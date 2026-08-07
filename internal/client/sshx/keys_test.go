@@ -13,7 +13,7 @@ import (
 func TestLoadOrCreateKeyGeneratesOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "id_ed25519")
 
-	first, err := LoadOrCreateKey(path, "dockerbox-test")
+	first, err := LoadOrCreateKey(path, "remote-docker-test")
 	if err != nil {
 		t.Fatalf("LoadOrCreateKey: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestLoadOrCreateKeyGeneratesOnce(t *testing.T) {
 
 	// The public half is enrolled on the workspace, so regenerating would
 	// silently revoke this machine's access.
-	second, err := LoadOrCreateKey(path, "dockerbox-test")
+	second, err := LoadOrCreateKey(path, "remote-docker-test")
 	if err != nil {
 		t.Fatalf("second LoadOrCreateKey: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestLoadOrCreateKeyGeneratesOnce(t *testing.T) {
 func TestLoadOrCreateKeyWritesPublicHalf(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "id_ed25519")
 
-	kp, err := LoadOrCreateKey(path, "dockerbox-host-user")
+	kp, err := LoadOrCreateKey(path, "remote-docker-host-user")
 	if err != nil {
 		t.Fatalf("LoadOrCreateKey: %v", err)
 	}
@@ -51,8 +51,8 @@ func TestLoadOrCreateKeyWritesPublicHalf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public key is not a valid authorized_keys line: %v", err)
 	}
-	if comment != "dockerbox-host-user" {
-		t.Errorf("comment = %q, want %q", comment, "dockerbox-host-user")
+	if comment != "remote-docker-host-user" {
+		t.Errorf("comment = %q, want %q", comment, "remote-docker-host-user")
 	}
 	if string(parsed.Marshal()) != string(kp.Signer.PublicKey().Marshal()) {
 		t.Error("the written public key does not match the signer")
