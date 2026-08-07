@@ -1,0 +1,75 @@
+#!/bin/sh
+# Mount the calling user's reverse-tunnelled NFS share at ~/workspace.
+#
+#   sudo workspace-mount            no-op if already mounted
+#   sudo workspace-mount --force    tear down and re-mount
+#
+# Idempotent on purpose. A dropped SSH tunnel does NOT require a remount: the
+# reverse-forwarded port is derived from the uid and therefore stable, so once
+# the tunnel is back the NFSv3/TCP client reconnects to the same endpoint and
+# the existing mount keeps working.
+#
+# This matters because a replacement mount is NOT visible to already-running
+# containers. Mount propagation (rslave) carries mounts made *inside* the
+# workspace, but not a new mount placed *at* the workspace itself -- that
+# event belongs to the parent's peer group, which the container does not have.
+# So --force means: every container bind-mounting this workspace must be
+# restarted afterwards. Verified experimentally; see test/propagation.
+#
+# Everything is derived from $SUDO_USER, never from arguments, so one user
+# cannot mount into another user's home or hijack another user's port.
+set -eu
+
+FORCE=false
+[ "${1:-}" = "--force" ] && FORCE=true
+
+# shellcheck disable=SC1091
+[ -f /etc/workspace/config ] && . /etc/workspace/config
+
+: "${WORKSPACE_UID_BASE:=10000}"
+: "${WORKSPACE_PORT_BASE:=30000}"
+
+user=${SUDO_USER:-}
+if [ -z "$user" ] || [ "$user" = "root" ]; then
+    echo "workspace-mount: must be invoked as 'sudo workspace-mount' by a workspace user" >&2
+    exit 64
+fi
+id "$user" >/dev/null 2>&1 || { echo "workspace-mount: unknown user $user" >&2; exit 64; }
+
+uid=$(id -u "$user")
+gid=$(id -g "$user")
+home=$(getent passwd "$user" | cut -d: -f6)
+port=$((WORKSPACE_PORT_BASE + uid - WORKSPACE_UID_BASE))
+mp="$home/workspace"
+
+install -d -m 0755 -o "$uid" -g "$gid" "$mp"
+
+if mountpoint -q "$mp"; then
+    if [ "$FORCE" != true ]; then
+        echo "already mounted: $mp (use --force to replace)"
+        exit 0
+    fi
+    echo "WARNING: replacing the mount at $mp -- running containers that" >&2
+    echo "         bind-mount it will keep the old, now-empty mount and" >&2
+    echo "         must be restarted." >&2
+    umount -f "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+fi
+
+# Bind /home onto itself so it can be marked shared. Without a shared parent,
+# `mount --make-rshared` on the mountpoint below is a no-op, and containers
+# started with bind-propagation=rslave would keep pointing at the old mount
+# after a reconnect -- silently, as an empty directory.
+if ! mountpoint -q /home; then
+    mount --bind /home /home
+fi
+mount --make-rshared /home
+
+# soft + short timeo: if the tunnel dies, I/O fails with EIO instead of
+# leaving container processes in uninterruptible sleep. nolock because
+# rclone's NFSv3 server implements no NLM. port==mountport skips rpcbind.
+mount -t nfs 127.0.0.1:/ "$mp" -o \
+    "port=$port,mountport=$port,nfsvers=3,tcp,nolock,soft,timeo=30,retrans=2,actimeo=1,noatime,rsize=1048576,wsize=1048576"
+
+mount --make-rshared "$mp"
+
+echo "mounted 127.0.0.1:$port -> $mp"

@@ -1,0 +1,143 @@
+#!/bin/sh
+# Provision one unix account per *.pub file in $WORKSPACE_KEYS_DIR.
+#
+#   alice.pub  ->  user "alice", uid 10000, reverse-tunnel port 30000
+#   bob.pub    ->  user "bob",   uid 10001, reverse-tunnel port 30001
+#
+# uids are allocated once and persisted in $WORKSPACE_STATE_DIR/uidmap, so a
+# user keeps the same uid -- and therefore the same port and the same file
+# ownership -- across container recreations.
+set -eu
+
+: "${WORKSPACE_STATE_DIR:=/etc/workspace}"
+: "${WORKSPACE_KEYS_DIR:=$WORKSPACE_STATE_DIR/authorized_keys.d}"
+: "${WORKSPACE_UID_BASE:=10000}"
+: "${WORKSPACE_SHELL:=/bin/bash}"
+: "${WORKSPACE_KEY_POLL_INTERVAL:=60}"
+
+UIDMAP="$WORKSPACE_STATE_DIR/uidmap"
+
+log() { echo "[key-watcher] $*" >&2; }
+
+sanitize() {
+    printf '%s' "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9_-]/-/g; s/^[^a-z_]*//' \
+        | cut -c1-30
+}
+
+# Return the uid for a username, allocating a fresh one if this is the first
+# time we have seen it.
+alloc_uid() {
+    _name=$1
+    touch "$UIDMAP"
+
+    _uid=$(awk -F: -v n="$_name" '$1 == n { print $2; exit }' "$UIDMAP")
+    if [ -n "$_uid" ]; then
+        printf '%s' "$_uid"
+        return 0
+    fi
+
+    _max=$(awk -F: '{ print $2 }' "$UIDMAP" | sort -n | tail -1)
+    [ -n "$_max" ] || _max=$((WORKSPACE_UID_BASE - 1))
+    _uid=$((_max + 1))
+
+    # Skip any uid already taken by a base-image account.
+    while getent passwd "$_uid" >/dev/null 2>&1; do
+        _uid=$((_uid + 1))
+    done
+
+    printf '%s:%s\n' "$_name" "$_uid" >>"$UIDMAP"
+    printf '%s' "$_uid"
+}
+
+provision_user() {
+    _name=$1
+    _keyfile=$2
+
+    if ! id "$_name" >/dev/null 2>&1; then
+        _uid=$(alloc_uid "$_name")
+        log "creating user $_name (uid $_uid)"
+        useradd --uid "$_uid" --create-home --shell "$WORKSPACE_SHELL" \
+                --groups docker,workspace "$_name" \
+            || { log "ERROR: useradd failed for $_name"; return 1; }
+        # '*' = password login disabled. Do NOT use '!' (locked): some sshd
+        # builds refuse public-key auth for locked accounts.
+        usermod -p '*' "$_name"
+    fi
+
+    _home=$(getent passwd "$_name" | cut -d: -f6)
+    install -d -m 0700 -o "$_name" -g "$_name" "$_home/.ssh"
+    install -d -m 0755 -o "$_name" -g "$_name" "$_home/workspace"
+
+    # restrict = deny everything, then re-enable only what the client needs:
+    # a pty for the interactive shell and port forwarding for the NFS tunnel.
+    _tmp="$_home/.ssh/authorized_keys.tmp"
+    : >"$_tmp"
+    while IFS= read -r line; do
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        printf 'restrict,pty,port-forwarding %s\n' "$line" >>"$_tmp"
+    done <"$_keyfile"
+
+    if [ -s "$_tmp" ]; then
+        mv "$_tmp" "$_home/.ssh/authorized_keys"
+    else
+        rm -f "$_tmp"
+        log "WARNING: $_keyfile contained no usable keys"
+        : >"$_home/.ssh/authorized_keys"
+    fi
+    chown "$_name:$_name" "$_home/.ssh/authorized_keys"
+    chmod 0600 "$_home/.ssh/authorized_keys"
+}
+
+# Users whose key file disappeared lose access, but their account and home
+# directory are kept -- deleting them would silently destroy data.
+revoke_missing() {
+    [ -f "$UIDMAP" ] || return 0
+    while IFS=: read -r _name _uid; do
+        [ -n "$_name" ] || continue
+        [ -f "$WORKSPACE_KEYS_DIR/$_name.pub" ] && continue
+        _home=$(getent passwd "$_name" 2>/dev/null | cut -d: -f6) || continue
+        [ -n "$_home" ] || continue
+        if [ -s "$_home/.ssh/authorized_keys" ]; then
+            log "revoking $_name (key file removed; account and home kept)"
+            : >"$_home/.ssh/authorized_keys"
+        fi
+    done <"$UIDMAP"
+}
+
+sync_keys() {
+    for keyfile in "$WORKSPACE_KEYS_DIR"/*.pub; do
+        [ -e "$keyfile" ] || continue
+
+        if ! ssh-keygen -l -f "$keyfile" >/dev/null 2>&1; then
+            log "ERROR: $keyfile is not a valid public key file, skipping"
+            continue
+        fi
+
+        base=$(basename "$keyfile" .pub)
+        name=$(sanitize "$base")
+        if [ -z "$name" ]; then
+            log "ERROR: cannot derive a username from $keyfile, skipping"
+            continue
+        fi
+        [ "$name" = "$base" ] || log "note: $base -> $name"
+
+        provision_user "$name" "$keyfile" || true
+    done
+    revoke_missing
+}
+
+sync_keys
+
+# inotify alone is not enough: if the keys directory is a network mount
+# (CephFS, NFS, SMB) inotify never fires for changes made on another host,
+# so poll as well.
+while :; do
+    inotifywait -q -t "$WORKSPACE_KEY_POLL_INTERVAL" \
+        -e create -e close_write -e delete -e moved_to -e moved_from \
+        "$WORKSPACE_KEYS_DIR" >/dev/null 2>&1 || true
+    sync_keys
+done

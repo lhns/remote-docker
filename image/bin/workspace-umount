@@ -1,0 +1,19 @@
+#!/bin/sh
+# Unmount the calling user's workspace. Invoked as: sudo workspace-umount
+set -eu
+
+user=${SUDO_USER:-}
+if [ -z "$user" ] || [ "$user" = "root" ]; then
+    echo "workspace-umount: must be invoked as 'sudo workspace-umount' by a workspace user" >&2
+    exit 64
+fi
+id "$user" >/dev/null 2>&1 || { echo "workspace-umount: unknown user $user" >&2; exit 64; }
+
+home=$(getent passwd "$user" | cut -d: -f6)
+mp="$home/workspace"
+
+mountpoint -q "$mp" || { echo "not mounted: $mp"; exit 0; }
+
+# Lazy unmount as a fallback: a container may still hold a bind mount of it.
+umount -f "$mp" 2>/dev/null || umount -l "$mp"
+echo "unmounted $mp"

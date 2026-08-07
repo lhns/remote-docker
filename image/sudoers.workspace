@@ -1,0 +1,11 @@
+# Workspace users may mount and unmount their own share -- nothing else.
+# The helpers derive the target path and port from $SUDO_USER, so a user
+# cannot mount into another user's home or steal another user's port.
+Defaults!/usr/local/bin/workspace-mount   !requiretty
+Defaults!/usr/local/bin/workspace-umount  !requiretty
+
+# Argument forms are pinned: "" means "no arguments at all". Listing a command
+# bare would permit ANY arguments, which is the usual way these rules go wrong.
+%workspace ALL=(root) NOPASSWD: /usr/local/bin/workspace-mount "", \
+                                /usr/local/bin/workspace-mount --force, \
+                                /usr/local/bin/workspace-umount ""

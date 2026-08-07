@@ -1,0 +1,45 @@
+# Plain Docker / Compose deployment (single host, no Swarm).
+#
+#   mkdir -p authorized_keys.d state
+#   cp ~/alice.pub authorized_keys.d/alice.pub     # filename == unix account
+#   docker compose up -d --build
+#
+services:
+  workspace:
+    build: ../image
+    image: docker-ssh-workspace:latest
+    container_name: docker-ssh-workspace
+    restart: unless-stopped
+
+    # dind needs this: it runs its own dockerd, sets up its own bridge and
+    # iptables rules, and mounts NFS inside its own mount namespace.
+    privileged: true
+
+    ports:
+      - "2222:2222"
+
+    environment:
+      TZ: Europe/Berlin
+      DOCKER_TLS_CERTDIR: ""
+      # On CephFS/NFS-backed appdata overlay2 will not work. Uncomment:
+      # WORKSPACE_DOCKERD_ARGS: "--storage-driver=fuse-overlayfs"
+
+    volumes:
+      # Keep the graph driver on real local disk if you possibly can.
+      - workspace-docker:/var/lib/docker
+      # Host keys + uid map. Persisting this is what stops clients getting a
+      # "REMOTE HOST IDENTIFICATION HAS CHANGED" warning after a redeploy,
+      # and what keeps each user's uid (and therefore port) stable.
+      - ./state:/etc/workspace
+      # Drop one <name>.pub per user in here.
+      - ./authorized_keys.d:/etc/workspace/authorized_keys.d:ro
+
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 2222 && docker info >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  workspace-docker:

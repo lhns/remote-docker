@@ -1,0 +1,6 @@
+# test image build artifact
+test/watchdir
+
+# local deployment state -- host keys, uidmap, enrolled public keys
+deploy/state/
+deploy/authorized_keys.d/
