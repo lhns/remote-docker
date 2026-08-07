@@ -183,6 +183,9 @@ image involved. The host socket mount in that file is the whole trust
 boundary: whoever can deploy the stack can already start privileged containers
 on the node. See [ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md).
 
+The workspace runs one binary, `remote-dockerd`: it supervises dockerd,
+provisions an account per enrolled key, and serves SSH itself.
+
 Enrolment is out of band: someone with access drops a `<name>.pub` into the
 keys directory, and the filename becomes that user's unix account. Removing a
 key revokes access but keeps the home directory.

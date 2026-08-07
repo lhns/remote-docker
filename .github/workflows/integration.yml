@@ -70,17 +70,10 @@ jobs:
   # The whole thing, together: a real workspace container, the real client
   # binary, and a real kernel NFS mount inside the dind daemon.
   end-to-end:
-    name: end to end (${{ matrix.server }})
+    name: end to end
     runs-on: ubuntu-latest
     needs: nfs-capability
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        # The agent must pass the suite written against sshd, unchanged. That
-        # is what makes it a substitution rather than a rewrite with its own
-        # bug surface (ADR 0010), so both run until sshd is removed.
-        server: [sshd, agent]
     steps:
       - uses: actions/checkout@v4
 
@@ -93,8 +86,6 @@ jobs:
         run: sudo modprobe nfs
 
       - name: run the suite
-        env:
-          WORKSPACE_SERVER: ${{ matrix.server }}
         run: bash test/integration.sh
 
       - name: workspace logs on failure

@@ -8,8 +8,14 @@
 #   B. host adds a mount INSIDE the workspace     -> container DOES follow,
 #                                                    but only with rslave
 #
-# (A) is why workspace-mount is idempotent and why --force warns you to restart
-# containers. (B) is why it still marks things rshared.
+# This USED to justify workspace-mount being idempotent and warning you to
+# restart containers on --force. Per-bind volumes retired that entirely
+# (ADR 0006): the daemon mounts each volume itself, so nothing has to propagate
+# into a running container.
+#
+# What it still governs is the convenience mount at ~/workspace, which the
+# agent makes for an interactive shell -- and the reason that mount is NOT
+# what containers use.
 #
 # A tmpfs stands in for the NFS mount; propagation semantics are identical.
 # Requires: a working docker daemon and the proptest image (see test/Dockerfile).

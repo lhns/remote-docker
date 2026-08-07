@@ -34,10 +34,10 @@ internal/client/
   ports/                 published ports -> local forwards
   session/               wires the above into one live connection
 
-image/                   the workspace container (still sshd + shell helpers)
+image/                   the workspace container (Dockerfile only)
 deploy/                  compose and swarm deployments
 client/                  the ORIGINAL shell clients — superseded, not yet deleted
-test/                    integration.sh, plus the legacy bash suites
+test/                    integration.sh, propagation.sh, probes
 docs/adr/                architecture decision records
 ```
 
@@ -109,11 +109,15 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
-- **`key-watcher` polls as well as using inotify.** The keys directory is
+- **The keys watcher polls as well as using inotify.** The keys directory is
   expected to be on CephFS/NFS, where inotify never fires for changes made on
-  another host. This must survive the rewrite to Go.
+  another host.
 - **Accounts use `usermod -p '*'`, not a locked (`!`) password.** Some sshd
-  builds refuse public-key auth for locked accounts.
+  builds refuse public-key auth for locked accounts. Kept even though the agent
+  authenticates itself, since a deployment may run sshd alongside.
+- **`shadow` must stay in the image.** The agent shells out to `useradd`, which
+  handles the locking between passwd, group and gshadow that hand-editing gets
+  wrong.
 
 ## Retired invariants
 
@@ -138,9 +142,11 @@ structural port ownership, the `/cwd` mount and dockerd supervision, and
 against both sshd and the agent, so the agent has to pass tests written before
 it existed.
 
+The shell implementation is gone. The image ships one binary; sshd, sudo, the
+key watcher and the mount helpers are deleted, and the agent passed the suite
+written against sshd before they were removed.
+
 Not done:
-- The image still ships sshd and the shell helpers alongside the agent. They go
-  once both matrix legs are green.
 - `docker compose` is NOT embedded. It works through the proxy; embedding it
   would mean pinning docker/cli back a major version (ADR 0009).
 - No tag has been pushed, so the release pipeline is unexercised.

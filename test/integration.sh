@@ -12,14 +12,6 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-
-# Which server the workspace runs. The agent must pass the suite written
-# against sshd, unchanged -- that is what makes it a substitution rather than a
-# rewrite with its own bug surface (ADR 0010).
-#
-#   WORKSPACE_SERVER=sshd    the original shell implementation
-#   WORKSPACE_SERVER=agent   remote-dockerd serve
-SERVER=${WORKSPACE_SERVER:-agent}
 WORK=$(mktemp -d)
 IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-itest
@@ -97,20 +89,12 @@ echo
 echo "== 4. start the workspace =="
 hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
 
-# The agent is a command on the same image; sshd is the image's default
-# entrypoint. Nothing else about the deployment differs, which is the point.
-SERVER_ARGS=()
-if [ "$SERVER" = "agent" ]; then
-    SERVER_ARGS=(remote-dockerd serve)
-fi
-echo "  ....  server: $SERVER"
-
 if hostdocker run -d --name "$CONTAINER" --privileged \
         -p "$SSH_PORT:2222" \
         -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
         -v "$WORK/wsstate:/etc/workspace" \
         -e DOCKER_TLS_CERTDIR= \
-        "$IMAGE" "${SERVER_ARGS[@]}" >/dev/null; then
+        "$IMAGE" >/dev/null; then
     ok "workspace container started"
 else
     bad "workspace container failed to start"
@@ -127,7 +111,7 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 if [ "$provisioned" = true ]; then
-    ok "key-watcher provisioned the account"
+    ok "the agent provisioned the account"
 else
     bad "the account was never provisioned"
     hostdocker logs "$CONTAINER" 2>&1 | tail -30

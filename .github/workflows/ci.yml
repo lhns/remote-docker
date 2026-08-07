@@ -99,31 +99,19 @@ jobs:
       - name: install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      # The image is Alpine, so anything under image/bin must be POSIX sh.
-      # test/ is allowed to be bash.
+      # Only test/ has shell left. The image's scripts and its sudoers file
+      # were retired by the Go agent (ADR 0010).
       #
-      # Each glob is guarded separately. A combined `a || b` check passes as
-      # soon as either matches, and then hands shellcheck the unexpanded
-      # pattern for the one that did not -- which is how deleting client/
-      # broke this step.
+      # The glob is guarded, because an unmatched pattern is passed through
+      # verbatim and shellcheck then fails on a file that does not exist --
+      # which is how deleting client/ broke this step once already.
       - name: shellcheck
         run: |
           set -eux
-          if compgen -G 'image/bin/*' >/dev/null; then
-            shellcheck -S warning -s sh image/bin/*
-          fi
           if compgen -G 'test/*.sh' >/dev/null; then
             shellcheck -S warning -s bash test/*.sh
           fi
         shell: bash
-
-      - name: visudo
-        run: |
-          if [ -f image/sudoers.workspace ]; then
-            sudo visudo -cf image/sudoers.workspace
-          else
-            echo "no sudoers file -- retired by the Go server agent (ADR 0010)"
-          fi
 
   image:
     name: image
