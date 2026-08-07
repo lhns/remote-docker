@@ -1,0 +1,193 @@
+package nfsserve
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/lhns/remote-docker/pkg/workspace"
+)
+
+func newTestRegistry(t *testing.T) *Registry {
+	t.Helper()
+	return NewRegistry(DefaultAttrs)
+}
+
+func TestRegisterCWD(t *testing.T) {
+	dir := t.TempDir()
+	r := newTestRegistry(t)
+
+	share, err := r.RegisterCWD(dir)
+	if err != nil {
+		t.Fatalf("RegisterCWD: %v", err)
+	}
+	if share.ExportPath != workspace.ExportCWD {
+		t.Errorf("ExportPath = %q, want %q", share.ExportPath, workspace.ExportCWD)
+	}
+}
+
+// Registering the same directory twice must not create a second share: the
+// share id is derived from the path precisely so a reconnecting client reuses
+// its handles and its remote volumes rather than orphaning a set per session.
+func TestRegisterIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	r := newTestRegistry(t)
+
+	first, err := r.Register(dir)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	second, err := r.Register(dir)
+	if err != nil {
+		t.Fatalf("second Register: %v", err)
+	}
+	if first.ExportPath != second.ExportPath {
+		t.Errorf("same directory produced %q then %q", first.ExportPath, second.ExportPath)
+	}
+	if got := len(r.Shares()); got != 1 {
+		t.Errorf("registry holds %d shares, want 1", got)
+	}
+}
+
+func TestRegisterDistinctDirectories(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	r := newTestRegistry(t)
+
+	shareA, err := r.Register(a)
+	if err != nil {
+		t.Fatalf("Register(a): %v", err)
+	}
+	shareB, err := r.Register(b)
+	if err != nil {
+		t.Fatalf("Register(b): %v", err)
+	}
+	if shareA.ExportPath == shareB.ExportPath {
+		t.Fatalf("two directories share the export path %q", shareA.ExportPath)
+	}
+	if !strings.HasPrefix(shareA.ExportPath, workspace.ExportMountPrefix) {
+		t.Errorf("ExportPath = %q, want the %q prefix", shareA.ExportPath, workspace.ExportMountPrefix)
+	}
+}
+
+func TestRegisterRejectsNonDirectories(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := newTestRegistry(t)
+
+	// Exporting the parent instead would silently share more than was asked
+	// for, which is exactly the property ADR 0007 relies on not happening.
+	if _, err := r.Register(file); err == nil {
+		t.Error("Register(file) = nil error, want an error")
+	}
+	if _, err := r.Register(filepath.Join(dir, "does-not-exist")); err == nil {
+		t.Error("Register(missing) = nil error, want an error")
+	}
+}
+
+func TestLookup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src", "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := newTestRegistry(t)
+	share, err := r.RegisterCWD(dir)
+	if err != nil {
+		t.Fatalf("RegisterCWD: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		query    string
+		wantRest string
+	}{
+		{"exact", "/cwd", "/"},
+		{"trailing slash", "/cwd/", "/"},
+		{"subdirectory", "/cwd/src", "/src"},
+		{"nested subdirectory", "/cwd/src/inner", "/src/inner"},
+		{"redundant separators", "/cwd//src", "/src"},
+		{"dot segment", "/cwd/./src", "/src"},
+		{"missing leading slash", "cwd/src", "/src"},
+		// Cleaning resolves this to "/cwd", which is a legitimate spelling of
+		// a registered share -- not an escape. The boundary that matters is
+		// that nothing *unregistered* becomes reachable, which is asserted in
+		// TestLookupRefusesUnregisteredPaths.
+		{"parent of root", "/../cwd", "/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, rest, ok := r.Lookup(tt.query)
+			if !ok {
+				t.Fatalf("Lookup(%q) not found", tt.query)
+			}
+			if got != share {
+				t.Errorf("Lookup(%q) returned the wrong share", tt.query)
+			}
+			if rest != tt.wantRest {
+				t.Errorf("Lookup(%q) rest = %q, want %q", tt.query, rest, tt.wantRest)
+			}
+		})
+	}
+}
+
+// The export root lists nothing, so only paths that were explicitly
+// registered are reachable. A client asking for anything else -- including a
+// path built to climb out of a share -- gets nothing.
+func TestLookupRefusesUnregisteredPaths(t *testing.T) {
+	dir := t.TempDir()
+	r := newTestRegistry(t)
+	if _, err := r.RegisterCWD(dir); err != nil {
+		t.Fatalf("RegisterCWD: %v", err)
+	}
+
+	for _, query := range []string{
+		"/",
+		"/m",
+		"/m/0011223344556677",
+		"/etc",
+		"/cwd/../etc",
+		"/cwd/../../etc/passwd",
+		"/cwdx",
+		"",
+	} {
+		if share, _, ok := r.Lookup(query); ok {
+			t.Errorf("Lookup(%q) resolved to %q, want not found", query, share.ExportPath)
+		}
+	}
+}
+
+// A share and a sibling whose export path is a prefix of it must not be
+// confused -- "/m/aaa" must never serve a lookup of "/m/aaabbb".
+func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
+	dir := t.TempDir()
+	r := newTestRegistry(t)
+	share, err := r.RegisterCWD(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := r.Lookup(share.ExportPath + "extra"); ok {
+		t.Error("a partial segment match resolved to a share")
+	}
+}
+
+func TestNormalizeExport(t *testing.T) {
+	tests := map[string]string{
+		"/cwd":        "/cwd",
+		"/cwd/":       "/cwd",
+		"cwd":         "/cwd",
+		"//cwd":       "/cwd",
+		"/cwd/./x":    "/cwd/x",
+		"/cwd/y/../x": "/cwd/x",
+		"/cwd/../..":  "/",
+		"":            "/",
+		"   /cwd   ":  "/cwd",
+	}
+	for in, want := range tests {
+		if got := normalizeExport(in); got != want {
+			t.Errorf("normalizeExport(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

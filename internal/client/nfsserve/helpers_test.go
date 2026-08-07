@@ -1,0 +1,92 @@
+package nfsserve
+
+import (
+	"fmt"
+	"net"
+	"strconv"
+	"testing"
+
+	nfsclient "github.com/willscott/go-nfs-client/nfs"
+	"github.com/willscott/go-nfs-client/nfs/rpc"
+	"github.com/willscott/go-nfs-client/nfs/xdr"
+)
+
+// mountAt performs an NFSv3 MOUNT and returns a usable target.
+//
+// The client's own Mount helper cannot be used: it reaches the NFS program
+// through rpcbind on port 111, and this server -- like the deployment it
+// models -- serves MOUNT and NFS on one port with no portmapper anywhere. That
+// is the same reason the mount options say port == mountport.
+func mountAt(t *testing.T, addr, export string) (*nfsclient.Target, error) {
+	t.Helper()
+
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", addr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parsing port %q: %v", portStr, err)
+	}
+
+	client, err := nfsclient.DialServiceAtPort(host, port)
+	if err != nil {
+		t.Fatalf("dialling %s: %v", addr, err)
+	}
+
+	type mountRequest struct {
+		rpc.Header
+		Dirpath string
+	}
+	res, err := client.Call(&mountRequest{
+		rpc.Header{
+			Rpcvers: 2,
+			Prog:    nfsclient.MountProg,
+			Vers:    nfsclient.MountVers,
+			Proc:    nfsclient.MountProc3MNT,
+			Cred:    rpc.AuthNull,
+			Verf:    rpc.AuthNull,
+		},
+		export,
+	})
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("mount call: %w", err)
+	}
+
+	status, err := xdr.ReadUint32(res)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("reading mount status: %w", err)
+	}
+	if status != nfsclient.MNT3Ok {
+		client.Close()
+		return nil, fmt.Errorf("mount of %q refused with status %d", export, status)
+	}
+
+	fh, err := xdr.ReadOpaque(res)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("reading file handle: %w", err)
+	}
+	_, _ = xdr.ReadUint32List(res)
+
+	// The same connection serves the NFS program, so no second dial.
+	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, fh, export, 0)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("opening target: %w", err)
+	}
+	return target, nil
+}
+
+// mustMount fails the test if the mount is refused.
+func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
+	t.Helper()
+	target, err := mountAt(t, addr, export)
+	if err != nil {
+		t.Fatalf("mounting %q: %v", export, err)
+	}
+	t.Cleanup(func() { target.Close() })
+	return target
+}
