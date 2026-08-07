@@ -47,10 +47,9 @@ set -- though an explicit one is respected.`,
 	// chosen one. Without this, the CLI would look for a local daemon that by
 	// premise is not installed.
 	if os.Getenv("DOCKER_HOST") == "" {
-		cfg, err := resolve()
 		endpoint := ""
-		if err == nil {
-			endpoint = cfg.Endpoint
+		if cfg, err := resolve(); err == nil {
+			endpoint = cfg.EndpointFor(proxy.DefaultEndpoint)
 		}
 		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -18,6 +19,10 @@ const DefaultSSHPort = 2222
 
 // Config is everything needed to open a session.
 type Config struct {
+	// Name identifies the workspace among several. Empty means the single
+	// unnamed workspace of a flat config file.
+	Name string
+
 	// Host is the workspace's address. There is no default; without it there
 	// is nothing to connect to.
 	Host string
@@ -35,28 +40,97 @@ type Config struct {
 }
 
 // File is the on-disk form, ~/.remote-docker.json.
+//
+// Two shapes are accepted. A flat one describes a single workspace:
+//
+//	{"host": "dev.example", "user": "alice"}
+//
+// and a keyed one describes several:
+//
+//	{"workspaces": {"dev": {...}, "ci": {...}}, "default": "dev"}
+//
+// The flat form is not deprecated. Most people have one workspace, and making
+// them nest it under a name to say so would be a poor trade.
 type File struct {
+	Host     string `json:"host,omitempty"`
+	Port     int    `json:"port,omitempty"`
+	User     string `json:"user,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+
+	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
+	Default    string               `json:"default,omitempty"`
+}
+
+// Workspace is one entry in the keyed form.
+type Workspace struct {
 	Host     string `json:"host,omitempty"`
 	Port     int    `json:"port,omitempty"`
 	User     string `json:"user,omitempty"`
 	Endpoint string `json:"endpoint,omitempty"`
 }
 
+// Names lists the configured workspaces in a stable order.
+func (f File) Names() []string {
+	names := make([]string, 0, len(f.Workspaces))
+	for name := range f.Workspaces {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// selected picks which workspace a request refers to.
+//
+// An explicit name wins; then the file's stated default; then, only when there
+// is exactly one, that one -- because with a single workspace configured, not
+// naming it is unambiguous rather than lazy.
+func (f File) selected(want string) (string, Workspace, error) {
+	if len(f.Workspaces) == 0 {
+		if want != "" {
+			return "", Workspace{}, fmt.Errorf("config: no workspaces are configured, so %q cannot be selected", want)
+		}
+		return "", Workspace{}, nil
+	}
+
+	switch {
+	case want != "":
+	case f.Default != "":
+		want = f.Default
+	case len(f.Workspaces) == 1:
+		want = f.Names()[0]
+	default:
+		return "", Workspace{}, fmt.Errorf(
+			"config: several workspaces are configured (%s) and none is the default; "+
+				"pass --workspace, set %s, or add a \"default\" to %s",
+			strings.Join(f.Names(), ", "), EnvWorkspace, DefaultPath())
+	}
+
+	ws, ok := f.Workspaces[want]
+	if !ok {
+		return "", Workspace{}, fmt.Errorf(
+			"config: no workspace named %q; configured: %s",
+			want, strings.Join(f.Names(), ", "))
+	}
+	return want, ws, nil
+}
+
 // Overrides are values supplied on the command line. Zero values mean
 // "not specified" and fall through to the next source.
 type Overrides struct {
-	Host     string
-	Port     int
-	User     string
-	Endpoint string
+	Workspace string
+	Host      string
+	Port      int
+	User      string
+	Endpoint  string
 }
 
 // Environment variable names.
 const (
-	EnvHost     = "REMOTE_DOCKER_HOST"
-	EnvPort     = "REMOTE_DOCKER_PORT"
-	EnvUser     = "REMOTE_DOCKER_USER"
-	EnvEndpoint = "REMOTE_DOCKER_ENDPOINT"
+	EnvHost      = "REMOTE_DOCKER_HOST"
+	EnvPort      = "REMOTE_DOCKER_PORT"
+	EnvUser      = "REMOTE_DOCKER_USER"
+	EnvEndpoint  = "REMOTE_DOCKER_ENDPOINT"
+	EnvWorkspace = "REMOTE_DOCKER_WORKSPACE"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -72,7 +146,19 @@ func Resolve(o Overrides, path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+
+	want := o.Workspace
+	if want == "" {
+		want = os.Getenv(EnvWorkspace)
+	}
+	name, ws, err := file.selected(want)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Name = name
+
 	applyFile(&cfg, file)
+	applyWorkspace(&cfg, ws)
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
 
@@ -117,6 +203,23 @@ func applyFile(cfg *Config, file File) {
 	}
 }
 
+// applyWorkspace overlays a named workspace on top of the file's flat fields,
+// so shared settings can sit at the top level and be specialised per entry.
+func applyWorkspace(cfg *Config, ws Workspace) {
+	if ws.Host != "" {
+		cfg.Host = ws.Host
+	}
+	if ws.Port != 0 {
+		cfg.Port = ws.Port
+	}
+	if ws.User != "" {
+		cfg.User = ws.User
+	}
+	if ws.Endpoint != "" {
+		cfg.Endpoint = ws.Endpoint
+	}
+}
+
 func applyEnv(cfg *Config) {
 	if v := os.Getenv(EnvHost); v != "" {
 		cfg.Host = v
@@ -150,6 +253,33 @@ func applyOverrides(cfg *Config, o Overrides) {
 	if o.Endpoint != "" {
 		cfg.Endpoint = o.Endpoint
 	}
+}
+
+// EndpointFor is where this workspace's Docker API is served.
+//
+// Derived from the workspace name so several sessions can run at once, each
+// answering on its own endpoint and each addressable as its own docker
+// context. An explicitly configured endpoint always wins.
+func (c Config) EndpointFor(base string) string {
+	if c.Endpoint != "" {
+		return c.Endpoint
+	}
+	if c.Name == "" {
+		return base
+	}
+	return base + endpointSeparator + sanitizeUser(c.Name)
+}
+
+// ContextName is the docker context this workspace installs.
+//
+// The workspace's own name, so `docker --context dev ps` reads naturally.
+// Nothing else is prefixed onto it, which means an install must check the
+// context is one of ours before replacing it -- see the install command.
+func (c Config) ContextName() string {
+	if c.Name == "" {
+		return "remote-docker"
+	}
+	return sanitizeUser(c.Name)
 }
 
 // RequireHost reports a usable error when no workspace is configured.

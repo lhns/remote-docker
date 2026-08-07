@@ -149,3 +149,131 @@ func TestSanitizeUser(t *testing.T) {
 		t.Errorf("a long username produced %d characters, want 30", len(got))
 	}
 }
+
+func TestResolveNamedWorkspaces(t *testing.T) {
+	path := writeConfig(t, `{
+		"user": "shared-user",
+		"workspaces": {
+			"dev": {"host": "dev.example"},
+			"ci":  {"host": "ci.example", "port": 2223, "user": "ci-user"}
+		},
+		"default": "dev"
+	}`)
+
+	t.Run("default is used when none is named", func(t *testing.T) {
+		cfg, err := Resolve(Overrides{}, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Name != "dev" || cfg.Host != "dev.example" {
+			t.Errorf("got %+v", cfg)
+		}
+		// Top-level fields are shared, so settings common to every workspace
+		// need not be repeated.
+		if cfg.User != "shared-user" {
+			t.Errorf("User = %q, want the shared top-level value", cfg.User)
+		}
+	})
+
+	t.Run("a named workspace overrides the shared fields", func(t *testing.T) {
+		cfg, err := Resolve(Overrides{Workspace: "ci"}, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Name != "ci" || cfg.Host != "ci.example" || cfg.Port != 2223 || cfg.User != "ci-user" {
+			t.Errorf("got %+v", cfg)
+		}
+	})
+
+	t.Run("the environment can select one", func(t *testing.T) {
+		t.Setenv(EnvWorkspace, "ci")
+		cfg, err := Resolve(Overrides{}, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Name != "ci" {
+			t.Errorf("Name = %q, want ci", cfg.Name)
+		}
+	})
+
+	t.Run("an unknown name lists what exists", func(t *testing.T) {
+		_, err := Resolve(Overrides{Workspace: "nope"}, path)
+		if err == nil {
+			t.Fatal("an unknown workspace was accepted")
+		}
+		for _, want := range []string{"nope", "ci", "dev"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err, want)
+			}
+		}
+	})
+}
+
+// With one workspace configured, not naming it is unambiguous rather than
+// lazy, so it should not need a "default" entry.
+func TestResolveSingleNamedWorkspaceNeedsNoDefault(t *testing.T) {
+	path := writeConfig(t, `{"workspaces": {"only": {"host": "only.example"}}}`)
+	cfg, err := Resolve(Overrides{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "only" || cfg.Host != "only.example" {
+		t.Errorf("got %+v", cfg)
+	}
+}
+
+// With several and no default, guessing would be worse than asking.
+func TestResolveAmbiguousWorkspacesAreRefused(t *testing.T) {
+	path := writeConfig(t, `{"workspaces": {"a": {"host": "a"}, "b": {"host": "b"}}}`)
+	_, err := Resolve(Overrides{}, path)
+	if err == nil {
+		t.Fatal("an ambiguous config was accepted")
+	}
+	if !strings.Contains(err.Error(), "--workspace") {
+		t.Errorf("error %q does not say how to resolve it", err)
+	}
+}
+
+// The flat single-workspace form must keep working untouched.
+func TestResolveFlatFormStillWorks(t *testing.T) {
+	path := writeConfig(t, `{"host": "solo.example", "user": "alice"}`)
+	cfg, err := Resolve(Overrides{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "" || cfg.Host != "solo.example" || cfg.User != "alice" {
+		t.Errorf("got %+v", cfg)
+	}
+}
+
+// Each workspace needs its own endpoint, or two sessions would fight over one
+// pipe and the second would fail to start.
+func TestEndpointForIsPerWorkspace(t *testing.T) {
+	base := "base"
+
+	solo := Config{}.EndpointFor(base)
+	dev := Config{Name: "dev"}.EndpointFor(base)
+	ci := Config{Name: "ci"}.EndpointFor(base)
+
+	if solo != base {
+		t.Errorf("unnamed workspace endpoint = %q, want the base %q", solo, base)
+	}
+	if dev == ci || dev == base || ci == base {
+		t.Errorf("endpoints collide: solo=%q dev=%q ci=%q", solo, dev, ci)
+	}
+
+	// An explicit endpoint is the user's decision and is not derived over.
+	explicit := Config{Name: "dev", Endpoint: "chosen"}.EndpointFor(base)
+	if explicit != "chosen" {
+		t.Errorf("explicit endpoint = %q, want it respected", explicit)
+	}
+}
+
+func TestContextName(t *testing.T) {
+	if got := (Config{}).ContextName(); got != "remote-docker" {
+		t.Errorf("unnamed context = %q", got)
+	}
+	if got := (Config{Name: "dev"}).ContextName(); got != "dev" {
+		t.Errorf("named context = %q, want dev", got)
+	}
+}

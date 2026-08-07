@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/internal/client/config"
+	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/session"
 	"github.com/lhns/remote-docker/internal/client/sshx"
 )
@@ -34,6 +35,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		SilenceErrors: true,
 	}
 
+	root.PersistentFlags().StringVarP(&overrides.Workspace, "workspace", "w", "", "which configured workspace to use")
 	root.PersistentFlags().StringVar(&overrides.Host, "host", "", "workspace address")
 	root.PersistentFlags().IntVar(&overrides.Port, "port", 0, "workspace SSH port")
 	root.PersistentFlags().StringVarP(&overrides.User, "user", "u", "", "workspace account")
@@ -48,6 +50,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newDockerCommand(),
 		newContextCommand(),
 		newVersionCommand(),
+		newWorkspacesCommand(),
 	)
 	return root
 }
@@ -125,7 +128,7 @@ func newStatusCommand() *cobra.Command {
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.Endpoint,
+				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
 				Log:      logger{},
 			})
 			if err != nil {
@@ -168,7 +171,7 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.Endpoint,
+				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
 				Log:      logger{},
 			})
 			if err != nil {
@@ -208,7 +211,7 @@ func newShellCommand() *cobra.Command {
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.Endpoint,
+				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
 				Log:      logger{},
 			})
 			if err != nil {
@@ -269,7 +272,7 @@ is never touched, whatever it is named.`,
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.Endpoint,
+				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
 				Log:      logger{},
 			})
 			if err != nil {
