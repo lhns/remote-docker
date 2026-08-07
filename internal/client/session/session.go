@@ -18,6 +18,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lhns/remote-docker/internal/client/config"
@@ -112,6 +113,9 @@ type liveConn struct {
 	nfs       *nfsserve.Server
 	nfsTunnel net.Listener
 	ports     *ports.Manager
+
+	// sessions counts interactive shells open on this connection.
+	sessions atomic.Int64
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -392,11 +396,22 @@ func (s *Session) releaseIfIdle() {
 
 // hasLiveDependents reports whether anything running still needs us.
 //
-// Two things can, and both must be checked. A container holding one of our
+// Three things can, and all must be checked. A container holding one of our
 // volumes has a live NFS mount that dropping the tunnel would break. A running
 // container of ours may have published ports whose forwards exist only while
-// we are connected.
+// we are connected. And an interactive session is using the ~/workspace mount,
+// which the agent unmounts when this connection's forward is released -- so
+// releasing while somebody sits at a shell pulls their working directory out
+// from under them.
+//
+// The third was missed at first, because a session is not a container and the
+// check only looked at containers. Same mistake as sessions reserving the
+// export port they did not need: reasoning about one session at a time rather
+// than several coexisting.
 func hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
+	if live.sessions.Load() > 0 {
+		return true, nil
+	}
 	containers, err := live.api.ListContainers(ctx)
 	if err != nil {
 		return false, err
@@ -429,12 +444,20 @@ func (live *liveConn) close() {
 }
 
 // Shell opens an interactive session on the workspace.
+//
+// Counted for the whole of its life, not just while acquiring: a shell can sit
+// idle for a long time and still be very much in use, and the idle sweep would
+// otherwise release the connection and unmount the workspace underneath it.
 func (s *Session) Shell(ctx context.Context) error {
 	live, done, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer done()
+
+	live.sessions.Add(1)
+	defer live.sessions.Add(-1)
+
 	return live.ssh.Shell(ctx, "cd ~/workspace 2>/dev/null; exec ${SHELL:-/bin/sh} -l")
 }
 
