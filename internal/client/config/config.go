@@ -37,6 +37,25 @@ type Config struct {
 	// Endpoint is where the local Docker API is served. Empty means the
 	// platform default.
 	Endpoint string
+
+	// Watch is how much of this machine's filesystem activity to replay into
+	// the workspace, so watchers in containers notice edits made here:
+	// "off" (the default), "partial" or "coarse". See ADR 0016.
+	//
+	// Held as the raw string rather than a parsed mode so this package stays
+	// the lowest layer, depending on nothing above it. The command parses and
+	// reports a bad value.
+	Watch string
+
+	// WatchBudget caps how many directories are watched at once. Zero means
+	// the per-platform default, which differs because the limit that binds
+	// differs: inotify watches on Linux, buffers on Windows, file descriptors
+	// on macOS.
+	WatchBudget int
+
+	// WatchExclude replaces the default list of directory names never
+	// watched. Empty means the default.
+	WatchExclude []string
 }
 
 // File is the on-disk form, ~/.remote-docker.json.
@@ -52,10 +71,13 @@ type Config struct {
 // The flat form is not deprecated. Most people have one workspace, and making
 // them nest it under a name to say so would be a poor trade.
 type File struct {
-	Host     string `json:"host,omitempty"`
-	Port     int    `json:"port,omitempty"`
-	User     string `json:"user,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
+	Host         string   `json:"host,omitempty"`
+	Port         int      `json:"port,omitempty"`
+	User         string   `json:"user,omitempty"`
+	Endpoint     string   `json:"endpoint,omitempty"`
+	Watch        string   `json:"watch,omitempty"`
+	WatchBudget  int      `json:"watchBudget,omitempty"`
+	WatchExclude []string `json:"watchExclude,omitempty"`
 
 	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
 	Default    string               `json:"default,omitempty"`
@@ -63,10 +85,13 @@ type File struct {
 
 // Workspace is one entry in the keyed form.
 type Workspace struct {
-	Host     string `json:"host,omitempty"`
-	Port     int    `json:"port,omitempty"`
-	User     string `json:"user,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
+	Host         string   `json:"host,omitempty"`
+	Port         int      `json:"port,omitempty"`
+	User         string   `json:"user,omitempty"`
+	Endpoint     string   `json:"endpoint,omitempty"`
+	Watch        string   `json:"watch,omitempty"`
+	WatchBudget  int      `json:"watchBudget,omitempty"`
+	WatchExclude []string `json:"watchExclude,omitempty"`
 }
 
 // Names lists the configured workspaces in a stable order.
@@ -122,6 +147,7 @@ type Overrides struct {
 	Port      int
 	User      string
 	Endpoint  string
+	Watch     string
 }
 
 // Environment variable names.
@@ -131,6 +157,10 @@ const (
 	EnvUser      = "REMOTE_DOCKER_USER"
 	EnvEndpoint  = "REMOTE_DOCKER_ENDPOINT"
 	EnvWorkspace = "REMOTE_DOCKER_WORKSPACE"
+
+	EnvWatch        = "REMOTE_DOCKER_WATCH"
+	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
+	EnvWatchExclude = "REMOTE_DOCKER_WATCH_EXCLUDE"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -201,6 +231,15 @@ func applyFile(cfg *Config, file File) {
 	if file.Endpoint != "" {
 		cfg.Endpoint = file.Endpoint
 	}
+	if file.Watch != "" {
+		cfg.Watch = file.Watch
+	}
+	if file.WatchBudget != 0 {
+		cfg.WatchBudget = file.WatchBudget
+	}
+	if len(file.WatchExclude) > 0 {
+		cfg.WatchExclude = file.WatchExclude
+	}
 }
 
 // applyWorkspace overlays a named workspace on top of the file's flat fields,
@@ -217,6 +256,15 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	}
 	if ws.Endpoint != "" {
 		cfg.Endpoint = ws.Endpoint
+	}
+	if ws.Watch != "" {
+		cfg.Watch = ws.Watch
+	}
+	if ws.WatchBudget != 0 {
+		cfg.WatchBudget = ws.WatchBudget
+	}
+	if len(ws.WatchExclude) > 0 {
+		cfg.WatchExclude = ws.WatchExclude
 	}
 }
 
@@ -238,6 +286,37 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv(EnvEndpoint); v != "" {
 		cfg.Endpoint = v
 	}
+	if v := os.Getenv(EnvWatch); v != "" {
+		cfg.Watch = v
+	}
+	if v := os.Getenv(EnvWatchBudget); v != "" {
+		// Ignored rather than fatal if malformed, for the same reason as the
+		// port: it would otherwise break every command, including the ones
+		// that connect to nothing.
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.WatchBudget = n
+		}
+	}
+	if v := os.Getenv(EnvWatchExclude); v != "" {
+		cfg.WatchExclude = splitList(v)
+	}
+}
+
+// splitList reads a comma- or os.PathListSeparator-separated list, so
+// REMOTE_DOCKER_WATCH_EXCLUDE can be written either way -- a semicolon list on
+// Windows is what a shell user reaches for, and a comma list is what a
+// Dockerfile or compose file does.
+func splitList(v string) []string {
+	fields := strings.FieldsFunc(v, func(r rune) bool {
+		return r == ',' || r == os.PathListSeparator
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func applyOverrides(cfg *Config, o Overrides) {
@@ -252,6 +331,9 @@ func applyOverrides(cfg *Config, o Overrides) {
 	}
 	if o.Endpoint != "" {
 		cfg.Endpoint = o.Endpoint
+	}
+	if o.Watch != "" {
+		cfg.Watch = o.Watch
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/mount"
+	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/internal/server/sshd"
 	"github.com/lhns/remote-docker/internal/server/supervise"
 	"github.com/lhns/remote-docker/pkg/workspace"
@@ -129,6 +130,7 @@ func serve(addr string) error {
 		Accounts: store,
 		Mapping:  mapping,
 		Mounts:   mount.New(logger{prefix: "mount"}),
+		Volumes:  notify.DockerVolumes{},
 		Log:      logger{prefix: "sshd"},
 	})
 	if err != nil {

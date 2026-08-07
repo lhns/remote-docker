@@ -17,6 +17,7 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 
 	"github.com/lhns/remote-docker/internal/server/mount"
+	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -34,6 +35,11 @@ const (
 	DialStdioCommand = "docker system dial-stdio"
 )
 
+// NotifyCommand carries the client's filesystem changes, which the agent
+// replays as real syscalls so watchers in containers see them (ADR 0016). The
+// name lives in pkg/workspace because both binaries must agree on it.
+const NotifyCommand = workspace.NotifyCommand
+
 // handleSession serves one session channel.
 func (s *Server) handleSession(session gssh.Session) {
 	account, ok := accountFor(session.Context())
@@ -49,6 +55,8 @@ func (s *Server) handleSession(session gssh.Session) {
 		s.serveInfo(session, account)
 	case DialStdioCommand:
 		s.serveDockerSocket(session, account)
+	case NotifyCommand:
+		s.serveNotify(session, account)
 	default:
 		s.serveExec(session, account, command)
 	}
@@ -102,6 +110,42 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 	defer func() { _ = conn.Close() }()
 
 	splice(session, conn)
+	_ = session.Exit(0)
+}
+
+// serveNotify replays the client's filesystem changes inside the workspace.
+//
+// Runs as root, like serveDockerSocket and for the same reason: the paths it
+// touches are volume mountpoints under /var/lib/docker, which the account
+// cannot reach. Every path is re-validated here rather than trusted, because
+// this is a root process being told which path to touch -- see
+// workspace.FSEvent.Validate, called on both sides.
+func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
+	if s.cfg.Volumes == nil {
+		// Nothing to resolve exports against. Exiting non-zero is what tells
+		// the client to stop trying rather than reconnect forever.
+		_, _ = fmt.Fprintln(session.Stderr(), "change notification is not available on this workspace")
+		_ = session.Exit(1)
+		return
+	}
+
+	// The interactive shell's ~/workspace is a second, separate mount of the
+	// same export. Separate mounts do not share an inode the way dockerd's
+	// bind mount does, so it has to be poked as well or a shell sees nothing.
+	extra := map[string]string{}
+	if stored, ok := s.cfg.Accounts.Lookup(account.Name()); ok && stored.Home != "" {
+		extra[workspace.ExportCWD] = stored.Home + "/workspace"
+	}
+
+	replayer := &notify.Replayer{
+		Volumes: s.cfg.Volumes,
+		Poker:   notify.SyscallPoker{},
+		Log:     s.cfg.Log,
+		Extra:   extra,
+	}
+	if err := replayer.Serve(session.Context(), session); err != nil {
+		s.logf("notify session for %s ended: %v", account.Name(), err)
+	}
 	_ = session.Exit(0)
 }
 

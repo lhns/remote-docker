@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/internal/client/config"
+	"github.com/lhns/remote-docker/internal/client/fswatch"
 	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/session"
 	"github.com/lhns/remote-docker/internal/client/sshx"
@@ -186,12 +187,24 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 			// running for this account, which is worth reporting rather than
 			// half-working.
 			files := session.FilesRequired
+
+			// Parsed here rather than in config, which is the lowest layer and
+			// depends on nothing above it. A bad value is reported now, before
+			// anything connects, rather than being silently treated as off.
+			watch, err := fswatch.ParseMode(cfg.Watch)
+			if err != nil {
+				return err
+			}
+
 			s, err := session.Open(ctx, session.Options{
-				Config:   cfg,
-				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
-				Files:    files,
-				Log:      logger{},
+				Config:       cfg,
+				WorkDir:      mustWorkDir(),
+				Endpoint:     cfg.EndpointFor(proxy.DefaultEndpoint),
+				Files:        files,
+				Watch:        watch,
+				WatchBudget:  cfg.WatchBudget,
+				WatchExclude: cfg.WatchExclude,
+				Log:          logger{},
 			})
 			if err != nil {
 				return err
@@ -203,6 +216,10 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 			_, _ = fmt.Fprintf(out, "Docker endpoint ready. In another terminal:\n\n")
 			_, _ = fmt.Fprintf(out, "    %s\n\n", exportLine(s.Endpoint))
 			_, _ = fmt.Fprintln(out, "Then use docker normally. Ctrl-C here closes the session.")
+			if watch != fswatch.ModeOff {
+				_, _ = fmt.Fprintf(out,
+					"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
+			}
 
 			<-ctx.Done()
 			_, _ = fmt.Fprintln(out, "\nclosing session")

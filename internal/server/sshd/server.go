@@ -17,6 +17,7 @@ import (
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/mount"
+	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -40,6 +41,12 @@ type Config struct {
 	// Mounts manages the convenience mount at ~/workspace. Nil disables it,
 	// which is what a workspace with no interactive use would want.
 	Mounts *mount.Manager
+
+	// Volumes resolves a managed volume to where dockerd has it mounted, for
+	// replaying the client's filesystem changes (ADR 0016). Nil refuses the
+	// notify command, which is what tells an unconfigured workspace's client
+	// to stop asking.
+	Volumes notify.Volumes
 
 	Log Logger
 }

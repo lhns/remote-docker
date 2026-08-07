@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/internal/client/config"
+	"github.com/lhns/remote-docker/internal/client/fswatch"
 	"github.com/lhns/remote-docker/internal/client/nfsserve"
 	"github.com/lhns/remote-docker/internal/client/ports"
 	"github.com/lhns/remote-docker/internal/client/proxy"
@@ -48,6 +49,13 @@ type Options struct {
 	// IdleTimeout is how long the workspace connection may sit unused before
 	// being released. Zero uses DefaultIdleTimeout; negative never releases.
 	IdleTimeout time.Duration
+
+	// Watch replays this machine's filesystem changes into the workspace, so
+	// watchers in containers notice them (ADR 0016). Off by default: nothing
+	// is watched and no channel is opened.
+	Watch        fswatch.Mode
+	WatchBudget  int
+	WatchExclude []string
 
 	// Files says whether this session should export the working directory.
 	//
@@ -96,6 +104,13 @@ type Session struct {
 	// rather than orphaning a set per connection.
 	registry *nfsserve.Registry
 
+	// watch outlives any single connection too, and for the same reason the
+	// registry does: watches are a local resource, and re-walking a large
+	// tree on every idle reconnect would cost more than the connection. Only
+	// the sink comes and goes.
+	watch      *fswatch.Watcher
+	notifyOnce sync.Once
+
 	gate *connGate[*liveConn]
 
 	ctx    context.Context
@@ -113,6 +128,10 @@ type liveConn struct {
 	nfs       *nfsserve.Server
 	nfsTunnel net.Listener
 	ports     *ports.Manager
+
+	// notify is the change-notification channel, nil when the workspace does
+	// not support it or watching is off.
+	notify io.Closer
 
 	// sessions counts interactive shells open on this connection.
 	sessions atomic.Int64
@@ -147,9 +166,33 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
+	if opts.Watch != fswatch.ModeOff && opts.Files != NoFiles {
+		watcher, err := fswatch.New(fswatch.Options{
+			Mode:    opts.Watch,
+			Budget:  opts.WatchBudget,
+			Exclude: opts.WatchExclude,
+			Log:     opts.Log,
+		})
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		s.watch = watcher
+		s.watch.Sync(sharesOf(s.registry))
+		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
+	}
+
 	s.gate = &connGate[*liveConn]{
 		open: s.connect,
-		shut: func(live *liveConn) { live.close() },
+		shut: func(live *liveConn) {
+			// The watches stay; only the channel to the agent goes. What was
+			// missed meanwhile is announced on the next connection rather
+			// than quietly forgotten.
+			if s.watch != nil {
+				s.watch.ClearSink()
+			}
+			live.close()
+		},
 		busy: hasLiveDependents,
 		idle: opts.IdleTimeout,
 		log:  opts.Log,
@@ -258,7 +301,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	live := &liveConn{ssh: client, info: info}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	live.rewriter = &rewrite.Rewriter{
-		Shares:  shareRegistrar{s.registry},
+		Shares:  shareRegistrar{registry: s.registry, changed: s.sharesChanged},
 		Volumes: live.api,
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
@@ -279,6 +322,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	liveCtx, cancel := context.WithCancel(s.ctx)
 	live.cancel = cancel
 	s.startPorts(liveCtx, live)
+	s.startNotify(live)
 
 	live.wg.Go(func() {
 		if _, err := s.collector(live).Collect(liveCtx); err != nil {
@@ -288,6 +332,18 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 	s.logf("connected to %s@%s", s.opts.Config.User, s.opts.Config.Host)
 	return live, nil
+}
+
+// shareReconcileInterval matches the port manager's: the same reasoning
+// applies, that a direct notification can be missed and a cheap periodic pass
+// covers it.
+const shareReconcileInterval = 30 * time.Second
+
+// sharesChanged tells the watcher a share was just registered.
+func (s *Session) sharesChanged() {
+	if s.watch != nil {
+		s.watch.Sync(sharesOf(s.registry))
+	}
 }
 
 func (s *Session) startNFS(live *liveConn) error {
@@ -433,6 +489,9 @@ func (live *liveConn) close() {
 	if live.cancel != nil {
 		live.cancel()
 	}
+	if live.notify != nil {
+		_ = live.notify.Close()
+	}
 	if live.ports != nil {
 		_ = live.ports.Close()
 	}
@@ -498,6 +557,9 @@ func (s *Session) Connected() bool {
 
 // Close tears the session down.
 func (s *Session) Close() error {
+	if s.watch != nil {
+		_ = s.watch.Close()
+	}
 	s.once.Do(func() {
 		s.cancel()
 		if s.listener != nil {
@@ -557,12 +619,22 @@ func keyComment() string {
 }
 
 // shareRegistrar adapts the NFS registry to the rewriter's Sharer.
-type shareRegistrar struct{ registry *nfsserve.Registry }
+//
+// It is also where a newly shared directory becomes a watched one: every bind
+// rewrite funnels through here, so the watcher learns about a share the moment
+// it exists rather than up to a reconcile interval later.
+type shareRegistrar struct {
+	registry *nfsserve.Registry
+	changed  func()
+}
 
 func (s shareRegistrar) Share(localPath string) (string, error) {
 	share, err := s.registry.Register(localPath)
 	if err != nil {
 		return "", err
+	}
+	if s.changed != nil {
+		s.changed()
 	}
 	return share.ExportPath, nil
 }
