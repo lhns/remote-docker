@@ -225,7 +225,16 @@ func isHijack(resp *http.Response) bool {
 	}
 	switch contentType(resp) {
 	case rawStreamType, multiplexedStreamType:
-		return true
+		// The content type alone is not enough. `docker logs` uses the very
+		// same one for an ordinary chunked response, and splicing that raw
+		// hands the chunk-size lines to the client's stream demultiplexer,
+		// which reports "Unrecognized input header: 49" -- 49 being the ASCII
+		// '1' that starts a hex chunk length.
+		//
+		// A hijack is the case where the daemon frames nothing itself: no
+		// content length and no transfer encoding, just bytes until the
+		// connection ends.
+		return resp.ContentLength < 0 && len(resp.TransferEncoding) == 0
 	default:
 		return false
 	}

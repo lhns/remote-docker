@@ -567,3 +567,64 @@ func TestProxyHalfClosesUpstreamWhenClientStopsWriting(t *testing.T) {
 		t.Errorf("got %q, want %q", buf, output)
 	}
 }
+
+// `docker logs` uses the same content type as a hijacked attach, but is an
+// ordinary chunked response. Splicing it raw hands the chunk-size lines to
+// the client's stream demultiplexer, which reports
+// "Unrecognized input header: 49" -- 49 being the ASCII '1' that starts a hex
+// chunk length. The integration suite reported exactly that string.
+func TestProxyDoesNotHijackChunkedDockerStreams(t *testing.T) {
+	// One stdcopy frame: stdout, 5 bytes, "hello".
+	frame := "\x01\x00\x00\x00\x00\x00\x00\x05hello"
+
+	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+		io.WriteString(conn, "HTTP/1.1 200 OK\r\n"+
+			"Content-Type: application/vnd.docker.multiplexed-stream\r\n"+
+			"Transfer-Encoding: chunked\r\n\r\n")
+		fmt.Fprintf(conn, "%x\r\n%s\r\n0\r\n\r\n", len(frame), frame)
+	})
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{daemon.listener.Addr().String()}})
+
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
+
+	resp, err := client.Get("http://" + addr + "/v1.51/containers/abc/logs?stdout=1")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Go's client de-chunks, so the body must be the frame and nothing else.
+	// If the proxy spliced it raw, the chunk-size line would be here too.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	if string(body) != frame {
+		t.Errorf("body = %q, want the stdcopy frame alone %q", body, frame)
+	}
+}
+
+// A response with a content length is likewise a normal response, not a
+// takeover.
+func TestProxyDoesNotHijackLengthDelimitedDockerStreams(t *testing.T) {
+	const payload = "not a hijack"
+	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+		fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s",
+			rawStreamType, len(payload), payload)
+	})
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{daemon.listener.Addr().String()}})
+
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
+
+	resp, err := client.Get("http://" + addr + "/v1.51/containers/abc/logs")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != payload {
+		t.Errorf("body = %q, want %q", body, payload)
+	}
+}
