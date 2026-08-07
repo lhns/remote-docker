@@ -55,6 +55,11 @@ for. Tune with `REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE`;
 when the budget runs out, the directory it stopped at is named rather than
 silently dropped.
 
+Watching starts delivering once the session has actually connected, which
+happens on the first Docker command rather than when `up` starts. Edits made
+before that are counted and reported, not silently lost — and nothing is
+watching inside a container that does not exist yet.
+
 The per-tool polling flags — `CHOKIDAR_USEPOLLING=1`, `WATCHPACK_POLLING=true`,
 `--poll` — still work and are never set for you: silently changing your build
 tool's behaviour is worse than telling you about the limitation.

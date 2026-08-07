@@ -170,6 +170,17 @@ owning one end and a marker.
   fsnotify's inotify mask omits `IN_OPEN` and `IN_CLOSE_WRITE`, so the library
   cannot observe the primitive this record is chiefly about. A probe that
   cannot see the thing under test reports "nothing happened" and is believed.
+- **Nothing is delivered until the session connects**, which is on the first
+  Docker request (ADR 0015), not when `up` starts. This is a consequence of
+  lazy connections rather than a decision here, and it is benign for the
+  reason ADR 0015 already gives: `hasLiveDependents` holds the connection open
+  while any owned container runs, and a hot-reload workflow has a running
+  container by definition. Edits made before the first connection are counted
+  and announced as a `disconnected` notice rather than dropped in silence.
+  It did cost a CI round trip, because the first version of the integration
+  test started a second client purely to watch -- which never issued a Docker
+  request, never connected, and would have collided on the account's single
+  NFS port if it had.
 - The matrix stays in the integration suite rather than being deleted as
   scaffolding. It is cheap, and it is the only thing that would notice a kernel
   or dockerd change quietly taking one of these primitives away.

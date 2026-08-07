@@ -482,94 +482,6 @@ else
 fi
 
 echo
-echo "== 11e. does replay make a container's watcher fire? =="
-# The payoff. 11b shows a client-side change notifies nobody; 11d shows which
-# syscall would; this runs the whole path -- client watcher, SSH channel,
-# agent replay -- and asks whether an ordinary edit here is noticed there.
-#
-# A SECOND client is started for this, with watching on. The main one is
-# holding this account's NFS port and REMOTE_DOCKER_WATCH was not set when it
-# started, so the setting has to arrive with a session that can be restarted.
-REPLAYDIR="$WORK/replayed"
-mkdir -p "$REPLAYDIR"
-echo "before the watch" >"$REPLAYDIR/reloaded.txt"
-
-if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
-    if ! dockert run -d --name itest-replay \
-            -v "$PROJECT:/probe:ro" \
-            -v "$REPLAYDIR:/data" \
-            alpine:3 /probe/watchprobe -timeout 60s /data >"$WORK/replay-run.log" 2>&1; then
-        bad "the replay probe container would not start"
-        sed 's/^/        /' "$WORK/replay-run.log"
-    else
-        ready=false
-        for _ in $(seq 1 30); do
-            if docker logs itest-replay 2>&1 | grep -q '^READY'; then
-                ready=true
-                break
-            fi
-            sleep 1
-        done
-        if [ "$ready" != true ]; then
-            info "the probe never reported READY"
-        fi
-
-        # The watching client shares the same directory, so it registers the
-        # same export -- but it must not take the NFS port the main `up` holds,
-        # which is what FilesIfAvailable is for.
-        (
-            cd "$REPLAYDIR" || exit 1
-            REMOTE_DOCKER_WATCH=partial \
-            REMOTE_DOCKER_ENDPOINT="$WORK/watch.sock" \
-                "$WORK/remote-docker" up
-        ) >"$WORK/watch-up.log" 2>&1 &
-        WATCH_PID=$!
-
-        # Wait for the second client to be serving before editing anything.
-        for _ in $(seq 1 60); do
-            [ -S "$WORK/watch.sock" ] && break
-            kill -0 "$WATCH_PID" 2>/dev/null || break
-            sleep 1
-        done
-        sleep 3
-
-        # The edit an editor would make: rewrite an existing file in place.
-        echo "edited on the client at $(date +%s)" >"$REPLAYDIR/reloaded.txt"
-
-        timeout 90 docker wait itest-replay >/dev/null 2>&1
-        replay=$(docker logs itest-replay 2>&1)
-        docker rm -f itest-replay >/dev/null 2>&1
-        kill "$WATCH_PID" 2>/dev/null
-        wait "$WATCH_PID" 2>/dev/null
-        rm -f "$PROJECT/watchprobe"
-
-        echo "        $(echo "$replay" | grep '^RESULT' || echo 'RESULT missing')"
-
-        if echo "$replay" | grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* reloaded\.txt$"; then
-            ok "an edit on the client fires inotify inside the container (ADR 0016)"
-        else
-            bad "replay did not reach the container's watcher"
-            sed 's/^/        /' "$WORK/watch-up.log" | tail -20
-            echo "$replay" | sed 's/^/        /' | tail -10
-        fi
-
-        # The echo loop this design has to avoid: the poke must not come back
-        # as a change the client reports, producing another poke, forever.
-        # openclose is silent over NFSv3 and the mtime write-back is an
-        # identity, so the count stays bounded rather than climbing.
-        pokes=$(echo "$replay" | grep -cE "^INOTIFY .* reloaded\.txt$")
-        info "the watcher saw $pokes events for one edit"
-        if [ "$pokes" -lt 25 ]; then
-            ok "replay does not echo into a loop"
-        else
-            bad "replay looks like it is looping: $pokes events for one edit"
-        fi
-    fi
-else
-    bad "could not build the replay probe"
-fi
-
-echo
 echo "== 11c. a container survives an idle disconnect =="
 # The connection is released when nothing needs it (ADR 0015), which makes the
 # reconnect path load-bearing rather than an error case. It must also NOT be
@@ -800,6 +712,93 @@ else
     bad "could not start the elevate launcher"
 fi
 hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
+
+echo
+echo "== 15. does replay make a container's watcher fire? =="
+# The payoff, and it goes last because it restarts the client.
+#
+# 11b shows a client-side change notifies nobody; 11d shows which syscall
+# would; this runs the whole path -- client watcher, SSH channel, agent
+# replay -- and asks whether an ordinary edit here is noticed there.
+#
+# It has to be the SAME client, not a second one alongside. `up` is the file
+# server for this account and there is one NFS port per account, so two would
+# collide. And the connection is established on demand (ADR 0015), so a client
+# that never issues a Docker request never connects and therefore never opens
+# the notification channel at all -- which is why the probe container is
+# started through this client rather than the previous one.
+kill "$CLIENT_PID" 2>/dev/null
+wait "$CLIENT_PID" 2>/dev/null
+CLIENT_PID=""
+
+REPLAYDIR="$WORK/replayed"
+mkdir -p "$REPLAYDIR"
+echo "before the watch" >"$REPLAYDIR/reloaded.txt"
+
+if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
+    REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" up >"$WORK/watch-up.log" 2>&1 &
+    CLIENT_PID=$!
+
+    ready=false
+    for _ in $(seq 1 60); do
+        if [ -S "$REMOTE_DOCKER_ENDPOINT" ] && docker info >/dev/null 2>&1; then
+            ready=true
+            break
+        fi
+        kill -0 "$CLIENT_PID" 2>/dev/null || break
+        sleep 1
+    done
+
+    if [ "$ready" != true ]; then
+        bad "the watching client never came up"
+        sed 's/^/        /' "$WORK/watch-up.log"
+    elif ! dockert run -d --name itest-replay             -v "$PROJECT:/probe:ro"             -v "$REPLAYDIR:/data"             alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/replay-run.log" 2>&1; then
+        bad "the replay probe container would not start"
+        sed 's/^/        /' "$WORK/replay-run.log"
+    else
+        ok "the watching client is serving"
+
+        for _ in $(seq 1 30); do
+            docker logs itest-replay 2>&1 | grep -q '^READY' && break
+            sleep 1
+        done
+
+        # The edit an editor would make: rewrite an existing file in place.
+        sleep 2
+        echo "edited on the client at $(date +%s)" >"$REPLAYDIR/reloaded.txt"
+
+        timeout 90 docker wait itest-replay >/dev/null 2>&1
+        replay=$(docker logs itest-replay 2>&1)
+        docker rm -f itest-replay >/dev/null 2>&1
+        rm -f "$PROJECT/watchprobe"
+
+        echo "        $(echo "$replay" | grep -o 'RESULT inotify_events=[0-9]* poll_entries=[0-9]*' || echo 'RESULT missing')"
+        echo "        events for the edited file:"
+        echo "$replay" | grep -E "^INOTIFY .* reloaded\.txt$" | sort | uniq -c | sed 's/^/          /'
+
+        if echo "$replay" | grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* reloaded\.txt$"; then
+            ok "an edit on the client fires inotify inside the container (ADR 0016)"
+        else
+            bad "replay did not reach the container's watcher"
+            sed 's/^/        /' "$WORK/watch-up.log" | tail -20
+        fi
+
+        # The echo loop this design has to avoid: the poke travels back over
+        # NFS, the client reports it as a change, and that produces another
+        # poke. openclose is silent over NFSv3 and the mtime write-back is an
+        # identity, so the count stays bounded rather than climbing.
+        pokes=$(echo "$replay" | grep -cE "^INOTIFY .* reloaded\.txt$")
+        info "the watcher saw $pokes events for one edit"
+        if [ "$pokes" -gt 0 ] && [ "$pokes" -lt 25 ]; then
+            ok "replay does not echo into a loop"
+        elif [ "$pokes" -ge 25 ]; then
+            bad "replay looks like it is looping: $pokes events for one edit"
+        fi
+    fi
+else
+    bad "could not build the replay probe"
+fi
+
 
 if [ "$FAIL" -ne 0 ]; then
     echo
