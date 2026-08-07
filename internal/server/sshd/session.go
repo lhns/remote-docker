@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/creack/pty"
@@ -263,19 +262,4 @@ func exitCode(err error) int {
 		return exit.ExitCode()
 	}
 	return 1
-}
-
-// splice copies between a session and a connection until either ends.
-func splice(a io.ReadWriter, b io.ReadWriteCloser) {
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_, _ = io.Copy(b, a)
-		if cw, ok := b.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-	})
-	wg.Go(func() {
-		_, _ = io.Copy(a, b)
-	})
-	wg.Wait()
 }
