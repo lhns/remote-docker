@@ -36,10 +36,23 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		SilenceErrors: true,
 	}
 
-	root.PersistentFlags().StringVarP(&overrides.Workspace, "workspace", "w", "", "which configured workspace to use")
+	// No shorthands, and that is not an oversight.
+	//
+	// Cobra merges a root's persistent flags into every subcommand, and this
+	// root has the entire Docker CLI underneath it. pflag SKIPS a flag whose
+	// long name is already taken -- which is why --user and --host coexist
+	// with docker's own -- but a clashing SHORTHAND panics outright:
+	//
+	//	panic: unable to redefine 'w' shorthand in "run" flagset:
+	//	       it's already used for "workdir" flag
+	//
+	// So `remote-docker docker run -ti debian bash` crashed, because -w meant
+	// --workspace here and --workdir there. A shorthand that turns a whole
+	// subcommand tree into a panic is worth less than typing the long form.
+	root.PersistentFlags().StringVar(&overrides.Workspace, "workspace", "", "which configured workspace to use")
 	root.PersistentFlags().StringVar(&overrides.Host, "host", "", "workspace address")
 	root.PersistentFlags().IntVar(&overrides.Port, "port", 0, "workspace SSH port")
-	root.PersistentFlags().StringVarP(&overrides.User, "user", "u", "", "workspace account")
+	root.PersistentFlags().StringVar(&overrides.User, "user", "", "workspace account")
 	root.PersistentFlags().StringVar(&overrides.Endpoint, "endpoint", "", "local Docker endpoint to serve")
 
 	root.AddCommand(
