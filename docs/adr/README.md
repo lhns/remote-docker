@@ -23,6 +23,12 @@ survives that document being superseded.
 | [0010](0010-go-ssh-server-agent.md) | A Go SSH server agent, not sshd and sudo | Accepted |
 | [0011](0011-one-module-shared-contract.md) | One module with a shared contract package | Accepted |
 | [0012](0012-shared-dockerd-across-users.md) | A shared dockerd across users | Accepted, revisit |
+| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open** |
+
+An **Open** record is not a decision. It states a problem that is measured,
+unsolved, and worth not rediscovering, and it lists the candidates so the next
+attempt starts where the last one stopped. It stays open until something is
+accepted or ruled out.
 
 ## Format
 

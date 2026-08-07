@@ -40,6 +40,13 @@ round-trip per `stat()` is exactly the cost a source tree cannot absorb.
   server implements no NLM; `port` equal to `mountport` to skip rpcbind.
 - **No `inotify` over NFS.** Hot-reloaders need polling. This is inherent to
   the protocol, not a configuration mistake.
+
+  This one line understated it. Measured later: a watcher inside a container
+  sees *zero* events for a file created on the client, while polling sees it
+  immediately. It is plausibly the reason the entire industry answers this
+  problem with file sync rather than a network filesystem, and it bounds what
+  the project is good for. See **[ADR 0014](0014-inotify-does-not-see-client-changes.md)**,
+  which is deliberately left open.
 - **No databases on the share.** `nolock` plus `fcntl` locking is a corruption
   risk.
 - Build artifacts — `node_modules`, `.git`, `target/`, coursier and ivy caches
