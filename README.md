@@ -282,10 +282,16 @@ docker node update --label-add workspace=true <node>
 # 2. Create the state directories ON THAT NODE. They are bind mounts, so a
 #    missing path is created as an empty root-owned directory rather than
 #    reported.
-ssh <node> 'mkdir -p /mnt/appdata/docker/workspace/{state,authorized_keys.d}'
+export WORKSPACE_DATA=/var/lib/remote-docker        # the default; override freely
+ssh <node> "mkdir -p $WORKSPACE_DATA/{state,authorized_keys.d}"
 
 docker stack deploy -c deploy/swarm.yml workspace
 ```
+
+If you point `WORKSPACE_DATA` at Ceph- or NFS-backed storage — worth doing if
+the workspace should survive moving nodes — you must also set
+`WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs`. overlay2 refuses such
+a filesystem outright, and vfs, the only other fallback, copies every layer.
 
 Port 2222 is published with `mode: host`, so it lands on the node actually
 running the task rather than being round-robined by the routing mesh to nodes

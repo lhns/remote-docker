@@ -7,6 +7,21 @@
 #
 #   docker stack deploy -c swarm.yml workspace
 #
+# Two things are yours to set. WORKSPACE_DATA is where this keeps its state on
+# the node; the default is a plain local path and works as-is. Point it at
+# shared storage only if you want the workspace to survive moving nodes -- and
+# read the note on WORKSPACE_DOCKERD_ARGS below before you do.
+#
+#   export WORKSPACE_DATA=/var/lib/remote-docker
+#   export WORKSPACE_IMAGE=ghcr.io/lhns/remote-docker-workspace:latest
+#
+# `version` is required here and only here. `docker stack deploy` parses with
+# the legacy Compose loader, which without it reads the file as format v1 --
+# and v1 has no `services:` key, so the whole thing is rejected. Plain
+# `docker compose` is the opposite: it deprecated the field and warns when it
+# is present, which is why deploy/docker-compose.yml has none.
+version: "3.8"
+
 services:
   workspace:
     image: ${WORKSPACE_IMAGE:-ghcr.io/lhns/remote-docker-workspace:latest}
@@ -19,11 +34,17 @@ services:
       # makes the published port below reach it.
       WORKSPACE_SELF: "{{.Task.Name}}"
 
-      TZ: Europe/Berlin
+      TZ: ${TZ:-UTC}
       DOCKER_TLS_CERTDIR: ""
-      # /var/lib/docker on Ceph- or NFS-backed storage is why: overlay2
-      # refuses outright, and vfs copies every layer.
-      WORKSPACE_DOCKERD_ARGS: "--storage-driver=fuse-overlayfs"
+
+      # Empty means overlay2, which is correct and fastest when
+      # /var/lib/docker is on real local disk -- which the default
+      # WORKSPACE_DATA below is.
+      #
+      # If you move WORKSPACE_DATA onto Ceph- or NFS-backed storage you MUST
+      # set this to --storage-driver=fuse-overlayfs: overlay2 refuses such a
+      # filesystem outright, and vfs, the other fallback, copies every layer.
+      WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
       # NOT /var/run/docker.sock. dind runs its own daemon on that path inside
@@ -37,16 +58,29 @@ services:
         source: /var/run/docker.sock
         target: /var/run/host-docker.sock
 
-      # Replicated onto the privileged child, which is why they are declared
-      # here rather than on it.
+      # Everything below is replicated onto the privileged child, which is why
+      # it is declared here rather than on it.
+      #
+      # The graph directory is per-slot: two replicas sharing one would corrupt
+      # it. {{.Task.Slot}} is a Swarm service template, expanded by Swarm at
+      # runtime, while ${WORKSPACE_DATA} is expanded by the CLI at deploy time.
+      # Both in one path is fine -- different things evaluate them, at
+      # different times.
       - type: bind
-        source: /mnt/appdata/docker/workspace/{{.Task.Slot}}/docker
+        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/{{.Task.Slot}}/docker
         target: /var/lib/docker
+
+      # Shared across slots on purpose: host keys and the uid map. Persisting
+      # them is what stops clients seeing "REMOTE HOST IDENTIFICATION HAS
+      # CHANGED" after a redeploy, and what keeps each user's uid -- and
+      # therefore their reverse-tunnel port -- stable.
       - type: bind
-        source: /mnt/appdata/docker/workspace/state
+        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/state
         target: /etc/workspace
+
+      # Drop one <name>.pub per user in here.
       - type: bind
-        source: /mnt/appdata/docker/workspace/authorized_keys.d
+        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d
         target: /etc/workspace/authorized_keys.d
         read_only: true
 

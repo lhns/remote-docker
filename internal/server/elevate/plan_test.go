@@ -12,12 +12,12 @@ func self() ContainerInfo {
 		Name:  "/workspace.1.xyz",
 		Image: "ghcr.io/lhns/remote-docker-workspace:latest",
 		Mounts: []Mount{
-			{Type: "bind", Source: "/mnt/appdata/state", Destination: "/etc/workspace"},
-			{Type: "bind", Source: "/mnt/appdata/keys", Destination: "/etc/workspace/authorized_keys.d", ReadOnly: true},
+			{Type: "bind", Source: "/var/lib/remote-docker/state", Destination: "/etc/workspace"},
+			{Type: "bind", Source: "/var/lib/remote-docker/authorized_keys.d", Destination: "/etc/workspace/authorized_keys.d", ReadOnly: true},
 			{Type: "volume", Source: "workspace-docker", Destination: "/var/lib/docker"},
 			{Type: "bind", Source: "/var/run/docker.sock", Destination: DefaultHostSocket},
 		},
-		Env: []string{"TZ=Europe/Berlin", "WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs"},
+		Env: []string{"TZ=UTC", "WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs"},
 	}
 }
 

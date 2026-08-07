@@ -10,7 +10,7 @@ services:
     build:
       context: ..
       dockerfile: image/Dockerfile
-    image: remote-docker-workspace:latest
+    image: ${WORKSPACE_IMAGE:-remote-docker-workspace:latest}
     container_name: remote-docker-workspace
     restart: unless-stopped
 
@@ -22,10 +22,13 @@ services:
       - "2222:2222"
 
     environment:
-      TZ: Europe/Berlin
+      TZ: ${TZ:-UTC}
       DOCKER_TLS_CERTDIR: ""
-      # On CephFS/NFS-backed appdata overlay2 will not work. Uncomment:
-      # WORKSPACE_DOCKERD_ARGS: "--storage-driver=fuse-overlayfs"
+      # Empty means overlay2, which is right for the named volume below. Set
+      # it to --storage-driver=fuse-overlayfs only if you replace that volume
+      # with a bind onto Ceph- or NFS-backed storage, where overlay2 refuses
+      # to run at all.
+      WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
       # Keep the graph driver on real local disk if you possibly can.
