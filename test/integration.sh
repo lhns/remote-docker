@@ -32,6 +32,12 @@ ACCOUNT=itest
 DOCKER_TIMEOUT=120
 dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
 
+# The workspace container itself lives on the RUNNER's daemon. Once DOCKER_HOST
+# is exported, plain `docker` talks to the WORKSPACE's daemon instead, so
+# anything about the container -- exec, logs, inspect -- has to say which
+# daemon it means or it silently looks in the wrong place.
+hostdocker() { env -u DOCKER_HOST docker "$@"; }
+
 PASS=0
 FAIL=0
 ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
@@ -45,7 +51,7 @@ cleanup() {
         kill "$CLIENT_PID" 2>/dev/null
         wait "$CLIENT_PID" 2>/dev/null
     fi
-    docker rm -f "$CONTAINER" >/dev/null 2>&1
+    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -89,7 +95,7 @@ fi
 
 echo
 echo "== 4. start the workspace =="
-docker rm -f "$CONTAINER" >/dev/null 2>&1
+hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
 
 # The agent is a command on the same image; sshd is the image's default
 # entrypoint. Nothing else about the deployment differs, which is the point.
@@ -99,7 +105,7 @@ if [ "$SERVER" = "agent" ]; then
 fi
 echo "  ....  server: $SERVER"
 
-if docker run -d --name "$CONTAINER" --privileged \
+if hostdocker run -d --name "$CONTAINER" --privileged \
         -p "$SSH_PORT:2222" \
         -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
         -v "$WORK/wsstate:/etc/workspace" \
@@ -114,7 +120,7 @@ fi
 info "waiting for the account to be provisioned"
 provisioned=false
 for _ in $(seq 1 60); do
-    if docker exec "$CONTAINER" id "$ACCOUNT" >/dev/null 2>&1; then
+    if hostdocker exec "$CONTAINER" id "$ACCOUNT" >/dev/null 2>&1; then
         provisioned=true
         break
     fi
@@ -124,13 +130,13 @@ if [ "$provisioned" = true ]; then
     ok "key-watcher provisioned the account"
 else
     bad "the account was never provisioned"
-    docker logs "$CONTAINER" 2>&1 | tail -30
+    hostdocker logs "$CONTAINER" 2>&1 | tail -30
     exit 1
 fi
 
 info "waiting for dockerd inside the workspace"
 for _ in $(seq 1 60); do
-    docker exec "$CONTAINER" docker info >/dev/null 2>&1 && break
+    hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && break
     sleep 1
 done
 
@@ -154,7 +160,7 @@ if timeout 90 "$WORK/remote-docker" status >"$WORK/status.log" 2>&1 && grep -q "
 else
     bad "status failed"
     sed 's/^/        /' "$WORK/status.log"
-    docker logs "$CONTAINER" 2>&1 | tail -20
+    hostdocker logs "$CONTAINER" 2>&1 | tail -20
     exit 1
 fi
 
@@ -392,7 +398,7 @@ cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$OTHER.pub"
 
 provisioned2=false
 for _ in $(seq 1 90); do
-    if docker exec "$CONTAINER" id "$OTHER" >/dev/null 2>&1; then
+    if hostdocker exec "$CONTAINER" id "$OTHER" >/dev/null 2>&1; then
         provisioned2=true
         break
     fi
@@ -401,6 +407,7 @@ done
 
 if [ "$provisioned2" != true ]; then
     bad "the second account was never provisioned"
+    hostdocker logs "$CONTAINER" 2>&1 | tail -15 | sed 's/^/        /' 
 else
     first_port=$(grep '^WORKSPACE_NFS_PORT=' "$WORK/status.log" | cut -d= -f2)
     if [ -z "$first_port" ]; then
@@ -478,7 +485,7 @@ if [ "$FAIL" -ne 0 ]; then
     sed 's/^/        /' "$WORK/up.log"
     echo
     echo "== workspace log =="
-    docker logs "$CONTAINER" 2>&1 | tail -40 | sed 's/^/        /'
+    hostdocker logs "$CONTAINER" 2>&1 | tail -40 | sed 's/^/        /'
 fi
 
 echo
