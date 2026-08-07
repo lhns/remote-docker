@@ -409,7 +409,9 @@ if [ "$provisioned2" != true ]; then
     bad "the second account was never provisioned"
     hostdocker logs "$CONTAINER" 2>&1 | tail -15 | sed 's/^/        /' 
 else
-    first_port=$(grep '^WORKSPACE_NFS_PORT=' "$WORK/status.log" | cut -d= -f2)
+    # `status` prints a human table, not KEY=VALUE -- the wire format is what
+    # the client parses, not what it displays.
+    first_port=$(awk '/^nfs port/ {print $3}' "$WORK/status.log")
     if [ -z "$first_port" ]; then
         bad "could not determine the first account's port"
     else
