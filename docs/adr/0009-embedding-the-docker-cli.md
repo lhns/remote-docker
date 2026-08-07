@@ -32,27 +32,51 @@ comes from the client machine and never needs to reach the workspace through
 NFS at all. What it does need is a `/session` connection, which is an HTTP
 upgrade carrying gRPC.
 
-## Spike result
+## What integration actually found
 
-Measured, rather than assumed, before accepting:
+Measured rather than assumed:
 
 | | |
 |---|---|
 | builds at `CGO_ENABLED=0` | yes — the single-binary premise survives |
-| stripped binary | 28.4 MB, `docker/cli` alone |
-| modules in the graph | 205 |
+| binary, `docker/cli` embedded | 42 MB |
 | subcommands registered | 57 |
+| `docker build` | **present in the tree** |
+| `docker compose` | **absent** |
 
-One snag worth recording, because it will recur for anyone adding these
-dependencies: `docker/cli` is a `+incompatible` module, so its own `go.mod`
-constraints do not propagate through MVS. Resolving from an empty module
-produces an ambiguous import of
-`google.golang.org/genproto/googleapis/api/annotations`, which is provided by
-both the pre-split monolith and the split module. Pinning
-`google.golang.org/genproto@latest` first, then tidying, resolves it.
+Two of this record's original assumptions were wrong, and the corrections
+matter more than the confirmations:
 
-28 MB is acceptable for a tool whose entire premise is that nothing has to be
-installed. Buildx and Compose will add to it.
+**Buildx is no longer a separate plugin binary for our purposes.** `build` and
+`bake` are in `docker/cli`'s own command tree at v29, so embedding the CLI
+gets a modern builder without vendoring buildx separately. The functional gap
+this ADR was most worried about does not exist.
+
+**Compose is still a separate module** and is not obtained by embedding the
+CLI. `docker compose` falls through to the parent's help. Adding it means
+taking `github.com/docker/compose/v2` as its own dependency, which is
+outstanding.
+
+Two integration hazards, neither of which a dependency-weight spike could have
+surfaced, because both need the command tree actually built and run:
+
+- **Client options must go on `Flags()`, not `PersistentFlags()`.** Cobra
+  merges persistent flags into every subcommand, and `--context` has the
+  shorthand `-c`, which `build` already uses for `--cpu-shares`. Installing
+  them persistently makes `docker build --help` *panic*. The real CLI uses
+  `Flags()` with `TraverseChildren: true`, which is what still lets
+  `docker --context x ps` parse.
+- **The genproto exclusion has to be at whole-module scope.** `docker/cli` is
+  a `+incompatible` module, so its `go.mod` constraints do not propagate
+  through MVS, and the pre-split `google.golang.org/genproto` monolith still
+  provides `googleapis/api/annotations` — as does the split
+  `genproto/googleapis/api`. Requiring the newer monolith is not enough:
+  `go mod tidy` drops a require that nothing imports directly, and MVS then
+  picks the old one back up from a transitive dependency. An `exclude` of the
+  old version in `go.mod` is what actually holds.
+
+42 MB is acceptable for a tool whose entire premise is that nothing has to be
+installed. Compose will add to it.
 
 ## Decision
 

@@ -18,6 +18,12 @@ CONTAINER=remote-docker-itest
 SSH_PORT=22222
 ACCOUNT=itest
 
+# Every docker command that crosses the proxy is wrapped in a timeout. A
+# container whose volume mount never completes would otherwise block forever,
+# burning the whole CI budget and reporting nothing about where it stopped.
+DOCKER_TIMEOUT=120
+dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
+
 PASS=0
 FAIL=0
 ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
@@ -153,9 +159,14 @@ fi
 
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
+info "pulling test images through the workspace"
+for image in alpine:3 nginx:alpine; do
+    timeout 300 docker pull -q "$image" >/dev/null 2>&1         || info "could not pre-pull $image; the test may be slower"
+done
+
 echo
 echo "== 7. a bind mount under the working directory =="
-if out=$(docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
+if out=$(dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
     if [ "$out" = "from the project directory" ]; then
         ok "the container read this machine's file through the tunnel"
     else
@@ -168,7 +179,7 @@ fi
 echo
 echo "== 8. a bind mount OUTSIDE the working directory =="
 # The case the previous single-mount design could not express at all.
-if out=$(docker run --rm -v "$OUTSIDE:/d" alpine:3 cat /d/data 2>&1); then
+if out=$(dockert run --rm -v "$OUTSIDE:/d" alpine:3 cat /d/data 2>&1); then
     if [ "$out" = "from an unrelated directory" ]; then
         ok "an unrelated local directory resolved"
     else
@@ -180,7 +191,7 @@ fi
 
 echo
 echo "== 9. writes reach this machine =="
-if docker run --rm -v "$PROJECT:/w" alpine:3 sh -c 'echo written-by-container > /w/out' 2>&1; then
+if dockert run --rm -v "$PROJECT:/w" alpine:3 sh -c 'echo written-by-container > /w/out' 2>&1; then
     if [ -f "$PROJECT/out" ] && [ "$(cat "$PROJECT/out")" = "written-by-container" ]; then
         ok "the container's write landed on this filesystem"
     else
@@ -192,7 +203,7 @@ fi
 
 echo
 echo "== 10. a published port is reachable here =="
-docker run -d --name itest-web -p 18080:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
+dockert run -d --name itest-web -p 18080:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
 echo "<h1>served from the client</h1>" >"$PROJECT/index.html"
 
 reachable=false
@@ -214,7 +225,7 @@ docker rm -f itest-web >/dev/null 2>&1
 echo
 echo "== 11. named volumes are left alone =="
 docker volume create itest-named >/dev/null 2>&1
-if out=$(docker run --rm -v itest-named:/data alpine:3 sh -c 'echo ok > /data/f && cat /data/f' 2>&1); then
+if out=$(dockert run --rm -v itest-named:/data alpine:3 sh -c 'echo ok > /data/f && cat /data/f' 2>&1); then
     if [ "$out" = "ok" ]; then
         ok "a named volume still behaves as a named volume"
     else

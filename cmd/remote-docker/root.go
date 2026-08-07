@@ -45,6 +45,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newUpCommand(),
 		newShellCommand(),
 		newGCCommand(),
+		newDockerCommand(),
 		newVersionCommand(),
 	)
 	return root
