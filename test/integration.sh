@@ -271,7 +271,53 @@ fi
 docker volume rm itest-named >/dev/null 2>&1
 
 echo
-echo "== 12. our volumes are labelled and identifiable =="
+echo "== 12. docker compose =="
+# Compose is the reason ADR 0005 put the translation at the API rather than in
+# a command wrapper: it speaks the Engine API directly and never shells out to
+# `docker`, so a wrapper could not have covered it at all.
+#
+# It also exercises relative path resolution, which is the original bug
+# (docker/compose#8484): compose expands ./html to an absolute path on THIS
+# machine before sending it, and that path means nothing to the remote daemon
+# until the proxy rewrites it.
+mkdir -p "$PROJECT/html"
+echo "served by compose" >"$PROJECT/html/index.html"
+cat >"$PROJECT/compose.yaml" <<'COMPOSE'
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "18081:80"
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+COMPOSE
+
+if timeout 180 docker compose -f "$PROJECT/compose.yaml" up -d >"$WORK/compose.log" 2>&1; then
+    ok "compose brought the stack up through the proxy"
+
+    composed=false
+    for _ in $(seq 1 45); do
+        if curl -fsS --max-time 3 http://127.0.0.1:18081/ 2>/dev/null | grep -q "served by compose"; then
+            composed=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$composed" = true ]; then
+        ok "a compose relative bind resolved and its port was forwarded"
+    else
+        bad "the compose service never served this machine's file"
+        sed 's/^/        /' "$WORK/compose.log" | tail -20
+    fi
+
+    timeout 120 docker compose -f "$PROJECT/compose.yaml" down -v >/dev/null 2>&1         && ok "compose tore the stack down"         || bad "compose down failed"
+else
+    bad "compose up failed"
+    sed 's/^/        /' "$WORK/compose.log" | tail -20
+fi
+
+echo
+echo "== 13. our volumes are labelled and identifiable =="
 if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^rd-'; then
     ok "shares became rd-* volumes on the workspace daemon"
 else
