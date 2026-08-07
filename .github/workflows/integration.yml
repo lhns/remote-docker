@@ -1,0 +1,68 @@
+name: integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Settles one question, and it is the one most likely to stop the whole
+  # integration suite: can a privileged container on a GitHub runner mount NFS?
+  #
+  # The runner's kernel is shared with every container on it, so NFS client
+  # support is not something the image can supply -- if the kernel lacks it,
+  # no amount of apt-get inside the container helps, and the suite needs a
+  # different home. Answering it here, cheaply, before the suite exists.
+  nfs-capability:
+    name: nfs client in a privileged container
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'integration')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: does the runner kernel know about nfs at all
+        run: |
+          set -x
+          grep -c nfs /proc/filesystems || true
+          sudo modprobe nfs && echo "modprobe nfs: ok"
+          grep nfs /proc/filesystems
+
+      - name: export a directory from the runner
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y nfs-kernel-server
+          sudo mkdir -p /srv/probe
+          echo "hello from the runner" | sudo tee /srv/probe/marker
+          echo '/srv/probe 127.0.0.1(ro,sync,no_subtree_check,insecure)' \
+            | sudo tee /etc/exports
+          sudo exportfs -ra
+          sudo systemctl restart nfs-kernel-server
+          sudo exportfs -v
+
+      # host networking so the container reaches the runner's own loopback,
+      # which is where the real client's reverse tunnel will listen too.
+      - name: mount it from inside a privileged container
+        run: |
+          set -eux
+          docker run --rm --privileged --network host \
+            docker:28-dind sh -eux -c '
+              apk add --no-cache nfs-utils
+              mkdir -p /mnt/probe
+              mount -t nfs 127.0.0.1:/srv/probe /mnt/probe \
+                -o nfsvers=3,tcp,nolock,soft,timeo=30
+              cat /mnt/probe/marker
+              umount /mnt/probe
+            '
+
+      - name: verdict
+        run: echo "NFS client works inside a privileged container on this runner."

@@ -1,0 +1,131 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race needs cgo, which is why this runs here and not in the
+      # cross-compile matrix below (that one is CGO_ENABLED=0 by necessity).
+      - name: go test
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [windows, linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The client ships as a single binary with no runtime dependencies, so
+      # every target must build without cgo. A dependency that quietly needs it
+      # should fail here rather than at release time.
+      - name: go build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
+
+  shell:
+    name: shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      # The image is Alpine, so anything under image/bin must be POSIX sh.
+      # client/ and test/ are allowed to be bash.
+      - name: shellcheck
+        run: |
+          set -eux
+          if compgen -G 'image/bin/*' >/dev/null; then
+            shellcheck -S warning -s sh image/bin/*
+          fi
+          if compgen -G 'client/*.sh' >/dev/null || compgen -G 'test/*.sh' >/dev/null; then
+            shellcheck -S warning -s bash client/*.sh test/*.sh
+          fi
+        shell: bash
+
+      - name: visudo
+        run: |
+          if [ -f image/sudoers.workspace ]; then
+            sudo visudo -cf image/sudoers.workspace
+          else
+            echo "no sudoers file -- retired by the Go server agent (ADR 0010)"
+          fi
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: image
+          push: false
+          load: true
+          tags: remote-docker-workspace:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
