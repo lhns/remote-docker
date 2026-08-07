@@ -12,6 +12,14 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+
+# Which server the workspace runs. The agent must pass the suite written
+# against sshd, unchanged -- that is what makes it a substitution rather than a
+# rewrite with its own bug surface (ADR 0010).
+#
+#   WORKSPACE_SERVER=sshd    the original shell implementation
+#   WORKSPACE_SERVER=agent   remote-dockerd serve
+SERVER=${WORKSPACE_SERVER:-agent}
 WORK=$(mktemp -d)
 IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-itest
@@ -360,6 +368,44 @@ if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3         sh -c 'whi
     docker rm -f itest-idle >/dev/null 2>&1
 else
     bad "could not start the idle-test container"
+fi
+
+echo
+echo "== 11d. one account cannot bind another's NFS port =="
+# ADR 0010's entire justification, and untested until now. Under sshd this
+# depended on a permitlisten string generated correctly into every key's
+# authorized_keys; under the agent it is a comparison.
+#
+# Enrol a second account, then have it ask for the FIRST account's reverse
+# port. It must be refused.
+OTHER=itest2
+cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$OTHER.pub"
+
+provisioned2=false
+for _ in $(seq 1 90); do
+    if docker exec "$CONTAINER" id "$OTHER" >/dev/null 2>&1; then
+        provisioned2=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "$provisioned2" != true ]; then
+    bad "the second account was never provisioned"
+else
+    first_port=$(grep '^WORKSPACE_NFS_PORT=' "$WORK/status.log" | cut -d= -f2)
+    if [ -z "$first_port" ]; then
+        bad "could not determine the first account's port"
+    else
+        # -R on the OTHER account, targeting the FIRST account's port.
+        hijack=$(timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519"             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             -o ExitOnForwardFailure=yes -o BatchMode=yes             -p "$SSH_PORT" -N -R "127.0.0.1:$first_port:127.0.0.1:1"             "$OTHER@127.0.0.1" 2>&1 </dev/null; echo "rc=$?")
+
+        if echo "$hijack" | grep -q "rc=0"; then
+            bad "SECURITY: $OTHER bound $ACCOUNT's NFS port $first_port"
+        else
+            ok "one account cannot bind another's NFS port"
+        fi
+    fi
 fi
 
 echo
