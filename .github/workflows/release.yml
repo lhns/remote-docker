@@ -70,8 +70,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # Skipped on ordinary commits, and that is deliberate: this job publishes a
+  # GitHub Release, which per-commit would be noise, and `goreleaser release`
+  # needs a tag to release. Per-commit binaries are not missing -- the ci
+  # workflow builds all six targets on every push and uploads them as job
+  # artifacts, with the same flags used here.
   binaries:
-    name: client binaries
+    name: release binaries (tags only)
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:

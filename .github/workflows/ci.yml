@@ -80,8 +80,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The client ships as a single binary with no runtime dependencies, so
-      # every target must build without cgo. A dependency that quietly needs it
+      # Every package, not just the binaries: a dependency that quietly needs
+      # cgo, or a build-tagged file with no counterpart for this platform,
       # should fail here rather than at release time.
       - name: go build
         env:
@@ -89,6 +89,35 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+      - name: version
+        id: v
+        run: echo "version=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Built with the same flags goreleaser uses for a tagged release, so
+      # what people download from a commit differs from a release only in the
+      # version string it reports. A CI artifact built differently from the
+      # release is a CI artifact that proves less than it appears to.
+      - name: build the client
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          BINARY: remote-docker${{ matrix.goos == 'windows' && '.exe' || '' }}
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${{ steps.v.outputs.version }}" \
+            -o "dist/$BINARY" \
+            ./cmd/remote-docker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remote-docker-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+          if-no-files-found: error
+          # Short, because this is one artifact per target per commit and the
+          # tagged releases are the ones worth keeping.
+          retention-days: 14
 
   shell:
     name: shell
