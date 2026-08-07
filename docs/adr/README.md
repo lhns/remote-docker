@@ -24,8 +24,9 @@ survives that document being superseded.
 | [0011](0011-one-module-shared-contract.md) | One module with a shared contract package | Accepted |
 | [0012](0012-shared-dockerd-across-users.md) | A shared dockerd across users | Accepted, revisit |
 | [0013](0013-self-elevation-instead-of-a-launcher.md) | Self-elevation instead of a launcher container | Accepted |
-| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open** |
+| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open**, narrowed |
 | [0015](0015-connections-on-demand.md) | Connections established on demand | Accepted |
+| [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | Accepted |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

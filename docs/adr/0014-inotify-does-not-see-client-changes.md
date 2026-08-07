@@ -1,11 +1,19 @@
 # 0014. inotify does not see client-side changes
 
-- Status: **Open — no accepted solution**
+- Status: **Open — narrowed to deletions and renames**
 - Date: 2026-08-07
+- Updated: 2026-08-07, once candidate 2 was measured
 
 This record exists to stop the problem being rediscovered, and to say plainly
 what is not solved. It is not a decision. It should stay open until one of the
 candidates below is either accepted or ruled out.
+
+**Most of it is now solved.** Candidate 2 was tested and works: writes and
+creates are replayed into the container as genuine inotify events, and
+[ADR 0016](0016-replaying-change-events-as-real-syscalls.md) records the
+mechanism. What follows describes the original problem, unchanged, because it
+is still exactly right about deletions — and about why the industry chose sync.
+See "What is left", at the end.
 
 ## The measurement
 
@@ -62,7 +70,15 @@ Not injected automatically, deliberately: silently changing the behaviour of a
 user's build tool is a worse failure than the one it papers over. Documented
 instead.
 
-**2. Replay the event through the mount.** The most promising, and unverified.
+**2. Replay the event through the mount.** ✅ **Measured, and adopted for
+writes and creates.** See [ADR 0016](0016-replaying-change-events-as-real-syscalls.md).
+
+The concern below turned out not to apply. inotify marks live on the *inode*,
+not the mount, and dockerd bind-mounts each volume from one NFS mount it makes
+itself — so a poke at the volume mountpoint and a watcher inside the container
+are measured to share `dev` and `ino`, and no namespace entering is needed at
+all. The original wording is kept below because the reasoning was sound and the
+conclusion was wrong, which is worth being able to see.
 
 The client already watches its own filesystem — it must, to know what changed.
 It could tell the agent, which touches the changed path so that a watcher
@@ -79,6 +95,8 @@ enter one — but this has not been tested.
 only candidate that would preserve the "real filesystem, not a sync" claim
 rather than abandoning it.
 
+*It was cheap to test, and it did preserve the claim — for writes and creates.*
+
 **3. FUSE on the container side.** A FUSE filesystem can generate events for
 operations it performs. But the operations still have to originate locally,
 which means shipping the changes there first — sync again, under another name,
@@ -86,6 +104,31 @@ with a FUSE dependency added.
 
 **4. Accept and document.** The status quo. The README says so at the top, and
 this record explains why.
+
+## What is left
+
+Deletions, and the source half of a rename.
+
+`unlink()` of a name the client has already removed fails with `ENOENT` before
+the kernel generates anything, so there is no operation to perform: the thing
+that would produce `IN_DELETE` requires the file still to be there. The same
+applies to `IN_MOVED_FROM`.
+
+Two things could still be tried, neither attempted:
+
+1. **Lie in our own NFS server.** We control it. A `REMOVE` for a file that is
+   already gone could return success, which is precisely the trick Docker
+   Desktop's FUSE client plays on its replay thread. The measured failure was
+   `ENOENT` raised locally in the container's kernel, which suggests the VFS
+   short-circuits on a negative dentry before any RPC is sent — in which case
+   the server never gets the chance and this cannot work. Worth confirming
+   rather than assuming, because it is the only route that would close the gap
+   properly.
+2. **Accept the coarse approximation.** `REMOTE_DOCKER_WATCH=coarse` pokes the
+   parent directory, which produces `IN_MODIFY|IN_ISDIR`. A watcher that
+   rescans on any directory event will notice the deletion; one that trusts the
+   event kind will not. This ships, as an explicit setting rather than a
+   heuristic, because misrepresenting an event kind is the user's trade to make.
 
 ## Consequences
 
