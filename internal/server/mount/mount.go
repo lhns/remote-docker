@@ -8,7 +8,9 @@
 package mount
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,11 +59,25 @@ func (m *Manager) Ensure(home string, uid, gid, port int) error {
 		return nil
 	}
 
-	if err := os.MkdirAll(mountpoint, 0o755); err != nil {
+	// EEXIST is not a failure: something is already at that name, which is
+	// all a mountpoint has to be.
+	//
+	// It happens for a reason worth naming. If a previous client died without
+	// unmounting -- Ctrl-C, a dropped link, a laptop lid -- the mount is left
+	// stale, and stat on a stale NFS mount fails rather than reporting a
+	// directory. IsMounted therefore says "not mounted", MkdirAll falls
+	// through to mkdir, and mkdir says EEXIST. Treating that as fatal left the
+	// user with a permanently broken ~/workspace and no way to fix it from the
+	// client, which is how this was found.
+	if err := os.MkdirAll(mountpoint, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("mount: creating %s: %w", mountpoint, err)
 	}
+	// Ownership of the mountpoint itself only matters while nothing is mounted
+	// on it; once the NFS mount is up, attributes come from the server. So a
+	// failure here -- again, likely a stale mount -- must not stop the mount
+	// that would fix it.
 	if err := os.Chown(mountpoint, uid, gid); err != nil {
-		return fmt.Errorf("mount: owning %s: %w", mountpoint, err)
+		m.logf("could not set ownership of %s: %v", mountpoint, err)
 	}
 
 	// The same options the client puts on its volumes, from the same place, so
@@ -74,6 +90,22 @@ func (m *Manager) Ensure(home string, uid, gid, port int) error {
 		"127.0.0.1:"+workspace.ExportCWD, mountpoint,
 		"-o", opts["o"])
 	if out, err := cmd.CombinedOutput(); err != nil {
+		// One retry, after forcing off whatever was there. A stale mount from
+		// a previous session is the common cause and it cannot clear itself:
+		// every later attempt hits the same corpse. Lazy, because a stale
+		// NFS mount cannot be unmounted any other way while anything still
+		// holds a reference into it.
+		if m.forceUnmount(mountpoint) {
+			cmd = exec.Command("mount", "-t", "nfs",
+				"127.0.0.1:"+workspace.ExportCWD, mountpoint,
+				"-o", opts["o"])
+			if out2, err2 := cmd.CombinedOutput(); err2 == nil {
+				m.mounted[mountpoint] = true
+				return nil
+			} else {
+				out, err = out2, err2
+			}
+		}
 		return fmt.Errorf("mount: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
@@ -113,6 +145,22 @@ func (m *Manager) Release(home string) {
 		}
 	}
 	m.logf("unmounted %s", mountpoint)
+}
+
+// forceUnmount clears whatever is at a mountpoint, reporting whether it is
+// worth trying to mount again.
+//
+// Lazy unmount is the only thing that works on a stale NFS mount: a plain
+// umount needs to talk to a server that is not answering, which is what made
+// it stale.
+func (m *Manager) forceUnmount(mountpoint string) bool {
+	if out, err := exec.Command("umount", "-l", mountpoint).CombinedOutput(); err != nil {
+		m.logf("could not clear %s before remounting: %v: %s",
+			mountpoint, err, strings.TrimSpace(string(out)))
+		return false
+	}
+	m.logf("cleared a stale mount at %s", mountpoint)
+	return true
 }
 
 func (m *Manager) logf(format string, args ...any) {

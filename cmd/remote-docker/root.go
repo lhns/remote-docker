@@ -51,7 +51,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newDockerCommand(),
 		newContextCommand(),
 		newVersionCommand(),
-		newWorkspacesCommand(),
+		newWorkspaceCommand(),
 	)
 	return root
 }
@@ -94,7 +94,13 @@ account there.`,
 				return err
 			}
 
-			key, err := sshx.LoadOrCreateKey(config.KeyPath(), "remote-docker")
+			// keyComment(), not a bare "remote-docker": the comment is the
+			// only thing distinguishing one .pub from another in the
+			// workspace's authorized_keys.d, and the person adding it needs
+			// to know whose machine it came from. LoadOrCreateKey only sets a
+			// comment when it GENERATES, and enroll is what usually generates,
+			// so this is the spelling that ends up on almost every key.
+			key, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 			if err != nil {
 				return err
 			}
@@ -104,7 +110,10 @@ account there.`,
 			_, _ = fmt.Fprintf(out, "It must be saved as: authorized_keys.d/%s.pub\n", cfg.User)
 			_, _ = fmt.Fprintln(out, "(the filename becomes your account name there)")
 			_, _ = fmt.Fprintln(out)
-			_, _ = fmt.Fprintln(out, key.AuthorizedKey(""))
+			// With the comment, not without. It is the only thing telling
+			// whoever files this .pub which machine it came from, and an
+			// authorized_keys.d full of anonymous keys cannot be audited.
+			_, _ = fmt.Fprintln(out, key.AuthorizedKey(config.KeyComment()))
 			return nil
 		},
 	}

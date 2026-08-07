@@ -127,6 +127,14 @@ Docker-in-Docker daemon and a real kernel NFS mount — see
 
 ## Several workspaces
 
+```bash
+remote-docker workspace add dev --host dev.example --user alice --watch partial
+remote-docker workspace add ci  --host ci.example  --user alice
+```
+
+which writes `~/.remote-docker.json` for you, and creates a docker context per
+workspace as it goes — there is no case where you want one and not the other:
+
 ```json
 {
   "workspaces": {
@@ -147,13 +155,12 @@ Each gets its own endpoint, so sessions run side by side:
 ```bash
 remote-docker up -w dev &
 remote-docker up -w ci &
-remote-docker context install --all
 
 docker --context dev ps
 docker --context ci ps
 ```
 
-`remote-docker workspaces` lists them.
+`remote-docker workspace list` shows them and which is the default.
 
 ## How it works
 
@@ -323,13 +330,16 @@ workspace is a shared machine; treat it as one.
 | | |
 |---|---|
 | `remote-docker enroll` | print the public key to hand over for enrolment |
+| `remote-docker workspace add <name> --host …` | add a workspace and create its docker context |
+| `remote-docker workspace remove <name>` | remove both again |
+| `remote-docker workspace list` | list them (`workspaces` still works) |
+| `remote-docker workspace default <name>` | choose which one commands use by default |
 | `remote-docker up` | open a session and serve the local Docker endpoint |
 | `remote-docker status` | what the workspace reports about this account |
 | `remote-docker shell` | interactive session on the workspace |
 | `remote-docker docker …` | the embedded Docker CLI |
-| `remote-docker context install [--use\|--all]` | write a docker context |
-| `remote-docker context remove` | remove it again |
-| `remote-docker workspaces` | list configured workspaces |
+| `remote-docker context install [--use\|--all]` | rewrite a docker context without touching the config |
+| `remote-docker context remove` | remove one |
 | `remote-docker gc` | remove share volumes nothing is using |
 | `remote-docker version` | |
 

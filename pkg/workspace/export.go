@@ -176,11 +176,16 @@ func ParseID(s string) (string, error) {
 // soft plus a short timeo means a dead tunnel surfaces as EIO instead of
 // parking container processes in uninterruptible sleep. nolock because the NFS
 // server implements no NLM. port == mountport skips rpcbind entirely.
+//
+// noacl because the server implements no NFS_ACL sideband either. Without it
+// the Linux client probes program 100227 on every mount, is correctly told
+// there is no handler, and the server logs that refusal as an error -- so the
+// first thing a user saw on their first `shell` was a red herring.
 func NFSVolumeOptions(port int, exportPath string) map[string]string {
 	return map[string]string{
 		"type": "nfs",
 		"o": fmt.Sprintf(
-			"addr=127.0.0.1,port=%d,mountport=%d,nfsvers=3,nolock,soft,timeo=30,retrans=2,actimeo=1,noatime,rsize=1048576,wsize=1048576",
+			"addr=127.0.0.1,port=%d,mountport=%d,nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2,actimeo=1,noatime,rsize=1048576,wsize=1048576",
 			port, port,
 		),
 		"device": ":" + exportPath,

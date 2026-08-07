@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	nfsclient "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
@@ -17,6 +18,27 @@ import (
 // through rpcbind on port 111, and this server -- like the deployment it
 // models -- serves MOUNT and NFS on one port with no portmapper anywhere. That
 // is the same reason the mount options say port == mountport.
+// dialWithRetry works around the host, not the code under test.
+//
+// These tests make many short-lived connections in quick succession, and on
+// Windows each one holds its source port in TIME_WAIT afterwards. The dial
+// then intermittently fails with "Only one usage of each socket address",
+// which says nothing about the NFS server and everything about the machine
+// running the test. It is a test-harness concern: the real client opens one
+// connection per session, not dozens in a loop.
+func dialWithRetry(host string, port int) (*rpc.Client, error) {
+	var err error
+	for attempt := range 10 {
+		var client *rpc.Client
+		client, err = nfsclient.DialServiceAtPort(host, port)
+		if err == nil {
+			return client, nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+	}
+	return nil, err
+}
+
 func mountAt(t *testing.T, addr, export string) (*nfsclient.Target, error) {
 	t.Helper()
 
@@ -29,7 +51,7 @@ func mountAt(t *testing.T, addr, export string) (*nfsclient.Target, error) {
 		t.Fatalf("parsing port %q: %v", portStr, err)
 	}
 
-	client, err := nfsclient.DialServiceAtPort(host, port)
+	client, err := dialWithRetry(host, port)
 	if err != nil {
 		t.Fatalf("dialling %s: %v", addr, err)
 	}

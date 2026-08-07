@@ -152,6 +152,11 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
+	// go-nfs logs to stderr through a package-level logger of its own. Point
+	// it at ours before anything can serve, or it writes past the client's
+	// logging and straight onto the user's terminal.
+	nfsserve.SetLogger(opts.Log)
+
 	s := &Session{
 		opts:   opts,
 		ctx:    runCtx,
@@ -321,14 +326,26 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 	liveCtx, cancel := context.WithCancel(s.ctx)
 	live.cancel = cancel
-	s.startPorts(liveCtx, live)
-	s.startNotify(live)
 
-	live.wg.Go(func() {
-		if _, err := s.collector(live).Collect(liveCtx); err != nil {
-			s.logf("collecting unused share volumes: %v", err)
-		}
-	})
+	// Both of these belong to a session that is HOSTING something: forwarding
+	// ports exists to make this session's containers reachable, and collecting
+	// volumes is housekeeping for a long-running `up`.
+	//
+	// A NoFiles session -- `status`, `gc` -- only asks the workspace a
+	// question and then closes. Starting them there meant a status command
+	// began two background round trips and immediately tore the connection out
+	// from under them, so it printed its table followed by two errors about
+	// work the user never asked for.
+	if s.opts.Files != NoFiles {
+		s.startPorts(liveCtx, live)
+		s.startNotify(live)
+
+		live.wg.Go(func() {
+			if _, err := s.collector(live).Collect(liveCtx); err != nil {
+				s.logQuiet(liveCtx, "collecting unused share volumes: %v", err)
+			}
+		})
+	}
 
 	s.logf("connected to %s@%s", s.opts.Config.User, s.opts.Config.Host)
 	return live, nil
@@ -346,6 +363,22 @@ func (s *Session) sharesChanged() {
 	}
 }
 
+// logQuiet reports an error unless the context that owns the work has already
+// been cancelled.
+//
+// Everything here talks over one SSH connection, so tearing that connection
+// down makes every goroutine still using it fail at once -- with EOF, or
+// "unexpected packet in response to channel open", or a half-read stream.
+// Those are descriptions of shutdown, not of anything wrong, and printing them
+// after the user pressed Ctrl-C or after a one-shot command finished is how a
+// clean exit came to look like a crash.
+func (s *Session) logQuiet(ctx context.Context, format string, args ...any) {
+	if ctx.Err() != nil || s.ctx.Err() != nil {
+		return
+	}
+	s.logf(format, args...)
+}
+
 func (s *Session) startNFS(live *liveConn) error {
 	addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(live.info.NFSPort))
 
@@ -358,7 +391,7 @@ func (s *Session) startNFS(live *liveConn) error {
 
 	live.wg.Go(func() {
 		if err := live.nfs.Serve(l); err != nil && !errors.Is(err, net.ErrClosed) {
-			s.logf("nfs server stopped: %v", err)
+			s.logQuiet(s.ctx, "nfs server stopped: %v", err)
 		}
 	})
 	return nil
@@ -385,7 +418,7 @@ func (s *Session) watchPorts(ctx context.Context, live *liveConn) {
 
 	reconcile := func() {
 		if err := live.ports.Reconcile(ctx); err != nil {
-			s.logf("reconciling ports: %v", err)
+			s.logQuiet(ctx, "reconciling ports: %v", err)
 		}
 	}
 	reconcile()

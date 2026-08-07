@@ -406,6 +406,31 @@ func KeyPath() string { return filepath.Join(StateDir(), "id_ed25519") }
 // KnownHostsPath records workspace host keys.
 func KnownHostsPath() string { return filepath.Join(StateDir(), "known_hosts") }
 
+// KeyComment identifies this machine on the key it generates.
+//
+// It is the only thing distinguishing one file from another in a workspace's
+// authorized_keys.d, so whoever enrols a key can tell whose machine it came
+// from. Lives here rather than in session because enroll needs it too, and the
+// two disagreeing meant the comment depended on which command happened to
+// generate the key.
+func KeyComment() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	user := ""
+	for _, key := range []string{"USER", "USERNAME", "LOGNAME"} {
+		if v := os.Getenv(key); v != "" {
+			user = v
+			break
+		}
+	}
+	if user == "" {
+		return "remote-docker-" + host
+	}
+	return "remote-docker-" + host + "-" + user
+}
+
 // defaultUser guesses the workspace account from the local username, because
 // the enrolled .pub file is usually named after it.
 func defaultUser() string {
@@ -438,4 +463,99 @@ func sanitizeUser(name string) string {
 		out = out[:30]
 	}
 	return out
+}
+
+// Save writes the config file, creating its directory if needed.
+//
+// Written to a temporary file in the same directory and renamed over the
+// original, so an interrupted write leaves the previous config intact rather
+// than a truncated one. This file is the only record of how to reach a
+// workspace; half of it is worse than none.
+func Save(file File, path string) error {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("config: creating %s: %w", dir, err)
+		}
+	}
+
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: encoding: %w", err)
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".remote-docker-*.json")
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: writing %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Windows will not rename onto an existing file.
+	_ = os.Remove(path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("config: replacing %s: %w", path, err)
+	}
+	return nil
+}
+
+// Set adds or replaces a workspace.
+//
+// A file written by hand may describe a single workspace with no name, in the
+// flat form. Adding a second one has to move the first into the keyed form,
+// or it would be shadowed by the top-level fields and silently unreachable.
+func (f *File) Set(name string, ws Workspace) error {
+	if name == "" {
+		return fmt.Errorf("config: a workspace needs a name")
+	}
+	if f.Workspaces == nil {
+		f.Workspaces = map[string]Workspace{}
+	}
+	if f.Host != "" {
+		existing := Workspace{Host: f.Host, Port: f.Port, User: f.User, Endpoint: f.Endpoint}
+		flat := f.Default
+		if flat == "" {
+			flat = f.Host
+		}
+		if flat != name {
+			if _, taken := f.Workspaces[flat]; !taken {
+				f.Workspaces[flat] = existing
+			}
+		}
+		f.Host, f.Port, f.User, f.Endpoint = "", 0, "", ""
+	}
+	f.Workspaces[name] = ws
+	if f.Default == "" {
+		f.Default = name
+	}
+	return nil
+}
+
+// Remove deletes a workspace. It reports whether there was one to delete.
+func (f *File) Remove(name string) bool {
+	if _, ok := f.Workspaces[name]; !ok {
+		return false
+	}
+	delete(f.Workspaces, name)
+	if f.Default != name {
+		return true
+	}
+	// The default pointed at what was just removed. Promote the only
+	// remaining workspace if there is exactly one, because then the choice is
+	// unambiguous; otherwise leave it unset rather than picking for the user.
+	f.Default = ""
+	if names := f.Names(); len(names) == 1 {
+		f.Default = names[0]
+	}
+	return true
 }
