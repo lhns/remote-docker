@@ -103,7 +103,7 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 	return nil
 }
 
-// Container is the subset of container state the port forwarder needs.
+// Container is the subset of container state the client needs.
 type Container struct {
 	ID    string `json:"Id"`
 	Names []string
@@ -114,6 +114,14 @@ type Container struct {
 		Type        string
 	}
 	Labels map[string]string
+
+	// Mounts says which volumes a container currently holds. Used to decide
+	// whether the connection can be released: a running container with one of
+	// our volumes has a live NFS mount that would break.
+	Mounts []struct {
+		Type string
+		Name string
+	}
 }
 
 // ListContainers returns the running containers.

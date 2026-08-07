@@ -136,11 +136,21 @@ func newStatusCommand() *cobra.Command {
 			}
 			defer func() { _ = s.Close() }()
 
+			// status is the one command whose whole job is to report what the
+			// workspace says, so it connects rather than waiting to be asked.
+			info, err := s.Info(ctx)
+			if err != nil {
+				return err
+			}
+
 			out := cmd.OutOrStdout()
+			if cfg.Name != "" {
+				_, _ = fmt.Fprintf(out, "%-20s %s\n", "name", cfg.Name)
+			}
 			_, _ = fmt.Fprintf(out, "%-20s %s@%s:%d\n", "workspace", cfg.User, cfg.Host, cfg.Port)
-			_, _ = fmt.Fprintf(out, "%-20s %s (uid %d)\n", "account", s.Info.User, s.Info.UID)
-			_, _ = fmt.Fprintf(out, "%-20s %d\n", "nfs port", s.Info.NFSPort)
-			_, _ = fmt.Fprintf(out, "%-20s %s\n", "docker", s.Info.Docker)
+			_, _ = fmt.Fprintf(out, "%-20s %s (uid %d)\n", "account", info.User, info.UID)
+			_, _ = fmt.Fprintf(out, "%-20s %d\n", "nfs port", info.NFSPort)
+			_, _ = fmt.Fprintf(out, "%-20s %s\n", "docker", info.Docker)
 			_, _ = fmt.Fprintf(out, "%-20s %s\n", "endpoint", s.Endpoint)
 			return nil
 		},

@@ -330,6 +330,39 @@ else
 fi
 
 echo
+echo "== 11c. a container survives an idle disconnect =="
+# The connection is released when nothing needs it (ADR 0015), which makes the
+# reconnect path load-bearing rather than an error case. It must also NOT be
+# released while a container holds one of our volumes -- that container has a
+# live NFS mount, and dropping the tunnel underneath gives it EIO.
+if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3         sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
+
+    # Longer than the idle timeout, so a sweep has certainly run.
+    sleep 75
+
+    if [ "$(docker inspect -f '{{.State.Running}}' itest-idle 2>/dev/null)" = "true" ]; then
+        ok "a container holding one of our volumes kept working across an idle period"
+    else
+        bad "the container died during the idle period -- its mount was dropped"
+        docker logs itest-idle 2>&1 | tail -5 | sed 's/^/        /'
+    fi
+
+    # And the client is still usable afterwards, reconnecting if it released.
+    if out=$(dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
+        if [ "$out" = "from the project directory" ]; then
+            ok "the client still works after an idle period"
+        else
+            bad "unexpected content after idle: $out"
+        fi
+    else
+        bad "the client failed after an idle period: $out"
+    fi
+    docker rm -f itest-idle >/dev/null 2>&1
+else
+    bad "could not start the idle-test container"
+fi
+
+echo
 echo "== 12. docker compose =="
 # Compose is the reason ADR 0005 put the translation at the API rather than in
 # a command wrapper: it speaks the Engine API directly and never shells out to

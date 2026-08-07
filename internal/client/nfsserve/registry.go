@@ -151,3 +151,19 @@ func normalizeExport(p string) string {
 	}
 	return strings.TrimSuffix(p, "/")
 }
+
+// SetAttrs changes the attributes reported for shares registered from now on,
+// and for existing ones.
+//
+// The session needs this because the workspace account's uid is only known
+// once connected, while the working directory is registered before that --
+// the endpoint has to exist before anything can ask us to connect.
+func (r *Registry) SetAttrs(attrs Attrs) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.attrs = attrs
+	for _, share := range r.shares {
+		share.fs = withAttrs(osfs.New(share.LocalPath, osfs.WithBoundOS()), attrs)
+	}
+}
