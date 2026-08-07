@@ -3,6 +3,7 @@ module github.com/lhns/remote-docker
 go 1.25.0
 
 require (
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/gliderlabs/ssh v0.3.8 // indirect
