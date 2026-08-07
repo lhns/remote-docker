@@ -78,3 +78,42 @@ than a rewrite.
   proven against stock sshd first, and the integration suite written against it
   becomes the agent's conformance test. The agent is not done until it passes
   tests written before it existed.
+
+## What it actually cost
+
+Written after building it, because the estimate above was a guess.
+
+**The client did not change at all.** Not one line. The agent speaks the same
+SSH, answers `workspace-info` from the same `pkg/workspace` type the client
+parses with, and keeps the `docker system dial-stdio` command name even though
+there is no CLI behind it any more — the name is now a protocol constant rather
+than a command, and keeping it is what made the substitution free.
+
+**Roughly 1,000 lines replaced roughly 350 lines of shell.** That is the honest
+number and it is not flattering on its own. What it buys:
+
+- account provisioning is unit tested, where the shell suite needed root and
+  therefore never ran in CI at all
+- the collision bug is fixed rather than documented — two files deriving the
+  same account name used to mean one silently overwrote the other's access
+- dockerd is supervised, where the entrypoint started it and never looked again
+- port ownership is a comparison rather than generated `authorized_keys` text
+
+**The port-ownership claim is now measured.** It was the whole justification
+for this record and had never been tested in either implementation. The
+integration suite enrols a second account and has it ask for the first
+account's reverse port; the suite runs against both servers, so sshd's
+`permitlisten` and the agent's comparison are held to the same assertion.
+
+**What the trade actually looks like in practice.** Giving up OpenSSH is real,
+and the mitigation is narrower than "gliderlabs is widely deployed": this
+server exposes public-key authentication and two channel types, and everything
+behind it drops privilege to the authenticated account exactly as sshd would.
+It is a small surface. It is still a surface OpenSSH had already hardened, and
+that has not changed.
+
+**One thing did not survive intact.** The agent's session handling is
+Linux-only — dropping privilege needs `syscall.Credential` — so it is
+build-tagged, and a lint or vet run on a non-Linux development machine does not
+see it. That cost a CI round trip before it was noticed, and the fix is a
+documented `GOOS=linux` pass rather than anything structural.

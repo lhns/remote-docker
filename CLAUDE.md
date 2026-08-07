@@ -132,11 +132,17 @@ Working, proven end to end in CI: the tunnel, the NFS export, bind rewriting
 including sources outside the working directory, automatic port forwarding,
 and managed volume creation.
 
+The Go agent exists: `cmd/remote-dockerd serve` provides accounts, SSH,
+structural port ownership, the `/cwd` mount and dockerd supervision, and
+`elevate` removes the third-party Swarm launcher. The integration suite runs
+against both sshd and the agent, so the agent has to pass tests written before
+it existed.
+
 Not done:
-- `cmd/remote-dockerd`, the Go server agent (ADR 0010). The image still runs
-  sshd, `key-watcher` and the mount helpers.
-- `docker compose` — a separate module, not obtained by embedding the CLI.
-- The original shell clients are superseded but not yet deleted.
+- The image still ships sshd and the shell helpers alongside the agent. They go
+  once both matrix legs are green.
+- `docker compose` is NOT embedded. It works through the proxy; embedding it
+  would mean pinning docker/cli back a major version (ADR 0009).
 - No tag has been pushed, so the release pipeline is unexercised.
 
 ## Conventions
