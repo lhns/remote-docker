@@ -66,3 +66,28 @@ jobs:
 
       - name: verdict
         run: echo "NFS client works inside a privileged container on this runner."
+
+  # The whole thing, together: a real workspace container, the real client
+  # binary, and a real kernel NFS mount inside the dind daemon.
+  end-to-end:
+    name: end to end
+    runs-on: ubuntu-latest
+    needs: nfs-capability
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      - name: run the suite
+        run: bash test/integration.sh
+
+      - name: workspace logs on failure
+        if: failure()
+        run: docker logs remote-docker-itest 2>&1 | tail -100 || true
