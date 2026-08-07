@@ -185,24 +185,24 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 		// is silently dropped.
 		if n := clientReader.Buffered(); n > 0 {
 			if buffered, err := clientReader.Peek(n); err == nil {
-				upstream.Write(buffered)
-				clientReader.Discard(n)
+				_, _ = upstream.Write(buffered)
+				_, _ = clientReader.Discard(n)
 			}
 		}
-		io.Copy(upstream, clientReader)
+		_, _ = io.Copy(upstream, clientReader)
 		upstream.Close()
 	})
 
 	wg.Go(func() {
 		if n := upstreamReader.Buffered(); n > 0 {
 			if buffered, err := upstreamReader.Peek(n); err == nil {
-				client.Write(buffered)
-				upstreamReader.Discard(n)
+				_, _ = client.Write(buffered)
+				_, _ = upstreamReader.Discard(n)
 			}
 		}
-		io.Copy(client, upstreamReader)
+		_, _ = io.Copy(client, upstreamReader)
 		if cw, ok := client.(interface{ CloseWrite() error }); ok {
-			cw.CloseWrite()
+			_ = cw.CloseWrite()
 		} else {
 			client.Close()
 		}
@@ -215,7 +215,7 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 // expects, so it prints a message rather than "unexpected EOF".
 func writeError(w io.Writer, err error) {
 	body := fmt.Sprintf("{\"message\":%q}", err.Error())
-	fmt.Fprintf(w, "HTTP/1.1 500 Internal Server Error\r\n"+
+	_, _ = fmt.Fprintf(w, "HTTP/1.1 500 Internal Server Error\r\n"+
 		"Content-Type: application/json\r\n"+
 		"Content-Length: %d\r\n"+
 		"Connection: close\r\n\r\n%s", len(body), body)

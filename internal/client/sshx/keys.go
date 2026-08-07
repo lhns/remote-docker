@@ -90,12 +90,12 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 		return KeyPair{}, fmt.Errorf("sshx: creating key file: %w", err)
 	}
 	if err := pem.Encode(f, block); err != nil {
-		f.Close()
-		os.Remove(path)
+		_ = f.Close()
+		_ = os.Remove(path)
 		return KeyPair{}, err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return KeyPair{}, fmt.Errorf("sshx: writing key file: %w", err)
 	}
 

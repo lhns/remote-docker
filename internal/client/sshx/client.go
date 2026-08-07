@@ -123,7 +123,7 @@ func (c *Client) keepAlive() {
 			return
 		case <-t.C:
 			if _, _, err := c.ssh.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-				c.Close()
+				_ = c.Close()
 				return
 			}
 		}
@@ -181,7 +181,7 @@ func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sshx: opening session: %w", err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 
 	var stderr strings.Builder
 	sess.Stderr = &stderr
@@ -198,7 +198,7 @@ func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 
 	select {
 	case <-ctx.Done():
-		sess.Signal(ssh.SIGKILL)
+		_ = sess.Signal(ssh.SIGKILL)
 		return nil, ctx.Err()
 	case r := <-ch:
 		if r.err != nil {
@@ -221,16 +221,16 @@ func (c *Client) OpenStream(cmd string) (io.ReadWriteCloser, error) {
 	}
 	stdin, err := sess.StdinPipe()
 	if err != nil {
-		sess.Close()
+		_ = sess.Close()
 		return nil, fmt.Errorf("sshx: stdin pipe: %w", err)
 	}
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
-		sess.Close()
+		_ = sess.Close()
 		return nil, fmt.Errorf("sshx: stdout pipe: %w", err)
 	}
 	if err := sess.Start(cmd); err != nil {
-		sess.Close()
+		_ = sess.Close()
 		return nil, fmt.Errorf("sshx: starting %q: %w", cmd, err)
 	}
 	return &sessionStream{sess: sess, in: stdin, out: stdout}, nil
@@ -249,7 +249,7 @@ func (s *sessionStream) Write(p []byte) (int, error) { return s.in.Write(p) }
 func (s *sessionStream) Close() error {
 	var err error
 	s.once.Do(func() {
-		s.in.Close()
+		_ = s.in.Close()
 		err = s.sess.Close()
 	})
 	return err

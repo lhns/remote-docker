@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  default: standard
+
+  settings:
+    errcheck:
+      # Close on a reader, and the writes in a best-effort teardown, have no
+      # useful failure handling: the operation they belong to has already
+      # succeeded or already failed. Checking them adds noise without adding
+      # information. Close on a *writer* is deliberately NOT here -- that one
+      # can lose data and must be handled.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*os.File).Sync
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test helpers close listeners, servers and connections in cleanup
+      # functions where there is nothing to do with an error and nothing to
+      # report it to. Production code is held to the full standard.
+      - path: _test\.go
+        linters:
+          - errcheck

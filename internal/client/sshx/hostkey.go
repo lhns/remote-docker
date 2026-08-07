@@ -102,7 +102,7 @@ func (k *KnownHosts) trust(hostname string, remote net.Addr, key ssh.PublicKey) 
 	if err != nil {
 		return fmt.Errorf("sshx: recording host key: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := fmt.Fprintln(f, knownhosts.Line(addrs, key)); err != nil {
 		return fmt.Errorf("sshx: recording host key: %w", err)

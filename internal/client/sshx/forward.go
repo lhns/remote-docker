@@ -114,11 +114,11 @@ func Serve(l net.Listener, dial func() (net.Conn, error)) error {
 func pipe(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		io.Copy(a, b)
+		_, _ = io.Copy(a, b)
 		closeWrite(a)
 	})
 	wg.Go(func() {
-		io.Copy(b, a)
+		_, _ = io.Copy(b, a)
 		closeWrite(b)
 	})
 	wg.Wait()
@@ -129,7 +129,7 @@ func pipe(a, b net.Conn) {
 func closeWrite(c net.Conn) {
 	type writeCloser interface{ CloseWrite() error }
 	if wc, ok := c.(writeCloser); ok {
-		wc.CloseWrite()
+		_ = wc.CloseWrite()
 		return
 	}
 	c.Close()

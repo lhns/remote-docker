@@ -60,14 +60,14 @@ func startTestServer(t *testing.T) *testServer {
 
 		Handler: func(s gssh.Session) {
 			cmd := strings.Join(s.Command(), " ")
-			switch {
-			case cmd == "":
+			switch cmd {
+			case "":
 				io.WriteString(s, "interactive\n")
-			case cmd == "fail":
+			case "fail":
 				io.WriteString(s.Stderr(), "something went wrong\n")
 				s.Exit(3)
 				return
-			case cmd == "cat":
+			case "cat":
 				// Bidirectional: used to prove OpenStream carries a
 				// long-lived duplex stream, which is what the Docker API
 				// needs from `docker system dial-stdio`.
