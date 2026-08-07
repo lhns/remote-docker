@@ -32,6 +32,10 @@ type Rewriter struct {
 	// NFSPort is the loopback port inside the workspace where the reverse
 	// tunnel exposes this client's NFS server.
 	NFSPort int
+
+	// Owner identifies this client's containers on a daemon shared with other
+	// accounts. Empty disables labelling.
+	Owner string
 }
 
 // ContainerCreate rewrites the body of POST /containers/create.
@@ -48,11 +52,23 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		return nil, fmt.Errorf("rewrite: decoding container create: %w", err)
 	}
 
+	changed := false
+	if err := r.label(payload, &changed); err != nil {
+		return nil, err
+	}
+
 	hostConfigRaw, ok := payload["HostConfig"]
 	if !ok {
-		// No HostConfig means no binds. Nothing to do, and the body must go
-		// through byte-identical.
-		return body, nil
+		// No HostConfig means no binds, but the label above may still have
+		// changed the payload.
+		if !changed {
+			return body, nil
+		}
+		out, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("rewrite: encoding container create: %w", err)
+		}
+		return out, nil
 	}
 
 	var hostConfig map[string]json.RawMessage
@@ -60,29 +76,67 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		return nil, fmt.Errorf("rewrite: decoding HostConfig: %w", err)
 	}
 
-	changed := false
-
-	if err := r.rewriteBinds(ctx, hostConfig, &changed); err != nil {
+	hostChanged := false
+	if err := r.rewriteBinds(ctx, hostConfig, &hostChanged); err != nil {
 		return nil, err
 	}
-	if err := r.rewriteMounts(ctx, hostConfig, &changed); err != nil {
+	if err := r.rewriteMounts(ctx, hostConfig, &hostChanged); err != nil {
 		return nil, err
 	}
-	if !changed {
+	if !hostChanged && !changed {
 		return body, nil
 	}
 
-	newHostConfig, err := json.Marshal(hostConfig)
-	if err != nil {
-		return nil, fmt.Errorf("rewrite: encoding HostConfig: %w", err)
+	if hostChanged {
+		newHostConfig, err := json.Marshal(hostConfig)
+		if err != nil {
+			return nil, fmt.Errorf("rewrite: encoding HostConfig: %w", err)
+		}
+		payload["HostConfig"] = newHostConfig
 	}
-	payload["HostConfig"] = newHostConfig
 
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("rewrite: encoding container create: %w", err)
 	}
 	return out, nil
+}
+
+// OwnerLabel marks every container this client creates.
+//
+// The workspace daemon is shared between accounts (ADR 0012), so its event
+// stream carries other people's containers. Without a mark of our own, port
+// forwarding would open listeners on this machine because somebody else ran
+// docker compose up.
+const OwnerLabel = "com.github.lhns.remote-docker.owner"
+
+// label stamps OwnerLabel onto the container's labels, preserving any the
+// caller set.
+func (r *Rewriter) label(payload map[string]json.RawMessage, changed *bool) error {
+	if r.Owner == "" {
+		return nil
+	}
+
+	labels := map[string]string{}
+	if raw, ok := payload["Labels"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &labels); err != nil {
+			// Labels we cannot read are left alone rather than replaced; the
+			// daemon will report anything genuinely malformed.
+			return nil
+		}
+	}
+	if labels[OwnerLabel] == r.Owner {
+		return nil
+	}
+	labels[OwnerLabel] = r.Owner
+
+	encoded, err := json.Marshal(labels)
+	if err != nil {
+		return fmt.Errorf("rewrite: encoding labels: %w", err)
+	}
+	payload["Labels"] = encoded
+	*changed = true
+	return nil
 }
 
 // rewriteBinds handles HostConfig.Binds, the `-v` form.

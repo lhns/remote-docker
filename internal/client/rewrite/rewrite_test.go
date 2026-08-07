@@ -297,3 +297,56 @@ func TestRewriteForwardsUnparseableBinds(t *testing.T) {
 		t.Errorf("an unparseable bind was altered:\n  in  %s\n  out %s", body, out)
 	}
 }
+
+// Containers must be identifiable as ours. The workspace daemon is shared
+// (ADR 0012), so without a mark of our own, port forwarding would open
+// listeners on this machine because somebody else ran docker compose up.
+func TestRewriteLabelsOurContainers(t *testing.T) {
+	r, _, _ := newRewriter()
+	r.Owner = "alice"
+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"Image":"alpine","Labels":{"mine":"kept"}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatal(err)
+	}
+	labels, _ := payload["Labels"].(map[string]any)
+	if labels[OwnerLabel] != "alice" {
+		t.Errorf("labels = %v, want %s=alice", labels, OwnerLabel)
+	}
+	// The user's own labels are not ours to discard.
+	if labels["mine"] != "kept" {
+		t.Errorf("labels = %v, which lost the caller's own label", labels)
+	}
+}
+
+func TestRewriteLabelsWithNoExistingLabels(t *testing.T) {
+	r, _, _ := newRewriter()
+	r.Owner = "alice"
+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"Image":"alpine"}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if !strings.Contains(string(out), OwnerLabel) {
+		t.Errorf("out = %s, want the owner label", out)
+	}
+}
+
+// With no owner configured the body must still pass through untouched.
+func TestRewriteWithoutOwnerLeavesBodyAlone(t *testing.T) {
+	r, _, _ := newRewriter()
+
+	body := []byte(`{"Image":"alpine"}`)
+	out, err := r.ContainerCreate(t.Context(), body)
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if string(out) != string(body) {
+		t.Errorf("body changed with no owner set:\n  in  %s\n  out %s", body, out)
+	}
+}
