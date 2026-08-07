@@ -364,3 +364,106 @@ type rewriterFunc func(context.Context, []byte) ([]byte, error)
 func (f rewriterFunc) ContainerCreate(ctx context.Context, body []byte) ([]byte, error) {
 	return f(ctx, body)
 }
+
+// Attach does not always negotiate with 101. When the client does not request
+// a protocol upgrade, the daemon answers 200 with a docker stream content type
+// and then writes raw frames. Treating that as an ordinary response is wrong
+// in the worst way: `docker run` exits 0 having printed nothing, because the
+// container's output was framed as an HTTP body nobody read.
+//
+// The integration suite found this -- every test that read container stdout
+// failed empty while every test that did not passed.
+func TestProxyHijacksOnDockerStreamContentType(t *testing.T) {
+	for _, contentType := range []string{
+		"application/vnd.docker.raw-stream",
+		"application/vnd.docker.multiplexed-stream",
+		"application/vnd.docker.raw-stream; charset=utf-8",
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			const output = "hello from the container\n"
+			daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n", contentType)
+				io.WriteString(conn, output)
+			})
+			addr := startProxy(t, &Proxy{Dialer: &tcpDialer{daemon.listener.Addr().String()}})
+
+			conn, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer conn.Close()
+
+			io.WriteString(conn, "POST /v1.51/containers/abc/attach?stream=1&stdout=1 HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n")
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			reader := bufio.NewReader(conn)
+
+			// Drain the head.
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					t.Fatalf("reading head: %v", err)
+				}
+				if strings.TrimSpace(line) == "" {
+					break
+				}
+			}
+
+			buf := make([]byte, len(output))
+			if _, err := io.ReadFull(reader, buf); err != nil {
+				t.Fatalf("the container's output never arrived: %v", err)
+			}
+			if string(buf) != output {
+				t.Errorf("got %q, want %q", buf, output)
+			}
+		})
+	}
+}
+
+// A non-standard reason phrase must survive: attach answers "101 UPGRADED",
+// and a client matching on it would be misled by a rewritten one.
+func TestProxyPreservesTheReasonPhrase(t *testing.T) {
+	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+		io.WriteString(conn, "HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+		io.WriteString(conn, "x")
+	})
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{daemon.listener.Addr().String()}})
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	io.WriteString(conn, "POST /v1.51/exec/abc/start HTTP/1.1\r\nHost: docker\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 0\r\n\r\n")
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	statusLine, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("reading status: %v", err)
+	}
+	if !strings.Contains(statusLine, "UPGRADED") {
+		t.Errorf("status = %q, want the daemon's own reason phrase", statusLine)
+	}
+}
+
+// An ordinary JSON response must NOT be treated as a hijack, or every normal
+// API call would stop being parseable.
+func TestProxyDoesNotHijackOrdinaryResponses(t *testing.T) {
+	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+		respondJSON(conn, 200, `{"ok":true}`)
+	})
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{daemon.listener.Addr().String()}})
+
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
+
+	resp, err := client.Get("http://" + addr + "/v1.51/_ping")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != `{"ok":true}` {
+		t.Errorf("body = %q", body)
+	}
+}

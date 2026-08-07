@@ -124,12 +124,15 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 	}
 	defer resp.Body.Close()
 
-	// An upgrade -- `docker exec`, `attach`, and buildx's /session, which
-	// carries gRPC -- means everything after the response head is raw bytes
-	// in both directions. Nothing may parse or buffer it after this point.
-	if resp.StatusCode == http.StatusSwitchingProtocols {
-		if err := resp.Write(client); err != nil {
-			return false, fmt.Errorf("writing upgrade response: %w", err)
+	// A hijack -- `docker exec`, `attach`, and buildx's /session, which carries
+	// gRPC -- means everything after the response head is raw bytes in both
+	// directions. Nothing may parse or buffer it after this point.
+	if isHijack(resp) {
+		// Only the head. resp.Write would copy the body too, and for a
+		// content-type hijack the body IS the stream -- it would be consumed
+		// here, one direction only, and the splice below would never run.
+		if err := writeHead(client, resp); err != nil {
+			return false, fmt.Errorf("writing hijack response: %w", err)
 		}
 		splice(client, clientReader, upstream, upstreamReader)
 		return false, nil
@@ -164,6 +167,66 @@ func (p *Proxy) rewriteBody(ctx context.Context, req *http.Request) error {
 	req.TransferEncoding = nil
 	req.Header.Del("Content-Length")
 	return nil
+}
+
+// writeHead writes a response's status line and headers, and nothing else.
+//
+// resp.Status is preferred over deriving the text from the code, because the
+// daemon's reason phrases are not always the standard ones -- attach answers
+// "101 UPGRADED" -- and a client matching on it would be misled.
+func writeHead(w io.Writer, resp *http.Response) error {
+	status := resp.Status
+	if status == "" {
+		status = fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+
+	var head strings.Builder
+	fmt.Fprintf(&head, "HTTP/1.1 %s\r\n", status)
+	if err := resp.Header.Write(&head); err != nil {
+		return err
+	}
+	head.WriteString("\r\n")
+
+	_, err := io.WriteString(w, head.String())
+	return err
+}
+
+// Docker's content types for a hijacked stream. The daemon answers an attach
+// with one of these and then treats the connection as raw bytes.
+const (
+	rawStreamType         = "application/vnd.docker.raw-stream"
+	multiplexedStreamType = "application/vnd.docker.multiplexed-stream"
+)
+
+// isHijack reports whether the daemon has taken the connection over.
+//
+// 101 is the obvious case and the one everyone thinks of. It is not the only
+// one: attach negotiates by content type when the client does not request a
+// protocol upgrade, answering 200 with a docker stream content type and then
+// writing raw frames. Treating that as an ordinary response is exactly wrong,
+// and wrong in a way that looks like success -- `docker run` exits 0 having
+// printed nothing, because the container's output was framed as an HTTP body
+// nobody was reading. Found by the integration suite: every test that read
+// container stdout failed empty while every test that did not passed.
+func isHijack(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return true
+	}
+	switch contentType(resp) {
+	case rawStreamType, multiplexedStreamType:
+		return true
+	default:
+		return false
+	}
+}
+
+// contentType returns the media type with any parameters stripped.
+func contentType(resp *http.Response) string {
+	ct := resp.Header.Get("Content-Type")
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(ct))
 }
 
 // isContainerCreate matches POST /containers/create and its versioned form,
