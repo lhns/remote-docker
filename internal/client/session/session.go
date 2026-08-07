@@ -58,6 +58,12 @@ type Session struct {
 	listener  net.Listener
 	nfsTunnel net.Listener
 
+	// cancel stops the session's own background work. It must exist
+	// separately from the caller's context: Close waits for those goroutines,
+	// and a caller whose context outlives the session -- a one-shot command
+	// like `status`, say -- would otherwise wait forever.
+	cancel context.CancelFunc
+
 	log  Logger
 	once sync.Once
 	wg   sync.WaitGroup
@@ -93,7 +99,11 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
-	s := &Session{ssh: client, log: opts.Log}
+	// Background work runs under a context this session owns, so Close can
+	// stop it regardless of what the caller's context is doing.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+
+	s := &Session{ssh: client, log: opts.Log, cancel: cancel}
 
 	info, err := s.readInfo(ctx)
 	if err != nil {
@@ -133,12 +143,12 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		Log: opts.Log,
 	}
 
-	if err := s.startProxy(ctx, opts.Endpoint); err != nil {
+	if err := s.startProxy(runCtx, opts.Endpoint); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 
-	s.startPorts(ctx)
+	s.startPorts(runCtx)
 
 	// Collect leftovers from earlier sessions. Best effort and in the
 	// background: a workspace where collection fails is still perfectly
@@ -151,7 +161,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		Log:     opts.Log,
 	}
 	s.wg.Go(func() {
-		if _, err := s.collector.Collect(ctx); err != nil {
+		if _, err := s.collector.Collect(runCtx); err != nil {
 			s.logf("collecting unused share volumes: %v", err)
 		}
 	})
@@ -289,6 +299,11 @@ func (s *Session) watchPorts(ctx context.Context) {
 func (s *Session) Close() error {
 	var err error
 	s.once.Do(func() {
+		// Stop the background goroutines first, or the wait below never
+		// returns.
+		if s.cancel != nil {
+			s.cancel()
+		}
 		if s.pm != nil {
 			_ = s.pm.Close()
 		}

@@ -125,7 +125,12 @@ echo "from the project directory" >"$PROJECT/marker"
 echo "from an unrelated directory" >"$OUTSIDE/data"
 
 cd "$PROJECT" || exit 1
-if "$WORK/remote-docker" status 2>&1 | tee "$WORK/status.log" | grep -q "nfs port"; then
+# Wrapped in a timeout: a command that hangs here reports where it stopped
+# instead of consuming the whole job budget in silence. This caught a real
+# deadlock -- Close waiting on background goroutines that only stopped when
+# the caller's context was cancelled, which for a one-shot command it never
+# was.
+if timeout 90 "$WORK/remote-docker" status >"$WORK/status.log" 2>&1 && grep -q "nfs port" "$WORK/status.log"; then
     ok "status reports the workspace parameters"
     sed 's/^/        /' "$WORK/status.log"
 else
