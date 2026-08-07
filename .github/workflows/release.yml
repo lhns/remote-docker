@@ -1,5 +1,9 @@
-name: release
+name: build and release
 
+# Named for what it does rather than for its rarest job. Every push to main
+# comes through here: it runs the whole of ci.yml first, then publishes. Only
+# the GitHub Release part is tag-only.
+#
 # Two things ship from here, on different schedules:
 #
 #   the workspace image   every push to main as sha-<short>, and on a v* tag
@@ -24,8 +28,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Nothing is published until this passes. It is the whole of ci.yml -- tests,
+  # lint, the cross-compile matrix, shellcheck -- run at this exact ref.
+  #
+  # Without it a tag published from code no workflow had ever checked: ci.yml
+  # has no tag trigger, so `git push --tags` went straight to a GitHub Release
+  # and to :latest.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   image:
     name: workspace image
+    needs: [ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,10 +87,11 @@ jobs:
   # Skipped on ordinary commits, and that is deliberate: this job publishes a
   # GitHub Release, which per-commit would be noise, and `goreleaser release`
   # needs a tag to release. Per-commit binaries are not missing -- the ci
-  # workflow builds all six targets on every push and uploads them as job
-  # artifacts, with the same flags used here.
+  # job above builds them from this same .goreleaser.yaml and uploads them as
+  # workflow artifacts.
   binaries:
     name: release binaries (tags only)
+    needs: [ci]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:

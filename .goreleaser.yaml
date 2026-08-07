@@ -39,7 +39,10 @@ checksum:
   name_template: checksums.txt
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  # Matches the tag the workspace image gets from the same commit, so a client
+  # binary and an image can be paired by eye. `remote-docker version` on a CI
+  # artifact prints sha-abc1234; on a release it prints the release version.
+  version_template: "sha-{{ .ShortCommit }}"
 
 changelog:
   use: github

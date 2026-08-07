@@ -1,9 +1,15 @@
 name: ci
 
+# Runs directly on pull requests, and is CALLED by release.yml for pushes to
+# main and for tags. That is why there is no `push` trigger here: if both fired
+# on a main push, the same checks would run twice and the two runs would fight
+# over the concurrency group below.
+#
+# Being called rather than merely running alongside is what makes a tag safe to
+# push -- release.yml waits for this to pass before publishing anything.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -90,33 +96,42 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
 
-      - name: version
-        id: v
-        run: echo "version=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+  # Downloadable binaries for every commit, built by goreleaser from
+  # .goreleaser.yaml -- the same file, the same flags and the same archive
+  # layout a tagged release uses. Only the version string differs: sha-<short>
+  # here, the release version there.
+  #
+  # This is deliberately NOT a second build definition alongside the matrix
+  # above. That matrix answers "does every package compile for this target",
+  # which goreleaser does not check because it only builds cmd/remote-docker.
+  # This job answers "what would we ship". Two questions, one definition each.
+  artifacts:
+    name: artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser derives the version from git describe, and a shallow
+          # clone has no tags to describe against.
+          fetch-depth: 0
 
-      # Built with the same flags goreleaser uses for a tagged release, so
-      # what people download from a commit differs from a release only in the
-      # version string it reports. A CI artifact built differently from the
-      # release is a CI artifact that proves less than it appears to.
-      - name: build the client
-        env:
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          BINARY: remote-docker${{ matrix.goos == 'windows' && '.exe' || '' }}
-        run: |
-          go build -trimpath \
-            -ldflags="-s -w -X main.version=${{ steps.v.outputs.version }}" \
-            -o "dist/$BINARY" \
-            ./cmd/remote-docker
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --snapshot --clean
 
       - uses: actions/upload-artifact@v4
         with:
-          name: remote-docker-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/
+          name: remote-docker-binaries
+          path: dist/**/remote-docker*
           if-no-files-found: error
-          # Short, because this is one artifact per target per commit and the
-          # tagged releases are the ones worth keeping.
+          # Short: this is six binaries per commit, and the tagged releases are
+          # the ones worth keeping.
           retention-days: 14
 
   shell:
@@ -142,9 +157,13 @@ jobs:
           fi
         shell: bash
 
+  # Pull requests only. On main and on tags, release.yml builds this image for
+  # real -- multi-arch and pushed -- so building it here as well would be the
+  # same work twice for a strictly weaker result.
   image:
     name: image
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

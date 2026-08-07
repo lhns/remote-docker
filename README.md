@@ -1,6 +1,6 @@
 # remote-docker
 
-[![ci](https://github.com/lhns/remote-docker/actions/workflows/ci.yml/badge.svg)](https://github.com/lhns/remote-docker/actions/workflows/ci.yml)
+[![build](https://github.com/lhns/remote-docker/actions/workflows/release.yml/badge.svg)](https://github.com/lhns/remote-docker/actions/workflows/release.yml)
 [![integration](https://github.com/lhns/remote-docker/actions/workflows/integration.yml/badge.svg)](https://github.com/lhns/remote-docker/actions/workflows/integration.yml)
 
 Use Docker from a machine that cannot have Docker installed, with your own
