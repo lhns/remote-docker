@@ -100,15 +100,20 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       # The image is Alpine, so anything under image/bin must be POSIX sh.
-      # client/ and test/ are allowed to be bash.
+      # test/ is allowed to be bash.
+      #
+      # Each glob is guarded separately. A combined `a || b` check passes as
+      # soon as either matches, and then hands shellcheck the unexpanded
+      # pattern for the one that did not -- which is how deleting client/
+      # broke this step.
       - name: shellcheck
         run: |
           set -eux
           if compgen -G 'image/bin/*' >/dev/null; then
             shellcheck -S warning -s sh image/bin/*
           fi
-          if compgen -G 'client/*.sh' >/dev/null || compgen -G 'test/*.sh' >/dev/null; then
-            shellcheck -S warning -s bash client/*.sh test/*.sh
+          if compgen -G 'test/*.sh' >/dev/null; then
+            shellcheck -S warning -s bash test/*.sh
           fi
         shell: bash
 
