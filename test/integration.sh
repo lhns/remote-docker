@@ -90,12 +90,21 @@ fi
 echo
 echo "== 4. start the workspace =="
 docker rm -f "$CONTAINER" >/dev/null 2>&1
+
+# The agent is a command on the same image; sshd is the image's default
+# entrypoint. Nothing else about the deployment differs, which is the point.
+SERVER_ARGS=()
+if [ "$SERVER" = "agent" ]; then
+    SERVER_ARGS=(remote-dockerd serve)
+fi
+echo "  ....  server: $SERVER"
+
 if docker run -d --name "$CONTAINER" --privileged \
         -p "$SSH_PORT:2222" \
         -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
         -v "$WORK/wsstate:/etc/workspace" \
         -e DOCKER_TLS_CERTDIR= \
-        "$IMAGE" >/dev/null; then
+        "$IMAGE" "${SERVER_ARGS[@]}" >/dev/null; then
     ok "workspace container started"
 else
     bad "workspace container failed to start"

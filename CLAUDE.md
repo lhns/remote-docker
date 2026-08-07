@@ -48,6 +48,12 @@ go build ./...
 go test ./...                    # unit tests; no daemon needed
 golangci-lint run ./...          # must be clean
 
+# The agent's session handling is Linux-only, so a lint run on the development
+# machine does not see it at all. CI does, and will fail on what you did not
+# lint. Run this before pushing server changes:
+GOOS=linux golangci-lint run ./...
+CGO_ENABLED=0 GOOS=linux go build ./...
+
 # the client
 go build -o remote-docker ./cmd/remote-docker
 

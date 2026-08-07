@@ -44,10 +44,10 @@ func (s *Server) handleSession(session gssh.Session) {
 
 	command := strings.Join(session.Command(), " ")
 
-	switch {
-	case command == InfoCommand:
+	switch command {
+	case InfoCommand:
 		s.serveInfo(session, account)
-	case command == DialStdioCommand:
+	case DialStdioCommand:
 		s.serveDockerSocket(session, account)
 	default:
 		s.serveExec(session, account, command)
@@ -58,7 +58,7 @@ func (s *Server) handleSession(session gssh.Session) {
 func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 	port, err := s.cfg.Mapping.PortForUID(account.UID())
 	if err != nil {
-		fmt.Fprintln(session.Stderr(), "workspace-info:", err)
+		_, _ = fmt.Fprintln(session.Stderr(), "workspace-info:", err)
 		_ = session.Exit(1)
 		return
 	}
@@ -95,7 +95,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount) {
 	conn, err := net.Dial("unix", s.cfg.DockerSocket)
 	if err != nil {
-		fmt.Fprintf(session.Stderr(), "cannot reach the docker daemon: %v\n", err)
+		_, _ = fmt.Fprintf(session.Stderr(), "cannot reach the docker daemon: %v\n", err)
 		_ = session.Exit(1)
 		return
 	}
@@ -154,7 +154,7 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 		if s.cfg.Mounts != nil {
 			if port, err := s.cfg.Mapping.PortForUID(stored.UID); err == nil {
 				if err := s.cfg.Mounts.Ensure(stored.Home, stored.UID, stored.GID, port); err != nil {
-					fmt.Fprintf(session.Stderr(), "workspace not mounted: %v\n", err)
+					_, _ = fmt.Fprintf(session.Stderr(), "workspace not mounted: %v\n", err)
 				}
 			}
 		}
@@ -178,7 +178,7 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 func (s *Server) servePTY(session gssh.Session, cmd *exec.Cmd, winCh <-chan gssh.Window) {
 	f, err := pty.Start(cmd)
 	if err != nil {
-		fmt.Fprintf(session.Stderr(), "cannot allocate a terminal: %v\n", err)
+		_, _ = fmt.Fprintf(session.Stderr(), "cannot allocate a terminal: %v\n", err)
 		_ = session.Exit(1)
 		return
 	}
