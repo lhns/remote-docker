@@ -1,0 +1,23 @@
+# Line endings are not cosmetic here.
+#
+# With core.autocrlf=true, a Windows checkout rewrites every text file to CRLF
+# in the working tree. image/ is then COPYed into an Alpine image, where a
+# script starting "#!/bin/sh\r" fails with "not found" -- naming the
+# interpreter, not the carriage return, so it reads as a missing shell rather
+# than as a line-ending problem. The same applies to anything the container
+# parses: sshd_config, sudoers, the entrypoint.
+#
+# Forcing LF in the working tree costs nothing on Windows -- every editor and
+# toolchain in use here reads LF -- and removes the failure entirely.
+
+* text=auto eol=lf
+
+# PowerShell is the one place CRLF is the local convention. Harmless either
+# way, since it never enters a container.
+*.ps1 text eol=crlf
+
+# Never touched, whatever they contain.
+*.png binary
+*.jpg binary
+*.gz  binary
+*.zip binary
