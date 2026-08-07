@@ -30,17 +30,20 @@ func (f *fakeSharer) Share(localPath string) (string, error) {
 
 type fakeVolumes struct {
 	created map[string]map[string]string
+	labels  map[string]map[string]string
 	err     error
 }
 
-func (f *fakeVolumes) EnsureVolume(_ context.Context, name string, opts map[string]string) error {
+func (f *fakeVolumes) EnsureVolume(_ context.Context, name string, opts, labels map[string]string) error {
 	if f.err != nil {
 		return f.err
 	}
 	if f.created == nil {
 		f.created = map[string]map[string]string{}
+		f.labels = map[string]map[string]string{}
 	}
 	f.created[name] = opts
+	f.labels[name] = labels
 	return nil
 }
 

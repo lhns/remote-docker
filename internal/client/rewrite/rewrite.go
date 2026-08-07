@@ -21,8 +21,13 @@ type Sharer interface {
 // VolumeEnsurer creates a volume on the workspace daemon if it is not already
 // there.
 type VolumeEnsurer interface {
-	EnsureVolume(ctx context.Context, name string, driverOpts map[string]string) error
+	EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error
 }
+
+// ManagedLabel marks a volume as one this client created, and is what makes
+// garbage collection safe: the rd- prefix alone proves nothing, since a user
+// is entitled to name a volume "rd-backups".
+const ManagedLabel = "com.github.lhns.remote-docker"
 
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
 type Rewriter struct {
@@ -268,7 +273,11 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, err
 	}
 
 	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath)
-	if err := r.Volumes.EnsureVolume(ctx, name, opts); err != nil {
+	labels := map[string]string{ManagedLabel: "share"}
+	if r.Owner != "" {
+		labels[OwnerLabel] = r.Owner
+	}
+	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
 		return "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
 	}
 	return name, nil

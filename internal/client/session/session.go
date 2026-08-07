@@ -47,12 +47,13 @@ type Session struct {
 	Info     workspace.Info
 	Endpoint string
 
-	ssh      *sshx.Client
-	nfs      *nfsserve.Server
-	registry *nfsserve.Registry
-	proxy    *proxy.Proxy
-	api      *proxy.APIClient
-	pm       *ports.Manager
+	ssh       *sshx.Client
+	nfs       *nfsserve.Server
+	registry  *nfsserve.Registry
+	proxy     *proxy.Proxy
+	api       *proxy.APIClient
+	pm        *ports.Manager
+	collector *rewrite.Collector
 
 	listener  net.Listener
 	nfsTunnel net.Listener
@@ -138,7 +139,29 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	}
 
 	s.startPorts(ctx)
+
+	// Collect leftovers from earlier sessions. Best effort and in the
+	// background: a workspace where collection fails is still perfectly
+	// usable, and blocking startup on housekeeping would be the wrong trade.
+	s.collector = &rewrite.Collector{
+		Volumes: s.api,
+		Remover: s.api,
+		InUse:   s.api,
+		Owner:   info.User,
+		Log:     opts.Log,
+	}
+	s.wg.Go(func() {
+		if _, err := s.collector.Collect(ctx); err != nil {
+			s.logf("collecting unused share volumes: %v", err)
+		}
+	})
+
 	return s, nil
+}
+
+// Collect removes share volumes this account is no longer using.
+func (s *Session) Collect(ctx context.Context) (int, error) {
+	return s.collector.Collect(ctx)
 }
 
 // readInfo asks the workspace for this account's parameters.

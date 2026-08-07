@@ -44,6 +44,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newStatusCommand(),
 		newUpCommand(),
 		newShellCommand(),
+		newGCCommand(),
 		newVersionCommand(),
 	)
 	return root
@@ -239,4 +240,47 @@ func mustWorkDir() string {
 // leaving its reverse forward bound on the workspace.
 func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func newGCCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "gc",
+		Short: "Remove share volumes this account is no longer using",
+		Long: `Each distinct directory bound into a container gets a volume on the
+workspace, and they outlive the containers that referenced them.
+
+Only volumes this client created, for this account, and referenced by no
+container -- running or stopped -- are removed. A volume you created yourself
+is never touched, whatever it is named.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := resolve()
+			if err != nil {
+				return err
+			}
+			if err := cfg.RequireHost(); err != nil {
+				return err
+			}
+
+			ctx, cancel := signalContext()
+			defer cancel()
+
+			s, err := session.Open(ctx, session.Options{
+				Config:   cfg,
+				WorkDir:  mustWorkDir(),
+				Endpoint: cfg.Endpoint,
+				Log:      logger{},
+			})
+			if err != nil {
+				return err
+			}
+			defer func() { _ = s.Close() }()
+
+			removed, err := s.Collect(ctx)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed %d unused share volume(s)\n", removed)
+			return nil
+		},
+	}
 }

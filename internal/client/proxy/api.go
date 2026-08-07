@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/lhns/remote-docker/internal/client/rewrite"
 )
 
 // APIClient makes Docker API calls of our own -- creating the volumes that
@@ -77,17 +79,15 @@ func (c *APIClient) versioned(path string) string {
 // Docker's volume create is idempotent for an identical definition and returns
 // the existing volume, so a reconnecting client re-uses what it made last time
 // rather than failing or duplicating.
-func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts map[string]string) error {
+func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error {
 	body := map[string]any{
 		"Name":       name,
 		"Driver":     "local",
 		"DriverOpts": driverOpts,
-		"Labels": map[string]string{
-			// Marks the volume as ours, so garbage collection can find it and
-			// -- more importantly -- can tell it apart from a volume the user
-			// created, which is never ours to remove.
-			"com.github.lhns.remote-docker": "share",
-		},
+		// The labels mark the volume as ours, so garbage collection can find
+		// it and -- more importantly -- can tell it apart from a volume the
+		// user created, which is never ours to remove.
+		"Labels": labels,
 	}
 
 	resp, conn, err := c.do(ctx, http.MethodPost, "/volumes/create", body)
@@ -202,4 +202,90 @@ func apiError(resp *http.Response) string {
 		return fmt.Sprintf("%s: %s", resp.Status, trimmed)
 	}
 	return resp.Status
+}
+
+// Volume is a volume as the daemon reports it.
+type Volume struct {
+	Name   string
+	Labels map[string]string
+}
+
+// ListVolumes returns every volume on the workspace daemon.
+func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
+	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("proxy: listing volumes: %s", apiError(resp))
+	}
+
+	var payload struct {
+		Volumes []Volume
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("proxy: decoding volume list: %w", err)
+	}
+
+	out := make([]rewrite.Volume, 0, len(payload.Volumes))
+	for _, v := range payload.Volumes {
+		out = append(out, rewrite.Volume{Name: v.Name, Labels: v.Labels})
+	}
+	return out, nil
+}
+
+// RemoveVolume deletes a volume by name.
+func (c *APIClient) RemoveVolume(ctx context.Context, name string) error {
+	resp, conn, err := c.do(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("proxy: removing volume %s: %s", name, apiError(resp))
+	}
+	return nil
+}
+
+// VolumesInUse names the volumes referenced by a container, running or not.
+//
+// Stopped containers count. A volume removed from under a stopped container
+// would make it fail to start again with a mount error, which is a confusing
+// way to discover that garbage collection was too eager.
+func (c *APIClient) VolumesInUse(ctx context.Context) (map[string]bool, error) {
+	resp, conn, err := c.do(ctx, http.MethodGet, "/containers/json?all=true", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("proxy: listing containers: %s", apiError(resp))
+	}
+
+	var containers []struct {
+		Mounts []struct {
+			Type string
+			Name string
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		return nil, fmt.Errorf("proxy: decoding container mounts: %w", err)
+	}
+
+	inUse := map[string]bool{}
+	for _, container := range containers {
+		for _, m := range container.Mounts {
+			if m.Type == "volume" && m.Name != "" {
+				inUse[m.Name] = true
+			}
+		}
+	}
+	return inUse, nil
 }
