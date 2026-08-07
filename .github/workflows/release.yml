@@ -37,18 +37,22 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  image:
-    name: workspace image
-    needs: [ci]
+  # The version every job below agrees on, computed once.
+  meta:
+    name: version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tags: ${{ steps.v.outputs.image_tags }}
+      image: ${{ steps.v.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Compute versions
         id: v
         run: |
           OWNER="${{ github.repository_owner }}"
           IMG="ghcr.io/${OWNER}/remote-docker-workspace"
+          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             V="${GITHUB_REF_NAME#v}"
             echo "image_tags=${IMG}:${V},${IMG}:latest" >> "$GITHUB_OUTPUT"
@@ -59,7 +63,32 @@ jobs:
             echo "version=${SHA}" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: docker/setup-qemu-action@v3
+  # One job per architecture, each on a runner of that architecture.
+  #
+  # This used to be a single job building both under QEMU, and emulating arm64
+  # to compile Go and run apk cost more than everything else in the workflow
+  # put together -- 5m25s against 1m40s for the whole test suite. Native arm
+  # runners are free for public repositories, so the emulation was buying
+  # nothing.
+  #
+  # Each pushes by digest only; the manifest job below joins them under the
+  # real tags. That is docker's own recommended shape for this, and it is what
+  # lets the two architectures build at the same time instead of one after the
+  # other.
+  image:
+    name: image (${{ matrix.platform }})
+    needs: [ci, meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -67,22 +96,68 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           # Context is the repository root, not image/: the agent is compiled
           # from source here.
           context: .
           file: image/Dockerfile
-          # The workspace runs Docker-in-Docker on whatever the deployment
-          # host is, so both architectures are worth publishing.
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.v.outputs.image_tags }}
+          platforms: ${{ matrix.platform }}
           build-args: |
-            VERSION=${{ steps.v.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            VERSION=${{ needs.meta.outputs.version }}
+          outputs: type=image,name=${{ needs.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          # Scoped per architecture: one cache shared between them would have
+          # each build evicting the other's layers on every run.
+          cache-from: type=gha,scope=image-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.platform }}
+
+      - name: Export the digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${{ steps.build.outputs.digest }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Joins the per-architecture digests into one multi-arch tag. Cheap: it moves
+  # no layers, only writes a manifest list.
+  manifest:
+    name: workspace image
+    needs: [image, meta]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the manifest list
+        run: |
+          set -eux
+          TAGS=""
+          for tag in $(echo "${{ needs.meta.outputs.tags }}" | tr ',' ' '); do
+            TAGS="$TAGS -t $tag"
+          done
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $TAGS             $(printf "${{ needs.meta.outputs.image }}@sha256:%s " *)
+        working-directory: /tmp/digests
+
+      - name: Show what was published
+        run: docker buildx imagetools inspect "$(echo '${{ needs.meta.outputs.tags }}' | cut -d, -f1)"
 
   # Skipped on ordinary commits, and that is deliberate: this job publishes a
   # GitHub Release, which per-commit would be noise, and `goreleaser release`

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultSSHPort is the workspace's sshd port.
@@ -56,6 +57,13 @@ type Config struct {
 	// WatchExclude replaces the default list of directory names never
 	// watched. Empty means the default.
 	WatchExclude []string
+
+	// IdleTimeout is how long the workspace connection may sit unused before
+	// being released (ADR 0015). Zero means the default; negative never
+	// releases. Configurable chiefly so the integration suite can exercise
+	// idle release without sleeping past a fixed minute, but a slow link is a
+	// fair reason to raise it too.
+	IdleTimeout time.Duration
 }
 
 // File is the on-disk form, ~/.remote-docker.json.
@@ -161,6 +169,7 @@ const (
 	EnvWatch        = "REMOTE_DOCKER_WATCH"
 	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
 	EnvWatchExclude = "REMOTE_DOCKER_WATCH_EXCLUDE"
+	EnvIdleTimeout  = "REMOTE_DOCKER_IDLE_TIMEOUT"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -299,6 +308,13 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvWatchExclude); v != "" {
 		cfg.WatchExclude = splitList(v)
+	}
+	if v := os.Getenv(EnvIdleTimeout); v != "" {
+		// Ignored rather than fatal if malformed, like the other numeric
+		// settings: it would otherwise break commands that connect to nothing.
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.IdleTimeout = d
+		}
 	}
 }
 

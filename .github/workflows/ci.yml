@@ -81,38 +81,9 @@ jobs:
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
-
-      # Every package, not just the binaries: a dependency that quietly needs
-      # cgo, or a build-tagged file with no counterpart for this platform,
-      # should fail here rather than at release time.
-      - name: go build
-        env:
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: go build ./...
-
-  # Downloadable binaries for every commit, built by goreleaser from
-  # .goreleaser.yaml -- the same file, the same flags and the same archive
-  # layout a tagged release uses. Only the version string differs: sha-<short>
-  # here, the release version there.
-  #
-  # This is deliberately NOT a second build definition alongside the matrix
-  # above. That matrix answers "does every package compile for this target",
-  # which goreleaser does not check because it only builds cmd/remote-docker.
-  # This job answers "what would we ship". Two questions, one definition each.
-  artifacts:
-    name: artifacts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # goreleaser derives the version from git describe, and a shallow
-          # clone has no tags to describe against.
+          # goreleaser derives a version from git describe, and a shallow clone
+          # has no tags to describe against.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
@@ -120,18 +91,44 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Every package, not just the binary: a dependency that quietly needs
+      # cgo, or a build-tagged file with no counterpart for this platform,
+      # should fail here rather than at release time. goreleaser below builds
+      # only ./cmd/remote-docker, so it would not notice.
+      - name: go build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
+
+      # The shippable binary, from .goreleaser.yaml -- the same file, flags and
+      # naming a tagged release uses, so only the version string differs.
+      #
+      # --single-target builds just this matrix leg, which shares the build
+      # cache with the step above instead of compiling the dependency tree
+      # again. This used to be a separate job building all six targets while
+      # the matrix compiled all six as well: the same work twice, and the
+      # slowest job in the workflow by a factor of two.
       - uses: goreleaser/goreleaser-action@v6
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         with:
           version: "~> v2"
-          args: build --snapshot --clean
+          args: build --single-target --snapshot --clean
 
+      # One artifact per platform rather than one holding all six. GitHub zips
+      # an artifact whole, so a combined one meant downloading every platform
+      # to get the one you wanted.
       - uses: actions/upload-artifact@v4
         with:
-          name: remote-docker-binaries
+          name: remote-docker-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/**/remote-docker*
           if-no-files-found: error
-          # Short: this is six binaries per commit, and the tagged releases are
-          # the ones worth keeping.
+          # Short: six binaries per commit, and the tagged releases are the
+          # ones worth keeping.
           retention-days: 14
 
   shell:

@@ -71,6 +71,10 @@ export REMOTE_DOCKER_HOST=127.0.0.1
 export REMOTE_DOCKER_PORT=$SSH_PORT
 export REMOTE_DOCKER_USER=$ACCOUNT
 export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
+# Idle release is a real behaviour worth testing (ADR 0015), but the default
+# minute meant sleeping 75 seconds to observe it -- a quarter of this suite's
+# runtime spent waiting for a timer we control.
+export REMOTE_DOCKER_IDLE_TIMEOUT=8s
 
 echo
 echo "== 3. enrol this machine =="
@@ -489,8 +493,8 @@ echo "== 11c. a container survives an idle disconnect =="
 # live NFS mount, and dropping the tunnel underneath gives it EIO.
 if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3         sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
 
-    # Longer than the idle timeout, so a sweep has certainly run.
-    sleep 75
+    # Longer than REMOTE_DOCKER_IDLE_TIMEOUT above, so a sweep has certainly run.
+    sleep 20
 
     if [ "$(docker inspect -f '{{.State.Running}}' itest-idle 2>/dev/null)" = "true" ]; then
         ok "a container holding one of our volumes kept working across an idle period"
