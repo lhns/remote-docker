@@ -124,6 +124,26 @@ func IsManagedVolume(name string) bool {
 	return strings.HasPrefix(name, VolumeNamePrefix)
 }
 
+// cwdSuffix names the volume backing the working-directory share.
+const cwdSuffix = "cwd"
+
+// VolumeNameForExport is the volume backing any export path.
+//
+// It handles /cwd as well as /m/<id>, which matters more than it looks:
+// registering the working directory as a bind source returns the existing
+// /cwd share rather than minting a second one for the same directory, so the
+// commonest bind of all -- `-v .:/app` -- arrives here as "/cwd".
+func VolumeNameForExport(exportPath string) (string, error) {
+	if exportPath == ExportCWD {
+		return VolumeNamePrefix + cwdSuffix, nil
+	}
+	id, err := ParseID(exportPath)
+	if err != nil {
+		return "", err
+	}
+	return VolumeNameForID(id), nil
+}
+
 // ParseID extracts the share id from an export path or a managed volume name.
 func ParseID(s string) (string, error) {
 	var id string
