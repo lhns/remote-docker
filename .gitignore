@@ -1,6 +1,16 @@
 # test image build artifact
 test/watchdir
 
+# go build output
+/dist/
+/remote-docker
+/remote-docker.exe
+/remote-dockerd
+/remote-dockerd.exe
+*.test
+*.test.exe
+coverage.out
+
 # local deployment state -- host keys, uidmap, enrolled public keys
 deploy/state/
 deploy/authorized_keys.d/
