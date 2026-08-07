@@ -271,6 +271,57 @@ fi
 docker volume rm itest-named >/dev/null 2>&1
 
 echo
+echo "== 11b. does a file watcher see client-side changes? =="
+# The question that decides how honest the central claim can be. A real
+# filesystem rather than a sync is only better than a sync if changes are
+# NOTICED, and NFS carries no change notification -- so a watcher inside the
+# container may see nothing while the file is plainly there.
+#
+# Two observations at once: inotify (what every hot-reload tool uses) and
+# polling (the control). If polling sees nothing either, the mount is broken
+# and the inotify result means nothing.
+#
+# See docs/adr/0014. This test records the behaviour rather than demanding a
+# particular answer, so if a future change makes inotify work, it says so.
+WATCHDIR="$WORK/watched"
+mkdir -p "$WATCHDIR"
+
+# No image build: a static binary placed on the share runs fine under plain
+# alpine. That keeps this test about file watching rather than about whether
+# `docker build` works through the proxy, and avoids shipping $WORK -- which
+# holds the private key and a live socket -- as a build context.
+if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
+    dockert run -d --name itest-watch         -v "$PROJECT:/probe:ro"         -v "$WATCHDIR:/data"         alpine:3 /probe/watchprobe /data >/dev/null 2>&1
+
+    # Let the watch register before making the change, or the result says
+    # nothing either way.
+    sleep 5
+    echo "written on the client" >"$WATCHDIR/created-after-watch.txt"
+
+    timeout 60 docker wait itest-watch >/dev/null 2>&1
+    probe=$(docker logs itest-watch 2>&1)
+    docker rm -f itest-watch >/dev/null 2>&1
+    rm -f "$PROJECT/watchprobe"
+
+    echo "        $(echo "$probe" | grep '^RESULT' || echo 'RESULT missing')"
+
+    if echo "$probe" | grep -q "POLL created-after-watch.txt"; then
+        ok "a polling watcher sees client-side changes"
+    else
+        bad "a polling watcher saw nothing -- the mount itself is not working"
+        echo "$probe" | sed 's/^/        /' | tail -10
+    fi
+
+    if echo "$probe" | grep -q "INOTIFY.*created-after-watch.txt"; then
+        ok "inotify FIRES for client-side changes (better than expected -- update ADR 0014)"
+    else
+        ok "inotify does not fire for client-side changes (expected; ADR 0014)"
+    fi
+else
+    bad "could not build the watch probe"
+fi
+
+echo
 echo "== 12. docker compose =="
 # Compose is the reason ADR 0005 put the translation at the API rather than in
 # a command wrapper: it speaks the Engine API directly and never shells out to
