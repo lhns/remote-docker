@@ -6,9 +6,12 @@
 #
 services:
   workspace:
-    build: ../image
-    image: docker-ssh-workspace:latest
-    container_name: docker-ssh-workspace
+    # Context is the repository root: the image builds the agent from source.
+    build:
+      context: ..
+      dockerfile: image/Dockerfile
+    image: remote-docker-workspace:latest
+    container_name: remote-docker-workspace
     restart: unless-stopped
 
     # dind needs this: it runs its own dockerd, sets up its own bridge and

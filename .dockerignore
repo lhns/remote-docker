@@ -1,0 +1,12 @@
+# The build context is the repository root so the agent can be built from
+# source. Everything the image does not need stays out of it.
+.git
+.github
+docs
+deploy
+client
+test
+*.md
+.golangci.yml
+.goreleaser.yaml
+dist

@@ -58,7 +58,8 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: image
+          context: .
+          file: image/Dockerfile
           # The workspace runs Docker-in-Docker on whatever the deployment
           # host is, so both architectures are worth publishing.
           platforms: linux/amd64,linux/arm64

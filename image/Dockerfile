@@ -1,12 +1,26 @@
 # syntax=docker/dockerfile:1
 #
-# docker-ssh-workspace
+# The remote-docker workspace.
 #
-# A Docker-in-Docker daemon you can SSH into, which mounts YOUR machine's
-# current directory over a reverse SSH tunnel. Because dockerd and the NFS
-# mount live in the SAME mount namespace, ordinary bind mounts in your
-# compose files just work -- no path translation, no volume plugin.
+# A privileged Docker-in-Docker daemon reached over SSH. The client serves its
+# own files over NFS through a reverse tunnel, and this daemon mounts them per
+# container as ordinary volumes -- so a bind mount naming a path on the
+# client's machine resolves, wherever on that machine it lives.
 #
+# The build context is the REPOSITORY ROOT, not image/, because the agent is
+# built from source here. Build with:
+#     docker build -f image/Dockerfile .
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+# Dependencies first, so a source change does not re-download the module graph.
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY pkg/ ./pkg/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+        -o /out/remote-dockerd ./cmd/remote-dockerd
+
 FROM docker:28-dind
 
 RUN apk add --no-cache \
@@ -24,9 +38,10 @@ RUN apk add --no-cache \
         tini \
     && rm -rf /var/cache/apk/*
 
-COPY sshd_config       /etc/ssh/sshd_config
-COPY sudoers.workspace /etc/sudoers.d/workspace
-COPY bin/              /usr/local/bin/
+COPY image/sshd_config       /etc/ssh/sshd_config
+COPY image/sudoers.workspace /etc/sudoers.d/workspace
+COPY image/bin/              /usr/local/bin/
+COPY --from=build /out/remote-dockerd /usr/local/bin/remote-dockerd
 
 RUN chmod 0440 /etc/sudoers.d/workspace \
     && chmod 0755 /usr/local/bin/entrypoint.sh \

@@ -1,0 +1,79 @@
+# Docker Swarm deployment.
+#
+# Swarm cannot run privileged tasks. This service therefore starts
+# UNPRIVILEGED and immediately relaunches itself privileged through the host's
+# Docker socket -- `remote-dockerd elevate`. No launcher image is involved.
+# See docs/adr/0013.
+#
+#   docker stack deploy -c swarm.yml workspace
+#
+services:
+  workspace:
+    image: ${WORKSPACE_IMAGE:-ghcr.io/lhns/remote-docker-workspace:latest}
+    command: ["elevate"]
+
+    environment:
+      # How we find ourselves. Swarm expands service templates in environment
+      # values, so this is exact -- no parsing /proc and guessing. The
+      # privileged child joins THIS task's network namespace, which is what
+      # makes the published port below reach it.
+      WORKSPACE_SELF: "{{.Task.Name}}"
+
+      TZ: Europe/Berlin
+      DOCKER_TLS_CERTDIR: ""
+      # /var/lib/docker on Ceph- or NFS-backed storage is why: overlay2
+      # refuses outright, and vfs copies every layer.
+      WORKSPACE_DOCKERD_ARGS: "--storage-driver=fuse-overlayfs"
+
+    volumes:
+      # NOT /var/run/docker.sock. dind runs its own daemon on that path inside
+      # the workspace, so the two would collide -- and mounting the host's
+      # socket somewhere distinct makes excluding it from the privileged child
+      # a matter of intent rather than of coincidence.
+      #
+      # This mount is the whole trust boundary: whoever can deploy this stack
+      # can already start privileged containers on the node.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/host-docker.sock
+
+      # Replicated onto the privileged child, which is why they are declared
+      # here rather than on it.
+      - type: bind
+        source: /mnt/appdata/docker/workspace/{{.Task.Slot}}/docker
+        target: /var/lib/docker
+      - type: bind
+        source: /mnt/appdata/docker/workspace/state
+        target: /etc/workspace
+      - type: bind
+        source: /mnt/appdata/docker/workspace/authorized_keys.d
+        target: /etc/workspace/authorized_keys.d
+        read_only: true
+
+    ports:
+      # mode: host so the port lands on the node actually running the task.
+      # The routing mesh would round-robin it to nodes where the privileged
+      # container does not exist.
+      - target: 2222
+        published: 2222
+        protocol: tcp
+        mode: host
+
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.workspace == true
+      restart_policy:
+        condition: any
+        delay: 10s
+
+    healthcheck:
+      # Checks the PRIVILEGED child, since this task shares its network
+      # namespace. Without it a workspace whose dockerd died would keep
+      # looking healthy.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s

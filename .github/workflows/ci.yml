@@ -128,7 +128,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
-          context: image
+          context: .
+          file: image/Dockerfile
           push: false
           load: true
           tags: remote-docker-workspace:ci

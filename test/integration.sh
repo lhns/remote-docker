@@ -43,7 +43,8 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== 1. build the workspace image =="
-if docker build -q -t "$IMAGE" "$REPO/image" >/dev/null; then
+# Context is the repo root: the image builds the agent from source.
+if docker build -q -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" >/dev/null; then
     ok "image builds"
 else
     bad "image build failed"

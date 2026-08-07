@@ -171,9 +171,17 @@ cp /path/to/alice.pub authorized_keys.d/alice.pub   # filename == unix account
 docker compose up -d --build
 ```
 
-Swarm cannot run privileged tasks, so `deploy/swarm-launcher.yml` starts the
-real container through the node's own socket. (Being replaced by a built-in
-`elevate`, which drops the third-party launcher image.)
+Under Swarm, use `deploy/swarm.yml`:
+
+```bash
+docker stack deploy -c deploy/swarm.yml workspace
+```
+
+Swarm cannot run privileged tasks, so the service starts unprivileged and
+relaunches itself privileged through the node's Docker socket -- no launcher
+image involved. The host socket mount in that file is the whole trust
+boundary: whoever can deploy the stack can already start privileged containers
+on the node. See [ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md).
 
 Enrolment is out of band: someone with access drops a `<name>.pub` into the
 keys directory, and the filename becomes that user's unix account. Removing a
