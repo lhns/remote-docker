@@ -125,10 +125,14 @@ func newStatusCommand() *cobra.Command {
 			ctx, cancel := signalContext()
 			defer cancel()
 
+			// Only asks the daemon questions, so it must not try to take the
+			// account's single export port -- which `up` is probably holding.
+			files := session.NoFiles
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
 				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
+				Files:    files,
 				Log:      logger{},
 			})
 			if err != nil {
@@ -178,10 +182,15 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 			ctx, cancel := signalContext()
 			defer cancel()
 
+			// This IS the file server. Failing to bind means another `up` is
+			// running for this account, which is worth reporting rather than
+			// half-working.
+			files := session.FilesRequired
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
 				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
+				Files:    files,
 				Log:      logger{},
 			})
 			if err != nil {
@@ -218,10 +227,14 @@ func newShellCommand() *cobra.Command {
 			ctx, cancel := signalContext()
 			defer cancel()
 
+			// Wants the workspace mount, but if `up` is already serving then the
+			// files are there and there is nothing to do.
+			files := session.FilesIfAvailable
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
 				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
+				Files:    files,
 				Log:      logger{},
 			})
 			if err != nil {
@@ -279,10 +292,14 @@ is never touched, whatever it is named.`,
 			ctx, cancel := signalContext()
 			defer cancel()
 
+			// Only removes volumes; exporting files would be beside the point and
+			// would fail whenever `up` is running.
+			files := session.NoFiles
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
 				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
+				Files:    files,
 				Log:      logger{},
 			})
 			if err != nil {

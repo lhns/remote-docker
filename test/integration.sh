@@ -475,7 +475,8 @@ shellout=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519"     -o Strict
 if echo "$shellout" | grep -q "marker"; then
     ok "an interactive session sees the workspace mount"
 else
-    bad "the workspace mount was not visible in a session: $(echo "$shellout" | tr -d '' | tail -3 | tr '
+    bad "the workspace mount was not visible in a session: $(echo "$shellout" | tr -d '
+' | tail -3 | tr '
 ' ' ')"
 fi
 
@@ -484,6 +485,16 @@ if out=$(timeout 60 "$WORK/remote-docker" docker ps --format '{{.Names}}' 2>&1);
     ok "the embedded docker CLI talks to the workspace"
 else
     bad "the embedded docker CLI failed: $(echo "$out" | tail -2)"
+fi
+
+# `status` while `up` holds the export port. An account has exactly ONE
+# reverse-tunnel port, so a session that needlessly reserves it fails the
+# moment `up` is running -- which is exactly when someone would run another
+# command. This is the case that broke.
+if out=$(timeout 60 "$WORK/remote-docker" status 2>&1); then
+    ok "status works while up is running"
+else
+    bad "status failed while up was running: $(echo "$out" | tail -2)"
 fi
 
 # gc must not remove a volume that is in use, and must not fail.

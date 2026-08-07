@@ -48,6 +48,14 @@ type Options struct {
 	// being released. Zero uses DefaultIdleTimeout; negative never releases.
 	IdleTimeout time.Duration
 
+	// Files says whether this session should export the working directory.
+	//
+	// An account has exactly one reverse-tunnel port (ADR 0003), so only one
+	// session at a time can serve files. A command that does not need to --
+	// status, gc -- must not try, or it fails the moment `up` is running,
+	// which is precisely when someone would run it.
+	Files FileServing
+
 	Log Logger
 }
 
@@ -55,6 +63,24 @@ type Options struct {
 // is using: long enough that someone working normally never notices, short
 // enough that a workspace left open overnight is not holding anything.
 const DefaultIdleTimeout = time.Minute
+
+// FileServing says whether a session exports files, and how badly it needs to.
+type FileServing int
+
+const (
+	// NoFiles does not export at all. For commands that only ask the daemon
+	// questions.
+	NoFiles FileServing = iota
+
+	// FilesIfAvailable exports when the port is free and carries on when it is
+	// not, because another session already serving means the files are
+	// already there.
+	FilesIfAvailable
+
+	// FilesRequired fails when the port is taken. Two `up` sessions for one
+	// account is a genuine conflict and reporting it beats half-working.
+	FilesRequired
+)
 
 // Session serves the local Docker endpoint for one workspace.
 type Session struct {
@@ -233,11 +259,17 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
 	}
-	live.nfs = nfsserve.New(s.registry)
-
-	if err := s.startNFS(live); err != nil {
-		_ = client.Close()
-		return nil, err
+	if s.opts.Files != NoFiles {
+		live.nfs = nfsserve.New(s.registry)
+		if err := s.startNFS(live); err != nil {
+			if s.opts.Files == FilesRequired {
+				_ = client.Close()
+				return nil, err
+			}
+			// Another session holds the port, which means it is already
+			// exporting this account's files. Nothing to do and nothing wrong.
+			s.logf("not exporting files: %v", err)
+		}
 	}
 
 	liveCtx, cancel := context.WithCancel(s.ctx)
