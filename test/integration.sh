@@ -337,6 +337,151 @@ else
 fi
 
 echo
+echo "== 11d. which syscall makes a container's watcher fire? (ADR 0014 spike) =="
+# 11b establishes that a client-side change notifies nobody. This asks the
+# follow-up: if the AGENT performs a minimal syscall on the same file inside
+# the workspace, does the container's watcher fire?
+#
+# Linux has no way to inject a synthetic inotify event -- fanotify(7) says so
+# outright. The only mechanism available to anyone, Docker Desktop included,
+# is to perform a real VFS operation and let the kernel emit the event as a
+# side effect. So this measures WHICH operation produces WHICH event, one file
+# per primitive so the correlation is by name rather than by timing.
+#
+# Nothing is asserted as pass/fail except the setup: the point is to record
+# the matrix, and the design that follows depends on what it says.
+POKEDIR="$WORK/poked"
+mkdir -p "$POKEDIR"
+
+if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe &&
+        CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/pokeprobe" ./test/pokeprobe); then
+
+    # The files each primitive acts on. Pre-created on the client where the
+    # primitive needs an existing file; 'create' and 'unlink' are handled
+    # separately below because their whole question is about a file that has
+    # just appeared or just gone.
+    for p in openclose mtime touch dirmtime procroot; do
+        echo "before the watch" >"$POKEDIR/poke-$p.txt"
+    done
+    echo "to be deleted" >"$POKEDIR/poke-unlink.txt"
+
+    if ! dockert run -d --name itest-poke \
+            -v "$PROJECT:/probe:ro" \
+            -v "$POKEDIR:/data" \
+            alpine:3 /probe/watchprobe -timeout 90s /data >"$WORK/poke-run.log" 2>&1; then
+        bad "the poke probe container would not start"
+        sed 's/^/        /' "$WORK/poke-run.log"
+    else
+        # Wait for READY rather than sleeping. A poke delivered before the
+        # watch lands proves nothing, and is an easy way to record a false
+        # negative and believe it.
+        watching=false
+        for _ in $(seq 1 30); do
+            if docker logs itest-poke 2>&1 | grep -q '^READY'; then
+                watching=true
+                break
+            fi
+            sleep 1
+        done
+        if [ "$watching" = true ]; then
+            ok "the watcher is established"
+        else
+            bad "the watcher never reported READY"
+        fi
+
+        # Where the workspace has this share mounted. dockerd's local driver
+        # mounts each rd-<id> NFS volume once and bind-mounts it into every
+        # container using it -- and a bind mount shares the superblock, hence
+        # the inode an inotify mark sits on. If that holds, poking the volume
+        # mountpoint is seen by a watcher inside the container, with no
+        # namespace entering at all.
+        vol=$(docker inspect itest-poke \
+            --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null)
+        mp=$(docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null)
+        pid=$(docker inspect itest-poke --format '{{.State.Pid}}' 2>/dev/null)
+        info "volume=$vol mountpoint=$mp container pid=$pid"
+
+        if [ -z "$mp" ]; then
+            bad "could not resolve the volume mountpoint -- the rest of the matrix cannot run"
+        else
+            hostdocker cp "$PROJECT/pokeprobe" "$CONTAINER:/pokeprobe" >/dev/null 2>&1
+
+            # Do the two views of the same file share a device? If st_dev
+            # differs they are separate superblocks, separate inodes, and no
+            # poke through the mountpoint can ever notify the container.
+            dev_ws=$(hostdocker exec "$CONTAINER" /pokeprobe stat "$mp/poke-openclose.txt" 2>&1)
+            dev_ct=$(docker exec itest-poke /probe/pokeprobe stat /data/poke-openclose.txt 2>&1)
+            info "workspace: $dev_ws"
+            info "container: $dev_ct"
+            # Compares dev AND ino, which is the stronger claim and the one
+            # that matters: an inotify mark lives on the inode, so identical
+            # dev+ino means a poke through either path reaches the same mark.
+            ids_ws=${dev_ws##*ok dev=}
+            ids_ct=${dev_ct##*ok dev=}
+            if [ "$ids_ws" != "$dev_ws" ] && [ "$ids_ws" = "$ids_ct" ]; then
+                ok "the volume mountpoint and the container see the same inode"
+            else
+                ok "INODES DIFFER -- the design must use /proc/<pid>/root instead"
+            fi
+
+            for p in openclose mtime touch dirmtime; do
+                out=$(hostdocker exec "$CONTAINER" /pokeprobe "$p" "$mp/poke-$p.txt" 2>&1)
+                info "$out"
+            done
+
+            # create: the file must appear on the CLIENT first, so the
+            # question is whether the container's dcache still holds a
+            # negative dentry and open(O_CREAT) therefore fires IN_CREATE.
+            echo "created on the client" >"$POKEDIR/poke-create.txt"
+            info "$(hostdocker exec "$CONTAINER" /pokeprobe create "$mp/poke-create.txt" 2>&1)"
+
+            # unlink: gone on the client, so the REMOVE has nothing to remove.
+            # Whether this can ever fire IN_DELETE is the least certain row in
+            # the matrix and decides whether deletes are representable at all.
+            rm -f "$POKEDIR/poke-unlink.txt"
+            info "$(hostdocker exec "$CONTAINER" /pokeprobe unlink "$mp/poke-unlink.txt" 2>&1)"
+
+            # The fallback route, in case the superblock assumption fails.
+            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                info "$(hostdocker exec "$CONTAINER" /pokeprobe openclose "/proc/$pid/root/data/poke-procroot.txt" 2>&1)"
+            fi
+        fi
+
+        timeout 120 docker wait itest-poke >/dev/null 2>&1
+        poke=$(docker logs itest-poke 2>&1)
+        docker rm -f itest-poke >/dev/null 2>&1
+
+        echo
+        echo "        --- poke matrix: which primitive produced which events ---"
+        for p in openclose mtime touch create unlink dirmtime procroot; do
+            seen=$(echo "$poke" | grep "^INOTIFY .* poke-$p\.txt$" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
+            # dirmtime acts on the watched directory itself, which the probe
+            # reports under the directory's own basename rather than a
+            # filename -- that distinction is exactly what the coarse
+            # fallback would rely on.
+            if [ "$p" = dirmtime ]; then
+                seen=$(echo "$poke" | grep "^INOTIFY .* data/$" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
+            fi
+            printf '        POKE-MATRIX %-10s %s\n' "$p" "${seen:-<nothing>}"
+        done
+        echo
+        echo "        $(echo "$poke" | grep '^RESULT' || echo 'RESULT missing')"
+
+        # The one row that is near-certain from kernel source, so a failure
+        # here means the experiment itself is wrong rather than the answer
+        # being no.
+        if echo "$poke" | grep -q "^INOTIFY .*IN_CLOSE_WRITE.* poke-openclose\.txt$"; then
+            ok "open(O_WRONLY)+close() reaches the container's watcher"
+        else
+            ok "open(O_WRONLY)+close() did NOT reach the watcher -- replay is not viable this way"
+        fi
+    fi
+    rm -f "$PROJECT/watchprobe" "$PROJECT/pokeprobe"
+else
+    bad "could not build the probes"
+fi
+
+echo
 echo "== 11c. a container survives an idle disconnect =="
 # The connection is released when nothing needs it (ADR 0015), which makes the
 # reconnect path load-bearing rather than an error case. It must also NOT be
