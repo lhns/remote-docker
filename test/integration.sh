@@ -170,6 +170,35 @@ for image in alpine:3 nginx:alpine; do
 done
 
 echo
+echo "== 6b. container stdout, with no volume involved =="
+# Isolates the attach/stdout path from anything to do with mounts. If this
+# fails, no mount test below can be trusted to be telling us about mounts.
+if out=$(dockert run --rm alpine:3 echo hello-from-container 2>&1); then
+    if [ "$out" = "hello-from-container" ]; then
+        ok "container stdout reaches the client"
+    else
+        bad "stdout was lost or altered: got [$out]"
+    fi
+else
+    bad "container failed: $out"
+fi
+
+# And the same output read back through the logs endpoint, which is a
+# different code path from attach.
+if dockert run -d --name itest-echo alpine:3 echo hello-from-logs >/dev/null 2>&1; then
+    sleep 2
+    logs=$(dockert logs itest-echo 2>&1)
+    if [ "$logs" = "hello-from-logs" ]; then
+        ok "container logs reach the client"
+    else
+        bad "logs were lost or altered: got [$logs]"
+    fi
+    docker rm -f itest-echo >/dev/null 2>&1
+else
+    bad "could not start the logs test container"
+fi
+
+echo
 echo "== 7. a bind mount under the working directory =="
 if out=$(dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
     if [ "$out" = "from the project directory" ]; then
@@ -247,6 +276,16 @@ if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^rd-'; then
     ok "shares became rd-* volumes on the workspace daemon"
 else
     bad "no managed volumes were created"
+fi
+
+echo
+if [ "$FAIL" -ne 0 ]; then
+    echo
+    echo "== client log =="
+    sed 's/^/        /' "$WORK/up.log"
+    echo
+    echo "== workspace log =="
+    docker logs "$CONTAINER" 2>&1 | tail -40 | sed 's/^/        /'
 fi
 
 echo
