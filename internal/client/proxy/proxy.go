@@ -43,10 +43,37 @@ type Proxy struct {
 	Log      Logger
 
 	wg sync.WaitGroup
+
+	// live tracks accepted connections so shutdown can close them.
+	//
+	// Needed because a Docker client keeps its connection alive between
+	// requests, so a handler that has finished serving one sits blocked
+	// reading the next. Usually harmless -- the client process exits and the
+	// socket closes -- but the EMBEDDED CLI runs in this very process, so
+	// nothing ever closes it, and `remote-docker docker run` took three
+	// minutes to exit while Serve waited for a peer that was itself waiting
+	// to be told to go away.
+	mu       sync.Mutex
+	live     map[net.Conn]struct{}
+	shutdown bool
 }
 
 // Serve accepts connections until l is closed.
 func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
+	// Closing live connections on cancellation is what makes shutdown prompt.
+	// An idle keep-alive connection has nothing to say and will not notice
+	// the context; the handler blocked on it only unblocks when the socket
+	// underneath it goes.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			p.closeLive()
+		case <-done:
+		}
+	}()
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -56,11 +83,52 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 			}
 			return fmt.Errorf("proxy: accept: %w", err)
 		}
+		if !p.track(conn) {
+			// Shutdown began between Accept and here.
+			_ = conn.Close()
+			continue
+		}
 		p.wg.Go(func() {
+			defer p.untrack(conn)
 			defer conn.Close()
 			p.handleConn(ctx, conn)
 		})
 	}
+}
+
+// track registers a connection, reporting false once shutdown has begun.
+func (p *Proxy) track(conn net.Conn) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.shutdown {
+		return false
+	}
+	if p.live == nil {
+		p.live = map[net.Conn]struct{}{}
+	}
+	p.live[conn] = struct{}{}
+	return true
+}
+
+func (p *Proxy) untrack(conn net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.live, conn)
+}
+
+// closeLive drops every accepted connection, including hijacked ones.
+//
+// Deliberately brutal: by the time this runs the session is going away, and a
+// container's attached stream is about to lose the tunnel underneath it
+// regardless. Ending it here is the same outcome, minutes sooner.
+func (p *Proxy) closeLive() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.shutdown = true
+	for conn := range p.live {
+		_ = conn.Close()
+	}
+	clear(p.live)
 }
 
 // handleConn services one client connection, which may carry several requests.

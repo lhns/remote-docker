@@ -628,3 +628,55 @@ func TestProxyDoesNotHijackLengthDelimitedDockerStreams(t *testing.T) {
 		t.Errorf("body = %q, want %q", body, payload)
 	}
 }
+
+// Serve must return promptly when its context is cancelled, even with an idle
+// keep-alive connection still open.
+//
+// This is the shape of a real hang, and the reason it is worth a test rather
+// than a comment. A Docker client keeps its connection alive between requests,
+// so the handler that served the last one sits blocked reading the next. When
+// the client is a separate process that is about to exit, the socket closes and
+// the handler unblocks. But the EMBEDDED Docker CLI runs in this very process,
+// so nothing closes it -- and `remote-docker docker run` sat for minutes after
+// the container had exited, waiting for a peer that was itself waiting to be
+// told to go away.
+func TestServeReturnsPromptlyWithAnIdleKeepAliveConnection(t *testing.T) {
+	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+		respondJSON(conn, http.StatusOK, `{"ok":true}`)
+	})
+
+	p := &Proxy{Dialer: &tcpDialer{addr: daemon.listener.Addr().String()}}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- p.Serve(ctx, l) }()
+
+	// A keep-alive client, deliberately NOT closed afterwards -- standing in
+	// for the embedded CLI's transport, which lives as long as we do.
+	client := &http.Client{Transport: &http.Transport{}}
+	resp, err := client.Get("http://" + l.Addr().String() + "/_ping")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	// Shut down the way Session.Close does: cancel, then close the listener.
+	cancel()
+	_ = l.Close()
+
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return within 5s; a handler is still blocked " +
+			"reading an idle keep-alive connection that nothing will ever close")
+	}
+}
