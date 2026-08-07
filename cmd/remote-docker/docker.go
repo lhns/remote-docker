@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -9,7 +10,10 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
 
+	"github.com/lhns/remote-docker/internal/client/config"
+	"github.com/lhns/remote-docker/internal/client/fswatch"
 	"github.com/lhns/remote-docker/internal/client/proxy"
+	"github.com/lhns/remote-docker/internal/client/session"
 )
 
 // newDockerCommand mounts the real Docker CLI's command tree under
@@ -50,6 +54,19 @@ set -- though an explicit one is respected.`,
 		endpoint := ""
 		if cfg, err := resolve(); err == nil {
 			endpoint = cfg.EndpointFor(proxy.DefaultEndpoint)
+
+			// Nothing is serving that endpoint, so bring a session up for the
+			// duration of this command rather than telling the user to go and
+			// start one in another terminal. Requiring `up` first made the
+			// embedded CLI -- the thing that exists so nothing has to be
+			// installed -- the one part of this tool with a setup step.
+			//
+			// Which workspace this is comes from the same resolution as every
+			// other command, so `--workspace ci docker ps` starts a session
+			// for ci and answers from ci.
+			if !proxy.Reachable(endpoint) {
+				startImplicitSession(cfg, endpoint)
+			}
 		}
 		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}
@@ -77,4 +94,66 @@ set -- though an explicit one is respected.`,
 
 	commands.AddCommands(cmd, dockerCli)
 	return cmd
+}
+
+// implicitSession is the one this command started for itself, if any. Closed
+// by main once the command has finished, because a deferred close here would
+// run while the docker command was still using it.
+var implicitSession *session.Session
+
+// startImplicitSession opens a session for the life of a single docker command.
+//
+// It serves files, because a bind mount is the whole point: `docker run -v
+// .:/app` has to reach this machine's disk, and that needs the NFS export this
+// session provides.
+//
+// Failure is deliberately quiet. The endpoint may have been taken by an `up`
+// that started a moment ago -- the check above is a race by nature -- and in
+// that case the docker command below connects to it and works. If there really
+// is nothing there, docker reports it, which is a better message than anything
+// guessed at here.
+func startImplicitSession(cfg config.Config, endpoint string) {
+	if cfg.Host == "" {
+		return
+	}
+	watch, err := fswatch.ParseMode(cfg.Watch)
+	if err != nil {
+		watch = fswatch.ModeOff
+	}
+	s, err := session.Open(context.Background(), session.Options{
+		Config:       cfg,
+		WorkDir:      mustWorkDir(),
+		Endpoint:     endpoint,
+		Files:        session.FilesRequired,
+		IdleTimeout:  cfg.IdleTimeout,
+		Watch:        watch,
+		WatchBudget:  cfg.WatchBudget,
+		WatchExclude: cfg.WatchExclude,
+		Log:          logger{},
+	})
+	if err != nil {
+		return
+	}
+	implicitSession = s
+}
+
+// closeImplicitSession tears down a session this command started, warning if
+// anything is left that will stop working without it.
+//
+// A container started with -d outlives the command that created it, but its
+// bind mounts are NFS volumes served by THIS process. Closing takes the file
+// server away and the container starts failing its I/O -- soft mounts make
+// that an error rather than a hang, but it is still a container that was
+// working and now is not. The user has to be told, and told what to do.
+func closeImplicitSession() {
+	if implicitSession == nil {
+		return
+	}
+	if n, err := implicitSession.OwnedVolumesInUse(context.Background()); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr,
+			"\nwarning: %d container(s) still hold directories served by this command,\n"+
+				"and those mounts stop working now that it has finished.\n"+
+				"Run `remote-docker up` in another terminal to keep them alive.\n", n)
+	}
+	_ = implicitSession.Close()
 }

@@ -8,8 +8,14 @@ import (
 )
 
 func main() {
+	// After Execute, not deferred inside the docker command: a session started
+	// implicitly for `remote-docker docker ...` has to outlive the command
+	// that is using it.
+	defer closeImplicitSession()
+
 	if err := newRootCommand().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "remote-docker:", err)
+		closeImplicitSession()
 		os.Exit(1)
 	}
 }
