@@ -43,7 +43,7 @@ func main() {
 		fmt.Printf("RESULT inotify=unavailable error=%v\n", err)
 		os.Exit(1)
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	if err := watcher.Add(dir); err != nil {
 		fmt.Printf("RESULT inotify=unavailable error=%v\n", err)

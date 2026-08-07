@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -237,5 +238,74 @@ func TestServeRefusesAnUnregisteredExport(t *testing.T) {
 	// crash this process by asking for a path that does not exist.
 	if _, err := mountAt(t, addr, "/cwd"); err != nil {
 		t.Fatalf("the server stopped serving after refusing a mount: %v", err)
+	}
+}
+
+// A file on the share has to be runnable. Without this, a committed binary or
+// a ./scripts/build.sh in the mounted project cannot be executed at all: the
+// container gets "permission denied" from a synthesised mode with no execute
+// bit. The integration suite found this the hard way -- a probe binary placed
+// on the share failed to start, producing no output and no explanation.
+func TestServeReportsExecutableFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "script.sh"), []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry(Attrs{
+		UID: 1000, GID: 1000,
+		FileMode:         0o644,
+		DirMode:          0o755,
+		AlwaysExecutable: true,
+	})
+	if _, err := r.RegisterCWD(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := mustMount(t, serve(t, r), "/cwd")
+
+	attr, err := target.Getattr("script.sh")
+	if err != nil {
+		t.Fatalf("Getattr: %v", err)
+	}
+	if perm := attr.Mode() & 0o777; perm&0o111 == 0 {
+		t.Errorf("mode = %04o, which has no execute bit; nothing on the share could be run", perm)
+	}
+}
+
+// Where the local filesystem does have an execute bit, it is preserved rather
+// than synthesised -- a data file should not become executable just because it
+// shares a directory with a script.
+func TestServePreservesRealExecutableBits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bit to preserve")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "script.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry(Attrs{UID: 1000, GID: 1000, FileMode: 0o644, DirMode: 0o755})
+	if _, err := r.RegisterCWD(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := mustMount(t, serve(t, r), "/cwd")
+
+	script, err := target.Getattr("script.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script.Mode()&0o111 == 0 {
+		t.Errorf("script mode = %04o, want the real execute bits preserved", script.Mode()&0o777)
+	}
+
+	data, err := target.Getattr("data.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Mode()&0o111 != 0 {
+		t.Errorf("data mode = %04o, want no execute bit", data.Mode()&0o777)
 	}
 }

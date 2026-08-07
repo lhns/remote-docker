@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -119,6 +120,10 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		GID:      uint32(info.GID),
 		FileMode: 0o644,
 		DirMode:  0o755,
+		// Windows has no execute bit to preserve, so without this nothing on
+		// the share could be run -- not a committed binary, not
+		// ./scripts/build.sh. Elsewhere the real bits are used instead.
+		AlwaysExecutable: runtime.GOOS == "windows",
 	})
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
 		_ = client.Close()

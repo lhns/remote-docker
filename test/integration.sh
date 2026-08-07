@@ -291,7 +291,14 @@ mkdir -p "$WATCHDIR"
 # `docker build` works through the proxy, and avoids shipping $WORK -- which
 # holds the private key and a live socket -- as a build context.
 if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
-    dockert run -d --name itest-watch         -v "$PROJECT:/probe:ro"         -v "$WATCHDIR:/data"         alpine:3 /probe/watchprobe /data >/dev/null 2>&1
+    # The error is NOT swallowed. The first run of this test produced an
+    # empty log and no explanation, which cost a CI round trip to diagnose:
+    # the binary was on the share with a synthesised mode 0644 and could not
+    # be executed.
+    if ! dockert run -d --name itest-watch             -v "$PROJECT:/probe:ro"             -v "$WATCHDIR:/data"             alpine:3 /probe/watchprobe /data >"$WORK/watch-run.log" 2>&1; then
+        bad "the watch probe container would not start"
+        sed 's/^/        /' "$WORK/watch-run.log"
+    fi
 
     # Let the watch register before making the change, or the result says
     # nothing either way.

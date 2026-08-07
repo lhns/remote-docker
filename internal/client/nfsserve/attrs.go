@@ -27,7 +27,23 @@ type Attrs struct {
 	// real file are preserved.
 	FileMode os.FileMode
 	DirMode  os.FileMode
+
+	// AlwaysExecutable reports every file as executable.
+	//
+	// Needed where the local filesystem has no execute bit to preserve, which
+	// means Windows. Without it nothing on the share can be run -- not a
+	// committed binary, not ./scripts/build.sh, not a Makefile's helper --
+	// because a synthesised 0644 has no execute bit and the container gets
+	// "permission denied". Mounting a FAT or NTFS volume on Linux makes the
+	// same trade for the same reason.
+	//
+	// Where the local filesystem does have an execute bit, leave this off:
+	// the real bits are preserved instead, which is strictly better.
+	AlwaysExecutable bool
 }
+
+// executableBits are the permissions granted when a file is executable.
+const executableBits = 0o111
 
 // DefaultAttrs is what a share reports when the account's uid is unknown.
 //
@@ -107,11 +123,20 @@ type attrInfo struct {
 // traversal outright.
 func (i *attrInfo) Mode() fs.FileMode {
 	mode := i.FileInfo.Mode()
-	perm := i.attrs.FileMode
 	if mode.IsDir() {
-		perm = i.attrs.DirMode
+		return (mode &^ fs.ModePerm) | (i.attrs.DirMode & fs.ModePerm)
 	}
-	return (mode &^ fs.ModePerm) | (perm & fs.ModePerm)
+
+	perm := i.attrs.FileMode & fs.ModePerm
+
+	// Executability is the one permission taken from the real file rather than
+	// synthesised, because getting it wrong means a script on the share cannot
+	// be run at all. Where the local filesystem cannot express it, the share
+	// says yes -- see Attrs.AlwaysExecutable.
+	if i.attrs.AlwaysExecutable || mode&executableBits != 0 {
+		perm |= executableBits
+	}
+	return (mode &^ fs.ModePerm) | perm
 }
 
 // Sys is how the attributes actually reach the wire: go-nfs checks Sys() for
