@@ -169,6 +169,17 @@ func (p *Proxy) rewriteBody(ctx context.Context, req *http.Request) error {
 	return nil
 }
 
+// closeWriteOrNothing signals end-of-input on a stream that supports it.
+//
+// Deliberately does nothing when the stream cannot half-close: ending the
+// whole stream is not a safe fallback here, because the other direction is
+// still carrying the response we are waiting for.
+func closeWriteOrNothing(s io.ReadWriteCloser) {
+	if cw, ok := s.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+}
+
 // writeHead writes a response's status line and headers, and nothing else.
 //
 // resp.Status is preferred over deriving the text from the code, because the
@@ -253,7 +264,13 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 			}
 		}
 		_, _ = io.Copy(upstream, clientReader)
-		upstream.Close()
+
+		// Half-close, never a full close. `docker run` without -i closes its
+		// stdin the moment the attach is established; closing the whole
+		// upstream in response would tear down the session carrying the
+		// container's output, and the command would exit 0 having printed
+		// nothing. Only signal end-of-input.
+		closeWriteOrNothing(upstream)
 	})
 
 	wg.Go(func() {

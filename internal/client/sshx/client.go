@@ -246,6 +246,16 @@ type sessionStream struct {
 func (s *sessionStream) Read(p []byte) (int, error)  { return s.out.Read(p) }
 func (s *sessionStream) Write(p []byte) (int, error) { return s.in.Write(p) }
 
+// CloseWrite signals end-of-input to the remote command without ending the
+// session, by closing only the stdin pipe.
+//
+// This distinction is load-bearing for `docker run`. Without -i, the CLI
+// closes its stdin as soon as the attach is established. A proxy that
+// responded by closing the whole stream would tear the session down before
+// the container had written anything, and the command would exit cleanly
+// having printed nothing at all.
+func (s *sessionStream) CloseWrite() error { return s.in.Close() }
+
 func (s *sessionStream) Close() error {
 	var err error
 	s.once.Do(func() {

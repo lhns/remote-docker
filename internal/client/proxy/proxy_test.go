@@ -467,3 +467,103 @@ func TestProxyDoesNotHijackOrdinaryResponses(t *testing.T) {
 		t.Errorf("body = %q", body)
 	}
 }
+
+// halfCloseStream is an upstream that distinguishes a half-close from a full
+// close, the way an SSH session stream does.
+type halfCloseStream struct {
+	io.Reader
+	io.Writer
+	writeClosed chan struct{}
+	closed      chan struct{}
+	once        sync.Once
+	writeOnce   sync.Once
+}
+
+func (h *halfCloseStream) CloseWrite() error {
+	h.writeOnce.Do(func() { close(h.writeClosed) })
+	return nil
+}
+
+func (h *halfCloseStream) Close() error {
+	h.once.Do(func() { close(h.closed) })
+	return nil
+}
+
+type halfCloseDialer struct{ stream *halfCloseStream }
+
+func (d *halfCloseDialer) DialDocker(context.Context) (io.ReadWriteCloser, error) {
+	return d.stream, nil
+}
+
+// The bug this pins down: `docker run` without -i closes its stdin as soon as
+// the attach is established. A proxy that responded by closing the whole
+// upstream would tear down the session carrying the container's output, and
+// the command would exit 0 having printed nothing at all.
+//
+// Every mount test in the integration suite failed this way -- empty output,
+// zero exit -- while writes and port forwarding passed, because only the
+// tests that read container stdout went through the attach path.
+func TestProxyHalfClosesUpstreamWhenClientStopsWriting(t *testing.T) {
+	// Upstream sends a hijack head, then holds the connection open.
+	upstreamReads, upstreamWrites := io.Pipe()
+	stream := &halfCloseStream{
+		Reader:      upstreamReads,
+		Writer:      io.Discard,
+		writeClosed: make(chan struct{}),
+		closed:      make(chan struct{}),
+	}
+
+	addr := startProxy(t, &Proxy{Dialer: &halfCloseDialer{stream}})
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	io.WriteString(conn, "POST /v1.51/containers/abc/attach?stream=1 HTTP/1.1\r\nHost: docker\r\nContent-Length: 0\r\n\r\n")
+
+	go func() {
+		io.WriteString(upstreamWrites, "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+	}()
+
+	// The client finishes sending and half-closes, exactly as `docker run`
+	// without -i does.
+	if c, ok := conn.(*net.TCPConn); ok {
+		if err := c.CloseWrite(); err != nil {
+			t.Fatalf("CloseWrite: %v", err)
+		}
+	}
+
+	select {
+	case <-stream.writeClosed:
+		// Correct: end-of-input signalled.
+	case <-stream.closed:
+		t.Fatal("the whole upstream was closed; the container's output stream would be torn down before it wrote anything")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the client's half-close was never propagated upstream")
+	}
+
+	// The other direction must still be usable.
+	const output = "output after the client stopped writing\n"
+	go func() { io.WriteString(upstreamWrites, output) }()
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading head: %v", err)
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	buf := make([]byte, len(output))
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		t.Fatalf("output after half-close never arrived: %v", err)
+	}
+	if string(buf) != output {
+		t.Errorf("got %q, want %q", buf, output)
+	}
+}
