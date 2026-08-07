@@ -132,24 +132,37 @@ them:
 
 ## State of play
 
-Working, proven end to end in CI: the tunnel, the NFS export, bind rewriting
-including sources outside the working directory, automatic port forwarding,
-and managed volume creation.
-
-The Go agent exists: `cmd/remote-dockerd serve` provides accounts, SSH,
-structural port ownership, the `/cwd` mount and dockerd supervision, and
-`elevate` removes the third-party Swarm launcher. The integration suite runs
-against both sshd and the agent, so the agent has to pass tests written before
-it existed.
-
 The shell implementation is gone. The image ships one binary; sshd, sudo, the
 key watcher and the mount helpers are deleted, and the agent passed the suite
-written against sshd before they were removed.
+written against sshd, unchanged, before they were removed.
 
-Not done:
-- `docker compose` is NOT embedded. It works through the proxy; embedding it
-  would mean pinning docker/cli back a major version (ADR 0009).
-- No tag has been pushed, so the release pipeline is unexercised.
+### Proven end to end, in CI, on every push
+
+Against a real dind daemon, a real kernel NFS mount and the real client
+binary: the tunnel, the NFS export, bind rewriting including sources outside
+the working directory, automatic port forwarding, managed volume creation,
+`docker compose`, the interactive shell and its `~/workspace` mount, the
+embedded Docker CLI, `gc`, idle disconnect and reconnect, cross-user port
+hijack refusal, and `elevate`.
+
+### NOT tested, and do not claim otherwise
+
+Keep this list honest. An audit found paths described in summaries as tested
+that had no coverage at all -- `elevate` most of all, which had been asserted
+as "the docker run mechanism under it is tested" when only the pure planning
+function was.
+
+- **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
+  wiring -- templated `{{.Task.Name}}`, `mode: host` publishing, placement --
+  needs a real cluster. CI cannot cover it.
+- **`docker build` through the proxy.** The `/session` hijack it depends on is
+  unit tested; no integration test runs an actual build.
+- **The Windows and macOS clients.** Cross-compiled on every push, executed
+  never. The integration suite runs the Linux client, and the endpoint code is
+  the one place they genuinely diverge.
+- **The release pipeline.** No tag has been pushed.
+- **`docker compose` embedded.** Not attempted -- it works through the proxy,
+  and embedding would pin docker/cli back a major version (ADR 0009).
 
 ## Conventions
 
