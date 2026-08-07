@@ -59,10 +59,6 @@ export DOCKER_HOST=unix:///…/docker.sock
 Then use Docker normally. If you have no Docker CLI at all, the binary carries
 one: `remote-docker docker ps`, `remote-docker docker build .`
 
-Other commands: `status` shows what the workspace reports, `shell` opens an
-interactive session on it, `gc` removes share volumes nothing is using, and
-`workspaces` lists what is configured.
-
 The endpoint is a **named pipe** on Windows (`\\.\pipe\docker_remote`) and a
 unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
 that can reach it can start containers that read and write your filesystem.
@@ -168,6 +164,21 @@ it is the open question in ADR 0014.
 
 ## Running a workspace
 
+The workspace runs one binary, `remote-dockerd`: it supervises dockerd,
+provisions an account per enrolled key, and serves SSH itself. There is no
+sshd, no sudo and no shell scripts in the image.
+
+### Build the image
+
+No image is published yet, so build it. The context is the repository root,
+because the agent is compiled from source:
+
+```bash
+docker build -f image/Dockerfile -t remote-docker-workspace:latest .
+```
+
+### Plain Docker
+
 ```bash
 cd deploy
 mkdir -p authorized_keys.d state
@@ -175,28 +186,82 @@ cp /path/to/alice.pub authorized_keys.d/alice.pub   # filename == unix account
 docker compose up -d --build
 ```
 
-Under Swarm, use `deploy/swarm.yml`:
+`state/` holds the host keys and the uid map and **must persist**. Losing it
+gives every client a changed-host-key warning and reassigns every account's
+uid — which changes its tunnel port and orphans the ownership of everything it
+has written.
+
+The container is privileged, because dind runs its own daemon, sets up its own
+bridge and iptables rules, and mounts NFS in its own namespace.
+
+### Docker Swarm
+
+Swarm cannot run privileged tasks, so the service starts **unprivileged** and
+relaunches itself through the node's Docker socket — `remote-dockerd elevate`,
+no launcher image involved ([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)).
+
+Three things must be true before `deploy/swarm.yml` will work, and none of
+them fails in an obvious way:
 
 ```bash
+# 1. Label the node that will run it. Without this the service is accepted
+#    and then never schedules, with no error anywhere.
+docker node update --label-add workspace=true <node>
+
+# 2. Create the state directories ON THAT NODE. They are bind mounts, so a
+#    missing path is created as an empty root-owned directory rather than
+#    reported.
+ssh <node> 'mkdir -p /mnt/appdata/docker/workspace/{state,authorized_keys.d}'
+
+# 3. Make the image reachable — push it to a registry the nodes can pull
+#    from, or build it on each node, then point the stack at it.
+export WORKSPACE_IMAGE=your-registry/remote-docker-workspace:latest
+
 docker stack deploy -c deploy/swarm.yml workspace
 ```
 
-Swarm cannot run privileged tasks, so the service starts unprivileged and
-relaunches itself privileged through the node's Docker socket -- no launcher
-image involved. The host socket mount in that file is the whole trust
-boundary: whoever can deploy the stack can already start privileged containers
-on the node. See [ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md).
+Port 2222 is published with `mode: host`, so it lands on the node actually
+running the task rather than being round-robined by the routing mesh to nodes
+where the privileged container does not exist. That node's 2222 is what
+clients connect to.
 
-The workspace runs one binary, `remote-dockerd`: it supervises dockerd,
-provisions an account per enrolled key, and serves SSH itself.
+**The host Docker socket mount in `swarm.yml` is the whole trust boundary.**
+Whoever can deploy this stack can already start privileged containers on the
+node; elevation does not widen that, it just avoids a second image doing it.
+The socket is deliberately *not* passed to the privileged child.
 
-Enrolment is out of band: someone with access drops a `<name>.pub` into the
-keys directory, and the filename becomes that user's unix account. Removing a
-key revokes access but keeps the home directory.
+### Enrolment
+
+Out of band: someone with access drops a `<name>.pub` into the keys directory,
+and the filename becomes that user's unix account. Removing a key revokes
+access but keeps the account and its home directory — a key file is removed
+far more often than a person leaves for good.
+
+The keys directory is re-read on change and polled every 60 seconds, because
+inotify never fires for a change made on another host when that directory is
+on shared storage.
 
 **All enrolled users share one Docker daemon** and can see each other's
 containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)). A
 workspace is a shared machine; treat it as one.
+
+## Commands
+
+| | |
+|---|---|
+| `remote-docker enroll` | print the public key to hand over for enrolment |
+| `remote-docker up` | open a session and serve the local Docker endpoint |
+| `remote-docker status` | what the workspace reports about this account |
+| `remote-docker shell` | interactive session on the workspace |
+| `remote-docker docker …` | the embedded Docker CLI |
+| `remote-docker context install [--use\|--all]` | write a docker context |
+| `remote-docker context remove` | remove it again |
+| `remote-docker workspaces` | list configured workspaces |
+| `remote-docker gc` | remove share volumes nothing is using |
+| `remote-docker version` | |
+
+On the workspace: `remote-dockerd serve` is the agent (the image's default),
+and `remote-dockerd elevate` is the Swarm entry point.
 
 ## Layout
 
