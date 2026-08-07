@@ -16,6 +16,7 @@ import (
 	"github.com/creack/pty"
 	gssh "github.com/gliderlabs/ssh"
 
+	"github.com/lhns/remote-docker/internal/server/mount"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -74,7 +75,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		GID:        account.UID(),
 		NFSPort:    port,
 		Mountpoint: home + "/workspace",
-		Mounted:    isMountpoint(home + "/workspace"),
+		Mounted:    mount.IsMounted(home + "/workspace"),
 		Docker:     s.dockerVersion(),
 	}
 
@@ -144,6 +145,20 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 
 	if ptyReq, winCh, isPty := session.Pty(); isPty {
 		cmd.Env = append(cmd.Env, "TERM="+ptyReq.Term)
+
+		// Somewhere for the shell to land. Attempted here rather than when the
+		// reverse forward was established, because the client begins serving
+		// NFS a moment after asking for the forward -- mounting then would
+		// race it. A failure is reported and the shell opens anyway: a shell
+		// in the home directory is far better than no shell.
+		if s.cfg.Mounts != nil {
+			if port, err := s.cfg.Mapping.PortForUID(stored.UID); err == nil {
+				if err := s.cfg.Mounts.Ensure(stored.Home, stored.UID, stored.GID, port); err != nil {
+					fmt.Fprintf(session.Stderr(), "workspace not mounted: %v\n", err)
+				}
+			}
+		}
+
 		s.servePTY(session, cmd, winCh)
 		return
 	}
@@ -196,22 +211,6 @@ func (s *Server) dockerVersion() string {
 		return workspace.DockerUnavailable
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// isMountpoint reports whether a path is a mount point, by comparing its
-// device with its parent's.
-func isMountpoint(path string) bool {
-	if path == "" {
-		return false
-	}
-	var self, parent syscall.Stat_t
-	if err := syscall.Stat(path, &self); err != nil {
-		return false
-	}
-	if err := syscall.Stat(path+"/..", &parent); err != nil {
-		return false
-	}
-	return self.Dev != parent.Dev
 }
 
 func exitCode(err error) int {
