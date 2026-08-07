@@ -47,13 +47,26 @@ stays open on exactly this, and
 [ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md) records
 how the rest works.
 
-Off by default because watching costs a recursive watch over every shared
-directory, and `fs.inotify.max_user_watches` is often 8192. `.git`,
-`node_modules` and similar are skipped; build outputs like `dist/` are **not**,
-because serving `dist/` and reloading on it is exactly the workflow this is
-for. Tune with `REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE`;
-when the budget runs out, the directory it stopped at is named rather than
-silently dropped.
+**Off by default, because watching is not free.** inotify is not recursive:
+`inotify_add_watch` covers exactly one directory and reports only its direct
+entries, so a tree costs one watch per directory in it. macOS is worse — kqueue
+needs an open file descriptor per *file*, not per directory. Only the
+directories you actually share are watched, never your whole disk, and there is
+a cap:
+
+| platform | default cap | what binds |
+|---|---|---|
+| Linux | 4096 directories | `fs.inotify.max_user_watches` (8192 by kernel default; many distros raise it) |
+| Windows | 1024 directories | one `ReadDirectoryChangesW` buffer per watch |
+| macOS | 512 directories | `RLIMIT_NOFILE`, because kqueue costs an fd per file |
+
+`.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle` and `.terraform` are
+skipped. Build outputs like `dist/` and `target/` are **not**, because serving
+`dist/` and reloading when it changes is exactly the workflow this is for — so
+a Rust or Java tree will spend its budget inside `target/` and say so. Tune
+with `REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE` (comma- or
+`PATH`-separated). When the budget runs out the directory it stopped at is
+named, never silently dropped.
 
 Watching starts delivering once the session has actually connected, which
 happens on the first Docker command rather than when `up` starts. Edits made
@@ -104,6 +117,9 @@ Nothing here needs administrator rights.
   Testcontainers, IDE plugins — anything that speaks the Docker API. The
   translation happens at the API, not in a command wrapper.
 - **Named volumes stay named volumes.** Only host paths are rewritten.
+- **File watchers can see your edits**, once `REMOTE_DOCKER_WATCH` is on —
+  writes and creations arrive as genuine inotify events inside the container,
+  not as a poll. See above for what that costs and what it does not cover.
 
 Every one of those is asserted end to end on each push, against a real
 Docker-in-Docker daemon and a real kernel NFS mount — see
@@ -114,12 +130,17 @@ Docker-in-Docker daemon and a real kernel NFS mount — see
 ```json
 {
   "workspaces": {
-    "dev": {"host": "dev.example", "user": "alice"},
+    "dev": {"host": "dev.example", "user": "alice", "watch": "partial"},
     "ci":  {"host": "ci.example",  "user": "alice"}
   },
   "default": "dev"
 }
 ```
+
+Every setting can also live at the top level, where it applies to all of them.
+`watch`, `watchBudget` and `watchExclude` are the file-form spellings of the
+`REMOTE_DOCKER_WATCH*` variables above — worth setting per workspace, since
+the one you edit against wants watching and a CI one does not.
 
 Each gets its own endpoint, so sessions run side by side:
 
@@ -315,8 +336,9 @@ and `remote-dockerd elevate` is the Swarm entry point.
 cmd/remote-docker/     the client
 cmd/remote-dockerd/    the workspace agent
 pkg/workspace/         the contract both sides share
-internal/client/       ssh, nfs server, api proxy, bind rewriting, ports
-internal/server/       the agent
+internal/client/       ssh, nfs server, api proxy, bind rewriting, ports,
+                       filesystem watching
+internal/server/       the agent, including change replay
 image/  deploy/        the workspace container and its deployments
 docs/adr/              why everything is the way it is
 test/                  integration suite and probes

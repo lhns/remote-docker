@@ -127,9 +127,26 @@ directory-level poke for deletes and renames, which produces
 lie about the event *kind* for one that does not. That is the user's trade to
 make, which is why it is a setting and not a heuristic.
 
-Default off until the end-to-end path has run in CI for a while. Watching costs
-a recursive watch over every shared directory, and `fs.inotify.max_user_watches`
-is often 8192.
+**Default off, deliberately, not provisionally.** inotify is not recursive:
+`inotify_add_watch` covers one directory and reports only its direct entries,
+so a tree costs one watch per directory. macOS is worse -- fsnotify's kqueue
+backend opens a file descriptor per *file*, not per directory, which is why the
+budget there is 512 against Linux's 4096. Build outputs are deliberately not
+excluded, so a Rust or Java tree exhausts the budget inside `target/`, and the
+first thing such a user would meet is a warning naming that directory.
+
+That is an acceptable cost for someone who wants hot reload and a poor
+introduction for everyone else, so it is opt-in. Turning it on is one
+environment variable.
+
+Worth recording because it was got wrong once: fsnotify *does* implement
+recursive watching on Windows, where `ReadDirectoryChangesW` supports it
+natively -- `backend_windows.go` passes `watch.recurse` straight through. It is
+simply not reachable: "Recursive watching is not currently enabled through
+fsnotify's public API; the recursive code path is gated and only exercised by
+fsnotify's own tests." So on Windows the per-directory cost is a library
+limitation rather than an OS one, and a future fsnotify release could remove it
+without any change here.
 
 ### Closing the echo loop
 
