@@ -353,3 +353,96 @@ func TestRewriteWithoutOwnerLeavesBodyAlone(t *testing.T) {
 		t.Errorf("body changed with no owner set:\n  in  %s\n  out %s", body, out)
 	}
 }
+
+// An audit of every container-create field that can name a host path, prompted
+// by Portainer's GHSA-7fw3-x4r2-g7wc -- which exists precisely because a proxy
+// inspected HostConfig.Binds and missed HostConfig.Mounts. Those two are the
+// only fields that produce a bind mount, and both are handled.
+//
+// The rest are pinned here as fields we must NOT disturb. A rewriter that
+// quietly drops a device or a tmpfs would be a subtler bug than one that
+// misses a bind.
+func TestRewriteLeavesOtherMountFieldsAlone(t *testing.T) {
+	r, _, _ := newRewriter()
+
+	body := []byte(`{
+		"HostConfig": {
+			"Binds": ["/src:/app"],
+			"Tmpfs": {"/run": "rw,size=64m"},
+			"Devices": [{"PathOnHost":"/dev/fuse","PathInContainer":"/dev/fuse","CgroupPermissions":"rwm"}],
+			"VolumesFrom": ["other-container"],
+			"DeviceRequests": [{"Driver":"nvidia","Count":-1}]
+		}
+	}`)
+	out, err := r.ContainerCreate(t.Context(), body)
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	hc := decodeHostConfig(t, out)
+	var before map[string]any
+	if err := json.Unmarshal(body, &before); err != nil {
+		t.Fatal(err)
+	}
+	beforeHC := before["HostConfig"].(map[string]any)
+
+	for _, field := range []string{"Tmpfs", "Devices", "VolumesFrom", "DeviceRequests"} {
+		if !reflect.DeepEqual(beforeHC[field], hc[field]) {
+			t.Errorf("HostConfig.%s changed:\n  before %v\n   after %v", field, beforeHC[field], hc[field])
+		}
+	}
+	// The bind itself must still have been rewritten.
+	if got := hc["Binds"].([]any)[0].(string); strings.HasPrefix(got, "/src:") {
+		t.Errorf("Binds = %q, which was not rewritten", got)
+	}
+}
+
+// HostConfig.VolumeDriver names the driver used for volumes this container
+// creates, and our rewrite produces an unqualified volume name -- so a
+// container setting it could in principle have our name resolved by the wrong
+// driver.
+//
+// It cannot, because the rewriter creates the volume with the local driver
+// BEFORE the container is created, and an existing volume is used as it
+// stands. The field is preserved for the user's own volumes, which is what it
+// was set for.
+func TestRewritePreservesVolumeDriver(t *testing.T) {
+	r, _, volumes := newRewriter()
+
+	body := []byte(`{"HostConfig":{"VolumeDriver":"some-plugin","Binds":["/src:/app","theirs:/data"]}}`)
+	out, err := r.ContainerCreate(t.Context(), body)
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	hc := decodeHostConfig(t, out)
+	if hc["VolumeDriver"] != "some-plugin" {
+		t.Errorf("VolumeDriver = %v, want it preserved", hc["VolumeDriver"])
+	}
+
+	// Ours is created explicitly with the local driver, so the name is already
+	// taken by the time the container is created.
+	wantVolume := workspace.VolumeNameForID(workspace.ShareID("/src"))
+	if _, ok := volumes.created[wantVolume]; !ok {
+		t.Errorf("volume %q was not created ahead of the container", wantVolume)
+	}
+}
+
+// npipe and cluster mounts name things that mean nothing on a Linux workspace.
+// Forwarding them lets the daemon produce its own error, which will be about
+// the real problem rather than about our rewriter.
+func TestRewriteForwardsExoticMountTypes(t *testing.T) {
+	r, _, _ := newRewriter()
+
+	body := []byte(`{"HostConfig":{"Mounts":[
+		{"Type":"npipe","Source":"\\\\.\\pipe\\docker_engine","Target":"/pipe"},
+		{"Type":"cluster","Source":"csi-volume","Target":"/data"}
+	]}}`)
+	out, err := r.ContainerCreate(t.Context(), body)
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if string(out) != string(body) {
+		t.Errorf("exotic mount types were altered:\n  in  %s\n  out %s", body, out)
+	}
+}
