@@ -25,10 +25,30 @@ const NameSuffix = ".elevated"
 
 // Mount is one mount on a container.
 type Mount struct {
-	Type        string
+	Type string
+
+	// Name is the volume name when Type is "volume". Replicating a volume
+	// mount by its host path instead of its name would bypass the volume
+	// entirely and bind the daemon's internal storage directory, which
+	// happens to work and is quietly wrong.
+	Name string
+
 	Source      string
 	Destination string
 	ReadOnly    bool
+}
+
+// arg renders the mount as a -v value.
+func (m Mount) arg() string {
+	source := m.Source
+	if m.Type == "volume" && m.Name != "" {
+		source = m.Name
+	}
+	spec := source + ":" + m.Destination
+	if m.ReadOnly {
+		spec += ":ro"
+	}
+	return spec
 }
 
 // ContainerInfo is what we learn about ourselves from the host daemon.
@@ -49,6 +69,31 @@ type RunSpec struct {
 	Remove     bool
 	Mounts     []Mount
 	Env        []string
+}
+
+// Args renders the spec as arguments to `docker run`.
+//
+// Kept next to Plan and pure for the same reason: the difference between a
+// correct and a catastrophic invocation here is one flag, and it should be
+// visible in a test rather than buried in a command line.
+func (s RunSpec) Args() []string {
+	args := []string{"run", "--rm", "-i"}
+	if s.Privileged {
+		args = append(args, "--privileged")
+	}
+	if s.Network != "" {
+		args = append(args, "--network", s.Network)
+	}
+	if s.Name != "" {
+		args = append(args, "--name", s.Name)
+	}
+	for _, e := range s.Env {
+		args = append(args, "-e", e)
+	}
+	for _, m := range s.Mounts {
+		args = append(args, "-v", m.arg())
+	}
+	return append(args, s.Image)
 }
 
 // Options tune the plan.
