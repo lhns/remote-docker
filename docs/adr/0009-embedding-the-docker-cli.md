@@ -32,6 +32,28 @@ comes from the client machine and never needs to reach the workspace through
 NFS at all. What it does need is a `/session` connection, which is an HTTP
 upgrade carrying gRPC.
 
+## Spike result
+
+Measured, rather than assumed, before accepting:
+
+| | |
+|---|---|
+| builds at `CGO_ENABLED=0` | yes — the single-binary premise survives |
+| stripped binary | 28.4 MB, `docker/cli` alone |
+| modules in the graph | 205 |
+| subcommands registered | 57 |
+
+One snag worth recording, because it will recur for anyone adding these
+dependencies: `docker/cli` is a `+incompatible` module, so its own `go.mod`
+constraints do not propagate through MVS. Resolving from an empty module
+produces an ambiguous import of
+`google.golang.org/genproto/googleapis/api/annotations`, which is provided by
+both the pre-split monolith and the split module. Pinning
+`google.golang.org/genproto@latest` first, then tidying, resolves it.
+
+28 MB is acceptable for a tool whose entire premise is that nothing has to be
+installed. Buildx and Compose will add to it.
+
 ## Decision
 
 Embed `docker/cli`, `buildx` and `compose/v2` into the `remote-docker` binary,
