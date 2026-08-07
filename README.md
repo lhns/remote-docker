@@ -168,10 +168,22 @@ The workspace runs one binary, `remote-dockerd`: it supervises dockerd,
 provisions an account per enrolled key, and serves SSH itself. There is no
 sshd, no sudo and no shell scripts in the image.
 
-### Build the image
+### The image
 
-No image is published yet, so build it. The context is the repository root,
-because the agent is compiled from source:
+Published to GHCR for `linux/amd64` and `linux/arm64`:
+
+```
+ghcr.io/lhns/remote-docker-workspace:<version>   # on a v<version> tag
+ghcr.io/lhns/remote-docker-workspace:latest      # on a v<version> tag
+ghcr.io/lhns/remote-docker-workspace:sha-<short> # every commit to main
+```
+
+`latest` only exists once a `v*` tag has been pushed. Before that, pin a
+`sha-` tag — `deploy/swarm.yml` takes `WORKSPACE_IMAGE` to override its
+default.
+
+Or build it yourself. The context is the repository root, because the agent is
+compiled from source:
 
 ```bash
 docker build -f image/Dockerfile -t remote-docker-workspace:latest .
@@ -200,8 +212,8 @@ Swarm cannot run privileged tasks, so the service starts **unprivileged** and
 relaunches itself through the node's Docker socket — `remote-dockerd elevate`,
 no launcher image involved ([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)).
 
-Three things must be true before `deploy/swarm.yml` will work, and none of
-them fails in an obvious way:
+Two things must be true before `deploy/swarm.yml` will work, and neither
+fails in an obvious way:
 
 ```bash
 # 1. Label the node that will run it. Without this the service is accepted
@@ -212,10 +224,6 @@ docker node update --label-add workspace=true <node>
 #    missing path is created as an empty root-owned directory rather than
 #    reported.
 ssh <node> 'mkdir -p /mnt/appdata/docker/workspace/{state,authorized_keys.d}'
-
-# 3. Make the image reachable — push it to a registry the nodes can pull
-#    from, or build it on each node, then point the stack at it.
-export WORKSPACE_IMAGE=your-registry/remote-docker-workspace:latest
 
 docker stack deploy -c deploy/swarm.yml workspace
 ```
