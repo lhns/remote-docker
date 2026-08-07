@@ -12,13 +12,17 @@
 #     docker build -f image/Dockerfile .
 FROM golang:1.25-alpine AS build
 WORKDIR /src
+# Stamped by the release workflow. Without it a published image reports "dev",
+# which makes "which version is this workspace running" unanswerable.
+ARG VERSION=dev
 # Dependencies first, so a source change does not re-download the module graph.
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+RUN CGO_ENABLED=0 go build -trimpath \
+        -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/remote-dockerd ./cmd/remote-dockerd
 
 FROM docker:28-dind

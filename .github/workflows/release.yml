@@ -60,6 +60,8 @@ jobs:
         with:
           context: .
           file: image/Dockerfile
+          build-args: |
+            VERSION=${{ github.ref_name }}
           # The workspace runs Docker-in-Docker on whatever the deployment
           # host is, so both architectures are worth publishing.
           platforms: linux/amd64,linux/arm64
