@@ -13,6 +13,12 @@ import (
 // It is filled in at runtime from the user's runtime directory.
 const DefaultEndpoint = ""
 
+// Deliberately NOT /var/run/docker.sock, the path the official CLI uses by
+// default. It is root-owned, so serving it would need privileges this client
+// otherwise never asks for, and it would collide with any local daemon. The
+// docker context written by `remote-docker context install` needs none and
+// behaves the same on every platform.
+
 // Listen binds the local Docker endpoint on a unix socket.
 func Listen(endpoint string) (net.Listener, error) {
 	if endpoint == "" {

@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultEndpoint is where the proxy listens when nothing else is asked for.
-const DefaultEndpoint = `\\.\pipe\remote-docker`
+const DefaultEndpoint = `\\.\pipe\docker_remote`
 
 // DockerEngineEndpoint is the pipe the official Docker CLI looks for when
 // DOCKER_HOST is unset. Binding it makes the official CLI work with no
