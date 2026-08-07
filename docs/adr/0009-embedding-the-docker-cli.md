@@ -53,9 +53,38 @@ gets a modern builder without vendoring buildx separately. The functional gap
 this ADR was most worried about does not exist.
 
 **Compose is still a separate module** and is not obtained by embedding the
-CLI. `docker compose` falls through to the parent's help. Adding it means
-taking `github.com/docker/compose/v2` as its own dependency, which is
-outstanding.
+CLI. `docker compose` falls through to the parent's help.
+
+### Compose: attempted, and deliberately not taken
+
+Three attempts, each failing differently, which together explain why:
+
+| Attempt | Result |
+|---|---|
+| `docker/cli@latest` + Compose | buildx v0.29 uses `github.com/docker/docker` types; cli v29.7 uses `github.com/moby/moby` — the same types under two module paths |
+| force buildx v0.36 | Compose needs `moby/buildkit/util/tracing/env`, absent from the buildkit that buildx pins |
+| let Compose choose the whole stack | **builds** — cli v28.5.1, buildx v0.29.1, buildkit v0.25.1, 86 MB, 36 subcommands |
+
+So it is possible, and it is **not taken**. The working combination requires
+pinning `docker/cli` back from v29.7.2 to v28.5.1 — a major version — and
+roughly doubles the binary, in exchange for a three-way version pin that any
+independent upgrade breaks.
+
+The cause is that the Docker ecosystem is mid-migration from
+`github.com/docker/docker` to `github.com/moby/moby`, and cli, buildx and
+Compose are not mutually consistent across it right now. Downgrading a major
+version of our primary dependency to work around somebody else's in-progress
+rename is the kind of decision that is cheap today and expensive later.
+
+**What is actually lost is small.** Compose already works *through* the proxy,
+and the integration suite proves it — that is the point of translating at the
+API rather than in a command wrapper (ADR 0005). The gap is only someone with
+*nothing* installed, and in practice the Docker CLI and Compose ship together,
+so a machine with one usually has both.
+
+Revisit when buildx and Compose have completed the `moby/moby` migration. The
+working combination above is recorded so that revisit does not repeat these
+three attempts.
 
 Two integration hazards, neither of which a dependency-weight spike could have
 surfaced, because both need the command tree actually built and run:
