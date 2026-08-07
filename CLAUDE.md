@@ -27,12 +27,16 @@ pkg/workspace/           THE SHARED CONTRACT, imported by both binaries
 
 internal/client/
   config/                settings precedence, state paths
+  fswatch/               watches shared dirs, streams changes to the agent
   sshx/                  ssh client, keys, known_hosts, forwards, pty shell
   nfsserve/              in-process NFSv3 server, virtual export namespace
   proxy/                 Docker API proxy + a small API client of our own
   rewrite/               binds -> NFS volumes, owner labelling, volume GC
   ports/                 published ports -> local forwards
   session/               wires the above into one live connection
+
+internal/server/
+  notify/                replays the client's changes as real syscalls
 
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose and swarm deployments
@@ -118,6 +122,21 @@ premise of the project, and it applies to building it too. So:
 - **`shadow` must stay in the image.** The agent shells out to `useradd`, which
   handles the locking between passwd, group and gshadow that hand-editing gets
   wrong.
+- **Replay must never mutate.** `internal/server/notify` performs syscalls on
+  the user's own files, through the export it is notifying about. `O_CREAT`,
+  `O_TRUNC` and a non-identity `utimensat` are all forbidden, even where they
+  would produce a better event: the file may have been deleted again between
+  the client observing a change and the agent replaying it, and the cost of
+  being wrong is data appearing in someone's project. The measured
+  `IN_CREATE` from `open(O_CREAT)` is deliberately not used for this reason.
+- **The replay primitives are measured, not remembered.** `utimensat` with
+  `atime=UTIME_OMIT` gives `IN_MODIFY`; with *both* times set it gives
+  `IN_ATTRIB`, which most watchers ignore. That asymmetry is the whole reason
+  the feature works, and `test/integration.sh` section 11d keeps both rows so
+  a kernel change cannot quietly take it away.
+- **`test/watchprobe` reads raw inotify, not fsnotify.** fsnotify's mask omits
+  `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
+  primitive under test and would report "nothing happened" convincingly.
 
 ## Retired invariants
 
@@ -143,7 +162,9 @@ binary: the tunnel, the NFS export, bind rewriting including sources outside
 the working directory, automatic port forwarding, managed volume creation,
 `docker compose`, the interactive shell and its `~/workspace` mount, the
 embedded Docker CLI, `gc`, idle disconnect and reconnect, cross-user port
-hijack refusal, and `elevate`.
+hijack refusal, `elevate`, the replay primitive matrix (which syscall produces
+which inotify event), and an edit here firing inotify inside a container with
+`REMOTE_DOCKER_WATCH=partial`.
 
 ### NOT tested, and do not claim otherwise
 
@@ -163,6 +184,13 @@ function was.
 - **The release pipeline.** No tag has been pushed.
 - **`docker compose` embedded.** Not attempted -- it works through the proxy,
   and embedding would pin docker/cli back a major version (ADR 0009).
+- **`coarse` watch mode.** The directory-level poke for deletions is unit
+  tested; no integration test asserts that a real watcher notices a deletion
+  through it.
+- **Watching at scale.** The budget, the exclude list and overflow reporting
+  are unit tested against a fake backend. Nothing has run a watcher over a
+  10,000-directory tree, and the macOS backend (kqueue, one fd per *file*) has
+  never been executed at all.
 
 ## Conventions
 

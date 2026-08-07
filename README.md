@@ -17,23 +17,47 @@ docker compose up -d                                  # ports land on YOUR local
 
 ## Read this first
 
-**File watchers do not see your edits.** A container watching a directory on
-the share receives *no* inotify events when you change a file — measured, not
-assumed. Polling sees the change immediately; inotify sees nothing at all.
+**File watchers need `REMOTE_DOCKER_WATCH` turned on.** By default, a container
+watching a directory on the share receives *no* inotify events when you change
+a file — measured, not assumed. NFS carries no change-notification protocol,
+so the container's kernel is simply never told. **Hot reload silently does
+nothing**: vite, webpack, nodemon, `air` and `dotnet watch` sit there while
+the file is plainly present.
 
-This is inherent to NFS, which carries no change-notification protocol. It
-means **hot reload does not work**: vite, webpack, nodemon, `air` and
-`dotnet watch` will sit silently doing nothing while the file is plainly
-there.
+Turning it on makes remote-docker watch this machine and replay each change
+inside the workspace as a real syscall, so the kernel there emits a genuine
+inotify event:
 
-Workarounds are per-tool polling flags — `CHOKIDAR_USEPOLLING=1`,
-`WATCHPACK_POLLING=true`, `--poll`. They are not set for you, because silently
-changing your build tool's behaviour is worse than the limitation.
+```bash
+export REMOTE_DOCKER_WATCH=partial    # writes and creations
+export REMOTE_DOCKER_WATCH=coarse     # also deletions, approximately
+```
 
-remote-docker is good at builds, tests, `docker compose up`, and any tool that
-reads its inputs when it starts. It is not currently good at the edit-reload
-loop. See [ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md),
-which is deliberately left open.
+| mode | what happens |
+|---|---|
+| `off` *(default)* | nothing is watched; hot reload does not work |
+| `partial` | writes and creations fire real events. Deletions are not reported at all — nothing is ever misrepresented |
+| `coarse` | as `partial`, plus a directory-level event for deletions and renames. A watcher that rescans notices; one that trusts the event *kind* is told something untrue |
+
+**Deletions are the honest gap.** `unlink` of a name that is already gone fails
+before the kernel generates anything, so a deletion cannot be replayed
+faithfully. `coarse` approximates it; `partial` says nothing rather than
+something wrong. [ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md)
+stays open on exactly this, and
+[ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md) records
+how the rest works.
+
+Off by default because watching costs a recursive watch over every shared
+directory, and `fs.inotify.max_user_watches` is often 8192. `.git`,
+`node_modules` and similar are skipped; build outputs like `dist/` are **not**,
+because serving `dist/` and reloading on it is exactly the workflow this is
+for. Tune with `REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE`;
+when the budget runs out, the directory it stopped at is named rather than
+silently dropped.
+
+The per-tool polling flags — `CHOKIDAR_USEPOLLING=1`, `WATCHPACK_POLLING=true`,
+`--poll` — still work and are never set for you: silently changing your build
+tool's behaviour is worse than telling you about the limitation.
 
 ## Getting started
 
@@ -159,8 +183,17 @@ by a stale bot; [podman#13358](https://github.com/containers/podman/issues/13358
 was closed "won't fix, far from trivial".
 
 Sync is not obviously the wrong answer — it makes changes land as ordinary
-local writes, so file watchers work. That may be the whole reason it won, and
-it is the open question in ADR 0014.
+local writes, so file watchers work. That is very likely the whole reason it
+won.
+
+remote-docker answers it differently, and not originally: Docker Desktop ships
+the same idea as "Event Injection", forwarding host events into its VM so a
+replay thread reproduces them. Linux offers no way to inject a synthetic
+inotify event — `fanotify(7)` says so outright — so performing a real
+operation is the only mechanism available to anyone. The difference here is
+that we own the NFS server as well as the agent, which is what keeps the
+replay from echoing back as a change of its own
+([ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md)).
 
 ## Running a workspace
 
