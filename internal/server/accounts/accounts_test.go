@@ -394,3 +394,36 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition never became true")
 }
+
+// uid allocation must not depend on Go's map iteration order.
+//
+// Sync sorts the key files so a collision resolves deterministically, then
+// handed the result to reconcile as a map -- which ranged it to ASSIGN uids.
+// So which account got which uid, and therefore which reverse-tunnel port,
+// differed between runs on a fresh workspace. It showed up as a test that
+// failed about one run in eight.
+func TestUIDAllocationFollowsSortedNames(t *testing.T) {
+	// Names deliberately not in insertion or creation order.
+	names := []string{"delta", "alpha", "charlie", "bravo", "echo"}
+
+	for attempt := range 20 {
+		s := newStore(t)
+		for _, n := range names {
+			s.writeKey(t, n+".pub")
+		}
+		if err := s.Sync(); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+
+		for i, n := range []string{"alpha", "bravo", "charlie", "delta", "echo"} {
+			a, ok := s.Lookup(n)
+			if !ok {
+				t.Fatalf("attempt %d: %s was not provisioned", attempt, n)
+			}
+			if want := workspace.DefaultUIDBase + i; a.UID != want {
+				t.Fatalf("attempt %d: %s uid = %d, want %d -- allocation is not deterministic",
+					attempt, n, a.UID, want)
+			}
+		}
+	}
+}

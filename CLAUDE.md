@@ -113,6 +113,12 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
+- **Never range a map to assign something durable.** Account uids are handed
+  out in `accounts.reconcile`, which used to range the `found` map -- so which
+  account got which uid, and therefore which reverse-tunnel port, differed
+  between runs on a fresh workspace. `Sync` sorts the key files precisely so
+  collisions resolve deterministically; passing the result on as a map threw
+  that away. It presented as a test failing about one run in eight.
 - **The keys watcher polls as well as using inotify.** The keys directory is
   expected to be on CephFS/NFS, where inotify never fires for changes made on
   another host.

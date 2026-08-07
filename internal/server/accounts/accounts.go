@@ -14,8 +14,10 @@ package accounts
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,7 +206,13 @@ func (s *Store) reconcile(found map[string]*Account, uids map[string]int) error 
 
 	changed := false
 
-	for name, account := range found {
+	// Sorted, because this loop ASSIGNS uids to accounts that do not have one
+	// yet, and ranging a map would assign them in Go's randomised order. Sync
+	// goes to some trouble to order the key files deterministically; handing
+	// the result over as a map threw that away, and the uid a new account got
+	// -- and therefore its reverse-tunnel port -- depended on the run.
+	for _, name := range slices.Sorted(maps.Keys(found)) {
+		account := found[name]
 		uid, ok := uids[name]
 		if !ok {
 			uid = nextUID(uids, s.Mapping.UIDBase)
