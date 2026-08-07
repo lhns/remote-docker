@@ -465,6 +465,98 @@ else
 fi
 
 echo
+echo
+echo "== 13. shell, the embedded CLI, and gc =="
+# The interactive path is the only thing that exercises the agent's ~/workspace
+# mount, and it was untested. `shell` needs a tty, so ssh -tt stands in for a
+# terminal well enough to prove the mount and the command both work.
+shellout=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519"     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null     -o BatchMode=yes -tt -p "$SSH_PORT" "$ACCOUNT@127.0.0.1"     'ls /home/'"$ACCOUNT"'/workspace' 2>&1 </dev/null)
+
+if echo "$shellout" | grep -q "marker"; then
+    ok "an interactive session sees the workspace mount"
+else
+    bad "the workspace mount was not visible in a session: $(echo "$shellout" | tr -d '' | tail -3 | tr '
+' ' ')"
+fi
+
+# The embedded CLI: the client's own docker, not the runner's.
+if out=$(timeout 60 "$WORK/remote-docker" docker ps --format '{{.Names}}' 2>&1); then
+    ok "the embedded docker CLI talks to the workspace"
+else
+    bad "the embedded docker CLI failed: $(echo "$out" | tail -2)"
+fi
+
+# gc must not remove a volume that is in use, and must not fail.
+if out=$(timeout 90 "$WORK/remote-docker" gc 2>&1); then
+    if echo "$out" | grep -q "removed"; then
+        ok "gc ran and reported what it removed"
+    else
+        bad "gc gave no account of itself: $out"
+    fi
+else
+    bad "gc failed: $(echo "$out" | tail -2)"
+fi
+
+echo
+echo "== 14. elevate =="
+# Swarm cannot run privileged tasks, so the service starts unprivileged and
+# relaunches itself (ADR 0013). Swarm itself is not worth standing up here --
+# the mechanism under test is `docker run`, which is exactly what runs below.
+#
+# The assertion that matters is the last one: the privileged child must NOT
+# inherit the host's Docker socket, or every enrolled workspace user has root
+# on the node.
+ELEV=remote-docker-elev
+hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
+
+if hostdocker run -d --name "$ELEV"         -v /var/run/docker.sock:/var/run/host-docker.sock         "$IMAGE" elevate >/dev/null 2>&1; then
+
+    elevated=false
+    for _ in $(seq 1 60); do
+        if hostdocker inspect "$ELEV.elevated" >/dev/null 2>&1; then
+            elevated=true
+            break
+        fi
+        hostdocker inspect -f '{{.State.Running}}' "$ELEV" 2>/dev/null | grep -q true || break
+        sleep 1
+    done
+
+    if [ "$elevated" != true ]; then
+        bad "elevate never launched a privileged container"
+        hostdocker logs "$ELEV" 2>&1 | tail -15 | sed 's/^/        /'
+    else
+        ok "elevate launched a privileged container"
+
+        if [ "$(hostdocker inspect -f '{{.HostConfig.Privileged}}' "$ELEV.elevated" 2>/dev/null)" = "true" ]; then
+            ok "the child is privileged"
+        else
+            bad "the child is not privileged, which is the entire point"
+        fi
+
+        # Sharing the launcher's network namespace is what lets a published
+        # port reach the workspace. Without it nothing can connect, and
+        # nothing says why.
+        parent_id=$(hostdocker inspect -f '{{.Id}}' "$ELEV" 2>/dev/null)
+        netmode=$(hostdocker inspect -f '{{.HostConfig.NetworkMode}}' "$ELEV.elevated" 2>/dev/null)
+        if [ "$netmode" = "container:$parent_id" ]; then
+            ok "the child shares the launcher's network namespace"
+        else
+            bad "the child's network mode is [$netmode], not the launcher's namespace"
+        fi
+
+        sockets=$(hostdocker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$ELEV.elevated" 2>/dev/null | tr ' ' '
+' | grep -c "docker.sock")
+        if [ "$sockets" = "0" ]; then
+            ok "the child did NOT inherit the host docker socket"
+        else
+            bad "SECURITY: the privileged child has the host docker socket"
+        fi
+    fi
+else
+    bad "could not start the elevate launcher"
+fi
+hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
+
 if [ "$FAIL" -ne 0 ]; then
     echo
     echo "== client log =="

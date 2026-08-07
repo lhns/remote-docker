@@ -59,6 +59,10 @@ export DOCKER_HOST=unix:///…/docker.sock
 Then use Docker normally. If you have no Docker CLI at all, the binary carries
 one: `remote-docker docker ps`, `remote-docker docker build .`
 
+Other commands: `status` shows what the workspace reports, `shell` opens an
+interactive session on it, `gc` removes share volumes nothing is using, and
+`workspaces` lists what is configured.
+
 The endpoint is a **named pipe** on Windows (`\\.\pipe\docker_remote`) and a
 unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
 that can reach it can start containers that read and write your filesystem.
