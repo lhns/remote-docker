@@ -91,11 +91,11 @@ func (s *Server) listenFor(ctx context.Context, account sessionAccount, addr str
 	return netns.Listen(d.NetNSPath(), "tcp", addr)
 }
 
-// HandleSSHRequest answers tcpip-forward and cancel-tcpip-forward.
+// handleForwardRequest answers tcpip-forward and cancel-tcpip-forward.
 //
 // A near-copy of gliderlabs' ForwardedTCPHandler, differing in one line: the
 // listener comes from listenFor rather than from net.Listen.
-func (s *Server) HandleSSHRequest(ctx gssh.Context, _ *gssh.Server, req *gossh.Request) (bool, []byte) {
+func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gossh.Request) (bool, []byte) {
 	f := &s.tcpip
 	f.mu.Lock()
 	if f.forwards == nil {

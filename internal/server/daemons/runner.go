@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lhns/remote-docker/internal/server/dockercli"
+	"github.com/lhns/remote-docker/internal/server/netns"
 )
 
 // Daemon is one account's running dockerd.
@@ -35,9 +37,14 @@ type Daemon struct {
 	checked time.Time
 }
 
+// Host is this daemon as a DOCKER_HOST value, which is how everything that is
+// not the agent itself addresses it -- the docker CLI, and the shells the
+// agent hands out.
+func (d Daemon) Host() string { return HostFor(d.Account) }
+
 // NetNSPath is the daemon's network namespace, for binding the reverse tunnel
 // inside it and dialling published ports from it.
-func (d Daemon) NetNSPath() string { return fmt.Sprintf("/proc/%d/ns/net", d.PID) }
+func (d Daemon) NetNSPath() string { return netns.Path(d.PID) }
 
 // Root is the daemon's filesystem as seen from the agent, which is where a
 // volume mountpoint reported by that daemon actually lives.
@@ -176,12 +183,12 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	// operator being able to see that and having to know it.
 	//
 	// Idempotent: creating an existing volume is a no-op that returns its name.
-	if out, err := m.docker(ctx, "volume", "create",
+	if err := m.parent().Run(ctx, "daemons: preparing "+account+"'s storage",
+		"volume", "create",
 		"--label", ManagedLabel+"=1",
 		"--label", AccountLabel+"="+account,
-		VolumeName(account)).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("daemons: preparing %s's storage: %w: %s",
-			account, err, strings.TrimSpace(string(out)))
+		VolumeName(account)); err != nil {
+		return nil, err
 	}
 
 	switch state := m.state(ctx, spec.Name); state {
@@ -189,18 +196,16 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		// Somebody else's Ensure won, or it survived our restart.
 	case "":
 		m.logf("starting a daemon for %s", account)
-		if out, err := m.docker(ctx, spec.Args()...).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("daemons: starting %s: %w: %s",
-				spec.Name, err, strings.TrimSpace(string(out)))
+		if err := m.parent().Run(ctx, "daemons: starting "+spec.Name, spec.Args()...); err != nil {
+			return nil, err
 		}
 	default:
 		// Stopped, exited, created. START it rather than running a new one:
 		// the container holds this user's containers and images, and
 		// replacing it would silently discard them.
 		m.logf("restarting the existing daemon for %s (was %s)", account, state)
-		if out, err := m.docker(ctx, "start", spec.Name).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("daemons: restarting %s: %w: %s",
-				spec.Name, err, strings.TrimSpace(string(out)))
+		if err := m.parent().Run(ctx, "daemons: restarting "+spec.Name, "start", spec.Name); err != nil {
+			return nil, err
 		}
 	}
 
@@ -271,12 +276,11 @@ func (m *Manager) pid(ctx context.Context, name string) (int, error) {
 }
 
 func (m *Manager) inspect(ctx context.Context, name, format string) (string, error) {
-	out, err := m.docker(ctx, "inspect", name, "--format", format).Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	return m.parent().Line(ctx, "inspect", name, "--format", format)
 }
+
+// parent is the workspace's own daemon, which hosts every per-account one.
+func (m *Manager) parent() dockercli.CLI { return dockercli.CLI{} }
 
 // Adopt takes ownership of daemons left running by a previous agent.
 //
@@ -297,13 +301,13 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		args = append(args, "--filter", "label="+WorkspaceLabel+"="+m.Options.Workspace)
 	}
 
-	out, err := m.docker(ctx, args...).Output()
+	out, err := m.parent().Line(ctx, args...)
 	if err != nil {
 		return 0, fmt.Errorf("daemons: listing daemons to adopt: %w", err)
 	}
 
 	adopted := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
 			continue
 		}
@@ -387,10 +391,6 @@ func (m *Manager) chown(account, socket string) error {
 		return err
 	}
 	return os.Chmod(socket, 0o660)
-}
-
-func (m *Manager) docker(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, "docker", args...)
 }
 
 func (m *Manager) logf(format string, args ...any) {

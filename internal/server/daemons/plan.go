@@ -129,6 +129,12 @@ func SocketPathFor(account string) string {
 	return SocketDir + "/" + account + "/" + SocketName
 }
 
+// HostFor is that same socket as a DOCKER_HOST value. It was written out as
+// "unix://" + SocketPathFor(account) at three call sites.
+func HostFor(account string) string {
+	return "unix://" + SocketPathFor(account)
+}
+
 // Plan works out what to launch for one account. Pure, so every rule here is
 // testable on a machine with no daemon.
 func Plan(account string, opts Options) (Spec, error) {
@@ -204,25 +210,8 @@ func (s Spec) Args() []string {
 		args = append(args, "-e", e)
 	}
 	for _, m := range s.Mounts {
-		args = append(args, "-v", mountArg(m))
+		args = append(args, "-v", m.Arg())
 	}
 	args = append(args, s.Image)
 	return append(args, s.Command...)
-}
-
-// mountArg renders a mount as a -v value.
-//
-// A volume mount is rendered by NAME, never by the host path it resolves to:
-// binding the daemon's internal storage directory instead happens to work and
-// is quietly wrong. Same rule, and the same reason, as elevate's.
-func mountArg(m elevate.Mount) string {
-	source := m.Source
-	if m.Type == "volume" && m.Name != "" {
-		source = m.Name
-	}
-	spec := source + ":" + m.Destination
-	if m.ReadOnly {
-		spec += ":ro"
-	}
-	return spec
 }

@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/lhns/remote-docker/internal/server/dockercli"
 )
 
 // SelfEnv names the environment variable holding our own container id or name.
@@ -35,7 +37,7 @@ type Runner struct {
 // Run inspects this container, launches a privileged copy, and blocks until it
 // exits, returning its exit code.
 func (r *Runner) Run(ctx context.Context) (int, error) {
-	self, err := r.Inspect(ctx, r.selfRef())
+	self, err := r.inspect(ctx, r.selfRef())
 	if err != nil {
 		return 1, err
 	}
@@ -101,7 +103,7 @@ func (r *Runner) launch(ctx context.Context, spec RunSpec) (int, error) {
 }
 
 // Inspect reads a container's configuration from the host daemon.
-func (r *Runner) Inspect(ctx context.Context, ref string) (ContainerInfo, error) {
+func (r *Runner) inspect(ctx context.Context, ref string) (ContainerInfo, error) {
 	if ref == "" {
 		return ContainerInfo{}, fmt.Errorf(
 			"elevate: cannot identify this container; set %s (Swarm can template it as {{.Task.Name}})",
@@ -219,10 +221,7 @@ func isHex(s string) bool {
 }
 
 func (r *Runner) docker(ctx context.Context, args ...string) *exec.Cmd {
-	bin := "docker"
-	full := []string{"--host", "unix://" + r.hostSocket()}
-	full = append(full, args...)
-	return exec.CommandContext(ctx, bin, full...)
+	return dockercli.CLI{Host: "unix://" + r.hostSocket()}.Cmd(ctx, args...)
 }
 
 func (r *Runner) hostSocket() string {

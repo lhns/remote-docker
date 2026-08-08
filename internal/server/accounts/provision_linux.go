@@ -14,30 +14,6 @@ import (
 	"strings"
 )
 
-// UnixProvisioner creates real unix accounts.
-//
-// It shells out to useradd rather than editing /etc/passwd directly. The
-// shadow tooling handles the group file, the home directory skeleton and the
-// locking between them; reimplementing that to avoid one dependency would be
-// trading a well-understood tool for a novel source of corruption.
-type UnixProvisioner struct {
-	// Groups the account joins. Empty means the shared-daemon default,
-	// {"docker", "workspace"}: "docker" is what gives access to the shared
-	// inner daemon, and "workspace" marks the account as ours.
-	Groups []string
-
-	// Revoke names groups an existing account must NOT be in.
-	//
-	// Needed because Ensure returns early for an account that already exists,
-	// so changing Groups alone would apply to new accounts only -- and on an
-	// upgraded workspace every account already exists. With a daemon per
-	// account (ADR 0019) that would leave every one of them still in the
-	// `docker` group, holding a socket that reaches the PARENT daemon, which
-	// can see and control every account's dind. The separation would be a
-	// claim rather than a fact, on exactly the workspaces that had users.
-	Revoke []string
-}
-
 // Ensure creates the account if it is missing and returns its home directory.
 func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, error) {
 	if u, err := user.Lookup(name); err == nil {

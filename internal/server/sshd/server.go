@@ -118,8 +118,8 @@ func New(cfg Config) (*Server, error) {
 		// Ours rather than gliderlabs', because both of theirs hardcode the
 		// namespace they listen and dial in -- see forward_tcpip.go.
 		RequestHandlers: map[string]gssh.RequestHandler{
-			"tcpip-forward":        s.HandleSSHRequest,
-			"cancel-tcpip-forward": s.HandleSSHRequest,
+			"tcpip-forward":        s.handleForwardRequest,
+			"cancel-tcpip-forward": s.handleForwardRequest,
 		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,

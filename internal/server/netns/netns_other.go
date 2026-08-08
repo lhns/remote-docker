@@ -4,7 +4,6 @@ package netns
 
 import (
 	"errors"
-	"fmt"
 	"net"
 )
 
@@ -15,8 +14,6 @@ import (
 // no Linux (see CLAUDE.md). They are not a portability claim: network
 // namespaces are a Linux facility and the agent only ever runs there.
 var ErrUnsupported = errors.New("netns: network namespaces are Linux-only")
-
-func Path(pid int) string { return fmt.Sprintf("/proc/%d/ns/net", pid) }
 
 func Do(string, func() error) error { return ErrUnsupported }
 

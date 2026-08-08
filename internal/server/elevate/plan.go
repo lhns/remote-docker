@@ -38,8 +38,13 @@ type Mount struct {
 	ReadOnly    bool
 }
 
-// arg renders the mount as a -v value.
-func (m Mount) arg() string {
+// Arg renders the mount as a -v value.
+//
+// Exported because internal/server/daemons renders mounts for its own
+// containers and had a byte-identical copy of this, down to the reasoning
+// below -- which is exactly the kind of duplication that survives until the
+// two copies disagree about something load-bearing.
+func (m Mount) Arg() string {
 	source := m.Source
 	if m.Type == "volume" && m.Name != "" {
 		source = m.Name
@@ -101,7 +106,7 @@ func (s RunSpec) Args() []string {
 		args = append(args, "-e", e)
 	}
 	for _, m := range s.Mounts {
-		args = append(args, "-v", m.arg())
+		args = append(args, "-v", m.Arg())
 	}
 	return append(args, s.Image)
 }

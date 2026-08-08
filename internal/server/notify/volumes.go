@@ -3,9 +3,9 @@ package notify
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path"
-	"strings"
+
+	"github.com/lhns/remote-docker/internal/server/dockercli"
 )
 
 // DockerVolumes resolves a volume to its mountpoint through the docker CLI,
@@ -36,16 +36,11 @@ type DockerVolumes struct {
 }
 
 func (d DockerVolumes) Mountpoint(ctx context.Context, volume string) (string, error) {
-	args := []string{"volume", "inspect", volume, "--format", "{{.Mountpoint}}"}
-	if d.Host != "" {
-		args = append([]string{"-H", d.Host}, args...)
-	}
-
-	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	mp, err := dockercli.CLI{Host: d.Host}.Line(ctx,
+		"volume", "inspect", volume, "--format", "{{.Mountpoint}}")
 	if err != nil {
 		return "", fmt.Errorf("notify: inspecting volume %s: %w", volume, err)
 	}
-	mp := strings.TrimSpace(string(out))
 	if mp == "" {
 		return "", fmt.Errorf("notify: volume %s reported no mountpoint", volume)
 	}
@@ -89,7 +84,7 @@ func relocate(mp string, root func() (string, error)) (string, error) {
 	// root process deciding which path to touch. So the result is checked
 	// rather than trusted.
 	joined := path.Join(prefix, mp)
-	if joined != prefix && !strings.HasPrefix(joined, prefix+"/") {
+	if !under(prefix, joined, "/") {
 		return "", fmt.Errorf(
 			"notify: the daemon reported a mountpoint that leaves its own filesystem (%q)", mp)
 	}

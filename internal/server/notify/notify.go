@@ -181,35 +181,37 @@ func (r *Replayer) apply(ctx context.Context, frame workspace.NotifyFrame) {
 
 // poke resolves an in-share path and performs the operation.
 func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
-	for _, root := range r.roots(ctx, export) {
-		abs, ok := resolve(root, share)
-		if !ok {
-			r.logf("notify: %s%s does not resolve under %s", export, share, root)
-			continue
-		}
-		if err := r.Poker.Poke(abs, isDir); err != nil {
-			// A path that is not there is the ordinary case, not a fault: the
-			// container may not have looked at it, or it may have changed
-			// again since. Logging every one would drown the log during a
-			// build.
-			r.debugf("notify: poking %s: %v", abs, err)
-		}
+	root, ok := r.root(ctx, export)
+	if !ok {
+		return
+	}
+	abs, ok := resolve(root, share)
+	if !ok {
+		r.logf("notify: %s%s does not resolve under %s", export, share, root)
+		return
+	}
+	if err := r.Poker.Poke(abs, isDir); err != nil {
+		// A path that is not there is the ordinary case, not a fault: the
+		// container may not have looked at it, or it may have changed again
+		// since. Logging every one would drown the log during a build.
+		r.debugf("notify: poking %s: %v", abs, err)
 	}
 }
 
-// roots is every directory in the workspace holding this export.
+// root is the directory in the workspace holding this export.
 //
-// A slice rather than one path, and deliberately so: the agent used to make a
-// second mount of the same export for the interactive shell, and separate
-// mounts of one export do not share an inode the way dockerd's bind mount
-// does, so each had to be poked separately. That mount is gone (ADR 0018) and
-// only dockerd's volume remains.
-func (r *Replayer) roots(ctx context.Context, export string) []string {
-	var out []string
-	if mp, err := r.mountpoint(ctx, export); err == nil && mp != "" {
-		out = append(out, mp)
+// Singular, and it was not always: the agent used to make a SECOND mount of
+// the same export for the interactive shell, and separate mounts of one export
+// do not share an inode the way dockerd's bind mount does, so each had to be
+// poked separately. That mount went with ADR 0018 and only dockerd's volume
+// remains. The finding is worth keeping even though the code it justified is
+// not -- if a second mount ever returns, one poke will silently not reach it.
+func (r *Replayer) root(ctx context.Context, export string) (string, bool) {
+	mp, err := r.mountpoint(ctx, export)
+	if err != nil || mp == "" {
+		return "", false
 	}
-	return out
+	return mp, true
 }
 
 func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error) {
@@ -256,10 +258,26 @@ func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error
 func resolve(root, share string) (string, bool) {
 	rel := strings.TrimPrefix(path.Clean("/"+share), "/")
 	abs := filepath.Join(root, filepath.FromSlash(rel))
-	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+	if !under(root, abs, string(filepath.Separator)) {
 		return "", false
 	}
 	return abs, true
+}
+
+// under reports whether p is root itself or something inside it.
+//
+// The check both callers need, in one place, because it is the one that must
+// not be got wrong: JOINING IS NOT CONTAINMENT. path.Join and filepath.Join
+// both CLEAN, so joining "/proc/42/root" to "/../../etc/shadow" yields
+// "/proc/etc/shadow" -- outside the root, with no error, looking correct.
+//
+// The separator is a parameter because the two callers genuinely differ:
+// resolve works in the agent's own filesystem and uses filepath so its tests
+// mean something on the development machine, while relocate works on paths a
+// Linux daemon reported and uses path. The prefix must include the separator
+// or "/proc/42/rootkit" passes as being under "/proc/42/root".
+func under(root, p, sep string) bool {
+	return p == root || strings.HasPrefix(p, root+sep)
 }
 
 // parentDir is the in-share directory holding a path.

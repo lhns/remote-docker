@@ -17,6 +17,7 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 
 	"github.com/lhns/remote-docker/internal/server/daemons"
+	"github.com/lhns/remote-docker/internal/server/dockercli"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
@@ -142,11 +143,11 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 		// Both have to be redirected, and the pid behind the root is resolved
 		// per call rather than captured: the daemon restarts, and a stale pid
 		// would silently name a path in nothing.
-		account := account.Name()
+		name := account.Name()
 		volumes = notify.DockerVolumes{
-			Host: "unix://" + daemons.SocketPathFor(account),
+			Host: daemons.HostFor(name),
 			Root: func() (string, error) {
-				d, err := s.cfg.Daemons.Ensure(session.Context(), account)
+				d, err := s.cfg.Daemons.Ensure(session.Context(), name)
 				if err != nil {
 					return "", err
 				}
@@ -220,7 +221,7 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 	// DOCKER_HOST is far better than no shell.
 	if s.cfg.Daemons != nil {
 		if d, err := s.cfg.Daemons.Ensure(session.Context(), account.Name()); err == nil {
-			cmd.Env = append(cmd.Env, "DOCKER_HOST=unix://"+d.Socket)
+			cmd.Env = append(cmd.Env, "DOCKER_HOST="+d.Host())
 		} else {
 			_, _ = fmt.Fprintf(session.Stderr(), "your docker daemon is not available: %v\n", err)
 		}
@@ -287,22 +288,22 @@ func (s *Server) servePTY(session gssh.Session, cmd *exec.Cmd, winCh <-chan gssh
 // displays. An unstarted daemon reports unavailable, exactly like a broken
 // one, and the next command starts it.
 func (s *Server) dockerVersion(ctx context.Context, account string) string {
-	args := []string{"version", "--format", "{{.Server.Version}}"}
+	var cli dockercli.CLI
 	if s.cfg.Daemons != nil {
 		d, ok := s.cfg.Daemons.Lookup(ctx, account)
 		if !ok {
 			return workspace.DockerUnavailable
 		}
-		args = append([]string{"-H", "unix://" + d.Socket}, args...)
+		cli.Host = d.Host()
 	}
 
-	out, err := exec.Command("docker", args...).Output()
+	out, err := cli.Line(ctx, "version", "--format", "{{.Server.Version}}")
 	if err != nil {
 		// A normal answer, not a failure: the client shows it rather than
 		// refusing to start.
 		return workspace.DockerUnavailable
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }
 
 func exitCode(err error) int {
