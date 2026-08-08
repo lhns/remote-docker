@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
+	"github.com/lhns/remote-docker/internal/server/daemons"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
@@ -35,7 +36,16 @@ type Config struct {
 
 	// DockerSocket is spliced directly to a session asking for
 	// `docker system dial-stdio`, so the Docker API needs no CLI in the path.
+	//
+	// Used when Daemons is nil -- the shared-daemon mode of ADR 0012, kept as
+	// the escape hatch.
 	DockerSocket string
+
+	// Daemons hands each account its own dockerd (ADR 0019). Nil keeps the
+	// shared daemon above, which is a supported configuration rather than a
+	// fallback: a single-user workspace has nothing to separate, and pays for
+	// separation in memory and layer cache either way.
+	Daemons *daemons.Manager
 
 	// Volumes resolves a managed volume to where dockerd has it mounted, for
 	// replaying the client's filesystem changes (ADR 0016). Nil refuses the

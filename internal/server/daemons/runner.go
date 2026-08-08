@@ -340,3 +340,19 @@ func (m *Manager) logf(format string, args ...any) {
 		m.Log(format, args...)
 	}
 }
+
+// Lookup returns an account's daemon only if it is already running.
+//
+// Never starts one and never waits, which is the entire point: workspace-info
+// is answered on the client's first round trip, and a cold dind takes seconds
+// to boot. Blocking there would make every first connection look like a hang,
+// and the client would be waiting for a version string it only displays.
+func (m *Manager) Lookup(ctx context.Context, account string) (*Daemon, bool) {
+	m.mu.Lock()
+	d, ok := m.byName[account]
+	m.mu.Unlock()
+	if !ok || !m.alive(ctx, d) {
+		return nil, false
+	}
+	return d, true
+}

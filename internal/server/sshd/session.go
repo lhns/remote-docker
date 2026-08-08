@@ -3,6 +3,7 @@
 package sshd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -79,7 +80,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		UID:     account.UID(),
 		GID:     account.UID(),
 		NFSPort: port,
-		Docker:  s.dockerVersion(),
+		Docker:  s.dockerVersion(session.Context(), account.Name()),
 		Agent:   s.cfg.Version,
 	}
 
@@ -92,12 +93,28 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 
 // serveDockerSocket connects the session to the daemon.
 //
-// This is what the workspace exists to provide, and it is the one place where
-// every account's access to the shared daemon is granted. There is no
-// per-account restriction here, because there is none to make: membership of
-// the docker group is root on the daemon, which is the trade ADR 0012 records.
+// This is what the workspace exists to provide, and it is where an account is
+// bound to A daemon -- which of the two depends on the mode.
+//
+// This used to say there was no per-account restriction here "because there is
+// none to make": one daemon, and reaching it at all is root on it, which was
+// the trade ADR 0012 recorded. With Daemons set that is no longer true. The
+// account is resolved to ITS OWN daemon here, and this lookup is the only
+// thing between one user's session and another user's containers. Getting it
+// wrong does not fail -- it succeeds, against the wrong daemon.
 func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount) {
-	conn, err := net.Dial("unix", s.cfg.DockerSocket)
+	socket := s.cfg.DockerSocket
+	if s.cfg.Daemons != nil {
+		d, err := s.cfg.Daemons.Ensure(session.Context(), account.Name())
+		if err != nil {
+			_, _ = fmt.Fprintf(session.Stderr(), "cannot start your docker daemon: %v\n", err)
+			_ = session.Exit(1)
+			return
+		}
+		socket = d.Socket
+	}
+
+	conn, err := net.Dial("unix", socket)
 	if err != nil {
 		_, _ = fmt.Fprintf(session.Stderr(), "cannot reach the docker daemon: %v\n", err)
 		_ = session.Exit(1)
@@ -219,9 +236,25 @@ func (s *Server) servePTY(session gssh.Session, cmd *exec.Cmd, winCh <-chan gssh
 	_ = session.Exit(0)
 }
 
-// dockerVersion asks the daemon what it is, for the info reply.
-func (s *Server) dockerVersion() string {
-	out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").Output()
+// dockerVersion asks the account's daemon what it is, for the info reply.
+//
+// Non-blocking on purpose. In per-account mode this runs while the daemon may
+// still be booting -- Warm fires at authentication and workspace-info is the
+// very next thing the client asks -- and waiting for it would turn every first
+// connection into a hang, in exchange for a version string the client only
+// displays. An unstarted daemon reports unavailable, exactly like a broken
+// one, and the next command starts it.
+func (s *Server) dockerVersion(ctx context.Context, account string) string {
+	args := []string{"version", "--format", "{{.Server.Version}}"}
+	if s.cfg.Daemons != nil {
+		d, ok := s.cfg.Daemons.Lookup(ctx, account)
+		if !ok {
+			return workspace.DockerUnavailable
+		}
+		args = append([]string{"-H", "unix://" + d.Socket}, args...)
+	}
+
+	out, err := exec.Command("docker", args...).Output()
 	if err != nil {
 		// A normal answer, not a failure: the client shows it rather than
 		// refusing to start.

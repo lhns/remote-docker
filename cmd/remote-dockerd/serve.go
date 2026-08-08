@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
+	"github.com/lhns/remote-docker/internal/server/daemons"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/internal/server/sshd"
 	"github.com/lhns/remote-docker/internal/server/supervise"
@@ -36,6 +37,17 @@ const (
 	envDockerd    = "WORKSPACE_DOCKERD_ARGS"
 	envEnableDind = "WORKSPACE_ENABLE_DIND"
 	envPollSecs   = "WORKSPACE_KEY_POLL_INTERVAL"
+
+	// envPerUserDind gives each account its own dockerd (ADR 0019) instead of
+	// sharing one (ADR 0012). Off for now; the default flips once CI proves
+	// it, and the shared mode stays as the escape hatch.
+	envPerUserDind = "WORKSPACE_PER_USER_DIND"
+
+	// envDindImage and envDindStorage tune the per-account daemons. The
+	// storage driver is not inherited from the parent, so a deployment whose
+	// graph volume is Ceph-backed has to say fuse-overlayfs here too.
+	envDindImage   = "WORKSPACE_DIND_IMAGE"
+	envDindStorage = "WORKSPACE_DIND_STORAGE_DRIVER"
 )
 
 func newServeCommand() *cobra.Command {
@@ -123,11 +135,27 @@ func serve(addr string) error {
 		return err
 	}
 
+	// Nil unless asked for, and nil is what keeps the shared daemon. A
+	// single-account workspace has nothing to separate and would pay for
+	// separation in memory and in duplicated layer cache.
+	var manager *daemons.Manager
+	if envOr(envPerUserDind, "false") == "true" {
+		manager = &daemons.Manager{
+			Options: daemons.Options{
+				Image:         os.Getenv(envDindImage),
+				StorageDriver: os.Getenv(envDindStorage),
+			},
+			Log: logger{prefix: "daemons"}.Printf,
+		}
+		log.Printf("each account gets its own docker daemon")
+	}
+
 	server, err := sshd.New(sshd.Config{
 		Addr:     addr,
 		HostKeys: hostKeys,
 		Accounts: store,
 		Mapping:  mapping,
+		Daemons:  manager,
 		Volumes:  notify.DockerVolumes{},
 		Version:  version,
 		Log:      logger{prefix: "sshd"},
