@@ -331,6 +331,46 @@ else
 fi
 
 echo
+echo "== 11. the account's storage outlives its daemon container =="
+# The persistence promise, stated exactly: the graph volume is named and
+# labelled so the container in front of it is disposable. An upgrade removes
+# and recreates that container; if the storage were anonymous, every account's
+# work would go with it.
+if hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$A-lib"         --format '{{index .Labels "remote-docker.daemon"}}' 2>/dev/null | grep -qx 1; then
+    ok "the graph volume is labelled, so an operator can see what must not be pruned"
+else
+    bad "the graph volume carries no label; a prune would take it with nothing naming it"
+fi
+
+images_before=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
+' ' ')
+
+# Remove the daemon CONTAINER, keeping the volume -- which is what an upgrade
+# does, and what adoption does after a redeploy.
+kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
+hostdocker exec "$CONTAINER" docker rm -f "rd-dind-$A" >/dev/null 2>&1
+
+CLIENT_A_PID=$(start_session "$A" "$WORK/a3.sock" "$WORK/a3.log" "$WORK/project-$A")
+for _ in $(seq 1 120); do
+    [ -S "$WORK/a3.sock" ] && docker -H "unix://$WORK/a3.sock" info >/dev/null 2>&1 && break
+    sleep 2
+done
+
+images_after=$(timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a3.sock"     images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
+' ' ')
+if [ -n "$images_before" ] && [ "$images_before" = "$images_after" ]; then
+    ok "alice's images survived her daemon container being destroyed"
+else
+    bad "alice's images did not survive: [$images_before] -> [$images_after]"
+fi
+
+if timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a3.sock" ps --all --format '{{.Names}}' 2>/dev/null | grep -qx alice-secret; then
+    ok "and so did her containers"
+else
+    bad "alice's containers did not survive her daemon being recreated"
+fi
+
+echo
 if [ "$FAIL" -ne 0 ]; then
     echo "== workspace log =="
     hostdocker logs "$CONTAINER" 2>&1 | tail -60 | sed 's/^/        /'

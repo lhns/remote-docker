@@ -172,6 +172,12 @@ premise of the project, and it applies to building it too. So:
   `/proc/etc/shadow`, outside the root and looking correct. `relocate` checks
   the result; `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in the poker stopped being
   tidiness the moment those paths left the agent's own filesystem.
+- **`rd-dind-<account>-lib` is the account, and the container in front of it is
+  disposable.** The graph volume is named and labelled so the daemon container
+  can be removed and recreated without losing anything, and so an operator can
+  tell which volumes must never be pruned. Anonymous storage here would make an
+  ordinary `docker system prune -a --volumes` on the workspace's own daemon
+  destroy every account's work with nothing on screen naming it.
 - **Never `--rm` a per-account daemon**, and never copy `elevate`'s
   `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
   state is worthless; this one holds somebody's containers, images and volumes.
@@ -215,8 +221,8 @@ which inotify event), an edit here firing inotify inside a container with
 mismatch, self-reclaim), and the workspace lifecycle with the docker context
 appearing and disappearing alongside it.
 
-A second suite, `test/per-user-dind.sh`, runs the same workspace with
-`WORKSPACE_PER_USER_DIND=true` and TWO enrolled accounts: that they reach
+A second suite, `test/per-user-dind.sh`, runs the same workspace with two
+enrolled accounts and a daemon each (the default since ADR 0019): that they reach
 different daemons, that neither can list or stop the other's containers, that
 each account's bind mount resolves (which is the only real proof the reverse
 tunnel was bound inside that account's netns), that both publish the same port

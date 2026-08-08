@@ -91,6 +91,16 @@ fi
 
 echo
 echo "== 4. start the workspace =="
+# Pinned to the SHARED daemon, explicitly, now that a daemon per account is the
+# default (ADR 0019). Two suites, one per mode, and each asks for its own:
+# this one is the evidence that the shared mode still works, and
+# test/per-user-dind.sh covers the other with the second account that mode is
+# actually about.
+#
+# Inheriting the default would have quietly turned this into a second, worse
+# test of per-user mode: several assertions below reach the client's containers
+# with `docker exec <workspace> docker ps`, which only finds them on the daemon
+# the agent itself runs.
 hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
 
 if hostdocker run -d --name "$CONTAINER" --privileged \
@@ -98,6 +108,7 @@ if hostdocker run -d --name "$CONTAINER" --privileged \
         -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
         -v "$WORK/wsstate:/etc/workspace" \
         -e DOCKER_TLS_CERTDIR= \
+        -e WORKSPACE_PER_USER_DIND=false \
         "$IMAGE" >/dev/null; then
     ok "workspace container started"
 else

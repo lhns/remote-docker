@@ -179,6 +179,22 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		return nil, fmt.Errorf("daemons: preparing %s: %w", dir, err)
 	}
 
+	// Created explicitly rather than implicitly by `-v name:/path`, so it
+	// carries labels. A volume docker creates as a side effect has none, and
+	// this is the one object in the whole design that must never be deleted by
+	// mistake: it holds everything the account owns. `docker volume ls
+	// --filter label=remote-docker.daemon` is the difference between an
+	// operator being able to see that and having to know it.
+	//
+	// Idempotent: creating an existing volume is a no-op that returns its name.
+	if out, err := m.docker(ctx, "volume", "create",
+		"--label", ManagedLabel+"=1",
+		"--label", AccountLabel+"="+account,
+		VolumeName(account)).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("daemons: preparing %s's storage: %w: %s",
+			account, err, strings.TrimSpace(string(out)))
+	}
+
 	switch state := m.state(ctx, spec.Name); state {
 	case "running":
 		// Somebody else's Ensure won, or it survived our restart.

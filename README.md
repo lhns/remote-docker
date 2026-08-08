@@ -330,8 +330,8 @@ on shared storage.
 
 ### A daemon per account
 
-Set `WORKSPACE_PER_USER_DIND=true` and each enrolled account gets its own
-Docker daemon, behind the same single SSH port
+Each enrolled account gets its own Docker daemon, behind the same single SSH
+port. This is the default
 ([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)). Accounts stop seeing each
 other's containers, images and volumes, two accounts can publish the same port
 at once, and a shell lands on its own daemon.
@@ -358,15 +358,58 @@ It costs real resources, and there is no mitigation worth implying:
 Ceph-backed deployment that sets `--storage-driver=fuse-overlayfs` below must
 set it here too.
 
-#### Turning it on is a breaking change
+#### What persists, in both modes
+
+Everything a user owns lives on the workspace, so where it lives is worth
+knowing before something is pruned.
+
+| | shared daemon | a daemon per account |
+|---|---|---|
+| host keys, uid map, workspace id | `/etc/workspace` | `/etc/workspace` |
+| images, containers, named volumes | the workspace's `/var/lib/docker` | a named volume per account, `rd-dind-<account>-lib`, **inside** the workspace's `/var/lib/docker` |
+| `rd-*` share volumes | the workspace's daemon | that account's daemon |
+| the account's docker socket | n/a | `/run/rd/<account>/`, recreated on every start |
+
+Both deployments in `deploy/` already persist `/var/lib/docker` and
+`/etc/workspace`. **Neither mode persists anything the other does not** — a
+daemon per account nests the same data one level deeper rather than moving it
+somewhere new.
+
+Three consequences of that nesting:
+
+- **`rd-dind-<account>-lib` is the most valuable object in the deployment.** It
+  is everything that account has. It is a *named* volume on purpose: the daemon
+  container in front of it can be removed and recreated — by an upgrade, by
+  `docker rm`, by adoption after a redeploy — and the account's images and
+  containers come back with it.
+- **`docker system prune -a --volumes` on the workspace's own daemon is
+  destructive in a way it was not before.** It removes stopped containers first
+  and then unused volumes, so an idle account's daemon and then its storage go
+  together. `docker volume ls --filter label=remote-docker.daemon` lists what
+  must not be pruned; the label is written for exactly this.
+- **`/etc/workspace/workspace-id` matters more than it looks.** It is how the
+  agent recognises its own daemons after a redeploy. Lose it and the running
+  daemons are orphaned — still running, still holding their users' work, no
+  longer adopted.
+
+`rd-*` share volumes are the exception to all of this and can be destroyed
+freely: they hold no data. They are NFS mounts of directories on the client's
+machine, so the volume is a pointer, and `remote-docker gc` removes the unused
+ones as a matter of routine.
+
+#### Upgrading an existing workspace is a breaking change
 
 Images and volumes an account built under the shared daemon are invisible from
-its own, and there is no cheap migration. Set `WORKSPACE_PER_USER_DIND=false`
-to keep the old behaviour; the old data is still in the shared
-`/var/lib/docker` if you change your mind.
+its own, and there is no cheap migration. **Set
+`WORKSPACE_PER_USER_DIND=false` before upgrading** if that matters; the old
+data is still in the shared `/var/lib/docker` either way, so the decision is
+reversible.
 
-**With it off, all enrolled users share one Docker daemon** and can see each
+With it off, all enrolled users share one Docker daemon and can see each
 other's containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)).
+That remains supported rather than deprecated: a single-account workspace has
+nothing to separate, and pays for separation in memory and in a duplicated
+layer cache.
 
 ## Commands
 

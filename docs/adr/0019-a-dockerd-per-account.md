@@ -161,6 +161,19 @@ in the namespace where every account's shell runs.
   and there is no cheap migration. `WORKSPACE_PER_USER_DIND=false` keeps the old
   behaviour, and the old data is still in the shared `/var/lib/docker` for
   anyone who changes their mind.
+- **Persistence moves one level deeper, and nowhere else.** Each account's
+  `/var/lib/docker` is a named volume `rd-dind-<account>-lib` on the workspace's
+  own daemon, so it lands inside the same `/var/lib/docker` the shared mode
+  used. A deployment that persisted that already persists this. Named rather
+  than anonymous, and labelled, for two reasons: the daemon container in front
+  of it is disposable — removed and recreated by upgrades and by adoption —
+  and an operator pruning the workspace's daemon needs to be able to *see*
+  which volumes are somebody's entire account. `docker system prune -a
+  --volumes` there removes stopped containers and then unused volumes, which is
+  an idle account's daemon followed by its storage.
+- **`workspace-id` becomes as load-bearing as the uid map.** Both live in
+  `/etc/workspace` and both survive a redeploy; losing the id orphans every
+  running daemon exactly as losing the uid map would renumber every account.
 - Two things become correct for free: `rd-cwd` stops colliding across accounts
   (every account produced that same name, and the second `EnsureVolume`
   silently returned the first account's volume with the *first* account's NFS

@@ -39,8 +39,16 @@ const (
 	envPollSecs   = "WORKSPACE_KEY_POLL_INTERVAL"
 
 	// envPerUserDind gives each account its own dockerd (ADR 0019) instead of
-	// sharing one (ADR 0012). Off for now; the default flips once CI proves
-	// it, and the shared mode stays as the escape hatch.
+	// sharing one (ADR 0012).
+	//
+	// Defaults to ON. Set it false for the shared daemon, which stays
+	// supported rather than deprecated: a single-account workspace has nothing
+	// to separate and would pay for separation in memory and in a duplicated
+	// layer cache.
+	//
+	// Turning it on is a BREAKING upgrade for a workspace that has users --
+	// images and volumes built under the shared daemon are invisible from an
+	// account's own. The old data is still in the shared /var/lib/docker.
 	envPerUserDind = "WORKSPACE_PER_USER_DIND"
 
 	// envDindImage and envDindStorage tune the per-account daemons. The
@@ -74,7 +82,7 @@ func serve(addr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	perUserDind := envOr(envPerUserDind, "false") == "true"
+	perUserDind := envOr(envPerUserDind, "true") == "true"
 
 	stateDir := envOr(envStateDir, "/etc/workspace")
 	keysDir := envOr(envKeysDir, filepath.Join(stateDir, "authorized_keys.d"))
