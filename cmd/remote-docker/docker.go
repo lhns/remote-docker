@@ -53,23 +53,40 @@ set -- though an explicit one is respected.`,
 	// and even `--help`, used to probe the endpoint and could open a whole
 	// file-serving session that then raced the real command's own session
 	// inside one process.
-	if invokingDocker() && os.Getenv("DOCKER_HOST") == "" {
-		endpoint := ""
+	if invokingDocker() {
 		if cfg, err := resolve(); err == nil {
-			endpoint = cfg.EndpointFor(proxy.DefaultEndpoint)
+			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+			ours := proxy.DockerHost(endpoint)
+			set := os.Getenv("DOCKER_HOST")
 
-			// Make a usable session available: start one if nothing is
-			// serving, and replace one built from a different commit if that
-			// costs nothing. Requiring `up` first made the embedded CLI -- the
-			// thing that exists so nothing has to be installed -- the one part
-			// of this tool with a setup step, and a stale daemon made a freshly
+			// Managed when the endpoint in play is ours -- whether we chose it
+			// or DOCKER_HOST names it. An explicitly set DOCKER_HOST used to
+			// skip this entirely, which meant pointing it at our OWN endpoint
+			// disabled starting a session and noticing a stale one. Anyone who
+			// has run `context install` or exported the printed value is in
+			// exactly that position, and the integration suite is too, which is
+			// how this was found.
+			//
+			// Make a usable session available: start one if nothing is serving,
+			// and replace one built from a different commit if that costs
+			// nothing. Requiring `up` first made the embedded CLI -- the thing
+			// that exists so nothing has to be installed -- the one part of
+			// this tool with a setup step, and a stale session made a freshly
 			// updated client behave like the old one.
 			//
 			// Which workspace this is comes from the same resolution as every
 			// other command, so `--workspace ci docker ps` uses ci.
-			ensureDaemon(cfg, endpoint)
+			if set == "" || set == ours {
+				ensureDaemon(cfg, endpoint)
+			}
+			// A DOCKER_HOST naming something else is left alone: it is a
+			// deliberate instruction to talk to that, not to us.
+			if set == "" {
+				_ = os.Setenv("DOCKER_HOST", ours)
+			}
+		} else if os.Getenv("DOCKER_HOST") == "" {
+			_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(""))
 		}
-		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}
 
 	dockerCli, err := command.NewDockerCli()
