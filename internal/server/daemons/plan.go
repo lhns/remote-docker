@@ -69,6 +69,19 @@ type Spec struct {
 	// volumes; `--rm` on it would delete all of that the moment it stopped.
 	Remove bool
 
+	// Restart is the policy the PARENT daemon applies to this one.
+	//
+	// Set, and it earns it: when the workspace is restarted, the parent
+	// dockerd restarts only containers that asked to be. Without a policy
+	// every account's daemon stays down until that account next connects --
+	// so a detached container survives its author's disconnect, as intended,
+	// but not the workspace being restarted, which is the moment it most
+	// needs to.
+	//
+	// `unless-stopped` rather than `always`: an operator who deliberately
+	// stops somebody's daemon should find it still stopped afterwards.
+	Restart string
+
 	Labels []string
 	Mounts []elevate.Mount
 	Env    []string
@@ -157,6 +170,7 @@ func Plan(account string, opts Options) (Spec, error) {
 		Account:    account,
 		Privileged: true,
 		Remove:     false,
+		Restart:    "unless-stopped",
 		Labels:     labels,
 		Mounts: []elevate.Mount{
 			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
@@ -178,6 +192,9 @@ func (s Spec) Args() []string {
 	}
 	if s.Privileged {
 		args = append(args, "--privileged")
+	}
+	if s.Restart != "" {
+		args = append(args, "--restart", s.Restart)
 	}
 	if s.Name != "" {
 		args = append(args, "--name", s.Name)

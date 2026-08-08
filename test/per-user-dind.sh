@@ -167,6 +167,16 @@ fi
 da() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a.sock" "$@"; }
 db() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/b.sock" "$@"; }
 
+# Pulled per account, because a daemon per account means a layer cache per
+# account -- which is the cost this design accepts, and it shows up here first:
+# an unpulled image put "Unable to find image locally" into the output an
+# assertion was reading.
+info "pulling test images into each account's daemon"
+for image in alpine:3 nginx:alpine; do
+    da pull -q "$image" >/dev/null 2>&1 || info "could not pre-pull $image for $A"
+    db pull -q "$image" >/dev/null 2>&1 || info "could not pre-pull $image for $B"
+done
+
 echo
 echo "== 5. the daemons really are different =="
 ida=$(da info --format '{{.ID}}' 2>/dev/null)
@@ -210,7 +220,7 @@ echo
 echo "== 7. a bind mount resolves, which proves the in-netns NFS listener =="
 # The reverse tunnel is bound INSIDE each account's dind. If that were wrong,
 # the volume would fail to mount and this reads the file rather than guessing.
-if out=$(da run --rm -v "$WORK/project-$A:/w" alpine:3 cat /w/marker 2>&1); then
+if out=$(da run --rm -v "$WORK/project-$A:/w" alpine:3 cat /w/marker 2>/dev/null); then
     if [ "$out" = "alice's file" ]; then
         ok "alice's bind mount resolves through her own daemon"
     else
@@ -220,7 +230,7 @@ else
     bad "alice's bind mount failed: $(echo "$out" | tail -3)"
 fi
 
-if out=$(db run --rm -v "$WORK/project-$B:/w" alpine:3 cat /w/marker 2>&1); then
+if out=$(db run --rm -v "$WORK/project-$B:/w" alpine:3 cat /w/marker 2>/dev/null); then
     if [ "$out" = "bob's file" ]; then
         ok "bob's bind mount resolves through his own daemon"
     else
@@ -257,27 +267,34 @@ case "$shell_docker_host" in
 esac
 
 echo
-echo "== 10. restarting the agent adopts the running daemons =="
+echo "== 10. the workspace restarts and the daemons come back =="
 # The case that would otherwise lose everybody's work: the agent comes back,
 # finds every daemon's name taken, and `docker run --name` conflicts rather
 # than replacing.
-before=$(da ps --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
+#
+# What survives is deliberately stated as CONTAINERS EXISTING, not running.
+# A restarted dockerd starts only containers with a restart policy, and the
+# account's own containers do not have one -- that is the account's business.
+# The daemon itself does, so it comes back and its graph comes back with it.
+before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
+' ' ')
+dind_before=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
 
 kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
 kill "$CLIENT_B_PID" 2>/dev/null; wait "$CLIENT_B_PID" 2>/dev/null; CLIENT_B_PID=""
 
 hostdocker restart "$CONTAINER" >/dev/null 2>&1
 info "waiting for the agent to come back"
-for _ in $(seq 1 90); do
+for _ in $(seq 1 120); do
     hostdocker exec "$CONTAINER" id "$A" >/dev/null 2>&1 && break
     sleep 1
 done
 
 if hostdocker logs "$CONTAINER" 2>&1 | grep -q "adopted"; then
-    ok "the agent adopted the daemons from the previous run"
+    ok "the agent adopted the daemons left running by the previous run"
 else
     bad "nothing was adopted after the restart"
-    hostdocker logs "$CONTAINER" 2>&1 | grep -i daemon | tail -10
+    hostdocker logs "$CONTAINER" 2>&1 | grep -iE "daemon|adopt" | tail -10
 fi
 
 CLIENT_A_PID=$(start_session "$A" "$WORK/a2.sock" "$WORK/a2.log" "$WORK/project-$A")
@@ -286,11 +303,21 @@ for _ in $(seq 1 120); do
     sleep 2
 done
 
-after=$(timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a2.sock" ps --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
+after=$(timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a2.sock" ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
+' ' ')
 if [ -n "$before" ] && [ "$before" = "$after" ]; then
-    ok "alice's containers survived the agent restart"
+    ok "alice's containers survived the restart"
 else
     bad "alice's containers changed across the restart: [$before] -> [$after]"
+fi
+
+# Reused, not replaced. A new id would mean the old daemon was abandoned with
+# everything in it, which is what adoption exists to prevent.
+dind_after=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
+if [ -n "$dind_before" ] && [ "$dind_before" = "$dind_after" ]; then
+    ok "the same daemon container was reused, not replaced"
+else
+    bad "alice's daemon was replaced: [$dind_before] -> [$dind_after]"
 fi
 
 echo

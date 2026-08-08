@@ -187,3 +187,28 @@ func TestLabelValue(t *testing.T) {
 		t.Errorf("empty labels produced %q", got)
 	}
 }
+
+// The workspace being restarted is the moment a daemon most needs to come
+// back, and the parent dockerd restarts only containers that asked to.
+//
+// Found in CI rather than by reasoning: after a workspace restart every
+// account's daemon stayed down until that account next connected, so adoption
+// found nothing to adopt and a detached container -- which survives its
+// author's disconnect by design -- did not survive the restart.
+func TestADaemonAsksToBeRestarted(t *testing.T) {
+	spec := plan(t, "alice", Options{})
+
+	if spec.Restart != "unless-stopped" {
+		t.Errorf("Restart = %q, want unless-stopped", spec.Restart)
+	}
+	// Not "always": an operator who deliberately stopped somebody's daemon
+	// should find it still stopped.
+	if slices.Contains(spec.Args(), "always") {
+		t.Errorf("the restart policy is always: %v", spec.Args())
+	}
+
+	args := strings.Join(spec.Args(), " ")
+	if !strings.Contains(args, "--restart unless-stopped") {
+		t.Errorf("the policy never reached the args: %s", args)
+	}
+}
