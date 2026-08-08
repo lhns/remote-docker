@@ -288,10 +288,15 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		// holding its own containers.
 		pid, err := m.pid(ctx, ContainerName(account))
 		if err != nil || pid <= 0 {
-			// Stopped, most likely. Left alone deliberately: Ensure will
-			// `docker start` it when the account next connects, which keeps
-			// its containers, and starting every account's daemon at boot
-			// would wake daemons for people who are not here.
+			// Not running yet, and that is the ordinary case rather than a
+			// problem. Two ways it happens: the daemon was stopped, or the
+			// parent dockerd is still bringing it back after a restart -- this
+			// runs the moment the agent starts, which is a race it cannot win
+			// and does not need to. Ensure does the work on demand.
+			//
+			// Left alone deliberately either way: starting every account's
+			// daemon at boot would wake daemons for people who are not here.
+			m.logf("%s has a daemon that is not running; it will start when they connect", account)
 			continue
 		}
 

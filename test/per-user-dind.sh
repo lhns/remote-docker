@@ -284,17 +284,27 @@ kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID
 kill "$CLIENT_B_PID" 2>/dev/null; wait "$CLIENT_B_PID" 2>/dev/null; CLIENT_B_PID=""
 
 hostdocker restart "$CONTAINER" >/dev/null 2>&1
-info "waiting for the agent to come back"
+info "waiting for the agent and the daemons to come back"
 for _ in $(seq 1 120); do
-    hostdocker exec "$CONTAINER" id "$A" >/dev/null 2>&1 && break
+    if hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A"             --format '{{.State.Status}}' 2>/dev/null | grep -qx running; then
+        break
+    fi
     sleep 1
 done
 
-if hostdocker logs "$CONTAINER" 2>&1 | grep -q "adopted"; then
-    ok "the agent adopted the daemons left running by the previous run"
+# Asserted as "exactly one", not by grepping a log line.
+#
+# A duplicate is the failure adoption exists to prevent, and the log message
+# is an implementation detail that was also a race: the agent runs Adopt the
+# moment it starts, while the parent dockerd is still bringing the daemons
+# back up, so it legitimately finds nothing running to adopt and Ensure does
+# the work on demand instead. The outcome is what the design promises.
+count=$(hostdocker exec "$CONTAINER" docker ps --all     --filter "name=^/rd-dind-$A$" --format '{{.Names}}' 2>/dev/null | grep -c .)
+if [ "$count" = "1" ]; then
+    ok "exactly one daemon for $A after the restart, not a second one beside it"
 else
-    bad "nothing was adopted after the restart"
-    hostdocker logs "$CONTAINER" 2>&1 | grep -iE "daemon|adopt" | tail -10
+    bad "$count daemons named rd-dind-$A after the restart"
+    hostdocker exec "$CONTAINER" docker ps --all --format '{{.Names}} {{.Status}}' 2>&1 | tail -10
 fi
 
 CLIENT_A_PID=$(start_session "$A" "$WORK/a2.sock" "$WORK/a2.log" "$WORK/project-$A")
