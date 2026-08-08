@@ -28,17 +28,31 @@ func Listen(endpoint string) (net.Listener, error) {
 		return nil, fmt.Errorf("proxy: creating socket directory: %w", err)
 	}
 
-	// A socket left behind by a process that did not shut down cleanly would
-	// otherwise make every later run fail with "address already in use".
-	// Removing it is safe because the directory is private to this user.
+	// The lock is what earns the right to clear the socket.
+	//
+	// A socket left by a process that did not shut down cleanly must be
+	// removed, or every later run fails with "address already in use". But
+	// removing it unconditionally -- which is what this did -- silently
+	// unlinks a RUNNING process's socket and takes its place: the first keeps
+	// accepting on an inode nobody can reach, and when the second exits the
+	// path is bound to nothing while the first still looks healthy. Holding
+	// the lock means the only socket we can be clearing is a dead one.
+	lock, err := acquireLock(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := os.Remove(endpoint); err != nil && !os.IsNotExist(err) {
+		lock.Release()
 		return nil, fmt.Errorf("proxy: clearing stale socket: %w", err)
 	}
 
 	l, err := net.Listen("unix", endpoint)
 	if err != nil {
+		lock.Release()
 		return nil, fmt.Errorf("proxy: listening on %s: %w", endpoint, err)
 	}
+	l = &lockedListener{Listener: l, lock: lock}
 
 	// Anything able to reach this endpoint can start containers that read and
 	// write this machine's filesystem through the NFS export, so it is the

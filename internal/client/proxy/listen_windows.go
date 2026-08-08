@@ -3,12 +3,14 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os/user"
 	"strings"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 // DefaultEndpoint is where the proxy listens when nothing else is asked for.
@@ -36,11 +38,27 @@ func Listen(endpoint string) (net.Listener, error) {
 
 	cfg := &winio.PipeConfig{SecurityDescriptor: ownerOnlySDDL()}
 
+	// Taken for the pid record only; the pipe bind below is what excludes.
+	lock, err := acquireLock(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
 	l, err := winio.ListenPipe(endpoint, cfg)
 	if err != nil {
+		lock.Release()
+		// "Access is denied" is what the kernel says when the name is already
+		// owned -- accurate, and telling the user nothing they can act on. Any
+		// OTHER failure is a real failure and must be reported as itself: a
+		// malformed pipe name reported as "already serving" because a stale
+		// lock file happened to sit next to it sends the reader hunting for a
+		// process that does not exist.
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return nil, &ErrLocked{Endpoint: endpoint, PID: Owner(endpoint)}
+		}
 		return nil, fmt.Errorf("proxy: listening on %s: %w", endpoint, err)
 	}
-	return l, nil
+	return &lockedListener{Listener: l, lock: lock}, nil
 }
 
 // ownerOnlySDDL grants this user, SYSTEM and Administrators, and nobody else.
