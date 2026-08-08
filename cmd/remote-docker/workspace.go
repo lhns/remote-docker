@@ -265,13 +265,24 @@ func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Co
 	}
 	name := cfg.ContextName()
 	if !contextIsOurs(docker, name) {
+		// Said out loud rather than passed over in silence. A context that is
+		// not ours is the expected case for a name the user created
+		// themselves, but it is also what a marker that failed to be written
+		// looks like -- and the difference matters, because in the second case
+		// a context we made is left behind with nothing reporting it.
+		_, _ = fmt.Fprintf(out, "docker context %q was left in place: "+
+			"it is not marked as one remote-docker created\n", name)
 		return
 	}
 	// Select default first: removing the active context would leave the CLI
 	// pointing at one that no longer exists.
 	_ = exec.Command(docker, "context", "use", "default").Run()
-	if err := exec.Command(docker, "context", "rm", "-f", name).Run(); err != nil {
-		_, _ = fmt.Fprintf(out, "docker context %q was left in place: %v\n", name, err)
+
+	// CombinedOutput, not Run: an exit status alone says a removal failed
+	// without saying why, and docker's own message is the whole diagnosis.
+	if out2, err := exec.Command(docker, "context", "rm", "-f", name).CombinedOutput(); err != nil {
+		_, _ = fmt.Fprintf(out, "docker context %q was left in place: %v: %s\n",
+			name, err, strings.TrimSpace(string(out2)))
 		return
 	}
 	_, _ = fmt.Fprintf(out, "removed docker context %q\n", name)

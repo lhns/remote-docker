@@ -10,6 +10,7 @@ package main
 // so it was never really a choice -- only a second place to look.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -58,14 +59,41 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 	return installedContext{name: name, endpoint: endpoint}, nil
 }
 
-// contextIsOurs reports whether a context exists and carries our marker.
+// contextIsOurs reports whether a docker context carries our marker.
+//
+// The JSON is parsed rather than asking docker to format the field, and that
+// is not a preference. `--format '{{.Metadata.Description}}'` looks exactly
+// right against the JSON docker prints -- Metadata.Description is where the
+// description plainly is -- but the template does not run against that JSON.
+// It runs against docker's internal `store.Metadata`, whose Description lives
+// one level further in, so the template failed to evaluate for every context
+// that ever existed:
+//
+//	template: :1:11: executing "" at <.Metadata.Description>:
+//	can't evaluate field Description in type store.Metadata
+//
+// Output() discards stderr, so the failure arrived as an error and every
+// context was judged not ours. Nothing ever said so: `workspace rm` left the
+// context behind in silence, and re-running `workspace create` -- the
+// documented repair path -- refused with "already exists and was not created
+// by remote-docker", accusing the user of having made a context we made.
+//
+// The JSON shape is the documented interface and is stable across versions;
+// the field path through docker's own structs is neither.
 func contextIsOurs(docker, name string) bool {
-	out, err := exec.Command(docker, "context", "inspect", name,
-		"--format", "{{.Metadata.Description}}").Output()
+	out, err := exec.Command(docker, "context", "inspect", name).Output()
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(string(out)) == contextMarker
+	var contexts []struct {
+		Metadata struct {
+			Description string `json:"Description"`
+		} `json:"Metadata"`
+	}
+	if err := json.Unmarshal(out, &contexts); err != nil || len(contexts) == 0 {
+		return false
+	}
+	return strings.TrimSpace(contexts[0].Metadata.Description) == contextMarker
 }
 
 func contextExists(docker, name string) bool {

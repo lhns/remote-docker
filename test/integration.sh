@@ -1165,8 +1165,17 @@ else
     bad "workspace rm failed: $(echo "$out" | tail -2)"
 fi
 
+# rm's own account of what it did to the context, printed either way. The
+# assertion below can fail three different ways -- the context was never
+# recognised as ours, the docker command refused, or it was removed and
+# something put it back -- and they are indistinguishable from the outside.
+info "workspace rm said: $(echo "$out" | tr '
+' '; ')"
+
 if hostdocker context ls --format '{{.Name}}' 2>/dev/null | grep -qx "itest-ws"; then
     bad "the docker context outlived the workspace"
+    info "context metadata: $(hostdocker context inspect itest-ws --format '{{.Metadata.Description}}' 2>&1 | tr '
+' ' ')"
 else
     ok "removing the workspace removed its docker context"
 fi
