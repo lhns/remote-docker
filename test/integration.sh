@@ -627,6 +627,83 @@ else
 fi
 
 echo
+echo "== 12b. one compose service reaching another =="
+# Container-to-container traffic never touches this client: it happens on the
+# workspace's own docker network, between containers the workspace's own daemon
+# started. But we rewrite every bind mount and forward every published port, so
+# "did we disturb the network" is a fair question and it deserves an answer
+# rather than an assurance.
+#
+# Four things at once, which is why this is one test and not four:
+#   - `client` resolves `web` by SERVICE NAME, so compose's DNS works
+#   - it connects to it over TCP, so the network works
+#   - what `web` serves is a file from THIS machine, through a rewritten bind
+#   - `client` writes the result to ANOTHER bind, which this test then reads
+#     from the client side -- so the answer comes back over NFS rather than
+#     being asserted inside the workspace where a mistake could hide
+#
+# depends_on + condition: service_healthy rather than a retry loop, because it
+# is how somebody would actually write this, and because a loop that never
+# succeeds looks the same as one that was never scheduled.
+mkdir -p "$PROJECT/net/html" "$PROJECT/net/out"
+echo "served from the client machine" >"$PROJECT/net/html/index.html"
+cat >"$PROJECT/net/compose.yaml" <<'COMPOSE'
+services:
+  web:
+    image: nginx:alpine
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  client:
+    image: alpine:3
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./out:/out
+    command:
+      - sh
+      - -c
+      - "wget -qO /out/fetched http://web/ && nc -z web 80 && echo reached > /out/status"
+COMPOSE
+
+if timeout 240 docker compose -f "$PROJECT/net/compose.yaml" up -d >"$WORK/compose-net.log" 2>&1; then
+    reached=false
+    for _ in $(seq 1 60); do
+        if [ -f "$PROJECT/net/out/status" ] && grep -q reached "$PROJECT/net/out/status" 2>/dev/null; then
+            reached=true
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$reached" = true ]; then
+        ok "a compose service resolved and reached another by service name"
+    else
+        bad "one compose service never reached the other"
+        sed 's/^/        /' "$WORK/compose-net.log" | tail -15
+        timeout 60 docker compose -f "$PROJECT/net/compose.yaml" logs 2>&1 | tail -15 | sed 's/^/        /'
+    fi
+
+    # And what came back is this machine's file, fetched by one container from
+    # another and written back through a second bind.
+    if [ "$(cat "$PROJECT/net/out/fetched" 2>/dev/null)" = "served from the client machine" ]; then
+        ok "the body it fetched is this machine's file, returned through a bind"
+    else
+        bad "unexpected body: [$(cat "$PROJECT/net/out/fetched" 2>/dev/null)]"
+    fi
+
+    timeout 120 docker compose -f "$PROJECT/net/compose.yaml" down -v >/dev/null 2>&1
+else
+    bad "the two-service stack would not come up"
+    sed 's/^/        /' "$WORK/compose-net.log" | tail -20
+fi
+
+echo
 echo "== 13. our volumes are labelled and identifiable =="
 if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^rd-'; then
     ok "shares became rd-* volumes on the workspace daemon"

@@ -354,11 +354,10 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 
 	// Reported as a difference, never as an ordering. A sha build names a
 	// commit and says nothing about when.
-	switch {
-	case st.Version == version:
+	if st.Version == version {
 		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session version", orUnknown(st.Version))
-	default:
-		_, _ = fmt.Fprintf(out, "%-20s %s  (this binary: %s -- DIFFERENT)\n",
-			"session version", orUnknown(st.Version), orUnknown(version))
+		return
 	}
+	_, _ = fmt.Fprintf(out, "%-20s %s  (this binary: %s -- DIFFERENT)\n",
+		"session version", orUnknown(st.Version), orUnknown(version))
 }
