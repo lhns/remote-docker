@@ -8,6 +8,7 @@ package sshd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -66,9 +67,16 @@ type Server struct {
 	forward *ForwardPolicy
 	ssh     *gssh.Server
 
+	tcpip forwardedTCP
+
 	mu     sync.Mutex
 	closed bool
 }
+
+// errNoAccount is returned when a forward arrives on a connection with no
+// authenticated account, which cannot happen and must not be treated as
+// permission if it does.
+var errNoAccount = errors.New("sshd: no authenticated account on this connection")
 
 // sessionAccount adapts an account to the forward policy's view of one.
 type sessionAccount struct {
@@ -93,8 +101,6 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}
 
-	forwardHandler := &gssh.ForwardedTCPHandler{}
-
 	s.ssh = &gssh.Server{
 		Addr:             cfg.Addr,
 		PublicKeyHandler: s.authenticate,
@@ -102,16 +108,22 @@ func New(cfg Config) (*Server, error) {
 		// Reverse forwarding carries the client's NFS export in; local
 		// forwarding lets the client reach published container ports. Both are
 		// needed, and both are constrained -- see ForwardPolicy.
-		ReversePortForwardingCallback: s.allowReverseForward,
-		LocalPortForwardingCallback:   s.allowLocalForward,
+		//
+		// The callbacks are deliberately NOT set. gliderlabs invokes them from
+		// the handlers we replaced, so setting them here would leave the
+		// permission check in two places -- and allowReverseForward is not a
+		// predicate: it binds the port and arms the release. Called twice, the
+		// second call refuses its own reservation.
 
+		// Ours rather than gliderlabs', because both of theirs hardcode the
+		// namespace they listen and dial in -- see forward_tcpip.go.
 		RequestHandlers: map[string]gssh.RequestHandler{
-			"tcpip-forward":        forwardHandler.HandleSSHRequest,
-			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
+			"tcpip-forward":        s.HandleSSHRequest,
+			"cancel-tcpip-forward": s.HandleSSHRequest,
 		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
-			"direct-tcpip": gssh.DirectTCPIPHandler,
+			"direct-tcpip": s.directTCPIP,
 		},
 
 		Handler: s.handleSession,
