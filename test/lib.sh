@@ -1,0 +1,136 @@
+# Shared mechanics for the two integration suites.
+#
+# The suites stay separate on purpose -- one per WORKSPACE_PER_USER_DIND mode,
+# each stating its own mode -- and this file is deliberately only the
+# MECHANICS. Nothing here decides anything a suite exists to decide.
+#
+# It exists because the same bug kept landing in one suite and not the other.
+# One captured stderr on a failed assertion and the other sent it to /dev/null,
+# so a real failure printed nothing after the colon. One broke its wait loop
+# when the client died and the other waited six minutes. Those are the lines
+# worth sharing; the assertions are not.
+#
+# Sourced, not executed: it needs the caller's WORK, IMAGE, CONTAINER and
+# SSH_PORT.
+
+PASS=0
+FAIL=0
+ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
+bad()  { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
+info() { echo "  ....  $*"; }
+
+# The workspace container lives on the RUNNER's daemon. Once DOCKER_HOST points
+# at the workspace, plain `docker` talks to the workspace's daemon instead, so
+# anything about the container -- exec, logs, inspect -- has to say which
+# daemon it means or it silently looks in the wrong place.
+hostdocker() { env -u DOCKER_HOST docker "$@"; }
+
+# build_image builds the workspace image from the repo root, because the image
+# builds the agent from source.
+build_image() {
+    docker build -q -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" >/dev/null
+}
+
+# build_client builds the client binary into $WORK.
+build_client() {
+    (cd "$REPO" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker)
+}
+
+# enrol generates a keypair for one account and stages its public half where
+# the workspace will find it. The FILENAME becomes the unix account there.
+enrol() {
+    local account=$1 statedir=$2
+    REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" enroll >/dev/null 2>&1
+    if [ -f "$statedir/id_ed25519.pub" ]; then
+        cp "$statedir/id_ed25519.pub" "$WORK/keys/$account.pub"
+        return 0
+    fi
+    return 1
+}
+
+# start_workspace runs the workspace container.
+#
+# The dind mode is a REQUIRED argument with no default, and that is the whole
+# reason this function can be shared at all. Give it a default and the two
+# suites stop stating which mode they test -- which is one script with a flag,
+# the thing both of their headers explicitly refuse.
+start_workspace() {
+    local per_user_dind=$1
+    shift
+    if [ -z "$per_user_dind" ]; then
+        bad "start_workspace needs a WORKSPACE_PER_USER_DIND value"
+        return 1
+    fi
+
+    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
+    hostdocker run -d --name "$CONTAINER" --privileged \
+        -p "$SSH_PORT:2222" \
+        -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
+        -v "$WORK/wsstate:/etc/workspace" \
+        -e DOCKER_TLS_CERTDIR= \
+        -e "WORKSPACE_PER_USER_DIND=$per_user_dind" \
+        "$@" \
+        "$IMAGE" >/dev/null
+}
+
+# wait_provisioned waits for the agent to create the named accounts.
+wait_provisioned() {
+    local seconds=${WAIT_PROVISION:-90} account
+    for _ in $(seq 1 "$seconds"); do
+        local all=true
+        for account in "$@"; do
+            hostdocker exec "$CONTAINER" id "$account" >/dev/null 2>&1 || all=false
+        done
+        [ "$all" = true ] && return 0
+        sleep 1
+    done
+    return 1
+}
+
+# wait_parent_dockerd waits for the workspace's own daemon.
+#
+# Reports when it never arrives, rather than falling through. A silent timeout
+# here makes the next section fail for a reason nothing on screen explains.
+wait_parent_dockerd() {
+    for _ in $(seq 1 90); do
+        hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    bad "the workspace's own dockerd never came up"
+    return 1
+}
+
+# wait_endpoint waits for a client endpoint to answer.
+#
+# The optional second argument is a client pid: if that process dies, the wait
+# ends immediately instead of running to the full timeout. Without it a client
+# that failed at startup costs the suite its entire patience and then reports a
+# timeout, which names the symptom and not the cause.
+wait_endpoint() {
+    local sock=$1 pid=${2:-}
+    for _ in $(seq 1 120); do
+        if [ -S "$sock" ] && docker -H "unix://$sock" info >/dev/null 2>&1; then
+            return 0
+        fi
+        if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+# dump_workspace_log prints the tail of the workspace container's log.
+dump_workspace_log() {
+    echo "== workspace log =="
+    hostdocker logs "$CONTAINER" 2>&1 | tail -"${1:-60}" | sed 's/^/        /'
+}
+
+# summary prints the totals and sets the exit status.
+summary() {
+    echo
+    echo "=================================="
+    echo "  passed: $PASS   failed: $FAIL"
+    echo "=================================="
+    [ "$FAIL" -eq 0 ]
+}

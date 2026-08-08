@@ -26,13 +26,9 @@ A=alice
 B=bob
 
 DOCKER_TIMEOUT=180
-hostdocker() { env -u DOCKER_HOST docker "$@"; }
 
-PASS=0
-FAIL=0
-ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
-bad()  { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
-info() { echo "  ....  $*"; }
+# shellcheck source=test/lib.sh
+. "$REPO/test/lib.sh"
 
 cleanup() {
     echo
@@ -47,8 +43,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== 1. build =="
-if docker build -q -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" >/dev/null &&
-   (cd "$REPO" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker); then
+if build_image && build_client; then
     ok "image and client build"
 else
     bad "build failed"
@@ -59,26 +54,15 @@ echo
 echo "== 2. enrol two accounts =="
 mkdir -p "$WORK/keys" "$WORK/wsstate"
 for account in "$A" "$B"; do
-    REMOTE_DOCKER_STATE_DIR="$WORK/state-$account" "$WORK/remote-docker" enroll >/dev/null 2>&1
-    if [ -f "$WORK/state-$account/id_ed25519.pub" ]; then
-        cp "$WORK/state-$account/id_ed25519.pub" "$WORK/keys/$account.pub"
-    else
-        bad "no key generated for $account"
-        exit 1
-    fi
+    enrol "$account" "$WORK/state-$account" || { bad "no key generated for $account"; exit 1; }
 done
 ok "two keypairs staged as $A.pub and $B.pub"
 
 echo
 echo "== 3. start the workspace with a daemon per account =="
-hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-if hostdocker run -d --name "$CONTAINER" --privileged \
-        -p "$SSH_PORT:2222" \
-        -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
-        -v "$WORK/wsstate:/etc/workspace" \
-        -e DOCKER_TLS_CERTDIR= \
-        -e WORKSPACE_PER_USER_DIND=true \
-        "$IMAGE" >/dev/null; then
+# true, written here rather than defaulted in the library: this suite exists to
+# test that mode, and it says so in its own file.
+if start_workspace true; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
     bad "workspace container failed to start"
@@ -86,20 +70,11 @@ else
 fi
 
 info "waiting for both accounts to be provisioned"
-provisioned=false
-for _ in $(seq 1 90); do
-    if hostdocker exec "$CONTAINER" id "$A" >/dev/null 2>&1 &&
-       hostdocker exec "$CONTAINER" id "$B" >/dev/null 2>&1; then
-        provisioned=true
-        break
-    fi
-    sleep 1
-done
-if [ "$provisioned" = true ]; then
+if wait_provisioned "$A" "$B"; then
     ok "both accounts provisioned"
 else
     bad "the accounts were never provisioned"
-    hostdocker logs "$CONTAINER" 2>&1 | tail -40
+    dump_workspace_log 40
     exit 1
 fi
 
@@ -115,10 +90,7 @@ for account in "$A" "$B"; do
 done
 
 info "waiting for the parent dockerd"
-for _ in $(seq 1 90); do
-    hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && break
-    sleep 1
-done
+wait_parent_dockerd
 
 echo
 echo "== 4. a session each =="
@@ -154,37 +126,22 @@ CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a.log" "$WORK/project-$A")
 CLIENT_B_PID=$(start_session "$B" "$B_SOCK" "$WORK/b.log" "$WORK/project-$B")
 
 # A cold dind has to be pulled and booted, which is the slowest thing here.
-ready=0
-for _ in $(seq 1 180); do
-    ready=0
-    for sock in "$A_SOCK" "$B_SOCK"; do
-        [ -S "$sock" ] && docker -H "unix://$sock" info >/dev/null 2>&1 && ready=$((ready + 1))
-    done
-    [ "$ready" -eq 2 ] && break
-    sleep 2
-done
-if [ "$ready" -eq 2 ]; then
+#
+# The client pids are passed so a client that dies at startup ends the wait
+# immediately. Without that this suite spent its full patience and then
+# reported a timeout, naming the symptom instead of the cause.
+if wait_endpoint "$A_SOCK" "$CLIENT_A_PID" && wait_endpoint "$B_SOCK" "$CLIENT_B_PID"; then
     ok "both accounts have a working docker endpoint"
 else
     bad "an endpoint never came up"
     sed 's/^/    A: /' "$WORK/a.log" | tail -20
     sed 's/^/    B: /' "$WORK/b.log" | tail -20
-    hostdocker logs "$CONTAINER" 2>&1 | tail -40
+    dump_workspace_log 40
     exit 1
 fi
 
 da() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$A_SOCK" "$@"; }
 db() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$B_SOCK" "$@"; }
-
-# Waits for an account's endpoint to answer after its session is restarted.
-wait_for() {
-    local sock=$1
-    for _ in $(seq 1 120); do
-        [ -S "$sock" ] && docker -H "unix://$sock" info >/dev/null 2>&1 && return 0
-        sleep 2
-    done
-    return 1
-}
 
 # Pulled per account, because a daemon per account means a layer cache per
 # account -- which is the cost this design accepts, and it shows up here first:
@@ -333,7 +290,7 @@ fi
 
 A_SOCK="$WORK/a2.sock"
 CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a2.log" "$WORK/project-$A")
-wait_for "$A_SOCK" || bad "alice's endpoint never came back after the restart"
+wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || bad "alice's endpoint never came back after the restart"
 
 after=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
 ' ' ')
@@ -374,7 +331,7 @@ hostdocker exec "$CONTAINER" docker rm -f "rd-dind-$A" >/dev/null 2>&1
 
 A_SOCK="$WORK/a3.sock"
 CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a3.log" "$WORK/project-$A")
-wait_for "$A_SOCK" || bad "alice's endpoint never came back after her daemon was destroyed"
+wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || bad "alice's endpoint never came back after her daemon was destroyed"
 
 images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
 ' ' ')
@@ -392,12 +349,7 @@ fi
 
 echo
 if [ "$FAIL" -ne 0 ]; then
-    echo "== workspace log =="
-    hostdocker logs "$CONTAINER" 2>&1 | tail -60 | sed 's/^/        /'
+    dump_workspace_log
 fi
 
-echo
-echo "=================================="
-echo "  passed: $PASS   failed: $FAIL"
-echo "=================================="
-[ "$FAIL" -eq 0 ]
+summary

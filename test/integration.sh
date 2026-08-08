@@ -24,17 +24,46 @@ ACCOUNT=itest
 DOCKER_TIMEOUT=120
 dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
 
-# The workspace container itself lives on the RUNNER's daemon. Once DOCKER_HOST
-# is exported, plain `docker` talks to the WORKSPACE's daemon instead, so
-# anything about the container -- exec, logs, inspect -- has to say which
-# daemon it means or it silently looks in the wrong place.
-hostdocker() { env -u DOCKER_HOST docker "$@"; }
+# PIN_SH keeps a container alive only while its mount still works, so the
+# container's own survival IS the assertion. Used by three sections, all of
+# which depend on /w/marker being the same file -- which is why it is written
+# once rather than three times.
+#
+# The script only, not the `sh -c`: quoting a whole command in one variable
+# passes it as a single argument.
+PIN_SH='while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done'
 
-PASS=0
-FAIL=0
-ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
-bad()  { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
-info() { echo "  ....  $*"; }
+# shellcheck source=test/lib.sh
+. "$REPO/test/lib.sh"
+
+# expect_output runs a container and compares its stdout to a literal.
+#
+# Seven copies of this shape existed, each nine lines, and each reported an
+# empty capture as a content mismatch -- "got []" -- when it actually means the
+# container produced no answer at all. That distinction has cost real time
+# three times in this suite's history, so it is the reason the helper exists.
+#
+#   expect_output <description> <expected> -- <docker run args...>
+expect_output() {
+    local what=$1 want=$2
+    shift 2
+    [ "$1" = "--" ] && shift
+
+    local out
+    if ! out=$(dockert run "$@" 2>&1); then
+        bad "$what: the container failed: $(echo "$out" | tail -3)"
+        return 1
+    fi
+    if [ -z "$out" ]; then
+        bad "$what: the container produced no output, so nothing can be concluded"
+        return 1
+    fi
+    if [ "$out" != "$want" ]; then
+        bad "$what: got [$out], want [$want]"
+        return 1
+    fi
+    ok "$what"
+}
 
 cleanup() {
     echo
@@ -49,8 +78,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== 1. build the workspace image =="
-# Context is the repo root: the image builds the agent from source.
-if docker build -q -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" >/dev/null; then
+if build_image; then
     ok "image builds"
 else
     bad "image build failed"
@@ -59,7 +87,7 @@ fi
 
 echo
 echo "== 2. build the client =="
-if (cd "$REPO" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker); then
+if build_client; then
     ok "client builds"
 else
     bad "client build failed"
@@ -79,10 +107,7 @@ export REMOTE_DOCKER_IDLE_TIMEOUT=8s
 echo
 echo "== 3. enrol this machine =="
 mkdir -p "$WORK/keys" "$WORK/wsstate"
-"$WORK/remote-docker" enroll >/dev/null 2>&1
-if [ -f "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" ]; then
-    # The filename becomes the unix account on the workspace.
-    cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$ACCOUNT.pub"
+if enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
     ok "keypair generated and staged as $ACCOUNT.pub"
 else
     bad "enroll produced no public key"
@@ -101,15 +126,7 @@ echo "== 4. start the workspace =="
 # test of per-user mode: several assertions below reach the client's containers
 # with `docker exec <workspace> docker ps`, which only finds them on the daemon
 # the agent itself runs.
-hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-
-if hostdocker run -d --name "$CONTAINER" --privileged \
-        -p "$SSH_PORT:2222" \
-        -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
-        -v "$WORK/wsstate:/etc/workspace" \
-        -e DOCKER_TLS_CERTDIR= \
-        -e WORKSPACE_PER_USER_DIND=false \
-        "$IMAGE" >/dev/null; then
+if start_workspace false; then
     ok "workspace container started"
 else
     bad "workspace container failed to start"
@@ -117,27 +134,16 @@ else
 fi
 
 info "waiting for the account to be provisioned"
-provisioned=false
-for _ in $(seq 1 60); do
-    if hostdocker exec "$CONTAINER" id "$ACCOUNT" >/dev/null 2>&1; then
-        provisioned=true
-        break
-    fi
-    sleep 1
-done
-if [ "$provisioned" = true ]; then
+if wait_provisioned "$ACCOUNT"; then
     ok "the agent provisioned the account"
 else
     bad "the account was never provisioned"
-    hostdocker logs "$CONTAINER" 2>&1 | tail -30
+    dump_workspace_log 30
     exit 1
 fi
 
 info "waiting for dockerd inside the workspace"
-for _ in $(seq 1 60); do
-    hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && break
-    sleep 1
-done
+wait_parent_dockerd
 
 echo
 echo "== 5. status =="
@@ -209,15 +215,7 @@ echo
 echo "== 6b. container stdout, with no volume involved =="
 # Isolates the attach/stdout path from anything to do with mounts. If this
 # fails, no mount test below can be trusted to be telling us about mounts.
-if out=$(dockert run --rm alpine:3 echo hello-from-container 2>&1); then
-    if [ "$out" = "hello-from-container" ]; then
-        ok "container stdout reaches the client"
-    else
-        bad "stdout was lost or altered: got [$out]"
-    fi
-else
-    bad "container failed: $out"
-fi
+expect_output "container stdout reaches the client" "hello-from-container" -- --rm alpine:3 echo hello-from-container
 
 # And the same output read back through the logs endpoint, which is a
 # different code path from attach.
@@ -236,28 +234,12 @@ fi
 
 echo
 echo "== 7. a bind mount under the working directory =="
-if out=$(dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
-    if [ "$out" = "from the project directory" ]; then
-        ok "the container read this machine's file through the tunnel"
-    else
-        bad "unexpected content: $out"
-    fi
-else
-    bad "container failed: $out"
-fi
+expect_output "the container read this machine's file through the tunnel" "from the project directory" -- --rm -v "$PROJECT:/w" alpine:3 cat /w/marker
 
 echo
 echo "== 8. a bind mount OUTSIDE the working directory =="
 # The case the previous single-mount design could not express at all.
-if out=$(dockert run --rm -v "$OUTSIDE:/d" alpine:3 cat /d/data 2>&1); then
-    if [ "$out" = "from an unrelated directory" ]; then
-        ok "an unrelated local directory resolved"
-    else
-        bad "unexpected content: $out"
-    fi
-else
-    bad "container failed: $out"
-fi
+expect_output "an unrelated local directory resolved" "from an unrelated directory" -- --rm -v "$OUTSIDE:/d" alpine:3 cat /d/data
 
 echo
 echo "== 9. writes reach this machine =="
@@ -537,24 +519,20 @@ echo "== 11c. idle release, and what must survive it =="
 # prove one does NOT happen while a container does.
 
 # (a) nothing running -> the connection must be released and reopen on demand.
-sleep 20
-if out=$(dockert run --rm alpine:3 echo after-idle 2>&1); then
-    if [ "$out" = "after-idle" ]; then
-        ok "the client reconnects after an idle release"
-    else
-        bad "unexpected output after an idle period: $out"
-    fi
-else
-    bad "the client could not reconnect after an idle period: $out"
-fi
+#
+# 12 seconds against an 8-second timer: a 1.5x margin. It was 20, twice, which
+# spent 40 seconds of every run waiting past a timeout the suite itself sets
+# short at the top of this file precisely to avoid that.
+sleep 12
+expect_output "the client reconnects after an idle release" "after-idle" -- --rm alpine:3 echo after-idle
 
 # (b) a container holding one of our volumes must pin the connection: it has a
 # live NFS mount, and dropping the tunnel underneath gives it EIO. The loop
 # exits non-zero if the mount stops working, so the container's own survival is
 # the assertion.
-if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3         sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
+if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
 
-    sleep 20
+    sleep 12
 
     if [ "$(docker inspect -f '{{.State.Running}}' itest-idle 2>/dev/null)" = "true" ]; then
         ok "a container holding one of our volumes kept working across an idle period"
@@ -1016,7 +994,7 @@ fi
 # A detached container must outlive the command that started it. This is what
 # the in-process session could not do: it died with the command and took the
 # container's mount with it.
-if dockert run -d --name itest-detached -v "$PROJECT:/w" alpine:3         sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
+if dockert run -d --name itest-detached -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
     sleep 10
     if [ "$(docker inspect -f '{{.State.Running}}' itest-detached 2>/dev/null)" = "true" ]; then
         ok "a detached container keeps its mount after the command exits"
@@ -1063,7 +1041,7 @@ if (cd "$REPO" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"
     # starts the container so the session holding it is the old one.
     "$WORK/remote-docker" stop >/dev/null 2>&1
     "$WORK/remote-docker-old" start >/dev/null 2>&1
-    if "$WORK/remote-docker-old" docker run -d --name itest-pin -v "$PROJECT:/w" alpine:3             sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
+    if "$WORK/remote-docker-old" docker run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
 
         warned=$("$WORK/remote-docker" docker ps 2>&1)
         case "$warned" in
@@ -1222,12 +1200,7 @@ if [ "$FAIL" -ne 0 ]; then
     echo "== client log =="
     sed 's/^/        /' "$WORK/up.log"
     echo
-    echo "== workspace log =="
-    hostdocker logs "$CONTAINER" 2>&1 | tail -40 | sed 's/^/        /'
+    dump_workspace_log 40
 fi
 
-echo
-echo "=================================="
-echo "  passed: $PASS   failed: $FAIL"
-echo "=================================="
-[ "$FAIL" -eq 0 ]
+summary
