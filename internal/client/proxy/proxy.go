@@ -110,6 +110,14 @@ func (p *Proxy) track(conn net.Conn) bool {
 	return true
 }
 
+// closing reports whether shutdown has begun, so a failure caused by our own
+// teardown is not reported as one caused by anything else.
+func (p *Proxy) closing() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.shutdown
+}
+
 func (p *Proxy) untrack(conn net.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -144,7 +152,11 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 	for {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
-			if err != io.EOF && !errors.Is(err, net.ErrClosed) {
+			// Once shutdown has begun every connection is closed underneath
+			// its handler on purpose, so the resulting read failure describes
+			// the shutdown rather than a fault. Reporting it turned a clean
+			// exit into two alarming lines about pipes that had ended.
+			if err != io.EOF && !errors.Is(err, net.ErrClosed) && !p.closing() {
 				p.logf("reading request: %v", err)
 			}
 			return
@@ -152,6 +164,11 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 
 		keepGoing, err := p.forward(ctx, client, reader, req)
 		if err != nil {
+			if p.closing() {
+				// The client is going away with us; there is nobody left to
+				// read an error and nothing left to do about it.
+				return
+			}
 			p.logf("%s %s: %v", req.Method, req.URL.Path, err)
 			writeError(client, err)
 			return
