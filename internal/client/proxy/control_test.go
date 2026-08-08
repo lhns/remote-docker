@@ -7,16 +7,37 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
+// shutdowns is atomic because Shutdown is called from the connection handler
+// AFTER the response has been written -- deliberately, since it closes the very
+// connection carrying the request. So the test observes it from one goroutine
+// while the proxy increments it on another.
 type fakeControl struct {
 	status    any
-	shutdowns int
+	shutdowns atomic.Int64
 }
 
 func (f *fakeControl) Status() any { return f.status }
-func (f *fakeControl) Shutdown()   { f.shutdowns++ }
+func (f *fakeControl) Shutdown()   { f.shutdowns.Add(1) }
+
+// waitForShutdown polls rather than reading once, for the same reason: the
+// acknowledgement arrives before the action, so a bare read races the handler
+// and would pass or fail on timing.
+func (f *fakeControl) waitForShutdown(t *testing.T) int64 {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if n := f.shutdowns.Load(); n > 0 {
+			return n
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return f.shutdowns.Load()
+}
 
 // A control request must never reach the workspace. Forwarding it would ask a
 // daemon that has never heard of it, and the user would get a bewildering 404
@@ -62,8 +83,8 @@ func TestShutdownIsAcknowledgedBeforeActing(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("shutdown returned %d, want 200", resp.StatusCode)
 	}
-	if ctrl.shutdowns != 1 {
-		t.Errorf("Shutdown called %d times, want 1", ctrl.shutdowns)
+	if n := ctrl.waitForShutdown(t); n != 1 {
+		t.Errorf("Shutdown called %d times, want 1", n)
 	}
 }
 
@@ -81,8 +102,11 @@ func TestShutdownRefusesGet(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("GET shutdown returned %d, want 405", resp.StatusCode)
 	}
-	if ctrl.shutdowns != 0 {
-		t.Error("a GET stopped the daemon")
+	// Given a moment to be wrong: an immediate read would pass even if a GET
+	// did trigger a shutdown on another goroutine.
+	time.Sleep(100 * time.Millisecond)
+	if n := ctrl.shutdowns.Load(); n != 0 {
+		t.Errorf("a GET stopped the daemon (%d shutdowns)", n)
 	}
 }
 
