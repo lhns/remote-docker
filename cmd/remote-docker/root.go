@@ -65,6 +65,8 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newContextCommand(),
 		newVersionCommand(),
 		newWorkspaceCommand(),
+		newStartCommand(),
+		newStopCommand(),
 	)
 	return root
 }
@@ -250,7 +252,13 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 					"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
 			}
 
-			<-ctx.Done()
+			// Either the terminal or `remote-docker stop`. A background session
+			// has no terminal to press Ctrl-C in, so without the second there
+			// would be no way to end one short of finding its pid.
+			select {
+			case <-ctx.Done():
+			case <-s.Stopped():
+			}
 			_, _ = fmt.Fprintln(out, "\nclosing session")
 			return nil
 		},

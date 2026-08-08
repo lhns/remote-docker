@@ -1,21 +1,16 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
 	"github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
 
-	"github.com/lhns/remote-docker/internal/client/config"
-	"github.com/lhns/remote-docker/internal/client/fswatch"
 	"github.com/lhns/remote-docker/internal/client/proxy"
-	"github.com/lhns/remote-docker/internal/client/session"
 )
 
 // newDockerCommand mounts the real Docker CLI's command tree under
@@ -63,17 +58,30 @@ set -- though an explicit one is respected.`,
 		if cfg, err := resolve(); err == nil {
 			endpoint = cfg.EndpointFor(proxy.DefaultEndpoint)
 
-			// Nothing is serving that endpoint, so bring a session up for the
-			// duration of this command rather than telling the user to go and
-			// start one in another terminal. Requiring `up` first made the
-			// embedded CLI -- the thing that exists so nothing has to be
-			// installed -- the one part of this tool with a setup step.
+			// Nothing is serving that endpoint, so start a background session
+			// rather than telling the user to go and open one in another
+			// terminal. Requiring `up` first made the embedded CLI -- the
+			// thing that exists so nothing has to be installed -- the one part
+			// of this tool with a setup step.
+			//
+			// A DAEMON, where this used to open a session inside this very
+			// process. That session died with the command, so `docker run -d`
+			// left a container whose filesystem stopped working, and all we
+			// could do was print a warning saying so. The daemon outlives the
+			// command, so a detached container keeps its mounts and the
+			// warning has nothing left to warn about.
 			//
 			// Which workspace this is comes from the same resolution as every
-			// other command, so `--workspace ci docker ps` starts a session
-			// for ci and answers from ci.
-			if !proxy.Reachable(endpoint) {
-				startImplicitSession(cfg, endpoint)
+			// other command, so `--workspace ci docker ps` starts a session for
+			// ci and answers from ci.
+			//
+			// Failure is quiet on purpose: the endpoint may have been taken by
+			// a session that started a moment ago -- this check is a race by
+			// nature -- and the command below then connects to it and works. If
+			// there really is nothing there, docker says so, which is a better
+			// message than anything guessed at here.
+			if !proxy.Reachable(endpoint) && cfg.Host != "" {
+				_ = startDaemon(cfg, endpoint)
 			}
 		}
 		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
@@ -132,100 +140,4 @@ func invokingDocker() bool {
 		return arg == "docker"
 	}
 	return false
-}
-
-// implicitSession is the one this command started for itself, if any. Closed
-// by main once the command has finished, because a deferred close here would
-// run while the docker command was still using it.
-var implicitSession *session.Session
-
-// startImplicitSession opens a session for the life of a single docker command.
-//
-// It serves files, because a bind mount is the whole point: `docker run -v
-// .:/app` has to reach this machine's disk, and that needs the NFS export this
-// session provides.
-//
-// Failure is deliberately quiet. The endpoint may have been taken by an `up`
-// that started a moment ago -- the check above is a race by nature -- and in
-// that case the docker command below connects to it and works. If there really
-// is nothing there, docker reports it, which is a better message than anything
-// guessed at here.
-func startImplicitSession(cfg config.Config, endpoint string) {
-	if cfg.Host == "" {
-		return
-	}
-	watch, err := fswatch.ParseMode(cfg.Watch)
-	if err != nil {
-		watch = fswatch.ModeOff
-	}
-	s, err := session.Open(context.Background(), session.Options{
-		Config:   cfg,
-		WorkDir:  mustWorkDir(),
-		Endpoint: endpoint,
-		// This session IS the one serving the endpoint for the life of the
-		// command, until the daemon takes that over.
-		Serve:        true,
-		Files:        session.FilesRequired,
-		IdleTimeout:  cfg.IdleTimeout,
-		Watch:        watch,
-		WatchBudget:  cfg.WatchBudget,
-		WatchExclude: cfg.WatchExclude,
-		Log:          logger{},
-	})
-	if err != nil {
-		return
-	}
-	implicitSession = s
-}
-
-// closeImplicitSession tears down a session this command started, warning if
-// anything is left that will stop working without it.
-//
-// A container started with -d outlives the command that created it, but its
-// bind mounts are NFS volumes served by THIS process. Closing takes the file
-// server away and the container starts failing its I/O -- soft mounts make
-// that an error rather than a hang, but it is still a container that was
-// working and now is not. The user has to be told, and told what to do.
-func closeImplicitSession() {
-	if implicitSession == nil {
-		return
-	}
-	if n := survivingContainers(); n > 0 {
-		fmt.Fprintf(os.Stderr,
-			"\nwarning: %d container(s) still hold directories served by this command,\n"+
-				"and those mounts stop working now that it has finished.\n"+
-				"Run `remote-docker up` in another terminal to keep them alive.\n", n)
-	}
-	_ = implicitSession.Close()
-}
-
-// survivingContainers counts containers that will outlive this command.
-//
-// Asked twice, because a foreground container is still running at the instant
-// the command ends: `docker run` without -d has just sent it a signal and it
-// takes a moment to go. Warning on that first answer told people their mounts
-// were about to break every time they pressed Ctrl-C on a container that was
-// already on its way out.
-//
-// The second look costs nothing in the ordinary case, because it only happens
-// when the first one found something -- and finding something is exactly when
-// being right matters.
-func survivingContainers() int {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	n, err := implicitSession.OwnedVolumesInUse(ctx)
-	if err != nil || n == 0 {
-		return 0
-	}
-	select {
-	case <-time.After(750 * time.Millisecond):
-	case <-ctx.Done():
-		return 0
-	}
-	n, err = implicitSession.OwnedVolumesInUse(ctx)
-	if err != nil {
-		return 0
-	}
-	return n
 }

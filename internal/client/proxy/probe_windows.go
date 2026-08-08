@@ -3,6 +3,8 @@
 package proxy
 
 import (
+	"context"
+	"net"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -25,4 +27,19 @@ func Reachable(endpoint string) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// DialEndpoint dials the endpoint, for an http.Transport talking to a session's
+// own control endpoints. The URL's host is ignored; only this matters.
+func DialEndpoint(endpoint string) func(context.Context, string, string) (net.Conn, error) {
+	if endpoint == "" {
+		endpoint = DefaultEndpoint
+	}
+	return func(ctx context.Context, _, _ string) (net.Conn, error) {
+		timeout := 10 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			timeout = time.Until(deadline)
+		}
+		return winio.DialPipe(endpoint, &timeout)
+	}
 }

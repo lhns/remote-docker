@@ -127,9 +127,13 @@ type Session struct {
 	// tree on every idle reconnect would cost more than the connection. Only
 	// the sink comes and goes.
 	watch      *fswatch.Watcher
+	started    time.Time
 	notifyOnce sync.Once
 
 	gate *connGate[*liveConn]
+
+	stopped  chan struct{}
+	stopOnce sync.Once
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -173,9 +177,10 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	nfsserve.SetLogger(opts.Log)
 
 	s := &Session{
-		opts:   opts,
-		ctx:    runCtx,
-		cancel: cancel,
+		opts:    opts,
+		ctx:     runCtx,
+		cancel:  cancel,
+		stopped: make(chan struct{}),
 		// Corrected once the workspace reports its uid. Nothing is served
 		// before that, so the defaults are never observed.
 		registry: nfsserve.NewRegistry(defaultAttrs()),
@@ -218,7 +223,13 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		log:  opts.Log,
 	}
 
+	s.started = time.Now()
 	s.proxy = &proxy.Proxy{Dialer: s, Rewriter: s, Log: opts.Log}
+	if opts.Serve {
+		// Only a session that serves the endpoint answers for it. One that
+		// does not would be claiming to be a daemon it is not.
+		s.proxy.Control = s
+	}
 
 	if opts.Serve {
 		if err := s.listen(opts.Endpoint); err != nil {
@@ -693,6 +704,50 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 		Log:     s.opts.Log,
 	}
 }
+
+// Status answers the control endpoint, satisfying proxy.Control.
+//
+// Deliberately does NOT connect. `status` connecting is its own decision --
+// reporting what the workspace says is that command's whole job -- but a
+// daemon asked to describe itself must not go and establish a connection it
+// had let go, which would make asking the question change the answer.
+func (s *Session) Status() any {
+	live, connected := s.gate.current()
+	st := proxy.Status{
+		Workspace: s.opts.Config.Name,
+		Host:      s.opts.Config.Host,
+		User:      s.opts.Config.User,
+		Endpoint:  s.Endpoint,
+		PID:       os.Getpid(),
+		Connected: connected,
+		Since:     s.started.Format(time.RFC3339),
+	}
+	if connected {
+		st.User = live.info.User
+		st.Ports = s.Ports()
+	}
+	if s.watch != nil {
+		st.Watching = s.watch.Stats().Mode.String()
+	}
+	for _, share := range s.registry.Shares() {
+		st.Shares = append(st.Shares, share.LocalPath)
+	}
+	return st
+}
+
+// Shutdown asks the session to stop, satisfying proxy.Control.
+//
+// Returns immediately and stops in the background, because the caller is the
+// control request still holding a connection that Close is about to shut.
+func (s *Session) Shutdown() {
+	go func() {
+		s.stopOnce.Do(func() { close(s.stopped) })
+	}()
+}
+
+// Stopped is closed when something has asked this session to stop. `up` waits
+// on it alongside its signal context.
+func (s *Session) Stopped() <-chan struct{} { return s.stopped }
 
 // Ports lists the ports currently forwarded, if connected.
 func (s *Session) Ports() []int {

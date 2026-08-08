@@ -42,6 +42,11 @@ type Proxy struct {
 	Rewriter Rewriter
 	Log      Logger
 
+	// Control answers this session's own endpoints, under ControlPrefix. Nil
+	// for a session that is not the daemon, which then reports them as absent
+	// rather than pretending.
+	Control Control
+
 	wg sync.WaitGroup
 
 	// live tracks accepted connections so shutdown can close them.
@@ -197,6 +202,14 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 // forward sends one request upstream and relays the response. It reports
 // whether the connection can carry another request.
 func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufio.Reader, req *http.Request) (bool, error) {
+	// Answered here, never forwarded: the workspace has never heard of these
+	// and would return a bewildering 404 from a daemon the user did not think
+	// they were talking to.
+	if isControl(req) {
+		p.serveControl(client, req)
+		return false, nil
+	}
+
 	upstream, err := p.Dialer.DialDocker(ctx)
 	if err != nil {
 		return false, fmt.Errorf("connecting to the workspace daemon: %w", err)

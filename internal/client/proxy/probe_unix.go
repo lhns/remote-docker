@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"time"
 )
@@ -23,4 +24,16 @@ func Reachable(endpoint string) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// DialEndpoint dials the endpoint, for an http.Transport talking to a session's
+// own control endpoints. The URL's host is ignored; only this matters.
+func DialEndpoint(endpoint string) func(context.Context, string, string) (net.Conn, error) {
+	if endpoint == "" {
+		endpoint = defaultSocketPath()
+	}
+	return func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", endpoint)
+	}
 }
