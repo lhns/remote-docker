@@ -18,7 +18,6 @@ import (
 	"os"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/lhns/remote-docker/internal/client/config"
@@ -152,9 +151,6 @@ type liveConn struct {
 	// not support it or watching is off.
 	notify io.Closer
 
-	// sessions counts interactive shells open on this connection.
-	sessions atomic.Int64
-
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -217,7 +213,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			}
 			live.close()
 		},
-		busy: hasLiveDependents,
+		busy: s.hasLiveDependents,
 		idle: opts.IdleTimeout,
 		log:  opts.Log,
 	}
@@ -265,8 +261,48 @@ func (s *Session) DialDocker(ctx context.Context) (io.ReadWriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer done()
-	return live.ssh.OpenStream(proxy.DialStdioCommand)
+	stream, err := live.ssh.OpenStream(proxy.DialStdioCommand)
+	if err != nil {
+		done()
+		return nil, err
+	}
+	// The lease is held for the life of the STREAM, not just the dial.
+	//
+	// It used to be released the instant the stream opened, so a hijacked
+	// connection -- `docker attach`, `exec -it`, `logs -f` -- held nothing at
+	// all. Those survived an idle release only indirectly, because their
+	// container was running and hasLiveDependents noticed it. A `logs -f` on a
+	// STOPPED container had nothing pinning it and would simply be cut.
+	//
+	// This is also the reliable answer to "is anything using the connection".
+	// A stream holds its lease for exactly as long as it is open; an idle
+	// keep-alive connection between requests holds none, which is the
+	// distinction that matters.
+	return &leasedStream{ReadWriteCloser: stream, release: done}, nil
+}
+
+// leasedStream keeps a gate lease alive until the stream is closed.
+type leasedStream struct {
+	io.ReadWriteCloser
+	release func()
+	once    sync.Once
+}
+
+func (s *leasedStream) Close() error {
+	err := s.ReadWriteCloser.Close()
+	s.once.Do(s.release)
+	return err
+}
+
+// CloseWrite forwards the half-close the hijack path depends on. Without it
+// the wrapper would hide the method and `docker run` without -i would lose the
+// container's output -- the failure ADR 0005 records and the proxy's tests
+// pin down.
+func (s *leasedStream) CloseWrite() error {
+	if cw, ok := s.ReadWriteCloser.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
 }
 
 // ContainerCreate satisfies proxy.Rewriter.
@@ -527,37 +563,55 @@ func (s *Session) releaseIfIdle() {
 
 // hasLiveDependents reports whether anything running still needs us.
 //
-// Three things can, and all must be checked. A container holding one of our
-// volumes has a live NFS mount that dropping the tunnel would break. A running
-// container of ours may have published ports whose forwards exist only while
-// we are connected. And an interactive session is using the ~/workspace mount,
-// which the agent unmounts when this connection's forward is released -- so
-// releasing while somebody sits at a shell pulls their working directory out
-// from under them.
+// Two things can, and both must be checked. A container holding one of our
+// volumes has a live NFS mount that dropping the tunnel would break, and a
+// running container of ours may have published ports whose forwards exist only
+// while we are connected.
 //
-// The third was missed at first, because a session is not a container and the
-// check only looked at containers. Same mistake as sessions reserving the
-// export port they did not need: reasoning about one session at a time rather
-// than several coexisting.
-func hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
-	if live.sessions.Load() > 0 {
-		return true, nil
-	}
+// A third used to be listed here -- an interactive shell using the ~/workspace
+// mount -- and was counted separately on liveConn. It never reached this
+// function: Shell holds its gate lease for its whole life, and sweep bails on
+// users > 0 long before busy is consulted. Now that every stream holds its
+// lease the same way, the counter documented an intent the code no longer
+// needed, so it is gone.
+//
+// The volume match is scoped to volumes WE created. It used to accept any
+// rd- prefix, so on a shared daemon (ADR 0012) another account's volume pinned
+// this connection open forever -- an idle release that could never fire, for a
+// dependency that was not ours.
+func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
 	containers, err := live.api.ListContainers(ctx)
 	if err != nil {
 		return false, err
 	}
+	ours := s.ourVolumes()
 	for _, c := range containers {
 		if c.Labels[rewrite.OwnerLabel] == live.info.User {
 			return true, nil
 		}
 		for _, m := range c.Mounts {
-			if m.Type == "volume" && workspace.IsManagedVolume(m.Name) {
+			if m.Type == "volume" && ours[m.Name] {
 				return true, nil
 			}
 		}
 	}
 	return false, nil
+}
+
+// ourVolumes names the volumes backing this session's shares.
+//
+// Derived rather than remembered: share ids are a pure function of the local
+// path (ADR 0007), so the registry already knows the exact set and no round
+// trip is needed to ask.
+func (s *Session) ourVolumes() map[string]bool {
+	shares := s.registry.Shares()
+	out := make(map[string]bool, len(shares))
+	for _, share := range shares {
+		if name, err := workspace.VolumeNameForExport(share.ExportPath); err == nil {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 // OwnedVolumesInUse counts running containers holding a share this session
@@ -606,18 +660,16 @@ func (live *liveConn) close() {
 
 // Shell opens an interactive session on the workspace.
 //
-// Counted for the whole of its life, not just while acquiring: a shell can sit
-// idle for a long time and still be very much in use, and the idle sweep would
-// otherwise release the connection and unmount the workspace underneath it.
+// The lease is held for the shell's whole life, not just while acquiring: a
+// shell can sit idle for a long time and still be very much in use, and the
+// idle sweep would otherwise release the connection and unmount ~/workspace
+// underneath somebody sitting at a prompt.
 func (s *Session) Shell(ctx context.Context) error {
 	live, done, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer done()
-
-	live.sessions.Add(1)
-	defer live.sessions.Add(-1)
 
 	return live.ssh.Shell(ctx, "cd ~/workspace 2>/dev/null; exec ${SHELL:-/bin/sh} -l")
 }
