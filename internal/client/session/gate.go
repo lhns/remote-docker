@@ -124,6 +124,22 @@ func (g *connGate[T]) sweep(ctx context.Context) bool {
 	return true
 }
 
+// lastUse reports when the connection was last used, and whether anything is
+// using it right now.
+//
+// The zero time means never, which the caller must handle rather than read as
+// "just now": a session that has served nothing has no last use, and it is the
+// one that should be reclaimed soonest.
+//
+// Separate from sweep because the daemon's lifetime asks a different question
+// from the connection's: sweep decides whether to drop a connection that can
+// be reopened, this decides whether to end a process that cannot.
+func (g *connGate[T]) lastUse() (time.Time, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lastUsed, g.users > 0
+}
+
 // current returns the connection if one is held.
 func (g *connGate[T]) current() (T, bool) {
 	g.mu.Lock()

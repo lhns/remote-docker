@@ -252,12 +252,19 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 					"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
 			}
 
-			// Either the terminal or `remote-docker stop`. A background session
-			// has no terminal to press Ctrl-C in, so without the second there
-			// would be no way to end one short of finding its pid.
+			// Three ways out: the terminal, `remote-docker stop`, and having
+			// nothing left to do. A background session has no terminal to
+			// press Ctrl-C in, so without the other two there would be no way
+			// to end one short of finding its pid.
+			idle := cfg.DaemonIdle
+			if idle == 0 {
+				idle = config.DefaultDaemonIdle
+			}
 			select {
 			case <-ctx.Done():
 			case <-s.Stopped():
+			case <-idleExpired(ctx, s, idle):
+				_, _ = fmt.Fprintf(out, "\nnothing has needed this session for %s", idle)
 			}
 			_, _ = fmt.Fprintln(out, "\nclosing session")
 			return nil

@@ -64,7 +64,23 @@ type Config struct {
 	// idle release without sleeping past a fixed minute, but a slow link is a
 	// fair reason to raise it too.
 	IdleTimeout time.Duration
+
+	// DaemonIdle is how long a background session may sit with nothing to do
+	// before it exits. Zero uses DefaultDaemonIdle; negative never exits.
+	//
+	// Longer than IdleTimeout by a lot, and doing something different: that
+	// one drops a connection which reopens on the next request, this one ends
+	// a process that cannot come back on its own. It never fires while
+	// anything depends on the session.
+	DaemonIdle time.Duration
 }
+
+// DefaultDaemonIdle is how long a background session outlives its last use.
+//
+// Half an hour: long enough that stepping away from a task and coming back
+// finds it still up, short enough that a workspace opened once last week is
+// not still holding a socket and a watch.
+const DefaultDaemonIdle = 30 * time.Minute
 
 // File is the on-disk form, ~/.remote-docker.json.
 //
@@ -170,6 +186,7 @@ const (
 	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
 	EnvWatchExclude = "REMOTE_DOCKER_WATCH_EXCLUDE"
 	EnvIdleTimeout  = "REMOTE_DOCKER_IDLE_TIMEOUT"
+	EnvDaemonIdle   = "REMOTE_DOCKER_DAEMON_IDLE"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -314,6 +331,11 @@ func applyEnv(cfg *Config) {
 		// settings: it would otherwise break commands that connect to nothing.
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.IdleTimeout = d
+		}
+	}
+	if v := os.Getenv(EnvDaemonIdle); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.DaemonIdle = d
 		}
 	}
 }

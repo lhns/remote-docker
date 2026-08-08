@@ -745,6 +745,45 @@ func (s *Session) Shutdown() {
 	}()
 }
 
+// IdleFor reports how long this session has had nothing to do, and whether it
+// would be safe to end the process now.
+//
+// Safe means the same thing it means for releasing a connection, because the
+// consequence is worse: a released connection reopens on the next request, and
+// an ended process takes the NFS export with it and a running container's
+// filesystem with that.
+//
+// The disjunction is the load-bearing part. If no connection is held, the gate
+// only let it go BECAUSE nothing depended on it, so there is nothing to ask
+// and nothing to break. If one is held, ask -- and "unable to tell" counts as
+// busy, exactly as it does for a release.
+func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
+	last, inUse := s.gate.lastUse()
+	if inUse {
+		return 0, false
+	}
+	// Never used means idle since the session began, not idle for no time at
+	// all. Reading the zero time as "just now" meant a daemon that had served
+	// nothing could never expire -- the one case where reclaiming it is most
+	// obviously right, and the case `start` leaves behind every time somebody
+	// opens a session and then does not use it.
+	if last.IsZero() {
+		last = s.started
+	}
+	quiet := time.Since(last)
+
+	live, connected := s.gate.current()
+	if !connected {
+		return quiet, true
+	}
+
+	busy, err := s.hasLiveDependents(ctx, live)
+	if err != nil || busy {
+		return quiet, false
+	}
+	return quiet, true
+}
+
 // Stopped is closed when something has asked this session to stop. `up` waits
 // on it alongside its signal context.
 func (s *Session) Stopped() <-chan struct{} { return s.stopped }
