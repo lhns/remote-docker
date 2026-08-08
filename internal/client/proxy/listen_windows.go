@@ -13,8 +13,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// defaultPipe is where the proxy listens when nothing else is asked for.
+const defaultPipe = `\\.\pipe\docker_remote`
+
 // DefaultEndpoint is where the proxy listens when nothing else is asked for.
-const DefaultEndpoint = `\\.\pipe\docker_remote`
+//
+// A function for symmetry with Unix, where the answer is not known until it is
+// asked. Here there is a constant behind it.
+func DefaultEndpoint() string { return defaultPipe }
 
 // DockerEngineEndpoint is the pipe the official Docker CLI looks for when
 // DOCKER_HOST is unset. Binding it makes the official CLI work with no
@@ -33,7 +39,7 @@ const DockerEngineEndpoint = `\\.\pipe\docker_engine`
 // Creating a pipe under \\.\pipe\ needs no administrator rights.
 func Listen(endpoint string) (net.Listener, error) {
 	if endpoint == "" {
-		endpoint = DefaultEndpoint
+		endpoint = defaultPipe
 	}
 
 	cfg := &winio.PipeConfig{SecurityDescriptor: ownerOnlySDDL()}
@@ -95,7 +101,7 @@ func ownerOnlySDDL() string {
 // DockerHost is the DOCKER_HOST value addressing this endpoint.
 func DockerHost(endpoint string) string {
 	if endpoint == "" {
-		endpoint = DefaultEndpoint
+		endpoint = defaultPipe
 	}
 	name := strings.TrimPrefix(endpoint, `\\.\pipe\`)
 	return "npipe:////./pipe/" + name

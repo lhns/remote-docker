@@ -38,7 +38,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	s, err := session.Open(ctx, session.Options{
 		Config:      cfg,
 		WorkDir:     mustWorkDir(),
-		Endpoint:    cfg.EndpointFor(proxy.DefaultEndpoint),
+		Endpoint:    cfg.EndpointFor(proxy.DefaultEndpoint()),
 		Files:       files,
 		IdleTimeout: cfg.IdleTimeout,
 		// The only command that binds the endpoint. Everything else either

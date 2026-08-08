@@ -55,7 +55,7 @@ set -- though an explicit one is respected.`,
 	// inside one process.
 	if invokingDocker() {
 		if cfg, err := resolve(); err == nil {
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
 			ours := proxy.DockerHost(endpoint)
 			set := os.Getenv("DOCKER_HOST")
 

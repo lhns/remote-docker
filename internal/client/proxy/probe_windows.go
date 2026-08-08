@@ -18,7 +18,7 @@ import (
 // file specified", and the user can act on one of those and not the other.
 func Reachable(endpoint string) bool {
 	if endpoint == "" {
-		endpoint = DefaultEndpoint
+		endpoint = defaultPipe
 	}
 	timeout := time.Second
 	conn, err := winio.DialPipe(endpoint, &timeout)
@@ -33,7 +33,7 @@ func Reachable(endpoint string) bool {
 // own control endpoints. The URL's host is ignored; only this matters.
 func DialEndpoint(endpoint string) func(context.Context, string, string) (net.Conn, error) {
 	if endpoint == "" {
-		endpoint = DefaultEndpoint
+		endpoint = defaultPipe
 	}
 	return func(ctx context.Context, _, _ string) (net.Conn, error) {
 		timeout := 10 * time.Second

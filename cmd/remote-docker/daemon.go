@@ -52,7 +52,7 @@ is doing.`,
 			if err := cfg.RequireHost(); err != nil {
 				return err
 			}
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
 			out := cmd.OutOrStdout()
 
 			if foreground {
@@ -86,7 +86,7 @@ func newStopCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
 			out := cmd.OutOrStdout()
 
 			if !proxy.Reachable(endpoint) {
@@ -310,7 +310,7 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 			if err := cfg.RequireHost(); err != nil {
 				return err
 			}
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
 			out := cmd.OutOrStdout()
 
 			if !proxy.Reachable(endpoint) {
@@ -354,7 +354,7 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 // and until this line existed there was no way to see that from the outside,
 // which is exactly how it went unnoticed during development.
 func reportLocalSession(out io.Writer, cfg config.Config) {
-	endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+	endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
 	if !proxy.Reachable(endpoint) {
 		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session", "not running")
 		return

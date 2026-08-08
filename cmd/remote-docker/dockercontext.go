@@ -37,7 +37,7 @@ type installedContext struct {
 // this client did not create.
 func installContext(docker string, cfg config.Config) (installedContext, error) {
 	name := cfg.ContextName()
-	endpoint := proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint))
+	endpoint := proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint()))
 
 	if contextIsOurs(docker, name) {
 		// Ours, so replacing is safe -- and it is replaced rather than

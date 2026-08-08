@@ -10,8 +10,15 @@ import (
 )
 
 // DefaultEndpoint is where the proxy listens when nothing else is asked for.
-// It is filled in at runtime from the user's runtime directory.
-const DefaultEndpoint = ""
+//
+// A function rather than a constant, because on this platform the answer is
+// not known until it is asked: it comes from the user's runtime directory.
+// It used to be the empty string, resolved inside Listen -- which was fine
+// for Listen and wrong for everybody else. A caller deriving a NAMED
+// workspace's endpoint appends to this, and appending to "" produced the
+// relative path "-dev": a socket in whatever directory the process happened
+// to be in, and a docker context pointing at unix://-dev.
+func DefaultEndpoint() string { return defaultSocketPath() }
 
 // Deliberately NOT /var/run/docker.sock, the path the official CLI uses by
 // default. It is root-owned, so serving it would need privileges this client

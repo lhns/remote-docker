@@ -154,7 +154,7 @@ func newStatusCommand() *cobra.Command {
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
+				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint()),
 				Files:    files,
 				Log:      logger{},
 			})
@@ -275,7 +275,7 @@ is never touched, whatever it is named.`,
 			s, err := session.Open(ctx, session.Options{
 				Config:   cfg,
 				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
+				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint()),
 				Files:    files,
 				Log:      logger{},
 			})

@@ -269,6 +269,22 @@ func TestEndpointForIsPerWorkspace(t *testing.T) {
 	}
 }
 
+// An empty base has no name to build on, and building one anyway was a real
+// bug: DefaultEndpoint was "" on Unix -- resolved inside Listen, which was fine
+// for Listen and wrong for everyone else -- so a NAMED workspace derived the
+// bare separator plus its name. "-dev" is a socket in whatever directory the
+// process happened to be in, and the docker context written from it said
+// unix://-dev. It could not be reproduced on Windows, where the pipe name is a
+// real constant, and CI never saw it because the suite sets an endpoint
+// explicitly.
+func TestEndpointForDoesNotBuildARelativePathFromNothing(t *testing.T) {
+	got := Config{Name: "dev"}.EndpointFor("")
+	if got != "" {
+		t.Errorf("EndpointFor(\"\") = %q for a named workspace, want the default; "+
+			"anything else names something relative to the working directory", got)
+	}
+}
+
 func TestContextName(t *testing.T) {
 	if got := (Config{}).ContextName(); got != "remote-docker" {
 		t.Errorf("unnamed context = %q", got)

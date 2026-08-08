@@ -229,7 +229,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				_, _ = fmt.Fprintf(out, "%s%-13s %-30s %s\n",
 					marker, name,
 					fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port),
-					proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint)))
+					proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint())))
 			}
 			_, _ = fmt.Fprintln(out, "\n* default")
 			return nil
@@ -332,7 +332,7 @@ func newWorkspaceInspectCommand() *cobra.Command {
 			}
 			row("name", cfg.Name)
 			row("workspace", fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port))
-			row("endpoint", proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint)))
+			row("endpoint", proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint())))
 			row("docker context", cfg.ContextName())
 			row("watch", cfg.Watch)
 			for _, ex := range cfg.WatchExclude {

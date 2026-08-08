@@ -384,10 +384,14 @@ func (c Config) EndpointFor(base string) string {
 	if c.Endpoint != "" {
 		return c.Endpoint
 	}
-	if c.Name == "" {
+	if c.Name == "" || base == "" {
+		// An empty base cannot be joined to. Returning it means the default,
+		// which is the one answer that is never wrong -- unlike the bare
+		// separator this used to build, which named a socket relative to the
+		// working directory.
 		return base
 	}
-	return base + endpointSeparator + sanitizeUser(c.Name)
+	return joinEndpoint(base, sanitizeUser(c.Name))
 }
 
 // ContextName is the docker context this workspace installs.
