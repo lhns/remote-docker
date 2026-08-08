@@ -91,3 +91,33 @@ jobs:
       - name: workspace logs on failure
         if: failure()
         run: docker logs remote-docker-itest 2>&1 | tail -100 || true
+
+  # A daemon per account (ADR 0019), with two accounts, which is the only way
+  # to test the claim at all.
+  #
+  # A separate job rather than more of the suite above: the two modes need
+  # differently configured workspaces, and integration.sh passing UNCHANGED is
+  # itself the evidence that the shared mode still works. One script with a
+  # flag would only ever prove whichever branch it took.
+  per-user-dind:
+    name: a daemon per account
+    runs-on: ubuntu-latest
+    needs: nfs-capability
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      - name: run the suite
+        run: bash test/per-user-dind.sh
+
+      - name: workspace logs on failure
+        if: failure()
+        run: docker logs remote-docker-peruser 2>&1 | tail -100 || true

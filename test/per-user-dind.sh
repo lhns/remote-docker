@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+# A daemon per account (ADR 0019), end to end, with TWO accounts.
+#
+# Separate from integration.sh rather than folded into it, because the claim
+# being tested needs a second enrolled account and a differently configured
+# workspace -- and because integration.sh must keep passing UNCHANGED in shared
+# mode, which is the escape hatch. Two scripts prove both modes; one script
+# with a flag would prove whichever branch it happened to take.
+#
+# The claim is narrow and worth stating exactly: accounts stop seeing each
+# other's containers. It is NOT isolation. Each per-account daemon runs
+# privileged, so a determined account can still break out and reach another's;
+# what changes is that nobody does so by accident.
+#
+# Requires: docker, and a kernel with NFS client support.
+set -uo pipefail
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+WORK=$(mktemp -d)
+IMAGE=remote-docker-workspace:test
+CONTAINER=remote-docker-peruser
+SSH_PORT=22223
+
+# Two accounts, which is the whole point of this file.
+A=alice
+B=bob
+
+DOCKER_TIMEOUT=180
+hostdocker() { env -u DOCKER_HOST docker "$@"; }
+
+PASS=0
+FAIL=0
+ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
+bad()  { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
+info() { echo "  ....  $*"; }
+
+cleanup() {
+    echo
+    echo "== cleanup =="
+    for pid in ${CLIENT_A_PID:-} ${CLIENT_B_PID:-}; do
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    done
+    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+echo "== 1. build =="
+if docker build -q -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" >/dev/null &&
+   (cd "$REPO" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker); then
+    ok "image and client build"
+else
+    bad "build failed"
+    exit 1
+fi
+
+echo
+echo "== 2. enrol two accounts =="
+mkdir -p "$WORK/keys" "$WORK/wsstate"
+for account in "$A" "$B"; do
+    REMOTE_DOCKER_STATE_DIR="$WORK/state-$account" "$WORK/remote-docker" enroll >/dev/null 2>&1
+    if [ -f "$WORK/state-$account/id_ed25519.pub" ]; then
+        cp "$WORK/state-$account/id_ed25519.pub" "$WORK/keys/$account.pub"
+    else
+        bad "no key generated for $account"
+        exit 1
+    fi
+done
+ok "two keypairs staged as $A.pub and $B.pub"
+
+echo
+echo "== 3. start the workspace with a daemon per account =="
+hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
+if hostdocker run -d --name "$CONTAINER" --privileged \
+        -p "$SSH_PORT:2222" \
+        -v "$WORK/keys:/etc/workspace/authorized_keys.d:ro" \
+        -v "$WORK/wsstate:/etc/workspace" \
+        -e DOCKER_TLS_CERTDIR= \
+        -e WORKSPACE_PER_USER_DIND=true \
+        "$IMAGE" >/dev/null; then
+    ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
+else
+    bad "workspace container failed to start"
+    exit 1
+fi
+
+info "waiting for both accounts to be provisioned"
+provisioned=false
+for _ in $(seq 1 90); do
+    if hostdocker exec "$CONTAINER" id "$A" >/dev/null 2>&1 &&
+       hostdocker exec "$CONTAINER" id "$B" >/dev/null 2>&1; then
+        provisioned=true
+        break
+    fi
+    sleep 1
+done
+if [ "$provisioned" = true ]; then
+    ok "both accounts provisioned"
+else
+    bad "the accounts were never provisioned"
+    hostdocker logs "$CONTAINER" 2>&1 | tail -40
+    exit 1
+fi
+
+# The shared `docker` group grants a socket reaching the PARENT daemon, which
+# holds every account's dind. In this mode nobody may be in it, or the
+# separation ends at the first shell.
+for account in "$A" "$B"; do
+    if hostdocker exec "$CONTAINER" id -nG "$account" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        bad "$account is still in the docker group; it can reach the parent daemon"
+    else
+        ok "$account is not in the docker group"
+    fi
+done
+
+info "waiting for the parent dockerd"
+for _ in $(seq 1 90); do
+    hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && break
+    sleep 1
+done
+
+echo
+echo "== 4. a session each =="
+mkdir -p "$WORK/project-$A" "$WORK/project-$B"
+echo "alice's file" >"$WORK/project-$A/marker"
+echo "bob's file"   >"$WORK/project-$B/marker"
+
+start_session() {
+    local account=$1 endpoint=$2 log=$3 dir=$4
+    (
+        cd "$dir" || exit 1
+        REMOTE_DOCKER_STATE_DIR="$WORK/state-$account" \
+        REMOTE_DOCKER_HOST=127.0.0.1 \
+        REMOTE_DOCKER_PORT=$SSH_PORT \
+        REMOTE_DOCKER_USER="$account" \
+        REMOTE_DOCKER_ENDPOINT="$endpoint" \
+        REMOTE_DOCKER_IDLE_TIMEOUT=8s \
+        "$WORK/remote-docker" start --foreground
+    ) >"$log" 2>&1 &
+    echo $!
+}
+
+CLIENT_A_PID=$(start_session "$A" "$WORK/a.sock" "$WORK/a.log" "$WORK/project-$A")
+CLIENT_B_PID=$(start_session "$B" "$WORK/b.sock" "$WORK/b.log" "$WORK/project-$B")
+
+# A cold dind has to be pulled and booted, which is the slowest thing here.
+ready=0
+for _ in $(seq 1 180); do
+    ready=0
+    for sock in "$WORK/a.sock" "$WORK/b.sock"; do
+        [ -S "$sock" ] && docker -H "unix://$sock" info >/dev/null 2>&1 && ready=$((ready + 1))
+    done
+    [ "$ready" -eq 2 ] && break
+    sleep 2
+done
+if [ "$ready" -eq 2 ]; then
+    ok "both accounts have a working docker endpoint"
+else
+    bad "an endpoint never came up"
+    sed 's/^/    A: /' "$WORK/a.log" | tail -20
+    sed 's/^/    B: /' "$WORK/b.log" | tail -20
+    hostdocker logs "$CONTAINER" 2>&1 | tail -40
+    exit 1
+fi
+
+da() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a.sock" "$@"; }
+db() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/b.sock" "$@"; }
+
+echo
+echo "== 5. the daemons really are different =="
+ida=$(da info --format '{{.ID}}' 2>/dev/null)
+idb=$(db info --format '{{.ID}}' 2>/dev/null)
+if [ -n "$ida" ] && [ "$ida" != "$idb" ]; then
+    ok "each account is talking to a different daemon"
+else
+    bad "both accounts reached the same daemon ($ida)"
+fi
+
+echo
+echo "== 6. one account cannot see the other's containers =="
+# THE assertion. Everything else in this file supports it.
+if da run -d --name alice-secret alpine:3 sleep 300 >/dev/null 2>&1; then
+    ok "alice started a container"
+else
+    bad "alice could not start a container"
+fi
+
+if db ps --all --format '{{.Names}}' 2>/dev/null | grep -qx alice-secret; then
+    bad "bob can see alice's container -- the accounts are not separated"
+else
+    ok "bob cannot see alice's container"
+fi
+
+# And cannot reach it by name either, which is the operation somebody would
+# actually try.
+if db stop alice-secret >/dev/null 2>&1; then
+    bad "bob stopped alice's container"
+else
+    ok "bob cannot stop alice's container"
+fi
+
+if da ps --format '{{.Names}}' 2>/dev/null | grep -qx alice-secret; then
+    ok "alice still sees her own"
+else
+    bad "alice lost sight of her own container"
+fi
+
+echo
+echo "== 7. a bind mount resolves, which proves the in-netns NFS listener =="
+# The reverse tunnel is bound INSIDE each account's dind. If that were wrong,
+# the volume would fail to mount and this reads the file rather than guessing.
+if out=$(da run --rm -v "$WORK/project-$A:/w" alpine:3 cat /w/marker 2>&1); then
+    if [ "$out" = "alice's file" ]; then
+        ok "alice's bind mount resolves through her own daemon"
+    else
+        bad "alice's bind mount gave [$out]"
+    fi
+else
+    bad "alice's bind mount failed: $(echo "$out" | tail -3)"
+fi
+
+if out=$(db run --rm -v "$WORK/project-$B:/w" alpine:3 cat /w/marker 2>&1); then
+    if [ "$out" = "bob's file" ]; then
+        ok "bob's bind mount resolves through his own daemon"
+    else
+        bad "bob's bind mount gave [$out]"
+    fi
+else
+    bad "bob's bind mount failed: $(echo "$out" | tail -3)"
+fi
+
+echo
+echo "== 8. both accounts publish the same port =="
+# Impossible on a shared daemon: the second bind collides. Two namespaces make
+# it ordinary.
+if da run -d --name alice-web -p 18090:80 nginx:alpine >/dev/null 2>&1 &&
+   db run -d --name bob-web   -p 18090:80 nginx:alpine >/dev/null 2>&1; then
+    ok "both accounts published 8080 without colliding"
+else
+    bad "publishing the same port from both accounts failed"
+    da logs alice-web 2>&1 | tail -5
+    db logs bob-web 2>&1 | tail -5
+fi
+
+echo
+echo "== 9. a shell points at its own daemon =="
+shell_docker_host=$(timeout 60 ssh -i "$WORK/state-$A/id_ed25519" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o BatchMode=yes -p "$SSH_PORT" "$A@127.0.0.1" \
+    'echo $DOCKER_HOST' 2>/dev/null </dev/null | tr -d '\r')
+
+case "$shell_docker_host" in
+    *"/run/rd/$A/docker.sock") ok "a shell's DOCKER_HOST is that account's own daemon" ;;
+    "")                        bad "a shell got no DOCKER_HOST; it would find the parent daemon" ;;
+    *)                         bad "a shell's DOCKER_HOST is $shell_docker_host" ;;
+esac
+
+echo
+echo "== 10. restarting the agent adopts the running daemons =="
+# The case that would otherwise lose everybody's work: the agent comes back,
+# finds every daemon's name taken, and `docker run --name` conflicts rather
+# than replacing.
+before=$(da ps --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
+
+kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
+kill "$CLIENT_B_PID" 2>/dev/null; wait "$CLIENT_B_PID" 2>/dev/null; CLIENT_B_PID=""
+
+hostdocker restart "$CONTAINER" >/dev/null 2>&1
+info "waiting for the agent to come back"
+for _ in $(seq 1 90); do
+    hostdocker exec "$CONTAINER" id "$A" >/dev/null 2>&1 && break
+    sleep 1
+done
+
+if hostdocker logs "$CONTAINER" 2>&1 | grep -q "adopted"; then
+    ok "the agent adopted the daemons from the previous run"
+else
+    bad "nothing was adopted after the restart"
+    hostdocker logs "$CONTAINER" 2>&1 | grep -i daemon | tail -10
+fi
+
+CLIENT_A_PID=$(start_session "$A" "$WORK/a2.sock" "$WORK/a2.log" "$WORK/project-$A")
+for _ in $(seq 1 120); do
+    [ -S "$WORK/a2.sock" ] && docker -H "unix://$WORK/a2.sock" info >/dev/null 2>&1 && break
+    sleep 2
+done
+
+after=$(timeout "$DOCKER_TIMEOUT" docker -H "unix://$WORK/a2.sock" ps --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
+if [ -n "$before" ] && [ "$before" = "$after" ]; then
+    ok "alice's containers survived the agent restart"
+else
+    bad "alice's containers changed across the restart: [$before] -> [$after]"
+fi
+
+echo
+if [ "$FAIL" -ne 0 ]; then
+    echo "== workspace log =="
+    hostdocker logs "$CONTAINER" 2>&1 | tail -60 | sed 's/^/        /'
+fi
+
+echo
+echo "=================================="
+echo "  passed: $PASS   failed: $FAIL"
+echo "=================================="
+[ "$FAIL" -eq 0 ]
