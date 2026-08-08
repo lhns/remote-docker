@@ -154,7 +154,10 @@ fi
 
 echo
 echo "== 6. open a session =="
-"$WORK/remote-docker" up >"$WORK/up.log" 2>&1 &
+# --foreground because the suite wants the session as a child it can kill and
+# whose log it can read. `start` on its own detaches, which is right for a
+# person and wrong for a test that needs to end it deterministically.
+"$WORK/remote-docker" start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 
 ready=false
@@ -713,18 +716,37 @@ fi
 
 echo
 echo
-echo "== 13. shell, the embedded CLI, and gc =="
-# The interactive path is the only thing that exercises the agent's ~/workspace
-# mount, and it was untested. `shell` needs a tty, so ssh -tt stands in for a
-# terminal well enough to prove the mount and the command both work.
-shellout=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519"     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null     -o BatchMode=yes -tt -p "$SSH_PORT" "$ACCOUNT@127.0.0.1"     'ls /home/'"$ACCOUNT"'/workspace' 2>&1 </dev/null)
+echo "== 13b. a stock ssh still gets a shell, and the embedded CLI =="
+# This is the ONLY test of the agent's exec/pty session, and it is deliberately
+# run with a stock ssh rather than anything of ours. `remote-docker shell` is
+# gone (ADR 0018) but serveExec and servePTY are not, because an enrolled key
+# still logging in is what server.go's argument for unrestricted local
+# forwarding rests on -- everything reachable that way is inside the workspace,
+# which the account can already reach with a shell. Delete this and ADR 0010's
+# central claim, one binary replacing sshd, has no coverage at all.
+#
+# -tt forces a pty, so `tty` naming one proves the agent allocated it rather
+# than falling through to the non-pty branch.
+shellout=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o BatchMode=yes -tt -p "$SSH_PORT" "$ACCOUNT@127.0.0.1" \
+    'tty; id -un' 2>&1 </dev/null)
 
-if echo "$shellout" | grep -q "marker"; then
-    ok "an interactive session sees the workspace mount"
-else
-    bad "the workspace mount was not visible in a session: $(echo "$shellout" | tr -d '
+# tr squeezes the pty's CRLF out so a failure prints as one readable line.
+trim() { echo "$1" | tr -d '
 ' | tail -3 | tr '
-' ' ')"
+' ' '; }
+
+if echo "$shellout" | grep -q '/dev/pts/'; then
+    ok "a stock ssh gets an interactive shell on a pty"
+else
+    bad "no pty from the agent: $(trim "$shellout")"
+fi
+
+if echo "$shellout" | grep -q "^$ACCOUNT"; then
+    ok "the shell runs as the enrolled account"
+else
+    bad "the shell was not $ACCOUNT: $(trim "$shellout")"
 fi
 
 # The embedded CLI: the client's own docker, not the runner's.
@@ -823,7 +845,7 @@ echo "== 15. does replay make a container's watcher fire? =="
 # would; this runs the whole path -- client watcher, SSH channel, agent
 # replay -- and asks whether an ordinary edit here is noticed there.
 #
-# It has to be the SAME client, not a second one alongside. `up` is the file
+# It has to be the SAME client, not a second one alongside. A session is the file
 # server for this account and there is one NFS port per account, so two would
 # collide. And the connection is established on demand (ADR 0015), so a client
 # that never issues a Docker request never connects and therefore never opens
@@ -838,7 +860,7 @@ mkdir -p "$REPLAYDIR"
 echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
 if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
-    REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" up >"$WORK/watch-up.log" 2>&1 &
+    REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 
     ready=false
@@ -904,12 +926,12 @@ fi
 
 echo
 echo "== 16. a background session, with no terminal held open =="
-# `up` is the daemon body, so this is the same session the rest of the suite
-# used -- started detached, stopped by asking rather than by signalling, and
-# reclaiming itself when nothing needs it.
+# `start --foreground` IS the daemon body, so this is the same session the rest
+# of the suite used -- started detached, stopped by asking rather than by
+# signalling, and reclaiming itself when nothing needs it.
 #
-# The suite's own `up` is stopped first: one endpoint has one owner now, which
-# is the point of the lock.
+# The suite's own session is stopped first: one endpoint has one owner now,
+# which is the point of the lock.
 kill "$CLIENT_PID" 2>/dev/null
 wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
@@ -940,9 +962,13 @@ else
     bad "a second start did not recognise the running session"
 fi
 
-# The endpoint has exactly one owner. `up` must refuse rather than steal it --
+# The endpoint has exactly one owner, and it must refuse rather than steal --
 # which on Unix it silently used to do, unlinking the socket and leaving the
 # first session accepting on an inode nobody could reach.
+#
+# Deliberately spelled `up` rather than `start --foreground`: `up` is a hidden
+# alias kept for scripts, and an alias nothing exercises is an alias nobody
+# notices breaking. This is its coverage.
 if out=$("$WORK/remote-docker" up 2>&1); then
     bad "a second up took the endpoint from the running session"
 else
@@ -1052,6 +1078,99 @@ if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" start >/dev/null 2>&1; the
 else
     bad "could not start a session for the idle test"
 fi
+
+
+echo
+echo "== 17. the workspace lifecycle, and the docker context that follows it =="
+# `workspace` and `context` used to be two commands doing one job (ADR 0018).
+# A context is a side effect now, so the thing to prove is that it appears and
+# disappears WITH the workspace rather than on request.
+#
+# The config file is $HOME/.remote-docker.json, which is real state on whatever
+# machine this runs on, so it is saved and put back. Everything else in the
+# suite is driven by environment variables, and this section runs last for the
+# same reason: setting a default workspace changes what every other command
+# would resolve.
+WSFILE="$HOME/.remote-docker.json"
+WSBACKUP="$WORK/remote-docker.json.bak"
+[ -f "$WSFILE" ] && cp "$WSFILE" "$WSBACKUP"
+
+restore_ws() {
+    if [ -f "$WSBACKUP" ]; then
+        cp "$WSBACKUP" "$WSFILE"
+    else
+        rm -f "$WSFILE"
+    fi
+    hostdocker context rm -f itest-ws >/dev/null 2>&1 || true
+}
+trap 'cleanup; restore_ws' EXIT
+
+if out=$("$WORK/remote-docker" workspace create itest-ws --host 127.0.0.1 --port "$SSH_PORT" --user "$ACCOUNT" 2>&1); then
+    ok "workspace create added a workspace"
+else
+    bad "workspace create failed: $(echo "$out" | tail -2)"
+fi
+
+if hostdocker context ls --format '{{.Name}}' 2>/dev/null | grep -qx "itest-ws"; then
+    ok "creating a workspace created its docker context"
+else
+    bad "no docker context appeared for the workspace"
+fi
+
+if "$WORK/remote-docker" workspace ls 2>&1 | grep -q "itest-ws"; then
+    ok "workspace ls shows it"
+else
+    bad "workspace ls did not show the workspace"
+fi
+
+# inspect is the one place the four derivations meet: the config file's view,
+# the endpoint derived from the name, the context named after it, and whether
+# anything is serving it.
+inspected=$("$WORK/remote-docker" workspace inspect itest-ws 2>&1)
+if echo "$inspected" | grep -q "docker context" && echo "$inspected" | grep -q "endpoint"; then
+    ok "workspace inspect reports the endpoint and the docker context together"
+else
+    bad "workspace inspect was incomplete: $(echo "$inspected" | tr '
+' ' ')"
+fi
+
+if "$WORK/remote-docker" workspace use itest-ws >/dev/null 2>&1 &&
+   "$WORK/remote-docker" workspace ls 2>&1 | grep -q "\*itest-ws"; then
+    ok "workspace use makes it the default"
+else
+    bad "workspace use did not set the default"
+fi
+
+# The old verbs are aliases, not history: something out there is scripted
+# against them.
+if "$WORK/remote-docker" workspace list 2>&1 | grep -q "itest-ws"; then
+    ok "the old verb 'list' still works"
+else
+    bad "the list alias stopped working"
+fi
+
+if out=$("$WORK/remote-docker" workspace rm itest-ws 2>&1); then
+    ok "workspace rm removed it"
+else
+    bad "workspace rm failed: $(echo "$out" | tail -2)"
+fi
+
+if hostdocker context ls --format '{{.Name}}' 2>/dev/null | grep -qx "itest-ws"; then
+    bad "the docker context outlived the workspace"
+else
+    ok "removing the workspace removed its docker context"
+fi
+
+# `context` is gone, and gone means gone -- a command that still half-exists is
+# worse than one that does not.
+if "$WORK/remote-docker" --help 2>&1 | grep -qE '^  context'; then
+    bad "the context command is still in the help"
+else
+    ok "context is no longer a command"
+fi
+
+restore_ws
+trap cleanup EXIT
 
 
 if [ "$FAIL" -ne 0 ]; then
