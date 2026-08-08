@@ -16,13 +16,12 @@ import (
 	"github.com/lhns/remote-docker/internal/client/proxy"
 )
 
-// `up` in the background.
+// A session in the background.
 //
-// `up` itself is unchanged -- foreground, blocking, reporting -- which is what
-// makes it the daemon body for free: `start` spawns exactly the command a
-// person would have run, with its output going to a log instead of a terminal.
-// There is no second implementation of the session to keep in step with the
-// first, and `up --help` still describes what the daemon does.
+// `start` spawns `start --foreground`, so the thing running in the background
+// is exactly the thing a person would have run in a terminal, with its output
+// going to a log. There is no second implementation of the session to keep in
+// step with the first, and `start --help` describes both.
 
 // startTimeout is how long to wait for a spawned daemon to answer.
 //
@@ -31,13 +30,20 @@ import (
 const startTimeout = 20 * time.Second
 
 func newStartCommand() *cobra.Command {
-	return &cobra.Command{
+	var foreground bool
+
+	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start a background session for this workspace",
+		Short: "Start a session for this workspace",
 		Long: `Starts a session in the background and returns, so no terminal has to stay
 open. Idempotent: if one is already running, this says so and does nothing.
 
-Use "remote-docker up" instead to run one in the foreground.`,
+The session serves the local Docker endpoint, exports this directory over the
+tunnel, and makes published container ports reachable here.
+
+With --foreground it runs in this terminal instead and holds it until Ctrl-C.
+That is what the background one runs, so it is also how to watch what a session
+is doing.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolve()
 			if err != nil {
@@ -48,6 +54,10 @@ Use "remote-docker up" instead to run one in the foreground.`,
 			}
 			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
 			out := cmd.OutOrStdout()
+
+			if foreground {
+				return runSession(cmd, cfg)
+			}
 
 			if proxy.Reachable(endpoint) {
 				_, _ = fmt.Fprintf(out, "already running: %s\n", proxy.DockerHost(endpoint))
@@ -62,6 +72,9 @@ Use "remote-docker up" instead to run one in the foreground.`,
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&foreground, "foreground", false,
+		"run in this terminal instead of the background")
+	return cmd
 }
 
 func newStopCommand() *cobra.Command {
@@ -101,7 +114,7 @@ func newStopCommand() *cobra.Command {
 	}
 }
 
-// startDaemon spawns `up` detached and waits for it to answer.
+// startDaemon spawns a foreground session, detached, and waits for it to answer.
 func startDaemon(cfg config.Config, endpoint string) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -123,7 +136,10 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	// The workspace is passed explicitly rather than inherited from the
 	// environment, so the daemon serves the workspace that was asked for even
 	// if it is started from a shell whose variables say otherwise.
-	args := []string{"up"}
+	// Itself, in the foreground. `start` used to spawn `up`, which was a
+	// second command doing the same job; folding them left one code path and
+	// one thing to describe.
+	args := []string{"start", "--foreground"}
 	if cfg.Name != "" {
 		args = append(args, "--workspace", cfg.Name)
 	}

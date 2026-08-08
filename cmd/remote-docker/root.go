@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/internal/client/config"
-	"github.com/lhns/remote-docker/internal/client/fswatch"
 	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/session"
 	"github.com/lhns/remote-docker/internal/client/sshx"
@@ -188,91 +187,30 @@ func newStatusCommand() *cobra.Command {
 	}
 }
 
+// newUpCommand is what `start --foreground` used to be called.
+//
+// Hidden rather than deleted. It is in shell history, in scripts and possibly
+// in a systemd unit, and a command that still works costs one line while a
+// command that stopped existing costs somebody an afternoon. It is the same
+// code path, so there is no second behaviour to keep in step.
 func newUpCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "up",
-		Short: "Open a session and serve the local Docker endpoint",
-		Long: `Brings up the whole session and holds it open: this directory is exported
-over the tunnel, the Docker endpoint is served locally, and published
-container ports become reachable here as they start.
+	cmd := newStartCommand()
+	cmd.Use = "up"
+	cmd.Short = "Deprecated: use `start --foreground`"
+	cmd.Long = `Runs a session in this terminal and holds it open.
 
-Point DOCKER_HOST at the printed endpoint and use docker normally.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
-			if err != nil {
-				return err
-			}
-			if err := cfg.RequireHost(); err != nil {
-				return err
-			}
+Superseded by "remote-docker start --foreground", which is the same thing.
+Kept working because it appears in scripts.`
+	cmd.Hidden = true
 
-			ctx, cancel := signalContext()
-			defer cancel()
-
-			// This IS the file server. Failing to bind means another `up` is
-			// running for this account, which is worth reporting rather than
-			// half-working.
-			files := session.FilesRequired
-
-			// Parsed here rather than in config, which is the lowest layer and
-			// depends on nothing above it. A bad value is reported now, before
-			// anything connects, rather than being silently treated as off.
-			watch, err := fswatch.ParseMode(cfg.Watch)
-			if err != nil {
-				return err
-			}
-
-			s, err := session.Open(ctx, session.Options{
-				Config:      cfg,
-				WorkDir:     mustWorkDir(),
-				Endpoint:    cfg.EndpointFor(proxy.DefaultEndpoint),
-				Files:       files,
-				IdleTimeout: cfg.IdleTimeout,
-				// The only command that binds the endpoint. Everything else
-				// either talks to whoever is serving it, or does not need it.
-				Serve:   true,
-				Version: version,
-				// `up` exists to hold a session open and say what it is doing;
-				// every other command has output of its own to protect.
-				Progress:     true,
-				Watch:        watch,
-				WatchBudget:  cfg.WatchBudget,
-				WatchExclude: cfg.WatchExclude,
-				Log:          logger{},
-			})
-			if err != nil {
-				return err
-			}
-			defer func() { _ = s.Close() }()
-
-			out := cmd.OutOrStdout()
-			_, _ = fmt.Fprintln(out)
-			_, _ = fmt.Fprintf(out, "Docker endpoint ready. In another terminal:\n\n")
-			_, _ = fmt.Fprintf(out, "    %s\n\n", exportLine(s.Endpoint))
-			_, _ = fmt.Fprintln(out, "Then use docker normally. Ctrl-C here closes the session.")
-			if watch != fswatch.ModeOff {
-				_, _ = fmt.Fprintf(out,
-					"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
-			}
-
-			// Three ways out: the terminal, `remote-docker stop`, and having
-			// nothing left to do. A background session has no terminal to
-			// press Ctrl-C in, so without the other two there would be no way
-			// to end one short of finding its pid.
-			idle := cfg.DaemonIdle
-			if idle == 0 {
-				idle = config.DefaultDaemonIdle
-			}
-			select {
-			case <-ctx.Done():
-			case <-s.Stopped():
-			case <-idleExpired(ctx, s, idle):
-				_, _ = fmt.Fprintf(out, "\nnothing has needed this session for %s", idle)
-			}
-			_, _ = fmt.Fprintln(out, "\nclosing session")
-			return nil
-		},
+	// Foreground by default, because that is what `up` always did. `start` on
+	// its own detaches now, and silently changing that underneath an existing
+	// script would be worse than not keeping the alias at all.
+	if f := cmd.Flags().Lookup("foreground"); f != nil {
+		_ = f.Value.Set("true")
+		f.DefValue = "true"
 	}
+	return cmd
 }
 
 func newShellCommand() *cobra.Command {
