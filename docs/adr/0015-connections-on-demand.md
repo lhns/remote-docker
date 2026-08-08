@@ -73,3 +73,30 @@ fake dependency check, and a controllable clock's worth of sleeps.
 - The reconnect path is now load-bearing rather than an error case, which
   makes it worth exercising: an integration assertion starts a container,
   waits out an idle period, and checks its I/O still works.
+
+## Corrections, made later
+
+**A stream held no lease.** `DialDocker` released the gate the instant the
+stream opened, so a hijacked connection -- `docker attach`, `exec -it`,
+`logs -f` -- pinned nothing. Those survived a release only indirectly, because
+their container was running and the dependency check noticed it; a `logs -f` on
+a **stopped** container had nothing holding the connection and would simply be
+cut. The lease now lasts the life of the stream, which is also the reliable
+answer to "is anything using this connection": a stream holds its lease for
+exactly as long as it is open, while an idle keep-alive connection between
+requests holds none. ADR 0017's background session depends on that distinction.
+
+**The dependency check was too broad in one direction.** It matched any volume
+with the `rd-` prefix, so on a shared daemon (ADR 0012) another account's
+volume pinned this connection open forever -- an idle release that could never
+fire, for a dependency that was not ours. It now matches only volumes this
+session created, derived from the registry rather than remembered.
+
+**The assertion above did not assert what it says.** Its probe container was
+created *through this client*, so it carried our owner label and held one of
+our volumes: the connection was pinned on the first check and never released at
+all, and the test then confirmed a container was alive that nothing had
+threatened. The reconnect path this record calls load-bearing was not exercised
+by anything. `test/integration.sh` section 11c now proves a release happens
+when nothing depends on the session, *and* that one does not while a container
+does.

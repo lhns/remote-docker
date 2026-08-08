@@ -27,6 +27,7 @@ survives that document being superseded.
 | [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open**, narrowed |
 | [0015](0015-connections-on-demand.md) | Connections established on demand | Accepted |
 | [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | Accepted |
+| [0017](0017-a-background-session-per-workspace.md) | A background session per workspace | Accepted |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

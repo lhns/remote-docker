@@ -486,14 +486,36 @@ else
 fi
 
 echo
-echo "== 11c. a container survives an idle disconnect =="
-# The connection is released when nothing needs it (ADR 0015), which makes the
-# reconnect path load-bearing rather than an error case. It must also NOT be
-# released while a container holds one of our volumes -- that container has a
-# live NFS mount, and dropping the tunnel underneath gives it EIO.
+echo "== 11c. idle release, and what must survive it =="
+# Two claims, and the first one used to be untested while looking tested.
+#
+# The old probe container was created THROUGH this client, so it carried our
+# owner label and held one of our volumes -- hasLiveDependents returned true on
+# the first check and the connection was never released at all. The test then
+# asserted the container was still alive, which it trivially was. The reconnect
+# path ADR 0015 calls load-bearing was never exercised.
+#
+# So: first prove a release actually happens when nothing depends on us, then
+# prove one does NOT happen while a container does.
+
+# (a) nothing running -> the connection must be released and reopen on demand.
+sleep 20
+if out=$(dockert run --rm alpine:3 echo after-idle 2>&1); then
+    if [ "$out" = "after-idle" ]; then
+        ok "the client reconnects after an idle release"
+    else
+        bad "unexpected output after an idle period: $out"
+    fi
+else
+    bad "the client could not reconnect after an idle period: $out"
+fi
+
+# (b) a container holding one of our volumes must pin the connection: it has a
+# live NFS mount, and dropping the tunnel underneath gives it EIO. The loop
+# exits non-zero if the mount stops working, so the container's own survival is
+# the assertion.
 if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3         sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
 
-    # Longer than REMOTE_DOCKER_IDLE_TIMEOUT above, so a sweep has certainly run.
     sleep 20
 
     if [ "$(docker inspect -f '{{.State.Running}}' itest-idle 2>/dev/null)" = "true" ]; then
@@ -503,7 +525,6 @@ if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3         sh -c 'whi
         docker logs itest-idle 2>&1 | tail -5 | sed 's/^/        /'
     fi
 
-    # And the client is still usable afterwards, reconnecting if it released.
     if out=$(dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
         if [ "$out" = "from the project directory" ]; then
             ok "the client still works after an idle period"
@@ -801,6 +822,106 @@ if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./t
     fi
 else
     bad "could not build the replay probe"
+fi
+
+
+echo
+echo "== 16. a background session, with no terminal held open =="
+# `up` is the daemon body, so this is the same session the rest of the suite
+# used -- started detached, stopped by asking rather than by signalling, and
+# reclaiming itself when nothing needs it.
+#
+# The suite's own `up` is stopped first: one endpoint has one owner now, which
+# is the point of the lock.
+kill "$CLIENT_PID" 2>/dev/null
+wait "$CLIENT_PID" 2>/dev/null
+CLIENT_PID=""
+sleep 2
+
+if "$WORK/remote-docker" start >"$WORK/start.log" 2>&1; then
+    ok "start returned without holding a terminal"
+    sed 's/^/        /' "$WORK/start.log"
+else
+    bad "start failed"
+    sed 's/^/        /' "$WORK/start.log"
+fi
+
+if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
+    if [ "$out" = "through-the-daemon" ]; then
+        ok "docker works through the background session"
+    else
+        bad "unexpected output through the daemon: $out"
+    fi
+else
+    bad "docker failed through the daemon: $out"
+fi
+
+# Idempotent: a second start must not fight the first for the endpoint.
+if "$WORK/remote-docker" start 2>&1 | grep -q "already running"; then
+    ok "a second start reports the running one rather than racing it"
+else
+    bad "a second start did not recognise the running session"
+fi
+
+# The endpoint has exactly one owner. `up` must refuse rather than steal it --
+# which on Unix it silently used to do, unlinking the socket and leaving the
+# first session accepting on an inode nobody could reach.
+if out=$("$WORK/remote-docker" up 2>&1); then
+    bad "a second up took the endpoint from the running session"
+else
+    case "$out" in
+        *"already serving"*) ok "a second up is refused, naming the owner" ;;
+        *) bad "a second up failed for the wrong reason: $out" ;;
+    esac
+fi
+
+# A detached container must outlive the command that started it. This is what
+# the in-process session could not do: it died with the command and took the
+# container's mount with it.
+if dockert run -d --name itest-detached -v "$PROJECT:/w" alpine:3         sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
+    sleep 10
+    if [ "$(docker inspect -f '{{.State.Running}}' itest-detached 2>/dev/null)" = "true" ]; then
+        ok "a detached container keeps its mount after the command exits"
+    else
+        bad "the detached container lost its mount"
+        docker logs itest-detached 2>&1 | tail -5 | sed 's/^/        /'
+    fi
+    docker rm -f itest-detached >/dev/null 2>&1
+else
+    bad "could not start the detached container"
+fi
+
+if "$WORK/remote-docker" stop 2>&1 | grep -q "stopped"; then
+    ok "stop ends the background session"
+else
+    bad "stop did not end the background session"
+fi
+if "$WORK/remote-docker" stop 2>&1 | grep -q "not running"; then
+    ok "stopping an already-stopped session says so"
+else
+    bad "stopping twice did not report it was not running"
+fi
+
+# It reclaims itself. A session that has never been used is the case that
+# should go soonest, and the one that used to be unable to: with no last-use
+# time, it reported zero idle and could never expire.
+if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" start >/dev/null 2>&1; then
+    reclaimed=false
+    for _ in $(seq 1 6); do
+        sleep 5
+        if ! "$WORK/remote-docker" start 2>&1 | grep -q "already running"; then
+            reclaimed=true
+            "$WORK/remote-docker" stop >/dev/null 2>&1
+            break
+        fi
+    done
+    if [ "$reclaimed" = true ]; then
+        ok "an unused background session reclaims itself"
+    else
+        bad "an unused background session never exited"
+    fi
+else
+    bad "could not start a session for the idle test"
 fi
 
 

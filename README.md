@@ -69,7 +69,7 @@ with `REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE` (comma- or
 named, never silently dropped.
 
 Watching starts delivering once the session has actually connected, which
-happens on the first Docker command rather than when `up` starts. Edits made
+happens on the first Docker command rather than when the session starts. Edits made
 before that are counted and reported, not silently lost — and nothing is
 watching inside a container that does not exist yet.
 
@@ -86,11 +86,12 @@ export REMOTE_DOCKER_HOST=workspace.example        # or --host, or ~/.remote-doc
 # 2. get your key enrolled (out of band -- hand it to whoever runs the workspace)
 remote-docker enroll
 
-# 3. open a session and leave it running
-remote-docker up
+# 3. start a session in the background
+remote-docker start
 ```
 
-`up` prints the endpoint. Point Docker at it, in another terminal:
+`start` prints the endpoint and returns -- no terminal to keep open. Point
+Docker at it:
 
 ```bash
 remote-docker context install --use    # official docker/compose CLIs, no env vars
@@ -153,8 +154,8 @@ the one you edit against wants watching and a CI one does not.
 Each gets its own endpoint, so sessions run side by side:
 
 ```bash
-remote-docker up -w dev &
-remote-docker up -w ci &
+remote-docker start --workspace dev
+remote-docker start --workspace ci
 
 docker --context dev ps
 docker --context ci ps
@@ -171,7 +172,7 @@ docker / compose / IDE
         │ DOCKER_HOST
         ▼
 ┌──────────────────────┐
-│  remote-docker up    │═════ ONE SSH CONNECTION ═════▶ sshd
+│  background session  │═════ ONE SSH CONNECTION ═════▶ sshd
 │                      │
 │  • API proxy         │──── dial-stdio ─────────────▶ dockerd
 │  • NFS server        │◀─── reverse forward ─────────  mounts NFS from
@@ -197,8 +198,13 @@ The reasoning behind each decision is in [`docs/adr/`](docs/adr/).
   risk.
 - **Latency multiplies.** NFSv3 is synchronous per operation, so a large tree
   over a WAN is painful. Over a LAN it is fine.
-- **The session must stay running.** `remote-docker up` *is* the endpoint and
-  the file server; close it and running containers lose their mounts.
+- **A session must be running**, though not in a terminal you are watching.
+  `remote-docker start` puts one in the background; it is the endpoint and the
+  file server, so stopping it takes running containers' mounts with it. Any
+  command that needs one starts it for you, including the built-in Docker CLI.
+- **A background session reclaims itself** after 30 minutes with nothing to do,
+  and never while a container of yours is running or a stream is open. Change
+  it with `REMOTE_DOCKER_DAEMON_IDLE`; a negative value means never.
 
 ## Prior art
 
@@ -334,7 +340,9 @@ workspace is a shared machine; treat it as one.
 | `remote-docker workspace remove <name>` | remove both again |
 | `remote-docker workspace list` | list them (`workspaces` still works) |
 | `remote-docker workspace default <name>` | choose which one commands use by default |
-| `remote-docker up` | open a session and serve the local Docker endpoint |
+| `remote-docker start` | start a background session and return |
+| `remote-docker stop` | stop it |
+| `remote-docker up` | run a session in the foreground instead |
 | `remote-docker status` | what the workspace reports about this account |
 | `remote-docker shell` | interactive session on the workspace |
 | `remote-docker docker …` | the embedded Docker CLI |

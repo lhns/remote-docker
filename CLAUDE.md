@@ -107,6 +107,18 @@ premise of the project, and it applies to building it too. So:
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
+- **Binding the endpoint is not a lock.** On Unix a bind used to remove any
+  existing socket first, so a second process silently unlinked a *running*
+  one's socket and took its place -- the first kept accepting on an inode
+  nobody could reach. Clearing a stale socket is only safe once the lock is
+  held (ADR 0017). On Windows the pipe bind does exclude, which is why the two
+  platforms failed differently and neither failure named the owner.
+- **A stream holds its gate lease until it closes.** Releasing it when the
+  stream opened meant `docker attach`, `exec -it` and `logs -f` pinned nothing,
+  and survived an idle release only because their container happened to be
+  running. It is also the only reliable way to tell a stream in use from an
+  idle keep-alive connection, which the background session's lifetime depends
+  on.
 - **`Session.Close` must not wait on the caller's context.** The session owns
   its own; a one-shot command's context is never cancelled, and Close
   deadlocked on exactly that.
