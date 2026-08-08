@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
@@ -149,11 +150,42 @@ func closeImplicitSession() {
 	if implicitSession == nil {
 		return
 	}
-	if n, err := implicitSession.OwnedVolumesInUse(context.Background()); err == nil && n > 0 {
+	if n := survivingContainers(); n > 0 {
 		fmt.Fprintf(os.Stderr,
 			"\nwarning: %d container(s) still hold directories served by this command,\n"+
 				"and those mounts stop working now that it has finished.\n"+
 				"Run `remote-docker up` in another terminal to keep them alive.\n", n)
 	}
 	_ = implicitSession.Close()
+}
+
+// survivingContainers counts containers that will outlive this command.
+//
+// Asked twice, because a foreground container is still running at the instant
+// the command ends: `docker run` without -d has just sent it a signal and it
+// takes a moment to go. Warning on that first answer told people their mounts
+// were about to break every time they pressed Ctrl-C on a container that was
+// already on its way out.
+//
+// The second look costs nothing in the ordinary case, because it only happens
+// when the first one found something -- and finding something is exactly when
+// being right matters.
+func survivingContainers() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	n, err := implicitSession.OwnedVolumesInUse(ctx)
+	if err != nil || n == 0 {
+		return 0
+	}
+	select {
+	case <-time.After(750 * time.Millisecond):
+	case <-ctx.Done():
+		return 0
+	}
+	n, err = implicitSession.OwnedVolumesInUse(ctx)
+	if err != nil {
+		return 0
+	}
+	return n
 }

@@ -50,6 +50,16 @@ type Options struct {
 	// being released. Zero uses DefaultIdleTimeout; negative never releases.
 	IdleTimeout time.Duration
 
+	// Progress enables the running commentary -- connected, forwarding a
+	// port, watching. Off by default, and that default is the point: a
+	// command's output belongs to the command. `remote-docker docker run`
+	// prints a container's stdout, and our chatter interleaving with it is
+	// noise in the success case. Only `up`, whose entire job is to hold a
+	// session open and report on it, turns this on.
+	//
+	// Problems are reported either way, and always to stderr.
+	Progress bool
+
 	// Watch replays this machine's filesystem changes into the workspace, so
 	// watchers in containers notice them (ADR 0016). Off by default: nothing
 	// is watched and no channel is opened.
@@ -347,7 +357,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		})
 	}
 
-	s.logf("connected to %s@%s", s.opts.Config.User, s.opts.Config.Host)
+	s.progressf("connected to %s@%s", s.opts.Config.User, s.opts.Config.Host)
 	return live, nil
 }
 
@@ -372,6 +382,23 @@ func (s *Session) sharesChanged() {
 // Those are descriptions of shutdown, not of anything wrong, and printing them
 // after the user pressed Ctrl-C or after a one-shot command finished is how a
 // clean exit came to look like a crash.
+// progressf reports routine progress, which most commands do not want.
+func (s *Session) progressf(format string, args ...any) {
+	if s.opts.Progress {
+		s.logf(format, args...)
+	}
+}
+
+// portsLogger is the logger the port manager gets: the real one when progress
+// is wanted, and nil otherwise, because "forwarding ..." arriving in the
+// middle of a container's output is exactly the pollution this avoids.
+func (s *Session) portsLogger() ports.Logger {
+	if s.opts.Progress {
+		return s.opts.Log
+	}
+	return nil
+}
+
 func (s *Session) logQuiet(ctx context.Context, format string, args ...any) {
 	if ctx.Err() != nil || s.ctx.Err() != nil {
 		return
@@ -401,7 +428,7 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 	live.ports = &ports.Manager{
 		Docker:    dockerPorts{live.api},
 		Forwarder: sshForwarder{live.ssh},
-		Log:       s.opts.Log,
+		Log:       s.portsLogger(),
 		Owned: func(c ports.Container) bool {
 			return c.Labels[rewrite.OwnerLabel] == live.info.User
 		},
