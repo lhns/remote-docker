@@ -16,6 +16,7 @@ import (
 	"github.com/creack/pty"
 	gssh "github.com/gliderlabs/ssh"
 
+	"github.com/lhns/remote-docker/internal/server/daemons"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
@@ -134,16 +135,40 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 // this is a root process being told which path to touch -- see
 // workspace.FSEvent.Validate, called on both sides.
 func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
-	if s.cfg.Volumes == nil {
+	volumes := s.cfg.Volumes
+	if s.cfg.Daemons != nil {
+		// The volume being replayed into belongs to THIS account's daemon, and
+		// the mountpoint that daemon reports is a path in its own filesystem.
+		// Both have to be redirected, and the pid behind the root is resolved
+		// per call rather than captured: the daemon restarts, and a stale pid
+		// would silently name a path in nothing.
+		account := account.Name()
+		volumes = notify.DockerVolumes{
+			Host: "unix://" + daemons.SocketPathFor(account),
+			Root: func() (string, error) {
+				d, err := s.cfg.Daemons.Ensure(session.Context(), account)
+				if err != nil {
+					return "", err
+				}
+				return d.Root(), nil
+			},
+		}
+	}
+
+	if volumes == nil {
 		// Nothing to resolve exports against. Exiting non-zero is what tells
 		// the client to stop trying rather than reconnect forever.
+		//
+		// Checked after the per-account resolver is built, not before: with a
+		// Manager the volumes come from the account's own daemon, so refusing
+		// on the configured value would refuse a mode that works.
 		_, _ = fmt.Fprintln(session.Stderr(), "change notification is not available on this workspace")
 		_ = session.Exit(1)
 		return
 	}
 
 	replayer := &notify.Replayer{
-		Volumes: s.cfg.Volumes,
+		Volumes: volumes,
 		Poker:   notify.SyscallPoker{},
 		Log:     s.cfg.Log,
 	}

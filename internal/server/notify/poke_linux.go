@@ -22,6 +22,17 @@ import (
 // UTIME_OMIT branch below is the whole point.
 type SyscallPoker struct{}
 
+// O_NOFOLLOW and AT_SYMLINK_NOFOLLOW below are load-bearing, and they did not
+// used to be.
+//
+// While every path was resolved inside the agent's own filesystem, refusing to
+// follow a symlink was tidiness -- the client does not watch through them
+// either, so following one would replay somewhere the client never meant. With
+// a daemon per account (ADR 0019) these paths are reached through
+// /proc/<pid>/root of somebody else's container, so a symlink here is a symlink
+// planted in a filesystem this process does not control, pointing anywhere it
+// likes. This is a root process being told which path to touch; following one
+// would be the escape.
 func (SyscallPoker) Poke(path string, isDir bool) error {
 	if err := pokeMtime(path); err != nil {
 		return err
