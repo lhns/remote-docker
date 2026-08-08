@@ -319,27 +319,6 @@ func TestMalformedFrameDoesNotEndTheStream(t *testing.T) {
 	}
 }
 
-// The interactive shell's ~/workspace is a SEPARATE mount of the same export.
-// Separate mounts do not necessarily share an inode the way a bind mount does,
-// so both have to be poked.
-func TestExtraRootsArePokedToo(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	extra := filepath.FromSlash("/home/alice/workspace")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
-	r.Extra = map[string]string{workspace.ExportCWD: extra}
-
-	feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/a.go", Op: workspace.OpWrite},
-	}})
-
-	got := poker.sorted()
-	want := []string{filepath.Join(extra, "a.go"), filepath.Join(root, "a.go")}
-	sort.Strings(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("poked %v, want %v", got, want)
-	}
-}
-
 // One frame can carry events for several shares, and each must be resolved
 // against its own mountpoint.
 func TestEventsSpanningExports(t *testing.T) {

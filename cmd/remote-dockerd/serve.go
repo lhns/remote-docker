@@ -18,7 +18,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
-	"github.com/lhns/remote-docker/internal/server/mount"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/internal/server/sshd"
 	"github.com/lhns/remote-docker/internal/server/supervise"
@@ -129,7 +128,6 @@ func serve(addr string) error {
 		HostKeys: hostKeys,
 		Accounts: store,
 		Mapping:  mapping,
-		Mounts:   mount.New(logger{prefix: "mount"}),
 		Volumes:  notify.DockerVolumes{},
 		Version:  version,
 		Log:      logger{prefix: "sshd"},

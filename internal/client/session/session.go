@@ -103,11 +103,6 @@ const (
 	// questions.
 	NoFiles FileServing = iota
 
-	// FilesIfAvailable exports when the port is free and carries on when it is
-	// not, because another session already serving means the files are
-	// already there.
-	FilesIfAvailable
-
 	// FilesRequired fails when the port is taken. Two `up` sessions for one
 	// account is a genuine conflict and reporting it beats half-working.
 	FilesRequired
@@ -390,13 +385,8 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	if s.opts.Files != NoFiles {
 		live.nfs = nfsserve.New(s.registry)
 		if err := s.startNFS(live); err != nil {
-			if s.opts.Files == FilesRequired {
-				_ = client.Close()
-				return nil, err
-			}
-			// Another session holds the port, which means it is already
-			// exporting this account's files. Nothing to do and nothing wrong.
-			s.logf("not exporting files: %v", err)
+			_ = client.Close()
+			return nil, err
 		}
 	}
 
@@ -671,22 +661,6 @@ func (live *liveConn) close() {
 	}
 	_ = live.ssh.Close()
 	live.wg.Wait()
-}
-
-// Shell opens an interactive session on the workspace.
-//
-// The lease is held for the shell's whole life, not just while acquiring: a
-// shell can sit idle for a long time and still be very much in use, and the
-// idle sweep would otherwise release the connection and unmount ~/workspace
-// underneath somebody sitting at a prompt.
-func (s *Session) Shell(ctx context.Context) error {
-	live, done, err := s.acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer done()
-
-	return live.ssh.Shell(ctx, "cd ~/workspace 2>/dev/null; exec ${SHELL:-/bin/sh} -l")
 }
 
 // Collect removes share volumes this account is no longer using.

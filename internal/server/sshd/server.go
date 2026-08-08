@@ -16,7 +16,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
-	"github.com/lhns/remote-docker/internal/server/mount"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
@@ -37,10 +36,6 @@ type Config struct {
 	// DockerSocket is spliced directly to a session asking for
 	// `docker system dial-stdio`, so the Docker API needs no CLI in the path.
 	DockerSocket string
-
-	// Mounts manages the convenience mount at ~/workspace. Nil disables it,
-	// which is what a workspace with no interactive use would want.
-	Mounts *mount.Manager
 
 	// Volumes resolves a managed volume to where dockerd has it mounted, for
 	// replaying the client's filesystem changes (ADR 0016). Nil refuses the
@@ -163,17 +158,10 @@ func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32)
 	}
 
 	// Released when the connection ends, so a dropped client does not keep its
-	// port reserved forever. The workspace mount goes with it: leaving a stale
-	// one behind would make the next session find a mountpoint pointing at a
-	// dead tunnel and consider it already mounted.
+	// port reserved forever.
 	go func() {
 		<-ctx.Done()
 		s.forward.Release(account, host, port)
-		if s.cfg.Mounts != nil {
-			if stored, ok := s.cfg.Accounts.Lookup(account.Name()); ok {
-				s.cfg.Mounts.Release(stored.Home)
-			}
-		}
 	}()
 
 	s.logf("%s is forwarding %s:%d", account.Name(), host, port)

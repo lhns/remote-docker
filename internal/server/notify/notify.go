@@ -63,11 +63,6 @@ type Replayer struct {
 	Poker   Poker
 	Log     Logger
 
-	// Extra maps an export to an additional directory to poke, for mounts the
-	// agent made itself rather than dockerd -- the interactive shell's
-	// ~/workspace, which is a second mount of the same export.
-	Extra map[string]string
-
 	mu     sync.Mutex
 	cached map[string]cachedMountpoint
 }
@@ -202,18 +197,17 @@ func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
 	}
 }
 
-// roots is every directory in the workspace holding this export: the volume
-// dockerd mounted, plus any mount the agent made itself.
+// roots is every directory in the workspace holding this export.
 //
-// Both are poked because they are separate mounts of the same export and,
-// unlike a bind mount, separate mounts do not necessarily share an inode.
+// A slice rather than one path, and deliberately so: the agent used to make a
+// second mount of the same export for the interactive shell, and separate
+// mounts of one export do not share an inode the way dockerd's bind mount
+// does, so each had to be poked separately. That mount is gone (ADR 0018) and
+// only dockerd's volume remains.
 func (r *Replayer) roots(ctx context.Context, export string) []string {
 	var out []string
 	if mp, err := r.mountpoint(ctx, export); err == nil && mp != "" {
 		out = append(out, mp)
-	}
-	if extra, ok := r.Extra[export]; ok && extra != "" {
-		out = append(out, extra)
 	}
 	return out
 }

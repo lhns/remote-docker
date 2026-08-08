@@ -15,7 +15,6 @@ import (
 	"github.com/creack/pty"
 	gssh "github.com/gliderlabs/ssh"
 
-	"github.com/lhns/remote-docker/internal/server/mount"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
@@ -70,21 +69,18 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		return
 	}
 
-	stored, _ := s.cfg.Accounts.Lookup(account.Name())
-	home := ""
-	if stored != nil {
-		home = stored.Home
-	}
-
+	// Mountpoint and Mounted are left unset. They described a convenience
+	// mount the agent made for the interactive shell, which is gone (ADR
+	// 0018); the fields stay in the contract because removing a field from a
+	// format both binaries parse is worth doing on purpose, not as a side
+	// effect of deleting a command.
 	info := workspace.Info{
-		User:       account.Name(),
-		UID:        account.UID(),
-		GID:        account.UID(),
-		NFSPort:    port,
-		Mountpoint: home + "/workspace",
-		Mounted:    mount.IsMounted(home + "/workspace"),
-		Docker:     s.dockerVersion(),
-		Agent:      s.cfg.Version,
+		User:    account.Name(),
+		UID:     account.UID(),
+		GID:     account.UID(),
+		NFSPort: port,
+		Docker:  s.dockerVersion(),
+		Agent:   s.cfg.Version,
 	}
 
 	if err := info.Encode(session); err != nil {
@@ -129,19 +125,10 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 		return
 	}
 
-	// The interactive shell's ~/workspace is a second, separate mount of the
-	// same export. Separate mounts do not share an inode the way dockerd's
-	// bind mount does, so it has to be poked as well or a shell sees nothing.
-	extra := map[string]string{}
-	if stored, ok := s.cfg.Accounts.Lookup(account.Name()); ok && stored.Home != "" {
-		extra[workspace.ExportCWD] = stored.Home + "/workspace"
-	}
-
 	replayer := &notify.Replayer{
 		Volumes: s.cfg.Volumes,
 		Poker:   notify.SyscallPoker{},
 		Log:     s.cfg.Log,
-		Extra:   extra,
 	}
 	if err := replayer.Serve(session.Context(), session); err != nil {
 		s.logf("notify session for %s ended: %v", account.Name(), err)
@@ -189,20 +176,6 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 
 	if ptyReq, winCh, isPty := session.Pty(); isPty {
 		cmd.Env = append(cmd.Env, "TERM="+ptyReq.Term)
-
-		// Somewhere for the shell to land. Attempted here rather than when the
-		// reverse forward was established, because the client begins serving
-		// NFS a moment after asking for the forward -- mounting then would
-		// race it. A failure is reported and the shell opens anyway: a shell
-		// in the home directory is far better than no shell.
-		if s.cfg.Mounts != nil {
-			if port, err := s.cfg.Mapping.PortForUID(stored.UID); err == nil {
-				if err := s.cfg.Mounts.Ensure(stored.Home, stored.UID, stored.GID, port); err != nil {
-					_, _ = fmt.Fprintf(session.Stderr(), "workspace not mounted: %v\n", err)
-				}
-			}
-		}
-
 		s.servePTY(session, cmd, winCh)
 		return
 	}

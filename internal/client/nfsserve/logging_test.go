@@ -16,7 +16,7 @@ func (c *capture) Printf(format string, args ...any) {
 
 // The NFS_ACL probe is the first thing a Linux client does on every v3 mount.
 // go-nfs logs the correct refusal at ERROR, so the first line a user ever saw
-// from `remote-docker shell` was a red herring they had no way to judge.
+// from a session was a red herring they had no way to judge.
 func TestACLProbeIsNotReported(t *testing.T) {
 	c := &capture{}
 	l := &nfsLogger{log: c}

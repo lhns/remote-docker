@@ -58,7 +58,6 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newEnrollCommand(),
 		newStatusCommand(),
 		newUpCommand(),
-		newShellCommand(),
 		newGCCommand(),
 		newDockerCommand(),
 		newVersionCommand(),
@@ -210,42 +209,6 @@ Kept working because it appears in scripts.`
 		f.DefValue = "true"
 	}
 	return cmd
-}
-
-func newShellCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "shell",
-		Short: "Open an interactive shell on the workspace",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
-			if err != nil {
-				return err
-			}
-			if err := cfg.RequireHost(); err != nil {
-				return err
-			}
-
-			ctx, cancel := signalContext()
-			defer cancel()
-
-			// Wants the workspace mount, but if `up` is already serving then the
-			// files are there and there is nothing to do.
-			files := session.FilesIfAvailable
-			s, err := session.Open(ctx, session.Options{
-				Config:   cfg,
-				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint),
-				Files:    files,
-				Log:      logger{},
-			})
-			if err != nil {
-				return err
-			}
-			defer func() { _ = s.Close() }()
-
-			return s.Shell(ctx)
-		},
-	}
 }
 
 // exportLine renders the DOCKER_HOST assignment for the shell the user is
