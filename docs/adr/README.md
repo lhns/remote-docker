@@ -22,13 +22,14 @@ survives that document being superseded.
 | [0009](0009-embedding-the-docker-cli.md) | Embedding the Docker CLI, Buildx and Compose | Accepted |
 | [0010](0010-go-ssh-server-agent.md) | A Go SSH server agent, not sshd and sudo | Accepted |
 | [0011](0011-one-module-shared-contract.md) | One module with a shared contract package | Accepted |
-| [0012](0012-shared-dockerd-across-users.md) | A shared dockerd across users | Accepted, revisit |
+| [0012](0012-shared-dockerd-across-users.md) | A shared dockerd across users | Accepted; superseded in part by 0019 |
 | [0013](0013-self-elevation-instead-of-a-launcher.md) | Self-elevation instead of a launcher container | Accepted |
 | [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open**, narrowed |
 | [0015](0015-connections-on-demand.md) | Connections established on demand | Accepted |
-| [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | Accepted |
+| [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | Accepted; amended by 0019 |
 | [0017](0017-a-background-session-per-workspace.md) | A background session per workspace | Accepted; `up` superseded by 0018 |
 | [0018](0018-one-way-to-do-each-thing.md) | One way to do each thing | Accepted |
+| [0019](0019-a-dockerd-per-account.md) | A dockerd per account, behind one SSH port | Accepted |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

@@ -37,6 +37,8 @@ internal/client/
 
 internal/server/
   notify/                replays the client's changes as real syscalls
+  daemons/               a dockerd per account: plan, start, adopt
+  netns/                 run a function inside another process's netns
 
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose and swarm deployments
@@ -152,6 +154,32 @@ premise of the project, and it applies to building it too. So:
   `IN_ATTRIB`, which most watchers ignore. That asymmetry is the whole reason
   the feature works, and `test/integration.sh` section 11d keeps both rows so
   a kernel change cannot quietly take it away.
+- **A per-account dind is separation, not isolation.** Each one runs
+  privileged, so a determined account can still break out and reach another's.
+  What ADR 0019 buys is that nobody sees anyone else's work by accident. ADR
+  0012's revisit trigger is NOT satisfied by it, and anything claiming
+  otherwise -- release notes, README, a commit message -- is wrong.
+- **A netns helper must never return a thread whose namespace it could not
+  restore.** `socket(2)` uses the calling thread's namespace, so the switch and
+  the socket call are pinned to one `LockOSThread`ed thread. If the restoring
+  `Setns` fails, that thread is parked forever rather than unlocked: an
+  unlocked thread rejoins the runtime's pool still in someone else's namespace,
+  and the next goroutine scheduled onto it opens sockets there, invisibly.
+  Leaking a thread is the cheap and correct answer.
+- **A per-account daemon's answers are untrusted input.** It reports its own
+  volume mountpoints and the account is root inside it. `path.Join` is not
+  containment -- it CLEANS, so `/proc/42/root` joined to `/../../etc/shadow` is
+  `/proc/etc/shadow`, outside the root and looking correct. `relocate` checks
+  the result; `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in the poker stopped being
+  tidiness the moment those paths left the agent's own filesystem.
+- **Never `--rm` a per-account daemon**, and never copy `elevate`'s
+  `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
+  state is worthless; this one holds somebody's containers, images and volumes.
+  `Ensure` on a stopped daemon runs `docker start`.
+- **Adoption keys on the persisted workspace id, never a container id.** An id
+  changes on every redeploy, so adopting by it orphans every account's daemon
+  on the first `compose up -d` -- still running, unadoptable, holding their
+  users' work, while the agent starts a second set under names already taken.
 - **`test/watchprobe` reads raw inotify, not fsnotify.** fsnotify's mask omits
   `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
   primitive under test and would report "nothing happened" convincingly.
@@ -186,6 +214,15 @@ which inotify event), an edit here firing inotify inside a container with
 `REMOTE_DOCKER_WATCH=partial`, the background session (detached start, version
 mismatch, self-reclaim), and the workspace lifecycle with the docker context
 appearing and disappearing alongside it.
+
+A second suite, `test/per-user-dind.sh`, runs the same workspace with
+`WORKSPACE_PER_USER_DIND=true` and TWO enrolled accounts: that they reach
+different daemons, that neither can list or stop the other's containers, that
+each account's bind mount resolves (which is the only real proof the reverse
+tunnel was bound inside that account's netns), that both publish the same port
+at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
+is in the `docker` group, and that restarting the agent adopts the running
+daemons with their containers intact.
 
 ### NOT tested, and do not claim otherwise
 

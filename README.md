@@ -328,9 +328,45 @@ The keys directory is re-read on change and polled every 60 seconds, because
 inotify never fires for a change made on another host when that directory is
 on shared storage.
 
-**All enrolled users share one Docker daemon** and can see each other's
-containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)). A
-workspace is a shared machine; treat it as one.
+### A daemon per account
+
+Set `WORKSPACE_PER_USER_DIND=true` and each enrolled account gets its own
+Docker daemon, behind the same single SSH port
+([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)). Accounts stop seeing each
+other's containers, images and volumes, two accounts can publish the same port
+at once, and a shell lands on its own daemon.
+
+**It is separation, not isolation, and the difference matters.** Each
+per-account daemon runs privileged, which is root on whatever hosts it, so a
+determined account can still break out and reach another's. What this buys is
+that nobody sees anyone else's work *by accident* -- which is the failure that
+actually happens. A workspace is still a shared machine; treat it as one.
+Genuine isolation is still one workspace container per account.
+
+It costs real resources, and there is no mitigation worth implying:
+
+- **the layer cache is duplicated.** Five accounts on `node:22` is five copies.
+  A registry mirror recovers bandwidth but not disk -- Docker has no shared
+  read-only image store.
+- **memory**, roughly 100--150MB per idle daemon plus containerd.
+- **disk becomes a shared failure mode.** One account's runaway build can fill
+  the volume and take down every other account's daemon.
+- **3--10s** for an account's first connection after the daemon has stopped.
+
+`WORKSPACE_DIND_IMAGE` overrides the dind image;
+`WORKSPACE_DIND_STORAGE_DRIVER` is **not** inherited from the parent, so a
+Ceph-backed deployment that sets `--storage-driver=fuse-overlayfs` below must
+set it here too.
+
+#### Turning it on is a breaking change
+
+Images and volumes an account built under the shared daemon are invisible from
+its own, and there is no cheap migration. Set `WORKSPACE_PER_USER_DIND=false`
+to keep the old behaviour; the old data is still in the shared
+`/var/lib/docker` if you change your mind.
+
+**With it off, all enrolled users share one Docker daemon** and can see each
+other's containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)).
 
 ## Commands
 

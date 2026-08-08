@@ -68,6 +68,20 @@ no `setns` and no `nsenter` — which is just as well, since `util-linux` is not
 in the image. `/proc/<pid>/root/...` was tested as a fallback and also works,
 but is not needed.
 
+> **Amended by [ADR 0019](0019-a-dockerd-per-account.md).** With a dockerd per
+> account, the mountpoint is reported by *that* daemon and names a path in its
+> own filesystem, so `/proc/<pid>/root/...` stops being a fallback and becomes
+> the route. Everything above still holds inside one daemon; what changes is
+> which filesystem the path is resolved in.
+>
+> It also changes what the mountpoint *is*: the account is root inside its own
+> daemon's container, so the path is attacker-controlled input to a root
+> process. `relocate` checks that the result stays under the daemon's root
+> rather than trusting `path.Join`, and the `O_NOFOLLOW` /
+> `AT_SYMLINK_NOFOLLOW` below stop being tidiness — they are what prevents a
+> symlink planted in a filesystem the agent does not control from redirecting
+> a poke.
+
 ### Which syscalls, and why those
 
 The matrix, measured in CI against a real dind daemon and a real kernel NFS

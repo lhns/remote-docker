@@ -1,6 +1,7 @@
 # 0012. A shared dockerd across users
 
-- Status: Accepted, revisit
+- Status: Accepted; superseded in part by
+  [ADR 0019](0019-a-dockerd-per-account.md)
 - Date: 2026-08-07
 
 ## Context
@@ -43,3 +44,21 @@ enrolment.
   not architecture.
 - Revisit when the user set stops being small and mutually trusted. That is the
   trigger; there is no other reason this decision needs to change.
+
+## Superseded in part by ADR 0019
+
+[ADR 0019](0019-a-dockerd-per-account.md) gives each account its own dockerd,
+which removes the second consequence above as the everyday experience: accounts
+no longer see each other's containers, images or volumes.
+
+**It does not satisfy the revisit trigger, and this record is not retired.**
+Each per-account daemon runs privileged, so a determined account can still
+break out and reach another's. What 0019 buys is that nobody does so by
+accident. The assumption stated in the Decision above -- everyone enrolled in a
+workspace is mutually trusted -- still holds, and a workspace is still a shared
+machine.
+
+The paragraph about one workspace container per user therefore stands unchanged
+and is still the answer for a user set that is not mutually trusting. So does
+the note about the shared layer cache being a real benefit: 0019 gives that up,
+and lists it as a cost rather than pretending otherwise.
