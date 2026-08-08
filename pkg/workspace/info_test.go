@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"reflect"
 	"strings"
 	"testing"
@@ -163,5 +164,38 @@ func TestEncodeDefaultsDockerToUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), keyDocker+"="+DockerUnavailable) {
 		t.Errorf("Encode() = %q, want it to report docker as %q", buf.String(), DockerUnavailable)
+	}
+}
+
+// The agent's version was added after the format was in use, which is only
+// safe because unrecognised keys survive. An old client reading a new agent's
+// reply must ignore it rather than fail, and a new client reading an old
+// agent's must see it empty rather than invent one.
+func TestAgentVersionIsBackwardCompatible(t *testing.T) {
+	// An old agent's reply: no WORKSPACE_AGENT at all.
+	old := "WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=30001\nWORKSPACE_DOCKER=28.5.2\n"
+	info, err := ParseInfo(strings.NewReader(old))
+	if err != nil {
+		t.Fatalf("parsing an old agent's reply: %v", err)
+	}
+	if info.Agent != "" {
+		t.Errorf("Agent = %q from a reply that had none", info.Agent)
+	}
+	if info.User != "alice" || info.NFSPort != 30001 {
+		t.Errorf("an old reply did not parse: %+v", info)
+	}
+
+	// A new agent's reply round trips.
+	var buf bytes.Buffer
+	want := Info{User: "alice", NFSPort: 30001, Docker: "28.5.2", Agent: "sha-abc1234"}
+	if err := want.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := ParseInfo(&buf)
+	if err != nil {
+		t.Fatalf("ParseInfo: %v", err)
+	}
+	if got.Agent != "sha-abc1234" {
+		t.Errorf("Agent = %q, want the agent's build", got.Agent)
 	}
 }

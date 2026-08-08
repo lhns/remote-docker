@@ -18,10 +18,12 @@ import (
 // while the proxy increments it on another.
 type fakeControl struct {
 	status    any
+	safe      bool
 	shutdowns atomic.Int64
 }
 
 func (f *fakeControl) Status() any { return f.status }
+func (f *fakeControl) Idle() any   { return Idle{Safe: f.safe, Quiet: "1m0s"} }
 func (f *fakeControl) Shutdown()   { f.shutdowns.Add(1) }
 
 // waitForShutdown polls rather than reading once, for the same reason: the
@@ -150,4 +152,50 @@ func mustURL(t *testing.T, path string) *url.URL {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// The version a daemon reports is what lets a freshly updated client notice it
+// is talking to an older build. Without it a stale daemon makes a new binary
+// behave like the old one, silently.
+func TestStatusCarriesTheVersion(t *testing.T) {
+	ctrl := &fakeControl{status: Status{Version: "sha-abc1234", Workspace: "dev"}}
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: "127.0.0.1:1"}, Control: ctrl})
+
+	resp, err := http.Get("http://" + addr + ControlPrefix + "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var got Status
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if got.Version != "sha-abc1234" {
+		t.Errorf("version = %q, want the daemon's build", got.Version)
+	}
+}
+
+// Whether a restart would lose anything is a separate question from what the
+// daemon is, because answering it costs a round trip to the workspace and is
+// only needed when the versions actually differ.
+func TestIdleReportsWhetherARestartIsSafe(t *testing.T) {
+	for _, safe := range []bool{true, false} {
+		ctrl := &fakeControl{safe: safe}
+		addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: "127.0.0.1:1"}, Control: ctrl})
+
+		resp, err := http.Get("http://" + addr + ControlPrefix + "idle")
+		if err != nil {
+			t.Fatalf("idle: %v", err)
+		}
+		var got Idle
+		err = json.NewDecoder(resp.Body).Decode(&got)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatalf("decoding: %v", err)
+		}
+		if got.Safe != safe {
+			t.Errorf("safe = %v, want %v", got.Safe, safe)
+		}
+	}
 }

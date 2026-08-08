@@ -48,6 +48,10 @@ type Config struct {
 	// to stop asking.
 	Volumes notify.Volumes
 
+	// Version is the agent's build, reported in workspace-info so a client can
+	// see which workspace agent it is talking to.
+	Version string
+
 	Log Logger
 }
 

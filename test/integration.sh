@@ -902,6 +902,58 @@ else
     bad "stopping twice did not report it was not running"
 fi
 
+# A session built from a different commit is replaced when that costs nothing,
+# and reported when it does not. A stale session serves the endpoint, so an
+# updated client talks to the OLD build and behaves like it -- silently, until
+# something it should have fixed does not work.
+#
+# Two binaries, same source, different stamps: the versions cannot be ordered
+# and nothing here tries to.
+if (cd "$REPO" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"         -o "$WORK/remote-docker-old" ./cmd/remote-docker); then
+
+    "$WORK/remote-docker-old" start >/dev/null 2>&1
+
+    # (a) nothing depends on it -> replaced silently.
+    "$WORK/remote-docker" docker ps >/dev/null 2>&1
+    if "$WORK/remote-docker" status 2>/dev/null | grep -q "DIFFERENT"; then
+        bad "an unused session built from another commit was not replaced"
+    else
+        ok "an unused session from another commit is replaced silently"
+    fi
+
+    # (b) something depends on it -> warned about, left alone. The old binary
+    # starts the container so the session holding it is the old one.
+    "$WORK/remote-docker" stop >/dev/null 2>&1
+    "$WORK/remote-docker-old" start >/dev/null 2>&1
+    if "$WORK/remote-docker-old" docker run -d --name itest-pin -v "$PROJECT:/w" alpine:3             sh -c 'while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done' >/dev/null 2>&1; then
+
+        warned=$("$WORK/remote-docker" docker ps 2>&1)
+        case "$warned" in
+            *"different version"*) ok "a session in use from another commit is reported, not restarted" ;;
+            *) bad "no version warning while a container depended on the old session" ;;
+        esac
+        if "$WORK/remote-docker" status 2>/dev/null | grep -q "sha-oldbuild"; then
+            ok "the in-use session was left running"
+        else
+            bad "the in-use session was replaced, taking its container's mount with it"
+        fi
+
+        # restart must refuse rather than break it.
+        if "$WORK/remote-docker" restart >/dev/null 2>&1; then
+            bad "restart proceeded while a container depended on the session"
+        else
+            ok "restart refuses while something depends on the session"
+        fi
+
+        "$WORK/remote-docker" docker rm -f itest-pin >/dev/null 2>&1
+    else
+        bad "could not start the pinning container"
+    fi
+    "$WORK/remote-docker" stop >/dev/null 2>&1
+else
+    bad "could not build a second client for the version test"
+fi
+
 # It reclaims itself. A session that has never been used is the case that
 # should go soonest, and the one that used to be unable to: with no last-use
 # time, it reported zero idle and could never expire.

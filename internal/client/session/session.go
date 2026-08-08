@@ -66,6 +66,10 @@ type Options struct {
 	WatchBudget  int
 	WatchExclude []string
 
+	// Version is the build this session is running, reported to anything
+	// asking whether it matches the client talking to it.
+	Version string
+
 	// Serve says whether this session binds the local Docker endpoint.
 	//
 	// Off by default, and the default is the point. `status` and `gc` declined
@@ -714,6 +718,7 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 func (s *Session) Status() any {
 	live, connected := s.gate.current()
 	st := proxy.Status{
+		Version:   s.opts.Version,
 		Workspace: s.opts.Config.Name,
 		Host:      s.opts.Config.Host,
 		User:      s.opts.Config.User,
@@ -733,6 +738,16 @@ func (s *Session) Status() any {
 		st.Shares = append(st.Shares, share.LocalPath)
 	}
 	return st
+}
+
+// Idle reports whether this session could be ended without breaking anything,
+// satisfying proxy.Control.
+func (s *Session) Idle() any {
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	quiet, safe := s.IdleFor(ctx)
+	return proxy.Idle{Safe: safe, Quiet: quiet.Round(time.Second).String()}
 }
 
 // Shutdown asks the session to stop, satisfying proxy.Control.

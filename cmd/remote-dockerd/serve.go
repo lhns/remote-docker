@@ -131,6 +131,7 @@ func serve(addr string) error {
 		Mapping:  mapping,
 		Mounts:   mount.New(logger{prefix: "mount"}),
 		Volumes:  notify.DockerVolumes{},
+		Version:  version,
 		Log:      logger{prefix: "sshd"},
 	})
 	if err != nil {

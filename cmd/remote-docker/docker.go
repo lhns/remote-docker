@@ -58,31 +58,16 @@ set -- though an explicit one is respected.`,
 		if cfg, err := resolve(); err == nil {
 			endpoint = cfg.EndpointFor(proxy.DefaultEndpoint)
 
-			// Nothing is serving that endpoint, so start a background session
-			// rather than telling the user to go and open one in another
-			// terminal. Requiring `up` first made the embedded CLI -- the
+			// Make a usable session available: start one if nothing is
+			// serving, and replace one built from a different commit if that
+			// costs nothing. Requiring `up` first made the embedded CLI -- the
 			// thing that exists so nothing has to be installed -- the one part
-			// of this tool with a setup step.
-			//
-			// A DAEMON, where this used to open a session inside this very
-			// process. That session died with the command, so `docker run -d`
-			// left a container whose filesystem stopped working, and all we
-			// could do was print a warning saying so. The daemon outlives the
-			// command, so a detached container keeps its mounts and the
-			// warning has nothing left to warn about.
+			// of this tool with a setup step, and a stale daemon made a freshly
+			// updated client behave like the old one.
 			//
 			// Which workspace this is comes from the same resolution as every
-			// other command, so `--workspace ci docker ps` starts a session for
-			// ci and answers from ci.
-			//
-			// Failure is quiet on purpose: the endpoint may have been taken by
-			// a session that started a moment ago -- this check is a race by
-			// nature -- and the command below then connects to it and works. If
-			// there really is nothing there, docker says so, which is a better
-			// message than anything guessed at here.
-			if !proxy.Reachable(endpoint) && cfg.Host != "" {
-				_ = startDaemon(cfg, endpoint)
-			}
+			// other command, so `--workspace ci docker ps` uses ci.
+			ensureDaemon(cfg, endpoint)
 		}
 		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}

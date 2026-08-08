@@ -67,6 +67,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newWorkspaceCommand(),
 		newStartCommand(),
 		newStopCommand(),
+		newRestartCommand(),
 	)
 	return root
 }
@@ -181,6 +182,7 @@ func newStatusCommand() *cobra.Command {
 			_, _ = fmt.Fprintf(out, "%-20s %d\n", "nfs port", info.NFSPort)
 			_, _ = fmt.Fprintf(out, "%-20s %s\n", "docker", info.Docker)
 			_, _ = fmt.Fprintf(out, "%-20s %s\n", "endpoint", s.Endpoint)
+			reportLocalSession(out, cfg)
 			return nil
 		},
 	}
@@ -228,7 +230,8 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 				IdleTimeout: cfg.IdleTimeout,
 				// The only command that binds the endpoint. Everything else
 				// either talks to whoever is serving it, or does not need it.
-				Serve: true,
+				Serve:   true,
+				Version: version,
 				// `up` exists to hold a session open and say what it is doing;
 				// every other command has output of its own to protect.
 				Progress:     true,

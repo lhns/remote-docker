@@ -84,6 +84,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		Mountpoint: home + "/workspace",
 		Mounted:    mount.IsMounted(home + "/workspace"),
 		Docker:     s.dockerVersion(),
+		Agent:      s.cfg.Version,
 	}
 
 	if err := info.Encode(session); err != nil {

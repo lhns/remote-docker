@@ -26,6 +26,12 @@ type Info struct {
 	Mounted    bool
 	Docker     string
 
+	// Agent is the version of remote-dockerd answering. Added after the
+	// format was in use, which is safe: ParseInfo keeps unrecognised keys in
+	// Extra, so an old client reading a new agent's reply ignores this and a
+	// new client reading an old agent's sees it empty.
+	Agent string
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -41,6 +47,7 @@ const (
 	keyMountpoint = "WORKSPACE_MOUNTPOINT"
 	keyMounted    = "WORKSPACE_MOUNTED"
 	keyDocker     = "WORKSPACE_DOCKER"
+	keyAgent      = "WORKSPACE_AGENT"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own
@@ -81,6 +88,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Mountpoint = value
 		case keyMounted:
 			info.Mounted, err = strconv.ParseBool(value)
+		case keyAgent:
+			info.Agent = value
 		case keyDocker:
 			info.Docker = value
 		default:
@@ -129,6 +138,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyMountpoint, i.Mountpoint},
 		{keyMounted, strconv.FormatBool(i.Mounted)},
 		{keyDocker, docker},
+		{keyAgent, i.Agent},
 	}
 
 	extraKeys := make([]string, 0, len(i.Extra))

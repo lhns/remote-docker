@@ -32,6 +32,12 @@ type Control interface {
 	// stopping in the background: the caller is still holding the connection
 	// that the shutdown is about to close.
 	Shutdown()
+
+	// Idle reports whether the session could be ended without breaking
+	// anything. Separate from Status because answering it costs a round trip
+	// to the workspace, and Status is asked far more often than the answer is
+	// needed.
+	Idle() any
 }
 
 func isControl(req *http.Request) bool {
@@ -49,6 +55,9 @@ func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 	switch strings.TrimPrefix(req.URL.Path, ControlPrefix) {
 	case "status":
 		writeControl(client, http.StatusOK, p.Control.Status())
+
+	case "idle":
+		writeControl(client, http.StatusOK, p.Control.Idle())
 
 	case "shutdown":
 		if req.Method != http.MethodPost {
@@ -85,6 +94,15 @@ func writeControl(w net.Conn, status int, body any) {
 
 // Status is what the daemon reports about itself.
 type Status struct {
+	// Version is the build the daemon is running.
+	//
+	// Compared, never ordered. A sha build says which commit and nothing about
+	// when: "sha-a7634c0" and "sha-95e42ac" cannot be put in sequence, and a
+	// release version cannot be compared with either. So a difference is
+	// reported as a difference, never as "outdated" -- claiming an order this
+	// cannot know would be worse than saying nothing.
+	Version string `json:"version"`
+
 	Workspace string   `json:"workspace"`
 	Host      string   `json:"host"`
 	User      string   `json:"user"`
@@ -95,4 +113,17 @@ type Status struct {
 	Since     string   `json:"since"`
 	Watching  string   `json:"watching,omitempty"`
 	Shares    []string `json:"shares,omitempty"`
+}
+
+// Idle is what the daemon reports about whether it can be ended.
+type Idle struct {
+	// Safe means nothing depends on this session: no container of ours
+	// running, no stream open, no shell. Restarting it would lose nothing.
+	//
+	// Never a guess. The check that produces it is the one guarding the idle
+	// timer, and it answers "cannot tell" as busy.
+	Safe bool `json:"safe"`
+
+	// Quiet is how long the session has had nothing to do.
+	Quiet string `json:"quiet"`
 }

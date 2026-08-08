@@ -191,3 +191,174 @@ func control(endpoint, method, path string, out any) error {
 	}
 	return json.Unmarshal(body, out)
 }
+
+// ensureDaemon makes a usable session available, restarting one built from a
+// different commit when that costs nothing.
+//
+// A running daemon serves the endpoint, so a freshly updated client talks to
+// the OLD build and appears not to have changed. That is not hypothetical: it
+// cost real debugging time during development, once presenting as `stop`
+// failing with Docker's own "page not found" because the request was being
+// forwarded by a daemon that predated the control channel.
+//
+// Reports whether anything is usable, never fails: if this cannot sort it out,
+// the command below says what went wrong with more context than a guess here.
+func ensureDaemon(cfg config.Config, endpoint string) {
+	if !proxy.Reachable(endpoint) {
+		if cfg.Host != "" {
+			_ = startDaemon(cfg, endpoint)
+		}
+		return
+	}
+
+	var st proxy.Status
+	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
+		// Something is serving the endpoint but will not answer for itself:
+		// a daemon too old to have a control channel, or not ours at all.
+		// Left alone either way -- taking over something we cannot identify
+		// is worse than the mismatch.
+		return
+	}
+	if st.Version == version {
+		return
+	}
+
+	// Versions differ. Whether that is worth doing anything about depends on
+	// what would be lost, and asking THAT costs a round trip to the workspace
+	// -- which is why it is asked here and not on every command.
+	var idle proxy.Idle
+	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil || !idle.Safe {
+		warnVersionMismatch(st)
+		return
+	}
+
+	if err := restartDaemon(cfg, endpoint); err != nil {
+		warnVersionMismatch(st)
+	}
+}
+
+// warnVersionMismatch reports a difference without claiming an order.
+//
+// "different", never "outdated": a sha build names a commit and says nothing
+// about when, so sha-a7634c0 and sha-95e42ac cannot be sequenced and neither
+// can be compared with a release version. Saying which is newer would be
+// inventing information.
+func warnVersionMismatch(st proxy.Status) {
+	fmt.Fprintf(os.Stderr,
+		"\nwarning: the running session was built from a different version.\n"+
+			"  session: %s (pid %d)\n"+
+			"  this:    %s\n"+
+			"It is in use, so it was left alone -- restarting drops the file server\n"+
+			"and any container holding a directory from it. Run `remote-docker restart`\n"+
+			"when nothing needs it, or `remote-docker restart --force` to do it anyway.\n",
+		orUnknown(st.Version), st.PID, orUnknown(version))
+}
+
+func orUnknown(v string) string {
+	if v == "" {
+		return "unknown"
+	}
+	return v
+}
+
+// restartDaemon stops a running session and starts one from this binary.
+func restartDaemon(cfg config.Config, endpoint string) error {
+	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
+		return fmt.Errorf("stopping the running session: %w", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if !proxy.Reachable(endpoint) {
+			return startDaemon(cfg, endpoint)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("the running session did not stop")
+}
+
+func newRestartCommand() *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the background session for this workspace",
+		Long: `Stops the running session and starts one from this binary.
+
+Refused while anything depends on it: restarting drops the file server, and a
+container holding a directory from it loses its filesystem. --force overrides.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := resolve()
+			if err != nil {
+				return err
+			}
+			if err := cfg.RequireHost(); err != nil {
+				return err
+			}
+			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+			out := cmd.OutOrStdout()
+
+			if !proxy.Reachable(endpoint) {
+				if err := startDaemon(cfg, endpoint); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(out, "started: %s\n", proxy.DockerHost(endpoint))
+				return nil
+			}
+
+			if !force {
+				var idle proxy.Idle
+				// A session that will not answer cannot be judged, and
+				// "cannot tell" is not a reason to break something.
+				if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil {
+					return fmt.Errorf("cannot tell whether the running session is in use: %w "+
+						"(use --force to restart anyway)", err)
+				}
+				if !idle.Safe {
+					return fmt.Errorf("the running session is in use -- a container is running, " +
+						"a stream is open, or a shell; restarting would take its file server away. " +
+						"Use --force to restart anyway")
+				}
+			}
+
+			if err := restartDaemon(cfg, endpoint); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(out, "restarted: %s\n", proxy.DockerHost(endpoint))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "restart even if something depends on the session")
+	return cmd
+}
+
+// reportLocalSession describes the background session, if there is one.
+//
+// The version is the reason this exists. A running session serves the
+// endpoint, so an updated client talks to the OLD build and behaves like it --
+// and until this line existed there was no way to see that from the outside,
+// which is exactly how it went unnoticed during development.
+func reportLocalSession(out io.Writer, cfg config.Config) {
+	endpoint := cfg.EndpointFor(proxy.DefaultEndpoint)
+	if !proxy.Reachable(endpoint) {
+		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session", "not running")
+		return
+	}
+
+	var st proxy.Status
+	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
+		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session", "running, but not answering")
+		return
+	}
+
+	_, _ = fmt.Fprintf(out, "%-20s running (pid %d, since %s)\n", "session", st.PID, st.Since)
+
+	// Reported as a difference, never as an ordering. A sha build names a
+	// commit and says nothing about when.
+	switch {
+	case st.Version == version:
+		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session version", orUnknown(st.Version))
+	default:
+		_, _ = fmt.Fprintf(out, "%-20s %s  (this binary: %s -- DIFFERENT)\n",
+			"session version", orUnknown(st.Version), orUnknown(version))
+	}
+}
