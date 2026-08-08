@@ -178,6 +178,19 @@ func newStatusCommand() *cobra.Command {
 			_, _ = fmt.Fprintf(out, "%-20s %s (uid %d)\n", "account", info.User, info.UID)
 			_, _ = fmt.Fprintf(out, "%-20s %d\n", "nfs port", info.NFSPort)
 			_, _ = fmt.Fprintf(out, "%-20s %s\n", "docker", info.Docker)
+
+			// The agent's build. A different question from the local version,
+			// and the one that matters when the workspace behaves oddly.
+			//
+			// Reported even when empty rather than skipped: a workspace too
+			// old to send it looks exactly like one that failed to, and
+			// silence would leave an answerable question unanswerable.
+			agent := info.Agent
+			if agent == "" {
+				agent = "not reported (workspace predates it)"
+			}
+			_, _ = fmt.Fprintf(out, "%-20s %s\n", "agent", agent)
+
 			_, _ = fmt.Fprintf(out, "%-20s %s\n", "endpoint", s.Endpoint)
 			reportLocalSession(out, cfg)
 			return nil

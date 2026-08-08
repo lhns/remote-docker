@@ -152,6 +152,16 @@ else
     exit 1
 fi
 
+# The agent's build, which is the question worth being able to answer when a
+# workspace behaves oddly and is not the same question as the client's build.
+# It is reported even when the workspace is too old to send one, because
+# silence there is indistinguishable from a failure to answer.
+if grep -qE "^agent +[^ ]" "$WORK/status.log"; then
+    ok "status reports the agent's version"
+else
+    bad "status did not report the agent version"
+fi
+
 echo
 echo "== 6. open a session =="
 # --foreground because the suite wants the session as a child it can kill and
