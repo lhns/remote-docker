@@ -215,3 +215,33 @@ func (s Spec) Args() []string {
 	args = append(args, s.Image)
 	return append(args, s.Command...)
 }
+
+// StorageDriverFrom picks a per-account storage driver out of the workspace's
+// own dockerd arguments.
+//
+// A per-account daemon does NOT inherit its parent's flags, and the one flag
+// where that matters is the graph driver. A deployment whose data directory is
+// on Ceph- or NFS-backed storage sets --storage-driver=fuse-overlayfs for the
+// workspace's dockerd because overlay2 refuses such a filesystem outright --
+// and the per-account daemon's storage is a volume ON that same filesystem, so
+// it needs the same answer.
+//
+// It was not inherited, and the failure was silent and expensive: dockerd falls
+// back to VFS, which has no copy-on-write and copies the entire image on every
+// container create. Everything kept working and `docker create debian` took 90
+// to 113 seconds while `docker ps` stayed instant. Nothing said why, because
+// nothing had failed.
+//
+// An explicit WORKSPACE_DIND_STORAGE_DRIVER still wins; this is only the
+// default, and the default should be "what the workspace itself decided".
+func StorageDriverFrom(dockerdArgs []string) string {
+	for i, arg := range dockerdArgs {
+		if v, ok := strings.CutPrefix(arg, "--storage-driver="); ok {
+			return v
+		}
+		if arg == "--storage-driver" && i+1 < len(dockerdArgs) {
+			return dockerdArgs[i+1]
+		}
+	}
+	return ""
+}

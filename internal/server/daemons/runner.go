@@ -170,6 +170,27 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	// The socket directory is ours, not the daemon's: it is bind-mounted in,
 	// so it has to exist before the container starts or docker creates it
 	// root-owned with the wrong mode.
+	// Two directories, two modes, and the difference is the whole point.
+	//
+	// SocketDir must be TRAVERSABLE by every account (0755): it holds one
+	// subdirectory per account, and a shell has to walk through it to reach
+	// its own socket. MkdirAll made both levels 0750 root:root and only the
+	// leaf was ever chowned, so every account's DOCKER_HOST pointed at a path
+	// it could not enter -- "permission denied while trying to connect to the
+	// Docker daemon socket", with the variable set correctly.
+	//
+	// The per-account directory below it is 0750 root:<account>, which is what
+	// actually keeps one account out of another's daemon. Traversing the
+	// parent reveals only the names of directories nobody else may enter.
+	if err := os.MkdirAll(SocketDir, 0o755); err != nil {
+		return nil, fmt.Errorf("daemons: preparing %s: %w", SocketDir, err)
+	}
+	// MkdirAll honours the umask; this does not, and this is the one that
+	// grants access.
+	if err := os.Chmod(SocketDir, 0o755); err != nil {
+		return nil, fmt.Errorf("daemons: preparing %s: %w", SocketDir, err)
+	}
+
 	dir := filepath.Join(SocketDir, account)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("daemons: preparing %s: %w", dir, err)
@@ -225,6 +246,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 				if err := m.chown(account, socket); err != nil {
 					m.logf("could not hand %s its socket: %v", account, err)
 				}
+				m.warnIfSlowStorage(ctx, d)
 				return d, nil
 			}
 		}
@@ -413,4 +435,28 @@ func (m *Manager) Lookup(ctx context.Context, account string) (*Daemon, bool) {
 		return nil, false
 	}
 	return d, true
+}
+
+// warnIfSlowStorage says so when a daemon came up on vfs.
+//
+// vfs has no copy-on-write: it copies the entire image on every container
+// create. Nothing fails, so nothing is reported -- `docker ps` stays instant
+// while `docker create debian` takes a minute and a half, which reads as a
+// hang rather than as a storage driver.
+//
+// dockerd chooses it silently when the graph filesystem refuses overlay2,
+// which is exactly what a Ceph- or NFS-backed data directory does. The
+// workspace's own dockerd is given --storage-driver=fuse-overlayfs for that
+// reason, and a per-account daemon now inherits it -- but a deployment can
+// still arrive here, so it should arrive loudly.
+func (m *Manager) warnIfSlowStorage(ctx context.Context, d *Daemon) {
+	driver, err := dockercli.CLI{Host: d.Host()}.Line(ctx, "info", "--format", "{{.Driver}}")
+	if err != nil || driver != "vfs" {
+		return
+	}
+	m.logf("WARNING: %s's daemon is using the vfs storage driver, which copies "+
+		"the whole image on every container create -- expect `docker run` to take "+
+		"minutes. Its storage is on a filesystem that refused overlay2; set "+
+		"WORKSPACE_DIND_STORAGE_DRIVER (fuse-overlayfs for Ceph- or NFS-backed "+
+		"data) and remove %s to rebuild it.", d.Account, ContainerName(d.Account))
 }

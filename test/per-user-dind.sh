@@ -235,17 +235,49 @@ else
 fi
 
 echo
-echo "== 9. a shell points at its own daemon =="
-shell_docker_host=$(timeout 60 ssh -i "$WORK/state-$A/id_ed25519" \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o BatchMode=yes -p "$SSH_PORT" "$A@127.0.0.1" \
-    'echo $DOCKER_HOST' 2>/dev/null </dev/null | tr -d '\r')
+echo "== 9. a shell points at its own daemon, AND CAN USE IT =="
+# Asserting the variable was set is what let a real bug ship: /run/rd was
+# created 0750 root:root, so every account's DOCKER_HOST named a socket behind
+# a directory it could not enter. The variable was perfect and `docker ps` in a
+# shell said "permission denied while trying to connect to the Docker daemon
+# socket". So the shell is made to actually USE it.
+shell_out=$(timeout 90 ssh -i "$WORK/state-$A/id_ed25519"     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null     -o BatchMode=yes -p "$SSH_PORT" "$A@127.0.0.1"     'echo "HOST=$DOCKER_HOST"; docker ps --format "{{.Names}}" 2>&1 | head -5'     2>/dev/null </dev/null | tr -d '')
 
-case "$shell_docker_host" in
-    *"/run/rd/$A/docker.sock") ok "a shell's DOCKER_HOST is that account's own daemon" ;;
-    "")                        bad "a shell got no DOCKER_HOST; it would find the parent daemon" ;;
-    *)                         bad "a shell's DOCKER_HOST is $shell_docker_host" ;;
+case "$shell_out" in
+    *"HOST=unix:///run/rd/$A/docker.sock"*)
+        ok "a shell's DOCKER_HOST is that account's own daemon" ;;
+    *"HOST="*)
+        bad "a shell's DOCKER_HOST is $(echo "$shell_out" | head -1)" ;;
+    *)
+        bad "a shell got no DOCKER_HOST; it would find the parent daemon" ;;
 esac
+
+# alice-secret is running on her daemon by now, so her own shell must see it.
+# Any permission problem reaching the socket shows up here instead.
+if echo "$shell_out" | grep -q "permission denied"; then
+    bad "the account cannot reach its own docker socket: $(echo "$shell_out" | tail -1)"
+elif echo "$shell_out" | grep -qx alice-secret; then
+    ok "and a shell can actually use it"
+else
+    bad "a shell could not list its own containers: $(echo "$shell_out" | tail -2 | tr '
+' ' ')"
+fi
+
+# The storage driver, which is the difference between `docker run` taking a
+# second and taking two minutes.
+#
+# vfs has no copy-on-write and copies the whole image on every create. dockerd
+# picks it silently when the graph filesystem refuses overlay2 -- which is what
+# a Ceph- or NFS-backed data directory does -- so nothing fails and everything
+# is slow. A real workspace hit exactly this.
+driver=$(da info --format '{{.Driver}}' 2>/dev/null)
+if [ -z "$driver" ]; then
+    bad "could not read the storage driver from $A's daemon"
+elif [ "$driver" = "vfs" ]; then
+    bad "$A's daemon is on vfs; every container create copies the whole image"
+else
+    ok "$A's daemon is on a copy-on-write storage driver ($driver)"
+fi
 
 echo
 echo "== 10. the workspace restarts and the daemons come back =="

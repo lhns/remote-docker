@@ -107,8 +107,9 @@ func serve(addr string) error {
 	// dockerd first: an account can be provisioned without it, but the
 	// workspace is not much use until the daemon is up, and starting it early
 	// overlaps its boot with everything else.
+	dockerdArgs := supervise.SplitArgs(os.Getenv(envDockerd))
 	daemon := &supervise.Dockerd{
-		Args: supervise.SplitArgs(os.Getenv(envDockerd)),
+		Args: dockerdArgs,
 		Log:  logger{prefix: "dockerd"},
 	}
 	if envOr(envEnableDind, "true") == "true" {
@@ -169,11 +170,25 @@ func serve(addr string) error {
 			return err
 		}
 
+		// Inherited from the workspace's own dockerd unless overridden. A
+		// deployment on Ceph- or NFS-backed storage sets fuse-overlayfs there,
+		// and a per-account daemon whose graph volume lives on that same
+		// filesystem needs the same answer -- otherwise dockerd falls back to
+		// vfs, which copies the whole image on every container create and says
+		// nothing about why everything became slow.
+		storage := os.Getenv(envDindStorage)
+		if storage == "" {
+			storage = daemons.StorageDriverFrom(dockerdArgs)
+			if storage != "" {
+				log.Printf("per-account daemons inherit --storage-driver=%s", storage)
+			}
+		}
+
 		manager = &daemons.Manager{
 			Options: daemons.Options{
 				Workspace:     id,
 				Image:         os.Getenv(envDindImage),
-				StorageDriver: os.Getenv(envDindStorage),
+				StorageDriver: storage,
 			},
 			Log: logger{prefix: "daemons"}.Printf,
 		}

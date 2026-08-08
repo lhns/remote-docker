@@ -353,10 +353,14 @@ It costs real resources, and there is no mitigation worth implying:
   the volume and take down every other account's daemon.
 - **3--10s** for an account's first connection after the daemon has stopped.
 
-`WORKSPACE_DIND_IMAGE` overrides the dind image;
-`WORKSPACE_DIND_STORAGE_DRIVER` is **not** inherited from the parent, so a
-Ceph-backed deployment that sets `--storage-driver=fuse-overlayfs` below must
-set it here too.
+`WORKSPACE_DIND_IMAGE` overrides the dind image.
+`WORKSPACE_DIND_STORAGE_DRIVER` overrides the graph driver, which is otherwise
+inherited from `WORKSPACE_DOCKERD_ARGS` -- a Ceph- or NFS-backed deployment
+sets `--storage-driver=fuse-overlayfs` there, and a per-account daemon needs
+the same answer because its storage is a volume on that same filesystem.
+Without it dockerd falls back to **vfs**, which copies the whole image on every
+`docker create`: nothing fails, `docker ps` stays instant, and `docker run`
+takes minutes.
 
 #### What persists, in both modes
 

@@ -141,6 +141,24 @@ in the namespace where every account's shell runs.
   accounts is ~1.5GB before anybody runs anything.
 - **Startup latency**, 3–10s for a cold account, worse on `fuse-overlayfs`.
   Warming at authentication hides most of it.
+- **The graph driver is inherited from the workspace's own dockerd**, and this
+  record originally said only that it was *not* — which documented a trap
+  instead of removing one. A deployment on Ceph- or NFS-backed storage sets
+  `--storage-driver=fuse-overlayfs` because overlay2 refuses that filesystem,
+  and a per-account daemon's storage is a volume on that same filesystem, so it
+  needs the same answer. Left to itself dockerd falls back to **vfs**, which
+  has no copy-on-write and copies the entire image on every container create:
+  `docker ps` stays instant while `docker create debian` takes 90 to 113
+  seconds, nothing fails, and nothing says why. That happened on a real
+  workspace within a day of this becoming the default.
+  `WORKSPACE_DIND_STORAGE_DRIVER` still overrides; vfs is now reported loudly
+  when it happens anyway.
+- **`/run/rd` is 0755 and the per-account directory inside it is 0750.** The
+  parent has to be traversable or an account cannot reach its own socket --
+  `DOCKER_HOST` correct, and `docker ps` answering "permission denied while
+  trying to connect to the Docker daemon socket". Traversing the parent reveals
+  only the names of directories nobody else may enter; the 0750 below it is
+  what separates the accounts.
 - **A per-account daemon is untrusted input.** It reports its own volume
   mountpoints, and the account is root inside it. `relocate` therefore checks
   that a relocated path stays under the daemon's root rather than trusting

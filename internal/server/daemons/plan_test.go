@@ -212,3 +212,32 @@ func TestADaemonAsksToBeRestarted(t *testing.T) {
 		t.Errorf("the policy never reached the args: %s", args)
 	}
 }
+
+// A per-account daemon does not inherit its parent's flags, and the one that
+// matters is the graph driver.
+//
+// This is the bug that shipped: a deployment on Ceph-backed storage sets
+// --storage-driver=fuse-overlayfs for the workspace's own dockerd because
+// overlay2 refuses that filesystem, the per-account daemon did not inherit it,
+// and dockerd fell back to VFS -- which copies the entire image on every
+// container create. `docker ps` stayed instant, `docker create debian` took 90
+// to 113 seconds, and nothing anywhere said why, because nothing had failed.
+func TestTheStorageDriverIsInheritedFromTheParent(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--storage-driver=fuse-overlayfs"}, "fuse-overlayfs"},
+		{[]string{"--storage-driver", "fuse-overlayfs"}, "fuse-overlayfs"},
+		{[]string{"--debug", "--storage-driver=vfs", "--iptables=false"}, "vfs"},
+		{[]string{"--debug"}, ""},
+		{nil, ""},
+		// A trailing --storage-driver with nothing after it is a malformed
+		// argument, not an empty driver: reading past the end would panic.
+		{[]string{"--storage-driver"}, ""},
+	} {
+		if got := StorageDriverFrom(tc.args); got != tc.want {
+			t.Errorf("StorageDriverFrom(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
