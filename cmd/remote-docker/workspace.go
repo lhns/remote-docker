@@ -20,8 +20,15 @@ import (
 // Docker contexts are written as a side effect rather than by a separate
 // command. There is no case where you want a workspace configured and not
 // reachable as `docker --context <name>`, so making that a second thing to
-// remember was a split in the tool that was never a split in the task. The
-// `context` command remains for repairing one without touching the config.
+// remember was a split in the tool that was never a split in the task.
+//
+// The verbs are docker's -- create, ls, use, rm, inspect -- because a
+// workspace IS the thing a docker context points at, and borrowing the
+// vocabulary costs nothing and saves explaining. The noun stays ours: the
+// config file's key is `workspaces`, the wire protocol is `workspace-info`,
+// the server's variables are WORKSPACE_*, and a CLI that disagreed with all
+// of them would trade one confusion for another. The old verbs remain as
+// aliases.
 func newWorkspaceCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "workspace",
@@ -33,6 +40,7 @@ func newWorkspaceCommand() *cobra.Command {
 		newWorkspaceRemoveCommand(),
 		newWorkspaceListCommand(),
 		newWorkspaceDefaultCommand(),
+		newWorkspaceInspectCommand(),
 	)
 	// Bare `remote-docker workspaces` still lists, which is what it did
 	// before this command existed.
@@ -46,9 +54,10 @@ func newWorkspaceAddCommand() *cobra.Command {
 	var makeDefault, noContext bool
 
 	cmd := &cobra.Command{
-		Use:   "add <name>",
-		Short: "Add a workspace and create its docker context",
-		Args:  cobra.ExactArgs(1),
+		Use:     "create <name>",
+		Aliases: []string{"add"},
+		Short:   "Create a workspace and its docker context",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if host == "" {
@@ -114,8 +123,8 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 	var keepContext bool
 
 	cmd := &cobra.Command{
-		Use:     "remove <name>",
-		Aliases: []string{"rm"},
+		Use:     "rm <name>",
+		Aliases: []string{"remove"},
 		Short:   "Remove a workspace and its docker context",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -131,7 +140,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			cfg, cfgErr := config.Resolve(config.Overrides{Workspace: name}, "")
 
 			if !file.Remove(name) {
-				return fmt.Errorf("no workspace named %q; `remote-docker workspace list` shows what there is", name)
+				return fmt.Errorf("no workspace named %q; `remote-docker workspace ls` shows what there is", name)
 			}
 			if err := config.Save(file, ""); err != nil {
 				return err
@@ -145,7 +154,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			}
 			if file.Default == "" && len(file.Names()) > 1 {
 				_, _ = fmt.Fprintf(out,
-					"no default workspace now; set one with `remote-docker workspace default <name>`\n")
+					"no default workspace now; set one with `remote-docker workspace use <name>`\n")
 			}
 			return nil
 		},
@@ -156,9 +165,10 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 
 func newWorkspaceDefaultCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "default <name>",
-		Short: "Choose which workspace commands use when none is named",
-		Args:  cobra.ExactArgs(1),
+		Use:     "use <name>",
+		Aliases: []string{"default"},
+		Short:   "Choose which workspace commands use when none is named",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			file, err := config.Load("")
@@ -180,8 +190,8 @@ func newWorkspaceDefaultCommand() *cobra.Command {
 
 func newWorkspaceListCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:     "list",
-		Aliases: []string{"ls"},
+		Use:     "ls",
+		Aliases: []string{"list"},
 		Short:   "List the configured workspaces",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			file, err := config.Load("")
@@ -201,7 +211,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				// a command for it now.
 				_, _ = fmt.Fprintf(out,
 					"no workspaces configured. Add one:\n\n"+
-						"    remote-docker workspace add dev --host dev.example --user alice\n")
+						"    remote-docker workspace create dev --host dev.example --user alice\n")
 				return nil
 			}
 
@@ -275,4 +285,50 @@ func enrolledKey() string {
 		return "(run `remote-docker enroll` to generate one)"
 	}
 	return strings.TrimSpace(kp.AuthorizedKey(config.KeyComment()))
+}
+
+// newWorkspaceInspectCommand shows everything about one workspace in one place.
+//
+// It exists because the pieces were scattered: the config file holds the host
+// and account, the endpoint is derived from the name, the docker context is
+// named after it too, and a session may or may not be running against it.
+// Answering "what is this workspace, actually" meant knowing all four
+// derivations. Now it does not.
+func newWorkspaceInspectCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "inspect [name]",
+		Short: "Show a workspace's settings, endpoint and docker context",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+			if err != nil {
+				return err
+			}
+			if cfg.Host == "" {
+				return fmt.Errorf("no workspace is configured; add one with " +
+					"`remote-docker workspace create <name> --host <host>`")
+			}
+
+			out := cmd.OutOrStdout()
+			row := func(k, v string) {
+				if v != "" {
+					_, _ = fmt.Fprintf(out, "%-20s %s\n", k, v)
+				}
+			}
+			row("name", cfg.Name)
+			row("workspace", fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port))
+			row("endpoint", proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint)))
+			row("docker context", cfg.ContextName())
+			row("watch", cfg.Watch)
+			for _, ex := range cfg.WatchExclude {
+				row("watch exclude", ex)
+			}
+			reportLocalSession(out, cfg)
+			return nil
+		},
+	}
 }
