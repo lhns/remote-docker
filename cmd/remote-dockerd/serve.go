@@ -152,14 +152,34 @@ func serve(addr string) error {
 	// separation in memory and in duplicated layer cache.
 	var manager *daemons.Manager
 	if perUserDind {
+		// The id identifies THIS workspace across redeploys, which a container
+		// id cannot. Without it the daemons are still labelled as ours, just
+		// not as ours-in-particular, so two workspaces sharing a parent daemon
+		// would adopt each other's.
+		id, err := daemons.WorkspaceID(stateDir)
+		if err != nil {
+			return err
+		}
+
 		manager = &daemons.Manager{
 			Options: daemons.Options{
+				Workspace:     id,
 				Image:         os.Getenv(envDindImage),
 				StorageDriver: os.Getenv(envDindStorage),
 			},
 			Log: logger{prefix: "daemons"}.Printf,
 		}
-		log.Printf("each account gets its own docker daemon")
+		log.Printf("each account gets its own docker daemon (workspace %s)", id)
+
+		// Adopt before serving. A restarted agent that did not would find
+		// every name taken -- `docker run --name` conflicts rather than
+		// replacing -- and every account locked out of the daemon holding its
+		// own running containers.
+		if n, err := manager.Adopt(ctx); err != nil {
+			log.Printf("could not adopt existing daemons: %v", err)
+		} else if n > 0 {
+			log.Printf("adopted %d running daemon(s) from a previous run", n)
+		}
 	}
 
 	server, err := sshd.New(sshd.Config{

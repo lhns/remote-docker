@@ -152,6 +152,15 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	}
 
 	ctx.SetValue(contextKey{}, sessionAccount{name: account.Name, uid: account.UID})
+
+	// Start this account's daemon now, in the background, so its boot hides
+	// behind the round trips that follow -- workspace-info, then the reverse
+	// forward. A cold dind takes seconds; without this the client's first
+	// docker command pays for all of them, looking like a hang rather than a
+	// start.
+	if s.cfg.Daemons != nil {
+		s.cfg.Daemons.Warm(account.Name)
+	}
 	return true
 }
 

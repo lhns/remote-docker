@@ -280,7 +280,34 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		if account == "" {
 			continue
 		}
-		m.logf("adopting the daemon for %s", account)
+
+		// Registered, not merely counted. A daemon that is running but not in
+		// the map is worse than one that is not running at all: Ensure would
+		// find the name taken, `docker run --name` fails on a conflict rather
+		// than replacing, and the account would be unable to use the daemon
+		// holding its own containers.
+		pid, err := m.pid(ctx, ContainerName(account))
+		if err != nil || pid <= 0 {
+			// Stopped, most likely. Left alone deliberately: Ensure will
+			// `docker start` it when the account next connects, which keeps
+			// its containers, and starting every account's daemon at boot
+			// would wake daemons for people who are not here.
+			continue
+		}
+
+		m.mu.Lock()
+		if m.byName == nil {
+			m.byName = map[string]*Daemon{}
+		}
+		m.byName[account] = &Daemon{
+			Account:   account,
+			Container: strings.TrimPrefix(row.Names, "/"),
+			PID:       pid,
+			Socket:    SocketPathFor(account),
+		}
+		m.mu.Unlock()
+
+		m.logf("adopted the running daemon for %s", account)
 		adopted++
 	}
 	return adopted, nil
