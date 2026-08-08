@@ -189,3 +189,40 @@ func TestPlanHonoursACustomHostSocketPath(t *testing.T) {
 		t.Errorf("mounts = %+v, want only /data", spec.Mounts)
 	}
 }
+
+// Args must read Remove rather than assume it.
+//
+// It did not: `--rm` was appended unconditionally while the field was set and
+// never consulted. Nothing caught it because nothing tested Args at all -- the
+// suite covered Plan's decisions thoroughly and the rendering not once, and
+// the one caller happened to want the flag that was hardcoded.
+//
+// It matters now because the next caller is a per-user daemon. `--rm` on that
+// would delete a user's daemon, and everything it was running, the moment it
+// stopped.
+func TestArgsHonoursRemove(t *testing.T) {
+	kept := RunSpec{Image: "img", Remove: false}.Args()
+	if slices.Contains(kept, "--rm") {
+		t.Errorf("Remove=false still rendered --rm: %v", kept)
+	}
+
+	removed := RunSpec{Image: "img", Remove: true}.Args()
+	if !slices.Contains(removed, "--rm") {
+		t.Errorf("Remove=true did not render --rm: %v", removed)
+	}
+}
+
+// elevate's own child is unchanged by that fix: it is a singleton whose state
+// is worthless, and it should still go away when it stops.
+func TestPlanStillAsksForARemovedChild(t *testing.T) {
+	spec, err := Plan(ContainerInfo{ID: "abc", Name: "/ws", Image: "img"}, Options{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !spec.Remove {
+		t.Error("the elevated child is no longer removed on exit")
+	}
+	if !slices.Contains(spec.Args(), "--rm") {
+		t.Errorf("the elevated child's args lost --rm: %v", spec.Args())
+	}
+}

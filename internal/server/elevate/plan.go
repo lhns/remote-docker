@@ -77,7 +77,17 @@ type RunSpec struct {
 // correct and a catastrophic invocation here is one flag, and it should be
 // visible in a test rather than buried in a command line.
 func (s RunSpec) Args() []string {
-	args := []string{"run", "--rm", "-i"}
+	args := []string{"run", "-i"}
+
+	// Read from the field, which it did not used to be: `--rm` was appended
+	// unconditionally and `Remove` was set but never consulted. It happened to
+	// be harmless because the only caller wants --rm -- elevate's child is a
+	// singleton whose state is worthless -- but a spec with a flag it ignores
+	// is a trap for the next caller, and the next caller is a per-user daemon
+	// holding somebody's running work.
+	if s.Remove {
+		args = append(args, "--rm")
+	}
 	if s.Privileged {
 		args = append(args, "--privileged")
 	}
