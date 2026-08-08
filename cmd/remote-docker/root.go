@@ -107,7 +107,7 @@ account there.`,
 				return err
 			}
 
-			// keyComment(), not a bare "remote-docker": the comment is the
+			// config.KeyComment(), not a bare "remote-docker": the comment is the
 			// only thing distinguishing one .pub from another in the
 			// workspace's authorized_keys.d, and the person adding it needs
 			// to know whose machine it came from. LoadOrCreateKey only sets a

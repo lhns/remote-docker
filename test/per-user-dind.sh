@@ -239,7 +239,12 @@ echo
 echo "== 7. a bind mount resolves, which proves the in-netns NFS listener =="
 # The reverse tunnel is bound INSIDE each account's dind. If that were wrong,
 # the volume would fail to mount and this reads the file rather than guessing.
-if out=$(da run --rm -v "$WORK/project-$A:/w" alpine:3 cat /w/marker 2>/dev/null); then
+#
+# stderr is captured, not discarded. It was briefly sent to /dev/null to keep
+# image-pull noise out of $out -- which also emptied the failure message, so a
+# broken mount reported "failed:" and nothing else. The images are pre-pulled
+# above instead, which removes the noise at its source.
+if out=$(da run --rm -v "$WORK/project-$A:/w" alpine:3 cat /w/marker 2>&1); then
     if [ "$out" = "alice's file" ]; then
         ok "alice's bind mount resolves through her own daemon"
     else
@@ -249,7 +254,7 @@ else
     bad "alice's bind mount failed: $(echo "$out" | tail -3)"
 fi
 
-if out=$(db run --rm -v "$WORK/project-$B:/w" alpine:3 cat /w/marker 2>/dev/null); then
+if out=$(db run --rm -v "$WORK/project-$B:/w" alpine:3 cat /w/marker 2>&1); then
     if [ "$out" = "bob's file" ]; then
         ok "bob's bind mount resolves through his own daemon"
     else

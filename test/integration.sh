@@ -334,21 +334,35 @@ if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./t
     if ! dockert run -d --name itest-watch             -v "$PROJECT:/probe:ro"             -v "$WATCHDIR:/data"             alpine:3 /probe/watchprobe /data >"$WORK/watch-run.log" 2>&1; then
         bad "the watch probe container would not start"
         sed 's/^/        /' "$WORK/watch-run.log"
+        probe=""
+    else
+        # Wait for READY rather than sleeping. watchprobe prints it so that a
+        # caller does not have to guess how long registering a watch takes,
+        # and a change made before the watch lands proves nothing either way.
+        # The two probe sections below already do this; this one slept five
+        # seconds and hoped, which is a flake on a loaded runner.
+        for _ in $(seq 1 30); do
+            docker logs itest-watch 2>&1 | grep -q '^READY' && break
+            sleep 1
+        done
+
+        echo "written on the client" >"$WATCHDIR/created-after-watch.txt"
+
+        timeout 60 docker wait itest-watch >/dev/null 2>&1
+        probe=$(docker logs itest-watch 2>&1)
     fi
-
-    # Let the watch register before making the change, or the result says
-    # nothing either way.
-    sleep 5
-    echo "written on the client" >"$WATCHDIR/created-after-watch.txt"
-
-    timeout 60 docker wait itest-watch >/dev/null 2>&1
-    probe=$(docker logs itest-watch 2>&1)
     docker rm -f itest-watch >/dev/null 2>&1
     rm -f "$PROJECT/watchprobe"
 
     echo "        $(echo "$probe" | grep '^RESULT' || echo 'RESULT missing')"
 
-    if echo "$probe" | grep -q "POLL created-after-watch.txt"; then
+    # An empty capture is NOT a negative result. The probe failing to start,
+    # or producing nothing, used to fall through to the assertion below and be
+    # reported as "the mount itself is not working" -- a confident diagnosis
+    # pointing at NFS when the fault was `docker run`.
+    if [ -z "$probe" ]; then
+        bad "the watch probe produced no output; nothing below can be concluded"
+    elif echo "$probe" | grep -q "POLL created-after-watch.txt"; then
         ok "a polling watcher sees client-side changes"
     else
         bad "a polling watcher saw nothing -- the mount itself is not working"

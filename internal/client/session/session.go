@@ -344,7 +344,7 @@ func (s *Session) acquire(ctx context.Context) (*liveConn, func(), error) {
 // the NFS export has to be reachable before any container can mount a volume
 // backed by it.
 func (s *Session) connect(ctx context.Context) (*liveConn, error) {
-	key, err := sshx.LoadOrCreateKey(config.KeyPath(), keyComment())
+	key, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
 		return nil, err
 	}
@@ -837,22 +837,6 @@ func (s *Session) logf(format string, args ...any) {
 	if s.opts.Log != nil {
 		s.opts.Log.Printf(format, args...)
 	}
-}
-
-// keyComment identifies this machine in the enrolled public key.
-func keyComment() string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "unknown"
-	}
-	user := os.Getenv("USER")
-	if user == "" {
-		user = os.Getenv("USERNAME")
-	}
-	if user == "" {
-		return "remote-docker-" + host
-	}
-	return fmt.Sprintf("remote-docker-%s-%s", host, user)
 }
 
 // shareRegistrar adapts the NFS registry to the rewriter's Sharer.
