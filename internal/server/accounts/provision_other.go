@@ -11,6 +11,7 @@ import "fmt"
 // than silently pretending to have provisioned anything.
 type UnixProvisioner struct {
 	Groups []string
+	Revoke []string
 }
 
 // Ensure always fails.

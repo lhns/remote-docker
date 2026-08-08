@@ -74,6 +74,8 @@ func serve(addr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	perUserDind := envOr(envPerUserDind, "false") == "true"
+
 	stateDir := envOr(envStateDir, "/etc/workspace")
 	keysDir := envOr(envKeysDir, filepath.Join(stateDir, "authorized_keys.d"))
 	hostKeyDir := envOr(envHostKeys, filepath.Join(stateDir, "host_keys"))
@@ -115,11 +117,21 @@ func serve(addr string) error {
 		}
 	}
 
+	// With a daemon per account the shared `docker` group must go: it grants
+	// a socket that reaches the PARENT daemon, which holds every account's
+	// dind. Revoke covers the accounts that already exist, which on an
+	// upgraded workspace is all of them.
+	provisioner := &accounts.UnixProvisioner{}
+	if perUserDind {
+		provisioner.Groups = []string{"workspace"}
+		provisioner.Revoke = []string{"docker"}
+	}
+
 	store := accounts.New(keysDir, stateDir, mapping,
-		&accounts.UnixProvisioner{}, logger{prefix: "accounts"})
+		provisioner, logger{prefix: "accounts"})
 	store.Shell = envOr(envShell, "/bin/bash")
 
-	if err := ensureGroups(); err != nil {
+	if err := ensureGroups(perUserDind); err != nil {
 		log.Printf("%v", err)
 	}
 
@@ -139,7 +151,7 @@ func serve(addr string) error {
 	// single-account workspace has nothing to separate and would pay for
 	// separation in memory and in duplicated layer cache.
 	var manager *daemons.Manager
-	if envOr(envPerUserDind, "false") == "true" {
+	if perUserDind {
 		manager = &daemons.Manager{
 			Options: daemons.Options{
 				Image:         os.Getenv(envDindImage),
@@ -185,8 +197,16 @@ func serve(addr string) error {
 }
 
 // ensureGroups creates the groups accounts are added to.
-func ensureGroups() error {
-	for _, group := range []string{"docker", "workspace"} {
+func ensureGroups(perUserDind bool) error {
+	groups := []string{"docker", "workspace"}
+	if perUserDind {
+		// The `docker` group is not created, because nothing should be in it.
+		// It may still EXIST on an upgraded workspace -- the image or an
+		// earlier run made it -- which is why accounts are revoked from it
+		// rather than the group being assumed absent.
+		groups = []string{"workspace"}
+	}
+	for _, group := range groups {
 		if err := addGroup(group); err != nil {
 			return fmt.Errorf("creating group %s: %w", group, err)
 		}

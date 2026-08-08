@@ -4,10 +4,12 @@ package accounts
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -19,14 +21,27 @@ import (
 // locking between them; reimplementing that to avoid one dependency would be
 // trading a well-understood tool for a novel source of corruption.
 type UnixProvisioner struct {
-	// Groups the account joins. "docker" is what gives access to the inner
-	// daemon; "workspace" marks it as ours.
+	// Groups the account joins. Empty means the shared-daemon default,
+	// {"docker", "workspace"}: "docker" is what gives access to the shared
+	// inner daemon, and "workspace" marks the account as ours.
 	Groups []string
+
+	// Revoke names groups an existing account must NOT be in.
+	//
+	// Needed because Ensure returns early for an account that already exists,
+	// so changing Groups alone would apply to new accounts only -- and on an
+	// upgraded workspace every account already exists. With a daemon per
+	// account (ADR 0019) that would leave every one of them still in the
+	// `docker` group, holding a socket that reaches the PARENT daemon, which
+	// can see and control every account's dind. The separation would be a
+	// claim rather than a fact, on exactly the workspaces that had users.
+	Revoke []string
 }
 
 // Ensure creates the account if it is missing and returns its home directory.
 func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, error) {
 	if u, err := user.Lookup(name); err == nil {
+		p.revoke(name)
 		return u.HomeDir, nil
 	}
 
@@ -69,4 +84,38 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, er
 	}
 
 	return u.HomeDir, nil
+}
+
+// revoke removes an existing account from groups it must no longer be in.
+//
+// Best effort and deliberately quiet about the ordinary case: `gpasswd -d`
+// fails when the account was never a member, which is what it looks like every
+// time after the first. A failure that matters shows up as the group still
+// being there, which the integration suite asserts rather than trusting this.
+func (p *UnixProvisioner) revoke(name string) {
+	for _, group := range p.Revoke {
+		if !inGroup(name, group) {
+			continue
+		}
+		if out, err := exec.Command("gpasswd", "-d", name, group).CombinedOutput(); err != nil {
+			log.Printf("accounts: could not remove %s from %s: %v: %s", name, group, err, out)
+		}
+	}
+}
+
+// inGroup reports whether an account is a member of a group.
+func inGroup(name, group string) bool {
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return false
+	}
+	u, err := user.Lookup(name)
+	if err != nil {
+		return false
+	}
+	ids, err := u.GroupIds()
+	if err != nil {
+		return false
+	}
+	return slices.Contains(ids, g.Gid)
 }

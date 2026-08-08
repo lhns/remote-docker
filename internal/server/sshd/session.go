@@ -208,6 +208,23 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 		"LOGNAME="+stored.Name,
 		"SHELL="+shell,
 	)
+
+	// Point a shell at the account's OWN daemon. Without this, `docker ps` in
+	// an ssh session would find /var/run/docker.sock -- the parent daemon,
+	// which holds every account's dind -- and the separation would end at the
+	// first shell prompt.
+	//
+	// Ensure rather than Lookup: somebody who opens a shell to run docker
+	// commands should wait for their daemon rather than be told it is not
+	// there. A failure is reported and the shell opens anyway; a shell with no
+	// DOCKER_HOST is far better than no shell.
+	if s.cfg.Daemons != nil {
+		if d, err := s.cfg.Daemons.Ensure(session.Context(), account.Name()); err == nil {
+			cmd.Env = append(cmd.Env, "DOCKER_HOST=unix://"+d.Socket)
+		} else {
+			_, _ = fmt.Fprintf(session.Stderr(), "your docker daemon is not available: %v\n", err)
+		}
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid: uint32(stored.UID),
