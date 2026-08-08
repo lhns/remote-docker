@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/docker/cli/cli/command"
@@ -51,7 +52,13 @@ set -- though an explicit one is respected.`,
 	// Point the embedded client at our endpoint unless the user has already
 	// chosen one. Without this, the CLI would look for a local daemon that by
 	// premise is not installed.
-	if os.Getenv("DOCKER_HOST") == "" {
+	//
+	// Gated on the invocation actually BEING a docker command, because this
+	// function runs while the root command is built -- so `remote-docker gc`,
+	// and even `--help`, used to probe the endpoint and could open a whole
+	// file-serving session that then raced the real command's own session
+	// inside one process.
+	if invokingDocker() && os.Getenv("DOCKER_HOST") == "" {
 		endpoint := ""
 		if cfg, err := resolve(); err == nil {
 			endpoint = cfg.EndpointFor(proxy.DefaultEndpoint)
@@ -97,6 +104,36 @@ set -- though an explicit one is respected.`,
 	return cmd
 }
 
+// invokingDocker reports whether this process was asked to run a docker
+// command, by finding the first argument that is not a flag or a flag's value.
+//
+// Crude on purpose. Cobra has not parsed anything yet -- it is still being
+// assembled -- so there is nothing better to ask, and being wrong costs only
+// a session that is opened slightly too eagerly or not eagerly enough.
+func invokingDocker() bool {
+	// Every root flag takes a value, so a flag consumes the token after it
+	// unless it was written as --flag=value.
+	takesValue := map[string]bool{
+		"--workspace": true, "--host": true, "--port": true,
+		"--user": true, "--endpoint": true,
+	}
+	skip := false
+	for _, arg := range os.Args[1:] {
+		if skip {
+			skip = false
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if name, _, hasValue := strings.Cut(arg, "="); !hasValue && takesValue[name] {
+				skip = true
+			}
+			continue
+		}
+		return arg == "docker"
+	}
+	return false
+}
+
 // implicitSession is the one this command started for itself, if any. Closed
 // by main once the command has finished, because a deferred close here would
 // run while the docker command was still using it.
@@ -122,9 +159,12 @@ func startImplicitSession(cfg config.Config, endpoint string) {
 		watch = fswatch.ModeOff
 	}
 	s, err := session.Open(context.Background(), session.Options{
-		Config:       cfg,
-		WorkDir:      mustWorkDir(),
-		Endpoint:     endpoint,
+		Config:   cfg,
+		WorkDir:  mustWorkDir(),
+		Endpoint: endpoint,
+		// This session IS the one serving the endpoint for the life of the
+		// command, until the daemon takes that over.
+		Serve:        true,
 		Files:        session.FilesRequired,
 		IdleTimeout:  cfg.IdleTimeout,
 		Watch:        watch,

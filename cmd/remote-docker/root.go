@@ -224,6 +224,9 @@ Point DOCKER_HOST at the printed endpoint and use docker normally.`,
 				Endpoint:    cfg.EndpointFor(proxy.DefaultEndpoint),
 				Files:       files,
 				IdleTimeout: cfg.IdleTimeout,
+				// The only command that binds the endpoint. Everything else
+				// either talks to whoever is serving it, or does not need it.
+				Serve: true,
 				// `up` exists to hold a session open and say what it is doing;
 				// every other command has output of its own to protect.
 				Progress:     true,

@@ -67,6 +67,15 @@ type Options struct {
 	WatchBudget  int
 	WatchExclude []string
 
+	// Serve says whether this session binds the local Docker endpoint.
+	//
+	// Off by default, and the default is the point. `status` and `gc` declined
+	// the remote NFS port with some care and then bound the LOCAL endpoint
+	// anyway, which they never use -- so on Windows, where the pipe bind is
+	// genuinely exclusive, `status` could not run at all while `up` was
+	// running. That is precisely when someone runs it.
+	Serve bool
+
 	// Files says whether this session should export the working directory.
 	//
 	// An account has exactly one reverse-tunnel port (ADR 0003), so only one
@@ -215,9 +224,15 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 
 	s.proxy = &proxy.Proxy{Dialer: s, Rewriter: s, Log: opts.Log}
 
-	if err := s.listen(opts.Endpoint); err != nil {
-		cancel()
-		return nil, err
+	if opts.Serve {
+		if err := s.listen(opts.Endpoint); err != nil {
+			cancel()
+			return nil, err
+		}
+	} else {
+		// Still reported, because commands print it and a session that serves
+		// nothing should still be able to say where the endpoint would be.
+		s.Endpoint = proxy.DockerHost(opts.Endpoint)
 	}
 
 	if opts.IdleTimeout > 0 {
