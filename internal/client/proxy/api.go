@@ -21,10 +21,6 @@ import (
 // user's own tooling does still goes through the proxy untouched.
 type APIClient struct {
 	Dialer Dialer
-
-	// Version pins the API version in request paths. Empty means unversioned,
-	// which the daemon answers with its own default.
-	Version string
 }
 
 // do performs one request over a fresh connection to the daemon.
@@ -44,7 +40,7 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 		payload = strings.NewReader(string(encoded))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+c.versioned(path), payload)
+	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+path, payload)
 	if err != nil {
 		conn.Close()
 		return nil, nil, fmt.Errorf("proxy: building request: %w", err)
@@ -65,13 +61,6 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 		return nil, nil, fmt.Errorf("proxy: reading response: %w", err)
 	}
 	return resp, conn, nil
-}
-
-func (c *APIClient) versioned(path string) string {
-	if c.Version == "" {
-		return path
-	}
-	return "/" + strings.TrimPrefix(c.Version, "/") + path
 }
 
 // EnsureVolume creates an NFS-backed volume if it is not already present.
@@ -212,12 +201,6 @@ func apiError(resp *http.Response) string {
 	return resp.Status
 }
 
-// Volume is a volume as the daemon reports it.
-type Volume struct {
-	Name   string
-	Labels map[string]string
-}
-
 // ListVolumes returns every volume on the workspace daemon.
 func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
 	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes", nil)
@@ -231,18 +214,17 @@ func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
 		return nil, fmt.Errorf("proxy: listing volumes: %s", apiError(resp))
 	}
 
+	// Decoded straight into the type the caller wants. There used to be a
+	// proxy.Volume declared here, identical to rewrite.Volume down to its doc
+	// comment, and a loop converting one to the other -- a conversion that
+	// existed only because the same struct was written twice.
 	var payload struct {
-		Volumes []Volume
+		Volumes []rewrite.Volume
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("proxy: decoding volume list: %w", err)
 	}
-
-	out := make([]rewrite.Volume, 0, len(payload.Volumes))
-	for _, v := range payload.Volumes {
-		out = append(out, rewrite.Volume{Name: v.Name, Labels: v.Labels})
-	}
-	return out, nil
+	return payload.Volumes, nil
 }
 
 // RemoveVolume deletes a volume by name.

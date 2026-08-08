@@ -58,16 +58,20 @@ type Logger interface {
 	Printf(format string, args ...any)
 }
 
+// bindAddr is the local interface a forward binds.
+//
+// Loopback, and not configurable. A published port becoming reachable from the
+// network because a container started on somebody else's machine would be a
+// surprise, and a nasty one. This was a field once; nothing ever set it, and
+// two log lines hardcoded the value anyway -- so a knob that appeared to work
+// would have made them lie.
+const bindAddr = "127.0.0.1"
+
 // Manager keeps local forwards in step with the containers that are running.
 type Manager struct {
 	Docker    Docker
 	Forwarder Forwarder
 	Log       Logger
-
-	// BindAddr is the local interface to bind. Loopback by default: a
-	// published port becoming reachable from the network because a container
-	// started somewhere else would be a surprise, and a nasty one.
-	BindAddr string
 
 	// Owned reports whether a container is one this client created. With a
 	// shared daemon (ADR 0012) the event stream carries other users'
@@ -131,7 +135,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			if !keep[port] {
 				_ = fwd.Close()
 				delete(existing.forwards, port)
-				m.logf("closed 127.0.0.1:%d (%s no longer publishes it)", port, existing.name)
+				m.logf("closed %s:%d (%s no longer publishes it)", bindAddr, port, existing.name)
 			}
 		}
 	}
@@ -160,7 +164,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // aborting the reconciliation: one unavailable port must not stop every other
 // container's ports from being forwarded.
 func (m *Manager) openLocked(entry *containerForwards, container Container, p Published) {
-	bind := m.bindAddr()
+	bind := bindAddr
 	local := net.JoinHostPort(bind, fmt.Sprint(p.PublicPort))
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(p.PublicPort))
 
@@ -179,7 +183,7 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
 	for port, fwd := range entry.forwards {
 		_ = fwd.Close()
-		m.logf("closed 127.0.0.1:%d (%s stopped)", port, entry.name)
+		m.logf("closed %s:%d (%s stopped)", bindAddr, port, entry.name)
 	}
 	delete(m.active, id)
 }
@@ -210,13 +214,6 @@ func (m *Manager) Active() []int {
 	}
 	sort.Ints(out)
 	return out
-}
-
-func (m *Manager) bindAddr() string {
-	if m.BindAddr == "" {
-		return "127.0.0.1"
-	}
-	return m.BindAddr
 }
 
 // publishedTCP returns the TCP ports a container publishes to the host.

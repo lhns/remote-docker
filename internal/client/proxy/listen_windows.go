@@ -22,11 +22,15 @@ const defaultPipe = `\\.\pipe\docker_remote`
 // asked. Here there is a constant behind it.
 func DefaultEndpoint() string { return defaultPipe }
 
-// DockerEngineEndpoint is the pipe the official Docker CLI looks for when
-// DOCKER_HOST is unset. Binding it makes the official CLI work with no
-// configuration at all -- but only when nothing else already owns the name,
-// which in practice means Docker Desktop is not running.
-const DockerEngineEndpoint = `\\.\pipe\docker_engine`
+// Deliberately NOT \\.\pipe\docker_engine, which is the pipe the official
+// Docker CLI looks for when DOCKER_HOST is unset. Binding it would make that
+// CLI work with no configuration at all -- but only while nothing else owns
+// the name, which in practice means only while Docker Desktop is not running.
+// A default that works until the user installs Docker Desktop is worse than
+// one that always needs a context, which `workspace create` writes anyway.
+//
+// This is the same reasoning as the Unix side's note about
+// /var/run/docker.sock, for the same reason.
 
 // Listen binds the local Docker endpoint.
 //

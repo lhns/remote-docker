@@ -21,15 +21,10 @@ const DialStdioCommand = "docker system dial-stdio"
 
 // SSHDialer opens Docker connections over an SSH client.
 type SSHDialer struct {
-	Client  *sshx.Client
-	Command string
+	Client *sshx.Client
 }
 
 // DialDocker opens one stream to the workspace daemon.
 func (d *SSHDialer) DialDocker(context.Context) (io.ReadWriteCloser, error) {
-	cmd := d.Command
-	if cmd == "" {
-		cmd = DialStdioCommand
-	}
-	return d.Client.OpenStream(cmd)
+	return d.Client.OpenStream(DialStdioCommand)
 }

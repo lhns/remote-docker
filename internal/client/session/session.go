@@ -619,33 +619,6 @@ func (s *Session) ourVolumes() map[string]bool {
 	return out
 }
 
-// OwnedVolumesInUse counts running containers holding a share this session
-// serves.
-//
-// For a session that is about to end: those containers keep running, but their
-// mounts are served by this process and stop working when it goes. Reported
-// rather than prevented, because refusing to exit would be worse.
-func (s *Session) OwnedVolumesInUse(ctx context.Context) (int, error) {
-	live, ok := s.gate.current()
-	if !ok {
-		return 0, nil
-	}
-	containers, err := live.api.ListContainers(ctx)
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, c := range containers {
-		for _, m := range c.Mounts {
-			if m.Type == "volume" && workspace.IsManagedVolume(m.Name) {
-				n++
-				break
-			}
-		}
-	}
-	return n, nil
-}
-
 func (live *liveConn) close() {
 	if live.cancel != nil {
 		live.cancel()
@@ -784,12 +757,6 @@ func (s *Session) Ports() []int {
 		return nil
 	}
 	return live.ports.Active()
-}
-
-// Connected reports whether a workspace connection is currently open.
-func (s *Session) Connected() bool {
-	_, ok := s.gate.current()
-	return ok
 }
 
 // Close tears the session down.

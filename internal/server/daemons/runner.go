@@ -16,9 +16,6 @@ import (
 type Daemon struct {
 	Account string
 
-	// Container is the id of the dind holding it.
-	Container string
-
 	// PID is the daemon container's pid in the agent's own pid namespace.
 	//
 	// Reachable because the dind is a CHILD of the workspace's dockerd rather
@@ -48,16 +45,8 @@ func (d Daemon) Root() string { return fmt.Sprintf("/proc/%d/root", d.PID) }
 
 // Manager starts, adopts and hands out per-account daemons.
 type Manager struct {
-	// Docker is the CLI used to talk to the WORKSPACE's own daemon, which is
-	// the parent of every per-account one. Empty means "docker" on PATH.
-	Docker string
-
 	// Options are passed to Plan.
 	Options Options
-
-	// ReadyTimeout bounds how long Ensure waits for a new daemon's socket to
-	// appear. Zero means DefaultReadyTimeout.
-	ReadyTimeout time.Duration
 
 	// Log receives progress. Nil means silence.
 	Log func(format string, args ...any)
@@ -156,7 +145,7 @@ func (m *Manager) Ensure(ctx context.Context, account string) (*Daemon, error) {
 // workspace-info round trip instead of behind its first docker command.
 func (m *Manager) Warm(account string) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), m.readyTimeout())
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultReadyTimeout)
 		defer cancel()
 		if _, err := m.Ensure(ctx, account); err != nil {
 			m.logf("warming %s: %v", account, err)
@@ -221,14 +210,13 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 // await waits for the daemon's socket to appear and reads back its pid.
 func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, error) {
 	socket := SocketPathFor(account)
-	deadline := time.Now().Add(m.readyTimeout())
+	deadline := time.Now().Add(DefaultReadyTimeout)
 
 	for {
 		if _, err := os.Stat(socket); err == nil {
 			pid, cerr := m.pid(ctx, name)
 			if cerr == nil && pid > 0 {
-				id, _ := m.inspect(ctx, name, "{{.Id}}")
-				d := &Daemon{Account: account, Container: id, PID: pid, Socket: socket}
+				d := &Daemon{Account: account, PID: pid, Socket: socket}
 				if err := m.chown(account, socket); err != nil {
 					m.logf("could not hand %s its socket: %v", account, err)
 				}
@@ -236,7 +224,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 			}
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("daemons: %s did not answer within %s", name, m.readyTimeout())
+			return nil, fmt.Errorf("daemons: %s did not answer within %s", name, DefaultReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -355,10 +343,9 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			m.byName = map[string]*Daemon{}
 		}
 		m.byName[account] = &Daemon{
-			Account:   account,
-			Container: strings.TrimPrefix(row.Names, "/"),
-			PID:       pid,
-			Socket:    SocketPathFor(account),
+			Account: account,
+			PID:     pid,
+			Socket:  SocketPathFor(account),
 		}
 		m.mu.Unlock()
 
@@ -403,18 +390,7 @@ func (m *Manager) chown(account, socket string) error {
 }
 
 func (m *Manager) docker(ctx context.Context, args ...string) *exec.Cmd {
-	docker := m.Docker
-	if docker == "" {
-		docker = "docker"
-	}
-	return exec.CommandContext(ctx, docker, args...)
-}
-
-func (m *Manager) readyTimeout() time.Duration {
-	if m.ReadyTimeout > 0 {
-		return m.ReadyTimeout
-	}
-	return DefaultReadyTimeout
+	return exec.CommandContext(ctx, "docker", args...)
 }
 
 func (m *Manager) logf(format string, args ...any) {

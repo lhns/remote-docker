@@ -13,9 +13,6 @@ import (
 // client, and adding one to ask a single question would be a large dependency
 // for a `--format` string -- the same trade internal/server/elevate makes.
 type DockerVolumes struct {
-	// Docker is the binary to run. Empty means "docker" from PATH.
-	Docker string
-
 	// Host is the daemon to ask, as a -H value. Empty means the agent's own,
 	// which is the shared-daemon mode of ADR 0012.
 	//
@@ -39,17 +36,12 @@ type DockerVolumes struct {
 }
 
 func (d DockerVolumes) Mountpoint(ctx context.Context, volume string) (string, error) {
-	bin := d.Docker
-	if bin == "" {
-		bin = "docker"
-	}
-
 	args := []string{"volume", "inspect", volume, "--format", "{{.Mountpoint}}"}
 	if d.Host != "" {
 		args = append([]string{"-H", d.Host}, args...)
 	}
 
-	out, err := exec.CommandContext(ctx, bin, args...).Output()
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
 		return "", fmt.Errorf("notify: inspecting volume %s: %w", volume, err)
 	}

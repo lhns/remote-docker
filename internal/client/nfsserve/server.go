@@ -58,10 +58,6 @@ func (s *Server) Serve(l net.Listener) error {
 	return err
 }
 
-// Registry returns the registry this server exports, so shares can be added
-// while it is running.
-func (s *Server) Registry() *Registry { return s.registry }
-
 // mountHandler resolves a MOUNT request to the share it names.
 //
 // This is where the virtual namespace lives. go-nfs hands us the requested

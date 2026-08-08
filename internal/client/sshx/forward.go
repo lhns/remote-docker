@@ -86,28 +86,6 @@ func (f *Forward) Close() error {
 	return err
 }
 
-// Serve accepts on l -- typically a listener obtained from Client.Listen, so
-// running on the workspace -- and carries each connection to a local address.
-// This is the reverse direction, used when something on the workspace must
-// reach a service here.
-func Serve(l net.Listener, dial func() (net.Conn, error)) error {
-	for {
-		remote, err := l.Accept()
-		if err != nil {
-			return err
-		}
-		go func() {
-			defer remote.Close()
-			local, err := dial()
-			if err != nil {
-				return
-			}
-			defer local.Close()
-			pipe(remote, local)
-		}()
-	}
-}
-
 // pipe copies in both directions until either side ends, then unblocks the
 // other by closing both. Without the close, one direction can sit in Read
 // forever after its peer has gone.

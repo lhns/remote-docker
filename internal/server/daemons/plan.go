@@ -61,7 +61,6 @@ const (
 type Spec struct {
 	Name       string
 	Image      string
-	Account    string
 	Privileged bool
 
 	// Remove is always false and the field is here to say so out loud. A
@@ -167,7 +166,6 @@ func Plan(account string, opts Options) (Spec, error) {
 	return Spec{
 		Name:       ContainerName(account),
 		Image:      image,
-		Account:    account,
 		Privileged: true,
 		Remove:     false,
 		Restart:    "unless-stopped",

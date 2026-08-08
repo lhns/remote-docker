@@ -140,9 +140,6 @@ func (c *Client) Close() error {
 	return err
 }
 
-// Wait blocks until the connection ends.
-func (c *Client) Wait() error { return c.ssh.Wait() }
-
 // Listen asks the workspace to listen on addr and forward connections back
 // here. This is ssh -R, and it is how the client's NFS export reaches the
 // remote dockerd.

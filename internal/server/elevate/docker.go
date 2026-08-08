@@ -25,9 +25,6 @@ const HostSocketEnv = "WORKSPACE_HOST_SOCKET"
 
 // Runner performs the elevation.
 type Runner struct {
-	// Docker is the docker CLI to invoke. Empty means "docker" on PATH.
-	Docker string
-
 	// HostSocket is the host daemon's socket inside this container.
 	HostSocket string
 
@@ -222,10 +219,7 @@ func isHex(s string) bool {
 }
 
 func (r *Runner) docker(ctx context.Context, args ...string) *exec.Cmd {
-	bin := r.Docker
-	if bin == "" {
-		bin = "docker"
-	}
+	bin := "docker"
 	full := []string{"--host", "unix://" + r.hostSocket()}
 	full = append(full, args...)
 	return exec.CommandContext(ctx, bin, full...)
