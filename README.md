@@ -94,7 +94,7 @@ remote-docker start
 Docker at it:
 
 ```bash
-remote-docker context install --use    # official docker/compose CLIs, no env vars
+docker --context <workspace> ps        # the context was created with the workspace
 # or
 export DOCKER_HOST=unix:///…/docker.sock
 ```
@@ -129,8 +129,8 @@ Docker-in-Docker daemon and a real kernel NFS mount — see
 ## Several workspaces
 
 ```bash
-remote-docker workspace add dev --host dev.example --user alice --watch partial
-remote-docker workspace add ci  --host ci.example  --user alice
+remote-docker workspace create dev --host dev.example --user alice --watch partial
+remote-docker workspace create ci  --host ci.example  --user alice
 ```
 
 which writes `~/.remote-docker.json` for you, and creates a docker context per
@@ -161,7 +161,8 @@ docker --context dev ps
 docker --context ci ps
 ```
 
-`remote-docker workspace list` shows them and which is the default.
+`remote-docker workspace ls` shows them and which is the default, and
+`remote-docker workspace inspect <name>` shows one in full.
 
 ## How it works
 
@@ -336,20 +337,29 @@ workspace is a shared machine; treat it as one.
 | | |
 |---|---|
 | `remote-docker enroll` | print the public key to hand over for enrolment |
-| `remote-docker workspace add <name> --host …` | add a workspace and create its docker context |
-| `remote-docker workspace remove <name>` | remove both again |
-| `remote-docker workspace list` | list them (`workspaces` still works) |
-| `remote-docker workspace default <name>` | choose which one commands use by default |
+| `remote-docker workspace create <name> --host …` | add a workspace and create its docker context |
+| `remote-docker workspace rm <name>` | remove both again |
+| `remote-docker workspace ls` | list them (`workspaces` still works) |
+| `remote-docker workspace use <name>` | choose which one commands use by default |
+| `remote-docker workspace inspect [name]` | its settings, endpoint, docker context and whether a session is up |
 | `remote-docker start` | start a background session and return |
+| `remote-docker start --foreground` | run it in this terminal instead |
 | `remote-docker stop` | stop it |
-| `remote-docker up` | run a session in the foreground instead |
+| `remote-docker restart` | stop and start, refusing while something depends on it |
 | `remote-docker status` | what the workspace reports about this account |
-| `remote-docker shell` | interactive session on the workspace |
 | `remote-docker docker …` | the embedded Docker CLI |
-| `remote-docker context install [--use\|--all]` | rewrite a docker context without touching the config |
-| `remote-docker context remove` | remove one |
 | `remote-docker gc` | remove share volumes nothing is using |
 | `remote-docker version` | |
+
+The workspace verbs are docker's, and the old spellings -- `add`, `remove`,
+`list`, `default` -- still work. There is no `context` command: a docker
+context is written when a workspace is created and removed when it is, because
+there is no case where you want a workspace configured and not reachable as
+`docker --context <name>` ([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)).
+Re-run `workspace create` to rewrite a context that has drifted.
+
+For a shell on the workspace, use `ssh`. The agent serves one to any enrolled
+key.
 
 On the workspace: `remote-dockerd serve` is the agent (the image's default),
 and `remote-dockerd elevate` is the Swarm entry point.

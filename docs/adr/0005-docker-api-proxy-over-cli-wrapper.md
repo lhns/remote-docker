@@ -54,6 +54,8 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
 - Requests we do not understand are forwarded verbatim rather than rejected.
   A proxy that fails closed on unfamiliar traffic would be a worse tool than
   the wrapper it replaces.
-- `remote-docker shell` still exists and still opens an interactive session on
-  the workspace. The proxy replaces the wrapper's `docker` subcommand, not its
-  usefulness as a way in.
+- ~~`remote-docker shell` still exists and still opens an interactive session
+  on the workspace.~~ **Corrected by [ADR 0018](0018-one-way-to-do-each-thing.md):**
+  `shell` is gone. The point it was making still holds -- the proxy replaced
+  the wrapper's `docker` subcommand, not its usefulness as a way in -- but a
+  stock `ssh` is what provides the way in now, and the agent still serves it.

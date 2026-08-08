@@ -1,6 +1,7 @@
 # 0017. A background session per workspace
 
-- Status: Accepted
+- Status: Accepted; `up` is superseded by `start --foreground` in
+  [ADR 0018](0018-one-way-to-do-each-thing.md)
 - Date: 2026-08-08
 
 ## Context
@@ -44,6 +45,9 @@ run by hand.
 - `start` — ensure one, print the endpoint. Idempotent.
 - `stop` — ask it to go.
 - `up` — unchanged. What the integration suite and anyone debugging uses.
+  (Renamed to `start --foreground` by ADR 0018 and kept as a hidden alias. The
+  paragraph above is what survives: one implementation, spawned rather than
+  reimplemented. Only its spelling changed.)
 - the embedded CLI — starts one rather than opening its own, so a detached
   container keeps its mounts after the command exits.
 

@@ -16,7 +16,7 @@ survives that document being superseded.
 | [0003](0003-client-serves-workspace-mounts.md) | The client serves, the workspace mounts | Accepted |
 | [0004](0004-single-go-binary-client.md) | A single Go binary with SSH and NFS embedded | Accepted |
 | [0005](0005-docker-api-proxy-over-cli-wrapper.md) | A Docker API proxy, not a CLI wrapper | Accepted |
-| [0006](0006-per-bind-nfs-volumes.md) | Per-bind NFS volumes, not one workspace mount | Accepted |
+| [0006](0006-per-bind-nfs-volumes.md) | Per-bind NFS volumes, not one workspace mount | Accepted; `~/workspace` superseded by 0018 |
 | [0007](0007-virtual-nfs-export-namespace.md) | A virtual NFS export namespace | Accepted |
 | [0008](0008-automatic-port-forwarding.md) | Automatic port forwarding driven by Docker events | Accepted |
 | [0009](0009-embedding-the-docker-cli.md) | Embedding the Docker CLI, Buildx and Compose | Accepted |
@@ -27,7 +27,8 @@ survives that document being superseded.
 | [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open**, narrowed |
 | [0015](0015-connections-on-demand.md) | Connections established on demand | Accepted |
 | [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | Accepted |
-| [0017](0017-a-background-session-per-workspace.md) | A background session per workspace | Accepted |
+| [0017](0017-a-background-session-per-workspace.md) | A background session per workspace | Accepted; `up` superseded by 0018 |
+| [0018](0018-one-way-to-do-each-thing.md) | One way to do each thing | Accepted |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

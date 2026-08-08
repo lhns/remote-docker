@@ -66,8 +66,13 @@ than a rewrite.
   glossed. `gliderlabs/ssh` is widely deployed for exactly this shape of
   problem — Gitea and Soft Serve among others — which is the basis for accepting
   it, but it is a smaller and less-attacked codebase than OpenSSH.
-- The agent must implement a PTY session to keep `remote-docker shell` working.
-  The library supports it and `bash` is in the image.
+- The agent must implement a PTY session. It was written to keep
+  `remote-docker shell` working; that command is gone
+  ([ADR 0018](0018-one-way-to-do-each-thing.md)) and the PTY is not, because a
+  stock `ssh` with an enrolled key is now the way in -- and because the
+  argument for unrestricted local forwarding in `server.go` rests on the
+  account being able to reach a shell. The library supports it and `bash` is in
+  the image.
 - Behaviour that must survive the rewrite, because it was learned the hard way:
   **poll the keys directory as well as watching it** — inotify never fires for
   changes made on another host when that directory is CephFS- or NFS-backed;

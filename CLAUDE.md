@@ -28,7 +28,7 @@ pkg/workspace/           THE SHARED CONTRACT, imported by both binaries
 internal/client/
   config/                settings precedence, state paths
   fswatch/               watches shared dirs, streams changes to the agent
-  sshx/                  ssh client, keys, known_hosts, forwards, pty shell
+  sshx/                  ssh client, keys, known_hosts, forwards
   nfsserve/              in-process NFSv3 server, virtual export namespace
   proxy/                 Docker API proxy + a small API client of our own
   rewrite/               binds -> NFS volumes, owner labelling, volume GC
@@ -41,7 +41,7 @@ internal/server/
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose and swarm deployments
 client/                  the ORIGINAL shell clients — superseded, not yet deleted
-test/                    integration.sh, propagation.sh, probes
+test/                    integration.sh, probes
 docs/adr/                architecture decision records
 ```
 
@@ -178,11 +178,14 @@ written against sshd, unchanged, before they were removed.
 Against a real dind daemon, a real kernel NFS mount and the real client
 binary: the tunnel, the NFS export, bind rewriting including sources outside
 the working directory, automatic port forwarding, managed volume creation,
-`docker compose`, the interactive shell and its `~/workspace` mount, the
+`docker compose` including one service reaching another over its network, a
+stock `ssh` still getting a shell on a pty as the enrolled account, the
 embedded Docker CLI, `gc`, idle disconnect and reconnect, cross-user port
 hijack refusal, `elevate`, the replay primitive matrix (which syscall produces
-which inotify event), and an edit here firing inotify inside a container with
-`REMOTE_DOCKER_WATCH=partial`.
+which inotify event), an edit here firing inotify inside a container with
+`REMOTE_DOCKER_WATCH=partial`, the background session (detached start, version
+mismatch, self-reclaim), and the workspace lifecycle with the docker context
+appearing and disappearing alongside it.
 
 ### NOT tested, and do not claim otherwise
 

@@ -1,6 +1,7 @@
 # 0006. Per-bind NFS volumes, not one workspace mount
 
-- Status: Accepted
+- Status: Accepted; the `~/workspace` convenience mount is superseded by
+  [ADR 0018](0018-one-way-to-do-each-thing.md)
 - Date: 2026-08-07
 - Supersedes part of the consequences of [ADR 0003](0003-client-serves-workspace-mounts.md)
 
@@ -54,7 +55,9 @@ this purpose for years. The daemon performs the mount in its own namespace when
 the container starts, on the loopback address where the reverse tunnel listens.
 
 A single convenience mount at `~/workspace` is kept, for the interactive shell
-only.
+only. (That mount and the shell are both gone as of ADR 0018. The rest of this
+record stands -- in particular the `rslave` finding below, which was found by
+experiment and outlives the mount it justified.)
 
 ## Consequences
 
