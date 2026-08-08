@@ -110,6 +110,21 @@ func (p *Proxy) track(conn net.Conn) bool {
 	return true
 }
 
+// clientGone reports an error that only means the other end hung up.
+//
+// A Docker client abandons requests it no longer needs -- it stops caring
+// about /containers/<id>/wait the moment the attach stream tells it the
+// container is gone -- so a write failing partway through is routine, not a
+// fault. Reporting it printed "The pipe has been ended." after a container
+// that had run perfectly.
+func clientGone(err error) bool {
+	return errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		peerGone(err)
+}
+
 // closing reports whether shutdown has begun, so a failure caused by our own
 // teardown is not reported as one caused by anything else.
 func (p *Proxy) closing() bool {
@@ -156,7 +171,7 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 			// its handler on purpose, so the resulting read failure describes
 			// the shutdown rather than a fault. Reporting it turned a clean
 			// exit into two alarming lines about pipes that had ended.
-			if err != io.EOF && !errors.Is(err, net.ErrClosed) && !p.closing() {
+			if err != io.EOF && !clientGone(err) && !p.closing() {
 				p.logf("reading request: %v", err)
 			}
 			return
@@ -164,7 +179,7 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 
 		keepGoing, err := p.forward(ctx, client, reader, req)
 		if err != nil {
-			if p.closing() {
+			if p.closing() || clientGone(err) {
 				// The client is going away with us; there is nobody left to
 				// read an error and nothing left to do about it.
 				return
