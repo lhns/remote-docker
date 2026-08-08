@@ -95,13 +95,12 @@ const DefaultDaemonIdle = 30 * time.Minute
 // The flat form is not deprecated. Most people have one workspace, and making
 // them nest it under a name to say so would be a poor trade.
 type File struct {
-	Host         string   `json:"host,omitempty"`
-	Port         int      `json:"port,omitempty"`
-	User         string   `json:"user,omitempty"`
-	Endpoint     string   `json:"endpoint,omitempty"`
-	Watch        string   `json:"watch,omitempty"`
-	WatchBudget  int      `json:"watchBudget,omitempty"`
-	WatchExclude []string `json:"watchExclude,omitempty"`
+	// The flat form IS a workspace, so it is one. Embedded rather than
+	// repeated: these seven fields were declared identically in both types,
+	// and two appliers walked them separately, so adding a setting meant
+	// remembering four places. encoding/json inlines an embedded struct's
+	// fields, tags and all, so the file format is unchanged.
+	Workspace
 
 	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
 	Default    string               `json:"default,omitempty"`
@@ -213,7 +212,7 @@ func Resolve(o Overrides, path string) (Config, error) {
 	}
 	cfg.Name = name
 
-	applyFile(&cfg, file)
+	applyWorkspace(&cfg, file.Workspace)
 	applyWorkspace(&cfg, ws)
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
@@ -244,32 +243,12 @@ func Load(path string) (File, error) {
 	return file, nil
 }
 
-func applyFile(cfg *Config, file File) {
-	if file.Host != "" {
-		cfg.Host = file.Host
-	}
-	if file.Port != 0 {
-		cfg.Port = file.Port
-	}
-	if file.User != "" {
-		cfg.User = file.User
-	}
-	if file.Endpoint != "" {
-		cfg.Endpoint = file.Endpoint
-	}
-	if file.Watch != "" {
-		cfg.Watch = file.Watch
-	}
-	if file.WatchBudget != 0 {
-		cfg.WatchBudget = file.WatchBudget
-	}
-	if len(file.WatchExclude) > 0 {
-		cfg.WatchExclude = file.WatchExclude
-	}
-}
-
-// applyWorkspace overlays a named workspace on top of the file's flat fields,
-// so shared settings can sit at the top level and be specialised per entry.
+// applyWorkspace overlays a workspace's settings, leaving anything it does not
+// set alone.
+//
+// Called twice: once for the file's flat fields, then once for the named entry
+// on top, so shared settings can sit at the top level and be specialised per
+// entry. It used to be two functions with the same seven clauses.
 func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Host != "" {
 		cfg.Host = ws.Host

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -60,7 +61,7 @@ func TestSaveDoesNotDestroyOnRewrite(t *testing.T) {
 // second has to move the first into the keyed form, or the top-level fields
 // would shadow it and it would silently stop being reachable.
 func TestSetMigratesTheFlatForm(t *testing.T) {
-	f := File{Host: "old.example", Port: 2200, User: "bob"}
+	f := File{Workspace: Workspace{Host: "old.example", Port: 2200, User: "bob"}}
 	if err := f.Set("new", Workspace{Host: "new.example", Port: 2222, User: "alice"}); err != nil {
 		t.Fatal(err)
 	}
@@ -136,5 +137,51 @@ func TestKeyCommentIdentifiesTheMachine(t *testing.T) {
 	got := KeyComment()
 	if got == "" || got == "remote-docker" {
 		t.Errorf("KeyComment() = %q, which identifies nothing", got)
+	}
+}
+
+// The flat form must survive Workspace being EMBEDDED in File rather than
+// repeated field for field.
+//
+// encoding/json inlines an anonymous embedded struct's fields, tags and all,
+// so the shape is unchanged -- but that is a property of the encoder rather
+// than of this code, and the config file is somebody's file on disk. Asserted
+// on the bytes, in both directions, so a future change to the struct that
+// nests them instead fails here rather than in a user's home directory.
+func TestTheFlatFormKeepsItsJSONShape(t *testing.T) {
+	const flat = `{"host":"dev.example","port":2200,"user":"alice","watch":"partial"}`
+
+	var f File
+	if err := json.Unmarshal([]byte(flat), &f); err != nil {
+		t.Fatalf("parsing the flat form: %v", err)
+	}
+	if f.Host != "dev.example" || f.Port != 2200 || f.User != "alice" || f.Watch != "partial" {
+		t.Fatalf("the flat form did not reach the fields: %+v", f)
+	}
+
+	out, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("re-marshalling: %v", err)
+	}
+	if string(out) != flat {
+		t.Errorf("the flat form re-marshalled as\n  %s\nwant\n  %s", out, flat)
+	}
+}
+
+// And the keyed form, for the same reason: `workspaces` and `default` sit
+// beside the inlined fields rather than under them.
+func TestTheKeyedFormKeepsItsJSONShape(t *testing.T) {
+	const keyed = `{"workspaces":{"dev":{"host":"dev.example"}},"default":"dev"}`
+
+	var f File
+	if err := json.Unmarshal([]byte(keyed), &f); err != nil {
+		t.Fatalf("parsing the keyed form: %v", err)
+	}
+	out, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("re-marshalling: %v", err)
+	}
+	if string(out) != keyed {
+		t.Errorf("the keyed form re-marshalled as\n  %s\nwant\n  %s", out, keyed)
 	}
 }
