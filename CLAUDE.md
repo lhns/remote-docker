@@ -21,7 +21,7 @@ itself. Published ports become reachable locally as containers start.
 
 ```
 cmd/remote-docker/       the client binary
-cmd/remote-dockerd/      the server agent (not built yet — ADR 0010)
+cmd/remote-dockerd/      the server agent (ADR 0010)
 
 pkg/workspace/           THE SHARED CONTRACT, imported by both binaries
 
@@ -36,14 +36,18 @@ internal/client/
   session/               wires the above into one live connection
 
 internal/server/
+  accounts/              one unix account per enrolled key
+  sshd/                  the SSH server: auth, sessions, forwards
+  supervise/             starts and watches the workspace's own dockerd
+  elevate/               relaunch privileged, for Swarm (ADR 0013)
   notify/                replays the client's changes as real syscalls
   daemons/               a dockerd per account: plan, start, adopt
   netns/                 run a function inside another process's netns
+  dockercli/             the one way this side runs the docker binary
 
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose and swarm deployments
-client/                  the ORIGINAL shell clients — superseded, not yet deleted
-test/                    integration.sh, probes
+test/                    lib.sh, integration.sh, per-user-dind.sh, probes
 docs/adr/                architecture decision records
 ```
 
@@ -261,6 +265,6 @@ function was.
 - Comments explain *why*, not *what*. Several encode findings that cost real
   debugging — the hijack rules, the half-close, the genproto exclusion, the
   go-nfs refusal panic, mount propagation. Do not strip them.
-- POSIX `sh` for anything remaining in `image/bin/` (the image is Alpine);
-  bash is fine in `test/`.
+- bash in `test/`. There is no shell left in the image: `image/` is a
+  Dockerfile and nothing else.
 - A finding that contradicts an ADR gets the ADR corrected, not ignored.
