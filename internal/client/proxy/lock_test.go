@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -83,5 +85,46 @@ func TestLockPathIsAFilename(t *testing.T) {
 		if filepath.Ext(got) != ".lock" {
 			t.Errorf("LockPath(%q) = %q, want a .lock suffix", endpoint, got)
 		}
+	}
+}
+
+// A refused Listen must not stamp its own pid over the owner's.
+//
+// This was real, on Windows, and it turned the one message that tells a user
+// what to do into a wrong one: the pid was written when the lock file was
+// OPENED, before the pipe bind decided anything, so a second process reported
+// "already serving (pid ...)" naming ITSELF -- a pid that no longer existed by
+// the time anyone looked. The owner's identity is the entire content of that
+// message.
+//
+// Both listeners here share a pid, so the assertion is on the record being
+// left alone rather than on which pid it holds: a sentinel stands in for the
+// owner, and a failed attempt must not disturb it.
+func TestARefusedListenDoesNotClaimTheRecord(t *testing.T) {
+	endpoint := testEndpoint(t)
+
+	first, err := Listen(endpoint)
+	if err != nil {
+		t.Fatalf("first Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	const sentinel = "424242\n"
+	if err := os.WriteFile(LockPath(endpoint), []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("seeding the lock record: %v", err)
+	}
+
+	if second, err := Listen(endpoint); err == nil {
+		_ = second.Close()
+		t.Fatal("a second Listen succeeded; it has taken the endpoint from the first")
+	}
+
+	got, err := os.ReadFile(LockPath(endpoint))
+	if err != nil {
+		t.Fatalf("reading the lock record back: %v", err)
+	}
+	if string(got) != sentinel {
+		t.Errorf("a refused Listen rewrote the owner record to %q; "+
+			"the refusal would name the process that just failed", strings.TrimSpace(string(got)))
 	}
 }

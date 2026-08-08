@@ -58,6 +58,10 @@ func Listen(endpoint string) (net.Listener, error) {
 		}
 		return nil, fmt.Errorf("proxy: listening on %s: %w", endpoint, err)
 	}
+
+	// Recorded here, not on acquire: the bind is what decided, so this is the
+	// first moment the pid in the file is true.
+	lock.writePid()
 	return &lockedListener{Listener: l, lock: lock}, nil
 }
 
