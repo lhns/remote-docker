@@ -7,7 +7,6 @@ import (
 
 	"github.com/lhns/remote-docker/internal/client/config"
 	"github.com/lhns/remote-docker/internal/client/fswatch"
-	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/session"
 )
 
@@ -38,7 +37,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	s, err := session.Open(ctx, session.Options{
 		Config:      cfg,
 		WorkDir:     mustWorkDir(),
-		Endpoint:    cfg.EndpointFor(proxy.DefaultEndpoint()),
+		Endpoint:    endpointOf(cfg),
 		Files:       files,
 		IdleTimeout: cfg.IdleTimeout,
 		// The only command that binds the endpoint. Everything else either

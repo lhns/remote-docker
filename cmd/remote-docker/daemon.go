@@ -23,11 +23,33 @@ import (
 // going to a log. There is no second implementation of the session to keep in
 // step with the first, and `start --help` describes both.
 
-// startTimeout is how long to wait for a spawned daemon to answer.
+// How long to wait for an endpoint to start or stop answering.
 //
-// Generous: the first thing it does is bind the endpoint, but on a cold start
-// it may also be loading a key and reading known_hosts off a slow disk.
-const startTimeout = 20 * time.Second
+// Together, and named, because they were three anonymous literals in three
+// copies of the same loop -- and two of them waited for the SAME event with
+// different patience (10s and 15s) for no stated reason.
+//
+// startTimeout is the generous one: the first thing a spawned daemon does is
+// bind the endpoint, but on a cold start it may also be loading a key and
+// reading known_hosts off a slow disk. stopTimeout can be shorter because the
+// session has already acknowledged the request before we begin waiting.
+const (
+	startTimeout = 20 * time.Second
+	stopTimeout  = 15 * time.Second
+)
+
+// waitForEndpoint blocks until the endpoint is reachable, or stops being, and
+// reports whether it got there before the deadline.
+func waitForEndpoint(endpoint string, want bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if proxy.Reachable(endpoint) == want {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
 
 func newStartCommand() *cobra.Command {
 	var foreground bool
@@ -52,7 +74,7 @@ is doing.`,
 			if err := cfg.RequireHost(); err != nil {
 				return err
 			}
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
+			endpoint := endpointOf(cfg)
 			out := cmd.OutOrStdout()
 
 			if foreground {
@@ -86,7 +108,7 @@ func newStopCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
+			endpoint := endpointOf(cfg)
 			out := cmd.OutOrStdout()
 
 			if !proxy.Reachable(endpoint) {
@@ -100,13 +122,9 @@ func newStopCommand() *cobra.Command {
 
 			// Confirmed rather than assumed: the daemon acknowledges before it
 			// acts, so a successful reply only means it agreed to stop.
-			deadline := time.Now().Add(10 * time.Second)
-			for time.Now().Before(deadline) {
-				if !proxy.Reachable(endpoint) {
-					_, _ = fmt.Fprintln(out, "stopped")
-					return nil
-				}
-				time.Sleep(100 * time.Millisecond)
+			if waitForEndpoint(endpoint, false, stopTimeout) {
+				_, _ = fmt.Fprintln(out, "stopped")
+				return nil
 			}
 			return fmt.Errorf("the session acknowledged the stop but is still serving %s",
 				proxy.DockerHost(endpoint))
@@ -157,12 +175,8 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	// daemon's parent for any longer than it takes to launch it.
 	_ = cmd.Process.Release()
 
-	deadline := time.Now().Add(startTimeout)
-	for time.Now().Before(deadline) {
-		if proxy.Reachable(endpoint) {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	if waitForEndpoint(endpoint, true, startTimeout) {
+		return nil
 	}
 	return fmt.Errorf("the background session did not start within %s; see %s",
 		startTimeout, logPath)
@@ -282,14 +296,10 @@ func restartDaemon(cfg config.Config, endpoint string) error {
 	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
 		return fmt.Errorf("stopping the running session: %w", err)
 	}
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if !proxy.Reachable(endpoint) {
-			return startDaemon(cfg, endpoint)
-		}
-		time.Sleep(100 * time.Millisecond)
+	if !waitForEndpoint(endpoint, false, stopTimeout) {
+		return fmt.Errorf("the running session did not stop")
 	}
-	return fmt.Errorf("the running session did not stop")
+	return startDaemon(cfg, endpoint)
 }
 
 func newRestartCommand() *cobra.Command {
@@ -310,7 +320,7 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 			if err := cfg.RequireHost(); err != nil {
 				return err
 			}
-			endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
+			endpoint := endpointOf(cfg)
 			out := cmd.OutOrStdout()
 
 			if !proxy.Reachable(endpoint) {
@@ -354,26 +364,26 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 // and until this line existed there was no way to see that from the outside,
 // which is exactly how it went unnoticed during development.
 func reportLocalSession(out io.Writer, cfg config.Config) {
-	endpoint := cfg.EndpointFor(proxy.DefaultEndpoint())
+	endpoint := endpointOf(cfg)
 	if !proxy.Reachable(endpoint) {
-		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session", "not running")
+		row(out, "session", "not running")
 		return
 	}
 
 	var st proxy.Status
 	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
-		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session", "running, but not answering")
+		row(out, "session", "running, but not answering")
 		return
 	}
 
-	_, _ = fmt.Fprintf(out, "%-20s running (pid %d, since %s)\n", "session", st.PID, st.Since)
+	rowf(out, "session", "running (pid %d, since %s)", st.PID, st.Since)
 
 	// Reported as a difference, never as an ordering. A sha build names a
 	// commit and says nothing about when.
 	if st.Version == version {
-		_, _ = fmt.Fprintf(out, "%-20s %s\n", "session version", orUnknown(st.Version))
+		row(out, "session version", orUnknown(st.Version))
 		return
 	}
-	_, _ = fmt.Fprintf(out, "%-20s %s  (this binary: %s -- DIFFERENT)\n",
-		"session version", orUnknown(st.Version), orUnknown(version))
+	rowf(out, "session version", "%s  (this binary: %s -- DIFFERENT)",
+		orUnknown(st.Version), orUnknown(version))
 }

@@ -429,15 +429,6 @@ func (s *Session) sharesChanged() {
 	}
 }
 
-// logQuiet reports an error unless the context that owns the work has already
-// been cancelled.
-//
-// Everything here talks over one SSH connection, so tearing that connection
-// down makes every goroutine still using it fail at once -- with EOF, or
-// "unexpected packet in response to channel open", or a half-read stream.
-// Those are descriptions of shutdown, not of anything wrong, and printing them
-// after the user pressed Ctrl-C or after a one-shot command finished is how a
-// clean exit came to look like a crash.
 // progressf reports routine progress, which most commands do not want.
 func (s *Session) progressf(format string, args ...any) {
 	if s.opts.Progress {
@@ -455,6 +446,15 @@ func (s *Session) portsLogger() ports.Logger {
 	return nil
 }
 
+// logQuiet reports an error unless the context that owns the work has already
+// been cancelled.
+//
+// Everything here talks over one SSH connection, so tearing that connection
+// down makes every goroutine still using it fail at once -- with EOF, or
+// "unexpected packet in response to channel open", or a half-read stream.
+// Those are descriptions of shutdown, not of anything wrong, and printing them
+// after the user pressed Ctrl-C or after a one-shot command finished is how a
+// clean exit came to look like a crash.
 func (s *Session) logQuiet(ctx context.Context, format string, args ...any) {
 	if ctx.Err() != nil || s.ctx.Err() != nil {
 		return

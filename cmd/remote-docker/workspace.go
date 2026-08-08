@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/internal/client/config"
-	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/sshx"
 )
 
@@ -229,7 +228,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				_, _ = fmt.Fprintf(out, "%s%-13s %-30s %s\n",
 					marker, name,
 					fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port),
-					proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint())))
+					dockerHostOf(cfg))
 			}
 			_, _ = fmt.Fprintln(out, "\n* default")
 			return nil
@@ -325,18 +324,13 @@ func newWorkspaceInspectCommand() *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
-			row := func(k, v string) {
-				if v != "" {
-					_, _ = fmt.Fprintf(out, "%-20s %s\n", k, v)
-				}
-			}
-			row("name", cfg.Name)
-			row("workspace", fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port))
-			row("endpoint", proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint())))
-			row("docker context", cfg.ContextName())
-			row("watch", cfg.Watch)
+			row(out, "name", cfg.Name)
+			rowf(out, "workspace", "%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
+			row(out, "endpoint", dockerHostOf(cfg))
+			row(out, "docker context", cfg.ContextName())
+			row(out, "watch", cfg.Watch)
 			for _, ex := range cfg.WatchExclude {
-				row("watch exclude", ex)
+				row(out, "watch exclude", ex)
 			}
 			reportLocalSession(out, cfg)
 			return nil

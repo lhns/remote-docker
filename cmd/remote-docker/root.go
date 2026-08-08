@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -132,6 +133,41 @@ account there.`,
 	}
 }
 
+// withQuerySession opens a session that only ASKS the workspace things, runs
+// fn against it, and closes it.
+//
+// `Files: NoFiles` is the load-bearing part, and the reason this is shared
+// rather than written twice. An account has exactly one reverse-tunnel port
+// (ADR 0003), so a command that does not need to export files must not try --
+// it would fail the moment a session is running, which is precisely when
+// somebody runs `status` or `gc`.
+func withQuerySession(fn func(ctx context.Context, s *session.Session) error) error {
+	cfg, err := resolve()
+	if err != nil {
+		return err
+	}
+	if err := cfg.RequireHost(); err != nil {
+		return err
+	}
+
+	ctx, cancel := signalContext()
+	defer cancel()
+
+	s, err := session.Open(ctx, session.Options{
+		Config:   cfg,
+		WorkDir:  mustWorkDir(),
+		Endpoint: endpointOf(cfg),
+		Files:    session.NoFiles,
+		Log:      logger{},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	return fn(ctx, s)
+}
+
 func newStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
@@ -141,59 +177,40 @@ func newStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := cfg.RequireHost(); err != nil {
-				return err
-			}
-
-			ctx, cancel := signalContext()
-			defer cancel()
-
-			// Only asks the daemon questions, so it must not try to take the
-			// account's single export port -- which `up` is probably holding.
-			files := session.NoFiles
-			s, err := session.Open(ctx, session.Options{
-				Config:   cfg,
-				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint()),
-				Files:    files,
-				Log:      logger{},
-			})
-			if err != nil {
-				return err
-			}
-			defer func() { _ = s.Close() }()
-
-			// status is the one command whose whole job is to report what the
-			// workspace says, so it connects rather than waiting to be asked.
-			info, err := s.Info(ctx)
-			if err != nil {
-				return err
-			}
-
 			out := cmd.OutOrStdout()
-			if cfg.Name != "" {
-				_, _ = fmt.Fprintf(out, "%-20s %s\n", "name", cfg.Name)
-			}
-			_, _ = fmt.Fprintf(out, "%-20s %s@%s:%d\n", "workspace", cfg.User, cfg.Host, cfg.Port)
-			_, _ = fmt.Fprintf(out, "%-20s %s (uid %d)\n", "account", info.User, info.UID)
-			_, _ = fmt.Fprintf(out, "%-20s %d\n", "nfs port", info.NFSPort)
-			_, _ = fmt.Fprintf(out, "%-20s %s\n", "docker", info.Docker)
 
-			// The agent's build. A different question from the local version,
-			// and the one that matters when the workspace behaves oddly.
-			//
-			// Reported even when empty rather than skipped: a workspace too
-			// old to send it looks exactly like one that failed to, and
-			// silence would leave an answerable question unanswerable.
-			agent := info.Agent
-			if agent == "" {
-				agent = "not reported (workspace predates it)"
-			}
-			_, _ = fmt.Fprintf(out, "%-20s %s\n", "agent", agent)
+			return withQuerySession(func(ctx context.Context, s *session.Session) error {
+				// status is the one command whose whole job is to report what
+				// the workspace says, so it connects rather than waiting to be
+				// asked.
+				info, err := s.Info(ctx)
+				if err != nil {
+					return err
+				}
 
-			_, _ = fmt.Fprintf(out, "%-20s %s\n", "endpoint", s.Endpoint)
-			reportLocalSession(out, cfg)
-			return nil
+				row(out, "name", cfg.Name)
+				rowf(out, "workspace", "%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
+				rowf(out, "account", "%s (uid %d)", info.User, info.UID)
+				rowf(out, "nfs port", "%d", info.NFSPort)
+				row(out, "docker", info.Docker)
+
+				// The agent's build. A different question from the local
+				// version, and the one that matters when the workspace behaves
+				// oddly.
+				//
+				// Reported even when empty rather than skipped: a workspace too
+				// old to send it looks exactly like one that failed to, and
+				// silence would leave an answerable question unanswerable.
+				agent := info.Agent
+				if agent == "" {
+					agent = "not reported (workspace predates it)"
+				}
+				row(out, "agent", agent)
+
+				row(out, "endpoint", s.Endpoint)
+				reportLocalSession(out, cfg)
+				return nil
+			})
 		},
 	}
 }
@@ -258,38 +275,49 @@ Only volumes this client created, for this account, and referenced by no
 container -- running or stopped -- are removed. A volume you created yourself
 is never touched, whatever it is named.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
-			if err != nil {
-				return err
-			}
-			if err := cfg.RequireHost(); err != nil {
-				return err
-			}
-
-			ctx, cancel := signalContext()
-			defer cancel()
-
-			// Only removes volumes; exporting files would be beside the point and
-			// would fail whenever `up` is running.
-			files := session.NoFiles
-			s, err := session.Open(ctx, session.Options{
-				Config:   cfg,
-				WorkDir:  mustWorkDir(),
-				Endpoint: cfg.EndpointFor(proxy.DefaultEndpoint()),
-				Files:    files,
-				Log:      logger{},
+			return withQuerySession(func(ctx context.Context, s *session.Session) error {
+				removed, err := s.Collect(ctx)
+				if err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed %d unused share volume(s)\n", removed)
+				return nil
 			})
-			if err != nil {
-				return err
-			}
-			defer func() { _ = s.Close() }()
-
-			removed, err := s.Collect(ctx)
-			if err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed %d unused share volume(s)\n", removed)
-			return nil
 		},
 	}
+}
+
+// endpointOf is where this workspace's Docker API is served locally.
+//
+// One spelling, in one place, and that is the point rather than the brevity.
+// `endpointOf(cfg)` was written out at ten call
+// sites, and the argument is the part that matters: passing an empty base
+// instead used to derive the RELATIVE path "-dev" for a named workspace, which
+// meant a socket in whatever directory the process happened to be in and a
+// docker context reading unix://-dev. That could not be reproduced on Windows,
+// where the pipe name is a real constant, and CI never saw it because the
+// suites set an endpoint explicitly.
+func endpointOf(cfg config.Config) string {
+	return cfg.EndpointFor(proxy.DefaultEndpoint())
+}
+
+// dockerHostOf is the same endpoint as a DOCKER_HOST value.
+func dockerHostOf(cfg config.Config) string {
+	return proxy.DockerHost(endpointOf(cfg))
+}
+
+// row prints one aligned "key    value" line.
+//
+// `status`, `workspace inspect` and reportLocalSession print one table between
+// them -- status calls reportLocalSession -- so the width has to agree across
+// all three. It was a bare %-20s at thirteen call sites.
+func row(out io.Writer, key, value string) {
+	if value != "" {
+		_, _ = fmt.Fprintf(out, "%-20s %s\n", key, value)
+	}
+}
+
+// rowf is row with a formatted value.
+func rowf(out io.Writer, key, format string, args ...any) {
+	row(out, key, fmt.Sprintf(format, args...))
 }

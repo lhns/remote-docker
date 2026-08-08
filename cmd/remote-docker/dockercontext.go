@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/internal/client/config"
-	"github.com/lhns/remote-docker/internal/client/proxy"
 )
 
 // contextMarker identifies a docker context as one this client wrote.
@@ -37,7 +36,7 @@ type installedContext struct {
 // this client did not create.
 func installContext(docker string, cfg config.Config) (installedContext, error) {
 	name := cfg.ContextName()
-	endpoint := proxy.DockerHost(cfg.EndpointFor(proxy.DefaultEndpoint()))
+	endpoint := dockerHostOf(cfg)
 
 	if contextIsOurs(docker, name) {
 		// Ours, so replacing is safe -- and it is replaced rather than
