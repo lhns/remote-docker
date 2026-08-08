@@ -31,6 +31,11 @@ type Daemon struct {
 
 	// Socket is where the agent dials this daemon.
 	Socket string
+
+	// checked is when this daemon was last confirmed to be running. Guarded
+	// by the manager's mutex, not by the daemon itself, because it is the
+	// manager's bookkeeping rather than the daemon's own state.
+	checked time.Time
 }
 
 // NetNSPath is the daemon's network namespace, for binding the reverse tunnel
@@ -62,6 +67,14 @@ type Manager struct {
 	pending map[string]chan struct{}
 }
 
+// aliveTTL is how long a confirmed-running daemon is believed without asking
+// again.
+//
+// Short enough that a daemon which died is noticed within a request or two,
+// long enough that a burst of API calls -- which is what any real docker
+// command is -- costs one check rather than hundreds.
+const aliveTTL = 2 * time.Second
+
 // DefaultReadyTimeout is how long a cold daemon has to answer.
 //
 // Generous because the first start of a dind on fuse-overlayfs is slow, and
@@ -78,10 +91,30 @@ const DefaultReadyTimeout = 90 * time.Second
 func (m *Manager) Ensure(ctx context.Context, account string) (*Daemon, error) {
 	for {
 		m.mu.Lock()
-		if d, ok := m.byName[account]; ok && m.alive(ctx, d) {
-			m.mu.Unlock()
+		d, known := m.byName[account]
+		fresh := known && time.Since(d.checked) < aliveTTL
+		m.mu.Unlock()
+
+		// The common case by far, and it must cost nothing. EVERY Docker API
+		// request from the client opens its own dial-stdio session and lands
+		// here -- `docker compose up` is hundreds -- so a `docker inspect`
+		// per call would add a subprocess to every request. Worse, the check
+		// used to run while the manager's lock was HELD, which serialised
+		// every account's requests behind one exec.
+		if fresh {
 			return d, nil
 		}
+		if known {
+			// Confirm it outside the lock, then record when we did.
+			if m.alive(ctx, d) {
+				m.mu.Lock()
+				d.checked = time.Now()
+				m.mu.Unlock()
+				return d, nil
+			}
+		}
+
+		m.mu.Lock()
 		if wait, ok := m.pending[account]; ok {
 			// Somebody else is starting it. Wait for them rather than racing.
 			m.mu.Unlock()
@@ -99,7 +132,7 @@ func (m *Manager) Ensure(ctx context.Context, account string) (*Daemon, error) {
 		m.pending[account] = wait
 		m.mu.Unlock()
 
-		d, err := m.start(ctx, account)
+		started, err := m.start(ctx, account)
 
 		m.mu.Lock()
 		delete(m.pending, account)
@@ -107,12 +140,13 @@ func (m *Manager) Ensure(ctx context.Context, account string) (*Daemon, error) {
 			if m.byName == nil {
 				m.byName = map[string]*Daemon{}
 			}
-			m.byName[account] = d
+			started.checked = time.Now()
+			m.byName[account] = started
 		}
 		m.mu.Unlock()
 		close(wait)
 
-		return d, err
+		return started, err
 	}
 }
 
