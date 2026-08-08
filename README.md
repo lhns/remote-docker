@@ -302,10 +302,38 @@ ssh <node> "mkdir -p $WORKSPACE_DATA/{state,authorized_keys.d}"
 docker stack deploy -c deploy/swarm.yml workspace
 ```
 
+### The storage driver, which is worth getting right once
+
 If you point `WORKSPACE_DATA` at Ceph- or NFS-backed storage — worth doing if
 the workspace should survive moving nodes — you must also set
 `WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs`. overlay2 refuses such
 a filesystem outright, and vfs, the only other fallback, copies every layer.
+
+**Per-account daemons inherit that setting**, so this is the one place to set
+it. `WORKSPACE_DIND_STORAGE_DRIVER` overrides them separately if you need it.
+
+**Why fuse-overlayfs is not simply the default.** Where overlay2 works it is
+the kernel doing the work, and it is markedly faster than fuse-overlayfs, which
+is a userspace FUSE filesystem — every layer read crosses into a userspace
+process. Defaulting to it would slow down every deployment on ordinary local
+disk to spare the ones on shared storage. Inheriting the workspace's own choice
+gets both right, because the workspace already had to decide.
+
+**What fuse-overlayfs needs**, if you do set it:
+
+| | |
+|---|---|
+| kernel | **4.18 or newer**, with `CONFIG_FUSE_FS` (a module is fine: `modprobe fuse`). Present on any ordinary distribution kernel; the usual absentee is a minimal or hardened container-host image. |
+| device | `/dev/fuse` in the container. The workspace runs privileged, so it has it. |
+| binary | `fuse-overlayfs`, which the `docker:dind` image ships. |
+| filesystem | Works on NFS and CephFS, which is the entire reason to reach for it. |
+
+If it is set and any of that is missing, dockerd falls back to **vfs** rather
+than failing — and vfs has no copy-on-write, so it copies the whole image on
+every `docker create`. Nothing errors, `docker ps` stays instant, and
+`docker run` takes minutes. The agent now says so explicitly in its log when a
+per-account daemon comes up on vfs, because the cost of this one is entirely in
+how quiet it is.
 
 Port 2222 is published with `mode: host`, so it lands on the node actually
 running the task rather than being round-robined by the routing mesh to nodes

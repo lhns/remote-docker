@@ -241,7 +241,8 @@ echo "== 9. a shell points at its own daemon, AND CAN USE IT =="
 # a directory it could not enter. The variable was perfect and `docker ps` in a
 # shell said "permission denied while trying to connect to the Docker daemon
 # socket". So the shell is made to actually USE it.
-shell_out=$(timeout 90 ssh -i "$WORK/state-$A/id_ed25519"     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null     -o BatchMode=yes -p "$SSH_PORT" "$A@127.0.0.1"     'echo "HOST=$DOCKER_HOST"; docker ps --format "{{.Names}}" 2>&1 | head -5'     2>/dev/null </dev/null | tr -d '')
+shell_out=$(timeout 90 ssh -i "$WORK/state-$A/id_ed25519"     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null     -o BatchMode=yes -p "$SSH_PORT" "$A@127.0.0.1"     'echo "HOST=$DOCKER_HOST"; docker ps --format "{{.Names}}" 2>&1 | head -5'     2>/dev/null </dev/null | tr -d '
+')
 
 case "$shell_out" in
     *"HOST=unix:///run/rd/$A/docker.sock"*)
@@ -322,7 +323,13 @@ fi
 
 A_SOCK="$WORK/a2.sock"
 CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a2.log" "$WORK/project-$A")
-wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || bad "alice's endpoint never came back after the restart"
+if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
+    bad "alice's endpoint never came back after the restart"
+    # The client's own log, which is where the reason is. Without it this
+    # failure reads as "slow" and costs a CI round trip to learn otherwise.
+    sed 's/^/    A: /' "$WORK/a2.log" | tail -20
+    dump_workspace_log 40
+fi
 
 after=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
 ' ' ')

@@ -246,7 +246,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 				if err := m.chown(account, socket); err != nil {
 					m.logf("could not hand %s its socket: %v", account, err)
 				}
-				m.warnIfSlowStorage(ctx, d)
+				go m.warnIfSlowStorage(d)
 				return d, nil
 			}
 		}
@@ -266,6 +266,21 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 // Checked on every Ensure rather than trusted, because the container can go
 // away underneath us -- an OOM kill, an operator, a crash -- and handing back a
 // dead socket produces a connection error that names nothing.
+//
+// THE PID IS PART OF "usable", and leaving it out was a real bug. A daemon that
+// restarts -- which it does on its own, since it carries a restart policy --
+// comes back as the same container, with the same name, the same socket path
+// and the same "running" status, and a DIFFERENT pid. Everything here that
+// crosses into it goes through /proc/<pid>: the reverse tunnel carrying the
+// client's NFS export (netns), and the volume mountpoints replay writes into
+// (root). Against a stale pid those name a namespace that no longer exists, so
+// the daemon answers Docker API calls perfectly while no container it starts
+// can mount anything -- and a client that requires its file server refuses to
+// start at all, with nothing pointing at the daemon having restarted.
+//
+// Reported as not-alive rather than repaired in place: Ensure then goes through
+// start, which finds the container already running and re-reads the pid, so the
+// self-healing path is the one that already exists.
 func (m *Manager) alive(ctx context.Context, d *Daemon) bool {
 	if d == nil {
 		return false
@@ -273,7 +288,25 @@ func (m *Manager) alive(ctx context.Context, d *Daemon) bool {
 	if _, err := os.Stat(d.Socket); err != nil {
 		return false
 	}
-	return m.state(ctx, ContainerName(d.Account)) == "running"
+
+	// One inspect for both facts, which also halves what the hot path costs.
+	out, err := m.inspect(ctx, ContainerName(d.Account), "{{.State.Status}} {{.State.Pid}}")
+	if err != nil {
+		return false
+	}
+	var status string
+	var pid int
+	if _, err := fmt.Sscanf(out, "%s %d", &status, &pid); err != nil {
+		return false
+	}
+	if status != "running" || pid <= 0 {
+		return false
+	}
+	if pid != d.PID {
+		m.logf("%s's daemon restarted (pid %d -> %d); re-reading it", d.Account, d.PID, pid)
+		return false
+	}
+	return true
 }
 
 // state is the container's state, or "" if there is no such container.
@@ -449,7 +482,14 @@ func (m *Manager) Lookup(ctx context.Context, account string) (*Daemon, bool) {
 // workspace's own dockerd is given --storage-driver=fuse-overlayfs for that
 // reason, and a per-account daemon now inherits it -- but a deployment can
 // still arrive here, so it should arrive loudly.
-func (m *Manager) warnIfSlowStorage(ctx context.Context, d *Daemon) {
+// Runs on its own goroutine with its own context, because it is only a
+// warning and it is reached while this account's start is holding the gate:
+// every other request for the same account waits behind it, and `docker info`
+// against a daemon that has just booted is not always quick.
+func (m *Manager) warnIfSlowStorage(d *Daemon) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	driver, err := dockercli.CLI{Host: d.Host()}.Line(ctx, "info", "--format", "{{.Driver}}")
 	if err != nil || driver != "vfs" {
 		return
