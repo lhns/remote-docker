@@ -15,9 +15,14 @@ WORKDIR /src
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
 ARG VERSION=dev
-# Dependencies first, so a source change does not re-download the module graph.
+# No `go mod download` step, deliberately.
+#
+# It was here to cache dependencies in their own layer, and with no arguments
+# it fetches the WHOLE module graph -- which now includes buildx and its
+# transitive tree, hundreds of megabytes the agent never imports. That is what
+# started failing this build. `go build` below downloads exactly what the
+# agent's own package needs, which is a small fraction of it.
 COPY go.mod go.sum ./
-RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
