@@ -1,6 +1,7 @@
 package daemons
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -235,7 +236,21 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	return m.await(ctx, account, spec.Name)
 }
 
-// await waits for the daemon's socket to appear and reads back its pid.
+// await waits for the daemon to ANSWER, not for its socket file to exist.
+//
+// The difference is the whole function. dockerd binds its socket early and
+// initialises its storage afterwards, so a daemon that dies on
+// "several valid graphdrivers ... please cleanup" leaves a socket file behind
+// looking exactly like a healthy one. Treating that as ready handed the client
+// a socket nothing was listening on, and every command failed with a bare
+//
+//	error during connect: Get "http://.../_ping": EOF
+//
+// which names neither the daemon nor the reason. That is the same mistake as
+// reading an empty result as data, in a new place.
+//
+// So readiness is a round trip: the socket exists, the container reports a pid,
+// and the daemon answers a request. Only the last one is evidence.
 func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, error) {
 	socket := SocketPathFor(account)
 	deadline := time.Now().Add(DefaultReadyTimeout)
@@ -245,15 +260,24 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 			pid, cerr := m.pid(ctx, name)
 			if cerr == nil && pid > 0 {
 				d := &Daemon{Account: account, PID: pid, Socket: socket}
+				// Chowned before the round trip: the agent is root and could
+				// talk to a socket the account cannot, so asking first would
+				// prove the wrong thing about it.
 				if err := m.chown(account, socket); err != nil {
 					m.logf("could not hand %s its socket: %v", account, err)
 				}
-				go m.warnIfSlowStorage(d)
-				return d, nil
+				if m.answers(ctx, d) {
+					go m.warnIfSlowStorage(d)
+					return d, nil
+				}
 			}
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("daemons: %s did not answer within %s", name, DefaultReadyTimeout)
+			// The daemon's own words, which are the only thing that says WHY.
+			// Without them this is "did not answer", and the reason is in a
+			// log the account cannot reach.
+			return nil, fmt.Errorf("daemons: %s did not answer within %s.%s",
+				name, DefaultReadyTimeout, m.lastWords(ctx, name))
 		}
 		select {
 		case <-ctx.Done():
@@ -261,6 +285,31 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// answers reports whether the daemon actually responds on its socket.
+func (m *Manager) answers(ctx context.Context, d *Daemon) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, err := dockercli.CLI{Host: d.Host()}.Line(ctx, "version", "--format", "{{.Server.Version}}")
+	return err == nil
+}
+
+// lastWords is the tail of a daemon's own log, for an error the account can
+// act on.
+//
+// A per-account daemon that will not start is the one failure an account can
+// neither diagnose nor fix: the log belongs to a daemon it deliberately cannot
+// reach. Carrying a few lines back through the error is the difference between
+// "did not answer" and "several valid graphdrivers: vfs, fuse-overlayfs;
+// please cleanup".
+func (m *Manager) lastWords(ctx context.Context, name string) string {
+	out, err := m.parent().Cmd(ctx, "logs", "--tail", "8", name).CombinedOutput()
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		return ""
+	}
+	return " It last said:\n" + string(bytes.TrimSpace(out))
 }
 
 // alive reports whether a daemon we already handed out is still usable.
