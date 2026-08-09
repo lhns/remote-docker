@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -213,10 +214,14 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		return nil, err
 	}
 
+	// A daemon created from older settings is brought up to date HERE, before
+	// anything decides to start it, so an upgrade is a redeploy rather than a
+	// list of commands somebody has to be told.
+	m.reconcile(ctx, account, spec)
+
 	switch state := m.state(ctx, spec.Name); state {
 	case "running":
 		// Somebody else's Ensure won, or it survived our restart.
-		m.warnIfStale(ctx, account, spec.Name)
 	case "":
 		m.logf("starting a daemon for %s", account)
 		if err := m.parent().Run(ctx, "daemons: starting "+spec.Name, spec.Args()...); err != nil {
@@ -226,7 +231,6 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		// Stopped, exited, created. START it rather than running a new one:
 		// the container holds this user's containers and images, and
 		// replacing it would silently discard them.
-		m.warnIfStale(ctx, account, spec.Name)
 		m.logf("restarting the existing daemon for %s (was %s)", account, state)
 		if err := m.parent().Run(ctx, "daemons: restarting "+spec.Name, "start", spec.Name); err != nil {
 			return nil, err
@@ -552,53 +556,149 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 		"data) and remove %s to rebuild it.", d.Account, ContainerName(d.Account))
 }
 
-// warnIfStale reports a daemon whose settings no longer match the workspace's.
+// reconcile brings a daemon created from older settings up to date.
 //
-// A daemon that already exists is STARTED, never re-run: that is what keeps an
-// account's containers and images across a redeploy, and it is the right
-// default. The cost is that its command line is fixed at creation, so changing
-// the workspace's configuration afterwards has no effect on it and nothing
-// says so.
+// The container is disposable and the graph volume is the data: removing and
+// re-running the container keeps every image and container the account owns,
+// which the suite proves by destroying it on purpose. So applying a new image,
+// a new flag or a new mount is safe -- as long as nothing is running inside.
 //
-// That is not hypothetical. A workspace whose data is on CephFS sets
-// --storage-driver=fuse-overlayfs; per-account daemons did not inherit it for
-// a day, and every daemon created in that window kept falling back to vfs --
-// copying the whole image over the network on every container create, for as
-// long as that container existed, while the setting that would have fixed it
-// sat in the stack file being ignored.
+// Two things it will NOT do on its own, and both matter:
 //
-// Reported rather than repaired, and that is deliberate. Recreating the
-// container is safe on its own -- the graph is a separate named volume that
-// outlives it -- but a graph written by one driver cannot be read by another,
-// so a silent recreation would leave the account with a daemon that will not
-// start, or with none of its images. Whether to spend that is the operator's
-// call, so this gives them the exact commands instead of making it.
-func (m *Manager) warnIfStale(ctx context.Context, account, name string) {
-	was, err := m.inspect(ctx, name,
-		"{{index .Config.Labels \""+StorageLabel+"\"}}")
+//   - Nothing while the account has containers running. Recreating the daemon
+//     stops them, and they do not come back unless they carry a restart policy.
+//     A setting can wait; somebody's work cannot. It is applied the next time
+//     that daemon is idle.
+//   - Nothing when the STORAGE DRIVER is what changed. A graph written by one
+//     driver cannot be read by another, so there is no recreation that keeps
+//     the data -- the choice is to discard it or to stay, and that is the
+//     operator's to make. `remote-dockerd daemons reset` is how they make it.
+func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
+	was, err := m.inspect(ctx, spec.Name, "{{index .Config.Labels \""+SpecLabel+"\"}}")
 	if err != nil {
+		// No such container: nothing to reconcile, it is about to be created.
 		return
 	}
-	// Docker renders a missing label as "<no value>"; a daemon from before
-	// this label existed is not evidence of drift, only of age.
-	if was == "<no value>" || was == m.Options.StorageDriver {
+	// A daemon from before this label existed is not evidence of drift, only
+	// of age -- docker renders a missing label as "<no value>".
+	if was == "<no value>" || was == Fingerprint(spec) {
 		return
 	}
 
-	m.logf("WARNING: %s's daemon was created with storage-driver=%q but this "+
-		"workspace now specifies %q. A daemon that already exists is started, "+
-		"never re-created, so it keeps the old one -- and a graph written by "+
-		"one driver cannot be read by another, so fixing it discards that "+
-		"account's images and containers. To do it: "+
-		"`docker rm -f %s && docker volume rm %s` on this workspace's own "+
-		"daemon, then reconnect.",
-		account, orNone(was), orNone(m.Options.StorageDriver),
-		name, VolumeName(account))
+	if m.storageChanged(ctx, spec.Name) {
+		m.logf("WARNING: %s's daemon was created with a different storage driver. "+
+			"A graph written by one driver cannot be read by another, so this "+
+			"cannot be applied without discarding that account's images and "+
+			"containers. Run `remote-dockerd daemons reset %s` on this workspace "+
+			"to do it.", account, account)
+		return
+	}
+
+	if n := m.runningInside(ctx, account); n != 0 {
+		m.logf("%s's daemon is out of date but has %d container(s) running; "+
+			"leaving it alone until it is idle", account, n)
+		return
+	}
+
+	m.logf("%s's daemon was created from older settings; recreating it "+
+		"(its images and containers are on a volume and are kept)", account)
+	if err := m.parent().Run(ctx, "daemons: replacing "+spec.Name, "rm", "-f", spec.Name); err != nil {
+		m.logf("could not replace %s: %v", spec.Name, err)
+	}
 }
 
-func orNone(s string) string {
-	if s == "" {
-		return "(unset)"
+// storageChanged reports whether the graph driver is what differs, which is
+// the one difference that cannot be applied by recreating the container.
+func (m *Manager) storageChanged(ctx context.Context, name string) bool {
+	was, err := m.inspect(ctx, name, "{{index .Config.Labels \""+StorageLabel+"\"}}")
+	if err != nil || was == "<no value>" {
+		return false
 	}
-	return s
+	return was != m.Options.StorageDriver
+}
+
+// runningInside counts the containers an account is running on its own daemon.
+//
+// Asked of the account's daemon rather than the parent, because these are its
+// containers and only it can see them. A daemon that cannot be asked counts as
+// busy: the cost of being wrong is somebody's work.
+func (m *Manager) runningInside(ctx context.Context, account string) int {
+	out, err := dockercli.CLI{Host: HostFor(account)}.Line(ctx, "ps", "--quiet")
+	if err != nil {
+		return -1
+	}
+	if strings.TrimSpace(out) == "" {
+		return 0
+	}
+	return len(strings.Split(strings.TrimSpace(out), "\n"))
+}
+
+// Reset removes an account's daemon so the next connection builds a fresh one.
+//
+// The container always goes; the graph volume only when asked. That split is
+// the whole point: the container is disposable and recreating it keeps
+// everything the account owns, so a reset that only replaces the container
+// costs nothing. Purging is the other thing entirely -- every image and
+// container that account has -- and it is needed for exactly one case, a
+// change of storage driver, because a graph written by one driver cannot be
+// read by another.
+//
+// An account is not asked to be offline first. Removing a daemon stops what it
+// was running, which is why this is a command somebody runs rather than
+// something the agent decides.
+func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
+	if _, err := Plan(account, m.Options); err != nil {
+		return err
+	}
+	name := ContainerName(account)
+
+	if err := m.parent().Run(ctx, "daemons: removing "+name, "rm", "-f", name); err != nil {
+		// Not fatal on its own: the container may simply not exist, which is a
+		// fine state to be in when the goal is for it not to exist.
+		m.logf("removing %s: %v", name, err)
+	}
+
+	m.mu.Lock()
+	delete(m.byName, account)
+	m.mu.Unlock()
+
+	if !purge {
+		return nil
+	}
+	return m.parent().Run(ctx, "daemons: removing "+account+"'s storage",
+		"volume", "rm", VolumeName(account))
+}
+
+// Accounts lists the accounts that currently have a daemon, running or not.
+func (m *Manager) Accounts(ctx context.Context) ([]string, error) {
+	args := []string{"ps", "--all", "--no-trunc",
+		"--filter", "label=" + ManagedLabel,
+		"--format", "{{json .}}"}
+	if m.Options.Workspace != "" {
+		args = append(args, "--filter", "label="+WorkspaceLabel+"="+m.Options.Workspace)
+	}
+
+	out, err := m.parent().Line(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("daemons: listing daemons: %w", err)
+	}
+
+	var accounts []string
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		var row struct {
+			Labels string `json:"Labels"`
+			Status string `json:"Status"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			continue
+		}
+		if a := labelValue(row.Labels, AccountLabel); a != "" {
+			accounts = append(accounts, a)
+		}
+	}
+	sort.Strings(accounts)
+	return accounts, nil
 }

@@ -301,3 +301,33 @@ func TestTheImageDefaultsToWhateverTheWorkspaceRuns(t *testing.T) {
 		t.Errorf("fallback image = %q, want %q", got, DefaultImage)
 	}
 }
+
+// The fingerprint is what makes an upgrade automatic: a daemon is recreated
+// when the settings it was built from have moved on, and comparing a digest
+// means nothing has to be taught which settings exist.
+func TestTheFingerprintChangesWithTheSpec(t *testing.T) {
+	base := plan(t, "alice", Options{})
+
+	for _, tc := range []struct {
+		what string
+		opts Options
+	}{
+		{"image", Options{Image: "ghcr.io/x/ws:sha-1"}},
+		{"storage driver", Options{StorageDriver: "fuse-overlayfs"}},
+	} {
+		if got := Fingerprint(plan(t, "alice", tc.opts)); got == Fingerprint(base) {
+			t.Errorf("changing the %s did not change the fingerprint", tc.what)
+		}
+	}
+
+	// Same settings, same digest -- or every connection would recreate the
+	// daemon it just built.
+	if Fingerprint(plan(t, "alice", Options{})) != Fingerprint(base) {
+		t.Error("the fingerprint is not stable for identical settings")
+	}
+
+	// And it is stamped ON the daemon, or there is nothing to compare against.
+	if !slices.Contains(base.Labels, SpecLabel+"="+Fingerprint(base)) {
+		t.Errorf("the fingerprint was not recorded: %v", base.Labels)
+	}
+}

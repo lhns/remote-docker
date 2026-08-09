@@ -17,6 +17,8 @@
 package daemons
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -87,6 +89,16 @@ const (
 	ManagedLabel   = "remote-docker.daemon"
 	AccountLabel   = "remote-docker.account"
 	WorkspaceLabel = "remote-docker.workspace"
+
+	// SpecLabel records a digest of everything a daemon was created with:
+	// image, entrypoint, flags, mounts, the lot.
+	//
+	// It exists because a daemon that already exists is STARTED, never re-run,
+	// so its command line is fixed for life. Without a record of what it was
+	// created from, changing the workspace's configuration silently applies to
+	// nobody who already has a daemon -- which, on any workspace that has been
+	// used, is everybody.
+	SpecLabel = "remote-docker.spec"
 
 	// StorageLabel records the graph driver a daemon was CREATED with.
 	//
@@ -210,12 +222,14 @@ func Plan(account string, opts Options) (Spec, error) {
 		ManagedLabel + "=1",
 		AccountLabel + "=" + account,
 		StorageLabel + "=" + opts.StorageDriver,
+		// Filled in below, once there is a spec to digest.
+		SpecLabel + "=",
 	}
 	if opts.Workspace != "" {
 		labels = append(labels, WorkspaceLabel+"="+opts.Workspace)
 	}
 
-	return Spec{
+	spec := Spec{
 		Name:       ContainerName(account),
 		Image:      image,
 		Entrypoint: Entrypoint,
@@ -232,7 +246,16 @@ func Plan(account string, opts Options) (Spec, error) {
 		// enter. Certificates would secure a network path that does not exist.
 		Env:     []string{"DOCKER_TLS_CERTDIR="},
 		Command: command,
-	}, nil
+	}
+
+	// Stamped last: the digest covers the spec, so it cannot be part of what
+	// it digests.
+	for i, l := range spec.Labels {
+		if l == SpecLabel+"=" {
+			spec.Labels[i] = SpecLabel + "=" + Fingerprint(spec)
+		}
+	}
+	return spec, nil
 }
 
 // Args renders the spec as arguments to `docker run`.
@@ -294,4 +317,25 @@ func StorageDriverFrom(dockerdArgs []string) string {
 		}
 	}
 	return ""
+}
+
+// Fingerprint digests everything about a spec that a running daemon cannot
+// change without being recreated.
+//
+// The rendered arguments, hashed: image, entrypoint, flags, labels, mounts.
+// Comparing the digest rather than the arguments means a new setting is
+// noticed without anything having to be taught what settings exist -- adding
+// one to Plan is enough.
+//
+// Its own label is excluded, since it is being computed.
+func Fingerprint(spec Spec) string {
+	h := sha256.New()
+	for _, arg := range spec.Args() {
+		if strings.HasPrefix(arg, SpecLabel+"=") {
+			continue
+		}
+		_, _ = h.Write([]byte(arg))
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }

@@ -328,28 +328,32 @@ gets both right, because the workspace already had to decide.
 | binary | `fuse-overlayfs` **in the image the daemon runs**. Stock `docker:dind` does NOT ship it; the workspace image here installs it, which is why per-account daemons default to the workspace's own image. |
 | filesystem | Works on NFS and CephFS, which is the entire reason to reach for it. |
 
-#### Changing it later does not reach a daemon that already exists
+#### Changing settings later
 
-A per-account daemon that is already there gets *started*, never re-created --
-that is what keeps an account's containers and images across a redeploy. Its
-command line is therefore fixed at creation, so changing
-`WORKSPACE_DOCKERD_ARGS` afterwards does not reach it.
+A per-account daemon is created once and *started* thereafter -- that is what
+keeps an account's containers and images across a redeploy -- so its image,
+flags and mounts are fixed at creation.
 
-This is not made automatic, and the reason is worth stating: recreating the
-container alone is safe -- the graph is a separate named volume that outlives
-it -- but **a graph written by one storage driver cannot be read by another**.
-So an automatic recreation would leave the account with a daemon that will not
-start, or with none of its images. Whether to spend that is not a decision to
-take on somebody's behalf.
+**The agent applies a changed configuration by itself**, and does not need to
+be told which settings exist: each daemon is stamped with a digest of what it
+was built from, and one that no longer matches is recreated. The container is
+disposable; the graph volume beside it is the data and is kept, so nothing is
+lost. It waits until that account has nothing running, because recreating a
+daemon stops its containers -- a setting can wait, somebody's work cannot.
 
-The agent detects it and logs the exact commands; `remote-docker status` shows
-the driver the account's daemon is actually using. To do it, on the workspace's
-own daemon:
+**The one exception is the storage driver**, because a graph written by one
+driver cannot be read by another. There is no recreation that keeps the data,
+so the agent will not choose: it says so and leaves it. Deciding is a command:
 
 ```bash
-docker rm -f rd-dind-<account>
-docker volume rm rd-dind-<account>-lib   # the images, which have to go too
+docker exec <workspace> remote-dockerd daemons ls
+docker exec <workspace> remote-dockerd daemons reset alice           # rebuild the daemon
+docker exec <workspace> remote-dockerd daemons reset --all --purge   # and discard the images
 ```
+
+`--purge` is the account's entire Docker state, and it is needed for exactly
+that one case. `remote-docker status` shows the driver an account's daemon is
+actually using.
 
 If it is set and any of that is missing, dockerd falls back to **vfs** rather
 than failing — and vfs has no copy-on-write, so it copies the whole image on
