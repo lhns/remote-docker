@@ -41,7 +41,11 @@ services:
       - ./authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 2222 && docker info >/dev/null 2>&1"]
+      # One command that checks both, and reports which failed. `docker info`
+      # in a shell returned 0 for a daemon that was answering but unusable;
+      # this asks the daemon for its version, which a half-started one cannot
+      # give.
+      test: ["CMD", "remote-dockerd", "healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

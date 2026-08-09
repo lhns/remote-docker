@@ -106,7 +106,12 @@ services:
       # Checks the PRIVILEGED child, since this task shares its network
       # namespace. Without it a workspace whose dockerd died would keep
       # looking healthy.
-      test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
+      #
+      # `nc -z` proved a port was open and nothing else. This asks the agent
+      # itself, which also checks the daemon when it can see its socket -- from
+      # here it cannot, since this task shares the child's network namespace
+      # but not its filesystem, and it says so rather than failing on it.
+      test: ["CMD", "remote-dockerd", "healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

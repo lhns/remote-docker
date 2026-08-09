@@ -504,7 +504,14 @@ For a shell on the workspace, use `ssh`. The agent serves one to any enrolled
 key.
 
 On the workspace: `remote-dockerd serve` is the agent (the image's default),
-and `remote-dockerd elevate` is the Swarm entry point.
+and `remote-dockerd elevate` is the Swarm entry point. Two more are for whoever
+runs it:
+
+| | |
+|---|---|
+| `remote-dockerd healthcheck` | is this workspace serving? Both deployments use it |
+| `remote-dockerd daemons ls` | which accounts have a daemon |
+| `remote-dockerd daemons reset <account> [--purge]` | rebuild one; `--purge` also discards its images |
 
 ## Layout
 
