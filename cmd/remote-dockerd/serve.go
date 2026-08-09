@@ -131,7 +131,10 @@ func serve(addr string) error {
 	// a socket that reaches the PARENT daemon, which holds every account's
 	// dind. Revoke covers the accounts that already exist, which on an
 	// upgraded workspace is all of them.
-	provisioner := &accounts.UnixProvisioner{}
+	// Stated in both modes, because membership is reconciled to it on every
+	// pass -- an empty list would mean "reconcile to nothing" rather than
+	// "leave alone".
+	provisioner := &accounts.UnixProvisioner{Groups: []string{"docker", "workspace"}}
 	if perUserDind {
 		provisioner.Groups = []string{"workspace"}
 		provisioner.Revoke = []string{"docker"}

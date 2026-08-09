@@ -17,7 +17,7 @@ import (
 // Ensure creates the account if it is missing and returns its home directory.
 func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, error) {
 	if u, err := user.Lookup(name); err == nil {
-		p.revoke(name)
+		p.reconcileGroups(name)
 		return u.HomeDir, nil
 	}
 
@@ -68,13 +68,35 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, er
 // fails when the account was never a member, which is what it looks like every
 // time after the first. A failure that matters shows up as the group still
 // being there, which the integration suite asserts rather than trusting this.
-func (p *UnixProvisioner) revoke(name string) {
+func (p *UnixProvisioner) reconcileGroups(name string) {
 	for _, group := range p.Revoke {
 		if !inGroup(name, group) {
 			continue
 		}
 		if out, err := exec.Command("gpasswd", "-d", name, group).CombinedOutput(); err != nil {
 			log.Printf("accounts: could not remove %s from %s: %v: %s", name, group, err, out)
+		}
+	}
+
+	// And BACK IN, which was missing and stranded people.
+	//
+	// Revoking was added so that switching to a daemon per account took the
+	// `docker` group away from accounts that already existed -- otherwise they
+	// kept a socket reaching the parent daemon and the separation was a claim
+	// rather than a fact. It was written in one direction only, so switching
+	// BACK to the shared daemon left every existing account out of the group
+	// and unable to reach any daemon at all: `docker ps` in a shell answering
+	// "permission denied while trying to connect to the Docker daemon socket".
+	//
+	// Membership is reconciled both ways now. An account that already exists
+	// is the normal case on any workspace that has been used, so anything only
+	// applied at creation is, in practice, applied to nobody.
+	for _, group := range p.Groups {
+		if inGroup(name, group) {
+			continue
+		}
+		if out, err := exec.Command("gpasswd", "-a", name, group).CombinedOutput(); err != nil {
+			log.Printf("accounts: could not add %s to %s: %v: %s", name, group, err, out)
 		}
 	}
 }

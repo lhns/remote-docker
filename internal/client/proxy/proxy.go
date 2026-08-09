@@ -14,8 +14,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Dialer opens a fresh connection to the workspace's Docker socket.
@@ -210,11 +212,36 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 		return false, nil
 	}
 
+	// Timed in two halves because they fail differently and they are fixed
+	// differently: opening the stream is ours -- an SSH channel and an exec --
+	// while everything after it is the daemon's. Without the split, "docker
+	// run takes five seconds" cannot be attributed to either.
+	started := time.Now()
 	upstream, err := p.Dialer.DialDocker(ctx)
 	if err != nil {
 		return false, fmt.Errorf("connecting to the workspace daemon: %w", err)
 	}
 	defer upstream.Close()
+	dialed := time.Now()
+
+	var sent, headed, written time.Time
+	if traceEnabled {
+		defer func() {
+			// A hijack never reaches the write, so its zero time would render
+			// as a nonsense duration. Reported as the stream it is instead.
+			body := "stream"
+			if !written.IsZero() {
+				body = written.Sub(headed).Round(time.Millisecond).String()
+			}
+			p.logf("trace %s %s dial=%s send=%s wait=%s body=%s total=%s",
+				req.Method, req.URL.Path,
+				dialed.Sub(started).Round(time.Millisecond),
+				sent.Sub(dialed).Round(time.Millisecond),
+				headed.Sub(sent).Round(time.Millisecond),
+				body,
+				time.Since(started).Round(time.Millisecond))
+		}()
+	}
 
 	if isContainerCreate(req) && p.Rewriter != nil {
 		if err := p.rewriteBody(ctx, req); err != nil {
@@ -229,12 +256,14 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 	if err := req.Write(upstream); err != nil {
 		return false, fmt.Errorf("sending request: %w", err)
 	}
+	sent = time.Now()
 
 	upstreamReader := bufio.NewReader(upstream)
 	resp, err := http.ReadResponse(upstreamReader, req)
 	if err != nil {
 		return false, fmt.Errorf("reading response: %w", err)
 	}
+	headed = time.Now()
 	defer resp.Body.Close()
 
 	// A hijack -- `docker exec`, `attach`, and buildx's /session, which carries
@@ -254,7 +283,9 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 	// Streaming responses -- /events, /build, logs with follow -- are copied
 	// as they arrive. resp.Write does not buffer the body, so a chunk read
 	// from the daemon becomes a write to the client.
-	if err := resp.Write(client); err != nil {
+	err = resp.Write(client)
+	written = time.Now()
+	if err != nil {
 		return false, fmt.Errorf("writing response: %w", err)
 	}
 	return !resp.Close && !req.Close, nil
@@ -428,3 +459,16 @@ func (p *Proxy) logf(format string, args ...any) {
 		p.Log.Printf(format, args...)
 	}
 }
+
+// TraceEnv turns on per-request timing.
+//
+// One line per Docker API request, split into the part that is ours -- opening
+// an SSH channel and asking the agent to exec -- and the part that is the
+// daemon's. A `docker run` is several requests, and knowing WHICH of them is
+// slow is the difference between fixing something and guessing at it.
+//
+// An environment variable rather than a flag because the process that does the
+// forwarding is the background session, which nobody passes flags to.
+const TraceEnv = "REMOTE_DOCKER_TRACE"
+
+var traceEnabled = os.Getenv(TraceEnv) != ""
