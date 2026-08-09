@@ -194,6 +194,20 @@ func newStatusCommand() *cobra.Command {
 				rowf(out, "nfs port", "%d", info.NFSPort)
 				row(out, "docker", info.Docker)
 
+				// Said plainly, because vfs is the difference between a
+				// container starting in a second and in minutes, and nothing
+				// about it fails. Reaching the daemon's own host to look is
+				// exactly what an account may not do, so this is the only
+				// place it can be seen.
+				switch info.Storage {
+				case "":
+					// An agent too old to report it, or a daemon not started.
+				case "vfs":
+					row(out, "storage", "vfs -- SLOW: every container create copies the whole image")
+				default:
+					row(out, "storage", info.Storage)
+				}
+
 				// The agent's build. A different question from the local
 				// version, and the one that matters when the workspace behaves
 				// oddly.

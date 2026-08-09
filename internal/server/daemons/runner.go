@@ -215,6 +215,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	switch state := m.state(ctx, spec.Name); state {
 	case "running":
 		// Somebody else's Ensure won, or it survived our restart.
+		m.warnIfStale(ctx, account, spec.Name)
 	case "":
 		m.logf("starting a daemon for %s", account)
 		if err := m.parent().Run(ctx, "daemons: starting "+spec.Name, spec.Args()...); err != nil {
@@ -224,6 +225,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		// Stopped, exited, created. START it rather than running a new one:
 		// the container holds this user's containers and images, and
 		// replacing it would silently discard them.
+		m.warnIfStale(ctx, account, spec.Name)
 		m.logf("restarting the existing daemon for %s (was %s)", account, state)
 		if err := m.parent().Run(ctx, "daemons: restarting "+spec.Name, "start", spec.Name); err != nil {
 			return nil, err
@@ -499,4 +501,55 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 		"minutes. Its storage is on a filesystem that refused overlay2; set "+
 		"WORKSPACE_DIND_STORAGE_DRIVER (fuse-overlayfs for Ceph- or NFS-backed "+
 		"data) and remove %s to rebuild it.", d.Account, ContainerName(d.Account))
+}
+
+// warnIfStale reports a daemon whose settings no longer match the workspace's.
+//
+// A daemon that already exists is STARTED, never re-run: that is what keeps an
+// account's containers and images across a redeploy, and it is the right
+// default. The cost is that its command line is fixed at creation, so changing
+// the workspace's configuration afterwards has no effect on it and nothing
+// says so.
+//
+// That is not hypothetical. A workspace whose data is on CephFS sets
+// --storage-driver=fuse-overlayfs; per-account daemons did not inherit it for
+// a day, and every daemon created in that window kept falling back to vfs --
+// copying the whole image over the network on every container create, for as
+// long as that container existed, while the setting that would have fixed it
+// sat in the stack file being ignored.
+//
+// Reported rather than repaired, and that is deliberate. Recreating the
+// container is safe on its own -- the graph is a separate named volume that
+// outlives it -- but a graph written by one driver cannot be read by another,
+// so a silent recreation would leave the account with a daemon that will not
+// start, or with none of its images. Whether to spend that is the operator's
+// call, so this gives them the exact commands instead of making it.
+func (m *Manager) warnIfStale(ctx context.Context, account, name string) {
+	was, err := m.inspect(ctx, name,
+		"{{index .Config.Labels \""+StorageLabel+"\"}}")
+	if err != nil {
+		return
+	}
+	// Docker renders a missing label as "<no value>"; a daemon from before
+	// this label existed is not evidence of drift, only of age.
+	if was == "<no value>" || was == m.Options.StorageDriver {
+		return
+	}
+
+	m.logf("WARNING: %s's daemon was created with storage-driver=%q but this "+
+		"workspace now specifies %q. A daemon that already exists is started, "+
+		"never re-created, so it keeps the old one -- and a graph written by "+
+		"one driver cannot be read by another, so fixing it discards that "+
+		"account's images and containers. To do it: "+
+		"`docker rm -f %s && docker volume rm %s` on this workspace's own "+
+		"daemon, then reconnect.",
+		account, orNone(was), orNone(m.Options.StorageDriver),
+		name, VolumeName(account))
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(unset)"
+	}
+	return s
 }

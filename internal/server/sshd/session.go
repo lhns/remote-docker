@@ -83,6 +83,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		GID:     account.UID(),
 		NFSPort: port,
 		Docker:  s.dockerVersion(session.Context(), account.Name()),
+		Storage: s.storageDriver(session.Context(), account.Name()),
 		Agent:   s.cfg.Version,
 	}
 
@@ -312,4 +313,31 @@ func exitCode(err error) int {
 		return exit.ExitCode()
 	}
 	return 1
+}
+
+// storageDriver reports the graph driver of the daemon serving this account.
+//
+// Non-blocking, exactly like dockerVersion and for the same reason: this
+// answers the client's first round trip, and a cold daemon must not turn that
+// into a wait.
+//
+// Worth carrying at all because the difference between overlay2 and vfs is the
+// difference between `docker run` taking a second and taking minutes, nothing
+// about it fails, and the account cannot look for itself -- reaching the
+// daemon's own host is precisely what it may not do.
+func (s *Server) storageDriver(ctx context.Context, account string) string {
+	var cli dockercli.CLI
+	if s.cfg.Daemons != nil {
+		d, ok := s.cfg.Daemons.Lookup(ctx, account)
+		if !ok {
+			return ""
+		}
+		cli.Host = d.Host()
+	}
+
+	out, err := cli.Line(ctx, "info", "--format", "{{.Driver}}")
+	if err != nil {
+		return ""
+	}
+	return out
 }

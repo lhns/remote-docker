@@ -32,6 +32,18 @@ type Info struct {
 	// new client reading an old agent's sees it empty.
 	Agent string
 
+	// Storage is the graph driver of the daemon serving this account.
+	//
+	// Reported because the difference between overlay2/fuse-overlayfs and vfs
+	// is the difference between `docker run` taking a second and taking
+	// minutes -- vfs has no copy-on-write and copies the whole image on every
+	// create -- and because nothing about it FAILS. A real workspace spent a
+	// day looking like it was hanging, with the answer available only to
+	// somebody who could reach a daemon the account deliberately cannot.
+	//
+	// Added the same way as Agent, and safe for the same reason.
+	Storage string
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -48,6 +60,7 @@ const (
 	keyMounted    = "WORKSPACE_MOUNTED"
 	keyDocker     = "WORKSPACE_DOCKER"
 	keyAgent      = "WORKSPACE_AGENT"
+	keyStorage    = "WORKSPACE_STORAGE"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own
@@ -90,6 +103,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Mounted, err = strconv.ParseBool(value)
 		case keyAgent:
 			info.Agent = value
+		case keyStorage:
+			info.Storage = value
 		case keyDocker:
 			info.Docker = value
 		default:
@@ -139,6 +154,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyMounted, strconv.FormatBool(i.Mounted)},
 		{keyDocker, docker},
 		{keyAgent, i.Agent},
+		{keyStorage, i.Storage},
 	}
 
 	extraKeys := make([]string, 0, len(i.Extra))

@@ -328,6 +328,29 @@ gets both right, because the workspace already had to decide.
 | binary | `fuse-overlayfs`, which the `docker:dind` image ships. |
 | filesystem | Works on NFS and CephFS, which is the entire reason to reach for it. |
 
+#### Changing it later does not reach a daemon that already exists
+
+A per-account daemon that is already there gets *started*, never re-created --
+that is what keeps an account's containers and images across a redeploy. Its
+command line is therefore fixed at creation, so changing
+`WORKSPACE_DOCKERD_ARGS` afterwards does not reach it.
+
+This is not made automatic, and the reason is worth stating: recreating the
+container alone is safe -- the graph is a separate named volume that outlives
+it -- but **a graph written by one storage driver cannot be read by another**.
+So an automatic recreation would leave the account with a daemon that will not
+start, or with none of its images. Whether to spend that is not a decision to
+take on somebody's behalf.
+
+The agent detects it and logs the exact commands; `remote-docker status` shows
+the driver the account's daemon is actually using. To do it, on the workspace's
+own daemon:
+
+```bash
+docker rm -f rd-dind-<account>
+docker volume rm rd-dind-<account>-lib   # the images, which have to go too
+```
+
 If it is set and any of that is missing, dockerd falls back to **vfs** rather
 than failing — and vfs has no copy-on-write, so it copies the whole image on
 every `docker create`. Nothing errors, `docker ps` stays instant, and

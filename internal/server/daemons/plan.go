@@ -55,6 +55,18 @@ const (
 	ManagedLabel   = "remote-docker.daemon"
 	AccountLabel   = "remote-docker.account"
 	WorkspaceLabel = "remote-docker.workspace"
+
+	// StorageLabel records the graph driver a daemon was CREATED with.
+	//
+	// A daemon that already exists is started, never re-run -- that is what
+	// keeps an account's containers and images across a redeploy -- so its
+	// command line is fixed for life. Without this label there is no way to
+	// notice that the workspace's configuration has since changed and the
+	// running daemon is not what the current settings would produce.
+	//
+	// It is a label rather than a comparison of command lines because the
+	// question worth asking is "what was intended", not "what was typed".
+	StorageLabel = "remote-docker.storage-driver"
 )
 
 // Spec describes one account's daemon.
@@ -164,6 +176,7 @@ func Plan(account string, opts Options) (Spec, error) {
 	labels := []string{
 		ManagedLabel + "=1",
 		AccountLabel + "=" + account,
+		StorageLabel + "=" + opts.StorageDriver,
 	}
 	if opts.Workspace != "" {
 		labels = append(labels, WorkspaceLabel+"="+opts.Workspace)

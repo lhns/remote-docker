@@ -241,3 +241,23 @@ func TestTheStorageDriverIsInheritedFromTheParent(t *testing.T) {
 		}
 	}
 }
+
+// The driver a daemon was created with is recorded on it, because a daemon
+// that already exists is started rather than re-run -- so its command line is
+// fixed for life and nothing else can tell that the workspace's settings have
+// moved on since.
+func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
+	spec := plan(t, "alice", Options{StorageDriver: "fuse-overlayfs"})
+	if !slices.Contains(spec.Labels, StorageLabel+"=fuse-overlayfs") {
+		t.Errorf("the storage driver was not labelled: %v", spec.Labels)
+	}
+
+	// Recorded even when unset. "created with no driver" and "created before
+	// this label existed" are different facts, and only the second is a reason
+	// to say nothing -- so the empty value has to be written rather than
+	// omitted, or drift from unset to set could never be detected.
+	plain := plan(t, "alice", Options{})
+	if !slices.Contains(plain.Labels, StorageLabel+"=") {
+		t.Errorf("an unset driver was not recorded: %v", plain.Labels)
+	}
+}
