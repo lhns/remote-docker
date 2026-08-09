@@ -10,14 +10,31 @@
 # The build context is the REPOSITORY ROOT, not image/, because the agent is
 # built from source here. Build with:
 #     docker build -f image/Dockerfile .
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
+# The golang images set GOTOOLCHAIN=local, which turns a go.mod that asks for a
+# newer Go than the base image into a hard build failure -- and go.mod's
+# directive moves on its own, raised by whatever a dependency requires. That is
+# what broke this build: a docker/buildx bump took the module to 1.26.3 while
+# the tag here still said 1.25, and the error named the toolchain rather than
+# the dependency that moved it. `auto` lets the build fetch what go.mod asks
+# for instead. The tag above still tracks it, so the fetch is normally a no-op.
+ENV GOTOOLCHAIN=auto
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
 ARG VERSION=dev
-# Dependencies first, so a source change does not re-download the module graph.
+# No `go mod download` step, deliberately.
+#
+# It was here to cache dependencies in their own layer, and with no arguments
+# it fetches everything the main module's packages need -- which now includes
+# buildx and its transitive tree, hundreds of megabytes the agent never
+# imports. `go build` below downloads exactly what the agent's own package
+# needs, which is a small fraction of it.
+#
+# It did NOT cause the failure it was removed for; the toolchain pin above did.
+# Removing it is still right, and saying so here stops the next reader
+# reinstating it as a fix for something.
 COPY go.mod go.sum ./
-RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
