@@ -193,6 +193,7 @@ func newStatusCommand() *cobra.Command {
 				rowf(out, "account", "%s (uid %d)", info.User, info.UID)
 				rowf(out, "nfs port", "%d", info.NFSPort)
 				row(out, "docker", info.Docker)
+				row(out, "mode", info.Mode)
 
 				// Said plainly, because vfs is the difference between a
 				// container starting in a second and in minutes, and nothing

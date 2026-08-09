@@ -192,6 +192,23 @@ in the namespace where every account's shell runs.
 - **`workspace-id` becomes as load-bearing as the uid map.** Both live in
   `/etc/workspace` and both survive a redeploy; losing the id orphans every
   running daemon exactly as losing the uid map would renumber every account.
+- **A daemon is created once and started thereafter, so its settings are fixed
+  at creation.** Each one carries a digest of the spec it was built from, and a
+  daemon whose digest no longer matches is recreated -- the container is
+  disposable, the graph volume beside it is the data. It waits until that
+  account has nothing running, because recreating a daemon stops its
+  containers. The storage driver is the exception, since a graph written by one
+  driver cannot be read by another; `remote-dockerd daemons reset` is where
+  that decision is made by a person.
+- **The image is the workspace's own**, passed in by `elevate`, which has
+  already inspected the container it is relaunching. Stock `docker:dind` does
+  not carry fuse-overlayfs, so a per-account daemon on it dies at startup on
+  exactly the workspaces where the driver matters. The entrypoint is dind's own
+  script, not `dockerd`: the script removes a stale /var/run/docker.pid, and
+  without it the first start works and every restart fails.
+- **Readiness is a round trip, not a socket file.** dockerd binds its socket
+  before initialising storage, so a daemon that dies during startup leaves one
+  behind that looks healthy.
 - Two things become correct for free: `rd-cwd` stops colliding across accounts
   (every account produced that same name, and the second `EnsureVolume`
   silently returned the first account's volume with the *first* account's NFS

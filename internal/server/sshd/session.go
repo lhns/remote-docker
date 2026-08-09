@@ -96,6 +96,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		NFSPort: port,
 		Docker:  s.dockerVersion(session.Context(), account.Name()),
 		Storage: s.storageDriver(session.Context(), account.Name()),
+		Mode:    s.mode(),
 		Agent:   s.cfg.Version,
 	}
 
@@ -401,4 +402,12 @@ func supplementaryGroups(name string, gid int) []uint32 {
 		return nil
 	}
 	return out
+}
+
+// mode names how this workspace serves daemons, for the info reply.
+func (s *Server) mode() string {
+	if s.cfg.Daemons != nil {
+		return "per-account"
+	}
+	return "shared"
 }

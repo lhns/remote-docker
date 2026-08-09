@@ -474,6 +474,28 @@ That remains supported rather than deprecated: a single-account workspace has
 nothing to separate, and pays for separation in memory and in a duplicated
 layer cache.
 
+## Why a container takes a few seconds to start
+
+Measured against a workspace whose `/var/lib/docker` is on CephFS, which is the
+case this is worth knowing for. `REMOTE_DOCKER_TRACE=1` on the session prints
+one line per Docker API request if you want your own numbers.
+
+| | |
+|---|---|
+| the tunnel | **~10ms per request.** An SSH channel opens in 2--3ms and a `/_ping` round trip is 8ms. This is not where the time goes. |
+| this binary starting | **~400ms per command.** ~210ms to load a 45MB binary and build the command tree, and about as much again initialising the embedded Docker CLI. Paid once per `remote-docker docker ...`, not per request. |
+| `docker create` | **~250ms**, and the same measured on the workspace itself. Container creation is many small metadata writes, and they are synchronous. |
+| `docker start` | **~800ms**, likewise the same locally. |
+
+So a `docker run` is roughly 400ms of us, a second of the daemon, and then the
+container's own runtime. **The remote part is not the expensive part** -- the
+storage is. The same daemon on local disk does create and start in tens of
+milliseconds.
+
+If that matters more than surviving a node move, put `/var/lib/docker` on local
+disk; see the storage driver section above. Nothing in the client will make a
+meaningful difference at 10ms a request.
+
 ## Commands
 
 | | |

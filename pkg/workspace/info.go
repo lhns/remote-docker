@@ -32,6 +32,17 @@ type Info struct {
 	// new client reading an old agent's sees it empty.
 	Agent string
 
+	// Mode is how this workspace serves daemons: "shared" (ADR 0012) or
+	// "per-account" (ADR 0019).
+	//
+	// Worth reporting because everything else in this reply means something
+	// different depending on it -- whose daemon the version and the storage
+	// driver describe, whether another account can see your containers, and
+	// what an operator has to do to change a setting. It is set on the
+	// workspace and invisible from the client, which spent a day being
+	// confusing.
+	Mode string
+
 	// Storage is the graph driver of the daemon serving this account.
 	//
 	// Reported because the difference between overlay2/fuse-overlayfs and vfs
@@ -61,6 +72,7 @@ const (
 	keyDocker     = "WORKSPACE_DOCKER"
 	keyAgent      = "WORKSPACE_AGENT"
 	keyStorage    = "WORKSPACE_STORAGE"
+	keyMode       = "WORKSPACE_MODE"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own
@@ -105,6 +117,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Agent = value
 		case keyStorage:
 			info.Storage = value
+		case keyMode:
+			info.Mode = value
 		case keyDocker:
 			info.Docker = value
 		default:
@@ -155,6 +169,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyDocker, docker},
 		{keyAgent, i.Agent},
 		{keyStorage, i.Storage},
+		{keyMode, i.Mode},
 	}
 
 	extraKeys := make([]string, 0, len(i.Extra))
