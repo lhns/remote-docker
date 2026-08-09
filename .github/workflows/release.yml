@@ -135,7 +135,7 @@ jobs:
     needs: [image, meta]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digest-*
@@ -179,7 +179,7 @@ jobs:
           # clone does not have.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
