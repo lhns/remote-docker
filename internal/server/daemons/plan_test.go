@@ -262,20 +262,20 @@ func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 	}
 }
 
-// dockerd is the entrypoint, because the image is the workspace's own and its
-// entrypoint is the agent.
-//
-// Without this the daemon container runs `remote-dockerd dockerd -H ...` --
-// the agent, handed dockerd's flags. Running dockerd directly is also what the
-// workspace does for its own daemon, so this is the same thing one level down.
+// The entrypoint is set, because the image is the workspace's own and its
+// entrypoint is the agent -- left alone the daemon container would run
+// `remote-dockerd` handed dockerd's flags.
 func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
 	spec := plan(t, "alice", Options{})
 
-	if spec.Entrypoint != "dockerd" {
-		t.Errorf("Entrypoint = %q, want dockerd", spec.Entrypoint)
+	// dind's own entrypoint script, NOT dockerd. The script removes a stale
+	// /var/run/docker.pid; bypassing it makes the first start work and every
+	// restart die with "process with PID 1 is still running".
+	if spec.Entrypoint != "dockerd-entrypoint.sh" {
+		t.Errorf("Entrypoint = %q, want dind's own entrypoint script", spec.Entrypoint)
 	}
 	args := strings.Join(spec.Args(), " ")
-	if !strings.Contains(args, "--entrypoint dockerd") {
+	if !strings.Contains(args, "--entrypoint dockerd-entrypoint.sh") {
 		t.Errorf("the entrypoint never reached the args: %s", args)
 	}
 

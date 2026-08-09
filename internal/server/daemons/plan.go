@@ -47,11 +47,22 @@ const DefaultImage = "docker:28-dind"
 
 // Entrypoint is what a per-account daemon runs.
 //
-// Set explicitly rather than left to the image, because the image is the
-// workspace's own and its entrypoint is the agent. Running dockerd directly is
-// also what the workspace does for its own daemon (internal/server/supervise),
-// so this is the same thing one level down rather than a new idea.
-const Entrypoint = "dockerd"
+// Set explicitly because the image is the workspace's own, whose entrypoint is
+// the agent -- left alone, the daemon container would run `remote-dockerd`
+// handed dockerd's flags.
+//
+// It is dind's OWN entrypoint script, not `dockerd`, and that distinction cost
+// a CI run. The script does setup that dockerd does not do for itself, and the
+// piece that matters is removing a stale /var/run/docker.pid. Without it the
+// FIRST start works and every RESTART dies with
+//
+//	failed to start daemon, ensure docker is not running or delete
+//	/var/run/docker.pid: process with PID 1 is still running
+//
+// in a loop -- so a daemon looks fine until the workspace is restarted, which
+// is exactly when nobody is watching. The script is present in both candidate
+// images because the workspace's own is built FROM docker:dind.
+const Entrypoint = "dockerd-entrypoint.sh"
 
 // SocketDir is where the agent keeps one socket directory per account, and
 // SocketMount is where that directory appears inside the account's daemon.

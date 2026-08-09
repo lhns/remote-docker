@@ -127,6 +127,15 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 		addr := net.JoinHostPort(payload.BindAddr, strconv.Itoa(int(payload.BindPort)))
 		ln, err := s.listenFor(ctx, account, addr)
 		if err != nil {
+			// The RESERVATION has to go with the failure.
+			//
+			// allowReverseForward above does not only permit -- it BINDS the
+			// port and arms a release for when the connection ends. So a
+			// listen that fails here left the account's one reverse-tunnel
+			// port reserved by a forward that does not exist, and every retry
+			// was refused with "another session for this account may still be
+			// open" -- blaming a second session for the first one's failure.
+			s.forward.Release(account, payload.BindAddr, payload.BindPort)
 			s.logf("could not bind %s for %s: %v", addr, account.Name(), err)
 			return false, []byte{}
 		}

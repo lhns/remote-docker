@@ -172,3 +172,28 @@ func TestPolicyIsSafeUnderConcurrency(t *testing.T) {
 		<-done
 	}
 }
+
+// A reservation that is never used has to be given back.
+//
+// Granting the port and opening the listener are two steps, and the second can
+// fail -- the account's daemon may not be up yet, and with a daemon per account
+// the listener is bound inside it. When it did, the reservation stayed: the
+// account's one reverse-tunnel port was held by a forward that did not exist,
+// and every retry was refused as "another session for this account may still be
+// open", blaming a second session for the first one's failure.
+//
+// This asserts the policy supports that -- releasing without waiting for the
+// connection to end -- which is what the failure path in forward_tcpip.go does.
+func TestAReservationCanBeGivenBackImmediately(t *testing.T) {
+	p := newPolicy()
+
+	if !p.Bind(alice, "127.0.0.1", 30000) {
+		t.Fatal("the first bind was refused")
+	}
+	// The listener failed; hand the port straight back.
+	p.Release(alice, "127.0.0.1", 30000)
+
+	if !p.Bind(alice, "127.0.0.1", 30000) {
+		t.Error("the port is still held after being released; a retry would be refused")
+	}
+}
