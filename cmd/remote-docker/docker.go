@@ -5,6 +5,14 @@ import (
 	"os"
 	"strings"
 
+	buildxcommands "github.com/docker/buildx/commands"
+
+	// The drivers register themselves, and buildx's own main is where that
+	// normally happens. Without them `docker build` answers "no drivers
+	// available": the command is present, correctly wired, and cannot build.
+	_ "github.com/docker/buildx/driver/docker"
+	_ "github.com/docker/buildx/driver/docker-container"
+	_ "github.com/docker/buildx/driver/remote"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
 	"github.com/docker/cli/cli/flags"
@@ -111,6 +119,7 @@ set -- though an explicit one is respected.`,
 	}
 
 	commands.AddCommands(cmd, dockerCli)
+	installModernBuilder(cmd, dockerCli)
 	return cmd
 }
 
@@ -142,4 +151,46 @@ func invokingDocker() bool {
 		return arg == "docker"
 	}
 	return false
+}
+
+// installModernBuilder replaces `build` with buildx's, which is what the real
+// docker CLI does when the plugin is present.
+//
+// Not an extra subcommand. Upstream, `docker build` IS `docker buildx build`
+// whenever buildx is installed, and the classic builder is only the fallback
+// for when it is not -- so adding a parallel `buildx` and leaving `build` on
+// the old path would be a shape docker does not have.
+//
+// The classic builder is what we shipped until now, and it was not a choice:
+// buildx is a separate plugin binary, so embedding docker/cli alone got the
+// pre-BuildKit path silently, even with DOCKER_BUILDKIT=1. ADR 0009 recorded
+// the opposite and was wrong.
+//
+// `buildx` is registered too, because it is a real command with subcommands
+// docker exposes -- bake, imagetools, du -- and hiding them would be a
+// different kind of surprise.
+func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
+	root := buildxcommands.NewRootCmd("buildx", true, dockerCli)
+
+	for _, sub := range root.Commands() {
+		if sub.Name() != "build" {
+			continue
+		}
+		// Off buildx's root before going onto ours: cobra keeps one parent
+		// per command, and a command still owned by another tree inherits
+		// that tree's flags and help.
+		root.RemoveCommand(sub)
+		if old, _, err := cmd.Find([]string{"build"}); err == nil {
+			cmd.RemoveCommand(old)
+		}
+		sub.Use = "build [OPTIONS] PATH | URL | -"
+		cmd.AddCommand(sub)
+		break
+	}
+
+	// The buildx ROOT is deliberately not registered. Its subcommands expect
+	// the plugin harness to have run -- `docker buildx version` panics on a
+	// nil dereference without it -- and `build` is what docker's own tree
+	// exposes anyway.
+	_ = root
 }

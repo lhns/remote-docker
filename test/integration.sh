@@ -829,6 +829,27 @@ RUN cat /marker.txt /sub/nested.txt
 DOCKERFILE
 
 if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" docker build -t itest-build . 2>&1); then
+    # THE builder assertion: is this BuildKit, or the classic builder wearing
+    # its name?
+    #
+    # `build` being present says nothing -- it was present before, and it
+    # silently used the pre-BuildKit path because buildx was not vendored, even
+    # with DOCKER_BUILDKIT=1. So the two builders are told apart by what they
+    # SAY, and both directions are asserted: a fallback would keep passing
+    # every other check in this section while quietly losing cache mounts,
+    # parallel stages and incremental context transfer.
+    if echo "$out" | grep -qE "exporting to image|\[internal\] load build definition"; then
+        ok "docker build goes through BuildKit"
+    else
+        bad "the build did not use BuildKit"
+        echo "$out" | head -5 | sed 's/^/        /'
+    fi
+    if echo "$out" | grep -q "Sending build context to Docker daemon"; then
+        bad "the build fell back to the classic builder"
+    else
+        ok "and not the classic builder"
+    fi
+
     if echo "$out" | grep -q "content-from-the-client-machine"; then
         ok "COPY read a file from this machine during the build"
     else

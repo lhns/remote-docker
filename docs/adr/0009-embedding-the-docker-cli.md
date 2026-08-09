@@ -83,6 +83,36 @@ Three attempts, each failing differently, which together explain why:
 | force buildx v0.36 | Compose needs `moby/buildkit/util/tracing/env`, absent from the buildkit that buildx pins |
 | let Compose choose the whole stack | **builds** — cli v28.5.1, buildx v0.29.1, buildkit v0.25.1, 86 MB, 36 subcommands |
 
+### 2026-08: buildx is now embedded, and compose still is not
+
+The blocker moved rather than vanished. buildx v0.36 builds against
+`docker/cli` v29.7.2 -- no downgrade, no three-way pin -- so `docker build`
+routes through BuildKit, which is what a real docker CLI does when the plugin
+is present. `build` is REPLACED rather than added beside: upstream, `docker
+build` IS `docker buildx build`, and the classic builder is only the fallback.
+
+Two things this needed that the plugin harness usually does:
+
+- **The drivers register themselves via blank imports in buildx's own main.**
+  Without them the command is present, correctly wired, and answers "no drivers
+  available".
+- **buildx's ROOT command is not registered.** Its subcommands expect the
+  plugin harness to have run and `docker buildx version` panics on a nil
+  dereference without it. `build` is what docker's tree exposes anyway.
+
+It cost 45 MB: 45 -> 91 MB. That is the price of the feature this record was
+originally most worried about losing, and it buys the `/session` hijack its
+first exercised caller -- BuildKit streams the context over it, and until now
+nothing did.
+
+**Compose remains out, for the reason below with new numbers.** compose v2.40.3
+requires buildx v0.29.1, buildkit v0.25.1 and `docker/cli` v28.5.1, while
+buildx v0.36.1 requires buildkit v0.32.2 -- which no longer contains
+`moby/buildkit/util/tracing/env`, the package compose imports. Taking compose
+means pinning `docker/cli` back a major version AND buildx back seven minors,
+losing the modern builder to gain a command that already works through the
+proxy as a separate binary.
+
 So it is possible, and it is **not taken**. The working combination requires
 pinning `docker/cli` back from v29.7.2 to v28.5.1 — a major version — and
 roughly doubles the binary, in exchange for a three-way version pin that any

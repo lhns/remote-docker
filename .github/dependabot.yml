@@ -1,0 +1,38 @@
+# Dependency updates, opened as PRs rather than applied.
+#
+# The integration suite is what makes these safe to take: a bump to docker/cli,
+# buildx or moby carries real behaviour, and this repository has been bitten
+# more than once by a claim about a dependency that was not true when checked
+# (docker:dind shipping fuse-overlayfs; buildx being reachable without
+# vendoring it). A PR runs both modes end to end before anybody believes it.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # The docker stack moves together and breaks together: cli, buildx and
+      # buildkit pin each other, which is the whole reason compose cannot be
+      # embedded today. One PR so a combination is tested as a combination.
+      docker:
+        patterns:
+          - "github.com/docker/*"
+          - "github.com/moby/*"
+          - "github.com/containerd/*"
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # The workspace image's base. A new docker:dind is a new dockerd for every
+  # workspace, and the integration suite builds this image from source.
+  - package-ecosystem: docker
+    directory: /image
+    schedule:
+      interval: weekly
