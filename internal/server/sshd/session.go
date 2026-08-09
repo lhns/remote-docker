@@ -10,6 +10,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -237,10 +239,23 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 			_, _ = fmt.Fprintf(session.Stderr(), "your docker daemon is not available: %v\n", err)
 		}
 	}
+	// Supplementary groups have to be listed, or they are REMOVED.
+	//
+	// Go calls setgroups() with Credential.Groups whenever a Credential is
+	// set, so leaving it nil clears every supplementary group rather than
+	// inheriting one. An account correctly listed in `docker` in /etc/group
+	// therefore got a shell that was not in it, and `docker ps` answered
+	// "permission denied while trying to connect to the Docker daemon socket"
+	// -- which reads exactly like a broken socket and is not one.
+	//
+	// It cost most of an evening: the group membership was checked, found
+	// correct, and believed, because nothing suggested the shell might have a
+	// different view of it than /etc/group did.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
-			Uid: uint32(stored.UID),
-			Gid: uint32(stored.GID),
+			Uid:    uint32(stored.UID),
+			Gid:    uint32(stored.GID),
+			Groups: supplementaryGroups(stored.Name, stored.GID),
 		},
 		Setsid: true,
 	}
@@ -354,6 +369,36 @@ func (s *Server) storageDriver(ctx context.Context, account string) string {
 	out, err := cli.Line(ctx, "info", "--format", "{{.Driver}}")
 	if err != nil {
 		return ""
+	}
+	return out
+}
+
+// supplementaryGroups is the account's group membership as /etc/group has it.
+//
+// Nil on any failure, which restores the previous behaviour rather than
+// refusing the shell: a login with fewer groups is worth having, a login that
+// does not happen is not.
+func supplementaryGroups(name string, gid int) []uint32 {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return nil
+	}
+	ids, err := u.GroupIds()
+	if err != nil {
+		return nil
+	}
+
+	out := make([]uint32, 0, len(ids))
+	for _, id := range ids {
+		n, err := strconv.Atoi(id)
+		if err != nil || n == gid {
+			// The primary group is already set and does not belong here twice.
+			continue
+		}
+		out = append(out, uint32(n))
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

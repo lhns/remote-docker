@@ -743,7 +743,7 @@ echo "== 13b. a stock ssh still gets a shell, and the embedded CLI =="
 shellout=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o BatchMode=yes -tt -p "$SSH_PORT" "$ACCOUNT@127.0.0.1" \
-    'tty; id -un' 2>&1 </dev/null)
+    'tty; id -un; docker ps --format {{.Names}} 2>&1 | head -3' 2>&1 </dev/null)
 
 # tr squeezes the pty's CRLF out so a failure prints as one readable line.
 trim() { echo "$1" | tr -d '
@@ -760,6 +760,22 @@ if echo "$shellout" | grep -q "^$ACCOUNT"; then
     ok "the shell runs as the enrolled account"
 else
     bad "the shell was not $ACCOUNT: $(trim "$shellout")"
+fi
+
+# ...and can USE the shared daemon, which needs its supplementary groups.
+#
+# Go calls setgroups() with Credential.Groups whenever a Credential is set, so
+# leaving it nil CLEARS every supplementary group. An account correctly listed
+# in `docker` in /etc/group got a shell that was not in it, and `docker ps`
+# answered "permission denied while trying to connect to the Docker daemon
+# socket" -- which reads like a broken socket and is not one.
+#
+# Asserted by using it, not by reading `id`: the group file was checked, found
+# right, and believed, while the shell had a different view of it.
+if echo "$shellout" | grep -q "permission denied"; then
+    bad "the shell cannot reach the shared daemon: $(trim "$shellout")"
+else
+    ok "and it can use the shared docker daemon"
 fi
 
 # The embedded CLI: the client's own docker, not the runner's.
