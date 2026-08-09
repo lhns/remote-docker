@@ -10,7 +10,7 @@
 # The build context is the REPOSITORY ROOT, not image/, because the agent is
 # built from source here. Build with:
 #     docker build -f image/Dockerfile .
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
