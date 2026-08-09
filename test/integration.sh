@@ -807,6 +807,72 @@ else
 fi
 
 echo
+echo "== 13c. docker build, and whether COPY sees this machine's files =="
+# The question worth settling: a Dockerfile COPYs from the build context, and
+# the context is on THIS machine while the daemon is on the workspace. Nothing
+# is mounted for a build -- no volume, no NFS -- so the only reason this can
+# work is that the docker CLI tars the directory and uploads it, which is what
+# "Sending build context to Docker daemon" means.
+#
+# It does work, and this is the only test of it. Asserted through the CONTENT
+# of a file written here, so a build that somehow read a stale or empty context
+# fails rather than passing on an image that exists.
+BUILDCTX="$WORK/buildctx"
+mkdir -p "$BUILDCTX/sub"
+echo "content-from-the-client-machine" >"$BUILDCTX/marker.txt"
+echo "nested-file" >"$BUILDCTX/sub/nested.txt"
+cat >"$BUILDCTX/Dockerfile" <<'DOCKERFILE'
+FROM alpine:3
+COPY marker.txt /marker.txt
+ADD sub /sub
+RUN cat /marker.txt /sub/nested.txt
+DOCKERFILE
+
+if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" docker build -t itest-build . 2>&1); then
+    if echo "$out" | grep -q "content-from-the-client-machine"; then
+        ok "COPY read a file from this machine during the build"
+    else
+        bad "the build ran but COPY did not produce the file's content"
+        echo "$out" | tail -10 | sed 's/^/        /'
+    fi
+    if echo "$out" | grep -q "nested-file"; then
+        ok "ADD carried a subdirectory too"
+    else
+        bad "ADD did not carry the subdirectory"
+    fi
+else
+    bad "docker build failed: $(echo "$out" | tail -5 | tr '
+' ' ')"
+fi
+
+# And the image is real: it runs, and what COPY put there is still there.
+expect_output "the built image runs and carries the copied file"     "content-from-the-client-machine" -- --rm itest-build cat /marker.txt
+
+# A file the context excludes must NOT reach the daemon. This is the only
+# thing standing between a build and uploading whatever else is in the
+# directory -- a .git, a node_modules, somebody's secrets.
+echo "must-not-be-uploaded" >"$BUILDCTX/secret.txt"
+printf 'secret.txt
+' >"$BUILDCTX/.dockerignore"
+cat >"$BUILDCTX/Dockerfile" <<'DOCKERFILE'
+FROM alpine:3
+COPY . /ctx
+RUN ls /ctx
+DOCKERFILE
+if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" docker build -t itest-ignore . 2>&1); then
+    if echo "$out" | grep -q "secret.txt"; then
+        bad ".dockerignore was not honoured; the excluded file was uploaded"
+    else
+        ok ".dockerignore keeps a file out of the build context"
+    fi
+else
+    bad "the .dockerignore build failed: $(echo "$out" | tail -5 | tr '
+' ' ')"
+fi
+
+timeout 60 docker rmi -f itest-build itest-ignore >/dev/null 2>&1
+
+echo
 echo "== 14. elevate =="
 # Swarm cannot run privileged tasks, so the service starts unprivileged and
 # relaunches itself (ADR 0013). Swarm itself is not worth standing up here --
