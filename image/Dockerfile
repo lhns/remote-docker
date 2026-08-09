@@ -42,7 +42,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/remote-dockerd ./cmd/remote-dockerd
 
-FROM docker:28-dind
+FROM docker:29-dind
 
 # openssh-server, sudo and inotify-tools left with the shell implementation:
 # the agent is its own SSH server, is already root, and watches the keys
