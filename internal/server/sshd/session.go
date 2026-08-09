@@ -114,23 +114,23 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 //
 // This used to say there was no per-account restriction here "because there is
 // none to make": one daemon, and reaching it at all is root on it, which was
-// the trade ADR 0012 recorded. With Daemons set that is no longer true. The
-// account is resolved to ITS OWN daemon here, and this lookup is the only
-// thing between one user's session and another user's containers. Getting it
-// wrong does not fail -- it succeeds, against the wrong daemon.
+// the trade ADR 0012 recorded. With a daemon per account that is no longer
+// true. The account is resolved to ITS OWN daemon here, and this resolution is
+// the only thing between one user's session and another user's containers.
+// Getting it wrong does not fail -- it succeeds, against the wrong daemon.
+//
+// Which is why the resolver is asked rather than a mode being branched on: in
+// shared mode it answers with the one socket, and there is no second path here
+// that could disagree with the first.
 func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount) {
-	socket := s.cfg.DockerSocket
-	if s.cfg.Daemons != nil {
-		d, err := s.cfg.Daemons.Ensure(session.Context(), account.Name())
-		if err != nil {
-			_, _ = fmt.Fprintf(session.Stderr(), "cannot start your docker daemon: %v\n", err)
-			_ = session.Exit(1)
-			return
-		}
-		socket = d.Socket
+	target, err := s.cfg.Daemons.Ensure(session.Context(), account.Name())
+	if err != nil {
+		_, _ = fmt.Fprintf(session.Stderr(), "cannot start your docker daemon: %v\n", err)
+		_ = session.Exit(1)
+		return
 	}
 
-	conn, err := net.Dial("unix", socket)
+	conn, err := net.Dial("unix", target.Socket)
 	if err != nil {
 		_, _ = fmt.Fprintf(session.Stderr(), "cannot reach the docker daemon: %v\n", err)
 		_ = session.Exit(1)
@@ -150,36 +150,21 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 // this is a root process being told which path to touch -- see
 // workspace.FSEvent.Validate, called on both sides.
 func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
-	volumes := s.cfg.Volumes
-	if s.cfg.Daemons != nil {
-		// The volume being replayed into belongs to THIS account's daemon, and
-		// the mountpoint that daemon reports is a path in its own filesystem.
-		// Both have to be redirected, and the pid behind the root is resolved
-		// per call rather than captured: the daemon restarts, and a stale pid
-		// would silently name a path in nothing.
-		name := account.Name()
-		volumes = notify.DockerVolumes{
-			Host: daemons.HostFor(name),
-			Root: func() (string, error) {
-				d, err := s.cfg.Daemons.Ensure(session.Context(), name)
-				if err != nil {
-					return "", err
-				}
-				return d.Root(), nil
-			},
-		}
+	// The volume being replayed into belongs to THIS account's daemon, and the
+	// mountpoint that daemon reports is a path in ITS filesystem. Both have to
+	// be redirected, and both are resolved per call rather than captured: the
+	// daemon restarts, and a stale root would silently name a path in nothing.
+	//
+	// In shared mode the resolver answers with an empty host and "/", which is
+	// the same zero value this used to be configured with -- so one expression
+	// now serves both arrangements instead of a branch choosing between them.
+	name := account.Name()
+	target := func() (daemons.Target, error) {
+		return s.cfg.Daemons.Ensure(session.Context(), name)
 	}
-
-	if volumes == nil {
-		// Nothing to resolve exports against. Exiting non-zero is what tells
-		// the client to stop trying rather than reconnect forever.
-		//
-		// Checked after the per-account resolver is built, not before: with a
-		// Manager the volumes come from the account's own daemon, so refusing
-		// on the configured value would refuse a mode that works.
-		_, _ = fmt.Fprintln(session.Stderr(), "change notification is not available on this workspace")
-		_ = session.Exit(1)
-		return
+	volumes := notify.DockerVolumes{
+		Host: func() (string, error) { t, err := target(); return t.Host, err },
+		Root: func() (string, error) { t, err := target(); return t.Root, err },
 	}
 
 	replayer := &notify.Replayer{
@@ -233,12 +218,13 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 	// commands should wait for their daemon rather than be told it is not
 	// there. A failure is reported and the shell opens anyway; a shell with no
 	// DOCKER_HOST is far better than no shell.
-	if s.cfg.Daemons != nil {
-		if d, err := s.cfg.Daemons.Ensure(session.Context(), account.Name()); err == nil {
-			cmd.Env = append(cmd.Env, "DOCKER_HOST="+d.Host())
-		} else {
-			_, _ = fmt.Fprintf(session.Stderr(), "your docker daemon is not available: %v\n", err)
-		}
+	if target, err := s.cfg.Daemons.Ensure(session.Context(), account.Name()); err != nil {
+		_, _ = fmt.Fprintf(session.Stderr(), "your docker daemon is not available: %v\n", err)
+	} else if target.Host != "" {
+		// Empty means the default socket is already the right one -- the shared
+		// daemon -- and setting DOCKER_HOST to it would be noise in a login
+		// shell rather than a redirection.
+		cmd.Env = append(cmd.Env, "DOCKER_HOST="+target.Host)
 	}
 	// Supplementary groups have to be listed, or they are REMOVED.
 	//
@@ -318,16 +304,14 @@ func (s *Server) dockerVersion(ctx context.Context, account string) string {
 	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
 	defer cancel()
 
-	var cli dockercli.CLI
-	if s.cfg.Daemons != nil {
-		d, ok := s.cfg.Daemons.Lookup(ctx, account)
-		if !ok {
-			return workspace.DockerUnavailable
-		}
-		cli.Host = d.Host()
+	// Lookup, never Ensure: see above. A daemon that is not up yet is reported
+	// as unavailable rather than started and waited for.
+	target, ok := s.cfg.Daemons.Lookup(ctx, account)
+	if !ok {
+		return workspace.DockerUnavailable
 	}
 
-	out, err := cli.Line(ctx, "version", "--format", "{{.Server.Version}}")
+	out, err := dockercli.CLI{Host: target.Host}.Line(ctx, "version", "--format", "{{.Server.Version}}")
 	if err != nil {
 		// A normal answer, not a failure: the client shows it rather than
 		// refusing to start.
@@ -358,16 +342,12 @@ func (s *Server) storageDriver(ctx context.Context, account string) string {
 	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
 	defer cancel()
 
-	var cli dockercli.CLI
-	if s.cfg.Daemons != nil {
-		d, ok := s.cfg.Daemons.Lookup(ctx, account)
-		if !ok {
-			return ""
-		}
-		cli.Host = d.Host()
+	target, ok := s.cfg.Daemons.Lookup(ctx, account)
+	if !ok {
+		return ""
 	}
 
-	out, err := cli.Line(ctx, "info", "--format", "{{.Driver}}")
+	out, err := dockercli.CLI{Host: target.Host}.Line(ctx, "info", "--format", "{{.Driver}}")
 	if err != nil {
 		return ""
 	}
@@ -404,10 +384,6 @@ func supplementaryGroups(name string, gid int) []uint32 {
 	return out
 }
 
-// mode names how this workspace serves daemons, for the info reply.
-func (s *Server) mode() string {
-	if s.cfg.Daemons != nil {
-		return "per-account"
-	}
-	return "shared"
-}
+// mode names how this workspace serves daemons, for the info reply. The
+// resolver knows, because choosing it is what chose the mode.
+func (s *Server) mode() string { return s.cfg.Daemons.Mode() }

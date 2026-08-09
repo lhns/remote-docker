@@ -20,7 +20,12 @@ type DockerVolumes struct {
 	// belongs to that account's daemon and does not exist on any other, so
 	// asking the wrong one does not return a wrong path -- it returns no such
 	// volume, which is at least loud.
-	Host string
+	//
+	// A func, and lazy, for the same reason Root is: resolving it eagerly would
+	// mean starting the account's daemon when the notify session OPENS rather
+	// than when it first replays something, turning the client's connect into a
+	// wait for a cold dind. Nil means the agent's own.
+	Host func() (string, error)
 
 	// Root maps that daemon's filesystem into ours.
 	//
@@ -36,7 +41,15 @@ type DockerVolumes struct {
 }
 
 func (d DockerVolumes) Mountpoint(ctx context.Context, volume string) (string, error) {
-	mp, err := dockercli.CLI{Host: d.Host}.Line(ctx,
+	host, err := call(d.Host)
+	if err != nil {
+		// Same rule as a root that cannot be resolved, below: refuse rather
+		// than fall back. An empty host is the AGENT's daemon, which exists and
+		// holds a different set of volumes.
+		return "", fmt.Errorf("notify: locating the daemon holding volume %s: %w", volume, err)
+	}
+
+	mp, err := dockercli.CLI{Host: host}.Line(ctx,
 		"volume", "inspect", volume, "--format", "{{.Mountpoint}}")
 	if err != nil {
 		return "", fmt.Errorf("notify: inspecting volume %s: %w", volume, err)
@@ -46,6 +59,15 @@ func (d DockerVolumes) Mountpoint(ctx context.Context, volume string) (string, e
 	}
 
 	return relocate(mp, d.Root)
+}
+
+// call reads a lazily-resolved setting. A nil func is the empty value, which
+// both fields document as "the agent's own".
+func call(fn func() (string, error)) (string, error) {
+	if fn == nil {
+		return "", nil
+	}
+	return fn()
 }
 
 // relocate maps a mountpoint reported by another daemon into our filesystem.

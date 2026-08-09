@@ -18,7 +18,6 @@ import (
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/daemons"
-	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -35,24 +34,16 @@ type Config struct {
 	Accounts *accounts.Store
 	Mapping  workspace.Mapping
 
-	// DockerSocket is spliced directly to a session asking for
-	// `docker system dial-stdio`, so the Docker API needs no CLI in the path.
+	// Daemons resolves an account to the daemon that serves it: its socket, its
+	// DOCKER_HOST, its network namespace and its filesystem root.
 	//
-	// Used when Daemons is nil -- the shared-daemon mode of ADR 0012, kept as
-	// the escape hatch.
-	DockerSocket string
-
-	// Daemons hands each account its own dockerd (ADR 0019). Nil keeps the
-	// shared daemon above, which is a supported configuration rather than a
-	// fallback: a single-user workspace has nothing to separate, and pays for
-	// separation in memory and layer cache either way.
-	Daemons *daemons.Manager
-
-	// Volumes resolves a managed volume to where dockerd has it mounted, for
-	// replaying the client's filesystem changes (ADR 0016). Nil refuses the
-	// notify command, which is what tells an unconfigured workspace's client
-	// to stop asking.
-	Volumes notify.Volumes
+	// One field, with the implementation chosen once by the caller --
+	// daemons.Shared for ADR 0012's single daemon, a *daemons.Manager for ADR
+	// 0019's one per account. It used to be two fields and a nil check repeated
+	// at nine call sites, which is precisely the shape a routing mistake hides
+	// in: sending a session to the wrong daemon does not fail, it succeeds
+	// against somebody else's containers.
+	Daemons daemons.Targets
 
 	// Version is the agent's build, reported in workspace-info so a client can
 	// see which workspace agent it is talking to.
@@ -95,8 +86,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Accounts == nil {
 		return nil, fmt.Errorf("sshd: an account store is required")
 	}
-	if cfg.DockerSocket == "" {
-		cfg.DockerSocket = "/var/run/docker.sock"
+	// A missing resolver is the shared daemon at its usual socket, so a caller
+	// that says nothing gets ADR 0012's arrangement rather than a nil
+	// dereference on the first session.
+	if cfg.Daemons == nil {
+		cfg.Daemons = daemons.Shared("")
 	}
 
 	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}
@@ -158,9 +152,7 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	// forward. A cold dind takes seconds; without this the client's first
 	// docker command pays for all of them, looking like a hang rather than a
 	// start.
-	if s.cfg.Daemons != nil {
-		s.cfg.Daemons.Warm(account.Name)
-	}
+	s.cfg.Daemons.Warm(account.Name)
 	return true
 }
 
