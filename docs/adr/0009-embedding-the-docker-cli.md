@@ -113,6 +113,50 @@ means pinning `docker/cli` back a major version AND buildx back seven minors,
 losing the modern builder to gain a command that already works through the
 proxy as a separate binary.
 
+**Compose's unreleased main was tried too, and does not help.** The obvious
+guess is that compose simply lags -- v2.40.3 predates buildx v0.36 -- so
+`@main` should have caught up. It has not: the November 2025 commit still
+imports `moby/buildkit/util/tracing/env`, a package buildkit deleted somewhere
+between v0.25 and v0.32. Compose has not adapted at all, so there is no
+version of it that builds against the buildkit buildx now requires.
+
+**Pinning buildkit back does not work either, and this was measured rather
+than assumed.** With `replace github.com/moby/buildkit => v0.25.1` -- the
+version compose wants -- buildx v0.36 fails to build: it needs
+`moby/buildkit/util/pgpsign`, which v0.25.1 does not have. The two have
+diverged in BOTH directions, so no single buildkit satisfies them. That closes
+the last option that did not involve owning somebody else's source.
+
+**What compose actually needs is one line**, which makes the situation more
+annoying rather than less. The import is blank:
+
+	_ "github.com/moby/buildkit/util/tracing/env" //nolint:blank-imports
+
+Compose calls nothing from that package. It is pulled in for an `init()` that
+wires OTEL trace-context propagation from the environment -- no API surface at
+all. So compose is not blocked on a migration; nobody upstream has deleted or
+repointed the line since buildkit dropped the package.
+
+**Go has no per-file override, and that is what makes a one-line problem
+expensive.** `replace` works at module granularity and `go mod vendor` is
+all-or-nothing:
+
+| route | cost |
+|---|---|
+| `go mod vendor`, then delete the import | vendors EVERYTHING -- cli, buildx, buildkit, containerd, the k8s libraries -- tens of thousands of files in git, and the edit reapplied by hand after every regeneration |
+| `replace` to a local directory | a complete copy of the replaced module in-tree; for buildkit that is the builder itself, rebased on every release |
+
+Either way the price of a one-line fix is owning a fork of the component that
+builds the images, to restore a package compose imports for a side effect it
+does not use. Not proportionate: `docker compose` already works through the
+proxy as a separate binary, so what is missing is the "nothing to install"
+premise, not the functionality.
+
+When compose adopts a current buildkit, embedding it becomes two lines --
+`installCompose` in cmd/remote-docker/docker.go is written and was reverted
+rather than never attempted. Dependabot will surface the release that makes it
+possible.
+
 So it is possible, and it is **not taken**. The working combination requires
 pinning `docker/cli` back from v29.7.2 to v28.5.1 — a major version — and
 roughly doubles the binary, in exchange for a three-way version pin that any
