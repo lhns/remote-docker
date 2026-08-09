@@ -245,7 +245,15 @@ function was.
   wiring -- templated `{{.Task.Name}}`, `mode: host` publishing, placement --
   needs a real cluster. CI cannot cover it.
 - **`docker build` through the proxy.** The `/session` hijack it depends on is
-  unit tested; no integration test runs an actual build.
+  unit tested; no integration test runs an actual build. A legacy build DOES
+  work end to end (verified by hand against a real workspace).
+- **BuildKit is not available through the embedded CLI**, and this contradicts
+  what ADR 0009 originally corrected itself to say. buildx is a separate plugin
+  binary and is not vendored, so `docker build` silently uses the classic
+  builder even with `DOCKER_BUILDKIT=1` -- while the daemon advertises
+  `Builder-Version: 2`. The `/session` hijack therefore has no exercised
+  caller. Point a real docker CLI at the workspace's docker context to get
+  BuildKit.
 - **The Windows and macOS clients.** Cross-compiled on every push, executed
   never. The integration suite runs the Linux client, and the endpoint code is
   the one place they genuinely diverge.

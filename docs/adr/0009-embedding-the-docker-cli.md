@@ -47,10 +47,28 @@ Measured rather than assumed:
 Two of this record's original assumptions were wrong, and the corrections
 matter more than the confirmations:
 
-**Buildx is no longer a separate plugin binary for our purposes.** `build` and
-`bake` are in `docker/cli`'s own command tree at v29, so embedding the CLI
-gets a modern builder without vendoring buildx separately. The functional gap
-this ADR was most worried about does not exist.
+**~~Buildx is no longer a separate plugin binary for our purposes.~~** This
+correction was itself wrong, and running a build shows it:
+
+    $ remote-docker docker build .
+    Sending build context to Docker daemon  30.93MB
+    Step 1/1 : FROM debian
+    Successfully built 826a5616954e
+
+That is the CLASSIC builder. `build` being present in `docker/cli`'s command
+tree is not the same as BuildKit being available: buildx is still a separate
+plugin binary, it is not in go.mod, and without it `docker build` falls back to
+the pre-BuildKit path -- silently, and even with `DOCKER_BUILDKIT=1`.
+
+The daemon is not the limitation. It advertises `Builder-Version: 2` on
+`/_ping`; the embedded client cannot use it.
+
+So the functional gap this record was most worried about DOES exist, and it is
+the one thing embedding costs that nothing else does: no cache mounts, no
+parallel stages, and the whole context re-uploaded on every build rather than
+streamed incrementally. Anyone who wants BuildKit can point a real docker CLI
+at the workspace's docker context, which is written for exactly this reason --
+`docker --context <workspace> build .` uses that machine's buildx.
 
 **Compose is still a separate module** and is not obtained by embedding the
 CLI. `docker compose` falls through to the parent's help.
