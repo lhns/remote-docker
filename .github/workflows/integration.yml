@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [labeled, synchronize]
+    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides whether this change needs the suites at all.
+  #
+  # These are expensive -- a real workspace, a real NFS mount, two modes, most
+  # of ten minutes -- so they were gated on an `integration` label. That label
+  # DID NOT EXIST, so the gate never opened: every pull request this repository
+  # has ever had skipped the suites entirely, silently, reporting green.
+  #
+  # It cost something real. Dependabot opened the Go base-image bump an hour
+  # before a dependency raised go.mod past it and broke the image build; the PR
+  # sat unmerged because a dependency PR that nothing meaningful has run
+  # against looks exactly like one that has. The suites are worth most on
+  # precisely the changes nobody wants to read closely.
+  #
+  # So: paths decide, and the label remains as the manual override for a change
+  # that touches none of them but deserves the run anyway. Fails OPEN -- if the
+  # diff cannot be read, run them. Wasting a runner is cheaper than the last
+  # two days.
+  gate:
+    name: do the suites apply
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: decide
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'integration') }}
+        run: |
+          set -u
+          say() { echo "run=$1" >>"$GITHUB_OUTPUT"; echo "$2"; }
+
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            say true "not a pull request: the suites always run."
+            exit 0
+          fi
+          if [ "$LABELLED" = true ]; then
+            say true "labelled 'integration': running on request."
+            exit 0
+          fi
+
+          # The paths that have ever broken these suites: the image, the
+          # contract they exercise, the suites themselves, and the module
+          # versions everything is built from.
+          if ! changed=$(git diff --name-only "$BASE" "$HEAD" 2>&1); then
+            say true "could not read the diff ($changed): running to be safe."
+            exit 0
+          fi
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+
+          if echo "$changed" | grep -Eq '^(image/|test/|cmd/|internal/|pkg/|go\.(mod|sum)$|\.github/workflows/integration\.yml$)'; then
+            say true "touches code, the image or the suites."
+          else
+            say false "documentation or unrelated config only: skipping the suites."
+          fi
+
   # Settles one question, and it is the one most likely to stop the whole
   # integration suite: can a privileged container on a GitHub runner mount NFS?
   #
@@ -25,7 +85,9 @@ jobs:
   nfs-capability:
     name: nfs client in a privileged container
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'integration')
+    # The two suites below hang off this job, so gating it gates all three.
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     steps:
       - uses: actions/checkout@v4
 
