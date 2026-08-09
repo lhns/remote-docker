@@ -410,7 +410,7 @@ func warnSlowStorage(w io.Writer, st proxy.Status) {
 	if st.Storage != "vfs" {
 		return
 	}
-	fmt.Fprintf(w,
+	_, _ = fmt.Fprintf(w,
 		"\nwarning: this workspace's docker daemon is using the vfs storage driver.\n"+
 			"It has no copy-on-write, so every `docker create` copies the whole image --\n"+
 			"expect containers to take minutes to start. Nothing is broken; it is slow.\n"+
