@@ -110,7 +110,7 @@ jobs:
       # again. This used to be a separate job building all six targets while
       # the matrix compiled all six as well: the same work twice, and the
       # slowest job in the workflow by a factor of two.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
