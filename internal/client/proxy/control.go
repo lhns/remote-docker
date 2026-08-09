@@ -103,10 +103,19 @@ type Status struct {
 	// cannot know would be worse than saying nothing.
 	Version string `json:"version"`
 
-	Workspace string   `json:"workspace"`
-	Host      string   `json:"host"`
-	User      string   `json:"user"`
-	Endpoint  string   `json:"endpoint"`
+	Workspace string `json:"workspace"`
+	Host      string `json:"host"`
+	User      string `json:"user"`
+	Endpoint  string `json:"endpoint"`
+
+	// Storage is the graph driver of the daemon this session is talking to.
+	//
+	// Carried here so an ordinary `docker` command can warn about it. The
+	// session is the only thing that has spoken to the workspace -- every
+	// other command talks to the session -- so without this the fact would be
+	// reachable only by running `status` on purpose, which is not something
+	// somebody does while wondering why their container is slow.
+	Storage   string   `json:"storage,omitempty"`
 	PID       int      `json:"pid"`
 	Connected bool     `json:"connected"`
 	Ports     []int    `json:"ports,omitempty"`

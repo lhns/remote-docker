@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	gssh "github.com/gliderlabs/ssh"
@@ -62,6 +63,15 @@ func (s *Server) handleSession(session gssh.Session) {
 		s.serveExec(session, account, command)
 	}
 }
+
+// infoQueryTimeout bounds the daemon queries that go into an info reply.
+//
+// workspace-info is the client's FIRST round trip, and two of its fields come
+// from running the docker CLI. Neither is worth waiting on: the version and
+// the storage driver are displayed, not acted upon, and a daemon slow enough
+// to sit on `docker info` is exactly the daemon whose client should not be
+// blocked introducing itself.
+const infoQueryTimeout = 5 * time.Second
 
 // serveInfo answers the client's parameters from the shared contract.
 func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
@@ -289,6 +299,9 @@ func (s *Server) servePTY(session gssh.Session, cmd *exec.Cmd, winCh <-chan gssh
 // displays. An unstarted daemon reports unavailable, exactly like a broken
 // one, and the next command starts it.
 func (s *Server) dockerVersion(ctx context.Context, account string) string {
+	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
+	defer cancel()
+
 	var cli dockercli.CLI
 	if s.cfg.Daemons != nil {
 		d, ok := s.cfg.Daemons.Lookup(ctx, account)
@@ -326,6 +339,9 @@ func exitCode(err error) int {
 // about it fails, and the account cannot look for itself -- reaching the
 // daemon's own host is precisely what it may not do.
 func (s *Server) storageDriver(ctx context.Context, account string) string {
+	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
+	defer cancel()
+
 	var cli dockercli.CLI
 	if s.cfg.Daemons != nil {
 		d, ok := s.cfg.Daemons.Lookup(ctx, account)

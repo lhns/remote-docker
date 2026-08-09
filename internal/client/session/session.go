@@ -676,6 +676,7 @@ func (s *Session) Status() any {
 	}
 	if connected {
 		st.User = live.info.User
+		st.Storage = live.info.Storage
 		st.Ports = s.Ports()
 	}
 	if s.watch != nil {

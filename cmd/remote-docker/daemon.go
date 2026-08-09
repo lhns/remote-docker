@@ -249,6 +249,9 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 		// is worse than the mismatch.
 		return
 	}
+
+	warnSlowStorage(os.Stderr, st)
+
 	if st.Version == version {
 		return
 	}
@@ -386,4 +389,31 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 	}
 	rowf(out, "session version", "%s  (this binary: %s -- DIFFERENT)",
 		orUnknown(st.Version), orUnknown(version))
+}
+
+// warnSlowStorage says so when the workspace's daemon is on vfs.
+//
+// vfs has no copy-on-write: it copies the entire image on every container
+// create. Nothing fails -- `docker ps` stays instant, `docker run` takes
+// minutes -- so it presents as a hang, and it stays that way until somebody
+// changes the workspace's configuration. A real workspace lost a day to it.
+//
+// Printed here, on the path every `remote-docker docker ...` already takes,
+// because that is where somebody is standing when they notice the slowness.
+// The agent logs it too, and `status` shows it, but both require already
+// suspecting storage -- and reaching the daemon's own host to look is exactly
+// what an account may not do.
+//
+// To stderr, and only when it is true: a correctly configured workspace prints
+// nothing, and nothing here ever touches stdout, which belongs to the command.
+func warnSlowStorage(w io.Writer, st proxy.Status) {
+	if st.Storage != "vfs" {
+		return
+	}
+	fmt.Fprintf(w,
+		"\nwarning: this workspace's docker daemon is using the vfs storage driver.\n"+
+			"It has no copy-on-write, so every `docker create` copies the whole image --\n"+
+			"expect containers to take minutes to start. Nothing is broken; it is slow.\n"+
+			"Whoever runs the workspace should set --storage-driver in WORKSPACE_DOCKERD_ARGS\n"+
+			"(fuse-overlayfs for Ceph- or NFS-backed data) and rebuild the daemon.\n")
 }
