@@ -226,3 +226,20 @@ func TestPlanStillAsksForARemovedChild(t *testing.T) {
 		t.Errorf("the elevated child's args lost --rm: %v", spec.Args())
 	}
 }
+
+// The child is told which image it is, because it cannot find out.
+//
+// Asking means inspecting ourselves through the host's Docker socket, and
+// keeping that socket out of the privileged child is the whole trust boundary.
+// The agent needs the answer to give each account's daemon the same image as
+// the workspace -- the only one known to carry fuse-overlayfs, without which a
+// Ceph- or NFS-backed workspace cannot start one at all.
+func TestTheChildIsToldItsImage(t *testing.T) {
+	spec, err := Plan(ContainerInfo{ID: "abc", Name: "/ws", Image: "ghcr.io/x/ws:sha-1"}, Options{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !slices.Contains(spec.Env, ImageEnv+"=ghcr.io/x/ws:sha-1") {
+		t.Errorf("the child was not told its image: %v", spec.Env)
+	}
+}

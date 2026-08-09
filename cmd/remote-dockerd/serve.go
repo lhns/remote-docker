@@ -19,6 +19,7 @@ import (
 
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/daemons"
+	"github.com/lhns/remote-docker/internal/server/elevate"
 	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/internal/server/sshd"
 	"github.com/lhns/remote-docker/internal/server/supervise"
@@ -184,10 +185,25 @@ func serve(addr string) error {
 			}
 		}
 
+		// The workspace's OWN image by default, because it is the only one
+		// known to carry what this workspace decided it needs -- fuse-overlayfs
+		// above all, which stock docker:dind does not ship. elevate sets
+		// WORKSPACE_IMAGE from the container it inspected; a deployment that
+		// does not elevate sets it in the stack file. Without either, the
+		// stock image is used and a Ceph- or NFS-backed workspace will say so
+		// loudly rather than silently.
+		image := os.Getenv(envDindImage)
+		if image == "" {
+			image = os.Getenv(elevate.ImageEnv)
+		}
+		if image != "" {
+			log.Printf("per-account daemons run %s", image)
+		}
+
 		manager = &daemons.Manager{
 			Options: daemons.Options{
 				Workspace:     id,
-				Image:         os.Getenv(envDindImage),
+				Image:         image,
 				StorageDriver: storage,
 			},
 			Log: logger{prefix: "daemons"}.Printf,

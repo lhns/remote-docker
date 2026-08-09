@@ -261,3 +261,43 @@ func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 		t.Errorf("an unset driver was not recorded: %v", plain.Labels)
 	}
 }
+
+// dockerd is the entrypoint, because the image is the workspace's own and its
+// entrypoint is the agent.
+//
+// Without this the daemon container runs `remote-dockerd dockerd -H ...` --
+// the agent, handed dockerd's flags. Running dockerd directly is also what the
+// workspace does for its own daemon, so this is the same thing one level down.
+func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
+	spec := plan(t, "alice", Options{})
+
+	if spec.Entrypoint != "dockerd" {
+		t.Errorf("Entrypoint = %q, want dockerd", spec.Entrypoint)
+	}
+	args := strings.Join(spec.Args(), " ")
+	if !strings.Contains(args, "--entrypoint dockerd") {
+		t.Errorf("the entrypoint never reached the args: %s", args)
+	}
+
+	// And the command must be FLAGS ONLY. A leading "dockerd" there would be
+	// passed to dockerd as a positional argument, which it refuses.
+	if len(spec.Command) == 0 || spec.Command[0] != "-H" {
+		t.Errorf("Command should start with a flag, got %v", spec.Command)
+	}
+}
+
+// The image defaults to the workspace's own, which is the only one known to
+// carry fuse-overlayfs -- stock docker:dind does not, and a per-account daemon
+// inheriting that driver on the stock image dies in a restart loop with
+// `exec: "fuse-overlayfs": executable file not found in $PATH`.
+func TestTheImageDefaultsToWhateverTheWorkspaceRuns(t *testing.T) {
+	const ours = "ghcr.io/lhns/remote-docker-workspace:sha-abc1234"
+
+	if got := plan(t, "alice", Options{Image: ours}).Image; got != ours {
+		t.Errorf("image = %q, want the workspace's own", got)
+	}
+	// Only when nothing is known at all does the stock image get used.
+	if got := plan(t, "alice", Options{}).Image; got != DefaultImage {
+		t.Errorf("fallback image = %q, want %q", got, DefaultImage)
+	}
+}

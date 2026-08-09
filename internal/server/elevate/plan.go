@@ -23,6 +23,15 @@ const ElevatedEnv = "WORKSPACE_ELEVATED"
 // NameSuffix is appended to our own container name to name the child.
 const NameSuffix = ".elevated"
 
+// ImageEnv names the workspace's own image, passed to the child.
+//
+// Declared here rather than in internal/server/daemons, which is what reads
+// it, because this is the only code that can KNOW it: finding out means
+// inspecting ourselves through the host's Docker socket, and keeping that
+// socket out of the privileged child is the whole trust boundary
+// (see childMounts). A deployment that does not elevate sets it directly.
+const ImageEnv = "WORKSPACE_IMAGE"
+
 // Mount is one mount on a container.
 type Mount struct {
 	Type string
@@ -161,7 +170,7 @@ func Plan(self ContainerInfo, opts Options) (RunSpec, error) {
 		Privileged: true,
 		Remove:     true,
 		Mounts:     childMounts(self.Mounts, hostSocket),
-		Env:        childEnv(self.Env),
+		Env:        childEnv(self.Env, self.Image),
 	}, nil
 }
 
@@ -195,9 +204,19 @@ func isHostSocket(m Mount, hostSocket string) bool {
 		strings.HasSuffix(m.Source, "/docker.sock")
 }
 
-// childEnv passes our environment through, marking the child as elevated.
-func childEnv(env []string) []string {
-	out := make([]string, 0, len(env)+1)
+// childEnv passes our environment through, marking the child as elevated and
+// telling it which image it is.
+//
+// The image is worth carrying because the child cannot find out for itself:
+// asking means the host's Docker socket, which childMounts deliberately keeps
+// out of it. The agent needs it to give each account's daemon the same image
+// as the workspace, which is the only one known to carry what the workspace
+// decided it needs -- fuse-overlayfs above all.
+func childEnv(env []string, image string) []string {
+	out := make([]string, 0, len(env)+2)
+	if image != "" {
+		out = append(out, ImageEnv+"="+image)
+	}
 	for _, e := range env {
 		if strings.HasPrefix(e, ElevatedEnv+"=") {
 			continue

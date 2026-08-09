@@ -29,8 +29,29 @@ import (
 // development machine.
 var ErrUnsupported = errors.New("daemons: per-account daemons are Linux-only")
 
-// DefaultImage is the dind image each account's daemon runs.
+// DefaultImage is the dind image each account's daemon runs when nothing else
+// is known.
+//
+// A LAST RESORT, not a good default, and the difference matters: stock
+// docker:dind does not carry fuse-overlayfs. A workspace whose data is on Ceph
+// or NFS runs its own dockerd with --storage-driver=fuse-overlayfs -- which is
+// why the image built here installs it -- and a per-account daemon inheriting
+// that driver on this image dies at startup with
+//
+//	exec: "fuse-overlayfs": executable file not found in $PATH
+//	failed to start daemon: error initializing graphdriver: driver not supported
+//
+// in a restart loop. The right image is the workspace's OWN, which is this one
+// plus exactly the tooling this project decided it needs; see ImageEnv.
 const DefaultImage = "docker:28-dind"
+
+// Entrypoint is what a per-account daemon runs.
+//
+// Set explicitly rather than left to the image, because the image is the
+// workspace's own and its entrypoint is the agent. Running dockerd directly is
+// also what the workspace does for its own daemon (internal/server/supervise),
+// so this is the same thing one level down rather than a new idea.
+const Entrypoint = "dockerd"
 
 // SocketDir is where the agent keeps one socket directory per account, and
 // SocketMount is where that directory appears inside the account's daemon.
@@ -73,6 +94,7 @@ const (
 type Spec struct {
 	Name       string
 	Image      string
+	Entrypoint string
 	Privileged bool
 
 	// Remove is always false and the field is here to say so out loud. A
@@ -162,10 +184,10 @@ func Plan(account string, opts Options) (Spec, error) {
 		image = DefaultImage
 	}
 
-	// Two listeners: the one the agent dials, and the conventional path so
-	// that anything running inside the daemon's own container still works.
+	// Flags only: dockerd itself is the entrypoint. Two listeners -- the one
+	// the agent dials, and the conventional path so anything running inside
+	// the daemon's own container still works.
 	command := []string{
-		"dockerd",
 		"-H", "unix://" + SocketMount + "/" + SocketName,
 		"-H", "unix:///var/run/docker.sock",
 	}
@@ -185,6 +207,7 @@ func Plan(account string, opts Options) (Spec, error) {
 	return Spec{
 		Name:       ContainerName(account),
 		Image:      image,
+		Entrypoint: Entrypoint,
 		Privileged: true,
 		Remove:     false,
 		Restart:    "unless-stopped",
@@ -212,6 +235,9 @@ func (s Spec) Args() []string {
 	}
 	if s.Restart != "" {
 		args = append(args, "--restart", s.Restart)
+	}
+	if s.Entrypoint != "" {
+		args = append(args, "--entrypoint", s.Entrypoint)
 	}
 	if s.Name != "" {
 		args = append(args, "--name", s.Name)

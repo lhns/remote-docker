@@ -325,7 +325,7 @@ gets both right, because the workspace already had to decide.
 |---|---|
 | kernel | **4.18 or newer**, with `CONFIG_FUSE_FS` (a module is fine: `modprobe fuse`). Present on any ordinary distribution kernel; the usual absentee is a minimal or hardened container-host image. |
 | device | `/dev/fuse` in the container. The workspace runs privileged, so it has it. |
-| binary | `fuse-overlayfs`, which the `docker:dind` image ships. |
+| binary | `fuse-overlayfs` **in the image the daemon runs**. Stock `docker:dind` does NOT ship it; the workspace image here installs it, which is why per-account daemons default to the workspace's own image. |
 | filesystem | Works on NFS and CephFS, which is the entire reason to reach for it. |
 
 #### Changing it later does not reach a daemon that already exists
@@ -404,7 +404,11 @@ It costs real resources, and there is no mitigation worth implying:
   the volume and take down every other account's daemon.
 - **3--10s** for an account's first connection after the daemon has stopped.
 
-`WORKSPACE_DIND_IMAGE` overrides the dind image.
+`WORKSPACE_DIND_IMAGE` overrides the image a per-account daemon runs. It
+defaults to the workspace's own -- the only one known to carry what this
+workspace decided it needs. Under Swarm that is passed through automatically by
+`elevate`; a plain compose deployment should set `WORKSPACE_IMAGE` to the same
+image as the service, or set this.
 `WORKSPACE_DIND_STORAGE_DRIVER` overrides the graph driver, which is otherwise
 inherited from `WORKSPACE_DOCKERD_ARGS` -- a Ceph- or NFS-backed deployment
 sets `--storage-driver=fuse-overlayfs` there, and a per-account daemon needs
