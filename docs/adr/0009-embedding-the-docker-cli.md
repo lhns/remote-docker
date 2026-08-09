@@ -113,6 +113,25 @@ means pinning `docker/cli` back a major version AND buildx back seven minors,
 losing the modern builder to gain a command that already works through the
 proxy as a separate binary.
 
+**Compose's unreleased main was tried too, and does not help.** The obvious
+guess is that compose simply lags -- v2.40.3 predates buildx v0.36 -- so
+`@main` should have caught up. It has not: the November 2025 commit still
+imports `moby/buildkit/util/tracing/env`, a package buildkit deleted somewhere
+between v0.25 and v0.32. Compose has not adapted at all, so there is no
+version of it that builds against the buildkit buildx now requires.
+
+What remains would be forking buildkit to restore a deleted package, or
+pinning buildkit back and losing BuildKit. The first is a permanent maintenance
+liability on a security-relevant dependency, taken on to embed a command that
+already works through the proxy as a separate binary; the second trades the
+larger capability for the smaller one. Neither is worth it, and both are worse
+than the three-way pin this record already refused.
+
+When compose adopts a current buildkit, embedding it becomes two lines --
+`installCompose` in cmd/remote-docker/docker.go is written and was reverted
+rather than never attempted. Dependabot will surface the release that makes it
+possible.
+
 So it is possible, and it is **not taken**. The working combination requires
 pinning `docker/cli` back from v29.7.2 to v28.5.1 — a major version — and
 roughly doubles the binary, in exchange for a three-way version pin that any
