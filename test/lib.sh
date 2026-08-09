@@ -27,8 +27,18 @@ hostdocker() { env -u DOCKER_HOST docker "$@"; }
 
 # build_image builds the workspace image from the repo root, because the image
 # builds the agent from source.
+#
+# The output is kept and printed on failure. It used to go to /dev/null with
+# -q, so a build that failed reported the Dockerfile line and NOTHING from the
+# compiler -- which cost a CI round trip to learn that the actual error was
+# never in the log at all. The build's own words are the whole diagnosis.
 build_image() {
-    docker build -q -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" >/dev/null
+    if docker build -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO"             >"$WORK/image-build.log" 2>&1; then
+        return 0
+    fi
+    echo "--- image build output ---"
+    tail -40 "$WORK/image-build.log" | sed 's/^/        /'
+    return 1
 }
 
 # build_client builds the client binary into $WORK.
