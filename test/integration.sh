@@ -1233,10 +1233,16 @@ else
     bad "no docker context appeared for the workspace"
 fi
 
-if "$WORK/remote-docker" workspace ls 2>&1 | grep -q "itest-ws"; then
+# Captured, not just tested. This assertion failed intermittently in CI and
+# said nothing but "did not show the workspace" -- so the first two occurrences
+# bought a re-run and no diagnosis. What ls printed, and what is actually in the
+# file it reads, are the whole answer, and they cost two lines.
+wsls=$("$WORK/remote-docker" workspace ls 2>&1)
+if echo "$wsls" | grep -q "itest-ws"; then
     ok "workspace ls shows it"
 else
-    bad "workspace ls did not show the workspace"
+    bad "workspace ls did not show the workspace; it said: $(echo "$wsls" | tr '\n' ' ')"
+    info "$WSFILE holds: $(cat "$WSFILE" 2>&1 | tr '\n' ' ')"
 fi
 
 # inspect is the one place the four derivations meet: the config file's view,
