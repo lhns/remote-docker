@@ -73,6 +73,16 @@ var settingSources = map[string]struct {
 			return c.WatchExclude[0]
 		},
 	},
+	// The samples are spelled the way time.Duration prints them, so a value
+	// that arrived can be compared with the string that set it.
+	"IdleTimeout": {
+		env: EnvIdleTimeout, override: false, sample: "1m30s",
+		want: func(c Config) string { return dur(c.IdleTimeout) },
+	},
+	"DaemonIdle": {
+		env: EnvDaemonIdle, override: false, sample: "45m0s",
+		want: func(c Config) string { return dur(c.DaemonIdle) },
+	},
 }
 
 // Every field of Workspace is accounted for. A new setting fails here first,
@@ -194,41 +204,58 @@ func TestOverridesAreHonouredAndComplete(t *testing.T) {
 	}
 }
 
-// Two settings are environment-only, and that is worth stating rather than
-// leaving to be discovered.
+// The two durations were environment-only until this test said so out loud,
+// which is what made it a decision rather than an oversight -- and then an
+// obviously wrong one: somebody wanting a longer idle on a slow link had to
+// export a variable rather than write it next to their host. They are file
+// settings now, covered by the table above like everything else.
 //
-// IdleTimeout and DaemonIdle live on Config and not on Workspace, so they can
-// be set through the environment and NOT through the config file. That is not
-// obviously right -- somebody who wants a longer idle on a slow link has to
-// export a variable rather than write it next to their host -- but it is what
-// the code does, and a test that says so is the difference between a decision
-// and an oversight. Moving them into Workspace would be a feature, and this
-// test is what will fail when somebody does it, prompting the file support to
-// arrive with it.
-func TestTheEnvironmentOnlySettingsAreDeliberate(t *testing.T) {
-	for _, name := range []string{"IdleTimeout", "DaemonIdle"} {
-		if _, ok := reflect.TypeOf(Workspace{}).FieldByName(name); ok {
-			t.Errorf("%s is now a Workspace field: add it to settingSources so the "+
-				"file, the environment and the overrides are all checked for it", name)
-		}
-		if _, ok := reflect.TypeOf(Config{}).FieldByName(name); !ok {
-			t.Errorf("%s is gone from Config; this test needs updating", name)
-		}
-	}
+// What remains worth pinning here is the FORM. They are strings in the file
+// and durations on the Config, and a duration that will not parse is ignored
+// rather than fatal -- so a typo costs the setting, never the command.
+func TestTheDurationSettingsParseFromTheFile(t *testing.T) {
+	path := writeConfigJSON(t, map[string]any{
+		"host": "workspace.example", "idleTimeout": "90s", "daemonIdle": "45m",
+	})
 
-	t.Setenv(EnvIdleTimeout, "90s")
-	t.Setenv(EnvDaemonIdle, "45m")
-
-	cfg, err := Resolve(Overrides{}, filepath.Join(t.TempDir(), "absent.json"))
+	cfg, err := Resolve(Overrides{}, path)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if cfg.IdleTimeout != 90*time.Second {
-		t.Errorf("IdleTimeout = %v, want 90s from %s", cfg.IdleTimeout, EnvIdleTimeout)
+		t.Errorf("IdleTimeout = %v, want 90s", cfg.IdleTimeout)
 	}
 	if cfg.DaemonIdle != 45*time.Minute {
-		t.Errorf("DaemonIdle = %v, want 45m from %s", cfg.DaemonIdle, EnvDaemonIdle)
+		t.Errorf("DaemonIdle = %v, want 45m", cfg.DaemonIdle)
 	}
+}
+
+// A duration nobody can parse costs the setting and nothing else. `enroll` and
+// `workspace ls` connect to nothing and must still work.
+func TestAMalformedDurationIsIgnoredRatherThanFatal(t *testing.T) {
+	path := writeConfigJSON(t, map[string]any{
+		"host": "workspace.example", "idleTimeout": "half an hour",
+	})
+
+	cfg, err := Resolve(Overrides{}, path)
+	if err != nil {
+		t.Fatalf("a malformed duration broke Resolve: %v", err)
+	}
+	if cfg.IdleTimeout != 0 {
+		t.Errorf("IdleTimeout = %v, want the zero that means the default", cfg.IdleTimeout)
+	}
+	if cfg.Host != "workspace.example" {
+		t.Errorf("Host = %q; the rest of the config should have survived", cfg.Host)
+	}
+}
+
+// dur reports a zero duration as the empty string, so "the setting did not
+// arrive" reads the same way as it does for the numeric settings.
+func dur(d time.Duration) string {
+	if d == 0 {
+		return ""
+	}
+	return d.String()
 }
 
 // jsonName is the field's spelling in the file, taken from the struct tag

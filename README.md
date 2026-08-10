@@ -151,6 +151,12 @@ Every setting can also live at the top level, where it applies to all of them.
 `REMOTE_DOCKER_WATCH*` variables above — worth setting per workspace, since
 the one you edit against wants watching and a CI one does not.
 
+`idleTimeout` and `daemonIdle` are durations written the way you would say them
+(`"90s"`, `"45m"`, `"-1s"` for never). The first is how long an unused
+connection is held before being dropped and silently reopened on the next
+request; the second is how long a background session with nothing to do
+outlives its last use before it exits. Raise the first on a slow link.
+
 Each gets its own endpoint, so sessions run side by side:
 
 ```bash
@@ -477,8 +483,11 @@ layer cache.
 ## Why a container takes a few seconds to start
 
 Measured against a workspace whose `/var/lib/docker` is on CephFS, which is the
-case this is worth knowing for. `REMOTE_DOCKER_TRACE=1` on the session prints
-one line per Docker API request if you want your own numbers.
+case this is worth knowing for. `REMOTE_DOCKER_TRACE=1` prints one line per
+Docker API request if you want your own numbers — set it on the **session**
+(`REMOTE_DOCKER_TRACE=1 remote-docker start`), since that is the process doing
+the forwarding. Setting it on the docker command you are timing traces nothing,
+and says so.
 
 | | |
 |---|---|

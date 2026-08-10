@@ -115,7 +115,15 @@ type Status struct {
 	// other command talks to the session -- so without this the fact would be
 	// reachable only by running `status` on purpose, which is not something
 	// somebody does while wondering why their container is slow.
-	Storage   string   `json:"storage,omitempty"`
+	Storage string `json:"storage,omitempty"`
+
+	// Tracing is whether the session was started with TraceEnv set.
+	//
+	// Here for the same reason Storage is: only the session can answer it, and
+	// the question is asked by somebody standing at another command wondering
+	// why setting the variable printed nothing.
+	Tracing bool `json:"tracing,omitempty"`
+
 	PID       int      `json:"pid"`
 	Connected bool     `json:"connected"`
 	Ports     []int    `json:"ports,omitempty"`

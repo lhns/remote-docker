@@ -107,6 +107,11 @@ type File struct {
 }
 
 // Workspace is one entry in the keyed form.
+//
+// The two durations are held as strings because that is what the file says --
+// "90s", "45m" -- and encoding/json has no idea what a time.Duration is. They
+// are parsed in applyWorkspace, where a malformed one is ignored rather than
+// fatal, exactly as the environment's are.
 type Workspace struct {
 	Host         string   `json:"host,omitempty"`
 	Port         int      `json:"port,omitempty"`
@@ -115,6 +120,8 @@ type Workspace struct {
 	Watch        string   `json:"watch,omitempty"`
 	WatchBudget  int      `json:"watchBudget,omitempty"`
 	WatchExclude []string `json:"watchExclude,omitempty"`
+	IdleTimeout  string   `json:"idleTimeout,omitempty"`
+	DaemonIdle   string   `json:"daemonIdle,omitempty"`
 }
 
 // Names lists the configured workspaces in a stable order.
@@ -302,6 +309,29 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if len(ws.WatchExclude) > 0 {
 		cfg.WatchExclude = ws.WatchExclude
 	}
+	if d, ok := duration(ws.IdleTimeout); ok {
+		cfg.IdleTimeout = d
+	}
+	if d, ok := duration(ws.DaemonIdle); ok {
+		cfg.DaemonIdle = d
+	}
+}
+
+// duration parses a setting written the way a person writes one -- "90s",
+// "45m", "-1s" for never -- and reports whether it said anything usable.
+//
+// Malformed is "said nothing", not an error, for the same reason a malformed
+// port in the environment is: this is the lowest layer and it is consulted by
+// every command, including the ones that connect to nothing.
+func duration(v string) (time.Duration, bool) {
+	if v == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, false
+	}
+	return d, true
 }
 
 func applyEnv(cfg *Config) {
@@ -336,17 +366,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv(EnvWatchExclude); v != "" {
 		cfg.WatchExclude = splitList(v)
 	}
-	if v := os.Getenv(EnvIdleTimeout); v != "" {
-		// Ignored rather than fatal if malformed, like the other numeric
-		// settings: it would otherwise break commands that connect to nothing.
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.IdleTimeout = d
-		}
+	if d, ok := duration(os.Getenv(EnvIdleTimeout)); ok {
+		cfg.IdleTimeout = d
 	}
-	if v := os.Getenv(EnvDaemonIdle); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.DaemonIdle = d
-		}
+	if d, ok := duration(os.Getenv(EnvDaemonIdle)); ok {
+		cfg.DaemonIdle = d
 	}
 }
 

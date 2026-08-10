@@ -472,3 +472,12 @@ func (p *Proxy) log() *slog.Logger {
 const TraceEnv = "REMOTE_DOCKER_TRACE"
 
 var traceEnabled = os.Getenv(TraceEnv) != ""
+
+// Tracing reports whether this process is tracing.
+//
+// Exported because the answer belongs to a process rather than to a command:
+// the requests are forwarded by the background session, so the variable only
+// does anything in the process that session runs in. A command that sets it
+// and expects output gets neither the output nor an explanation, which is the
+// failure this exists to let the caller name.
+func Tracing() bool { return traceEnabled }
