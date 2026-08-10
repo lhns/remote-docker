@@ -19,8 +19,10 @@ STRIDE letters are used where they apply and left out where they do not.
    and every control below exists mainly to protect it.
 2. **The user's SSH private key**, `~/.config/remote-docker/id_ed25519`, which
    is the only credential in the system.
-3. **Each account's images, containers and volumes** on the workspace.
-4. **The node's Docker socket**, where Swarm deployments run.
+3. **The registry credentials in `~/.docker/config.json`** or the keychain a
+   credential helper fronts. They do not stay here: see flow 2.
+4. **Each account's images, containers and volumes** on the workspace.
+5. **The node's Docker socket**, where Swarm deployments run.
 
 ## Trust boundaries
 
@@ -151,6 +153,10 @@ sequenceDiagram
     participant C as container
 
     U->>CLI: docker run -v $PWD:/app img
+    CLI->>CLI: resolve the registry login<br/>from THIS machine's config or keychain
+    CLI->>EP: POST /images/create, X-Registry-Auth: &lt;token&gt;
+    EP->>D: forwarded verbatim
+    D->>D: pull, authenticating AS YOU
     CLI->>EP: POST /containers/create
     EP->>Proxy: (reaching this socket is the authorisation)
     Proxy->>NFS: register /cwd for this directory
@@ -176,6 +182,17 @@ named pipe (`listen_windows.go`), and never a TCP port. *Covered by*
 reach the port can read and write every registered share. There is no second
 control on the NFS layer, which is why the loopback rule in flow 3 and the
 holder rule in flow 4 carry the whole weight.
+
+**I — your registry credentials leave this machine (2-5).** The daemon does the
+pulling but has no logins of its own: the CLI resolves yours locally
+(`RetrieveAuthTokenFromImage` against this machine's config or keychain) and
+sends them in `X-Registry-Auth`, which the proxy forwards verbatim. So a
+private pull hands a usable registry token to the workspace, where root can
+read it out of the daemon's request. Encrypted in transit by SSH, exposed at
+the far end to whoever runs the workspace. Nothing here mitigates that, and it
+is the reason a workspace should be as trusted as the registries you use from
+it. Docker works this way everywhere; it is only worth stating because here the
+daemon is somebody else's.
 
 **T — a path outside the shares (10, 11).** The export namespace is virtual:
 only `/cwd` and `/m/<16 hex>` resolve, and lookups that climb out of a share
@@ -407,6 +424,10 @@ Stated here rather than buried, because each is a deliberate trade.
   workspace container per account.
 - **Containers you run can write anything you shared with them.** That is the
   feature. A malicious image with `-v $HOME:/h` has your home directory.
+- **A private pull gives the workspace a registry token of yours.** Flow 2 has
+  the mechanism. There is no way around it while the remote daemon does the
+  pulling, so treat a workspace as trusted with every registry you log into
+  from it, and prefer tokens scoped to what that workspace needs.
 - **Whoever deploys the stack is already root on the node** (ADR 0013).
 - **No audit trail inside containers.** Sessions, forwards and refusals are
   logged; what a container did with a mounted directory is not.
