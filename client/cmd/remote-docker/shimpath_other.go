@@ -47,7 +47,7 @@ func reportPATH(out io.Writer, dir string) error {
 // paths are on different filesystems.
 //
 // A hardlink is a second directory entry for ONE inode, and an inode number
-// means nothing outside its own filesystem -- which is what EXDEV says.
+// means nothing outside its own filesystem, which is what EXDEV says.
 func crossDeviceNote(self, path string) (string, bool) {
 	a, ok1 := deviceOf(self)
 	b, ok2 := deviceOf(filepath.Dir(path))

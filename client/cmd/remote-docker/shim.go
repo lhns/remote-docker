@@ -4,7 +4,7 @@ package main
 //
 // The mechanism is alias.go: a process invoked under the name docker runs the
 // Docker CLI. This file only arranges for that name to exist somewhere the
-// shell will find it -- so renaming the downloaded binary to docker.exe is a
+// shell will find it, so renaming the downloaded binary to docker.exe is a
 // complete installation on its own, and this is the tidy, reversible way to do
 // the same thing.
 
@@ -28,12 +28,12 @@ import (
 // distinguishes them once installed:
 //
 //   - a symlink stores a path and is resolved at run time, so replacing the
-//     binary -- how nearly every upgrade works -- leaves it correct;
+//     binary (how nearly every upgrade works) leaves it correct;
 //   - a hardlink is a second name for the same data, costing nothing and
 //     unable to disagree, until an upgrade REPLACES the file rather than
 //     rewriting it. Measured, because the difference is not obvious: `go build
 //     -o` writes in place and the hardlink follows it, while deleting and
-//     recreating the binary -- what an installer or an unzip does -- leaves
+//     recreating the binary (what an installer or an unzip does) leaves
 //     the shim on the old data with nothing to say so;
 //   - a copy duplicates the whole binary and goes stale identically, and is
 //     the only one that has to ask first.
@@ -96,7 +96,7 @@ func shimPath() (string, error) {
 //
 // It exists because "is this file ours?" has to be answerable WITHOUT running
 // the file. A hardlink to this binary answers itself through os.SameFile, but
-// a stale hardlink or a copy of an older build does not -- and the only other
+// a stale hardlink or a copy of an older build does not, and the only other
 // way to ask a binary what it is would be to execute it, which is exactly what
 // must never happen to a `docker.exe` we did not put there.
 //
@@ -197,7 +197,7 @@ func inspectShim(self string) (installed, error) {
 
 	// Not this binary. It is either a stale hardlink or copy of an older
 	// remote-docker, or somebody's real docker CLI. The marker is what tells
-	// them apart, and the absence of one means "not ours" -- which errs
+	// them apart, and the absence of one means "not ours", which errs
 	// towards leaving a stranger's file alone.
 	if m, ok := readMarker(filepath.Dir(path)); ok {
 		in.ours = true
@@ -338,7 +338,7 @@ func link(out io.Writer, in io.Reader, self, path string, allowCopy bool) (form,
 // as a no.
 //
 // A closed or absent input means no. This runs in scripts and in CI, where
-// there is nobody to ask -- and the thing being asked about duplicates 45MB
+// there is nobody to ask, and the thing being asked about duplicates 45MB
 // and silently goes stale, so proceeding unasked is the wrong default.
 func confirm(out io.Writer, in io.Reader, question string) bool {
 	if in == nil {

@@ -183,7 +183,7 @@ func TestPolicyIsSafeUnderConcurrency(t *testing.T) {
 // open", blaming a second session for the first one's failure.
 //
 // This asserts the policy supports that -- releasing without waiting for the
-// connection to end -- which is what the failure path in forward_tcpip.go does.
+// connection to end, which is what the failure path in forward_tcpip.go does.
 func TestAReservationCanBeGivenBackImmediately(t *testing.T) {
 	p := newPolicy()
 

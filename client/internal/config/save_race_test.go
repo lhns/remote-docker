@@ -13,7 +13,7 @@ import (
 // The config file must never stop existing while Save replaces it.
 //
 // Save used to unlink the destination before renaming onto it, for a stated
-// reason -- "Windows will not rename onto an existing file" -- that is not
+// reason ("Windows will not rename onto an existing file") that is not
 // true of os.Rename, which replaces. What it cost was a window in which the
 // file was absent, and Load reports a missing file as an empty config with NO
 // error, because that is what a machine nobody has configured looks like. So a

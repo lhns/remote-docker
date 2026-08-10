@@ -25,7 +25,7 @@ func (h *halfCloser) CloseWrite() error { h.wroteClose = true; return nil }
 // A stream must hold its lease for as long as it is open.
 //
 // The lease used to be released the instant the stream opened, so a hijacked
-// connection -- attach, exec -it, logs -f -- held nothing. Those survived an
+// connection (attach, exec -it, logs -f) held nothing. Those survived an
 // idle release only because their container happened to be running; a
 // `logs -f` on a stopped container would simply be cut.
 func TestLeasedStreamHoldsUntilClosed(t *testing.T) {
@@ -47,7 +47,7 @@ func TestLeasedStreamHoldsUntilClosed(t *testing.T) {
 	}
 }
 
-// Close can be reached twice -- a handler's defer and an explicit close -- and
+// Close can be reached twice (a handler's defer and an explicit close) and
 // double-releasing a gate lease would drop the user count below zero and let a
 // sweep close a connection still in use.
 func TestLeasedStreamReleasesOnce(t *testing.T) {

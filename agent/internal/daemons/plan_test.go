@@ -19,7 +19,7 @@ func plan(t *testing.T, account string, opts Options) Spec {
 //
 // A user's daemon holds their running containers, their images and their
 // volumes. `--rm` would delete all of it the moment the daemon stopped -- on a
-// restart, on an OOM kill, on a redeploy -- and the user would have no idea
+// restart, on an OOM kill, on a redeploy, and the user would have no idea
 // why their work evaporated. elevate's child DOES take --rm because it is a
 // singleton whose state is worthless; copying that here would be the single
 // worst mistake available in this package.
@@ -193,7 +193,7 @@ func TestLabelValue(t *testing.T) {
 //
 // Found in CI rather than by reasoning: after a workspace restart every
 // account's daemon stayed down until that account next connected, so adoption
-// found nothing to adopt and a detached container -- which survives its
+// found nothing to adopt and a detached container, which survives its
 // author's disconnect by design -- did not survive the restart.
 func TestADaemonAsksToBeRestarted(t *testing.T) {
 	spec := plan(t, "alice", Options{})
@@ -219,7 +219,7 @@ func TestADaemonAsksToBeRestarted(t *testing.T) {
 // This is the bug that shipped: a deployment on Ceph-backed storage sets
 // --storage-driver=fuse-overlayfs for the workspace's own dockerd because
 // overlay2 refuses that filesystem, the per-account daemon did not inherit it,
-// and dockerd fell back to VFS -- which copies the entire image on every
+// and dockerd fell back to VFS, which copies the entire image on every
 // container create. `docker ps` stayed instant, `docker create debian` took 90
 // to 113 seconds, and nothing anywhere said why, because nothing had failed.
 func TestTheStorageDriverIsInheritedFromTheParent(t *testing.T) {
@@ -243,7 +243,7 @@ func TestTheStorageDriverIsInheritedFromTheParent(t *testing.T) {
 }
 
 // The driver a daemon was created with is recorded on it, because a daemon
-// that already exists is started rather than re-run -- so its command line is
+// that already exists is started rather than re-run, so its command line is
 // fixed for life and nothing else can tell that the workspace's settings have
 // moved on since.
 func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
@@ -254,7 +254,7 @@ func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 
 	// Recorded even when unset. "created with no driver" and "created before
 	// this label existed" are different facts, and only the second is a reason
-	// to say nothing -- so the empty value has to be written rather than
+	// to say nothing, so the empty value has to be written rather than
 	// omitted, or drift from unset to set could never be detected.
 	plain := plan(t, "alice", Options{})
 	if !slices.Contains(plain.Labels, StorageLabel+"=") {
@@ -320,7 +320,7 @@ func TestTheFingerprintChangesWithTheSpec(t *testing.T) {
 		}
 	}
 
-	// Same settings, same digest -- or every connection would recreate the
+	// Same settings, same digest, or every connection would recreate the
 	// daemon it just built.
 	if Fingerprint(plan(t, "alice", Options{})) != Fingerprint(base) {
 		t.Error("the fingerprint is not stable for identical settings")

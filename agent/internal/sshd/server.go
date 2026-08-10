@@ -102,7 +102,7 @@ func New(cfg Config) (*Server, error) {
 		//
 		// The callbacks are deliberately NOT set. gliderlabs invokes them from
 		// the handlers we replaced, so setting them here would leave the
-		// permission check in two places -- and allowReverseForward is not a
+		// permission check in two places, and allowReverseForward is not a
 		// predicate: it binds the port and arms the release. Called twice, the
 		// second call refuses its own reservation.
 

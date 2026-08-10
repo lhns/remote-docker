@@ -139,7 +139,7 @@ func (shared) Mode() string { return ModeShared }
 
 // Host and NetNSPath are deliberately empty, not filled in with the values
 // that would be equivalent. Empty is the statement that no redirection is
-// needed -- the default socket, this namespace -- and it is what the call
+// needed (the default socket, this namespace) and it is what the call
 // sites branch on where they still need to (a login shell gets no DOCKER_HOST
 // rather than a redundant one).
 func (s shared) target() Target {

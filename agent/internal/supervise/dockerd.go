@@ -20,7 +20,7 @@ import (
 // The entrypoint script started dockerd and never looked at it again. A daemon
 // that crashed left the container running and looking healthy, with sshd still
 // answering, so the workspace accepted connections and then failed every
-// Docker call -- and the Swarm deployment had no healthcheck at all to notice.
+// Docker call, and the Swarm deployment had no healthcheck at all to notice.
 type Dockerd struct {
 	// Command is the entrypoint to run. The dind image ships
 	// dockerd-entrypoint.sh, which prepends `dockerd` when the first argument

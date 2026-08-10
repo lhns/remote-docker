@@ -83,7 +83,7 @@ func twoAccounts() *fakeTargets {
 }
 
 // Every path that reaches a daemon asks for the account that owns the session,
-// and never a fixed one. A resolver that ignored its argument -- which is what
+// and never a fixed one. A resolver that ignored its argument, which is what
 // a mode branch left behind would amount to -- fails here.
 func TestEveryPathResolvesTheSessionsOwnAccount(t *testing.T) {
 	for _, account := range []string{"alice", "bob"} {

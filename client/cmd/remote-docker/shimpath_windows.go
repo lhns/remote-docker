@@ -1,7 +1,7 @@
 package main
 
 // Editing the user's PATH on Windows, which is the only platform where this
-// program does that -- and the only one where the alternative is a trip
+// program does that, and the only one where the alternative is a trip
 // through the System Properties dialog.
 
 import (
@@ -23,7 +23,7 @@ const userEnvKey = `Environment`
 // ensurePATH adds dir to the user's PATH, and reports whether it had to.
 //
 // NEVER `setx`. It is the obvious way to do this and it is destructive: setx
-// truncates the value at 1024 characters, so a PATH longer than that -- which
+// truncates the value at 1024 characters, so a PATH longer than that, which
 // is most developer machines -- is silently CUT SHORT, and everything past the
 // cut is gone from the account for good. The registry is the interface;
 // setx is a wrapper around it with a limit the registry does not have.

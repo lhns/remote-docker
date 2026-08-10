@@ -29,7 +29,7 @@ type Share struct {
 //
 // Registration is lazy: a directory is added the first time a bind mount names
 // it. The workspace's view of this machine is therefore exactly the set of
-// paths the user asked for, and nothing else is reachable -- which is the
+// paths the user asked for, and nothing else is reachable, which is the
 // property that lets a single export serve arbitrary local paths without
 // exposing the filesystem root. See ADR 0007.
 type Registry struct {
@@ -144,7 +144,7 @@ func normalizeExport(p string) string {
 		p = "/" + p
 	}
 	// Clean leaves a trailing slash only on the root, and trimming that would
-	// turn "/" into the empty string -- which matches no share but also
+	// turn "/" into the empty string, which matches no share but also
 	// matches no branch below, so keep it whole.
 	if p = path.Clean(p); p == "/" {
 		return "/"

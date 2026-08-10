@@ -136,7 +136,7 @@ func TestCollectSurvivesARemovalFailure(t *testing.T) {
 	}
 }
 
-// With no owner set, ownership is not a criterion -- but the prefix and label
+// With no owner set, ownership is not a criterion, but the prefix and label
 // still are.
 func TestCollectWithoutOwner(t *testing.T) {
 	store := &fakeVolumeStore{volumes: []Volume{

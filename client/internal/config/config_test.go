@@ -74,7 +74,7 @@ func TestResolveDefaults(t *testing.T) {
 }
 
 // enroll has to work before anything is configured -- that is how a key gets
-// issued in the first place -- so an absent file cannot be fatal.
+// issued in the first place, so an absent file cannot be fatal.
 func TestResolveToleratesMissingFile(t *testing.T) {
 	if _, err := Resolve(Overrides{}, filepath.Join(t.TempDir(), "nope.json")); err != nil {
 		t.Errorf("Resolve with no config file: %v", err)
@@ -271,7 +271,7 @@ func TestEndpointForIsPerWorkspace(t *testing.T) {
 
 // An empty base has no name to build on, and building one anyway was a real
 // bug: DefaultEndpoint was "" on Unix -- resolved inside Listen, which was fine
-// for Listen and wrong for everyone else -- so a NAMED workspace derived the
+// for Listen and wrong for everyone else, so a NAMED workspace derived the
 // bare separator plus its name. "-dev" is a socket in whatever directory the
 // process happened to be in, and the docker context written from it said
 // unix://-dev. It could not be reproduced on Windows, where the pipe name is a

@@ -47,7 +47,7 @@ func (s *Session) releaseIfIdle() {
 // while we are connected.
 //
 // A third used to be listed here -- an interactive shell using the ~/workspace
-// mount -- and was counted separately on liveConn. It never reached this
+// mount, and was counted separately on liveConn. It never reached this
 // function: Shell holds its gate lease for its whole life, and sweep bails on
 // users > 0 long before busy is consulted. Now that every stream holds its
 // lease the same way, the counter documented an intent the code no longer
@@ -153,7 +153,7 @@ func (s *Session) exportsVolume(volume string) bool {
 // Status answers the control endpoint, satisfying proxy.Control.
 //
 // Deliberately does NOT connect. `status` connecting is its own decision --
-// reporting what the workspace says is that command's whole job -- but a
+// reporting what the workspace says is that command's whole job, but a
 // daemon asked to describe itself must not go and establish a connection it
 // had let go, which would make asking the question change the answer.
 func (s *Session) Status() any {
@@ -213,7 +213,7 @@ func (s *Session) Shutdown() {
 //
 // The disjunction is the load-bearing part. If no connection is held, the gate
 // only let it go BECAUSE nothing depended on it, so there is nothing to ask
-// and nothing to break. If one is held, ask -- and "unable to tell" counts as
+// and nothing to break. If one is held, ask, and "unable to tell" counts as
 // busy, exactly as it does for a release.
 func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	last, inUse := s.gate.lastUse()

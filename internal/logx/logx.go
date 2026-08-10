@@ -6,7 +6,7 @@
 // programs: the client's lines are read by a person watching
 // `remote-docker start --foreground`, and the agent's are read by whoever runs
 // `docker logs` on a workspace that is misbehaving. So the structure is
-// internal -- attributes, levels, With -- and the rendering stays what it was.
+// internal (attributes, levels, With) and the rendering stays what it was.
 //
 // Ten packages each declared their own `Logger interface { Printf(...) }`,
 // with a nil check and a logf shim apiece, and one of them spelled it as a func
@@ -60,7 +60,7 @@ func Logger(out io.Writer, indent string, prefix bool) *slog.Logger {
 //
 // This is what replaced eleven `if x.Log != nil` guards. A nil *slog.Logger
 // panics rather than staying quiet, so every zero value that used to mean
-// silence has to name this instead -- which is a fair trade for never writing
+// silence has to name this instead, which is a fair trade for never writing
 // the check again, but it IS the one thing to remember when adding a field.
 func Discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 

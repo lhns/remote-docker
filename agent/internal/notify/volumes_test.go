@@ -20,7 +20,7 @@ func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
 	}
 }
 
-// With no root -- the shared daemon -- the path is already ours.
+// With no root (the shared daemon) the path is already ours.
 //
 // All three spellings of "no relocation" must work, and "/" is here because it
 // did not. daemons.Shared reports its root as "/", which is true; this function
@@ -45,7 +45,7 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 
 // A daemon we cannot locate must fail rather than fall back to the
 // unrelocated path. That path EXISTS in the agent's filesystem -- it is the
-// shared daemon's -- so a silent fallback would replay one account's edits
+// shared daemon's, so a silent fallback would replay one account's edits
 // into another daemon's volume.
 func TestRelocateFailsRatherThanFallingBack(t *testing.T) {
 	boom := errors.New("no such daemon")

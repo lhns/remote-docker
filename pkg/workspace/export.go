@@ -16,9 +16,8 @@ import (
 //	/m/<id>         -> any other local directory named by a bind mount
 //
 // One export means one server, one reverse-tunnel port and one round of NFS
-// handle state, while still supporting bind sources anywhere on the client --
-// on another drive, above the working directory, or unrelated to it entirely.
-// That is the case the previous single-mount design could not express at all.
+// handle state, while still supporting bind sources anywhere on the client:
+// another drive, above the working directory, or unrelated to it.
 const (
 	// ExportRoot is the NFS export path. rclone served the working directory
 	// directly; we serve a mux and mount subtrees of it.
@@ -31,10 +30,8 @@ const (
 	// ExportMountPrefix precedes every dynamically registered directory.
 	ExportMountPrefix = "/m/"
 
-	// VolumeNamePrefix precedes every Docker volume we create on the remote
-	// daemon, so ours are distinguishable from the user's own volumes -- which
-	// matters for garbage collection, and for never touching a volume we did
-	// not create.
+	// VolumeNamePrefix precedes every Docker volume we create, so garbage
+	// collection can tell ours from the user's own.
 	VolumeNamePrefix = "rd-"
 )
 
@@ -46,10 +43,9 @@ const idLen = 16
 // CanonicalKey folds a local path into the form used to decide whether two
 // bind sources are the same directory.
 //
-// This is an identity key, NOT a path to open. Windows paths are compared
-// case-insensitively, so the key is lowercased -- opening the lowercased form
-// happens to work on Windows but would be wrong to rely on, and would be
-// actively wrong on any case-sensitive filesystem.
+// An identity key, NOT a path to open. Windows compares paths
+// case-insensitively so the key is lowercased, and opening that form would be
+// wrong on any case-sensitive filesystem.
 func CanonicalKey(p string) string {
 	return canonicalKeyFor(runtime.GOOS, p)
 }
@@ -165,22 +161,19 @@ func ParseID(s string) (string, error) {
 }
 
 // NFSVolumeOptions returns the driver options for a Docker volume backed by
-// this client's NFS export, using Docker's built-in "local" driver -- no
-// volume plugin is involved.
+// this client's NFS export. Docker's built-in "local" driver does the mount;
+// no volume plugin is involved.
 //
-// The mount happens inside dockerd's own namespace when the container starts,
-// which is the property that makes per-bind volumes better than one host-side
-// mount: nothing has to propagate anywhere, and replacing a share is a
-// container restart rather than a remount that running containers cannot see.
+// dockerd mounts it in its own namespace when the container starts, which is
+// what makes per-bind volumes better than one host-side mount: nothing has to
+// propagate, and replacing a share is a container restart.
 //
-// soft plus a short timeo means a dead tunnel surfaces as EIO instead of
-// parking container processes in uninterruptible sleep. nolock because the NFS
-// server implements no NLM. port == mountport skips rpcbind entirely.
-//
-// noacl because the server implements no NFS_ACL sideband either. Without it
-// the Linux client probes program 100227 on every mount, is correctly told
-// there is no handler, and the server logs that refusal as an error -- so the
-// first thing a user saw on their first `shell` was a red herring.
+// The options are not arbitrary. soft plus a short timeo makes a dead tunnel
+// surface as EIO rather than parking container processes in uninterruptible
+// sleep. nolock and noacl because the server implements neither NLM nor the
+// NFS_ACL sideband, and without noacl the client probes for one on every
+// mount and the server logs the refusal as an error. port == mountport skips
+// rpcbind.
 func NFSVolumeOptions(port int, exportPath string) map[string]string {
 	return map[string]string{
 		"type": "nfs",

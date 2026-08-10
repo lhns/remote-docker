@@ -15,7 +15,7 @@ import (
 // This is a regression test for a real failure, and for the platform CI never
 // runs. `status` and `gc` declined the workspace's export port with some care
 // and then bound the LOCAL endpoint anyway, which they never use. On Unix that
-// was invisible -- a bind unlinks whatever socket is there -- but a Windows
+// was invisible (a bind unlinks whatever socket is there) but a Windows
 // named pipe genuinely excludes, so `status` could not run at all while a
 // session was running. Which is exactly when a person runs `status`.
 func TestQueryDoesNotBindTheEndpoint(t *testing.T) {
@@ -105,7 +105,7 @@ func TestRoleIsOneBit(t *testing.T) {
 }
 
 // testEndpoint names an endpoint this test may bind, in the platform's own
-// spelling -- which is the whole point of running these two tests here rather
+// spelling, which is the whole point of running these two tests here rather
 // than trusting the integration suite. A socket under the test's own directory
 // on Unix; a uniquely named pipe on Windows, where there is no filesystem path
 // to put one at, and where the bind genuinely excludes.

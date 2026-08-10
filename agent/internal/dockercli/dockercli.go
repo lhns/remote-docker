@@ -9,7 +9,7 @@
 // This package exists because four callers then made it separately, and each
 // re-decided the same four things: which binary, how to name the daemon, how
 // to trim the output, and how to wrap the error. Two of them spelled the host
-// flag differently -- `--host` in one, `-H` in another -- and the fourth
+// flag differently (`--host` in one, `-H` in another) and the fourth
 // hardcoded the binary with no seam at all, which is why the agent's version
 // lookup could not be tested.
 package dockercli

@@ -44,7 +44,7 @@ func TestTwoWorkspacesGetDifferentIDs(t *testing.T) {
 }
 
 // A half-finished first run leaves an empty file. Reading it back as the id
-// would label every daemon with the empty string -- which matches every OTHER
+// would label every daemon with the empty string, which matches every OTHER
 // workspace that failed the same way.
 func TestAnEmptyIDFileIsReplaced(t *testing.T) {
 	dir := t.TempDir()

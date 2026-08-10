@@ -54,7 +54,7 @@ func (SyscallPoker) Poke(path string, isDir bool) error {
 	// here. Nor is O_CREAT: this must never bring a path into existence.
 	//
 	// It is also completely silent over NFSv3, which is stateless and has no
-	// OPEN operation -- so this primitive cannot echo back to the client as a
+	// OPEN operation, so this primitive cannot echo back to the client as a
 	// change, which would otherwise loop forever.
 	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {

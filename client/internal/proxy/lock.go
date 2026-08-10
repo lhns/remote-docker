@@ -13,7 +13,7 @@ import (
 // of one.
 //
 // On Windows a named pipe bind is exclusive -- winio asks for
-// FILE_FLAG_FIRST_PIPE_INSTANCE -- and the kernel releases it when the process
+// FILE_FLAG_FIRST_PIPE_INSTANCE, and the kernel releases it when the process
 // dies. On Unix, Listen removed any existing socket before binding, because a
 // process that died without cleaning up would otherwise make every later run
 // fail with "address already in use". That recovery is necessary and the way

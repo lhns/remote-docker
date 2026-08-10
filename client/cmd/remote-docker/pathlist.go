@@ -1,7 +1,7 @@
 package main
 
 // The PATH string arithmetic, kept away from the registry so it can be tested
-// on any machine -- and because getting it wrong damages something the user
+// on any machine, and because getting it wrong damages something the user
 // cannot easily reconstruct.
 
 import (
@@ -14,7 +14,7 @@ import (
 // whether it changed anything.
 //
 // APPENDED, never prepended. If a real Docker is installed on this machine
-// later, its entry comes first and wins -- which is the correct outcome: a
+// later, its entry comes first and wins, which is the correct outcome: a
 // local Docker is the thing this program stands in for, not something it
 // should shadow.
 //
@@ -54,7 +54,7 @@ func removeFromPath(current, dir string) (string, bool) {
 	}
 
 	// Empty entries are kept, every one of them. An empty entry in PATH means
-	// the CURRENT DIRECTORY -- so dropping one while tidying up changes what
+	// the CURRENT DIRECTORY, so dropping one while tidying up changes what
 	// the user's shell resolves, quietly, in a way that looks like nothing
 	// happened. Nothing here is entitled to remove anything but our own entry.
 	return strings.Join(kept, string(filepath.ListSeparator)), true

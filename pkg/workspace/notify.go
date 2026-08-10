@@ -96,7 +96,7 @@ type FSEvent struct {
 
 	// Dir says the path is, or was, a directory. The agent needs it because
 	// the operation that makes a watcher notice a directory is not the one
-	// that makes it notice a file -- and after a removal it cannot go and
+	// that makes it notice a file, and after a removal it cannot go and
 	// look.
 	Dir bool `json:"d,omitempty"`
 }
@@ -163,7 +163,7 @@ func validateSharePath(p string) error {
 }
 
 // FSNotice tells the receiver that the client's view is incomplete under Path,
-// so it should do something coarser than replaying events -- or nothing, if
+// so it should do something coarser than replaying events, or nothing, if
 // the tool being served rescans anyway.
 //
 // Never omitted when something was lost. A receiver that silently believes it

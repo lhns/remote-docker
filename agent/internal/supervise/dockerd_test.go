@@ -29,7 +29,7 @@ func TestSplitArgs(t *testing.T) {
 }
 
 // Readiness is the socket's presence, which is what the shell entrypoint
-// waited on too -- and getting it wrong means the first `docker ps` after a
+// waited on too, and getting it wrong means the first `docker ps` after a
 // login fails for no reason the user can act on.
 func TestReady(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "docker.sock")

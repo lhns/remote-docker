@@ -34,7 +34,7 @@ const contextMarker = "remote-docker workspace"
 // `shim install` has put a `docker` on PATH, the docker that LookPath finds is
 // THIS BINARY. Without NoSessionEnv, writing a context would spawn us, and we
 // would open an SSH connection, an NFS server and a reverse tunnel in order to
-// write a file on this machine -- and then tear them all down again.
+// write a file on this machine, and then tear them all down again.
 //
 // It costs nothing when the docker found is a real one: a docker CLI that has
 // never heard of the variable ignores it.
@@ -56,7 +56,7 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 	endpoint := dockerHostOf(cfg)
 
 	if contextIsOurs(docker, name) {
-		// Ours, so replacing is safe -- and it is replaced rather than
+		// Ours, so replacing is safe, and it is replaced rather than
 		// updated, so a stale endpoint from an earlier run cannot survive.
 		_ = dockerCmd(docker, "context", "rm", "-f", name).Run()
 	} else if contextExists(docker, name) {
@@ -80,7 +80,7 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 // The JSON is parsed rather than asking docker to format the field, and that
 // is not a preference. `--format '{{.Metadata.Description}}'` looks exactly
 // right against the JSON docker prints -- Metadata.Description is where the
-// description plainly is -- but the template does not run against that JSON.
+// description plainly is, but the template does not run against that JSON.
 // It runs against docker's internal `store.Metadata`, whose Description lives
 // one level further in, so the template failed to evaluate for every context
 // that ever existed:

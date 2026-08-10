@@ -10,7 +10,7 @@ import (
 
 // Silence in the three cases where the warning would be wrong.
 //
-// The one it exists for -- this process tracing, the session not -- cannot be
+// The one it exists for (this process tracing, the session not) cannot be
 // exercised here: proxy.Tracing() is read from the environment once, at
 // package init, which is the whole reason the mistake is possible in the first
 // place. So the halves are tested for what each can prove. This one pins that

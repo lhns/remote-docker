@@ -107,7 +107,7 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 // behind it, and reports whether it went.
 //
 // The decision and the deletion happen under the guard, so a bind rewrite
-// either registered its share first -- and the volume is spared -- or arrives
+// either registered its share first (and the volume is spared) or arrives
 // after the removal and recreates it. The daemon's own answer cannot cover
 // this: a volume exists for a moment before any container names it, and that
 // moment is exactly when this runs.

@@ -41,7 +41,7 @@ func NewForwardPolicy(mapping workspace.Mapping) *ForwardPolicy {
 // Three rules, in order of what they protect against:
 //
 //  1. loopback only. A workspace's NFS export is unauthenticated -- anything
-//     that can reach the port can read and write the client's files -- so it
+//     that can reach the port can read and write the client's files, so it
 //     must never be published beyond the container.
 //  2. the account's own port, and only that one. This is what stops one user
 //     binding another's port before they connect and serving them a

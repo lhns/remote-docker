@@ -15,7 +15,7 @@ import (
 // The two halves of a volume's life do not overlap in the DAEMON's view: it
 // learns a volume is in use only when a container referencing it is created,
 // which is strictly after the volume exists. Between those two moments the
-// volume is ours, needed, and reported as unused -- and the collector runs
+// volume is ours, needed, and reported as unused, and the collector runs
 // exactly then, because the connection it rides on is opened lazily by the
 // very request that is creating the volume.
 //

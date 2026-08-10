@@ -11,12 +11,9 @@ import (
 
 // Info is what the workspace reports about the calling account.
 //
-// The wire format is the KEY=VALUE text emitted by the original
-// image/bin/workspace-info shell script, and it stays that way on purpose:
-// the Go client is built and tested against the existing sshd-based server
-// before the Go agent replaces it, so both must speak the same thing. Once the
-// agent is the only server this format can be revisited -- but not before, or
-// the agent stops being a drop-in substitution.
+// The wire format is the KEY=VALUE text the original shell implementation
+// emitted, kept so the Go agent could be a drop-in substitution for it. It
+// can be revisited now that the agent is the only server.
 type Info struct {
 	User       string
 	UID        int
@@ -35,22 +32,19 @@ type Info struct {
 	// Mode is how this workspace serves daemons: "shared" (ADR 0012) or
 	// "per-account" (ADR 0019).
 	//
-	// Worth reporting because everything else in this reply means something
-	// different depending on it -- whose daemon the version and the storage
-	// driver describe, whether another account can see your containers, and
-	// what an operator has to do to change a setting. It is set on the
-	// workspace and invisible from the client, which spent a day being
-	// confusing.
+	// Reported because everything else here means something different
+	// depending on it: whose daemon the version and storage driver describe,
+	// whether another account can see your containers, and what an operator
+	// changes to alter a setting. It is set on the workspace and otherwise
+	// invisible from the client.
 	Mode string
 
 	// Storage is the graph driver of the daemon serving this account.
 	//
-	// Reported because the difference between overlay2/fuse-overlayfs and vfs
-	// is the difference between `docker run` taking a second and taking
-	// minutes -- vfs has no copy-on-write and copies the whole image on every
-	// create -- and because nothing about it FAILS. A real workspace spent a
-	// day looking like it was hanging, with the answer available only to
-	// somebody who could reach a daemon the account deliberately cannot.
+	// Reported because vfs is the difference between `docker run` taking a
+	// second and taking minutes, and because nothing about it fails: it looks
+	// like a hang. The answer is otherwise only visible from a daemon the
+	// account deliberately cannot reach.
 	//
 	// Added the same way as Agent, and safe for the same reason.
 	Storage string

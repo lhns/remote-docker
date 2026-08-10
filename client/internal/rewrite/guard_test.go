@@ -53,7 +53,7 @@ func (b *blockingVolumes) EnsureVolume(context.Context, string, map[string]strin
 // deciding on a half-built world.
 //
 // The share registration is what saves the volume, and it happens INSIDE the
-// held section -- so without the lock a collector that read the registry a
+// held section, so without the lock a collector that read the registry a
 // moment earlier would still delete it.
 func TestARewriteInProgressBlocksCollection(t *testing.T) {
 	name, err := workspace.VolumeNameForExport(workspace.ExportCWD)

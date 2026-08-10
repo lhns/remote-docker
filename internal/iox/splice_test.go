@@ -12,7 +12,7 @@ import (
 //
 // The important property is what it does NOT do: it never closes its own write
 // half on its own initiative. That is a Windows named pipe, which has no
-// half-close at all -- and a Docker client attached to a container it is not
+// half-close at all, and a Docker client attached to a container it is not
 // feeding stdin to simply sits there. Only being told the stream is over makes
 // it go away.
 type clientSide struct {

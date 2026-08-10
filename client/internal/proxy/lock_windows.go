@@ -18,7 +18,7 @@ func defaultEndpoint() string { return defaultPipe }
 
 // acquireLock opens the pid record. The real exclusion is the pipe bind
 // itself, which winio takes with FILE_FLAG_FIRST_PIPE_INSTANCE and the kernel
-// releases when the process dies -- so unlike Unix there is nothing to recover
+// releases when the process dies, so unlike Unix there is nothing to recover
 // from and nothing that can go stale.
 //
 // The file exists so `start` and `stop` can name the process that owns a
@@ -26,7 +26,7 @@ func defaultEndpoint() string { return defaultPipe }
 // would invent a failure the platform does not have.
 //
 // It does NOT write the pid, and that is the fix for a real and confusing bug.
-// Opening is not winning here -- the bind that follows decides -- so writing
+// Opening is not winning here (the bind that follows decides) so writing
 // now meant a process about to be REFUSED had already stamped its own pid over
 // the owner's. The refusal read that back and reported "another remote-docker
 // is already serving ... (pid <the failing process>)", sending the reader to

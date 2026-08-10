@@ -71,7 +71,7 @@ type mountHandler struct {
 // refusedFS is returned alongside every failing mount status.
 //
 // go-nfs v0.0.4's onMount calls Handler.ToHandle on the returned filesystem
-// before checking the status, and the caching handler dereferences it -- so
+// before checking the status, and the caching handler dereferences it, so
 // returning nil, the obvious thing for a refusal, panics the server. Any
 // client could then crash this process just by asking for a path that does not
 // exist, which is precisely the boundary we rely on refusing. An empty

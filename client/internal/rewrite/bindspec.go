@@ -45,7 +45,7 @@ func (b BindSpec) String() string {
 // The colon is both the field separator and part of a Windows drive letter,
 // which is the entire difficulty here: `C:\projects:/app:ro` has four colons
 // and three fields. A drive letter is recognised only where it can appear --
-// a single letter, followed by a colon, followed by a separator -- so a named
+// a single letter, followed by a colon, followed by a separator, so a named
 // volume called `c` is not mistaken for one.
 func ParseBind(spec string) (BindSpec, error) {
 	if strings.TrimSpace(spec) == "" {

@@ -17,7 +17,7 @@ import (
 // applyWorkspace, an Env constant, a clause in applyEnv, sometimes an Overrides
 // field and a clause in applyOverrides. Four functions enumerating one list is
 // how a setting ends up readable from the config file and silently ignored from
-// the environment -- which fails as "I set the variable and nothing happened",
+// the environment, which fails as "I set the variable and nothing happened",
 // with nothing on screen and nothing in a log.
 //
 // The table-driven rewrite that would make this structurally impossible needs
@@ -205,14 +205,14 @@ func TestOverridesAreHonouredAndComplete(t *testing.T) {
 }
 
 // The two durations were environment-only until this test said so out loud,
-// which is what made it a decision rather than an oversight -- and then an
+// which is what made it a decision rather than an oversight, and then an
 // obviously wrong one: somebody wanting a longer idle on a slow link had to
 // export a variable rather than write it next to their host. They are file
 // settings now, covered by the table above like everything else.
 //
 // What remains worth pinning here is the FORM. They are strings in the file
 // and durations on the Config, and a duration that will not parse is ignored
-// rather than fatal -- so a typo costs the setting, never the command.
+// rather than fatal, so a typo costs the setting, never the command.
 func TestTheDurationSettingsParseFromTheFile(t *testing.T) {
 	path := writeConfigJSON(t, map[string]any{
 		"host": "workspace.example", "idleTimeout": "90s", "daemonIdle": "45m",

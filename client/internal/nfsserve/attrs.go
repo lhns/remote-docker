@@ -31,7 +31,7 @@ type Attrs struct {
 	// AlwaysExecutable reports every file as executable.
 	//
 	// Needed where the local filesystem has no execute bit to preserve, which
-	// means Windows. Without it nothing on the share can be run -- not a
+	// means Windows. Without it nothing on the share can be run, not a
 	// committed binary, not ./scripts/build.sh, not a Makefile's helper --
 	// because a synthesised 0644 has no execute bit and the container gets
 	// "permission denied". Mounting a FAT or NTFS volume on Linux makes the
@@ -118,7 +118,7 @@ type attrInfo struct {
 	path  string
 }
 
-// Mode keeps the type bits -- directory, symlink, device -- and replaces only
+// Mode keeps the type bits (directory, symlink, device) and replaces only
 // the permissions. Reporting a directory as a regular file would break
 // traversal outright.
 func (i *attrInfo) Mode() fs.FileMode {
@@ -155,8 +155,8 @@ func (i *attrInfo) Sys() any {
 //
 // NFS clients use it to tell files apart and to detect that two names are the
 // same file, so it must be stable for a given path and distinct between paths.
-// Windows exposes no inode through os.FileInfo, so it is derived from the path
-// -- which is what go-nfs itself does when it cannot find a real one.
+// Windows exposes no inode through os.FileInfo, so it is derived from the path,
+// which is what go-nfs itself does when it cannot find a real one.
 func fileID(p string) uint64 {
 	h := fnv.New64()
 	_, _ = h.Write([]byte(p))

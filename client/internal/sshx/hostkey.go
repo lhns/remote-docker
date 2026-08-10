@@ -49,7 +49,7 @@ func (k *KnownHosts) Callback() ssh.HostKeyCallback {
 		k.mu.Lock()
 		defer k.mu.Unlock()
 
-		// Reloaded per connection rather than cached: another process -- or
+		// Reloaded per connection rather than cached: another process, or
 		// another connection from this one -- may have recorded a host since
 		// the checker was built.
 		check, err := knownhosts.New(k.Path)
@@ -74,7 +74,7 @@ func (k *KnownHosts) Callback() ssh.HostKeyCallback {
 
 		// A KeyError with no Want entries means "host not in the file".
 		// With Want entries it means "host is in the file, with a different
-		// key" -- which is the case that must never be papered over.
+		// key", which is the case that must never be papered over.
 		if len(keyErr.Want) > 0 {
 			return fmt.Errorf(
 				"sshx: host key for %s has CHANGED.\n"+

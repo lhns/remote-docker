@@ -11,7 +11,7 @@ import (
 // This is the shared-daemon mode (ADR 0012) travelling through the same code
 // as the per-account one, and it is the reason the call sites in sshd have no
 // mode branch left. If this ever started calling enter, the agent would refuse
-// every forward on a shared-daemon workspace -- and on the development machine,
+// every forward on a shared-daemon workspace, and on the development machine,
 // where enter is unsupported, these tests are the only thing that would say so.
 func TestDoWithNoPathRunsHere(t *testing.T) {
 	ran := false

@@ -111,7 +111,7 @@ func (c *coalescer) add(now time.Time, e workspace.FSEvent) {
 // mergeOps combines an accumulated operation set with a newly observed one.
 //
 // Removal and rename are exclusive with creation and writing rather than
-// additive, and which wins is decided by arrival order -- because both orders
+// additive, and which wins is decided by arrival order, because both orders
 // occur and mean different things. Create-then-remove within one window is a
 // temporary file, and the net truth is that it is gone. Remove-then-create is
 // the atomic-save every editor performs, and the net truth is that it is
@@ -132,7 +132,7 @@ func mergeOps(have, add workspace.FSOp) workspace.FSOp {
 }
 
 // drop records an event that could not be kept. Individual paths are not
-// remembered -- that is the whole point of being over capacity -- only how
+// remembered (that is the whole point of being over capacity) only how
 // many were lost and the deepest directory covering all of them.
 func (c *coalescer) drop(export, p string) {
 	l, ok := c.lost[export]

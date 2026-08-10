@@ -51,7 +51,7 @@ type Mount struct {
 //
 // Exported because internal/server/daemons renders mounts for its own
 // containers and had a byte-identical copy of this, down to the reasoning
-// below -- which is exactly the kind of duplication that survives until the
+// below, which is exactly the kind of duplication that survives until the
 // two copies disagree about something load-bearing.
 func (m Mount) Arg() string {
 	source := m.Source
@@ -96,7 +96,7 @@ func (s RunSpec) Args() []string {
 	// Read from the field, which it did not used to be: `--rm` was appended
 	// unconditionally and `Remove` was set but never consulted. It happened to
 	// be harmless because the only caller wants --rm -- elevate's child is a
-	// singleton whose state is worthless -- but a spec with a flag it ignores
+	// singleton whose state is worthless, but a spec with a flag it ignores
 	// is a trap for the next caller, and the next caller is a per-user daemon
 	// holding somebody's running work.
 	if s.Remove {

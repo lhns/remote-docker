@@ -27,7 +27,7 @@ import (
 // How long to wait for an endpoint to start or stop answering.
 //
 // Together, and named, because they were three anonymous literals in three
-// copies of the same loop -- and two of them waited for the SAME event with
+// copies of the same loop, and two of them waited for the SAME event with
 // different patience (10s and 15s) for no stated reason.
 //
 // startTimeout is the generous one: the first thing a spawned daemon does is
@@ -164,8 +164,8 @@ func newStopCommand() *cobra.Command {
 			// whatever runs next.
 			//
 			// The endpoint going quiet is not the end of the teardown, it is
-			// the START of it: Session.Close shuts the listener first -- so no
-			// new request can arrive mid-teardown -- and only then drops the
+			// the START of it: Session.Close shuts the listener first, so no
+			// new request can arrive mid-teardown, and only then drops the
 			// SSH connection, the reverse tunnel and the NFS export. An account
 			// has exactly ONE reverse-tunnel port (ADR 0003) and a host session
 			// fails hard when it cannot take it, so a `stop` that returned at
@@ -260,7 +260,7 @@ func control(endpoint, method, path string, out any) error {
 		Transport: &http.Transport{DialContext: proxy.DialEndpoint(endpoint)},
 		Timeout:   10 * time.Second,
 	}
-	// The host is ignored -- the transport dials the endpoint -- but a URL
+	// The host is ignored (the transport dials the endpoint) but a URL
 	// needs one.
 	req, err := http.NewRequest(method, "http://remote-docker"+proxy.ControlPrefix+path, nil)
 	if err != nil {
@@ -324,8 +324,8 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 	}
 
 	// Versions differ. Whether that is worth doing anything about depends on
-	// what would be lost, and asking THAT costs a round trip to the workspace
-	// -- which is why it is asked here and not on every command.
+	// what would be lost, and asking THAT costs a round trip to the workspace,
+	// which is why it is asked here and not on every command.
 	var idle proxy.Idle
 	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil || !idle.Safe {
 		warnVersionMismatch(st)
@@ -460,7 +460,7 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 // that would print the traces is not.
 //
 // REMOTE_DOCKER_TRACE is read once, at start, by whichever process forwards
-// the requests -- and that is the background session, not this command. So
+// the requests, and that is the background session, not this command. So
 // `REMOTE_DOCKER_TRACE=1 remote-docker docker ps` against a running session
 // prints nothing and explains nothing, which reads as "tracing does not work"
 // rather than "you set it on the wrong process".
@@ -488,13 +488,13 @@ func writeTraceWarning(w io.Writer, st proxy.Status) {
 //
 // vfs has no copy-on-write: it copies the entire image on every container
 // create. Nothing fails -- `docker ps` stays instant, `docker run` takes
-// minutes -- so it presents as a hang, and it stays that way until somebody
+// minutes, so it presents as a hang, and it stays that way until somebody
 // changes the workspace's configuration. A real workspace lost a day to it.
 //
 // Printed here, on the path every `remote-docker docker ...` already takes,
 // because that is where somebody is standing when they notice the slowness.
 // The agent logs it too, and `status` shows it, but both require already
-// suspecting storage -- and reaching the daemon's own host to look is exactly
+// suspecting storage, and reaching the daemon's own host to look is exactly
 // what an account may not do.
 //
 // To stderr, and only when it is true: a correctly configured workspace prints

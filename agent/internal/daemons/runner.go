@@ -28,8 +28,8 @@ type Daemon struct {
 	// than a sibling on the host: nested pid namespaces mean the pid docker
 	// reports is one the agent can open under its own /proc. A sibling would
 	// have a host pid that does not exist here, and making it exist would need
-	// `pid: host` -- every enrolled user's shell seeing every process on the
-	// node, which is worse than the problem being solved.
+	// `pid: host`, so every enrolled user's shell would see every process on
+	// the node. That is worse than the problem being solved.
 	PID int
 
 	// Socket is where the agent dials this daemon.
@@ -41,9 +41,8 @@ type Daemon struct {
 	checked time.Time
 }
 
-// Host is this daemon as a DOCKER_HOST value, which is how everything that is
-// not the agent itself addresses it -- the docker CLI, and the shells the
-// agent hands out.
+// Host is this daemon as a DOCKER_HOST value, which is how everything but the
+// agent addresses it: the docker CLI, and the shells the agent hands out.
 func (d Daemon) Host() string { return HostFor(d.Account) }
 
 // NetNSPath is the daemon's network namespace, for binding the reverse tunnel
@@ -71,8 +70,8 @@ type Manager struct {
 // again.
 //
 // Short enough that a daemon which died is noticed within a request or two,
-// long enough that a burst of API calls -- which is what any real docker
-// command is -- costs one check rather than hundreds.
+// long enough that a burst of API calls, which is what any real docker
+// command is, costs one check rather than hundreds.
 const aliveTTL = 2 * time.Second
 
 // DefaultReadyTimeout is how long a cold daemon has to answer.
@@ -86,9 +85,9 @@ const DefaultReadyTimeout = 90 * time.Second
 // Callers outside this package reach it through Ensure, which answers in the
 // Target that both modes share.
 //
-// Idempotent and single-flighted per account: several sessions for one user
-// arriving together is the normal case -- the client opens one connection and
-// the docker CLI opens more -- and each starting its own daemon would be a
+// Idempotent and single-flighted per account. Several sessions for one user
+// arriving together is the normal case, since the client opens one connection
+// and the docker CLI opens more, and each starting its own daemon would be a
 // race whose loser leaves a container behind.
 func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 	for {
@@ -99,7 +98,7 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 
 		// The common case by far, and it must cost nothing. EVERY Docker API
 		// request from the client opens its own dial-stdio session and lands
-		// here -- `docker compose up` is hundreds -- so a `docker inspect`
+		// here (`docker compose up` is hundreds) so a `docker inspect`
 		// per call would add a subprocess to every request. Worse, the check
 		// used to run while the manager's lock was HELD, which serialised
 		// every account's requests behind one exec.
@@ -182,7 +181,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	// subdirectory per account, and a shell has to walk through it to reach
 	// its own socket. MkdirAll made both levels 0750 root:root and only the
 	// leaf was ever chowned, so every account's DOCKER_HOST pointed at a path
-	// it could not enter -- "permission denied while trying to connect to the
+	// it could not enter: "permission denied while trying to connect to the
 	// Docker daemon socket", with the variable set correctly.
 	//
 	// The per-account directory below it is 0750 root:<account>, which is what
@@ -323,18 +322,18 @@ func (m *Manager) lastWords(ctx context.Context, name string) string {
 // alive reports whether a daemon we already handed out is still usable.
 //
 // Checked on every Ensure rather than trusted, because the container can go
-// away underneath us -- an OOM kill, an operator, a crash -- and handing back a
+// away underneath us (an OOM kill, an operator, a crash) and handing back a
 // dead socket produces a connection error that names nothing.
 //
 // THE PID IS PART OF "usable", and leaving it out was a real bug. A daemon that
-// restarts -- which it does on its own, since it carries a restart policy --
+// restarts, which it does on its own, since it carries a restart policy --
 // comes back as the same container, with the same name, the same socket path
 // and the same "running" status, and a DIFFERENT pid. Everything here that
 // crosses into it goes through /proc/<pid>: the reverse tunnel carrying the
 // client's NFS export (netns), and the volume mountpoints replay writes into
 // (root). Against a stale pid those name a namespace that no longer exists, so
 // the daemon answers Docker API calls perfectly while no container it starts
-// can mount anything -- and a client that requires its file server refuses to
+// can mount anything, and a client that requires its file server refuses to
 // start at all, with nothing pointing at the daemon having restarted.
 //
 // Reported as not-alive rather than repaired in place: Ensure then goes through
@@ -399,7 +398,7 @@ func (m *Manager) parent() dockercli.CLI { return dockercli.CLI{} }
 // Adopt takes ownership of daemons left running by a previous agent.
 //
 // Called at startup. Without it a restarted agent would find every name taken
-// and every user's running work unreachable -- and `docker run --name` fails
+// and every user's running work unreachable, and `docker run --name` fails
 // on a conflict rather than replacing, so it would stay that way.
 //
 // Deliberately NOT elevate's `docker rm -f <name>` opener. That is right for a
@@ -445,10 +444,10 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		pid, err := m.pid(ctx, ContainerName(account))
 		if err != nil || pid <= 0 {
 			// Not running yet, and that is the ordinary case rather than a
-			// problem. Two ways it happens: the daemon was stopped, or the
-			// parent dockerd is still bringing it back after a restart -- this
-			// runs the moment the agent starts, which is a race it cannot win
-			// and does not need to. Ensure does the work on demand.
+			// problem. Either the daemon was stopped, or the parent dockerd
+			// is still bringing it back after a restart: this runs the moment
+			// the agent starts, which is a race it cannot win and does not
+			// need to. Ensure does the work on demand.
 			//
 			// Left alone deliberately either way: starting every account's
 			// daemon at boot would wake daemons for people who are not here.
@@ -489,7 +488,7 @@ func labelValue(labels, key string) string {
 // Re-applied on every start, not once: dockerd recreates the socket each time
 // it boots, so ownership set at creation is gone after the first restart. The
 // directory is 0750 and the socket 0660, so the account can reach its own
-// daemon and nobody else can reach it at all -- which is what lets the shared
+// daemon and nobody else can reach it at all, which is what lets the shared
 // `docker` group go away.
 func (m *Manager) chown(account, socket string) error {
 	uid, gid, err := lookupIDs(account)
@@ -536,14 +535,14 @@ func (m *Manager) lookup(ctx context.Context, account string) (*Daemon, bool) {
 // warnIfSlowStorage says so when a daemon came up on vfs.
 //
 // vfs has no copy-on-write: it copies the entire image on every container
-// create. Nothing fails, so nothing is reported -- `docker ps` stays instant
+// create. Nothing fails, so nothing is reported. `docker ps` stays instant
 // while `docker create debian` takes a minute and a half, which reads as a
 // hang rather than as a storage driver.
 //
 // dockerd chooses it silently when the graph filesystem refuses overlay2,
 // which is exactly what a Ceph- or NFS-backed data directory does. The
 // workspace's own dockerd is given --storage-driver=fuse-overlayfs for that
-// reason, and a per-account daemon now inherits it -- but a deployment can
+// reason, and a per-account daemon now inherits it, but a deployment can
 // still arrive here, so it should arrive loudly.
 // Runs on its own goroutine with its own context, because it is only a
 // warning and it is reached while this account's start is holding the gate:
@@ -569,7 +568,7 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 // The container is disposable and the graph volume is the data: removing and
 // re-running the container keeps every image and container the account owns,
 // which the suite proves by destroying it on purpose. So applying a new image,
-// a new flag or a new mount is safe -- as long as nothing is running inside.
+// a new flag or a new mount is safe, as long as nothing is running inside.
 //
 // Two things it will NOT do on its own, and both matter:
 //
@@ -579,8 +578,8 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 //     that daemon is idle.
 //   - Nothing when the STORAGE DRIVER is what changed. A graph written by one
 //     driver cannot be read by another, so there is no recreation that keeps
-//     the data -- the choice is to discard it or to stay, and that is the
-//     operator's to make. `remote-dockerd daemons reset` is how they make it.
+//     the data. Discarding it or staying is the operator's choice, and
+//     `remote-dockerd daemons reset` is how they make it.
 func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
 	was, err := m.inspect(ctx, spec.Name, "{{index .Config.Labels \""+SpecLabel+"\"}}")
 	if err != nil {
@@ -588,7 +587,7 @@ func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
 		return
 	}
 	// A daemon from before this label existed is not evidence of drift, only
-	// of age -- docker renders a missing label as "<no value>".
+	// of age. Docker renders a missing label as "<no value>".
 	if was == "<no value>" || was == Fingerprint(spec) {
 		return
 	}
@@ -645,9 +644,9 @@ func (m *Manager) runningInside(ctx context.Context, account string) int {
 // The container always goes; the graph volume only when asked. That split is
 // the whole point: the container is disposable and recreating it keeps
 // everything the account owns, so a reset that only replaces the container
-// costs nothing. Purging is the other thing entirely -- every image and
-// container that account has -- and it is needed for exactly one case, a
-// change of storage driver, because a graph written by one driver cannot be
+// costs nothing. Purging is the other thing entirely: every image and
+// container that account has. It is needed for one case, a change of storage
+// driver, because a graph written by one driver cannot be
 // read by another.
 //
 // An account is not asked to be offline first. Removing a daemon stops what it

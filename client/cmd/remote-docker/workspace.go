@@ -21,7 +21,7 @@ import (
 // reachable as `docker --context <name>`, so making that a second thing to
 // remember was a split in the tool that was never a split in the task.
 //
-// The verbs are docker's -- create, ls, use, rm, inspect -- because a
+// The verbs are docker's (create, ls, use, rm, inspect) because a
 // workspace IS the thing a docker context points at, and borrowing the
 // vocabulary costs nothing and saves explaining. The noun stays ours: the
 // config file's key is `workspaces`, the wire protocol is `workspace-info`,
@@ -99,7 +99,7 @@ func newWorkspaceAddCommand() *cobra.Command {
 			}
 
 			// The key is per machine, not per workspace, so it is the same one
-			// every workspace has to accept -- and a freshly added workspace
+			// every workspace has to accept, and a freshly added workspace
 			// is exactly when someone has not yet handed it over.
 			_, _ = fmt.Fprintf(out,
 				"\nIf this machine is not enrolled there yet, hand this to whoever runs it:\n\n    %s\n",
@@ -240,7 +240,7 @@ func newWorkspaceListCommand() *cobra.Command {
 // than failing.
 //
 // Not having a docker CLI is an ordinary situation here -- the binary carries
-// its own, and the whole premise is a machine where nothing is installed -- so
+// its own, and the whole premise is a machine where nothing is installed, so
 // it must not turn adding a workspace into an error.
 func reportContext(out interface{ Write([]byte) (int, error) }, cfg config.Config) {
 	docker, err := exec.LookPath("docker")
@@ -267,7 +267,7 @@ func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Co
 		// Said out loud rather than passed over in silence. A context that is
 		// not ours is the expected case for a name the user created
 		// themselves, but it is also what a marker that failed to be written
-		// looks like -- and the difference matters, because in the second case
+		// looks like, and the difference matters, because in the second case
 		// a context we made is left behind with nothing reporting it.
 		_, _ = fmt.Fprintf(out, "docker context %q was left in place: "+
 			"it is not marked as one remote-docker created\n", name)

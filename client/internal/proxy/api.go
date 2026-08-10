@@ -74,7 +74,7 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 		"Driver":     "local",
 		"DriverOpts": driverOpts,
 		// The labels mark the volume as ours, so garbage collection can find
-		// it and -- more importantly -- can tell it apart from a volume the
+		// it and (more importantly) can tell it apart from a volume the
 		// user created, which is never ours to remove.
 		"Labels": labels,
 	}

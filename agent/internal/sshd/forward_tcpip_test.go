@@ -54,7 +54,7 @@ func TestForwardsUseTheAskingAccountsNamespace(t *testing.T) {
 	s := &Server{cfg: Config{Daemons: targets}}
 
 	// The bind itself cannot succeed here -- entering a named namespace is
-	// Linux-only and those pids do not exist -- and it does not need to. What
+	// Linux-only and those pids do not exist, and it does not need to. What
 	// is under test is WHICH namespace was asked for.
 	_, _ = s.listenFor(context.Background(), sessionAccount{name: "alice"}, "127.0.0.1:0")
 	_, _ = s.dialFor(context.Background(), sessionAccount{name: "bob"}, "127.0.0.1:1")

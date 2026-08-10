@@ -171,7 +171,7 @@ func TestOffModeWatchesNothing(t *testing.T) {
 }
 
 // Losing the connection must not disturb the watches -- re-walking a large
-// tree on every idle reconnect would cost more than the connection did -- but
+// tree on every idle reconnect would cost more than the connection did, but
 // what happened meanwhile must be admitted rather than quietly forgotten.
 func TestReconnectAnnouncesWhatWasMissed(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")

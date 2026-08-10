@@ -61,7 +61,7 @@ type Docker interface {
 // Loopback, and not configurable. A published port becoming reachable from the
 // network because a container started on somebody else's machine would be a
 // surprise, and a nasty one. This was a field once; nothing ever set it, and
-// two log lines hardcoded the value anyway -- so a knob that appeared to work
+// two log lines hardcoded the value anyway, so a knob that appeared to work
 // would have made them lie.
 const bindAddr = "127.0.0.1"
 
@@ -90,7 +90,7 @@ type containerForwards struct {
 //
 // This is the whole of the logic, and it is deliberately a full reconciliation
 // rather than an incremental apply of each event. The event stream can drop --
-// a reconnect, a daemon restart, a tunnel blip -- and an incremental design
+// a reconnect, a daemon restart, a tunnel blip, and an incremental design
 // leaks forwards for containers that stopped during the gap while never
 // forwarding those that started. Recomputing from the current state cannot
 // drift.

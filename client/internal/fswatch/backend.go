@@ -35,7 +35,7 @@ func (b *fsnotifyBackend) Add(path string) error { return b.w.Add(path) }
 
 // Remove tolerates a watch that is already gone. The kernel drops a watch when
 // its directory is deleted and tells us so with an event, so by the time we
-// act on that event the descriptor may already have been reclaimed -- which is
+// act on that event the descriptor may already have been reclaimed, which is
 // the ordinary case, not an error.
 func (b *fsnotifyBackend) Remove(path string) error {
 	err := b.w.Remove(path)

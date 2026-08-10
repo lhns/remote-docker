@@ -112,7 +112,7 @@ func TestLookup(t *testing.T) {
 		{"dot segment", "/cwd/./src", "/src"},
 		{"missing leading slash", "cwd/src", "/src"},
 		// Cleaning resolves this to "/cwd", which is a legitimate spelling of
-		// a registered share -- not an escape. The boundary that matters is
+		// a registered share, not an escape. The boundary that matters is
 		// that nothing *unregistered* becomes reachable, which is asserted in
 		// TestLookupRefusesUnregisteredPaths.
 		{"parent of root", "/../cwd", "/"},

@@ -11,7 +11,7 @@ import (
 
 // These tests drive the server over a real NFSv3 conversation, using a real
 // NFS client, on a real socket. They prove the wire protocol -- mount path
-// resolution, file handles, attributes, reads and writes -- without needing a
+// resolution, file handles, attributes, reads and writes, without needing a
 // kernel mount, a container, or a Docker daemon, none of which exist on the
 // machine this is developed on.
 //

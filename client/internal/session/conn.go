@@ -84,7 +84,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// ports exists to make this session's containers reachable, and collecting
 	// volumes is housekeeping for a long-running `up`.
 	//
-	// A Query session -- `status`, `gc` -- only asks the workspace a
+	// A Query session (`status`, `gc`) only asks the workspace a
 	// question and then closes. Starting them there meant a status command
 	// began two background round trips and immediately tore the connection out
 	// from under them, so it printed its table followed by two errors about
@@ -137,7 +137,7 @@ func (s *Session) portsLogger() *slog.Logger {
 // been cancelled.
 //
 // Everything here talks over one SSH connection, so tearing that connection
-// down makes every goroutine still using it fail at once -- with EOF, or
+// down makes every goroutine still using it fail at once, with EOF, or
 // "unexpected packet in response to channel open", or a half-read stream.
 // Those are descriptions of shutdown, not of anything wrong, and printing them
 // after the user pressed Ctrl-C or after a one-shot command finished is how a

@@ -24,7 +24,7 @@ func poke(primitive, path string) (string, error) {
 		// never correct here.
 		//
 		// This is also the only primitive that is silent over NFSv3, which
-		// is stateless and has no OPEN operation at all -- so it cannot echo
+		// is stateless and has no OPEN operation at all, so it cannot echo
 		// back to the client as a filesystem change.
 		fd, err := unix.Open(path, unix.O_WRONLY, 0)
 		if err != nil {

@@ -36,8 +36,8 @@ var ErrUnsupported = errors.New("daemons: per-account daemons are Linux-only")
 //
 // A LAST RESORT, not a good default, and the difference matters: stock
 // docker:dind does not carry fuse-overlayfs. A workspace whose data is on Ceph
-// or NFS runs its own dockerd with --storage-driver=fuse-overlayfs -- which is
-// why the image built here installs it -- and a per-account daemon inheriting
+// or NFS runs its own dockerd with --storage-driver=fuse-overlayfs, which is
+// why the image built here installs it, and a per-account daemon inheriting
 // that driver on this image dies at startup with
 //
 //	exec: "fuse-overlayfs": executable file not found in $PATH
@@ -61,7 +61,7 @@ const DefaultImage = "docker:28-dind"
 //	failed to start daemon, ensure docker is not running or delete
 //	/var/run/docker.pid: process with PID 1 is still running
 //
-// in a loop -- so a daemon looks fine until the workspace is restarted, which
+// in a loop, so a daemon looks fine until the workspace is restarted, which
 // is exactly when nobody is watching. The script is present in both candidate
 // images because the workspace's own is built FROM docker:dind.
 const Entrypoint = "dockerd-entrypoint.sh"
@@ -96,14 +96,14 @@ const (
 	// It exists because a daemon that already exists is STARTED, never re-run,
 	// so its command line is fixed for life. Without a record of what it was
 	// created from, changing the workspace's configuration silently applies to
-	// nobody who already has a daemon -- which, on any workspace that has been
+	// nobody who already has a daemon, which, on any workspace that has been
 	// used, is everybody.
 	SpecLabel = "remote-docker.spec"
 
 	// StorageLabel records the graph driver a daemon was CREATED with.
 	//
 	// A daemon that already exists is started, never re-run -- that is what
-	// keeps an account's containers and images across a redeploy -- so its
+	// keeps an account's containers and images across a redeploy, so its
 	// command line is fixed for life. Without this label there is no way to
 	// notice that the workspace's configuration has since changed and the
 	// running daemon is not what the current settings would produce.
@@ -172,7 +172,7 @@ func ContainerName(account string) string {
 // VolumeName is where one account's /var/lib/docker lives.
 //
 // A named volume on the WORKSPACE's daemon, so it lands on a real filesystem
-// rather than on an overlay -- overlay2 on overlay2 never arises -- and so it
+// rather than on an overlay (overlay2 on overlay2 never arises) and so it
 // survives the daemon being restarted, the agent being restarted and the
 // workspace being redeployed. Never collected automatically, for the same
 // reason accounts are revoked rather than deleted: the cost of being wrong is

@@ -11,7 +11,7 @@ import (
 // the given period AND nothing depends on it.
 //
 // Both conditions, always. Ending the process takes the NFS export with it,
-// and a container holding one of our volumes loses its filesystem -- so this
+// and a container holding one of our volumes loses its filesystem, so this
 // asks the same question a connection release asks, for the same reason, and
 // treats "cannot tell" as a reason to stay.
 //
@@ -26,7 +26,7 @@ func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-
 	go func() {
 		// Checked several times per period rather than once at the end, so
 		// the answer is at most a fraction of the period stale. Bounded below
-		// because a very short period -- which is what a test sets -- must not
+		// because a very short period (which is what a test sets) must not
 		// become a busy loop.
 		interval := max(idle/4, time.Second)
 		ticker := time.NewTicker(interval)

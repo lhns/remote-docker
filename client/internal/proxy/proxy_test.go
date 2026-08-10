@@ -191,7 +191,7 @@ func TestProxyDoesNotRewriteOtherRequests(t *testing.T) {
 }
 
 // An HTTP upgrade means everything after the response head is raw bytes in
-// both directions. This is docker exec, attach, and buildx's /session -- so
+// both directions. This is docker exec, attach, and buildx's /session, so
 // docker build depends on it (ADR 0009).
 func TestProxyPassesThroughHijackedConnections(t *testing.T) {
 	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, reader *bufio.Reader) {
@@ -251,7 +251,7 @@ func TestProxyPassesThroughHijackedConnections(t *testing.T) {
 	}
 }
 
-// Streaming responses -- /events, /build, logs with follow -- must reach the
+// Streaming responses (/events, /build, logs with follow) must reach the
 // client as they are produced, not when the response completes. A proxy that
 // buffers looks correct for docker ps and then hangs docker events forever.
 func TestProxyStreamsResponsesIncrementally(t *testing.T) {
@@ -637,7 +637,7 @@ func TestProxyDoesNotHijackLengthDelimitedDockerStreams(t *testing.T) {
 // so the handler that served the last one sits blocked reading the next. When
 // the client is a separate process that is about to exit, the socket closes and
 // the handler unblocks. But the EMBEDDED Docker CLI runs in this very process,
-// so nothing closes it -- and `remote-docker docker run` sat for minutes after
+// so nothing closes it, and `remote-docker docker run` sat for minutes after
 // the container had exited, waiting for a peer that was itself waiting to be
 // told to go away.
 func TestServeReturnsPromptlyWithAnIdleKeepAliveConnection(t *testing.T) {

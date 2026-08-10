@@ -3,7 +3,7 @@
 // It replaces the key-watcher shell script. The model is unchanged, because it
 // is a good one and deployments depend on it: a file named alice.pub becomes
 // the unix account "alice", uids are allocated once and persisted so an
-// account keeps the same uid -- and therefore the same reverse-tunnel port and
+// account keeps the same uid, and therefore the same reverse-tunnel port and
 // the same file ownership -- across container recreations.
 //
 // What changes is that authentication happens in this process rather than
@@ -136,8 +136,8 @@ func (s *Store) Sync() error {
 		return err
 	}
 
-	// Sorted, so a collision is decided by name rather than by directory order
-	// -- which would make the winner depend on the filesystem.
+	// Sorted, so a collision is decided by name rather than by directory order,
+	// which would make the winner depend on the filesystem.
 	//
 	// Files whose name is ALREADY the account name are considered first, so
 	// alice.pub beats Alice.pub for "alice". Sorted order alone would hand it
@@ -208,7 +208,7 @@ func (s *Store) reconcile(found map[string]*Account, uids map[string]int) error 
 	// yet, and ranging a map would assign them in Go's randomised order. Sync
 	// goes to some trouble to order the key files deterministically; handing
 	// the result over as a map threw that away, and the uid a new account got
-	// -- and therefore its reverse-tunnel port -- depended on the run.
+	// (and therefore its reverse-tunnel port) depended on the run.
 	for _, name := range slices.Sorted(maps.Keys(found)) {
 		account := found[name]
 		uid, ok := uids[name]
@@ -352,7 +352,7 @@ func parseKeys(path string) ([]ssh.PublicKey, error) {
 }
 
 // log is the store's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer -- and one
+// rather than doing nothing, so the zero value needs an answer, and one
 // accessor is a better place for it than a check at every call.
 func (s *Store) log() *slog.Logger {
 	if s.Log == nil {

@@ -4,7 +4,7 @@
 // NFS carries no change notification, so a container watching a bind-mounted
 // directory sees nothing at all when the user edits a file on their own
 // machine (ADR 0014). Linux offers no way to inject a synthetic event --
-// fanotify(7) says so outright -- so the only mechanism, here or anywhere, is
+// fanotify(7) says so outright, so the only mechanism, here or anywhere, is
 // to perform a real VFS operation and let the kernel emit the event as a side
 // effect. ADR 0016 records which operations produce which events, measured.
 package notify
@@ -31,7 +31,7 @@ import (
 //
 // That directory is the whole trick. dockerd's local driver mounts each NFS
 // volume once and bind-mounts it into every container using it, and a bind
-// mount shares the superblock -- so the inode there is the same inode a
+// mount shares the superblock, so the inode there is the same inode a
 // watcher inside the container put its mark on. Measured, not assumed: see
 // ADR 0016. It means no container enumeration, no PID lookup and no entering
 // anyone's mount namespace.
@@ -73,7 +73,7 @@ type cachedMountpoint struct {
 //
 // The hello line goes first and goes unconditionally. An agent too old to know
 // this command falls through to the generic exec path and runs
-// `sh -c "workspace-notify"`, which exits 127 -- so the client has to be able
+// `sh -c "workspace-notify"`, which exits 127, so the client has to be able
 // to tell a working channel from a missing one, and a greeting is the only
 // thing that distinguishes them.
 func (r *Replayer) Serve(ctx context.Context, rw io.ReadWriter) error {

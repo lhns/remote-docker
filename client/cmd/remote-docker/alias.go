@@ -3,7 +3,7 @@ package main
 // Answering to a second name.
 //
 // A machine that cannot install Docker cannot install the docker CLI either --
-// on Windows every route to one leads to Docker Desktop -- and this binary has
+// on Windows every route to one leads to Docker Desktop, and this binary has
 // carried the complete CLI since ADR 0009. It was reachable only as
 // `remote-docker docker ps`, which is the right thing under the wrong name:
 // muscle memory, scripts, IDE integrations and docker's own `context` command
@@ -27,7 +27,7 @@ const dockerName = "docker"
 // docker.
 //
 // os.Args[0], never os.Executable(). The second RESOLVES SYMLINKS -- on Linux
-// it reads /proc/self/exe -- so it reports "remote-docker" for exactly the
+// it reads /proc/self/exe, so it reports "remote-docker" for exactly the
 // installation this feature creates, and the feature would be silently dead on
 // the platform where the symlink is the good answer. argv[0] is the name the
 // user typed, which is the question being asked.

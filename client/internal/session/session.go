@@ -285,7 +285,7 @@ func (s *Session) DialDocker(ctx context.Context) (io.ReadWriteCloser, error) {
 	// The lease is held for the life of the STREAM, not just the dial.
 	//
 	// It used to be released the instant the stream opened, so a hijacked
-	// connection -- `docker attach`, `exec -it`, `logs -f` -- held nothing at
+	// connection (`docker attach`, `exec -it`, `logs -f`) held nothing at
 	// all. Those survived an idle release only indirectly, because their
 	// container was running and hasLiveDependents noticed it. A `logs -f` on a
 	// STOPPED container had nothing pinning it and would simply be cut.
@@ -372,7 +372,7 @@ func attrsFor(info workspace.Info) nfsserve.Attrs {
 }
 
 // log is the session's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer -- and one
+// rather than doing nothing, so the zero value needs an answer, and one
 // accessor is a better place for it than a check at every call.
 func (s *Session) log() *slog.Logger {
 	if s.opts.Log == nil {

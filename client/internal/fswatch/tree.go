@@ -138,7 +138,7 @@ func (t *tree) sync(shares []Share) {
 // it was created before we could watch for it, and would otherwise never be
 // reported at all. The synthetic events can duplicate real ones that arrive
 // the moment after the watch lands, which is harmless -- a replay is a
-// notification, not a mutation -- and duplication is much better than the
+// notification, not a mutation, and duplication is much better than the
 // silent loss this whole package exists to remove.
 func (t *tree) addTree(r *shareRoot, dir string, emit func(path string, isDir bool)) {
 	queue := []string{dir}
@@ -168,7 +168,7 @@ func (t *tree) addTree(r *shareRoot, dir string, emit func(path string, isDir bo
 			}
 			// Symlinks are never followed. inotify_add_watch on a symlink
 			// watches its target, which would let a watch escape the share
-			// that osfs.WithBoundOS() exists to bound -- and admits cycles.
+			// that osfs.WithBoundOS() exists to bound, and admits cycles.
 			if e.IsDir() && e.Type()&fs.ModeSymlink == 0 && !t.isExcluded(e.Name()) {
 				queue = append(queue, child)
 			}

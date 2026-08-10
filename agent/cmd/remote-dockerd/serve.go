@@ -222,7 +222,7 @@ func serve(addr string) error {
 
 		// Adopt before serving. A restarted agent that did not would find
 		// every name taken -- `docker run --name` conflicts rather than
-		// replacing -- and every account locked out of the daemon holding its
+		// replacing, and every account locked out of the daemon holding its
 		// own running containers.
 		if n, err := manager.Adopt(ctx); err != nil {
 			log.Warn("could not adopt existing daemons", "err", err)
@@ -270,7 +270,7 @@ func ensureGroups(perUserDind bool) error {
 	if perUserDind {
 		// The `docker` group is not created, because nothing should be in it.
 		// It may still EXIST on an upgraded workspace -- the image or an
-		// earlier run made it -- which is why accounts are revoked from it
+		// earlier run made it, which is why accounts are revoked from it
 		// rather than the group being assumed absent.
 		groups = []string{"workspace"}
 	}
@@ -285,7 +285,7 @@ func ensureGroups(perUserDind bool) error {
 // loadHostKeys reads the workspace's host keys, generating them on first run.
 //
 // Kept on the state volume so clients do not get a changed-host-key warning
-// every time the container is recreated -- which they would learn to click
+// every time the container is recreated, which they would learn to click
 // through, which is worse than not warning at all.
 func loadHostKeys(dir string) ([]ssh.Signer, error) {
 	var signers []ssh.Signer
