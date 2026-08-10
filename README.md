@@ -4,8 +4,8 @@
 [![integration](https://github.com/lhns/remote-docker/actions/workflows/integration.yml/badge.svg)](https://github.com/lhns/remote-docker/actions/workflows/integration.yml)
 
 Use Docker from a machine that cannot have Docker installed, with your own
-directories **really mounted** into the containers — not copied, not synced —
-and published ports reachable locally.
+directories **really mounted** into the containers, not copied or synced, and
+published ports reachable locally.
 
 One binary. Nothing else to install: the SSH client, the NFS server and the
 Docker CLI are all inside it.
@@ -15,208 +15,64 @@ docker run --rm -v D:\data:/data alpine ls /data     # a directory on YOUR machi
 docker compose up -d                                  # ports land on YOUR localhost
 ```
 
-## Read this first
+## Quick start
 
-**File watchers need `REMOTE_DOCKER_WATCH` turned on.** By default, a container
-watching a directory on the share receives *no* inotify events when you change
-a file — measured, not assumed. NFS carries no change-notification protocol,
-so the container's kernel is simply never told. **Hot reload silently does
-nothing**: vite, webpack, nodemon, `air` and `dotnet watch` sit there while
-the file is plainly present.
-
-Turning it on makes remote-docker watch this machine and replay each change
-inside the workspace as a real syscall, so the kernel there emits a genuine
-inotify event:
+You need a workspace to connect to. If nobody has set one up yet, see
+[Running a workspace](#running-a-workspace).
 
 ```bash
-export REMOTE_DOCKER_WATCH=partial    # writes and creations
-export REMOTE_DOCKER_WATCH=coarse     # also deletions, approximately
-```
+# 1. say where the workspace is
+export REMOTE_DOCKER_HOST=workspace.example
 
-| mode | what happens |
-|---|---|
-| `off` *(default)* | nothing is watched; hot reload does not work |
-| `partial` | writes and creations fire real events. Deletions are not reported at all — nothing is ever misrepresented |
-| `coarse` | as `partial`, plus a directory-level event for deletions and renames. A watcher that rescans notices; one that trusts the event *kind* is told something untrue |
-
-**Deletions are the honest gap.** `unlink` of a name that is already gone fails
-before the kernel generates anything, so a deletion cannot be replayed
-faithfully. `coarse` approximates it; `partial` says nothing rather than
-something wrong. [ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md)
-stays open on exactly this, and
-[ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md) records
-how the rest works.
-
-**Off by default, because watching is not free.** inotify is not recursive:
-`inotify_add_watch` covers exactly one directory and reports only its direct
-entries, so a tree costs one watch per directory in it. macOS is worse — kqueue
-needs an open file descriptor per *file*, not per directory. Only the
-directories you actually share are watched, never your whole disk, and there is
-a cap:
-
-| platform | default cap | what binds |
-|---|---|---|
-| Linux | 4096 directories | `fs.inotify.max_user_watches` (8192 by kernel default; many distros raise it) |
-| Windows | 1024 directories | one `ReadDirectoryChangesW` buffer per watch |
-| macOS | 512 directories | `RLIMIT_NOFILE`, because kqueue costs an fd per file |
-
-`.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle` and `.terraform` are
-skipped. Build outputs like `dist/` and `target/` are **not**, because serving
-`dist/` and reloading when it changes is exactly the workflow this is for — so
-a Rust or Java tree will spend its budget inside `target/` and say so. Tune
-with `REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE` (comma- or
-`PATH`-separated). When the budget runs out the directory it stopped at is
-named, never silently dropped.
-
-Watching starts delivering once the session has actually connected, which
-happens on the first Docker command rather than when the session starts. Edits made
-before that are counted and reported, not silently lost — and nothing is
-watching inside a container that does not exist yet.
-
-The per-tool polling flags — `CHOKIDAR_USEPOLLING=1`, `WATCHPACK_POLLING=true`,
-`--poll` — still work and are never set for you: silently changing your build
-tool's behaviour is worse than telling you about the limitation.
-
-## Getting started
-
-```bash
-# 1. tell it where the workspace is
-export REMOTE_DOCKER_HOST=workspace.example        # or --host, or ~/.remote-docker.json
-
-# 2. get your key enrolled (out of band -- hand it to whoever runs the workspace)
+# 2. print your public key and hand it to whoever runs the workspace
 remote-docker enroll
 
-# 3. start a session in the background
+# 3. once your key is enrolled, start a session
 remote-docker start
 ```
 
-`start` prints the endpoint and returns -- no terminal to keep open. Point
-Docker at it:
+`start` prints the endpoint and returns. No terminal has to stay open.
+
+**If you already have a docker CLI**, point it at the workspace:
 
 ```bash
-docker --context <workspace> ps        # the context was created with the workspace
-# or
-export DOCKER_HOST=unix:///…/docker.sock
+docker --context <workspace> ps          # the context is created with the workspace
 ```
 
-Then use Docker normally. If you have no Docker CLI at all, the binary carries
-one: `remote-docker docker ps`, `remote-docker docker build .`
-
-## No Docker CLI? This binary is one
-
-There is no supported way to install just the docker CLI on Windows — every
-page leads to Docker Desktop. You do not need it. This binary already contains
-the complete Docker CLI, and it answers to the name it is invoked by:
+**If you do not**, this binary is one:
 
 ```bash
-remote-docker shim install
+remote-docker shim install               # puts `docker` on your PATH
+docker run --rm -v .:/w alpine ls /w
 ```
 
-That puts a `docker` on your PATH which *is* this binary, so the ordinary
-commands work with no prefix:
+There is no supported way to install just the docker CLI on Windows; every
+page leads to Docker Desktop. You do not need it. `shim install` links this
+binary onto your PATH under the name `docker`, and on Windows adds one
+directory to your user PATH, at the end, so a real Docker installed later
+still wins. Open a new terminal afterwards. `remote-docker shim uninstall`
+reverses both. Renaming the binary to `docker.exe` yourself does the same
+thing.
 
-```bash
-docker run --rm -v D:\data:/data alpine ls /data
-docker ps
-docker build .
-```
-
-Nothing is downloaded and, where the system allows it, nothing is duplicated:
-the shim is a link to this binary. On Windows it also adds one directory to
-your **user** PATH — at the end, so a real Docker installed later still wins —
-and tells you exactly what it changed. Already-open terminals keep the PATH
-they started with, so open a new one. `remote-docker shim uninstall` reverses
-both. On Linux and macOS nothing edits your shell configuration; it prints the
-one line to add if `~/.local/bin` is not already on PATH.
-
-If a `docker` is already there and this did not put it there, it is left alone
-and says so — that is almost certainly a real Docker, and it should win.
-
-Renaming the binary to `docker.exe` yourself does the same thing. The command
-just does it tidily and reversibly.
-
-| | |
-|---|---|
-| `remote-docker shim status` | where it is, and whether it still points at this build |
-| `remote-docker shim install --no-path` | install the file, leave PATH alone |
-| `remote-docker shim uninstall` | remove it, and the PATH entry if we added it |
-
-**`docker compose` is not included.** Compose is not embedded in this binary
-(see [ADR 0009](docs/adr/0009-embedding-the-docker-cli.md)), so `docker compose
-up` will not work through the shim. Everything else does. Compose works
-normally if you point a real docker CLI at the workspace's docker context.
-
-A link or a copy does not follow upgrades: after you replace the binary, run
-`remote-docker shim install` again. `remote-docker status` says when it has
-drifted.
-
-The endpoint is a **named pipe** on Windows (`\\.\pipe\docker_remote`) and a
-unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
-that can reach it can start containers that read and write your filesystem.
-Nothing here needs administrator rights.
+`docker compose` is **not** included; see [Caveats](#caveats).
 
 ## What works
 
-- **Bind mounts from anywhere on your machine** — another drive, above the
+- **Bind mounts from anywhere on your machine.** Another drive, above the
   working directory, unrelated to it. Not only a synced project folder.
 - **Published ports reach your localhost.** `-p 8080:80` means
-  `localhost:8080` here, opened automatically as containers start. No manual
-  tunnels.
+  `localhost:8080` here, opened automatically as containers start.
 - **The real tooling, unmodified.** `docker`, `docker compose`,
-  Testcontainers, IDE plugins — anything that speaks the Docker API. The
+  Testcontainers, IDE plugins, anything that speaks the Docker API. The
   translation happens at the API, not in a command wrapper.
 - **Named volumes stay named volumes.** Only host paths are rewritten.
-- **File watchers can see your edits**, once `REMOTE_DOCKER_WATCH` is on —
-  writes and creations arrive as genuine inotify events inside the container,
-  not as a poll. See above for what that costs and what it does not cover.
+- **File watchers can see your edits**, once `REMOTE_DOCKER_WATCH` is on. See
+  [File watching](#file-watching); it is off by default and worth
+  understanding before you rely on it.
 
 Every one of those is asserted end to end on each push, against a real
-Docker-in-Docker daemon and a real kernel NFS mount — see
+Docker-in-Docker daemon and a real kernel NFS mount. See
 [`test/integration.sh`](test/integration.sh).
-
-## Several workspaces
-
-```bash
-remote-docker workspace create dev --host dev.example --user alice --watch partial
-remote-docker workspace create ci  --host ci.example  --user alice
-```
-
-which writes `~/.remote-docker.json` for you, and creates a docker context per
-workspace as it goes — there is no case where you want one and not the other:
-
-```json
-{
-  "workspaces": {
-    "dev": {"host": "dev.example", "user": "alice", "watch": "partial"},
-    "ci":  {"host": "ci.example",  "user": "alice"}
-  },
-  "default": "dev"
-}
-```
-
-Every setting can also live at the top level, where it applies to all of them.
-`watch`, `watchBudget` and `watchExclude` are the file-form spellings of the
-`REMOTE_DOCKER_WATCH*` variables above — worth setting per workspace, since
-the one you edit against wants watching and a CI one does not.
-
-`idleTimeout` and `daemonIdle` are durations written the way you would say them
-(`"90s"`, `"45m"`, `"-1s"` for never). The first is how long an unused
-connection is held before being dropped and silently reopened on the next
-request; the second is how long a background session with nothing to do
-outlives its last use before it exits. Raise the first on a slow link.
-
-Each gets its own endpoint, so sessions run side by side:
-
-```bash
-remote-docker start --workspace dev
-remote-docker start --workspace ci
-
-docker --context dev ps
-docker --context ci ps
-```
-
-`remote-docker workspace ls` shows them and which is the default, and
-`remote-docker workspace inspect <name>` shows one in full.
 
 ## How it works
 
@@ -239,59 +95,134 @@ docker / compose / IDE
 
 Your machine is the **file server**; the workspace is the client. The proxy
 rewrites each bind mount into an NFS-backed Docker volume, which the remote
-daemon mounts for itself when the container starts — so nothing has to
-propagate into a running container, and a bind source anywhere on your disk
-works.
+daemon mounts for itself when the container starts. Nothing has to propagate
+into a running container, and a bind source anywhere on your disk works.
+
+The endpoint is a **named pipe** on Windows (`\\.\pipe\docker_remote`) and a
+unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
+that can reach it can start containers that read and write your filesystem.
+Nothing here needs administrator rights.
 
 The reasoning behind each decision is in [`docs/adr/`](docs/adr/).
 
-## Other things that will bite you
+## Commands
 
-- **Keep build artifacts off the share.** `node_modules`, `.git`, `target/`,
-  package caches. Worth roughly 20×; protocol tuning is worth about 2×.
-- **No databases on the share.** `nolock` plus `fcntl` locking is a corruption
-  risk.
-- **Latency multiplies.** NFSv3 is synchronous per operation, so a large tree
-  over a WAN is painful. Over a LAN it is fine.
-- **A session must be running**, though not in a terminal you are watching.
-  `remote-docker start` puts one in the background; it is the endpoint and the
-  file server, so stopping it takes running containers' mounts with it. Any
-  command that needs one starts it for you, including the built-in Docker CLI.
-- **A background session reclaims itself** after 30 minutes with nothing to do,
-  and never while a container of yours is running or a stream is open. Change
-  it with `REMOTE_DOCKER_DAEMON_IDLE`; a negative value means never.
+| | |
+|---|---|
+| `remote-docker enroll` | print the public key to hand over for enrolment |
+| `remote-docker start` | start a background session and return |
+| `remote-docker start --foreground` | run it in this terminal instead |
+| `remote-docker stop` | stop it |
+| `remote-docker restart` | stop and start, refusing while something depends on it |
+| `remote-docker status` | what the workspace reports about this account |
+| `remote-docker docker …` | the embedded Docker CLI |
+| `remote-docker gc` | remove share volumes nothing is using |
+| `remote-docker version` | |
+| `remote-docker workspace create <name> --host …` | add a workspace and its docker context |
+| `remote-docker workspace rm <name>` | remove both again |
+| `remote-docker workspace ls` | list them |
+| `remote-docker workspace use <name>` | choose the default |
+| `remote-docker workspace inspect [name]` | settings, endpoint, context, whether a session is up |
+| `remote-docker shim install` | put `docker` on PATH (`--no-path` skips the PATH edit) |
+| `remote-docker shim uninstall` | remove it again |
+| `remote-docker shim status` | where it is, and whether it is still this build |
 
-## Prior art
+Any command that needs a session starts one, including the embedded CLI. For a
+shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
-Nothing else appears to do this. The pieces exist separately —
-[docker-injector](https://github.com/rse/docker-injector) mutates
-container-create requests, [sshocker](https://github.com/lima-vm/sshocker)
-serves files from the client to a VM — but not the combination.
+There is no `context` command. A docker context is written when a workspace is
+created and removed when it is
+([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)). Re-run `workspace
+create` to rewrite one that has drifted.
 
-Everyone else answers this problem with **file sync** instead: Mutagen, Okteto,
-Docker's own Synchronized File Shares. Testcontainers Cloud proxies a local
-socket to a remote runtime and states that mounting local files "is not
-implemented". VS Code and Codespaces document it as unsupported.
-[docker/compose#8484](https://github.com/docker/compose/issues/8484) was closed
-by a stale bot; [podman#13358](https://github.com/containers/podman/issues/13358)
-was closed "won't fix, far from trivial".
+## Settings
 
-Sync is not obviously the wrong answer — it makes changes land as ordinary
-local writes, so file watchers work. That is very likely the whole reason it
-won.
+Every setting can be an environment variable, a key in `~/.remote-docker.json`,
+and for some a flag. Precedence, highest first: **flag, environment, file,
+default.**
 
-remote-docker answers it differently, and not originally: Docker Desktop ships
-the same idea as "Event Injection", forwarding host events into its VM so a
-replay thread reproduces them. Linux offers no way to inject a synthetic
-inotify event — `fanotify(7)` says so outright — so performing a real
-operation is the only mechanism available to anyone. The difference here is
-that we own the NFS server as well as the agent, which is what keeps the
-replay from echoing back as a change of its own
-([ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md)).
+| environment | file key | flag | default |
+|---|---|---|---|
+| `REMOTE_DOCKER_HOST` | `host` | `--host` | none; required |
+| `REMOTE_DOCKER_PORT` | `port` | `--port` | `2222` |
+| `REMOTE_DOCKER_USER` | `user` | `--user` | your local username |
+| `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
+| `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
+| `REMOTE_DOCKER_WATCH` | `watch` | `workspace create --watch` | `off` |
+| `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
+| `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |
+| `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
+| `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | `30m` before an unused session exits; negative never |
+| `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
+| `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
+| `REMOTE_DOCKER_SHIM_DIR` | | | `%LOCALAPPDATA%\remote-docker\bin`, `~/.local/bin` |
+
+Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
+
+`REMOTE_DOCKER_TRACE` belongs to the **session**, which is the process that
+forwards the requests, so set it there:
+`REMOTE_DOCKER_TRACE=1 remote-docker start`. On a docker command it does
+nothing, and says so.
+
+### Several workspaces
+
+```bash
+remote-docker workspace create dev --host dev.example --user alice --watch partial
+remote-docker workspace create ci  --host ci.example  --user alice
+```
+
+which writes `~/.remote-docker.json` and creates a docker context for each:
+
+```json
+{
+  "workspaces": {
+    "dev": {"host": "dev.example", "user": "alice", "watch": "partial"},
+    "ci":  {"host": "ci.example",  "user": "alice"}
+  },
+  "default": "dev"
+}
+```
+
+Any setting from the table can sit at the top level, where it applies to all
+of them, or inside one workspace, where it applies to that one. Each workspace
+gets its own endpoint, so sessions run side by side:
+
+```bash
+remote-docker start --workspace dev
+docker --context dev ps
+```
+
+## File watching
+
+A container watching a directory on the share receives **no inotify events**
+when you change a file, because NFS carries no change-notification protocol.
+Hot reload silently does nothing: vite, webpack, nodemon, `air` and
+`dotnet watch` sit there while the file is plainly present.
+
+Turning watching on makes remote-docker watch this machine and replay each
+change inside the workspace as a real syscall, so the kernel there emits a
+genuine inotify event:
+
+```bash
+export REMOTE_DOCKER_WATCH=partial    # writes and creations
+export REMOTE_DOCKER_WATCH=coarse     # also deletions, approximately
+```
+
+| mode | what happens |
+|---|---|
+| `off` *(default)* | nothing is watched; hot reload does not work |
+| `partial` | writes and creations fire real events. Deletions are not reported at all |
+| `coarse` | as `partial`, plus a directory-level event for deletions and renames |
+
+It is off by default because watching costs one inotify watch per directory,
+and on macOS one file descriptor per file. Only the directories you share are
+watched, never your whole disk, and there is a budget. What that costs, why
+deletions are the honest gap, and what to do when the budget runs out are in
+[Caveats](#file-watching-in-detail).
 
 ## Running a workspace
 
-The workspace runs one binary, `remote-dockerd`: it supervises dockerd,
+The workspace runs one binary, `remote-dockerd`. It supervises dockerd,
 provisions an account per enrolled key, and serves SSH itself. There is no
 sshd, no sudo and no shell scripts in the image.
 
@@ -306,11 +237,7 @@ ghcr.io/lhns/remote-docker-workspace:sha-<short> # every commit to main
 ```
 
 `latest` only exists once a `v*` tag has been pushed. Before that, pin a
-`sha-` tag — `deploy/swarm.yml` takes `WORKSPACE_IMAGE` to override its
-default.
-
-Or build it yourself. The context is the repository root, because the agent is
-compiled from source:
+`sha-` tag. Or build it yourself, with the repository root as the context:
 
 ```bash
 docker build -f image/Dockerfile -t remote-docker-workspace:latest .
@@ -327,7 +254,7 @@ docker compose up -d --build
 
 `state/` holds the host keys and the uid map and **must persist**. Losing it
 gives every client a changed-host-key warning and reassigns every account's
-uid — which changes its tunnel port and orphans the ownership of everything it
+uid, which changes its tunnel port and orphans the ownership of everything it
 has written.
 
 The container is privileged, because dind runs its own daemon, sets up its own
@@ -336,102 +263,93 @@ bridge and iptables rules, and mounts NFS in its own namespace.
 ### Docker Swarm
 
 Swarm cannot run privileged tasks, so the service starts **unprivileged** and
-relaunches itself through the node's Docker socket — `remote-dockerd elevate`,
-no launcher image involved ([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)).
+relaunches itself through the node's Docker socket
+([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)). No
+launcher image is involved.
 
-Two things must be true before `deploy/swarm.yml` will work, and neither
-fails in an obvious way:
+Two things must be true first, and neither fails in an obvious way:
 
 ```bash
-# 1. Label the node that will run it. Without this the service is accepted
-#    and then never schedules, with no error anywhere.
+# 1. Label the node. Without this the service is accepted and never schedules.
 docker node update --label-add workspace=true <node>
 
 # 2. Create the state directories ON THAT NODE. They are bind mounts, so a
-#    missing path is created as an empty root-owned directory rather than
-#    reported.
-export WORKSPACE_DATA=/var/lib/remote-docker        # the default; override freely
+#    missing path becomes an empty root-owned directory instead of an error.
+export WORKSPACE_DATA=/var/lib/remote-docker
 ssh <node> "mkdir -p $WORKSPACE_DATA/{state,authorized_keys.d}"
 
 docker stack deploy -c deploy/swarm.yml workspace
 ```
 
-### The storage driver, which is worth getting right once
+Port 2222 is published with `mode: host`, so it lands on the node actually
+running the task. That node's 2222 is what clients connect to.
 
-If you point `WORKSPACE_DATA` at Ceph- or NFS-backed storage — worth doing if
-the workspace should survive moving nodes — you must also set
-`WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs`. overlay2 refuses such
-a filesystem outright, and vfs, the only other fallback, copies every layer.
+The host Docker socket mount in `swarm.yml` is **the whole trust boundary**.
+Whoever can deploy this stack can already start privileged containers on the
+node. The socket is deliberately not passed to the privileged child.
 
-**Per-account daemons inherit that setting**, so this is the one place to set
-it. `WORKSPACE_DIND_STORAGE_DRIVER` overrides them separately if you need it.
+### Workspace settings
 
-**Why fuse-overlayfs is not simply the default.** Where overlay2 works it is
-the kernel doing the work, and it is markedly faster than fuse-overlayfs, which
-is a userspace FUSE filesystem — every layer read crosses into a userspace
-process. Defaulting to it would slow down every deployment on ordinary local
-disk to spare the ones on shared storage. Inheriting the workspace's own choice
-gets both right, because the workspace already had to decide.
+| variable | default | |
+|---|---|---|
+| `WORKSPACE_STATE_DIR` | `/etc/workspace` | host keys, uid map, workspace id |
+| `WORKSPACE_KEYS_DIR` | `<state>/authorized_keys.d` | one `<account>.pub` per user |
+| `WORKSPACE_HOSTKEY_DIR` | `<state>/host_keys` | |
+| `WORKSPACE_KEY_POLL_INTERVAL` | `60` | seconds; the keys directory is polled as well as watched |
+| `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
+| `WORKSPACE_ENABLE_DIND` | `true` | |
+| `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
+| `WORKSPACE_DIND_IMAGE` | the workspace's own image | image a per-account daemon runs |
+| `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
+| `WORKSPACE_SHELL` | `/bin/bash` | shell an SSH session lands in |
+| `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
+| `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; uid decides the rest |
+| `WORKSPACE_IMAGE` | | the service's own image, for Swarm elevation |
+| `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
+| `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
 
-**What fuse-overlayfs needs**, if you do set it:
+Operator commands, on the workspace:
 
 | | |
 |---|---|
-| kernel | **4.18 or newer**, with `CONFIG_FUSE_FS` (a module is fine: `modprobe fuse`). Present on any ordinary distribution kernel; the usual absentee is a minimal or hardened container-host image. |
-| device | `/dev/fuse` in the container. The workspace runs privileged, so it has it. |
-| binary | `fuse-overlayfs` **in the image the daemon runs**. Stock `docker:dind` does NOT ship it; the workspace image here installs it, which is why per-account daemons default to the workspace's own image. |
-| filesystem | Works on NFS and CephFS, which is the entire reason to reach for it. |
+| `remote-dockerd serve` | the agent; the image's default |
+| `remote-dockerd elevate` | the Swarm entry point |
+| `remote-dockerd healthcheck` | is this workspace serving? Both deployments use it |
+| `remote-dockerd daemons ls` | which accounts have a daemon |
+| `remote-dockerd daemons reset <account> [--purge]` | rebuild one; `--purge` discards its images |
 
-#### Changing settings later
+### The storage driver, worth getting right once
 
-A per-account daemon is created once and *started* thereafter -- that is what
-keeps an account's containers and images across a redeploy -- so its image,
-flags and mounts are fixed at creation.
+If `WORKSPACE_DATA` is on Ceph- or NFS-backed storage, worth doing if the
+workspace should survive moving nodes, you must set
+`WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs`. overlay2 refuses
+such a filesystem outright, and vfs, the only other fallback, copies every
+layer.
 
-**The agent applies a changed configuration by itself**, and does not need to
-be told which settings exist: each daemon is stamped with a digest of what it
-was built from, and one that no longer matches is recreated. The container is
-disposable; the graph volume beside it is the data and is kept, so nothing is
-lost. It waits until that account has nothing running, because recreating a
-daemon stops its containers -- a setting can wait, somebody's work cannot.
+Per-account daemons inherit that setting, so this is the one place to set it.
 
-**The one exception is the storage driver**, because a graph written by one
-driver cannot be read by another. There is no recreation that keeps the data,
-so the agent will not choose: it says so and leaves it. Deciding is a command:
+**If it is set and anything it needs is missing, dockerd falls back to vfs
+rather than failing.** vfs has no copy-on-write, so it copies the whole image
+on every `docker create`. Nothing errors, `docker ps` stays instant, and
+`docker run` takes minutes. The agent logs it and `remote-docker status` shows
+it, because the cost of this one is entirely in how quiet it is.
 
-```bash
-docker exec <workspace> remote-dockerd daemons ls
-docker exec <workspace> remote-dockerd daemons reset alice           # rebuild the daemon
-docker exec <workspace> remote-dockerd daemons reset --all --purge   # and discard the images
-```
+fuse-overlayfs needs a **4.18 kernel or newer** with `CONFIG_FUSE_FS`
+(`modprobe fuse` is enough), `/dev/fuse` in the container, and the
+`fuse-overlayfs` binary **in the image the daemon runs**. Stock `docker:dind`
+does not ship it; this workspace image does, which is why per-account daemons
+default to the workspace's own image.
 
-`--purge` is the account's entire Docker state, and it is needed for exactly
-that one case. `remote-docker status` shows the driver an account's daemon is
-actually using.
-
-If it is set and any of that is missing, dockerd falls back to **vfs** rather
-than failing — and vfs has no copy-on-write, so it copies the whole image on
-every `docker create`. Nothing errors, `docker ps` stays instant, and
-`docker run` takes minutes. The agent now says so explicitly in its log when a
-per-account daemon comes up on vfs, because the cost of this one is entirely in
-how quiet it is.
-
-Port 2222 is published with `mode: host`, so it lands on the node actually
-running the task rather than being round-robined by the routing mesh to nodes
-where the privileged container does not exist. That node's 2222 is what
-clients connect to.
-
-**The host Docker socket mount in `swarm.yml` is the whole trust boundary.**
-Whoever can deploy this stack can already start privileged containers on the
-node; elevation does not widen that, it just avoids a second image doing it.
-The socket is deliberately *not* passed to the privileged child.
+It is not the default because where overlay2 works it is the kernel doing the
+work and is markedly faster. fuse-overlayfs is a userspace filesystem, so
+every layer read crosses into a userspace process.
 
 ### Enrolment
 
 Out of band: someone with access drops a `<name>.pub` into the keys directory,
 and the filename becomes that user's unix account. Removing a key revokes
-access but keeps the account and its home directory — a key file is removed
-far more often than a person leaves for good.
+access but keeps the account and its home directory, because a key file is
+removed far more often than a person leaves for good.
 
 The keys directory is re-read on change and polled every 60 seconds, because
 inotify never fires for a change made on another host when that directory is
@@ -439,46 +357,54 @@ on shared storage.
 
 ### A daemon per account
 
-Each enrolled account gets its own Docker daemon, behind the same single SSH
-port. This is the default
-([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)). Accounts stop seeing each
-other's containers, images and volumes, two accounts can publish the same port
-at once, and a shell lands on its own daemon.
+Each enrolled account gets its own Docker daemon behind the same single SSH
+port ([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)), which is the
+default. Accounts stop seeing each other's containers, images and volumes, two
+accounts can publish the same port at once, and a shell lands on its own
+daemon.
 
-**It is separation, not isolation, and the difference matters.** Each
-per-account daemon runs privileged, which is root on whatever hosts it, so a
-determined account can still break out and reach another's. What this buys is
-that nobody sees anyone else's work *by accident* -- which is the failure that
-actually happens. A workspace is still a shared machine; treat it as one.
-Genuine isolation is still one workspace container per account.
+**It is separation, not isolation.** Each per-account daemon runs privileged,
+which is root on whatever hosts it, so a determined account can still break
+out and reach another's. What this buys is that nobody sees anyone else's work
+*by accident*, which is the failure that actually happens. A workspace is
+still a shared machine. Genuine isolation is one workspace container per
+account.
 
-It costs real resources, and there is no mitigation worth implying:
+It costs real resources:
 
-- **the layer cache is duplicated.** Five accounts on `node:22` is five copies.
-  A registry mirror recovers bandwidth but not disk -- Docker has no shared
-  read-only image store.
-- **memory**, roughly 100--150MB per idle daemon plus containerd.
+- **the layer cache is duplicated.** Five accounts on `node:22` is five
+  copies. A registry mirror recovers bandwidth but not disk.
+- **memory**, roughly 100-150MB per idle daemon plus containerd.
 - **disk becomes a shared failure mode.** One account's runaway build can fill
   the volume and take down every other account's daemon.
-- **3--10s** for an account's first connection after the daemon has stopped.
+- **3-10s** for an account's first connection after its daemon has stopped.
 
-`WORKSPACE_DIND_IMAGE` overrides the image a per-account daemon runs. It
-defaults to the workspace's own -- the only one known to carry what this
-workspace decided it needs. Under Swarm that is passed through automatically by
-`elevate`; a plain compose deployment should set `WORKSPACE_IMAGE` to the same
-image as the service, or set this.
-`WORKSPACE_DIND_STORAGE_DRIVER` overrides the graph driver, which is otherwise
-inherited from `WORKSPACE_DOCKERD_ARGS` -- a Ceph- or NFS-backed deployment
-sets `--storage-driver=fuse-overlayfs` there, and a per-account daemon needs
-the same answer because its storage is a volume on that same filesystem.
-Without it dockerd falls back to **vfs**, which copies the whole image on every
-`docker create`: nothing fails, `docker ps` stays instant, and `docker run`
-takes minutes.
+#### Changing settings later
 
-#### What persists, in both modes
+A per-account daemon is created once and started thereafter, which is what
+keeps an account's containers and images across a redeploy, so its image,
+flags and mounts are fixed at creation.
 
-Everything a user owns lives on the workspace, so where it lives is worth
-knowing before something is pruned.
+The agent applies a changed configuration by itself: each daemon is stamped
+with a digest of what it was built from, and one that no longer matches is
+recreated. The container is disposable and the graph volume beside it is kept.
+It waits until that account has nothing running, because recreating a daemon
+stops its containers.
+
+**The storage driver is the exception**, because a graph written by one driver
+cannot be read by another. There is no recreation that keeps the data, so the
+agent says so and leaves it. Deciding is a command:
+
+```bash
+docker exec <workspace> remote-dockerd daemons ls
+docker exec <workspace> remote-dockerd daemons reset alice           # rebuild it
+docker exec <workspace> remote-dockerd daemons reset --all --purge   # and discard images
+```
+
+`--purge` is the account's entire Docker state, and it is needed for exactly
+that one case.
+
+#### What persists
 
 | | shared daemon | a daemon per account |
 |---|---|---|
@@ -488,130 +414,181 @@ knowing before something is pruned.
 | the account's docker socket | n/a | `/run/rd/<account>/`, recreated on every start |
 
 Both deployments in `deploy/` already persist `/var/lib/docker` and
-`/etc/workspace`. **Neither mode persists anything the other does not** — a
-daemon per account nests the same data one level deeper rather than moving it
-somewhere new.
+`/etc/workspace`. Neither mode persists anything the other does not; a daemon
+per account nests the same data one level deeper.
 
 Three consequences of that nesting:
 
-- **`rd-dind-<account>-lib` is the most valuable object in the deployment.** It
-  is everything that account has. It is a *named* volume on purpose: the daemon
-  container in front of it can be removed and recreated — by an upgrade, by
-  `docker rm`, by adoption after a redeploy — and the account's images and
-  containers come back with it.
+- **`rd-dind-<account>-lib` is the most valuable object in the deployment.**
+  It is everything that account has. It is a *named* volume on purpose: the
+  daemon container in front of it can be removed and recreated, and the
+  account's images and containers come back with it.
 - **`docker system prune -a --volumes` on the workspace's own daemon is
-  destructive in a way it was not before.** It removes stopped containers first
-  and then unused volumes, so an idle account's daemon and then its storage go
-  together. `docker volume ls --filter label=remote-docker.daemon` lists what
-  must not be pruned; the label is written for exactly this.
+  destructive.** It removes stopped containers first and then unused volumes,
+  so an idle account's daemon and then its storage go together.
+  `docker volume ls --filter label=remote-docker.daemon` lists what must not
+  be pruned.
 - **`/etc/workspace/workspace-id` matters more than it looks.** It is how the
   agent recognises its own daemons after a redeploy. Lose it and the running
-  daemons are orphaned — still running, still holding their users' work, no
+  daemons are orphaned: still running, still holding their users' work, no
   longer adopted.
 
-`rd-*` share volumes are the exception to all of this and can be destroyed
-freely: they hold no data. They are NFS mounts of directories on the client's
-machine, so the volume is a pointer, and `remote-docker gc` removes the unused
-ones as a matter of routine.
+`rd-*` share volumes are the exception and can be destroyed freely. They hold
+no data, only a pointer to a directory on a client's machine, and
+`remote-docker gc` removes the unused ones as a matter of routine.
 
 #### Upgrading an existing workspace is a breaking change
 
 Images and volumes an account built under the shared daemon are invisible from
 its own, and there is no cheap migration. **Set
-`WORKSPACE_PER_USER_DIND=false` before upgrading** if that matters; the old
+`WORKSPACE_PER_USER_DIND=false` before upgrading** if that matters. The old
 data is still in the shared `/var/lib/docker` either way, so the decision is
 reversible.
 
-With it off, all enrolled users share one Docker daemon and can see each
-other's containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)).
-That remains supported rather than deprecated: a single-account workspace has
-nothing to separate, and pays for separation in memory and in a duplicated
-layer cache.
+With it off, all enrolled users share one daemon and can see each other's
+containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)). That
+stays supported rather than deprecated: a single-account workspace has nothing
+to separate.
 
-## Why a container takes a few seconds to start
+## Caveats
 
-Measured against a workspace whose `/var/lib/docker` is on CephFS, which is the
-case this is worth knowing for. `REMOTE_DOCKER_TRACE=1` prints one line per
-Docker API request if you want your own numbers — set it on the **session**
-(`REMOTE_DOCKER_TRACE=1 remote-docker start`), since that is the process doing
-the forwarding. Setting it on the docker command you are timing traces nothing,
-and says so.
+### What not to put on the share
+
+- **Build artifacts.** `node_modules`, `.git`, `target/`, package caches.
+  Keeping them off the share is worth roughly 20×; protocol tuning is worth
+  about 2×.
+- **Databases.** `nolock` plus `fcntl` locking is a corruption risk.
+- **Very large trees over a WAN.** NFSv3 is synchronous per operation, so
+  latency multiplies. Over a LAN it is fine.
+
+### `docker compose` is not embedded
+
+`remote-docker docker compose` and the `docker` shim both fail on it. Compose
+would pin `docker/cli` back a major version and buildx back seven minors
+([ADR 0009](docs/adr/0009-embedding-the-docker-cli.md)), which would cost
+BuildKit. Compose works normally if you point a real docker CLI at the
+workspace's docker context.
+
+### A session must be running
+
+Not in a terminal you are watching, but running: it is the endpoint and the
+file server, so stopping it takes running containers' mounts with it. Any
+command that needs one starts it. A background session reclaims itself after
+30 minutes with nothing to do, and never while a container of yours is running
+or a stream is open.
+
+### File watching in detail
+
+**Deletions are the honest gap.** `unlink` of a name that is already gone
+fails before the kernel generates anything, so a deletion cannot be replayed
+faithfully. `coarse` approximates it with a directory-level event; `partial`
+says nothing rather than something wrong. A watcher that rescans notices; one
+that trusts the event *kind* is told something untrue.
+[ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md) stays open on
+exactly this, and
+[ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md) records
+how the rest works.
+
+**Watching is not free.** inotify is not recursive: `inotify_add_watch` covers
+one directory and reports only its direct entries, so a tree costs one watch
+per directory. macOS is worse, because kqueue needs an open file descriptor
+per *file*.
+
+| platform | budget | what binds |
+|---|---|---|
+| Linux | 4096 directories | `fs.inotify.max_user_watches` (8192 by kernel default; many distros raise it) |
+| Windows | 1024 directories | one `ReadDirectoryChangesW` buffer per watch |
+| macOS | 512 directories | `RLIMIT_NOFILE`, because kqueue costs an fd per file |
+
+Build outputs like `dist/` and `target/` are **not** excluded by default,
+because serving `dist/` and reloading when it changes is exactly the workflow
+this is for. So a Rust or Java tree will spend its budget inside `target/` and
+say so. Tune with `REMOTE_DOCKER_WATCH_BUDGET` and
+`REMOTE_DOCKER_WATCH_EXCLUDE` (comma- or `PATH`-separated). When the budget
+runs out, the directory it stopped at is named rather than silently dropped.
+
+Watching starts delivering once the session has connected, which happens on
+the first Docker command. Edits made before that are counted and reported, not
+silently lost.
+
+The per-tool polling flags (`CHOKIDAR_USEPOLLING=1`, `WATCHPACK_POLLING=true`,
+`--poll`) still work and are never set for you.
+
+### Why a container takes a few seconds to start
+
+Measured against a workspace whose `/var/lib/docker` is on CephFS, which is
+the case this is worth knowing for.
 
 | | |
 |---|---|
-| the tunnel | **~10ms per request.** An SSH channel opens in 2--3ms and a `/_ping` round trip is 8ms. This is not where the time goes. |
-| this binary starting | **~400ms per command.** ~210ms to load a 45MB binary and build the command tree, and about as much again initialising the embedded Docker CLI. Paid once per `remote-docker docker ...`, not per request. |
-| `docker create` | **~250ms**, and the same measured on the workspace itself. Container creation is many small metadata writes, and they are synchronous. |
+| the tunnel | **~10ms per request.** An SSH channel opens in 2-3ms and a `/_ping` round trip is 8ms. Not where the time goes. |
+| this binary starting | **~400ms per command.** ~210ms to load a 45MB binary and build the command tree, about as much again for the embedded Docker CLI. Once per command, not per request. |
+| `docker create` | **~250ms**, the same measured on the workspace itself. Container creation is many small synchronous metadata writes. |
 | `docker start` | **~800ms**, likewise the same locally. |
 
-So a `docker run` is roughly 400ms of us, a second of the daemon, and then the
-container's own runtime. **The remote part is not the expensive part** -- the
+So a `docker run` is roughly 400ms of us, a second of the daemon, then the
+container's own runtime. **The remote part is not the expensive part**; the
 storage is. The same daemon on local disk does create and start in tens of
-milliseconds.
+milliseconds. If that matters more than surviving a node move, put
+`/var/lib/docker` on local disk.
 
-If that matters more than surviving a node move, put `/var/lib/docker` on local
-disk; see the storage driver section above. Nothing in the client will make a
-meaningful difference at 10ms a request.
+### What is not tested
 
-## Commands
+The integration suites run the Linux client against a real workspace on every
+push. **macOS has never been executed at all**, in CI or anywhere else.
+**Windows is unit tested**, including the named-pipe endpoint, but no Windows
+machine has taken a session end to end, because the suite needs a Linux
+kernel's NFS client. Swarm itself needs a real cluster and CI cannot cover it.
 
-| | |
-|---|---|
-| `remote-docker enroll` | print the public key to hand over for enrolment |
-| `remote-docker workspace create <name> --host …` | add a workspace and create its docker context |
-| `remote-docker workspace rm <name>` | remove both again |
-| `remote-docker workspace ls` | list them (`workspaces` still works) |
-| `remote-docker workspace use <name>` | choose which one commands use by default |
-| `remote-docker workspace inspect [name]` | its settings, endpoint, docker context and whether a session is up |
-| `remote-docker start` | start a background session and return |
-| `remote-docker start --foreground` | run it in this terminal instead |
-| `remote-docker stop` | stop it |
-| `remote-docker restart` | stop and start, refusing while something depends on it |
-| `remote-docker status` | what the workspace reports about this account |
-| `remote-docker docker …` | the embedded Docker CLI |
-| `remote-docker gc` | remove share volumes nothing is using |
-| `remote-docker version` | |
+## Prior art
 
-The workspace verbs are docker's, and the old spellings -- `add`, `remove`,
-`list`, `default` -- still work. There is no `context` command: a docker
-context is written when a workspace is created and removed when it is, because
-there is no case where you want a workspace configured and not reachable as
-`docker --context <name>` ([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)).
-Re-run `workspace create` to rewrite a context that has drifted.
+Nothing else appears to do this. The pieces exist separately:
+[docker-injector](https://github.com/rse/docker-injector) mutates
+container-create requests, [sshocker](https://github.com/lima-vm/sshocker)
+serves files from the client to a VM, but not the combination.
 
-For a shell on the workspace, use `ssh`. The agent serves one to any enrolled
-key.
+Everyone else answers this problem with **file sync**: Mutagen, Okteto,
+Docker's own Synchronized File Shares. Testcontainers Cloud proxies a local
+socket to a remote runtime and states that mounting local files "is not
+implemented". VS Code and Codespaces document it as unsupported.
+[docker/compose#8484](https://github.com/docker/compose/issues/8484) was
+closed by a stale bot;
+[podman#13358](https://github.com/containers/podman/issues/13358) was closed
+"won't fix, far from trivial".
 
-On the workspace: `remote-dockerd serve` is the agent (the image's default),
-and `remote-dockerd elevate` is the Swarm entry point. Two more are for whoever
-runs it:
+Sync is not obviously the wrong answer. It makes changes land as ordinary
+local writes, so file watchers work, which is very likely the whole reason it
+won.
 
-| | |
-|---|---|
-| `remote-dockerd healthcheck` | is this workspace serving? Both deployments use it |
-| `remote-dockerd daemons ls` | which accounts have a daemon |
-| `remote-dockerd daemons reset <account> [--purge]` | rebuild one; `--purge` also discards its images |
+remote-docker answers it differently, and not originally: Docker Desktop ships
+the same idea as "Event Injection", forwarding host events into its VM so a
+replay thread reproduces them. Linux offers no way to inject a synthetic
+inotify event, `fanotify(7)` says so outright, so performing a real operation
+is the only mechanism available to anyone. The difference here is that we own
+the NFS server as well as the agent, which is what keeps the replay from
+echoing back as a change of its own
+([ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md)).
 
-## Layout
+## Project layout
 
-Three Go modules, one repository (ADR 0021). The shared one at the root
-depends on almost nothing, so the agent does not inherit the client's tree.
+Three Go modules in one repository ([ADR 0021](docs/adr/0021-three-modules.md)).
+The shared one depends on almost nothing, so the agent does not inherit the
+client's dependency tree.
 
 ```
-go.mod                 the shared module: the contract, and the two things
-                       both binaries must do identically
-  pkg/workspace/       the contract itself
-  internal/logx/       one log handler
-  internal/iox/        one bidirectional copy, and one half-close
-  test/                integration suite and probes
+go.mod                 shared: what both binaries must agree on
+  pkg/workspace/       the contract itself: paths, uid→port, volume names
+  internal/logx/       one log handler, so both look the same
+  internal/iox/        one bidirectional copy, one answer to half-closing
+  test/                the integration suites and their probes
 
-client/                the client module: docker/cli, buildx
-  cmd/remote-docker/   the client binary
+client/                the client module (docker/cli, buildx)
+  cmd/remote-docker/   the binary, which also answers to `docker`
   internal/            ssh, nfs server, api proxy, bind rewriting, ports,
-                       filesystem watching
+                       file watching, session wiring
 
-agent/                 the agent module: seven third-party dependencies
-  cmd/remote-dockerd/  the workspace agent
+agent/                 the agent module (seven third-party dependencies)
+  cmd/remote-dockerd/  the workspace binary
   internal/            accounts, sshd, per-account daemons, change replay
 
 image/  deploy/        the workspace container and its deployments
@@ -621,8 +598,7 @@ docs/adr/              why everything is the way it is
 ## Development
 
 `./...` stops at a module boundary, so a bare `go test ./...` at the root
-covers the shared module and nothing else -- it passes while testing almost
-none of this.
+covers the shared module and nothing else.
 
 ```bash
 for m in . ./agent ./client; do (cd $m && go build ./... && go test ./...); done
