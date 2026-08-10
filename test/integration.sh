@@ -1294,6 +1294,20 @@ else
     bad "workspace use did not set the default"
 fi
 
+# And docker's own current context, which is the half that was missing. Our
+# default is read by this binary alone; everything else on the machine resolves
+# `currentContext`, so a `use` that set only ours left compose, buildx and the
+# rest talking to whatever was selected before.
+#
+# Asked of the CONTEXT STORE rather than of a docker command, because
+# DOCKER_HOST is exported here and would mask which context is selected.
+current=$(hostdocker context show 2>/dev/null)
+if [ "$current" = "itest-ws" ]; then
+    ok "workspace use selects the docker context too"
+else
+    bad "docker's current context is $current, want itest-ws"
+fi
+
 # The old verbs are aliases, not history: something out there is scripted
 # against them.
 if "$WORK/remote-docker" workspace list 2>&1 | grep -q "itest-ws"; then

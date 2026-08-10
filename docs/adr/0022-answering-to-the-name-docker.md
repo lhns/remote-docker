@@ -23,7 +23,8 @@ looks for:
 - IDE integrations and tools that shell out to `docker`;
 - **this program itself** — `reportContext` calls `exec.LookPath("docker")` to
   write a docker context, and on a machine with no docker it reported that it
-  could not.
+  could not. Which is the premise machine, so the context was missing exactly
+  where it was needed.
 
 ## Decision
 
@@ -78,8 +79,12 @@ installed later still wins.
   order to write a line of JSON, and tear them all down again. Commands that
   reach no daemon at all — `context`, `completion`, `help`, and a bare
   `docker` — are excluded for the same reason.
-- **Docker contexts start working on machines that had no CLI.** The thing
-  `reportContext` needed is now the thing that installed it.
+- **Docker contexts start working on machines that had no CLI**, and without
+  waiting for `shim install`: when PATH has no docker, the context commands
+  invoke this binary directly, with the `docker` subcommand in front. Giving up
+  instead is what left a premise machine with no context at all, so compose
+  fell through to the Docker Desktop pipe and reported that the daemon was not
+  running.
 - **`docker compose` is still not there.** Compose is not embedded (ADR 0009:
   it pins `docker/cli` back a major version and buildx back seven minors), so
   it fails under the new name exactly as it did under the old one. Making it
