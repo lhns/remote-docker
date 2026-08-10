@@ -91,7 +91,16 @@ func relocate(mp string, root func() (string, error)) (string, error) {
 		// edits into another daemon's volume.
 		return "", fmt.Errorf("notify: locating the daemon holding the volume: %w", err)
 	}
-	if prefix == "" {
+	// "" and "/" both mean the identity mapping: the daemon's filesystem IS
+	// ours. Only "" used to, and "/" fell through to the join below, where
+	// under("/", p, "/") asks whether p starts with "//" and always says no --
+	// so every replay on a SHARED daemon was refused as an escape attempt.
+	//
+	// The integration suite caught that; the unit tests did not, because they
+	// asserted the shared target was "/" without ever pushing it through here.
+	// Both spellings are accepted now, rather than one being made mandatory: a
+	// root of "/" is a true statement, and a resolver is entitled to make it.
+	if prefix == "" || prefix == "/" {
 		return mp, nil
 	}
 
