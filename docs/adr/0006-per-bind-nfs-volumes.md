@@ -86,3 +86,14 @@ experiment and outlives the mount it justified.)
 - Volumes we create must be identifiable so they can be garbage collected, and
   a volume we did not create must never be removed. Hence the `rd-` prefix and
   `IsManagedVolume`.
+- **"In use" cannot be asked of the daemon alone.** It counts a volume as in
+  use once a container names it, which is strictly after the volume is created
+  -- so every rewrite passes through a window where the volume exists and looks
+  collectable. The collector runs in exactly that window, because the
+  connection it rides on is opened lazily by the request creating the volume.
+  Losing the race is silent: a missing named volume is RECREATED by the daemon
+  as an empty local one, so the container starts with an empty directory
+  instead of the project. `rewrite.Guard` closes it -- the share registry is
+  the second source of truth, and one lock spans registering a share and
+  creating its volume. Found by `test/integration.sh` section 16, after the
+  test for something else had been written.

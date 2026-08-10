@@ -537,23 +537,39 @@ runs it:
 
 ## Layout
 
+Three Go modules, one repository (ADR 0021). The shared one at the root
+depends on almost nothing, so the agent does not inherit the client's tree.
+
 ```
-cmd/remote-docker/     the client
-cmd/remote-dockerd/    the workspace agent
-pkg/workspace/         the contract both sides share
-internal/client/       ssh, nfs server, api proxy, bind rewriting, ports,
+go.mod                 the shared module: the contract, and the two things
+                       both binaries must do identically
+  pkg/workspace/       the contract itself
+  internal/logx/       one log handler
+  internal/iox/        one bidirectional copy, and one half-close
+  test/                integration suite and probes
+
+client/                the client module: docker/cli, buildx
+  cmd/remote-docker/   the client binary
+  internal/            ssh, nfs server, api proxy, bind rewriting, ports,
                        filesystem watching
-internal/server/       the agent, including change replay
+
+agent/                 the agent module: seven third-party dependencies
+  cmd/remote-dockerd/  the workspace agent
+  internal/            accounts, sshd, per-account daemons, change replay
+
 image/  deploy/        the workspace container and its deployments
 docs/adr/              why everything is the way it is
-test/                  integration suite and probes
 ```
 
 ## Development
 
+`./...` stops at a module boundary, so a bare `go test ./...` at the root
+covers the shared module and nothing else -- it passes while testing almost
+none of this.
+
 ```bash
-go test ./...                 # no daemon needed
-golangci-lint run ./...
+for m in . ./agent ./client; do (cd $m && go build ./... && go test ./...); done
+for m in . ./agent ./client; do (cd $m && golangci-lint run ./...); done
 bash test/integration.sh      # needs docker and NFS client support
 ```
 
