@@ -13,6 +13,7 @@ package accounts
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -37,9 +38,10 @@ type Account struct {
 	GID  int
 	Home string
 
-	// Keys are the public keys enrolled for this account. Empty means the key
-	// file was removed: access is revoked, but the account and its home
-	// directory stay.
+	// Keys are the public keys enrolled for this account. A file may hold
+	// several, one per line, and any of them authenticates. Empty means the
+	// file was removed or emptied: access is revoked, but the account and its
+	// home directory stay.
 	Keys []ssh.PublicKey
 }
 
@@ -76,6 +78,11 @@ type Store struct {
 
 	mu       sync.RWMutex
 	accounts map[string]*Account
+
+	// unusable is the accounts whose key file was present but held no usable
+	// key on the previous sync. Revoking on one read cannot tell a deliberate
+	// emptying from the middle of somebody's save, so it takes two.
+	unusable map[string]bool
 }
 
 // New returns an empty store.
@@ -88,6 +95,7 @@ func New(keysDir, stateDir string, mapping workspace.Mapping, p Provisioner, log
 		Provisioner: p,
 		Log:         log,
 		accounts:    map[string]*Account{},
+		unusable:    map[string]bool{},
 	}
 }
 
@@ -161,6 +169,7 @@ func (s *Store) Sync() error {
 
 	found := map[string]*Account{}
 	claimed := map[string]string{} // account name -> file that claimed it
+	unusable := map[string]bool{}  // account name -> its file is there and holds nothing
 
 	for _, file := range names {
 		base := strings.TrimSuffix(file, ".pub")
@@ -180,25 +189,35 @@ func (s *Store) Sync() error {
 			continue
 		}
 
-		keys, err := parseKeys(filepath.Join(s.KeysDir, file))
+		// Claimed before it is parsed. A file being written is empty for a
+		// moment, and if the claim waited for a key then Alice.pub could take
+		// "alice" during that moment, which is the takeover the rule above
+		// exists to refuse.
+		claimed[name] = file
+
+		keys, skipped, err := parseKeys(filepath.Join(s.KeysDir, file))
 		if err != nil {
-			s.log().Warn("ignoring a key file", "file", file, "err", err)
+			s.log().Warn("a key file holds no usable public key", "file", file, "err", err)
+			unusable[name] = true
 			continue
 		}
-		if len(keys) == 0 {
-			s.log().Warn("ignoring a key file: it holds no usable public key", "file", file)
-			continue
+		if skipped > 0 {
+			s.log().Warn("a key file has lines that are not public keys; the rest are enrolled",
+				"file", file, "keys", len(keys), "skipped", skipped)
 		}
 
-		claimed[name] = file
 		found[name] = &Account{Name: name, Keys: keys}
 	}
 
-	return s.reconcile(found, uids)
+	return s.reconcile(found, unusable, uids)
 }
 
-// reconcile provisions new accounts and revokes ones whose key file is gone.
-func (s *Store) reconcile(found map[string]*Account, uids map[string]int) error {
+// reconcile provisions new accounts and revokes ones whose key file no longer
+// enrols them.
+//
+// unusable names the accounts whose file is still there but held no key this
+// time round. See the revoke loop for why that is not the same thing as gone.
+func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, uids map[string]int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -236,16 +255,31 @@ func (s *Store) reconcile(found map[string]*Account, uids map[string]int) error 
 	// Revoke, do not delete. Removing the account and its home would be a
 	// silent way to lose whatever the user left there, and a key file is
 	// removed far more often than a person leaves for good.
+	//
+	// An account is enrolled exactly while its file holds a key, so emptying
+	// the file revokes: that is the interface. But a file being saved is empty
+	// for a moment, and one read cannot tell that moment from an emptying
+	// meant on purpose. So a file that is THERE and holds nothing has to say so
+	// twice, the second read being the next event or the next poll. A file that
+	// is GONE revokes at once: there is no write window to be caught in.
 	for name, account := range s.accounts {
 		if _, still := found[name]; still {
 			continue
 		}
+		if unusable[name] && !s.unusable[name] {
+			continue
+		}
 		if len(account.Keys) > 0 {
-			s.log().Info("revoking an account: its key file is gone. the account and its home are kept",
+			reason := "its key file is gone"
+			if unusable[name] {
+				reason = "its key file holds no usable public key"
+			}
+			s.log().Info("revoking an account: "+reason+". the account and its home are kept",
 				"account", name)
 		}
 		account.Keys = nil
 	}
+	s.unusable = unusable
 
 	if changed {
 		if err := s.saveUIDs(uids); err != nil {
@@ -326,29 +360,54 @@ func (s *Store) saveUIDs(uids map[string]int) error {
 	return nil
 }
 
-// parseKeys reads every public key in a file.
-func parseKeys(path string) ([]ssh.PublicKey, error) {
+// parseKeys reads every public key in a file, and counts the lines that were
+// not one.
+//
+// Line by line, because a file holds several keys and one bad line should cost
+// that line. Parsing the file as a stream stopped at the first thing it could
+// not read, so a typo, a wrapped paste or a BOM on the top line took every key
+// under it with it, and the account was revoked over a line nobody had touched.
+func parseKeys(path string) (keys []ssh.PublicKey, skipped int, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	var keys []ssh.PublicKey
-	rest := data
-	for len(rest) > 0 {
-		key, _, _, remaining, err := ssh.ParseAuthorizedKey(rest)
+	// A file saved by PowerShell's Out-File or by an older Notepad opens with a
+	// byte order mark. UTF-8's is invisible in every editor and makes the first
+	// line unreadable, so it is dropped; UTF-16 cannot be repaired here and is
+	// named instead, because "no valid public key found" about a file that
+	// plainly holds one sends the reader looking in the wrong place.
+	if after, found := bytes.CutPrefix(data, []byte{0xef, 0xbb, 0xbf}); found {
+		data = after
+	} else if bytes.HasPrefix(data, []byte{0xff, 0xfe}) || bytes.HasPrefix(data, []byte{0xfe, 0xff}) {
+		return nil, 0, fmt.Errorf("the file is UTF-16; save it as UTF-8")
+	}
+
+	scan := bufio.NewScanner(bytes.NewReader(data))
+	for scan.Scan() {
+		line := bytes.TrimSpace(scan.Bytes())
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
+		key, _, _, _, err := ssh.ParseAuthorizedKey(line)
 		if err != nil {
-			// Trailing comments or blank lines end the file rather than
-			// invalidating the keys already read.
-			break
+			skipped++
+			continue
 		}
 		keys = append(keys, key)
-		rest = remaining
 	}
+	if err := scan.Err(); err != nil {
+		return nil, 0, err
+	}
+
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("no valid public key found")
+		if skipped == 0 {
+			return nil, 0, fmt.Errorf("the file is empty")
+		}
+		return nil, skipped, fmt.Errorf("none of its %d lines is a public key", skipped)
 	}
-	return keys, nil
+	return keys, skipped, nil
 }
 
 // log is the store's logger, or silence. A nil *slog.Logger panics on use
