@@ -2,9 +2,9 @@ package main
 
 // Answering to a second name.
 //
-// A machine that cannot install Docker cannot install the docker CLI either --
-// on Windows every route to one leads to Docker Desktop, and this binary has
-// carried the complete CLI since ADR 0009. It was reachable only as
+// A machine that cannot install Docker cannot install the docker CLI either,
+// and this binary has carried the complete CLI since ADR 0009. It was
+// reachable only as
 // `remote-docker docker ps`, which is the right thing under the wrong name:
 // muscle memory, scripts, IDE integrations and docker's own `context` command
 // all look for a plain `docker` on PATH.

@@ -9,11 +9,18 @@ ADR 0009 embedded the Docker CLI so that nothing would have to be installed on
 the machine using this. It was reached as `remote-docker docker ps`, and that
 prefix quietly kept the original problem alive.
 
-On Windows there is no supported way to install just the docker CLI. Every
-route documented anywhere leads to Docker Desktop — which is the software the
-premise of this project says cannot be installed. So a Windows user with
-`remote-docker` had the whole Docker CLI on their machine and still could not
-type `docker`.
+A Windows user with `remote-docker` had the whole Docker CLI on their machine
+and still could not type `docker`.
+
+*(Corrected 2026-08-10. This record originally said there was no supported way
+to install a standalone docker CLI on Windows. There is: `winget install
+Docker.DockerCLI` ships v29.7.2, and download.docker.com publishes static zips.
+The decision does not rest on that and is unchanged, but the reason it gave
+was wrong. Re-check with `winget search --id Docker.DockerCLI`.)*
+
+The premise still holds where it matters: a machine that cannot have software
+installed cannot install that CLI either, and on every other machine a second
+CLI is a second thing to update and keep in step with this one.
 
 The prefix is not only a matter of typing. It is the name that everything else
 looks for:

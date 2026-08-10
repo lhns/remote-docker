@@ -46,8 +46,10 @@ remote-docker shim install               # puts `docker` on your PATH
 docker run --rm -v .:/w alpine ls /w
 ```
 
-There is no supported way to install just the docker CLI on Windows; every
-page leads to Docker Desktop. You do not need it. `shim install` links this
+You do not need a docker CLI at all, because this binary is one. A standalone
+one does exist for Windows if you want it (`winget install Docker.DockerCLI`,
+or the static zip from download.docker.com), but that is a second thing to
+install, update and keep in step with the daemon. `shim install` links this
 binary onto your PATH under the name `docker`, and on Windows adds one
 directory to your user PATH, at the end, so a real Docker installed later
 still wins. Open a new terminal afterwards. `remote-docker shim uninstall`

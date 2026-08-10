@@ -55,6 +55,11 @@ enrolment.
   trigger; there is no other reason this decision needs to change. The tunnel
   reachability above is a second, smaller one: it is fixed, but it is the kind
   of thing one namespace keeps producing.
+- **That trigger is a judgement, not a check.** Nothing can evaluate "small and
+  mutually trusted" in CI, so it is the operator's to re-make, not something to
+  wait for a build to notice. Said explicitly because the other revisit trigger
+  in these records, ADR 0009's, WAS mechanical, went unevaluated for as long as
+  it existed, and its stale conclusion was quoted as current fact.
 
 ## Superseded in part by ADR 0019
 

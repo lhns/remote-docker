@@ -107,6 +107,10 @@ deliberately not used, for the same reason buildx's root command is not
 registered: it expects to be a separate process docker execs, and it would
 initialise a second CLI over the one already pointed at our endpoint.
 
+The check that would have caught it, in one command:
+
+    (cd client && go get github.com/docker/compose/v5 && go build ./...)
+
 **The lesson is about the record, not the dependency.** This ADR said "revisit
 when buildx and Compose have completed the `moby/moby` migration", and then the
 conclusion outlived the condition: it was quoted as current fact in the README,
