@@ -758,6 +758,56 @@ else
 fi
 
 echo
+echo "== 12c. the compose INSIDE this binary =="
+# Sections 12 and 12b use the runner's own docker CLI. This one uses ours, and
+# it is a different claim: that a machine with no docker installed at all can
+# run `docker compose up`.
+#
+# ADR 0009 could not have this. Compose v2 pinned docker/cli back a major
+# version and buildx back seven minors, which would have cost BuildKit, so the
+# record said to revisit when compose finished the moby/moby migration. It has,
+# and this is what checks that the two stay compatible: a version bump on
+# either side that breaks the pairing fails here rather than in somebody's
+# terminal.
+mkdir -p "$PROJECT/embedded"
+echo "served by the embedded compose" >"$PROJECT/embedded/index.html"
+cat >"$PROJECT/embedded/compose.yaml" <<'COMPOSE'
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "18083:80"
+    volumes:
+      - .:/usr/share/nginx/html:ro
+COMPOSE
+
+if timeout 180 "$WORK/remote-docker" docker compose -f "$PROJECT/embedded/compose.yaml" up -d \
+    >"$WORK/compose-embedded.log" 2>&1; then
+    ok "the embedded compose brought a stack up"
+
+    embedded=false
+    for _ in $(seq 1 45); do
+        if curl -fsS --max-time 3 http://127.0.0.1:18083/ 2>/dev/null | grep -q "served by the embedded compose"; then
+            embedded=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$embedded" = true ]; then
+        ok "its relative bind resolved and its port was forwarded"
+    else
+        bad "the embedded compose service never served this machine's file"
+        sed 's/^/        /' "$WORK/compose-embedded.log" | tail -20
+    fi
+
+    timeout 120 "$WORK/remote-docker" docker compose -f "$PROJECT/embedded/compose.yaml" down -v \
+        >/dev/null 2>&1 && ok "and tore it down again" || bad "the embedded compose down failed"
+else
+    bad "the embedded compose could not bring a stack up"
+    sed 's/^/        /' "$WORK/compose-embedded.log" | tail -20
+fi
+
+echo
 echo "== 13. our volumes are labelled and identifiable =="
 if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^rd-'; then
     ok "shares became rd-* volumes on the workspace daemon"

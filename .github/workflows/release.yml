@@ -184,6 +184,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # What the embedded Compose reports as its version. Read from the module
+      # graph so it cannot drift from go.mod.
+      - name: compose version
+        run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"

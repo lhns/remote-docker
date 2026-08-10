@@ -173,6 +173,11 @@ jobs:
             (cd "$mod" && go build ./...)
           done
 
+      # What the embedded Compose reports as its version. Read from the module
+      # graph so it cannot drift from go.mod.
+      - name: compose version
+        run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
+
       # The shippable binary, from .goreleaser.yaml -- the same file, flags and
       # naming a tagged release uses, so only the version string differs.
       #

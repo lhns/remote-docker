@@ -83,6 +83,37 @@ Three attempts, each failing differently, which together explain why:
 | force buildx v0.36 | Compose needs `moby/buildkit/util/tracing/env`, absent from the buildkit that buildx pins |
 | let Compose choose the whole stack | **builds** — cli v28.5.1, buildx v0.29.1, buildkit v0.25.1, 86 MB, 36 subcommands |
 
+### 2026-08, later the same day: compose is embedded too
+
+The revisit trigger below was met without anyone noticing. Compose is on **v5**
+now, module `github.com/docker/compose/v5`, and that line completed the
+`moby/moby` migration: it builds against buildx v0.36, buildkit v0.32 and
+`moby/moby/api` v1.55, which is the stack this binary already carries. The
+three-way pin that defeated the earlier attempts does not exist any more.
+
+What it took, measured rather than estimated:
+
+| | |
+|---|---|
+| dependency changes | `go get github.com/docker/compose/v5`, no downgrade of cli, buildx or buildkit |
+| code | one file, `installCompose`, mirroring how buildx is registered |
+| binary | 91MB to 95MB, because compose shares docker/cli, buildx and buildkit |
+| fork | none needed; upstream is used directly |
+
+The wiring is compose's own `pluginMain` minus the plugin harness: build a
+`BackendOptions` carrying the confirmation prompt, call
+`commands.RootCommand(cli, opts)`, add `HooksCommand`. `plugin.Run` is
+deliberately not used, for the same reason buildx's root command is not
+registered: it expects to be a separate process docker execs, and it would
+initialise a second CLI over the one already pointed at our endpoint.
+
+**The lesson is about the record, not the dependency.** This ADR said "revisit
+when buildx and Compose have completed the `moby/moby` migration", and then the
+conclusion outlived the condition: it was quoted as current fact in the README,
+in `--help`, and in advice to a user to go and install a standalone compose,
+none of which checked what compose actually shipped. A revisit trigger nobody
+evaluates is a decision that has quietly stopped being true.
+
 ### 2026-08: buildx is now embedded, and compose still is not
 
 The blocker moved rather than vanished. buildx v0.36 builds against
@@ -176,7 +207,8 @@ so a machine with one usually has both.
 
 Revisit when buildx and Compose have completed the `moby/moby` migration. The
 working combination above is recorded so that revisit does not repeat these
-three attempts.
+three attempts. *(Both have; see the update at the top. Compose v5 is
+embedded.)*
 
 Two integration hazards, neither of which a dependency-weight spike could have
 surfaced, because both need the command tree actually built and run:
