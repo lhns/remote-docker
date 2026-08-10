@@ -15,19 +15,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
-
-// Logger matches the convention used elsewhere in the agent.
-type Logger interface {
-	Printf(format string, args ...any)
-}
 
 // Volumes resolves a managed volume to the directory dockerd has it mounted
 // at.
@@ -61,7 +58,7 @@ const mountpointTTL = 10 * time.Second
 type Replayer struct {
 	Volumes Volumes
 	Poker   Poker
-	Log     Logger
+	Log     *slog.Logger
 
 	mu     sync.Mutex
 	cached map[string]cachedMountpoint
@@ -105,7 +102,7 @@ func (r *Replayer) Serve(ctx context.Context, rw io.ReadWriter) error {
 		if err := json.Unmarshal(line, &frame); err != nil {
 			// A malformed frame is a bug on the client, not a reason to tear
 			// down a working session: the next frame is very likely fine.
-			r.logf("notify: ignoring a malformed frame: %v", err)
+			r.log().Warn("notify: ignoring a malformed frame", "err", err)
 			continue
 		}
 		r.apply(ctx, frame)
@@ -120,8 +117,8 @@ func (r *Replayer) apply(ctx context.Context, frame workspace.NotifyFrame) {
 		// available answer is one coarse poke at the directory covering what
 		// was lost: a watcher that rescans notices, and replaying events we
 		// never received is not on offer.
-		r.logf("notify: the client dropped %d changes under %s%s (%s); poking the directory instead",
-			n.Dropped, n.Export, n.Path, n.Reason)
+		r.log().Warn("notify: the client dropped changes; poking the directory instead",
+			"dropped", n.Dropped, "export", n.Export, "path", n.Path, "reason", n.Reason)
 		r.poke(ctx, n.Export, cleanShare(n.Path), true)
 		return
 	}
@@ -142,7 +139,7 @@ func (r *Replayer) apply(ctx context.Context, frame workspace.NotifyFrame) {
 		// This stream tells a root process which path to touch, and neither
 		// end may assume the other checked.
 		if err := e.Validate(); err != nil {
-			r.logf("notify: refusing an event: %v", err)
+			r.log().Warn("notify: refusing an event", "err", err)
 			continue
 		}
 
@@ -187,14 +184,15 @@ func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
 	}
 	abs, ok := resolve(root, share)
 	if !ok {
-		r.logf("notify: %s%s does not resolve under %s", export, share, root)
+		r.log().Warn("notify: a share does not resolve under its root",
+			"export", export, "share", share, "root", root)
 		return
 	}
 	if err := r.Poker.Poke(abs, isDir); err != nil {
 		// A path that is not there is the ordinary case, not a fault: the
 		// container may not have looked at it, or it may have changed again
 		// since. Logging every one would drown the log during a build.
-		r.debugf("notify: poking %s: %v", abs, err)
+		r.debug("notify: poking a path", "path", abs, "err", err)
 	}
 }
 
@@ -295,13 +293,17 @@ func cleanShare(p string) string {
 	return path.Clean("/" + strings.TrimPrefix(p, "/"))
 }
 
-func (r *Replayer) logf(format string, args ...any) {
-	if r.Log != nil {
-		r.Log.Printf(format, args...)
+// log is the replayer's logger, or silence. A nil *slog.Logger panics on use
+// rather than doing nothing, so the zero value needs an answer.
+func (r *Replayer) log() *slog.Logger {
+	if r.Log == nil {
+		return logx.Discard()
 	}
+	return r.Log
 }
 
-// debugf is for the ordinary, expected failures -- a path that has changed
-// again, a container that never looked at it. Kept separate so raising the
-// log level is a choice rather than a flood.
-func (r *Replayer) debugf(string, ...any) {}
+// debug is for the ordinary, expected failures -- a path that has changed
+// again, a container that never looked at it. A level now rather than a
+// separate do-nothing method, so raising it is a handler's decision instead of
+// an edit here.
+func (r *Replayer) debug(msg string, args ...any) { r.log().Debug(msg, args...) }

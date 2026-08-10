@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/internal/server/dockercli"
 	"github.com/lhns/remote-docker/internal/server/netns"
 )
@@ -58,7 +60,7 @@ type Manager struct {
 	Options Options
 
 	// Log receives progress. Nil means silence.
-	Log func(format string, args ...any)
+	Log *slog.Logger
 
 	mu      sync.Mutex
 	byName  map[string]*Daemon
@@ -159,7 +161,7 @@ func (m *Manager) Warm(account string) {
 		ctx, cancel := context.WithTimeout(context.Background(), DefaultReadyTimeout)
 		defer cancel()
 		if _, err := m.Ensure(ctx, account); err != nil {
-			m.logf("warming %s: %v", account, err)
+			m.log().Warn("warming a daemon", "account", account, "err", err)
 		}
 	}()
 }
@@ -225,7 +227,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	case "running":
 		// Somebody else's Ensure won, or it survived our restart.
 	case "":
-		m.logf("starting a daemon for %s", account)
+		m.log().Info("starting a daemon", "account", account)
 		if err := m.parent().Run(ctx, "daemons: starting "+spec.Name, spec.Args()...); err != nil {
 			return nil, err
 		}
@@ -233,7 +235,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		// Stopped, exited, created. START it rather than running a new one:
 		// the container holds this user's containers and images, and
 		// replacing it would silently discard them.
-		m.logf("restarting the existing daemon for %s (was %s)", account, state)
+		m.log().Info("restarting an existing daemon", "account", account, "was", state)
 		if err := m.parent().Run(ctx, "daemons: restarting "+spec.Name, "start", spec.Name); err != nil {
 			return nil, err
 		}
@@ -270,7 +272,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 				// talk to a socket the account cannot, so asking first would
 				// prove the wrong thing about it.
 				if err := m.chown(account, socket); err != nil {
-					m.logf("could not hand %s its socket: %v", account, err)
+					m.log().Error("could not hand an account its socket", "account", account, "err", err)
 				}
 				if m.answers(ctx, d) {
 					go m.warnIfSlowStorage(d)
@@ -360,7 +362,7 @@ func (m *Manager) alive(ctx context.Context, d *Daemon) bool {
 		return false
 	}
 	if pid != d.PID {
-		m.logf("%s's daemon restarted (pid %d -> %d); re-reading it", d.Account, d.PID, pid)
+		m.log().Info("a daemon restarted; re-reading it", "account", d.Account, "wasPID", d.PID, "pid", pid)
 		return false
 	}
 	return true
@@ -450,7 +452,8 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			//
 			// Left alone deliberately either way: starting every account's
 			// daemon at boot would wake daemons for people who are not here.
-			m.logf("%s has a daemon that is not running; it will start when they connect", account)
+			m.log().Info("an account has a daemon that is not running; it will start when they connect",
+				"account", account)
 			continue
 		}
 
@@ -465,7 +468,7 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		}
 		m.mu.Unlock()
 
-		m.logf("adopted the running daemon for %s", account)
+		m.log().Info("adopted a running daemon", "account", account)
 		adopted++
 	}
 	return adopted, nil
@@ -505,10 +508,13 @@ func (m *Manager) chown(account, socket string) error {
 	return os.Chmod(socket, 0o660)
 }
 
-func (m *Manager) logf(format string, args ...any) {
-	if m.Log != nil {
-		m.Log(format, args...)
+// log is the manager's logger, or silence. A nil *slog.Logger panics on use
+// rather than doing nothing, so the zero value needs an answer.
+func (m *Manager) log() *slog.Logger {
+	if m.Log == nil {
+		return logx.Discard()
 	}
+	return m.Log
 }
 
 // Lookup returns an account's daemon only if it is already running.
@@ -551,11 +557,11 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 	if err != nil || driver != "vfs" {
 		return
 	}
-	m.logf("WARNING: %s's daemon is using the vfs storage driver, which copies "+
-		"the whole image on every container create -- expect `docker run` to take "+
-		"minutes. Its storage is on a filesystem that refused overlay2; set "+
-		"WORKSPACE_DIND_STORAGE_DRIVER (fuse-overlayfs for Ceph- or NFS-backed "+
-		"data) and remove %s to rebuild it.", d.Account, ContainerName(d.Account))
+	m.log().Warn("a daemon is using the vfs storage driver, which copies the whole image on "+
+		"every container create -- expect `docker run` to take minutes. Its storage is on a "+
+		"filesystem that refused overlay2; set WORKSPACE_DIND_STORAGE_DRIVER (fuse-overlayfs "+
+		"for Ceph- or NFS-backed data) and remove the container to rebuild it.",
+		"account", d.Account, "container", ContainerName(d.Account))
 }
 
 // reconcile brings a daemon created from older settings up to date.
@@ -588,24 +594,23 @@ func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
 	}
 
 	if m.storageChanged(ctx, spec.Name) {
-		m.logf("WARNING: %s's daemon was created with a different storage driver. "+
-			"A graph written by one driver cannot be read by another, so this "+
-			"cannot be applied without discarding that account's images and "+
-			"containers. Run `remote-dockerd daemons reset %s` on this workspace "+
-			"to do it.", account, account)
+		m.log().Warn("a daemon was created with a different storage driver. A graph written by "+
+			"one driver cannot be read by another, so this cannot be applied without discarding "+
+			"that account's images and containers. Run `remote-dockerd daemons reset <account>` "+
+			"on this workspace to do it.", "account", account)
 		return
 	}
 
 	if n := m.runningInside(ctx, account); n != 0 {
-		m.logf("%s's daemon is out of date but has %d container(s) running; "+
-			"leaving it alone until it is idle", account, n)
+		m.log().Info("a daemon is out of date but has containers running; leaving it alone until it is idle",
+			"account", account, "running", n)
 		return
 	}
 
-	m.logf("%s's daemon was created from older settings; recreating it "+
-		"(its images and containers are on a volume and are kept)", account)
+	m.log().Info("a daemon was created from older settings; recreating it "+
+		"(its images and containers are on a volume and are kept)", "account", account)
 	if err := m.parent().Run(ctx, "daemons: replacing "+spec.Name, "rm", "-f", spec.Name); err != nil {
-		m.logf("could not replace %s: %v", spec.Name, err)
+		m.log().Error("could not replace a daemon", "container", spec.Name, "err", err)
 	}
 }
 
@@ -657,7 +662,7 @@ func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 	if err := m.parent().Run(ctx, "daemons: removing "+name, "rm", "-f", name); err != nil {
 		// Not fatal on its own: the container may simply not exist, which is a
 		// fine state to be in when the goal is for it not to exist.
-		m.logf("removing %s: %v", name, err)
+		m.log().Error("removing a daemon", "container", name, "err", err)
 	}
 
 	m.mu.Lock()

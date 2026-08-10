@@ -95,7 +95,7 @@ func (s *Session) startNotify(live *liveConn) {
 	sink, err := openNotify(live.ssh)
 	if err != nil {
 		s.notifyOnce.Do(func() {
-			s.logf("file watchers inside containers will not see your edits: %v (see ADR 0014)", err)
+			s.log().Warn("file watchers inside containers will not see your edits (see ADR 0014)", "err", err)
 		})
 		return
 	}

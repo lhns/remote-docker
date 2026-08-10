@@ -110,7 +110,7 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 	case "tcpip-forward":
 		var payload remoteForwardRequest
 		if err := gossh.Unmarshal(req.Payload, &payload); err != nil {
-			s.logf("unparseable tcpip-forward request: %v", err)
+			s.log().Warn("unparseable tcpip-forward request", "err", err)
 			return false, []byte{}
 		}
 		if !s.allowReverseForward(ctx, payload.BindAddr, payload.BindPort) {
@@ -134,7 +134,7 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 			// was refused with "another session for this account may still be
 			// open" -- blaming a second session for the first one's failure.
 			s.forward.Release(account, payload.BindAddr, payload.BindPort)
-			s.logf("could not bind %s for %s: %v", addr, account.Name(), err)
+			s.log().Error("could not bind a forward", "addr", addr, "account", account.Name(), "err", err)
 			return false, []byte{}
 		}
 
@@ -197,7 +197,7 @@ func (s *Server) serveForwarded(conn *gossh.ServerConn, ln net.Listener, bindAdd
 		go func() {
 			ch, reqs, err := conn.OpenChannel(forwardedTCPChannelType, payload)
 			if err != nil {
-				s.logf("forwarded connection refused by the client: %v", err)
+				s.log().Warn("the client refused a forwarded connection", "err", err)
 				_ = c.Close()
 				return
 			}

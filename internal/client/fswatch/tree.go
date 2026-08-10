@@ -3,9 +3,12 @@ package fswatch
 import (
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // maxDeniedReported bounds how many distinct subtrees the budget report names.
@@ -30,7 +33,7 @@ type tree struct {
 	be      backend
 	budget  int
 	exclude map[string]bool
-	log     Logger
+	log     *slog.Logger
 
 	roots []*shareRoot
 
@@ -45,7 +48,7 @@ type tree struct {
 	excluded int
 }
 
-func newTree(goos string, be backend, budget int, exclude []string, log Logger) *tree {
+func newTree(goos string, be backend, budget int, exclude []string, log *slog.Logger) *tree {
 	set := make(map[string]bool, len(exclude))
 	for _, name := range exclude {
 		set[strings.ToLower(name)] = true
@@ -153,7 +156,7 @@ func (t *tree) addTree(r *shareRoot, dir string, emit func(path string, isDir bo
 			// created and removed while we were getting to it, and its own
 			// removal event is already on the way.
 			if !errors.Is(err, fs.ErrNotExist) {
-				t.logf("reading %s: %v", current, err)
+				t.logger().Warn("reading a directory", "dir", current, "err", err)
 			}
 			continue
 		}
@@ -197,7 +200,7 @@ func (t *tree) addOne(r *shareRoot, dir string) bool {
 	}
 	if err := t.be.Add(dir); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			t.logf("watching %s: %v", dir, err)
+			t.logger().Warn("watching a directory", "dir", dir, "err", err)
 		}
 		return false
 	}
@@ -224,9 +227,9 @@ func (t *tree) deny(dir string) {
 		return
 	}
 	t.denied[key] = 1
-	t.logf("watch budget of %d directories reached at %s; "+
-		"changes below it will not be noticed. Raise it with REMOTE_DOCKER_WATCH_BUDGET "+
-		"or exclude directories with REMOTE_DOCKER_WATCH_EXCLUDE.", t.budget, dir)
+	t.logger().Warn("the watch budget is reached; changes below this directory will not be "+
+		"noticed. Raise it with REMOTE_DOCKER_WATCH_BUDGET or exclude directories with "+
+		"REMOTE_DOCKER_WATCH_EXCLUDE.", "budget", t.budget, "dir", dir)
 }
 
 // removeTree drops dir and everything below it.
@@ -260,8 +263,11 @@ func (t *tree) watching(dir string) bool {
 	return ok
 }
 
-func (t *tree) logf(format string, args ...any) {
-	if t.log != nil {
-		t.log.Printf(format, args...)
+// logger is the tree's, or silence. A nil *slog.Logger panics on use rather
+// than doing nothing, and a tree built by a test has none.
+func (t *tree) logger() *slog.Logger {
+	if t.log == nil {
+		return logx.Discard()
 	}
+	return t.log
 }

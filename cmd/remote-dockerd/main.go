@@ -72,9 +72,7 @@ and the replacement task would fail to bind it.`,
 
 			runner := &elevate.Runner{
 				HostSocket: hostSocket,
-				Log: func(format string, args ...any) {
-					_, _ = fmt.Fprintf(os.Stderr, "[elevate] "+format+"\n", args...)
-				},
+				Log:        logger("elevate"),
 			}
 
 			// The child's exit code is ours: a supervisor watching this task

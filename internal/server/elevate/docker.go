@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/internal/server/dockercli"
 )
 
@@ -31,7 +33,7 @@ type Runner struct {
 	HostSocket string
 
 	// Log receives progress. Nil means silence.
-	Log func(format string, args ...any)
+	Log *slog.Logger
 }
 
 // Run inspects this container, launches a privileged copy, and blocks until it
@@ -52,11 +54,11 @@ func (r *Runner) Run(ctx context.Context) (int, error) {
 	// is the difference between a node recovering by itself and needing a
 	// human.
 	if spec.Name != "" {
-		r.logf("removing any stale %s", spec.Name)
+		r.log().Info("removing any stale container", "container", spec.Name)
 		_ = r.docker(ctx, "rm", "-f", spec.Name).Run()
 	}
 
-	r.logf("launching %s privileged, sharing our network namespace", spec.Name)
+	r.log().Info("launching a container privileged, sharing our network namespace", "container", spec.Name)
 	return r.launch(ctx, spec)
 }
 
@@ -83,7 +85,7 @@ func (r *Runner) launch(ctx context.Context, spec RunSpec) (int, error) {
 	for {
 		select {
 		case sig := <-signals:
-			r.logf("forwarding %s to %s", sig, spec.Name)
+			r.log().Info("forwarding a signal", "signal", sig, "container", spec.Name)
 			if cmd.Process != nil {
 				_ = cmd.Process.Signal(sig)
 			}
@@ -234,8 +236,11 @@ func (r *Runner) hostSocket() string {
 	return DefaultHostSocket
 }
 
-func (r *Runner) logf(format string, args ...any) {
-	if r.Log != nil {
-		r.Log(format, args...)
+// log is the runner's logger, or silence. A nil *slog.Logger panics on use
+// rather than doing nothing, so the zero value needs an answer.
+func (r *Runner) log() *slog.Logger {
+	if r.Log == nil {
+		return logx.Discard()
 	}
+	return r.Log
 }
