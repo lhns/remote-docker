@@ -102,6 +102,54 @@ export DOCKER_HOST=unix:///…/docker.sock
 Then use Docker normally. If you have no Docker CLI at all, the binary carries
 one: `remote-docker docker ps`, `remote-docker docker build .`
 
+## No Docker CLI? This binary is one
+
+There is no supported way to install just the docker CLI on Windows — every
+page leads to Docker Desktop. You do not need it. This binary already contains
+the complete Docker CLI, and it answers to the name it is invoked by:
+
+```bash
+remote-docker shim install
+```
+
+That puts a `docker` on your PATH which *is* this binary, so the ordinary
+commands work with no prefix:
+
+```bash
+docker run --rm -v D:\data:/data alpine ls /data
+docker ps
+docker build .
+```
+
+Nothing is downloaded and, where the system allows it, nothing is duplicated:
+the shim is a link to this binary. On Windows it also adds one directory to
+your **user** PATH — at the end, so a real Docker installed later still wins —
+and tells you exactly what it changed. Already-open terminals keep the PATH
+they started with, so open a new one. `remote-docker shim uninstall` reverses
+both. On Linux and macOS nothing edits your shell configuration; it prints the
+one line to add if `~/.local/bin` is not already on PATH.
+
+If a `docker` is already there and this did not put it there, it is left alone
+and says so — that is almost certainly a real Docker, and it should win.
+
+Renaming the binary to `docker.exe` yourself does the same thing. The command
+just does it tidily and reversibly.
+
+| | |
+|---|---|
+| `remote-docker shim status` | where it is, and whether it still points at this build |
+| `remote-docker shim install --no-path` | install the file, leave PATH alone |
+| `remote-docker shim uninstall` | remove it, and the PATH entry if we added it |
+
+**`docker compose` is not included.** Compose is not embedded in this binary
+(see [ADR 0009](docs/adr/0009-embedding-the-docker-cli.md)), so `docker compose
+up` will not work through the shim. Everything else does. Compose works
+normally if you point a real docker CLI at the workspace's docker context.
+
+A link or a copy does not follow upgrades: after you replace the binary, run
+`remote-docker shim install` again. `remote-docker status` says when it has
+drifted.
+
 The endpoint is a **named pipe** on Windows (`\\.\pipe\docker_remote`) and a
 unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
 that can reach it can start containers that read and write your filesystem.

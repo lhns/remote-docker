@@ -68,6 +68,7 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		newStartCommand(),
 		newStopCommand(),
 		newRestartCommand(),
+		newShimCommand(),
 	)
 	return root
 }
@@ -227,6 +228,15 @@ func newStatusCommand() *cobra.Command {
 
 				row(out, "endpoint", s.Endpoint)
 				reportLocalSession(out, cfg)
+
+				// Where `docker` comes from, and whether it is still this
+				// build. A hardlink or a copy keeps serving the binary that
+				// existed when it was made, and an upgrade says nothing about
+				// it -- so a stale shim is a silently OLD client, which is the
+				// same failure mode the session version check exists for.
+				if self, err := os.Executable(); err == nil {
+					reportShim(out, self)
+				}
 				return nil
 			})
 		},
