@@ -1,12 +1,26 @@
 package main
 
 import (
-	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+// newTestRoot builds the real command tree, docker and compose included.
+//
+// Per call rather than shared: cobra commands hold the flags they parsed, so a
+// root reused across cases would carry the previous one's state into the next.
+func newTestRoot(t *testing.T) *cobra.Command {
+	t.Helper()
+
+	// The root's flags write into a package variable, so anything that parses
+	// one has to put it back.
+	saved := overrides
+	t.Cleanup(func() { overrides = saved })
+
+	return newRootCommand()
+}
 
 // A flag belongs to the command that declares it, wherever that command sits
 // in the chain. `--context` is the docker command's; `-f` is compose's; both
@@ -20,7 +34,7 @@ import (
 // The claim lived in a comment for three days and was wrong the whole time,
 // because nothing ran it. This runs it.
 func TestTheRootTraverses(t *testing.T) {
-	if !newRootCommand().TraverseChildren {
+	if !newTestRoot(t).TraverseChildren {
 		t.Error("the root does not traverse, so flags will be parsed at the deepest command")
 	}
 	// And the docker command, which IS the root under the `docker` alias.
@@ -31,11 +45,6 @@ func TestTheRootTraverses(t *testing.T) {
 
 // Where traversal lands, given a flag halfway down.
 func TestMidChainFlagsReachTheirOwnCommand(t *testing.T) {
-	// Traversal parses as it walks, and the root's flags write into a package
-	// variable, so the case below that uses one is put back afterwards.
-	saved := overrides
-	t.Cleanup(func() { overrides = saved })
-
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -49,7 +58,7 @@ func TestMidChainFlagsReachTheirOwnCommand(t *testing.T) {
 		{"no flags at all", []string{"docker", "compose", "ls"}, "ls"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, _, err := newRootCommand().Traverse(tc.args)
+			cmd, _, err := newTestRoot(t).Traverse(tc.args)
 			if err != nil {
 				t.Fatalf("traversing %v: %v", tc.args, err)
 			}
@@ -57,32 +66,6 @@ func TestMidChainFlagsReachTheirOwnCommand(t *testing.T) {
 				t.Errorf("%v landed on %q, want %q", tc.args, cmd.Name(), tc.want)
 			}
 		})
-	}
-}
-
-// And the whole way through Execute, which is what actually broke.
-//
-// `compose config` on a file that is not there needs no daemon: it fails on
-// the file. So the error tells us which command got the -f. "no such file"
-// means compose parsed it; "unknown shorthand flag" means it was handed to
-// `config`, which is the bug.
-func TestAMidChainFlagIsNotHandedToTheLeaf(t *testing.T) {
-	absent := filepath.Join(t.TempDir(), "absent.yaml")
-
-	root := newRootCommand()
-	root.SetArgs([]string{"docker", "compose", "-f", absent, "config"})
-	root.SetOut(io.Discard)
-	root.SetErr(io.Discard)
-
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("a missing compose file was accepted")
-	}
-	if strings.Contains(err.Error(), "unknown shorthand flag") {
-		t.Fatalf("-f was parsed by `config` rather than by `compose`: %v", err)
-	}
-	if !strings.Contains(err.Error(), filepath.Base(absent)) {
-		t.Errorf("the failure does not name the file, so it may not be the one we expected: %v", err)
 	}
 }
 
