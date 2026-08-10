@@ -133,6 +133,15 @@ premise of the project, and it applies to building it too. So:
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
+- **A volume this session exports is in use, whatever the daemon says.** The
+  daemon calls a volume in use only once a container names it, which is
+  strictly after the volume is created -- and the collector runs in that gap,
+  because the connection it rides on is opened lazily by the very request
+  creating the volume. Losing that race is silent: the daemon RECREATES a
+  missing named volume as an empty local one, so the container starts with an
+  empty directory where the project should be. `rewrite.Guard` is the answer --
+  the share registry decides, and one lock spans registering a share and
+  creating its volume, so the two orders both end correctly.
 - **Binding the endpoint is not a lock.** On Unix a bind used to remove any
   existing socket first, so a second process silently unlinked a *running*
   one's socket and took its place -- the first kept accepting on an inode

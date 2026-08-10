@@ -59,11 +59,15 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 	live := &liveConn{ssh: client, info: info}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
+	// One guard for this connection, shared by the two things that disagree
+	// about a volume's lifetime -- see rewrite.Guard.
+	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
 		Shares:  shareRegistrar{registry: s.registry, changed: s.sharesChanged},
 		Volumes: live.api,
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
+		Guard:   live.guard,
 	}
 	if s.opts.Role.hosting() {
 		live.nfs = nfsserve.New(s.registry)
