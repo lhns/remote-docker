@@ -189,6 +189,18 @@ premise of the project, and it applies to building it too. So:
 - **The keys watcher polls as well as using inotify.** The keys directory is
   expected to be on CephFS/NFS, where inotify never fires for changes made on
   another host.
+- **Revoking on an unusable key file takes two reads; a missing one takes
+  one.** An account is enrolled exactly while its file holds a key, so emptying
+  the file is how you revoke somebody and must keep working. But a file being
+  saved is empty for a moment, and a single read cannot tell that moment from
+  an emptying meant on purpose. It used to revoke on the first read and log
+  "its key file is gone" about a file that was right there, which presents as
+  access being withdrawn at random rather than as a race. A file that is
+  actually absent has no write window and revokes at once.
+- **A key file is parsed line by line.** Several keys per file is the format,
+  and reading it as one stream stopped at the first line it could not parse, so
+  a typo or a BOM on the top line silently dropped every key under it. A bad
+  line costs that line and is counted in the warning.
 - **Accounts use `usermod -p '*'`, not a locked (`!`) password.** Some sshd
   builds refuse public-key auth for locked accounts. Kept even though the agent
   authenticates itself, since a deployment may run sshd alongside.

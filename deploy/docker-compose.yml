@@ -4,6 +4,10 @@
 #   cp ~/alice.pub authorized_keys.d/alice.pub     # filename == unix account
 #   docker compose up -d --build
 #
+# One file per account, holding one or more keys, one per line. The directory
+# is re-read within a minute, so a new file is not enrolled the instant you
+# save it. Emptying or removing a file revokes that account, keeping its home.
+#
 services:
   workspace:
     # Context is the repository root: the image builds the agent from source.

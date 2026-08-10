@@ -55,6 +55,25 @@ func (c Config) Addr() string {
 	return net.JoinHostPort(c.Host, fmt.Sprint(c.Port))
 }
 
+// enrolmentHint is what to add to an authentication failure, and nothing at
+// all for any other kind.
+//
+// The workspace enrols a key by filename, out of band, so "unable to
+// authenticate" is nearly always a key that has not been put there yet or a
+// file that has just been written and not yet read. Neither the account nor the
+// file nor the key is in the error, and all three are needed to fix it.
+//
+// Matched on x/crypto's wording, which is not a promise it makes. A reworded
+// upstream costs the hint and leaves the error, which is the right way round.
+func enrolmentHint(err error, cfg Config) string {
+	if err == nil || cfg.Key.Signer == nil || !strings.Contains(err.Error(), "unable to authenticate") {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\n  fix: enrol this key as authorized_keys.d/%s.pub; it is read within a minute\n  key: %s",
+		cfg.User, ssh.FingerprintSHA256(cfg.Key.Signer.PublicKey()))
+}
+
 // Client is a live connection to a workspace.
 //
 // One Client carries every channel this tool needs: the reverse forward for
@@ -100,7 +119,8 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr(), clientCfg)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("sshx: connecting to %s@%s: %w", cfg.User, cfg.Addr(), err)
+		return nil, fmt.Errorf("sshx: connecting to %s@%s: %w%s",
+			cfg.User, cfg.Addr(), err, enrolmentHint(err, cfg))
 	}
 
 	c := &Client{
