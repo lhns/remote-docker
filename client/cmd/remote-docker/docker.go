@@ -32,16 +32,28 @@ import (
 // This is the genuine command tree, not a reimplementation: every subcommand
 // the real CLI has, with its real flags and its real help.
 func newDockerCommand() *cobra.Command {
+	nameTheEmbeddedCLI()
+
 	cmd := &cobra.Command{
 		Use:   "docker",
 		Short: "Run any docker command against the workspace",
 		Long: `The complete Docker CLI, talking to the workspace daemon.
 
-Needs a session: run "remote-docker up" in another terminal. This command
-finds that session's endpoint on its own, so DOCKER_HOST does not have to be
-set -- though an explicit one is respected.`,
+It finds the session's endpoint on its own -- DOCKER_HOST does not have to be
+set, though an explicit one is respected -- and starts a session if none is
+running, so there is nothing to do first.
+
+"docker compose" is NOT included: compose is not embedded in this binary. See
+the README.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+
+		// So `docker --version` and `docker -v` answer, which is the first
+		// thing anybody types at a docker they are not sure about. Cobra adds
+		// the flag because this field is set, and the shorthand because
+		// nothing at this level uses -v -- which matches the real CLI, where
+		// -v is version at the root and --volume only under `run`.
+		Version: dockerVersionLine(),
 
 		// The client options below go on Flags() rather than PersistentFlags(),
 		// which is what the real CLI does and is not a style choice: cobra
@@ -51,6 +63,9 @@ set -- though an explicit one is respected.`,
 		// TraverseChildren is what still lets `docker --context x ps` parse.
 		TraverseChildren: true,
 	}
+	// Cobra's default template would render "docker version Docker version
+	// 29.7.2, build ...". The line is already the whole answer.
+	cmd.SetVersionTemplate("{{.Version}}\n")
 
 	// Point the embedded client at our endpoint unless the user has already
 	// chosen one. Without this, the CLI would look for a local daemon that by
@@ -123,13 +138,62 @@ set -- though an explicit one is respected.`,
 	return cmd
 }
 
+// NoSessionEnv tells a docker command not to make a session available.
+//
+// Set on the docker commands this program runs itself. Once `docker` on PATH
+// IS this binary, `exec.LookPath("docker")` finds us -- so `workspace create`
+// writing a docker context would spawn us, and we would start a whole
+// file-serving session in order to write a line of JSON. A docker command we
+// run ourselves must not start a session.
+const NoSessionEnv = "REMOTE_DOCKER_NO_SESSION"
+
 // invokingDocker reports whether this process was asked to run a docker
-// command, by finding the first argument that is not a flag or a flag's value.
+// command that should have a session made available for it.
 //
 // Crude on purpose. Cobra has not parsed anything yet -- it is still being
 // assembled -- so there is nothing better to ask, and being wrong costs only
 // a session that is opened slightly too eagerly or not eagerly enough.
 func invokingDocker() bool {
+	if os.Getenv(NoSessionEnv) != "" {
+		return false
+	}
+
+	args := os.Args[1:]
+	if !invokedAsDocker() {
+		// Under our own name the docker tree is a subcommand, so the first
+		// non-flag argument has to BE "docker". Under the alias every argument
+		// is already docker's and the same scan asks a different question:
+		// which docker subcommand it is.
+		var found bool
+		if args, found = afterDockerVerb(args); !found {
+			return false
+		}
+	}
+
+	// Some docker commands never reach a daemon, and one of them is how we
+	// invoke ourselves. Starting a session for `docker context create` is not
+	// wrong so much as absurd: it opens an SSH connection, an NFS server and a
+	// reverse tunnel in order to write a file on this machine.
+	//
+	// No subcommand at all -- `docker`, `docker --help`, `docker --version` --
+	// is the same answer for the same reason. Printing help used to be enough
+	// to start a session.
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		switch arg {
+		case "context", "completion", "help":
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// afterDockerVerb finds the "docker" subcommand among our own arguments and
+// returns what follows it.
+func afterDockerVerb(args []string) ([]string, bool) {
 	// Every root flag takes a value, so a flag consumes the token after it
 	// unless it was written as --flag=value.
 	takesValue := map[string]bool{
@@ -137,7 +201,7 @@ func invokingDocker() bool {
 		"--user": true, "--endpoint": true,
 	}
 	skip := false
-	for _, arg := range os.Args[1:] {
+	for i, arg := range args {
 		if skip {
 			skip = false
 			continue
@@ -148,9 +212,12 @@ func invokingDocker() bool {
 			}
 			continue
 		}
-		return arg == "docker"
+		if arg != dockerName {
+			return nil, false
+		}
+		return args[i+1:], true
 	}
-	return false
+	return nil, false
 }
 
 // installModernBuilder replaces `build` with buildx's, which is what the real

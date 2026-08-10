@@ -1334,6 +1334,84 @@ fi
 restore_ws
 trap cleanup EXIT
 
+echo
+echo "== 18. the client answering to the name docker =="
+# The claim is that a machine with no Docker installed can type `docker run`.
+# It rests on one thing -- the binary looking at the name it was invoked by --
+# and the only way to test that is to invoke it by that name.
+#
+# Deliberately with NO DOCKER_HOST and no session running: that is the state a
+# person is in after `shim install`, and everything the alias has to do for
+# itself (resolve the workspace, start a session, point the CLI at it) happens
+# in this one command or not at all.
+ALIASDIR="$WORK/aliasbin"
+mkdir -p "$ALIASDIR"
+ln -sf "$WORK/remote-docker" "$ALIASDIR/docker"
+
+"$WORK/remote-docker" stop >/dev/null 2>&1 || true
+
+if out=$(cd "$PROJECT" && env -u DOCKER_HOST PATH="$ALIASDIR:$PATH" \
+        timeout "$DOCKER_TIMEOUT" docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1) &&
+    echo "$out" | grep -q "from the project directory"; then
+    ok "docker run works under the plain name, with no DOCKER_HOST and no session"
+else
+    bad "docker under its own name failed: $(echo "$out" | tail -3 | tr '\n' ' ')"
+fi
+
+if env -u DOCKER_HOST PATH="$ALIASDIR:$PATH" timeout 60 docker ps >/dev/null 2>&1; then
+    ok "and so does docker ps"
+else
+    bad "docker ps failed under the plain name"
+fi
+
+# A docker command that reaches no daemon must not open a session. This is not
+# tidiness: once `docker` on PATH is this binary, `workspace create` writing a
+# context spawns US, and a session to write a line of JSON means an SSH
+# connection, an NFS server and a reverse tunnel -- torn down again immediately.
+#
+# Asserted through `stop`, which says "not running" when there is nothing to
+# stop and "stopped" when there was.
+if "$WORK/remote-docker" stop 2>&1 | grep -q "stopped"; then
+    ok "the session the alias started was there to stop"
+else
+    bad "no session was running after docker run under the alias"
+fi
+env -u DOCKER_HOST PATH="$ALIASDIR:$PATH" timeout 60 docker context ls >/dev/null 2>&1
+if "$WORK/remote-docker" stop 2>&1 | grep -q "not running"; then
+    ok "docker context ls started no session"
+else
+    bad "a command that reaches no daemon opened a session anyway"
+    "$WORK/remote-docker" stop >/dev/null 2>&1
+fi
+
+# And the command that puts the name there in the first place. On this runner a
+# symlink is available, so this also pins the form: a copy would mean the ladder
+# fell all the way down without saying why.
+SHIMDIR="$WORK/shimbin"
+if out=$(REMOTE_DOCKER_SHIM_DIR="$SHIMDIR" "$WORK/remote-docker" shim install 2>&1); then
+    if echo "$out" | grep -q "symlink"; then
+        ok "shim install linked rather than copied"
+    else
+        bad "shim install did not produce a symlink: $(echo "$out" | tr '\n' ' ')"
+    fi
+    if env -u DOCKER_HOST timeout 60 "$SHIMDIR/docker" version --format '{{.Client.Version}}' >/dev/null 2>&1; then
+        ok "the installed shim runs the docker CLI"
+    else
+        bad "the installed shim did not run"
+    fi
+else
+    bad "shim install failed: $(echo "$out" | tail -3 | tr '\n' ' ')"
+fi
+
+if REMOTE_DOCKER_SHIM_DIR="$SHIMDIR" "$WORK/remote-docker" shim uninstall >/dev/null 2>&1 &&
+    [ ! -e "$SHIMDIR/docker" ]; then
+    ok "shim uninstall took it away again"
+else
+    bad "shim uninstall left the shim behind"
+fi
+
+"$WORK/remote-docker" stop >/dev/null 2>&1 || true
+
 
 if [ "$FAIL" -ne 0 ]; then
     echo

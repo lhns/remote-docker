@@ -28,7 +28,8 @@ go.mod                   THE SHARED MODULE (ADR 0021), depends on ~nothing
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
 client/go.mod            the client module: docker/cli, buildx, 786 go.sum lines
-  cmd/remote-docker/     the client binary
+  cmd/remote-docker/     the client binary, which also answers to the name
+                         `docker` (ADR 0022)
   internal/
     config/              settings precedence, state paths
     fswatch/             watches shared dirs, streams changes to the agent
@@ -142,6 +143,25 @@ premise of the project, and it applies to building it too. So:
   empty directory where the project should be. `rewrite.Guard` is the answer --
   the share registry decides, and one lock spans registering a share and
   creating its volume, so the two orders both end correctly.
+- **The alias reads `os.Args[0]`, never `os.Executable()`.** The second
+  resolves symlinks -- `/proc/self/exe` on Linux -- so it reports
+  `remote-docker` for exactly the installation `shim install` creates, and
+  answering to the name `docker` (ADR 0022) would be silently dead on the
+  platform where a symlink is the right answer. The shim command is the
+  opposite: it needs the real file to link *to*, so it uses `os.Executable`.
+- **Never touch a `docker` we did not write, and never execute one to find
+  out.** A machine may get Docker Desktop tomorrow. Ours is `os.SameFile`
+  against this binary, or a marker file beside it; anything else is left where
+  it is and named on screen. Running the file to ask what it is would be
+  running an unknown binary from PATH.
+- **Never `setx`.** It truncates PATH at 1024 characters and what is past the
+  cut is gone -- silently, and from an account's own configuration. The
+  registry (`HKCU\Environment`, preserving `REG_EXPAND_SZ`) is the interface.
+  And appended, never prepended: a real Docker installed later must win.
+- **A docker command this program runs itself carries
+  `REMOTE_DOCKER_NO_SESSION=1`.** `exec.LookPath("docker")` may now find *us*,
+  so without it `workspace create` writing a context opens an SSH connection,
+  an NFS server and a reverse tunnel to write a line of JSON.
 - **Binding the endpoint is not a lock.** On Unix a bind used to remove any
   existing socket first, so a second process silently unlinked a *running*
   one's socket and took its place -- the first kept accepting on an inode

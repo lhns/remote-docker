@@ -32,6 +32,7 @@ survives that document being superseded.
 | [0019](0019-a-dockerd-per-account.md) | A dockerd per account, behind one SSH port | Accepted; routing extracted by 0020 |
 | [0020](0020-one-daemon-target.md) | One daemon target, not a mode branch | Accepted |
 | [0021](0021-three-modules.md) | Three modules: shared, client, agent | Accepted |
+| [0022](0022-answering-to-the-name-docker.md) | The client answers to the name `docker` | Accepted; completes 0009 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next
