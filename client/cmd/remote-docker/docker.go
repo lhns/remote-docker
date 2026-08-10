@@ -59,52 +59,19 @@ buildx and buildkit this binary carries.`,
 		// merges persistent flags into every subcommand, and `--context` has
 		// the shorthand -c, which `build` already uses for --cpu-shares.
 		// Installing them persistently panics on `docker build --help`.
-		// TraverseChildren is what still lets `docker --context x ps` parse.
+		//
+		// TraverseChildren so that `docker --context x ps` parses under the
+		// `docker` alias, where this command is the root. On the prefixed
+		// form the ROOT's setting is what decides, which is why that one was
+		// broken until it had one too.
 		TraverseChildren: true,
 	}
 	// Cobra's default template would render "docker version Docker version
 	// 29.7.2, build ...". The line is already the whole answer.
 	cmd.SetVersionTemplate("{{.Version}}\n")
 
-	// Point the embedded client at our endpoint unless the user has already
-	// chosen one. Without this, the CLI would look for a local daemon that by
-	// premise is not installed.
-	//
-	// Gated on the invocation actually BEING a docker command, because this
-	// function runs while the root command is built, so `remote-docker gc`,
-	// and even `--help`, used to probe the endpoint and could open a whole
-	// file-serving session that then raced the real command's own session
-	// inside one process.
 	if invokingDocker() {
-		if cfg, err := resolve(); err == nil {
-			endpoint := endpointOf(cfg)
-			ours := proxy.DockerHost(endpoint)
-			set := os.Getenv("DOCKER_HOST")
-
-			// Managed whenever the endpoint in play is ours, whether we chose
-			// it or DOCKER_HOST names it. Skipping this when DOCKER_HOST was
-			// set meant that pointing it at our OWN endpoint, which is what
-			// the printed value and the docker context both do, disabled
-			// starting a session and noticing a stale one.
-			//
-			// Start one if nothing is serving, and replace one built from a
-			// different commit when that costs nothing. Requiring `start`
-			// first would give the embedded CLI, which exists so that nothing
-			// has to be installed, a setup step of its own.
-			//
-			// The workspace comes from the same resolution as every other
-			// command, so `--workspace ci docker ps` uses ci.
-			if set == "" || set == ours {
-				ensureDaemon(cfg, endpoint)
-			}
-			// A DOCKER_HOST naming something else is left alone: it is a
-			// deliberate instruction to talk to that, not to us.
-			if set == "" {
-				_ = os.Setenv("DOCKER_HOST", ours)
-			}
-		} else if os.Getenv("DOCKER_HOST") == "" {
-			_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(""))
-		}
+		pointAtOurEndpoint()
 	}
 
 	dockerCli, err := command.NewDockerCli()
@@ -149,6 +116,51 @@ buildx and buildkit this binary carries.`,
 		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return credentials }
 	}
 	return cmd
+}
+
+// pointAtOurEndpoint aims the embedded CLI at this workspace, and makes a
+// session available to answer.
+//
+// Called only when the invocation is actually a docker command, because the
+// tree is built for every command: `remote-docker gc`, and even `--help`,
+// used to probe the endpoint and could open a whole file-serving session that
+// then raced the real command's own, inside one process.
+func pointAtOurEndpoint() {
+	cfg, err := resolve()
+	if err != nil {
+		// No workspace resolved, so there is nothing to aim at beyond the
+		// default endpoint.
+		if os.Getenv("DOCKER_HOST") == "" {
+			_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(""))
+		}
+		return
+	}
+
+	endpoint := endpointOf(cfg)
+	ours := proxy.DockerHost(endpoint)
+	set := os.Getenv("DOCKER_HOST")
+
+	// Managed whenever the endpoint in play is ours, whether we chose it or
+	// DOCKER_HOST names it. Skipping this when DOCKER_HOST was set meant that
+	// pointing it at our OWN endpoint, which is what the printed value and the
+	// docker context both do, disabled starting a session and noticing a stale
+	// one.
+	//
+	// Start one if nothing is serving, and replace one built from a different
+	// commit when that costs nothing. Requiring `start` first would give the
+	// embedded CLI, which exists so that nothing has to be installed, a setup
+	// step of its own.
+	//
+	// The workspace comes from the same resolution as every other command, so
+	// `--workspace ci docker ps` uses ci.
+	if set == "" || set == ours {
+		ensureDaemon(cfg, endpoint)
+	}
+	// A DOCKER_HOST naming something else is left alone: it is a deliberate
+	// instruction to talk to that, not to us.
+	if set == "" {
+		_ = os.Setenv("DOCKER_HOST", ours)
+	}
 }
 
 // NoSessionEnv tells a docker command not to make a session available.

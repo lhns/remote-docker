@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -270,7 +271,7 @@ func newWorkspaceListCommand() *cobra.Command {
 // binary is one, and dockerCmd falls back to it. Giving up left the premise
 // machine with no context, so every tool that resolves one found the platform
 // default instead.
-func reportContext(out interface{ Write([]byte) (int, error) }, cfg config.Config) {
+func reportContext(out io.Writer, cfg config.Config) {
 	installed, err := installContext(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "workspace saved, but its docker context was not created: %v\n", err)
@@ -288,7 +289,7 @@ func reportContext(out interface{ Write([]byte) (int, error) }, cfg config.Confi
 //
 // Reported rather than fatal, for the same reason as reportContext: the
 // workspace default has already been saved and is the part that was asked for.
-func useContext(out interface{ Write([]byte) (int, error) }, name string) {
+func useContext(out io.Writer, name string) {
 	if outBytes, err := dockerCmd("context", "use", name).CombinedOutput(); err != nil {
 		_, _ = fmt.Fprintf(out, "docker context %q was not selected: %v: %s\n",
 			name, err, strings.TrimSpace(string(outBytes)))
@@ -297,7 +298,7 @@ func useContext(out interface{ Write([]byte) (int, error) }, name string) {
 	_, _ = fmt.Fprintf(out, "docker context is now %q\n", name)
 }
 
-func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Config) {
+func removeContextFor(out io.Writer, cfg config.Config) {
 	name := cfg.ContextName()
 	if !contextIsOurs(name) {
 		// Said out loud rather than passed over in silence. A context that is

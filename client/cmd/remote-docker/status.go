@@ -111,14 +111,7 @@ func reportStatus(out io.Writer, f facts) {
 
 	// Is it up, and how does anything else reach it.
 	_, _ = fmt.Fprintln(out)
-	switch {
-	case !f.serving:
-		row(out, "session", "not running")
-	case !f.answering:
-		row(out, "session", "running, but not answering")
-	default:
-		rowf(out, "session", "running (pid %d, since %s)", f.local.PID, f.local.Since)
-	}
+	row(out, "session", f.sessionLine())
 	// The DOCKER_HOST spelling rather than the raw path, because that is the
 	// form anything else has to be given.
 	row(out, "endpoint", proxy.DockerHost(f.endpoint))
@@ -136,6 +129,22 @@ func reportStatus(out io.Writer, f facts) {
 	// What is in play, which is the question when something behaves oddly.
 	_, _ = fmt.Fprintln(out)
 	row(out, "versions", versionsLine(f))
+}
+
+// sessionLine is what the background session is doing, in one row's worth.
+//
+// Here rather than in daemon.go because `workspace inspect` asks the same
+// question and used to answer it with its own copy of the reachable/answering
+// dance.
+func (f facts) sessionLine() string {
+	switch {
+	case !f.serving:
+		return "not running"
+	case !f.answering:
+		return "running, but not answering"
+	default:
+		return fmt.Sprintf("running (pid %d, since %s)", f.local.PID, f.local.Since)
+	}
 }
 
 // dockerReach is what a tool that is not this binary will talk to.
