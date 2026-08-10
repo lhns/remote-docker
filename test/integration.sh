@@ -1128,7 +1128,7 @@ fi
 #
 # Two binaries, same source, different stamps: the versions cannot be ordered
 # and nothing here tries to.
-if (cd "$REPO" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"         -o "$WORK/remote-docker-old" ./cmd/remote-docker); then
+if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"         -o "$WORK/remote-docker-old" ./cmd/remote-docker); then
 
     "$WORK/remote-docker-old" start >/dev/null 2>&1
 

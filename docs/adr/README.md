@@ -21,7 +21,7 @@ survives that document being superseded.
 | [0008](0008-automatic-port-forwarding.md) | Automatic port forwarding driven by Docker events | Accepted |
 | [0009](0009-embedding-the-docker-cli.md) | Embedding the Docker CLI, Buildx and Compose | Accepted |
 | [0010](0010-go-ssh-server-agent.md) | A Go SSH server agent, not sshd and sudo | Accepted |
-| [0011](0011-one-module-shared-contract.md) | One module with a shared contract package | Accepted |
+| [0011](0011-one-module-shared-contract.md) | One module with a shared contract package | Accepted; the single module is superseded by 0021, the contract rule stands |
 | [0012](0012-shared-dockerd-across-users.md) | A shared dockerd across users | Accepted; superseded in part by 0019, and an implementation rather than a nil since 0020 |
 | [0013](0013-self-elevation-instead-of-a-launcher.md) | Self-elevation instead of a launcher container | Accepted |
 | [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open**, narrowed |
@@ -31,6 +31,7 @@ survives that document being superseded.
 | [0018](0018-one-way-to-do-each-thing.md) | One way to do each thing | Accepted |
 | [0019](0019-a-dockerd-per-account.md) | A dockerd per account, behind one SSH port | Accepted; routing extracted by 0020 |
 | [0020](0020-one-daemon-target.md) | One daemon target, not a mode branch | Accepted |
+| [0021](0021-three-modules.md) | Three modules: shared, client, agent | Accepted |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

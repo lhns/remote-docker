@@ -1,6 +1,8 @@
 # 0011. One module with a shared contract package
 
-- Status: Accepted
+- Status: Accepted; the single-module decision is superseded by
+  [ADR 0021](0021-three-modules.md). The contract rule below is unchanged and
+  still governs what may live in `pkg/workspace`.
 - Date: 2026-08-07
 
 ## Context
@@ -46,3 +48,16 @@ A type used by one binary does not go in `pkg/workspace`.
   package turns into a utility dump and stops meaning anything. The rule is
   narrow: it goes in `pkg/workspace` only if the two sides must *agree* on it,
   not merely if both use it.
+
+## Superseded in part (ADR 0021)
+
+One module turned out to have a cost this record did not foresee: a module is
+the unit of version resolution, so the client's dependencies set the Go
+toolchain floor for the agent as well. A `docker/buildx` bump raised the
+directive past the workspace image's pinned builder and the agent -- which
+imports no buildx -- stopped compiling.
+
+The repository now has three modules. **The rule above is unchanged**: what may
+live in `pkg/workspace` is still only what both sides must agree on, and making
+it a separate module is what finally makes the "a third-party client can build
+against the contract" claim true rather than aspirational.

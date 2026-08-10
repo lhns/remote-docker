@@ -23,22 +23,22 @@ ENV GOTOOLCHAIN=auto
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
 ARG VERSION=dev
-# No `go mod download` step, deliberately.
+# Only the agent's module and the shared one it requires. The client's tree --
+# docker/cli, buildx, 215 packages -- is not copied and cannot be resolved from
+# here, which is the point of ADR 0021: this build could break because of a
+# dependency the binary never imported, and now it cannot.
 #
-# It was here to cache dependencies in their own layer, and with no arguments
-# it fetches everything the main module's packages need -- which now includes
-# buildx and its transitive tree, hundreds of megabytes the agent never
-# imports. `go build` below downloads exactly what the agent's own package
-# needs, which is a small fraction of it.
-#
-# It did NOT cause the failure it was removed for; the toolchain pin above did.
-# Removing it is still right, and saying so here stops the next reader
-# reinstating it as a fix for something.
+# go.work is deliberately NOT copied. It would make this build resolve through
+# the workspace instead of through agent/go.mod's own replace, so a missing
+# require here would still succeed and only fail somewhere without it.
 COPY go.mod go.sum ./
-COPY cmd/ ./cmd/
-COPY internal/ ./internal/
 COPY pkg/ ./pkg/
-RUN CGO_ENABLED=0 go build -trimpath \
+COPY internal/ ./internal/
+COPY agent/ ./agent/
+# `go mod download` is deliberately absent. It was here to cache dependencies
+# in their own layer; `go build` fetches exactly what this binary needs, which
+# after the split is 24 lines of go.sum.
+RUN cd agent && CGO_ENABLED=0 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/remote-dockerd ./cmd/remote-dockerd
 
