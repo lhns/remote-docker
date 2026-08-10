@@ -223,12 +223,43 @@ func Resolve(o Overrides, path string) (Config, error) {
 	return cfg, nil
 }
 
+// readRetries is how many times a read is attempted before its error is
+// believed.
+//
+// Windows only, in practice, and for a specific transient: while Save renames
+// the new file over the old one, an opener can be refused with a sharing
+// violation. It is brief and it clears; reporting it would mean
+// `remote-docker status` failing because a session happened to be writing its
+// config at that instant.
+//
+// Deliberately small, and deliberately not applied to a MISSING file, which is
+// answered immediately as the empty config it means. Retrying a real
+// permission problem three times over 30ms costs nothing and tells the user
+// the same thing in the end.
+const (
+	readRetries = 3
+	readBackoff = 10 * time.Millisecond
+)
+
 // Load reads the config file. A missing file yields a zero File and no error.
 func Load(path string) (File, error) {
 	if path == "" {
 		path = DefaultPath()
 	}
-	data, err := os.ReadFile(path)
+
+	var (
+		data []byte
+		err  error
+	)
+	for attempt := range readRetries {
+		data, err = os.ReadFile(path)
+		if err == nil || errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+		if attempt < readRetries-1 {
+			time.Sleep(readBackoff)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return File{}, nil
@@ -522,13 +553,48 @@ func Save(file File, path string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	// Windows will not rename onto an existing file.
-	_ = os.Remove(path)
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("config: replacing %s: %w", path, err)
+	// Renamed straight over the old file, never unlinked first.
+	//
+	// This used to `os.Remove(path)` before renaming, for a stated reason --
+	// "Windows will not rename onto an existing file" -- that is not true of
+	// os.Rename: it calls MoveFileEx with MOVEFILE_REPLACE_EXISTING, which
+	// replaces. Measured on Windows rather than assumed, because the comment
+	// was confident and wrong.
+	//
+	// What it cost: between the Remove and the Rename the config file DOES NOT
+	// EXIST, and Load treats a missing file as an empty config with no error --
+	// so a `remote-docker workspace ls` that read in that window printed
+	// nothing and exited 0, having been told there were no workspaces. It
+	// showed up as one flaky integration assertion; the same window is open to
+	// anything else reading the file while a session writes it.
+	//
+	// The rename is RETRIED rather than forced. On Windows it fails with a
+	// sharing violation while another process has the file open -- a reader,
+	// usually, for the few microseconds it takes to read it -- and that is
+	// transient. Unlinking to make room is what the old code did, and it is
+	// the bug: it trades a brief failure for a brief absence, and an absent
+	// config reads as an empty one rather than as a problem.
+	//
+	// Measured, not assumed: with the unlink in place the test beside this
+	// sees an empty config within a couple of hundred iterations; with an
+	// unlinking FALLBACK it still does, which is how this ended up a retry.
+	for attempt := range renameRetries {
+		if err = os.Rename(tmpName, path); err == nil {
+			return nil
+		}
+		if attempt < renameRetries-1 {
+			time.Sleep(readBackoff)
+		}
 	}
-	return nil
+	// Reported rather than forced. A save that fails is recoverable -- the old
+	// config is still there and intact, and the user is told. A config file
+	// that disappeared is not.
+	return fmt.Errorf("config: replacing %s: %w", path, err)
 }
+
+// renameRetries bounds how long Save waits for a reader to let go. Generous
+// enough to outlast reading a small JSON file many times over.
+const renameRetries = 10
 
 // Set adds or replaces a workspace.
 //
