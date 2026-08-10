@@ -129,11 +129,25 @@ buildx and buildkit this binary carries.`,
 	}
 
 	// After Initialize, because that is what loads the config file this reads.
-	dropMissingCredentialHelpers(dockerCli.ConfigFile(), lookPath, os.Stderr)
+	credentials := checkCredentialHelpers(dockerCli.ConfigFile(), lookPath, os.Stderr)
 
 	commands.AddCommands(cmd, dockerCli)
 	installModernBuilder(cmd, dockerCli)
 	installCompose(cmd, dockerCli)
+
+	// Raised when a command RUNS, not by leaving commands out of the tree.
+	// Returning early here built a docker with no subcommands, so `docker run
+	// --rm` failed with "unknown flag: --rm", which is a worse lie than the
+	// one it was replacing.
+	//
+	// PersistentPreRunE, so it reaches every subcommand. Cobra runs the
+	// closest one up the chain: compose chains to its parent's, `docker stack`
+	// replaces it and is the one place this will not fire, which is Swarm and
+	// untested anyway (ADR 0009). Help is unaffected, because cobra answers
+	// --help before it runs hooks.
+	if credentials != nil {
+		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return credentials }
+	}
 	return cmd
 }
 
