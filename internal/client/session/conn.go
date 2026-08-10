@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -90,12 +91,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
-				s.logQuiet(liveCtx, "collecting unused share volumes: %v", err)
+				s.logQuiet(liveCtx, "collecting unused share volumes", "err", err)
 			}
 		})
 	}
 
-	s.progressf("connected to %s@%s", s.opts.Config.User, s.opts.Config.Host)
+	s.progressf("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	return live, nil
 }
 
@@ -112,16 +113,16 @@ func (s *Session) sharesChanged() {
 }
 
 // progressf reports routine progress, which most commands do not want.
-func (s *Session) progressf(format string, args ...any) {
+func (s *Session) progressf(msg string, args ...any) {
 	if s.opts.Role.hosting() {
-		s.logf(format, args...)
+		s.log().Info(msg, args...)
 	}
 }
 
 // portsLogger is the logger the port manager gets: the real one when progress
 // is wanted, and nil otherwise, because "forwarding ..." arriving in the
 // middle of a container's output is exactly the pollution this avoids.
-func (s *Session) portsLogger() ports.Logger {
+func (s *Session) portsLogger() *slog.Logger {
 	if s.opts.Role.hosting() {
 		return s.opts.Log
 	}
@@ -137,11 +138,11 @@ func (s *Session) portsLogger() ports.Logger {
 // Those are descriptions of shutdown, not of anything wrong, and printing them
 // after the user pressed Ctrl-C or after a one-shot command finished is how a
 // clean exit came to look like a crash.
-func (s *Session) logQuiet(ctx context.Context, format string, args ...any) {
+func (s *Session) logQuiet(ctx context.Context, msg string, args ...any) {
 	if ctx.Err() != nil || s.ctx.Err() != nil {
 		return
 	}
-	s.logf(format, args...)
+	s.log().Warn(msg, args...)
 }
 
 func (s *Session) startNFS(live *liveConn) error {
@@ -156,7 +157,7 @@ func (s *Session) startNFS(live *liveConn) error {
 
 	live.wg.Go(func() {
 		if err := live.nfs.Serve(l); err != nil && !errors.Is(err, net.ErrClosed) {
-			s.logQuiet(s.ctx, "nfs server stopped: %v", err)
+			s.logQuiet(s.ctx, "the nfs server stopped", "err", err)
 		}
 	})
 	return nil
@@ -183,7 +184,7 @@ func (s *Session) watchPorts(ctx context.Context, live *liveConn) {
 
 	reconcile := func() {
 		if err := live.ports.Reconcile(ctx); err != nil {
-			s.logQuiet(ctx, "reconciling ports: %v", err)
+			s.logQuiet(ctx, "reconciling ports", "err", err)
 		}
 	}
 	reconcile()

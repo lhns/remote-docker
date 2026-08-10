@@ -10,21 +10,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/daemons"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
-
-// Logger reports connections and refusals.
-type Logger interface {
-	Printf(format string, args ...any)
-}
 
 // Config configures the server.
 type Config struct {
@@ -49,7 +46,7 @@ type Config struct {
 	// see which workspace agent it is talking to.
 	Version string
 
-	Log Logger
+	Log *slog.Logger
 }
 
 // Server serves SSH for the workspace.
@@ -135,13 +132,13 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 
 	account, ok := s.cfg.Accounts.Lookup(name)
 	if !ok {
-		s.logf("refused %s from %s: no such account", name, ctx.RemoteAddr())
+		s.log().Warn("refused a connection: no such account", "account", name, "from", ctx.RemoteAddr())
 		return false
 	}
 	if !account.Authorized(key) {
 		// Covers a revoked account too: revocation empties the key list, so
 		// the account survives while its access does not.
-		s.logf("refused %s from %s: key not enrolled", name, ctx.RemoteAddr())
+		s.log().Warn("refused a connection: the key is not enrolled", "account", name, "from", ctx.RemoteAddr())
 		return false
 	}
 
@@ -172,11 +169,12 @@ func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32)
 
 	allowed, why := s.forward.Allow(account, host, port)
 	if !allowed {
-		s.logf("refused reverse forward %s:%d for %s: %s", host, port, account.Name(), why)
+		s.log().Warn("refused a reverse forward", "host", host, "port", port, "account", account.Name(), "why", why)
 		return false
 	}
 	if !s.forward.Bind(account, host, port) {
-		s.logf("refused reverse forward %s:%d for %s: already held", host, port, account.Name())
+		s.log().Warn("refused a reverse forward: the port is already held",
+			"host", host, "port", port, "account", account.Name())
 		return false
 	}
 
@@ -187,7 +185,7 @@ func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32)
 		s.forward.Release(account, host, port)
 	}()
 
-	s.logf("%s is forwarding %s:%d", account.Name(), host, port)
+	s.log().Info("forwarding", "account", account.Name(), "host", host, "port", port)
 	return true
 }
 
@@ -204,7 +202,7 @@ func (s *Server) allowLocalForward(ctx gssh.Context, host string, port uint32) b
 		return false
 	}
 	if !isLoopback(host) {
-		s.logf("refused local forward to %s:%d: only loopback may be reached", host, port)
+		s.log().Warn("refused a local forward: only loopback may be reached", "host", host, "port", port)
 		return false
 	}
 	return true
@@ -222,7 +220,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		_ = s.Close()
 	}()
 
-	s.logf("listening on %s", s.cfg.Addr)
+	s.log().Info("listening on " + s.cfg.Addr)
 	if err := s.ssh.Serve(listener); err != nil && !isClosed(err) {
 		return fmt.Errorf("sshd: serving: %w", err)
 	}
@@ -248,8 +246,11 @@ func isClosed(err error) bool {
 	return err == gssh.ErrServerClosed || err == net.ErrClosed
 }
 
-func (s *Server) logf(format string, args ...any) {
-	if s.cfg.Log != nil {
-		s.cfg.Log.Printf(format, args...)
+// log is the server's logger, or silence. A nil *slog.Logger panics on use
+// rather than doing nothing, so the zero value needs an answer.
+func (s *Server) log() *slog.Logger {
+	if s.cfg.Log == nil {
+		return logx.Discard()
 	}
+	return s.cfg.Log
 }

@@ -10,10 +10,13 @@ package ports
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // Forwarder opens a local listener carrying connections to an address inside
@@ -53,11 +56,6 @@ type Docker interface {
 	ListContainers(ctx context.Context) ([]Container, error)
 }
 
-// Logger reports forwards opening and closing. Nil means silence.
-type Logger interface {
-	Printf(format string, args ...any)
-}
-
 // bindAddr is the local interface a forward binds.
 //
 // Loopback, and not configurable. A published port becoming reachable from the
@@ -71,7 +69,7 @@ const bindAddr = "127.0.0.1"
 type Manager struct {
 	Docker    Docker
 	Forwarder Forwarder
-	Log       Logger
+	Log       *slog.Logger
 
 	// Owned reports whether a container is one this client created. With a
 	// shared daemon (ADR 0012) the event stream carries other users'
@@ -135,7 +133,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			if !keep[port] {
 				_ = fwd.Close()
 				delete(existing.forwards, port)
-				m.logf("closed %s:%d (%s no longer publishes it)", bindAddr, port, existing.name)
+				m.log().Info("closed a forward: the container no longer publishes it",
+					"addr", bindAddr, "port", port, "container", existing.name)
 			}
 		}
 	}
@@ -173,17 +172,18 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 		// Deliberately not retried on another port. A listener at an address
 		// nobody asked for looks like success and breaks the next thing that
 		// expects the real one, so the conflict is reported and left alone.
-		m.logf("could not forward %s for %s: %v", local, container.Name, err)
+		m.log().Warn("could not forward", "addr", local, "container", container.Name, "err", err)
 		return
 	}
 	entry.forwards[p.PublicPort] = fwd
-	m.logf("forwarding %s -> %s:%d (%s)", fwd.LocalAddr(), container.Name, p.PrivatePort, container.Name)
+	m.log().Info("forwarding", "from", fwd.LocalAddr(), "container", container.Name, "port", p.PrivatePort)
 }
 
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
 	for port, fwd := range entry.forwards {
 		_ = fwd.Close()
-		m.logf("closed %s:%d (%s stopped)", bindAddr, port, entry.name)
+		m.log().Info("closed a forward: the container stopped",
+			"addr", bindAddr, "port", port, "container", entry.name)
 	}
 	delete(m.active, id)
 }
@@ -244,8 +244,11 @@ func publishedTCP(c Container) []Published {
 	return out
 }
 
-func (m *Manager) logf(format string, args ...any) {
-	if m.Log != nil {
-		m.Log.Printf(format, args...)
+// log is the manager's logger, or silence. A nil *slog.Logger panics on use,
+// and nil is how a command that must not narrate asks for quiet.
+func (m *Manager) log() *slog.Logger {
+	if m.Log == nil {
+		return logx.Discard()
 	}
+	return m.Log
 }

@@ -12,12 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // Dialer opens a fresh connection to the workspace's Docker socket.
@@ -33,16 +36,11 @@ type Rewriter interface {
 	ContainerCreate(ctx context.Context, body []byte) ([]byte, error)
 }
 
-// Logger reports what the proxy is doing. Nil means silence.
-type Logger interface {
-	Printf(format string, args ...any)
-}
-
 // Proxy serves the Docker API on a local listener.
 type Proxy struct {
 	Dialer   Dialer
 	Rewriter Rewriter
-	Log      Logger
+	Log      *slog.Logger
 
 	// Control answers this session's own endpoints, under ControlPrefix. Nil
 	// for a session that is not the daemon, which then reports them as absent
@@ -179,7 +177,7 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 			// the shutdown rather than a fault. Reporting it turned a clean
 			// exit into two alarming lines about pipes that had ended.
 			if err != io.EOF && !clientGone(err) && !p.closing() {
-				p.logf("reading request: %v", err)
+				p.log().Warn("reading request", "err", err)
 			}
 			return
 		}
@@ -191,7 +189,7 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 				// read an error and nothing left to do about it.
 				return
 			}
-			p.logf("%s %s: %v", req.Method, req.URL.Path, err)
+			p.log().Warn("proxying a request", "method", req.Method, "path", req.URL.Path, "err", err)
 			writeError(client, err)
 			return
 		}
@@ -233,13 +231,13 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 			if !written.IsZero() {
 				body = written.Sub(headed).Round(time.Millisecond).String()
 			}
-			p.logf("trace %s %s dial=%s send=%s wait=%s body=%s total=%s",
-				req.Method, req.URL.Path,
-				dialed.Sub(started).Round(time.Millisecond),
-				sent.Sub(dialed).Round(time.Millisecond),
-				headed.Sub(sent).Round(time.Millisecond),
-				body,
-				time.Since(started).Round(time.Millisecond))
+			p.log().Info("trace",
+				"method", req.Method, "path", req.URL.Path,
+				"dial", dialed.Sub(started).Round(time.Millisecond),
+				"send", sent.Sub(dialed).Round(time.Millisecond),
+				"wait", headed.Sub(sent).Round(time.Millisecond),
+				"body", body,
+				"total", time.Since(started).Round(time.Millisecond))
 		}()
 	}
 
@@ -454,10 +452,12 @@ func writeError(w io.Writer, err error) {
 		"Connection: close\r\n\r\n%s", len(body), body)
 }
 
-func (p *Proxy) logf(format string, args ...any) {
-	if p.Log != nil {
-		p.Log.Printf(format, args...)
+// log is the proxy's logger, or silence. A nil *slog.Logger panics on use.
+func (p *Proxy) log() *slog.Logger {
+	if p.Log == nil {
+		return logx.Discard()
 	}
+	return p.Log
 }
 
 // TraceEnv turns on per-request timing.

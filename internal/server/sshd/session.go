@@ -173,7 +173,7 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 		Log:     s.cfg.Log,
 	}
 	if err := replayer.Serve(session.Context(), session); err != nil {
-		s.logf("notify session for %s ended: %v", account.Name(), err)
+		s.log().Info("a notify session ended", "account", account.Name(), "err", err)
 	}
 	_ = session.Exit(0)
 }

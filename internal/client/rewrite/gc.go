@@ -3,8 +3,11 @@ package rewrite
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/lhns/remote-docker/pkg/workspace"
+
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // Volume is a volume as the daemon reports it.
@@ -45,12 +48,7 @@ type Collector struct {
 	// Owner limits collection to this account's volumes.
 	Owner string
 
-	Log Logger
-}
-
-// Logger reports what was removed.
-type Logger interface {
-	Printf(format string, args ...any)
+	Log *slog.Logger
 }
 
 // Collect removes unused managed volumes and reports how many went.
@@ -87,11 +85,11 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 			// A volume that cannot be removed is not fatal: it may have been
 			// claimed by a container between the listing and now, which is a
 			// race we lose harmlessly and retry next time.
-			c.logf("could not remove %s: %v", v.Name, err)
+			c.log().Warn("could not remove a volume", "volume", v.Name, "err", err)
 			continue
 		}
 		removed++
-		c.logf("removed unused share volume %s", v.Name)
+		c.log().Info("removed an unused share volume", "volume", v.Name)
 	}
 	return removed, nil
 }
@@ -112,8 +110,10 @@ func (c *Collector) ours(v Volume) bool {
 	return true
 }
 
-func (c *Collector) logf(format string, args ...any) {
-	if c.Log != nil {
-		c.Log.Printf(format, args...)
+// log is the collector's logger, or silence. A nil *slog.Logger panics on use.
+func (c *Collector) log() *slog.Logger {
+	if c.Log == nil {
+		return logx.Discard()
 	}
+	return c.Log
 }

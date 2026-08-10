@@ -11,6 +11,7 @@ package fswatch
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -68,12 +70,6 @@ func ParseMode(s string) (Mode, error) {
 	return ModeOff, fmt.Errorf("fswatch: unknown watch mode %q; want off, partial or coarse", s)
 }
 
-// Logger is the subset of logging this package needs, matching the convention
-// used by session and accounts.
-type Logger interface {
-	Printf(format string, args ...any)
-}
-
 // Share is one export and the local directory behind it.
 //
 // Deliberately not *nfsserve.Share: the same decoupling as rewrite.Sharer, so
@@ -103,7 +99,7 @@ type Options struct {
 	Debounce time.Duration
 	MaxDelay time.Duration
 	QueueLen int
-	Log      Logger
+	Log      *slog.Logger
 
 	// goos and newBackend are test seams: they let the Windows and macOS path
 	// rules, and the whole of the watch bookkeeping, be exercised from a Linux
@@ -280,7 +276,7 @@ func (w *Watcher) drain() {
 			if !ok {
 				return
 			}
-			w.logf("file watcher: %v", err)
+			w.log().Warn("file watcher", "err", err)
 		}
 	}
 }
@@ -430,7 +426,7 @@ func (w *Watcher) emit(out chan<- workspace.NotifyFrame, events []workspace.FSEv
 	kept := events[:0]
 	for _, e := range events {
 		if err := e.Validate(); err != nil {
-			w.logf("not reporting a change: %v", err)
+			w.log().Warn("not reporting a change", "err", err)
 			w.countDropped(1)
 			continue
 		}
@@ -478,11 +474,11 @@ func (w *Watcher) send(out <-chan workspace.NotifyFrame) {
 			// picture for a complete one.
 			for _, n := range pending {
 				if err := sink.Send(w.ctx, workspace.NotifyFrame{Notice: &n}); err != nil {
-					w.logf("reporting dropped changes: %v", err)
+					w.log().Warn("reporting dropped changes", "err", err)
 				}
 			}
 			if err := sink.Send(w.ctx, frame); err != nil {
-				w.logf("sending changes: %v", err)
+				w.log().Warn("sending changes", "err", err)
 				w.countDropped(uint64(len(frame.Events)))
 				continue
 			}
@@ -529,10 +525,12 @@ func (w *Watcher) countDropped(n uint64) {
 	w.mu.Unlock()
 }
 
-func (w *Watcher) logf(format string, args ...any) {
-	if w.opts.Log != nil {
-		w.opts.Log.Printf(format, args...)
+// log is the watcher's logger, or silence. A nil *slog.Logger panics on use.
+func (w *Watcher) log() *slog.Logger {
+	if w.opts.Log == nil {
+		return logx.Discard()
 	}
+	return w.opts.Log
 }
 
 // statNoFollow reports what a path is without following a final symlink. A
