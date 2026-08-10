@@ -457,7 +457,7 @@ Nothing is downloaded. This binary already carries the Docker CLI and answers
 to the name it is invoked by, so the shim is a link rather than a second
 program. Renaming the binary to docker` + exeSuffixDoc() + ` does the same thing by hand.
 
-"docker compose" is not included; see the README.`,
+"docker compose" works through it too: that is in here as well.`,
 	}
 	cmd.AddCommand(newShimInstallCommand(), newShimUninstallCommand(), newShimStatusCommand())
 	return cmd

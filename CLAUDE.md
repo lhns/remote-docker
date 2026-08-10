@@ -275,7 +275,8 @@ written against sshd, unchanged, before they were removed.
 Against a real dind daemon, a real kernel NFS mount and the real client
 binary: the tunnel, the NFS export, bind rewriting including sources outside
 the working directory, automatic port forwarding, managed volume creation,
-`docker compose` including one service reaching another over its network, a
+`docker compose` including one service reaching another over its network and
+the EMBEDDED compose bringing a stack up on its own (ADR 0009), a
 stock `ssh` still getting a shell on a pty as the enrolled account, the
 embedded Docker CLI, `gc`, idle disconnect and reconnect, cross-user port
 hijack refusal, `elevate`, the replay primitive matrix (which syscall produces
@@ -318,8 +319,6 @@ function was.
   machine has taken a session end to end in CI. Say "unit tested on Windows",
   never "the Windows client is tested".
 - **The release pipeline.** No tag has been pushed.
-- **`docker compose` embedded.** Not attempted -- it works through the proxy,
-  and embedding would pin docker/cli back a major version (ADR 0009).
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

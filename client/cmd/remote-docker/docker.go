@@ -42,7 +42,8 @@ func newDockerCommand() *cobra.Command {
 It finds the session's endpoint itself and starts a session if none is
 running, so there is nothing to do first. An explicit DOCKER_HOST is respected.
 
-"docker compose" is not included; see the README.`,
+"docker compose" is included: compose v5 builds against the same docker/cli,
+buildx and buildkit this binary carries.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 
@@ -132,6 +133,7 @@ running, so there is nothing to do first. An explicit DOCKER_HOST is respected.
 
 	commands.AddCommands(cmd, dockerCli)
 	installModernBuilder(cmd, dockerCli)
+	installCompose(cmd, dockerCli)
 	return cmd
 }
 

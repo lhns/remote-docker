@@ -54,7 +54,7 @@ still wins. Open a new terminal afterwards. `remote-docker shim uninstall`
 reverses both. Renaming the binary to `docker.exe` yourself does the same
 thing.
 
-`docker compose` is **not** included; see [Caveats](#caveats).
+`docker compose` is included too, so the whole toolchain is one binary.
 
 ## What works
 
@@ -64,7 +64,9 @@ thing.
   `localhost:8080` here, opened automatically as containers start.
 - **The real tooling, unmodified.** `docker`, `docker compose`,
   Testcontainers, IDE plugins, anything that speaks the Docker API. The
-  translation happens at the API, not in a command wrapper.
+  translation happens at the API, not in a command wrapper. The Docker CLI,
+  buildx and Compose are all inside this binary, so a machine with nothing
+  installed still gets `docker compose up`.
 - **Named volumes stay named volumes.** Only host paths are rewritten.
 - **File watchers can see your edits**, once `REMOTE_DOCKER_WATCH` is on. See
   [File watching](#file-watching); it is off by default and worth
@@ -471,14 +473,6 @@ to separate.
 - **Databases.** `nolock` plus `fcntl` locking is a corruption risk.
 - **Very large trees over a WAN.** NFSv3 is synchronous per operation, so
   latency multiplies. Over a LAN it is fine.
-
-### `docker compose` is not embedded
-
-`remote-docker docker compose` and the `docker` shim both fail on it. Compose
-would pin `docker/cli` back a major version and buildx back seven minors
-([ADR 0009](docs/adr/0009-embedding-the-docker-cli.md)), which would cost
-BuildKit. Compose works normally if you point a real docker CLI at the
-workspace's docker context.
 
 ### A session must be running
 
