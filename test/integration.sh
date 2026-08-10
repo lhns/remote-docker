@@ -1228,10 +1228,15 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ol
             *"different version"*) ok "a session in use from another commit is reported, not restarted" ;;
             *) bad "no version warning while a container depended on the old session" ;;
         esac
-        if "$WORK/remote-docker" status 2>/dev/null | grep -q "sha-oldbuild"; then
+        # Captured rather than piped, so a failure can show what status said.
+        # Which build is serving is exactly the question here, and "it did not
+        # match" without the output leaves nothing to reason from.
+        insitu=$("$WORK/remote-docker" status 2>&1)
+        if echo "$insitu" | grep -q "sha-oldbuild"; then
             ok "the in-use session was left running"
         else
             bad "the in-use session was replaced, taking its container's mount with it"
+            echo "$insitu" | sed 's/^/        /'
         fi
 
         # restart must refuse rather than break it.
