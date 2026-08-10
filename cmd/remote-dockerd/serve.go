@@ -20,7 +20,6 @@ import (
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/daemons"
 	"github.com/lhns/remote-docker/internal/server/elevate"
-	"github.com/lhns/remote-docker/internal/server/notify"
 	"github.com/lhns/remote-docker/internal/server/sshd"
 	"github.com/lhns/remote-docker/internal/server/supervise"
 	"github.com/lhns/remote-docker/pkg/workspace"
@@ -160,10 +159,15 @@ func serve(addr string) error {
 		return err
 	}
 
-	// Nil unless asked for, and nil is what keeps the shared daemon. A
+	// THE one place the mode is chosen. Everything downstream asks the resolver
+	// and is told; nothing else branches on which arrangement this workspace
+	// runs, which is what stops one session being routed to another account's
+	// daemon by a check somebody forgot to copy (ADR 0020).
+	//
+	// The shared daemon is a supported configuration rather than a fallback: a
 	// single-account workspace has nothing to separate and would pay for
 	// separation in memory and in duplicated layer cache.
-	var manager *daemons.Manager
+	targets := daemons.Shared("")
 	if perUserDind {
 		// The id identifies THIS workspace across redeploys, which a container
 		// id cannot. Without it the daemons are still labelled as ours, just
@@ -203,7 +207,7 @@ func serve(addr string) error {
 			log.Printf("per-account daemons run %s", image)
 		}
 
-		manager = &daemons.Manager{
+		manager := &daemons.Manager{
 			Options: daemons.Options{
 				Workspace:     id,
 				Image:         image,
@@ -211,6 +215,7 @@ func serve(addr string) error {
 			},
 			Log: logger{prefix: "daemons"}.Printf,
 		}
+		targets = manager
 		log.Printf("each account gets its own docker daemon (workspace %s)", id)
 
 		// Adopt before serving. A restarted agent that did not would find
@@ -229,8 +234,7 @@ func serve(addr string) error {
 		HostKeys: hostKeys,
 		Accounts: store,
 		Mapping:  mapping,
-		Daemons:  manager,
-		Volumes:  notify.DockerVolumes{},
+		Daemons:  targets,
 		Version:  version,
 		Log:      logger{prefix: "sshd"},
 	})

@@ -21,14 +21,25 @@ func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
 }
 
 // With no root -- the shared daemon -- the path is already ours.
+//
+// All three spellings of "no relocation" must work, and "/" is here because it
+// did not. daemons.Shared reports its root as "/", which is true; this function
+// took it for a prefix and asked whether the mountpoint began with "//", which
+// nothing does. Every replay on a shared-daemon workspace was refused as an
+// escape attempt, and the integration suite is what said so -- the unit tests
+// asserted the value "/" without ever passing it through the code that reads
+// it, which is a test agreeing with a bug rather than catching it.
 func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 	const mp = "/var/lib/docker/volumes/rd-cwd/_data"
 
-	if got, err := relocate(mp, nil); err != nil || got != mp {
-		t.Errorf("relocate(nil root) = %q, %v; want it unchanged", got, err)
-	}
-	if got, err := relocate(mp, func() (string, error) { return "", nil }); err != nil || got != mp {
-		t.Errorf("relocate(empty root) = %q, %v; want it unchanged", got, err)
+	for _, root := range []func() (string, error){
+		nil,
+		func() (string, error) { return "", nil },
+		func() (string, error) { return "/", nil },
+	} {
+		if got, err := relocate(mp, root); err != nil || got != mp {
+			t.Errorf("relocate = %q, %v; want it unchanged", got, err)
+		}
 	}
 }
 

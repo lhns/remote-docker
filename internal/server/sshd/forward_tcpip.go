@@ -77,18 +77,16 @@ type forwardedTCP struct {
 // lives in the agent's namespace, so binding there is what makes the export
 // reachable at all.
 func (s *Server) listenFor(ctx context.Context, account sessionAccount, addr string) (net.Listener, error) {
-	if s.cfg.Daemons == nil {
-		return net.Listen("tcp", addr)
-	}
-
 	// Ensure rather than Lookup: the client asks for this forward moments
 	// after authenticating, and Warm may still be booting the daemon. Waiting
 	// here is right -- there is nothing to bind into until it exists.
-	d, err := s.cfg.Daemons.Ensure(ctx, account.Name())
+	target, err := s.cfg.Daemons.Ensure(ctx, account.Name())
 	if err != nil {
 		return nil, err
 	}
-	return netns.Listen(d.NetNSPath(), "tcp", addr)
+	// An empty path is the agent's own namespace, which is where the shared
+	// daemon lives, so this one line serves both modes -- see netns.Do.
+	return netns.Listen(target.NetNSPath, "tcp", addr)
 }
 
 // handleForwardRequest answers tcpip-forward and cancel-tcpip-forward.
@@ -262,16 +260,11 @@ func (s *Server) directTCPIP(_ *gssh.Server, _ *gossh.ServerConn, newChan gossh.
 
 // dialFor connects to dest from wherever this account's containers publish.
 func (s *Server) dialFor(ctx context.Context, account sessionAccount, dest string) (net.Conn, error) {
-	if s.cfg.Daemons == nil {
-		var dialer net.Dialer
-		return dialer.DialContext(ctx, "tcp", dest)
-	}
-
-	d, err := s.cfg.Daemons.Ensure(ctx, account.Name())
+	target, err := s.cfg.Daemons.Ensure(ctx, account.Name())
 	if err != nil {
 		return nil, err
 	}
-	return netns.Dial(d.NetNSPath(), "tcp", dest)
+	return netns.Dial(target.NetNSPath, "tcp", dest)
 }
 
 // bridge copies both ways and closes both ends when either finishes.

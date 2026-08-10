@@ -41,8 +41,10 @@ internal/server/
   supervise/             starts and watches the workspace's own dockerd
   elevate/               relaunch privileged, for Swarm (ADR 0013)
   notify/                replays the client's changes as real syscalls
-  daemons/               a dockerd per account: plan, start, adopt
+  daemons/               a dockerd per account: plan, start, adopt; and the
+                         one resolver both modes answer through (ADR 0020)
   netns/                 run a function inside another process's netns
+                         (an empty path means this one -- ADR 0020)
   dockercli/             the one way this side runs the docker binary
 
 image/                   the workspace container (Dockerfile only)
@@ -158,6 +160,16 @@ premise of the project, and it applies to building it too. So:
   `IN_ATTRIB`, which most watchers ignore. That asymmetry is the whole reason
   the feature works, and `test/integration.sh` section 11d keeps both rows so
   a kernel change cannot quietly take it away.
+- **An account is resolved to its daemon exactly once, through
+  `daemons.Targets`.** Never reintroduce `if cfg.Daemons != nil` at a use site.
+  There were nine such branches and the invariant they guarded is one that
+  fails by *succeeding*: a session sent to the wrong daemon runs, against
+  another account's containers, with nothing logged and nothing failing. The
+  shared daemon of ADR 0012 is `daemons.Shared`, an implementation, so there is
+  no second path that could drift from the first. The empty string is how "no
+  redirection" travels -- `netns.Do("")` stays in this namespace, an empty
+  `Host` leaves `DOCKER_HOST` unset -- and that is what lets both modes be one
+  code path.
 - **A per-account dind is separation, not isolation.** Each one runs
   privileged, so a determined account can still break out and reach another's.
   What ADR 0019 buys is that nobody sees anyone else's work by accident. ADR

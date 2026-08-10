@@ -80,13 +80,15 @@ const aliveTTL = 2 * time.Second
 // user cannot act on.
 const DefaultReadyTimeout = 90 * time.Second
 
-// Ensure returns the account's daemon, starting or restarting it if needed.
+// ensure returns the account's daemon, starting or restarting it if needed.
+// Callers outside this package reach it through Ensure, which answers in the
+// Target that both modes share.
 //
 // Idempotent and single-flighted per account: several sessions for one user
 // arriving together is the normal case -- the client opens one connection and
 // the docker CLI opens more -- and each starting its own daemon would be a
 // race whose loser leaves a container behind.
-func (m *Manager) Ensure(ctx context.Context, account string) (*Daemon, error) {
+func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 	for {
 		m.mu.Lock()
 		d, known := m.byName[account]
@@ -515,7 +517,7 @@ func (m *Manager) logf(format string, args ...any) {
 // is answered on the client's first round trip, and a cold dind takes seconds
 // to boot. Blocking there would make every first connection look like a hang,
 // and the client would be waiting for a version string it only displays.
-func (m *Manager) Lookup(ctx context.Context, account string) (*Daemon, bool) {
+func (m *Manager) lookup(ctx context.Context, account string) (*Daemon, bool) {
 	m.mu.Lock()
 	d, ok := m.byName[account]
 	m.mu.Unlock()
