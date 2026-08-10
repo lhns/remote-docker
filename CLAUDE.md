@@ -330,9 +330,20 @@ function was.
 
 ## Conventions
 
-- Comments explain *why*, not *what*. Several encode findings that cost real
-  debugging — the hijack rules, the half-close, the genproto exclusion, the
-  go-nfs refusal panic, mount propagation. Do not strip them.
+- Comments explain *why*, not *what*, and are written for somebody reading the
+  code to understand it rather than for whoever debugged it. Keep the finding
+  and the way it fails silently; drop the transcript, the re-derivation and
+  what was tried first. Several findings here cost real debugging (the hijack
+  rules, the half-close, the genproto exclusion, the go-nfs refusal panic,
+  mount propagation) and must survive the edit that shortens them. The long
+  version belongs in an ADR, which the comment then links to.
+- No `--` interjections, and few em-dashes. A dash almost always carries a
+  clause that wanted its own sentence, and reading around one means holding
+  the first half open while the second runs underneath it.
 - bash in `test/`. There is no shell left in the image: `image/` is a
   Dockerfile and nothing else.
+- CLI output is one line of diagnosis, and where there is a remedy, one
+  indented `fix:` line under it. Never a wrapped paragraph: the terminal's
+  width is not ours to guess, so the answer is a message short enough not to
+  need wrapping. Help text is the exception, since cobra does not reflow it.
 - A finding that contradicts an ADR gets the ADR corrected, not ignored.

@@ -575,31 +575,18 @@ func Save(file File, path string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	// Renamed straight over the old file, never unlinked first.
+	// Renamed straight over the old file, NEVER unlinked first.
 	//
-	// This used to `os.Remove(path)` before renaming, for a stated reason
-	// ("Windows will not rename onto an existing file") that is not true of
-	// os.Rename: it calls MoveFileEx with MOVEFILE_REPLACE_EXISTING, which
-	// replaces. Measured on Windows rather than assumed, because the comment
-	// was confident and wrong.
+	// Unlinking opens a window where the config does not exist, and Load reads
+	// a missing file as an empty config with no error: `workspace ls` in that
+	// window prints nothing and exits 0. os.Rename does not need the unlink
+	// anyway, since MoveFileEx replaces on Windows too.
 	//
-	// What it cost: between the Remove and the Rename the config file DOES NOT
-	// EXIST, and Load treats a missing file as an empty config with no error --
-	// so a `remote-docker workspace ls` that read in that window printed
-	// nothing and exited 0, having been told there were no workspaces. It
-	// showed up as one flaky integration assertion; the same window is open to
-	// anything else reading the file while a session writes it.
-	//
-	// The rename is RETRIED rather than forced. On Windows it fails with a
-	// sharing violation while another process has the file open, usually a
-	// reader for the few microseconds it takes, which is transient.
-	// Unlinking to make room is what the old code did, and it is
-	// the bug: it trades a brief failure for a brief absence, and an absent
-	// config reads as an empty one rather than as a problem.
-	//
-	// Measured, not assumed: with the unlink in place the test beside this
-	// sees an empty config within a couple of hundred iterations; with an
-	// unlinking FALLBACK it still does, which is how this ended up a retry.
+	// Retried rather than forced. A rename can fail with a sharing violation
+	// while a reader has the file open, which is transient and loud; unlinking
+	// to make room trades that for a brief absence, which is silent. The test
+	// beside this catches an unlinking version within a couple of hundred
+	// iterations, fallback included.
 	for attempt := range renameRetries {
 		if err = os.Rename(tmpName, path); err == nil {
 			return nil
