@@ -23,7 +23,7 @@ const healthTimeout = 5 * time.Second
 //
 // The deployments used `nc -z 127.0.0.1 2222`, which proves a port is open and
 // nothing else. A workspace whose dockerd had died kept passing it, which is
-// precisely the case a healthcheck exists to catch -- the agent is fine, the
+// precisely the case a healthcheck exists to catch: the agent is fine, the
 // port is fine, and every client command fails.
 //
 // What it checks depends on what it can SEE, and that is deliberate rather
@@ -94,7 +94,7 @@ func sshAccepting(ctx context.Context, addr string) error {
 // dockerAnswering asks the daemon for its version.
 //
 // A request rather than a socket file, because a socket file is what a daemon
-// that died during startup leaves behind -- the same distinction that made
+// that died during startup leaves behind, the same distinction that made
 // per-account daemons look ready when they were not.
 func dockerAnswering(ctx context.Context) error {
 	if _, err := (dockercli.CLI{}).Line(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {

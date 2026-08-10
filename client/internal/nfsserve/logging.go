@@ -19,7 +19,7 @@ import (
 // Program 100227 is NFS_ACL and procedure 0 is NULL, so that line is the Linux
 // NFS client asking "do you support ACLs?" and being correctly told no. It is
 // a routine probe reported as a failure, and it is alarming precisely when a
-// user is least able to judge it -- the first time they run `shell`.
+// user is least able to judge it: the first time they run `shell`.
 //
 // The mount options carry `noacl` now, which stops the probe at source. This
 // stays as well, because the probe is only the loudest example: go-nfs's

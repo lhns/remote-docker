@@ -355,7 +355,7 @@ func TestRewriteWithoutOwnerLeavesBodyAlone(t *testing.T) {
 }
 
 // An audit of every container-create field that can name a host path, prompted
-// by Portainer's GHSA-7fw3-x4r2-g7wc -- which exists precisely because a proxy
+// by Portainer's GHSA-7fw3-x4r2-g7wc, which exists precisely because a proxy
 // inspected HostConfig.Binds and missed HostConfig.Mounts. Those two are the
 // only fields that produce a bind mount, and both are handled.
 //
@@ -398,7 +398,7 @@ func TestRewriteLeavesOtherMountFieldsAlone(t *testing.T) {
 }
 
 // HostConfig.VolumeDriver names the driver used for volumes this container
-// creates, and our rewrite produces an unqualified volume name -- so a
+// creates, and our rewrite produces an unqualified volume name, so a
 // container setting it could in principle have our name resolved by the wrong
 // driver.
 //

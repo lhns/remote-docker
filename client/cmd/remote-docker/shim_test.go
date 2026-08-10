@@ -79,7 +79,7 @@ func TestInstallIsIdempotent(t *testing.T) {
 }
 
 // The invariant of the whole feature. A machine may get Docker Desktop
-// tomorrow, and a shim that overwrote a real CLI is a broken machine -- so
+// tomorrow, and a shim that overwrote a real CLI is a broken machine, so
 // anything without our marker beside it is left exactly where it is.
 func TestInstallRefusesADockerItDidNotWrite(t *testing.T) {
 	home := t.TempDir()
@@ -152,7 +152,7 @@ func TestUninstallRemovesWhatItInstalled(t *testing.T) {
 }
 
 // A copy is the one form that duplicates the binary and silently goes stale,
-// so it is never reached without consent -- and "no terminal to ask" must mean
+// so it is never reached without consent, and "no terminal to ask" must mean
 // no, which is what CI and every script are.
 func TestACopyIsNeverMadeWithoutConsent(t *testing.T) {
 	home := t.TempDir()

@@ -24,7 +24,7 @@ func DefaultEndpoint() string { return defaultPipe }
 
 // Deliberately NOT \\.\pipe\docker_engine, which is the pipe the official
 // Docker CLI looks for when DOCKER_HOST is unset. Binding it would make that
-// CLI work with no configuration at all -- but only while nothing else owns
+// CLI work with no configuration at all, but only while nothing else owns
 // the name, which in practice means only while Docker Desktop is not running.
 // A default that works until the user installs Docker Desktop is worse than
 // one that always needs a context, which `workspace create` writes anyway.
@@ -58,7 +58,7 @@ func Listen(endpoint string) (net.Listener, error) {
 	if err != nil {
 		lock.Release()
 		// "Access is denied" is what the kernel says when the name is already
-		// owned -- accurate, and telling the user nothing they can act on. Any
+		// owned, which is accurate and tells the user nothing they can act on. Any
 		// OTHER failure is a real failure and must be reported as itself: a
 		// malformed pipe name reported as "already serving" because a stale
 		// lock file happened to sit next to it sends the reader hunting for a
@@ -77,7 +77,7 @@ func Listen(endpoint string) (net.Listener, error) {
 
 // ownerOnlySDDL grants this user, SYSTEM and Administrators, and nobody else.
 //
-// The alternative -- passing a nil config -- takes the Windows default named
+// The alternative (passing a nil config) takes the Windows default named
 // pipe ACL from RtlDefaultNpAcl, which is more generous than is appropriate
 // for an endpoint that can mount this machine's filesystem into a container.
 // Being explicit costs one lookup and removes the question.

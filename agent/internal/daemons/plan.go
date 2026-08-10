@@ -36,8 +36,8 @@ var ErrUnsupported = errors.New("daemons: per-account daemons are Linux-only")
 //
 // A LAST RESORT, not a good default, and the difference matters: stock
 // docker:dind does not carry fuse-overlayfs. A workspace whose data is on Ceph
-// or NFS runs its own dockerd with --storage-driver=fuse-overlayfs -- which is
-// why the image built here installs it -- and a per-account daemon inheriting
+// or NFS runs its own dockerd with --storage-driver=fuse-overlayfs, which is
+// why the image built here installs it, and a per-account daemon inheriting
 // that driver on this image dies at startup with
 //
 //	exec: "fuse-overlayfs": executable file not found in $PATH
@@ -50,7 +50,7 @@ const DefaultImage = "docker:28-dind"
 // Entrypoint is what a per-account daemon runs.
 //
 // Set explicitly because the image is the workspace's own, whose entrypoint is
-// the agent -- left alone, the daemon container would run `remote-dockerd`
+// the agent. Left alone, the daemon container would run `remote-dockerd`
 // handed dockerd's flags.
 //
 // It is dind's OWN entrypoint script, not `dockerd`, and that distinction cost
@@ -61,7 +61,7 @@ const DefaultImage = "docker:28-dind"
 //	failed to start daemon, ensure docker is not running or delete
 //	/var/run/docker.pid: process with PID 1 is still running
 //
-// in a loop -- so a daemon looks fine until the workspace is restarted, which
+// in a loop, so a daemon looks fine until the workspace is restarted, which
 // is exactly when nobody is watching. The script is present in both candidate
 // images because the workspace's own is built FROM docker:dind.
 const Entrypoint = "dockerd-entrypoint.sh"
@@ -83,8 +83,8 @@ const (
 // The workspace label carries an id persisted in the state directory, NOT the
 // container id. A container id changes on every redeploy, so adopting by it
 // would orphan every user's daemon the first time somebody ran
-// `docker compose up -d` -- leaving the daemons running, unreferenced, holding
-// their volumes and their users' containers.
+// `docker compose up -d`, leaving them running, unreferenced, and holding
+// their users' containers.
 const (
 	ManagedLabel   = "remote-docker.daemon"
 	AccountLabel   = "remote-docker.account"
@@ -96,15 +96,15 @@ const (
 	// It exists because a daemon that already exists is STARTED, never re-run,
 	// so its command line is fixed for life. Without a record of what it was
 	// created from, changing the workspace's configuration silently applies to
-	// nobody who already has a daemon -- which, on any workspace that has been
+	// nobody who already has a daemon, which, on any workspace that has been
 	// used, is everybody.
 	SpecLabel = "remote-docker.spec"
 
 	// StorageLabel records the graph driver a daemon was CREATED with.
 	//
-	// A daemon that already exists is started, never re-run -- that is what
-	// keeps an account's containers and images across a redeploy -- so its
-	// command line is fixed for life. Without this label there is no way to
+	// A daemon that already exists is started, never re-run, which is what
+	// keeps an account's containers and images across a redeploy. Its command
+	// line is fixed for life, and without this label there is no way to
 	// notice that the workspace's configuration has since changed and the
 	// running daemon is not what the current settings would produce.
 	//
@@ -157,7 +157,7 @@ type Options struct {
 
 	// StorageDriver is passed to the per-user dockerd. A deployment whose
 	// graph volume is Ceph-backed sets fuse-overlayfs, and that has to reach
-	// each account's daemon explicitly -- it is not inherited.
+	// each account's daemon explicitly, because it is not inherited.
 	StorageDriver string
 }
 
@@ -172,7 +172,7 @@ func ContainerName(account string) string {
 // VolumeName is where one account's /var/lib/docker lives.
 //
 // A named volume on the WORKSPACE's daemon, so it lands on a real filesystem
-// rather than on an overlay -- overlay2 on overlay2 never arises -- and so it
+// rather than on an overlay (overlay2 on overlay2 never arises) and so it
 // survives the daemon being restarted, the agent being restarted and the
 // workspace being redeployed. Never collected automatically, for the same
 // reason accounts are revoked rather than deleted: the cost of being wrong is
@@ -207,9 +207,9 @@ func Plan(account string, opts Options) (Spec, error) {
 		image = DefaultImage
 	}
 
-	// Flags only: dockerd itself is the entrypoint. Two listeners -- the one
-	// the agent dials, and the conventional path so anything running inside
-	// the daemon's own container still works.
+	// Flags only: dockerd itself is the entrypoint. Two listeners, the one the
+	// agent dials and the conventional path, so anything running inside the
+	// daemon's own container still works.
 	command := []string{
 		"-H", "unix://" + SocketMount + "/" + SocketName,
 		"-H", "unix:///var/run/docker.sock",
@@ -324,7 +324,7 @@ func StorageDriverFrom(dockerdArgs []string) string {
 //
 // The rendered arguments, hashed: image, entrypoint, flags, labels, mounts.
 // Comparing the digest rather than the arguments means a new setting is
-// noticed without anything having to be taught what settings exist -- adding
+// noticed without anything having to be taught what settings exist. Adding
 // one to Plan is enough.
 //
 // Its own label is excluded, since it is being computed.

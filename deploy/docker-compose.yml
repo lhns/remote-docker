@@ -14,8 +14,8 @@ services:
     container_name: remote-docker-workspace
     restart: unless-stopped
 
-    # dind needs this: it runs its own dockerd, sets up its own bridge and
-    # iptables rules, and mounts NFS inside its own mount namespace.
+    # dind runs its own dockerd, sets up its own bridge and iptables rules, and
+    # mounts NFS in its own namespace.
     privileged: true
 
     ports:
@@ -25,26 +25,24 @@ services:
       TZ: ${TZ:-UTC}
       DOCKER_TLS_CERTDIR: ""
       # Empty means overlay2, which is right for the named volume below. Set
-      # it to --storage-driver=fuse-overlayfs only if you replace that volume
-      # with a bind onto Ceph- or NFS-backed storage, where overlay2 refuses
-      # to run at all.
+      # --storage-driver=fuse-overlayfs only if you replace that volume with a
+      # bind onto Ceph- or NFS-backed storage, where overlay2 refuses to run.
       WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
       # Keep the graph driver on real local disk if you possibly can.
       - workspace-docker:/var/lib/docker
-      # Host keys + uid map. Persisting this is what stops clients getting a
-      # "REMOTE HOST IDENTIFICATION HAS CHANGED" warning after a redeploy,
-      # and what keeps each user's uid (and therefore port) stable.
+      # Host keys and the uid map. Persisting this stops clients getting
+      # "REMOTE HOST IDENTIFICATION HAS CHANGED" after a redeploy and keeps
+      # each account's uid, and so its tunnel port, stable.
       - ./state:/etc/workspace
       # Drop one <name>.pub per user in here.
       - ./authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     healthcheck:
-      # One command that checks both, and reports which failed. `docker info`
-      # in a shell returned 0 for a daemon that was answering but unusable;
-      # this asks the daemon for its version, which a half-started one cannot
-      # give.
+      # Asks the agent, which also asks the daemon for its version. `docker
+      # info` in a shell returned 0 for a daemon that was answering but
+      # unusable.
       test: ["CMD", "remote-dockerd", "healthcheck"]
       interval: 30s
       timeout: 10s

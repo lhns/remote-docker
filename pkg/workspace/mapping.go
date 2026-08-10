@@ -18,7 +18,7 @@ const MaxPort = 65535
 //
 // The mapping is deliberately a pure function of the uid rather than an
 // allocation: it needs no coordination between users, cannot collide, and --
-// the property that turned out to matter -- is stable, so a dropped tunnel
+// the property that turned out to matter, is stable, so a dropped tunnel
 // reconnects to the same endpoint instead of forcing a remount.
 type Mapping struct {
 	UIDBase  int

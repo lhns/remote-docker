@@ -65,7 +65,7 @@ type Collector struct {
 //  2. the volume carries our label
 //
 // A volume failing either is not ours, whatever it looks like. The prefix
-// alone is not enough -- a user is perfectly entitled to name a volume
+// alone is not enough, because a user is entitled to name a volume
 // "rd-backups".
 func (c *Collector) Collect(ctx context.Context) (int, error) {
 	volumes, err := c.Volumes.ListVolumes(ctx)
@@ -107,7 +107,7 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 // behind it, and reports whether it went.
 //
 // The decision and the deletion happen under the guard, so a bind rewrite
-// either registered its share first -- and the volume is spared -- or arrives
+// either registered its share first (and the volume is spared) or arrives
 // after the removal and recreates it. The daemon's own answer cannot cover
 // this: a volume exists for a moment before any container names it, and that
 // moment is exactly when this runs.

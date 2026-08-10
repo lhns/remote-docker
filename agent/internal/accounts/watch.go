@@ -14,7 +14,7 @@ const DefaultPollInterval = 60 * time.Second
 // Watch keeps accounts in step with the keys directory until ctx is done.
 //
 // It both watches and polls, and the polling is not belt-and-braces. The keys
-// directory is expected to live on shared storage -- CephFS, NFS -- where
+// directory is expected to live on shared storage (CephFS, NFS) where
 // inotify never fires for a change made on another host. A deployment where
 // enrolment happens from a management node would silently never see a new key.
 //
@@ -53,8 +53,8 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
-	// Changes arrive in bursts -- an editor writing a key file produces
-	// several events -- so a change schedules one sync shortly after rather
+	// Changes arrive in bursts: an editor writing a key file produces
+	// several events, so a change schedules one sync shortly after rather
 	// than one per event.
 	var pending <-chan time.Time
 

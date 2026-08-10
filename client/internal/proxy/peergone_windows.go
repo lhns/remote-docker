@@ -8,7 +8,7 @@ import (
 )
 
 // Windows reports a peer that has gone away with its own error numbers, and
-// they arrive as text like "The pipe has been ended." -- which reads alarming
+// they arrive as text like "The pipe has been ended.", which reads alarming
 // in a terminal and means nothing more than "the client hung up".
 const (
 	errorBrokenPipe       = syscall.Errno(109) // ERROR_BROKEN_PIPE

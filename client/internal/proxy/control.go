@@ -12,7 +12,7 @@ import (
 // own.
 //
 // One endpoint means one lock, one ACL and one thing to find. A second socket
-// would need all three again, and would need them to agree -- and the Docker
+// would need all three again, and would need them to agree, and the Docker
 // endpoint's permissions already say exactly who may drive this session,
 // because anyone who can reach it can already start containers that read and
 // write this machine's filesystem.
@@ -85,7 +85,7 @@ func writeControl(w net.Conn, status int, body any) {
 		status = http.StatusInternalServerError
 	}
 	// Connection: close, because a control call is a one-shot and leaving the
-	// connection open would have the caller's transport hold it idle -- which
+	// connection open would have the caller's transport hold it idle, which
 	// for `stop` means holding the very session it just asked to end.
 	_, _ = fmt.Fprintf(w,
 		"HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
@@ -99,7 +99,7 @@ type Status struct {
 	// Compared, never ordered. A sha build says which commit and nothing about
 	// when: "sha-a7634c0" and "sha-95e42ac" cannot be put in sequence, and a
 	// release version cannot be compared with either. So a difference is
-	// reported as a difference, never as "outdated" -- claiming an order this
+	// reported as a difference, never as "outdated": claiming an order this
 	// cannot know would be worse than saying nothing.
 	Version string `json:"version"`
 
@@ -111,8 +111,8 @@ type Status struct {
 	// Storage is the graph driver of the daemon this session is talking to.
 	//
 	// Carried here so an ordinary `docker` command can warn about it. The
-	// session is the only thing that has spoken to the workspace -- every
-	// other command talks to the session -- so without this the fact would be
+	// session is the only thing that has spoken to the workspace, since every
+	// other command talks to the session, so without this the fact would be
 	// reachable only by running `status` on purpose, which is not something
 	// somebody does while wondering why their container is slow.
 	Storage string `json:"storage,omitempty"`

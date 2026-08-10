@@ -109,7 +109,7 @@ type File struct {
 // Workspace is one entry in the keyed form.
 //
 // The two durations are held as strings because that is what the file says --
-// "90s", "45m" -- and encoding/json has no idea what a time.Duration is. They
+// "90s", "45m", and encoding/json has no idea what a time.Duration is. They
 // are parsed in applyWorkspace, where a malformed one is ignored rather than
 // fatal, exactly as the environment's are.
 type Workspace struct {
@@ -137,7 +137,7 @@ func (f File) Names() []string {
 // selected picks which workspace a request refers to.
 //
 // An explicit name wins; then the file's stated default; then, only when there
-// is exactly one, that one -- because with a single workspace configured, not
+// is exactly one, that one, because with a single workspace configured, not
 // naming it is unambiguous rather than lazy.
 func (f File) selected(want string) (string, Workspace, error) {
 	if len(f.Workspaces) == 0 {
@@ -198,9 +198,8 @@ const (
 // Resolve combines the sources in order of decreasing precedence: command
 // line, environment, config file, defaults.
 //
-// The file is optional and a missing one is not an error -- `enroll` has to
-// work before anything is configured, since that is how a key gets issued in
-// the first place.
+// The file is optional and a missing one is not an error: `enroll` has to work
+// before anything is configured, since that is how a key gets issued.
 func Resolve(o Overrides, path string) (Config, error) {
 	cfg := Config{Port: DefaultSSHPort, User: defaultUser()}
 
@@ -317,8 +316,8 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	}
 }
 
-// duration parses a setting written the way a person writes one -- "90s",
-// "45m", "-1s" for never -- and reports whether it said anything usable.
+// duration parses a setting written the way a person writes one ("90s", "45m",
+// "-1s" for never) and reports whether it said anything usable.
 //
 // Malformed is "said nothing", not an error, for the same reason a malformed
 // port in the environment is: this is the lowest layer and it is consulted by
@@ -375,9 +374,9 @@ func applyEnv(cfg *Config) {
 }
 
 // splitList reads a comma- or os.PathListSeparator-separated list, so
-// REMOTE_DOCKER_WATCH_EXCLUDE can be written either way -- a semicolon list on
-// Windows is what a shell user reaches for, and a comma list is what a
-// Dockerfile or compose file does.
+// REMOTE_DOCKER_WATCH_EXCLUDE can be written either way. A semicolon list is
+// what a Windows shell user reaches for; a comma list is what a Dockerfile or
+// compose file does.
 func splitList(v string) []string {
 	fields := strings.FieldsFunc(v, func(r rune) bool {
 		return r == ',' || r == os.PathListSeparator
@@ -420,9 +419,8 @@ func (c Config) EndpointFor(base string) string {
 	}
 	if c.Name == "" || base == "" {
 		// An empty base cannot be joined to. Returning it means the default,
-		// which is the one answer that is never wrong -- unlike the bare
-		// separator this used to build, which named a socket relative to the
-		// working directory.
+		// which is never wrong, unlike the bare separator this used to build:
+		// that named a socket relative to the working directory.
 		return base
 	}
 	return joinEndpoint(base, sanitizeUser(c.Name))
@@ -431,8 +429,8 @@ func (c Config) EndpointFor(base string) string {
 // ContextName is the docker context this workspace installs.
 //
 // The workspace's own name, so `docker --context dev ps` reads naturally.
-// Nothing else is prefixed onto it, which means an install must check the
-// context is one of ours before replacing it -- see the install command.
+// Nothing else is prefixed onto it, so an install must check the context is
+// one of ours before replacing it.
 func (c Config) ContextName() string {
 	if c.Name == "" {
 		return "remote-docker"
@@ -577,31 +575,18 @@ func Save(file File, path string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	// Renamed straight over the old file, never unlinked first.
+	// Renamed straight over the old file, NEVER unlinked first.
 	//
-	// This used to `os.Remove(path)` before renaming, for a stated reason --
-	// "Windows will not rename onto an existing file" -- that is not true of
-	// os.Rename: it calls MoveFileEx with MOVEFILE_REPLACE_EXISTING, which
-	// replaces. Measured on Windows rather than assumed, because the comment
-	// was confident and wrong.
+	// Unlinking opens a window where the config does not exist, and Load reads
+	// a missing file as an empty config with no error: `workspace ls` in that
+	// window prints nothing and exits 0. os.Rename does not need the unlink
+	// anyway, since MoveFileEx replaces on Windows too.
 	//
-	// What it cost: between the Remove and the Rename the config file DOES NOT
-	// EXIST, and Load treats a missing file as an empty config with no error --
-	// so a `remote-docker workspace ls` that read in that window printed
-	// nothing and exited 0, having been told there were no workspaces. It
-	// showed up as one flaky integration assertion; the same window is open to
-	// anything else reading the file while a session writes it.
-	//
-	// The rename is RETRIED rather than forced. On Windows it fails with a
-	// sharing violation while another process has the file open -- a reader,
-	// usually, for the few microseconds it takes to read it -- and that is
-	// transient. Unlinking to make room is what the old code did, and it is
-	// the bug: it trades a brief failure for a brief absence, and an absent
-	// config reads as an empty one rather than as a problem.
-	//
-	// Measured, not assumed: with the unlink in place the test beside this
-	// sees an empty config within a couple of hundred iterations; with an
-	// unlinking FALLBACK it still does, which is how this ended up a retry.
+	// Retried rather than forced. A rename can fail with a sharing violation
+	// while a reader has the file open, which is transient and loud; unlinking
+	// to make room trades that for a brief absence, which is silent. The test
+	// beside this catches an unlinking version within a couple of hundred
+	// iterations, fallback included.
 	for attempt := range renameRetries {
 		if err = os.Rename(tmpName, path); err == nil {
 			return nil
@@ -610,9 +595,9 @@ func Save(file File, path string) error {
 			time.Sleep(readBackoff)
 		}
 	}
-	// Reported rather than forced. A save that fails is recoverable -- the old
-	// config is still there and intact, and the user is told. A config file
-	// that disappeared is not.
+	// Reported rather than forced. A save that fails is recoverable: the old
+	// config is intact and the user is told. A config file that disappeared is
+	// not.
 	return fmt.Errorf("config: replacing %s: %w", path, err)
 }
 

@@ -67,7 +67,7 @@ type Options struct {
 type Role int
 
 const (
-	// Query only asks the workspace things -- `status`, `gc`. It binds
+	// Query only asks the workspace things, as `status` and `gc` do. It binds
 	// nothing and exports nothing, and each half of that is load-bearing:
 	//
 	//   - It must not bind the local Docker endpoint. These commands never use
@@ -91,7 +91,7 @@ const (
 	// behind one.
 	//
 	// Exactly one of these can exist per account, and it fails rather than
-	// half-working when the export port is already taken -- two of them is a
+	// half-working when the export port is already taken, and two of them is a
 	// genuine conflict and saying so beats a session that silently serves no
 	// files.
 	Host
@@ -285,7 +285,7 @@ func (s *Session) DialDocker(ctx context.Context) (io.ReadWriteCloser, error) {
 	// The lease is held for the life of the STREAM, not just the dial.
 	//
 	// It used to be released the instant the stream opened, so a hijacked
-	// connection -- `docker attach`, `exec -it`, `logs -f` -- held nothing at
+	// connection (`docker attach`, `exec -it`, `logs -f`) held nothing at
 	// all. Those survived an idle release only indirectly, because their
 	// container was running and hasLiveDependents noticed it. A `logs -f` on a
 	// STOPPED container had nothing pinning it and would simply be cut.
@@ -312,7 +312,7 @@ func (s *leasedStream) Close() error {
 
 // CloseWrite forwards the half-close the hijack path depends on. Without it
 // the wrapper would hide the method and `docker run` without -i would lose the
-// container's output -- the failure ADR 0005 records and the proxy's tests
+// container's output: the failure ADR 0005 records and the proxy's tests
 // pin down.
 func (s *leasedStream) CloseWrite() error {
 	if cw, ok := s.ReadWriteCloser.(interface{ CloseWrite() error }); ok {
@@ -372,7 +372,7 @@ func attrsFor(info workspace.Info) nfsserve.Attrs {
 }
 
 // log is the session's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer -- and one
+// rather than doing nothing, so the zero value needs an answer, and one
 // accessor is a better place for it than a check at every call.
 func (s *Session) log() *slog.Logger {
 	if s.opts.Log == nil {

@@ -28,10 +28,9 @@ func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "remote-docker",
 		Short: "Run Docker on a remote workspace with your local files really mounted",
-		Long: `remote-docker gives you a Docker daemon on a remote workspace while your
-own directories are genuinely mounted into the containers -- not copied, not
-synced -- so bind mounts, published ports and the standard Docker tooling all
-behave the way they would locally.
+		Long: `A Docker daemon on a remote workspace, with your own directories really
+mounted into the containers. Not copied, not synced, so bind mounts, published
+ports and the standard tooling behave the way they would locally.
 
 Nothing needs to be installed on this machine beyond this binary.`,
 		SilenceUsage:  true,
@@ -42,8 +41,8 @@ Nothing needs to be installed on this machine beyond this binary.`,
 	//
 	// Cobra merges a root's persistent flags into every subcommand, and this
 	// root has the entire Docker CLI underneath it. pflag SKIPS a flag whose
-	// long name is already taken -- which is why --user and --host coexist
-	// with docker's own -- but a clashing SHORTHAND panics outright:
+	// long name is already taken, which is why --user and --host coexist
+	// with docker's own, but a clashing SHORTHAND panics outright:
 	//
 	//	panic: unable to redefine 'w' shorthand in "run" flagset:
 	//	       it's already used for "workdir" flag
@@ -143,7 +142,7 @@ account there.`,
 // `session.Query` is the load-bearing part, and the reason this is shared
 // rather than written twice. A query session takes neither the local endpoint
 // nor the account's one reverse-tunnel port (ADR 0003), so it still works while
-// a real session holds both -- which is precisely when somebody runs `status`
+// a real session holds both, which is precisely when somebody runs `status`
 // or `gc`. See session.Role for what each half of that prevents.
 func withQuerySession(fn func(ctx context.Context, s *session.Session) error) error {
 	cfg, err := resolve()
@@ -208,7 +207,7 @@ func newStatusCommand() *cobra.Command {
 				case "":
 					// An agent too old to report it, or a daemon not started.
 				case "vfs":
-					row(out, "storage", "vfs -- SLOW: every container create copies the whole image")
+					row(out, "storage", "vfs, SLOW: every container create copies the whole image")
 				default:
 					row(out, "storage", info.Storage)
 				}
@@ -232,7 +231,7 @@ func newStatusCommand() *cobra.Command {
 				// Where `docker` comes from, and whether it is still this
 				// build. A hardlink or a copy keeps serving the binary that
 				// existed when it was made, and an upgrade says nothing about
-				// it -- so a stale shim is a silently OLD client, which is the
+				// it, so a stale shim is a silently OLD client, which is the
 				// same failure mode the session version check exists for.
 				if self, err := os.Executable(); err == nil {
 					reportShim(out, self)
@@ -296,15 +295,12 @@ func newGCCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
 		Short: "Remove share volumes this account is no longer using",
-		Long: `Each distinct directory bound into a container gets a volume on the
-workspace, and they outlive the containers that referenced them.
+		Long: `Each directory bound into a container gets a volume on the workspace, and
+they outlive the containers that used them.
 
-Only volumes this client created, for this account, and referenced by no
-container -- running or stopped -- are removed. A volume you created yourself
-is never touched, whatever it is named.
-
-The volume for the directory this runs in is also left alone: the session
-exports it, so it is about to be needed even when nothing holds it now.`,
+Only volumes this client created, for this account, that no container refers
+to. A volume you created yourself is never touched, whatever it is named, and
+neither is the one for the directory this runs in.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withQuerySession(func(ctx context.Context, s *session.Session) error {
 				removed, err := s.Collect(ctx)
@@ -340,7 +336,7 @@ func dockerHostOf(cfg config.Config) string {
 // row prints one aligned "key    value" line.
 //
 // `status`, `workspace inspect` and reportLocalSession print one table between
-// them -- status calls reportLocalSession -- so the width has to agree across
+// them (status calls reportLocalSession) so the width has to agree across
 // all three. It was a bare %-20s at thirteen call sites.
 func row(out io.Writer, key, value string) {
 	if value != "" {

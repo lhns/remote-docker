@@ -29,7 +29,7 @@ func TestSplitArgs(t *testing.T) {
 }
 
 // Readiness is the socket's presence, which is what the shell entrypoint
-// waited on too -- and getting it wrong means the first `docker ps` after a
+// waited on too, and getting it wrong means the first `docker ps` after a
 // login fails for no reason the user can act on.
 func TestReady(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "docker.sock")
@@ -62,7 +62,7 @@ func TestWaitReady(t *testing.T) {
 }
 
 // A timeout has to be reported rather than waited on forever, and the message
-// has to say what did not appear -- the caller treats it as non-fatal and logs
+// has to say what did not appear, because the caller treats it as non-fatal and logs
 // it, so it is the only account anyone gets.
 func TestWaitReadyTimesOut(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "docker.sock")
@@ -97,7 +97,7 @@ func TestWaitReadyHonoursCancellation(t *testing.T) {
 	}
 }
 
-// Stopping something that was never started must not panic -- the serve path
+// Stopping something that was never started must not panic: the serve path
 // calls Stop unconditionally on the way out.
 func TestStopWithNothingRunning(t *testing.T) {
 	if err := (&Dockerd{}).Stop(); err != nil {

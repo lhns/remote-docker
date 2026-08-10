@@ -66,7 +66,7 @@ func TestRelativeTo(t *testing.T) {
 		// the command line, the event came from the OS with on-disk casing.
 		{"root lowercase, event on-disk", "windows", `c:\projects\foo`, `C:\Projects\Foo\src\a.ts`, "/src/a.ts", true},
 		{"root on-disk, event lowercase", "windows", `C:\Projects\Foo`, `c:\projects\foo\src\a.ts`, "/src/a.ts", true},
-		// The TAIL keeps the event's casing, not the root's -- the workspace
+		// The TAIL keeps the event's casing, not the root's, because the workspace
 		// filesystem is case-sensitive.
 		{"tail casing preserved", "windows", `c:\projects\foo`, `C:\Projects\Foo\Src\App.TS`, "/Src/App.TS", true},
 		{"extended-length root", "windows", `\\?\C:\projects\foo`, `C:\projects\foo\a`, "/a", true},

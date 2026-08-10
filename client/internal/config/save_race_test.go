@@ -13,7 +13,7 @@ import (
 // The config file must never stop existing while Save replaces it.
 //
 // Save used to unlink the destination before renaming onto it, for a stated
-// reason -- "Windows will not rename onto an existing file" -- that is not
+// reason ("Windows will not rename onto an existing file") that is not
 // true of os.Rename, which replaces. What it cost was a window in which the
 // file was absent, and Load reports a missing file as an empty config with NO
 // error, because that is what a machine nobody has configured looks like. So a
@@ -24,7 +24,7 @@ import (
 // every other reader of that file.
 //
 // os.Stat rather than Load for the observer: Stat does not hold the file open,
-// so this measures the property under test -- does the path ever disappear --
+// so this measures the property under test, whether the path ever disappears,
 // rather than the contention between a reader and a rename, which on Windows
 // is a different and much louder thing.
 func TestSaveNeverMakesTheConfigDisappear(t *testing.T) {
@@ -70,7 +70,7 @@ func TestSaveNeverMakesTheConfigDisappear(t *testing.T) {
 	wg.Wait()
 }
 
-// And what a reader gets is either the config or an error -- never silently
+// And what a reader gets is either the config or an error, never silently
 // nothing. That consequence is what made the absence matter.
 func TestLoadDuringSaveIsNeverSilentlyEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "remote-docker.json")
@@ -112,7 +112,7 @@ func TestLoadDuringSaveIsNeverSilentlyEmpty(t *testing.T) {
 			if err != nil {
 				// Tolerated, and the distinction is the point. On Windows a
 				// read landing exactly on the rename is refused with a sharing
-				// violation, which is LOUD -- the caller reports it. What must
+				// violation, which is LOUD, and the caller reports it. What must
 				// never happen is the quiet answer below.
 				refused++
 				continue

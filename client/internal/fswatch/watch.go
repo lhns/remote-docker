@@ -4,7 +4,7 @@
 //
 // The client is the right place to watch: the files are local, notification
 // works natively on every platform we ship, and the workspace cannot observe
-// them at all -- NFS carries no change notification, which is the whole of
+// them at all. NFS carries no change notification, which is the whole of
 // ADR 0014. See ADR 0016 for what the agent then does.
 package fswatch
 

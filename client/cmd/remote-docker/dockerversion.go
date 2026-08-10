@@ -13,7 +13,7 @@ import (
 // embeddedCLIVersion is the docker/cli version compiled into this binary.
 //
 // Read from the build info rather than written down. docker/cli sets its own
-// version through ldflags at ITS release, which we do not perform -- so
+// version through ldflags at ITS release, which we do not perform, so
 // without this the embedded CLI reports "unknown-version", and `docker
 // version` on a machine with no other docker is the only place to find out
 // what is actually running.
@@ -51,7 +51,7 @@ func nameTheEmbeddedCLI() {
 
 // dockerVersionLine is what `docker --version` prints.
 //
-// The shape is docker's -- "Docker version X, build Y" -- because that is what
+// The shape is docker's ("Docker version X, build Y") because that is what
 // scripts and tools parse, and a different shape here would break them for no
 // gain. The build field says remote-docker rather than a commit we do not
 // have, which is the honest thing to put in it and also the useful one.

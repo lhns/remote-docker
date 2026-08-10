@@ -17,7 +17,7 @@ import (
 //
 // `socket(2)` uses the CALLING THREAD's network namespace, not the process's.
 // Go schedules goroutines across threads freely, so the switch and the socket
-// call have to happen on one pinned thread -- hence LockOSThread. Once the fd
+// call have to happen on one pinned thread, hence LockOSThread. Once the fd
 // exists it is an ordinary fd belonging to that namespace, and Accept, Read
 // and Write work from any thread afterwards. That asymmetry is why this
 // package only has to wrap the creating call and not the whole connection.

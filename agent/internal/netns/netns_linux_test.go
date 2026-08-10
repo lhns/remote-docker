@@ -11,7 +11,7 @@ import (
 // A namespace that cannot be opened must fail rather than hang.
 //
 // Do runs its work on a goroutine and reports through a channel, so a mistake
-// in the failure paths presents as a deadlock rather than as an error -- and a
+// in the failure paths presents as a deadlock rather than as an error, and a
 // deadlocked session is far harder to read than a refused one.
 func TestDoReportsAnUnopenableNamespace(t *testing.T) {
 	done := make(chan error, 1)

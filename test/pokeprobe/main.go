@@ -3,15 +3,14 @@
 // reports which inotify events a container sees, and pokeprobe is what the
 // workspace agent would do to produce them.
 //
-// Linux has no way to inject a synthetic inotify event -- fanotify(7) says so
-// outright, and there is no inotify_inject. The only mechanism available to
-// anyone, including Docker Desktop's "Event Injection", is to perform a real
-// VFS operation and let the kernel emit the event as a side effect. So the
-// question is not "can we inject" but "which real operation is cheap enough,
-// non-destructive enough, and produces the event watchers actually key on".
+// Linux cannot inject a synthetic inotify event; fanotify(7) says so outright.
+// The only mechanism available to anyone, Docker Desktop included, is to
+// perform a real VFS operation and let the kernel emit the event. So the
+// question is which real operation is cheap, non-destructive, and produces the
+// event watchers key on.
 //
-// This binary answers that, one primitive per invocation. It never writes
-// bytes and never changes anything observable:
+// This binary answers it, one primitive per invocation, writing no bytes and
+// changing nothing observable:
 //
 //	openclose  open(O_WRONLY) + close, never O_TRUNC
 //	mtime      utimensat with atime=UTIME_OMIT and mtime set to its own

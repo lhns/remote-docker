@@ -15,8 +15,8 @@ import (
 // mountAt performs an NFSv3 MOUNT and returns a usable target.
 //
 // The client's own Mount helper cannot be used: it reaches the NFS program
-// through rpcbind on port 111, and this server -- like the deployment it
-// models -- serves MOUNT and NFS on one port with no portmapper anywhere. That
+// through rpcbind on port 111, and this server, like the deployment it
+// models, serves MOUNT and NFS on one port with no portmapper anywhere. That
 // is the same reason the mount options say port == mountport.
 // dialWithRetry works around the host, not the code under test.
 //

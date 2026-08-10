@@ -13,7 +13,7 @@ import (
 )
 
 // shutdowns is atomic because Shutdown is called from the connection handler
-// AFTER the response has been written -- deliberately, since it closes the very
+// AFTER the response has been written, deliberately, since it closes the very
 // connection carrying the request. So the test observes it from one goroutine
 // while the proxy increments it on another.
 type fakeControl struct {

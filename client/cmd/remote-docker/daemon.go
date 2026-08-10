@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,7 @@ import (
 // How long to wait for an endpoint to start or stop answering.
 //
 // Together, and named, because they were three anonymous literals in three
-// copies of the same loop -- and two of them waited for the SAME event with
+// copies of the same loop, and two of them waited for the SAME event with
 // different patience (10s and 15s) for no stated reason.
 //
 // startTimeout is the generous one: the first thing a spawned daemon does is
@@ -58,19 +59,16 @@ func newStartCommand() *cobra.Command {
 		Use:   "start",
 		Short: "Start a session for this workspace",
 		Long: `Starts a session in the background and returns, so no terminal has to stay
-open. Idempotent: if one is already running, this says so and does nothing.
+open. If one is already running, this says so and does nothing.
 
 The session serves the local Docker endpoint, exports this directory over the
 tunnel, and makes published container ports reachable here.
 
-With --foreground it runs in this terminal instead and holds it until Ctrl-C.
-That is what the background one runs, so it is also how to watch what a session
-is doing.
+--foreground runs it in this terminal instead and holds it until Ctrl-C. That
+is what the background one runs, so it is also how to watch one work.
 
-The session's environment is this command's, and it is the only one that
-matters: it forwards every request, so REMOTE_DOCKER_TRACE=1 (one timing line
-per Docker API request) and REMOTE_DOCKER_WATCH have to be set HERE, not on the
-docker command you are timing.`,
+The session forwards every request, so set REMOTE_DOCKER_WATCH and
+REMOTE_DOCKER_TRACE here rather than on the docker command you run.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolve()
 			if err != nil {
@@ -107,7 +105,7 @@ docker command you are timing.`,
 // waitForExit blocks until the process is gone, and reports whether it got
 // there before the deadline.
 //
-// A pid of 0 means nobody told us which process to watch -- an older session
+// A pid of 0 means nobody told us which process to watch: an older session
 // that does not report one, or a status request that failed. Treated as done
 // rather than as a failure: the endpoint has already gone quiet, which is what
 // this command could check before, and refusing to return would turn a missing
@@ -166,8 +164,8 @@ func newStopCommand() *cobra.Command {
 			// whatever runs next.
 			//
 			// The endpoint going quiet is not the end of the teardown, it is
-			// the START of it: Session.Close shuts the listener first -- so no
-			// new request can arrive mid-teardown -- and only then drops the
+			// the START of it: Session.Close shuts the listener first, so no
+			// new request can arrive mid-teardown, and only then drops the
 			// SSH connection, the reverse tunnel and the NFS export. An account
 			// has exactly ONE reverse-tunnel port (ADR 0003) and a host session
 			// fails hard when it cannot take it, so a `stop` that returned at
@@ -175,8 +173,8 @@ func newStopCommand() *cobra.Command {
 			// not released yet.
 			if !waitForExit(st.PID, stopTimeout) {
 				return fmt.Errorf(
-					"the session stopped serving %s but process %d is still running; "+
-						"its workspace resources may not be released yet",
+					"the session stopped serving %s but process %d is still running, "+
+						"so its workspace resources may not be free yet",
 					proxy.DockerHost(endpoint), st.PID)
 			}
 
@@ -240,7 +238,7 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	// reports "already running" and points at the session its predecessor
 	// disowned.
 	//
-	// By pid, because cmd.Process was released above -- this process must not
+	// By pid, because cmd.Process was released above: this process must not
 	// be the daemon's parent, so it cannot wait on it either.
 	stopped := "and was stopped"
 	if err := killPID(cmd.Process.Pid); err != nil {
@@ -262,7 +260,7 @@ func control(endpoint, method, path string, out any) error {
 		Transport: &http.Transport{DialContext: proxy.DialEndpoint(endpoint)},
 		Timeout:   10 * time.Second,
 	}
-	// The host is ignored -- the transport dials the endpoint -- but a URL
+	// The host is ignored (the transport dials the endpoint) but a URL
 	// needs one.
 	req, err := http.NewRequest(method, "http://remote-docker"+proxy.ControlPrefix+path, nil)
 	if err != nil {
@@ -313,7 +311,7 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
 		// Something is serving the endpoint but will not answer for itself:
 		// a daemon too old to have a control channel, or not ours at all.
-		// Left alone either way -- taking over something we cannot identify
+		// Left alone either way, because taking over something we cannot identify
 		// is worse than the mismatch.
 		return
 	}
@@ -326,8 +324,8 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 	}
 
 	// Versions differ. Whether that is worth doing anything about depends on
-	// what would be lost, and asking THAT costs a round trip to the workspace
-	// -- which is why it is asked here and not on every command.
+	// what would be lost, and asking THAT costs a round trip to the workspace,
+	// which is why it is asked here and not on every command.
 	var idle proxy.Idle
 	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil || !idle.Safe {
 		warnVersionMismatch(st)
@@ -347,12 +345,10 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 // inventing information.
 func warnVersionMismatch(st proxy.Status) {
 	fmt.Fprintf(os.Stderr,
-		"\nwarning: the running session was built from a different version.\n"+
+		"\nwarning: the running session is a different version, and is in use, so it was left alone.\n"+
 			"  session: %s (pid %d)\n"+
 			"  this:    %s\n"+
-			"It is in use, so it was left alone -- restarting drops the file server\n"+
-			"and any container holding a directory from it. Run `remote-docker restart`\n"+
-			"when nothing needs it, or `remote-docker restart --force` to do it anyway.\n",
+			"  fix: `remote-docker restart` once nothing needs it, or `restart --force` now\n",
 		orUnknown(st.Version), st.PID, orUnknown(version))
 }
 
@@ -382,7 +378,7 @@ func newRestartCommand() *cobra.Command {
 		Short: "Restart the background session for this workspace",
 		Long: `Stops the running session and starts one from this binary.
 
-Refused while anything depends on it: restarting drops the file server, and a
+Refused while anything depends on it. Restarting drops the file server, and a
 container holding a directory from it loses its filesystem. --force overrides.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolve()
@@ -408,13 +404,13 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 				// A session that will not answer cannot be judged, and
 				// "cannot tell" is not a reason to break something.
 				if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil {
-					return fmt.Errorf("cannot tell whether the running session is in use: %w "+
-						"(use --force to restart anyway)", err)
+					return fmt.Errorf("cannot tell whether the running session is in use: %w\n"+
+						"  fix: `remote-docker restart --force` to restart anyway", err)
 				}
 				if !idle.Safe {
-					return fmt.Errorf("the running session is in use -- a container is running, " +
-						"a stream is open, or a shell; restarting would take its file server away. " +
-						"Use --force to restart anyway")
+					return errors.New("the running session is in use, and restarting takes its " +
+						"file server away from whatever is using it\n" +
+						"  fix: `remote-docker restart --force` to restart anyway")
 				}
 			}
 
@@ -456,7 +452,7 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 		row(out, "session version", orUnknown(st.Version))
 		return
 	}
-	rowf(out, "session version", "%s  (this binary: %s -- DIFFERENT)",
+	rowf(out, "session version", "%s  (this binary: %s, DIFFERENT)",
 		orUnknown(st.Version), orUnknown(version))
 }
 
@@ -464,7 +460,7 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 // that would print the traces is not.
 //
 // REMOTE_DOCKER_TRACE is read once, at start, by whichever process forwards
-// the requests -- and that is the background session, not this command. So
+// the requests, and that is the background session, not this command. So
 // `REMOTE_DOCKER_TRACE=1 remote-docker docker ps` against a running session
 // prints nothing and explains nothing, which reads as "tracing does not work"
 // rather than "you set it on the wrong process".
@@ -483,23 +479,22 @@ func warnTraceGoesNowhere(w io.Writer, st proxy.Status) {
 // a test can read it without owning the environment this process started with.
 func writeTraceWarning(w io.Writer, st proxy.Status) {
 	_, _ = fmt.Fprintf(w,
-		"\nwarning: %s is set here, but the requests are forwarded by the background\n"+
-			"session (pid %d), which was started without it. Restart it with the variable\n"+
-			"set -- `remote-docker restart` -- or run `remote-docker start --foreground`.\n",
-		proxy.TraceEnv, st.PID)
+		"\nwarning: %s is set here, but the session forwarding the requests (pid %d) was started without it.\n"+
+			"  fix: %s=1 remote-docker restart\n",
+		proxy.TraceEnv, st.PID, proxy.TraceEnv)
 }
 
 // warnSlowStorage says so when the workspace's daemon is on vfs.
 //
 // vfs has no copy-on-write: it copies the entire image on every container
-// create. Nothing fails -- `docker ps` stays instant, `docker run` takes
-// minutes -- so it presents as a hang, and it stays that way until somebody
+// create. Nothing fails: `docker ps` stays instant, `docker run` takes
+// minutes, so it presents as a hang, and it stays that way until somebody
 // changes the workspace's configuration. A real workspace lost a day to it.
 //
 // Printed here, on the path every `remote-docker docker ...` already takes,
 // because that is where somebody is standing when they notice the slowness.
 // The agent logs it too, and `status` shows it, but both require already
-// suspecting storage -- and reaching the daemon's own host to look is exactly
+// suspecting storage, and reaching the daemon's own host to look is exactly
 // what an account may not do.
 //
 // To stderr, and only when it is true: a correctly configured workspace prints
@@ -509,9 +504,6 @@ func warnSlowStorage(w io.Writer, st proxy.Status) {
 		return
 	}
 	_, _ = fmt.Fprintf(w,
-		"\nwarning: this workspace's docker daemon is using the vfs storage driver.\n"+
-			"It has no copy-on-write, so every `docker create` copies the whole image --\n"+
-			"expect containers to take minutes to start. Nothing is broken; it is slow.\n"+
-			"Whoever runs the workspace should set --storage-driver in WORKSPACE_DOCKERD_ARGS\n"+
-			"(fuse-overlayfs for Ceph- or NFS-backed data) and rebuild the daemon.\n")
+		"\nwarning: the workspace daemon is on the vfs storage driver, so containers start slowly.\n"+
+			"  fix: set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs, then rebuild the daemon\n")
 }

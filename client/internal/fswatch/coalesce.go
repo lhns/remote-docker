@@ -18,8 +18,8 @@ const (
 	DefaultDebounce = 40 * time.Millisecond
 
 	// DefaultMaxDelay caps how long a continuously-touched path can be held
-	// back. Without it, a file being appended to in a loop -- a log, a
-	// compiler writing output -- would never be reported at all, because it is
+	// back. Without it, a file appended to in a loop (a log, a compiler
+	// writing output) would never be reported at all, because it is
 	// never quiet for a whole debounce interval.
 	DefaultMaxDelay = 250 * time.Millisecond
 
@@ -57,7 +57,7 @@ type lost struct {
 //
 // It owns no goroutine, no timer and no clock: every method takes the current
 // time from the caller. That makes the whole of the interesting behaviour --
-// merge rules, due-ness, overflow, ordering -- testable by calling methods
+// merge rules, due-ness, overflow and ordering testable by calling methods
 // with made-up timestamps, on a development machine with no daemon and no
 // kernel to observe.
 type coalescer struct {
@@ -111,7 +111,7 @@ func (c *coalescer) add(now time.Time, e workspace.FSEvent) {
 // mergeOps combines an accumulated operation set with a newly observed one.
 //
 // Removal and rename are exclusive with creation and writing rather than
-// additive, and which wins is decided by arrival order -- because both orders
+// additive, and which wins is decided by arrival order, because both orders
 // occur and mean different things. Create-then-remove within one window is a
 // temporary file, and the net truth is that it is gone. Remove-then-create is
 // the atomic-save every editor performs, and the net truth is that it is
@@ -132,7 +132,7 @@ func mergeOps(have, add workspace.FSOp) workspace.FSOp {
 }
 
 // drop records an event that could not be kept. Individual paths are not
-// remembered -- that is the whole point of being over capacity -- only how
+// remembered (that is the whole point of being over capacity) only how
 // many were lost and the deepest directory covering all of them.
 func (c *coalescer) drop(export, p string) {
 	l, ok := c.lost[export]
@@ -145,7 +145,7 @@ func (c *coalescer) drop(export, p string) {
 	l.count++
 }
 
-// overflow records a loss the caller detected elsewhere -- a kernel queue
+// overflow records a loss the caller detected elsewhere: a kernel queue
 // overflow, a full outbound queue, a refused watch. Same accounting, so there
 // is one degradation path rather than several that must agree.
 func (c *coalescer) overflow(export, dir string, n int) {

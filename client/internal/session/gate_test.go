@@ -184,7 +184,7 @@ func TestGateDoesNotReleaseWhileInUse(t *testing.T) {
 	}
 	release()
 
-	// Releasing restarts the idle window -- it was in use right up until now.
+	// Releasing restarts the idle window: it was in use right up until now.
 	if f.gate.sweep(t.Context()) {
 		t.Error("the connection was released the instant the request finished, ignoring the idle period")
 	}

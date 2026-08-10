@@ -36,7 +36,7 @@ type Target struct {
 	//
 	// Untrusted input downstream: the daemon reports its own mountpoints and
 	// the account is root inside it. See notify.relocate, which checks that a
-	// joined path stays under the root -- path.Join CLEANS, so ".." escapes
+	// joined path stays under the root, because path.Join CLEANS and ".." escapes
 	// look like containment.
 	Root string
 }
@@ -47,7 +47,7 @@ type Target struct {
 // stylistic:
 //
 //   - Ensure waits, starting the daemon if it is not up. Right for anything
-//     the user is waiting on -- a docker command, a shell, a forward.
+//     the user is waiting on: a docker command, a shell, a forward.
 //   - Lookup never waits. Right for the answers folded into workspace-info,
 //     which is the client's FIRST round trip: a cold daemon must not turn
 //     every new connection into a boot-length hang for a version string the
@@ -139,7 +139,7 @@ func (shared) Mode() string { return ModeShared }
 
 // Host and NetNSPath are deliberately empty, not filled in with the values
 // that would be equivalent. Empty is the statement that no redirection is
-// needed -- the default socket, this namespace -- and it is what the call
+// needed (the default socket, this namespace) and it is what the call
 // sites branch on where they still need to (a login shell gets no DOCKER_HOST
 // rather than a redundant one).
 func (s shared) target() Target {

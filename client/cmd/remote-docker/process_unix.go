@@ -19,7 +19,7 @@ func killPID(pid int) error {
 // processAlive reports whether pid still exists.
 //
 // Signal 0 checks for the process without touching it. os.FindProcess cannot
-// answer this on Unix -- it never fails, because a pid is not a handle there --
+// answer this on Unix, where it never fails because a pid is not a handle,
 // which is why this is build-tagged rather than shared.
 func processAlive(pid int) bool {
 	if pid <= 0 {

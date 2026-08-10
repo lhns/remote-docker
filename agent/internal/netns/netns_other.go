@@ -13,7 +13,7 @@ import "errors"
 //
 // The empty path is a different question and is answered in netns.go, on every
 // platform: "this namespace" needs no system call, so the shared-daemon paths
-// through Listen and Dial work here too -- which is what lets them be tested on
+// through Listen and Dial work here too, which is what lets them be tested on
 // the machine this project is developed on.
 var ErrUnsupported = errors.New("netns: network namespaces are Linux-only")
 

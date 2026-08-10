@@ -1,7 +1,7 @@
 // Package ports makes published container ports reachable on the client.
 //
 // `docker run -p 8080:80` publishes on the daemon's network, which for
-// Docker-in-Docker is the workspace container's own namespace -- nothing on
+// Docker-in-Docker is the workspace container's own namespace, so nothing on
 // this machine can reach it. Watching the daemon's event stream and opening a
 // local forward per published port closes that gap without the user having to
 // know the ports in advance (ADR 0008).
@@ -41,7 +41,7 @@ type Container struct {
 
 // Published is one published port.
 type Published struct {
-	// PublicPort is the port on the workspace container's network -- what the
+	// PublicPort is the port on the workspace container's network, what the
 	// user asked for on the left of the colon.
 	PublicPort int
 
@@ -61,7 +61,7 @@ type Docker interface {
 // Loopback, and not configurable. A published port becoming reachable from the
 // network because a container started on somebody else's machine would be a
 // surprise, and a nasty one. This was a field once; nothing ever set it, and
-// two log lines hardcoded the value anyway -- so a knob that appeared to work
+// two log lines hardcoded the value anyway, so a knob that appeared to work
 // would have made them lie.
 const bindAddr = "127.0.0.1"
 
@@ -90,7 +90,7 @@ type containerForwards struct {
 //
 // This is the whole of the logic, and it is deliberately a full reconciliation
 // rather than an incremental apply of each event. The event stream can drop --
-// a reconnect, a daemon restart, a tunnel blip -- and an incremental design
+// a reconnect, a daemon restart, a tunnel blip, and an incremental design
 // leaks forwards for containers that stopped during the gap while never
 // forwarding those that started. Recomputing from the current state cannot
 // drift.
@@ -218,7 +218,7 @@ func (m *Manager) Active() []int {
 
 // publishedTCP returns the TCP ports a container publishes to the host.
 //
-// A port with no PublicPort is exposed but not published -- it has no host
+// A port with no PublicPort is exposed but not published: it has no host
 // side to forward. UDP is skipped because the SSH transport carries TCP only,
 // and pretending otherwise would produce a listener that silently drops
 // everything.
