@@ -33,7 +33,10 @@ func TestInvokingDocker(t *testing.T) {
 
 		// Under the alias, every argument is already docker's.
 		{[]string{"docker", "ps"}, true},
-		{[]string{`C:\bin\docker.exe`, "run", "--rm", "alpine"}, true},
+		// A full path, spelled with the separator BOTH platforms accept: a
+		// backslash path is one long filename on Linux, and asserting it here
+		// would be asserting a name nobody there could invoke us by.
+		{[]string{"/usr/local/bin/docker", "run", "--rm", "alpine"}, true},
 		{[]string{"docker", "--context", "dev", "ps"}, true},
 
 		// No subcommand is no daemon, under either name. `docker` alone,
