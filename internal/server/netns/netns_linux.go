@@ -68,4 +68,3 @@ func enter(path string, fn func() error) error {
 
 	return <-done
 }
-
