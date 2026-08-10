@@ -159,10 +159,13 @@ cd "$PROJECT" || exit 1
 # deadlock -- Close waiting on background goroutines that only stopped when
 # the caller's context was cancelled, which for a one-shot command it never
 # was.
+# No session is running yet, so the verdict is "no session" and that is
+# correct. What this proves is that the workspace answered: the account row
+# only exists when it did.
 if timeout 90 "$WORK/remote-docker" status >"$WORK/status.log" 2>&1 &&
-    grep -q "^status .*ready" "$WORK/status.log" &&
+    grep -q "^status " "$WORK/status.log" &&
     grep -q "tunnel port" "$WORK/status.log"; then
-    ok "status says ready and reports the workspace parameters"
+    ok "status reports a verdict and the workspace parameters"
     sed 's/^/        /' "$WORK/status.log"
 else
     bad "status failed"
@@ -1099,6 +1102,14 @@ fi
 if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
     if [ "$out" = "through-the-daemon" ]; then
         ok "docker works through the background session"
+
+        # And the verdict, which is the whole point of `status`. A session is
+        # demonstrably up: the command above went through it.
+        if "$WORK/remote-docker" status 2>&1 | grep -q "^status  *ready"; then
+            ok "status says ready while a session is serving"
+        else
+            bad "status did not say ready: $("$WORK/remote-docker" status 2>&1 | head -1)"
+        fi
     else
         bad "unexpected output through the daemon: $out"
     fi
