@@ -68,6 +68,44 @@ jobs:
             agent/coverage.out
             client/coverage.out
 
+  # The client, on the platform whose code has no counterpart anywhere else.
+  #
+  # Everything above runs on Linux, which was defensible while no test was
+  # platform-specific. It stopped being: the endpoint is a named PIPE here and
+  # a unix socket there, and `processAlive` asks Windows a question -- via
+  # GetExitCodeProcess -- that has no meaning on Unix. Both had bugs, both were
+  # caught by tests that ran on one developer's machine and nowhere else, which
+  # is the one place this project's own premise says not to depend on.
+  #
+  # The client and the shared module only. The agent is Linux-only by design
+  # (it drives useradd, netns and inotify); the cross-compile matrix already
+  # keeps its `_other.go` stubs honest, and running its tests here would prove
+  # nothing about the machine it actually runs on.
+  #
+  # No -race: it needs cgo, and a C toolchain on this runner is a dependency
+  # for a check the Linux job already performs on the same code.
+  #
+  # No gofmt either -- `.gitattributes` forces LF, and a gofmt run on a
+  # checkout is a test of git's line endings rather than of the source.
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test
+        shell: bash
+        run: |
+          set -eux
+          for mod in . client; do
+            (cd "$mod" && go test ./...)
+          done
+
   lint:
     name: lint
     runs-on: ubuntu-latest

@@ -261,8 +261,12 @@ embedded Docker CLI, `gc`, idle disconnect and reconnect, cross-user port
 hijack refusal, `elevate`, the replay primitive matrix (which syscall produces
 which inotify event), an edit here firing inotify inside a container with
 `REMOTE_DOCKER_WATCH=partial`, the background session (detached start, version
-mismatch, self-reclaim), and the workspace lifecycle with the docker context
-appearing and disappearing alongside it.
+mismatch, self-reclaim), `start && docker run` and `stop && start && docker
+run` with nothing between the commands, `docker build` through the proxy --
+asserted to be BuildKit and not the classic builder wearing its name, with
+`COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
+workspace lifecycle with the docker context appearing and disappearing
+alongside it.
 
 A second suite, `test/per-user-dind.sh`, runs the same workspace with two
 enrolled accounts and a daemon each (the default since ADR 0019): that they reach
@@ -283,19 +287,16 @@ function was.
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}`, `mode: host` publishing, placement --
   needs a real cluster. CI cannot cover it.
-- **`docker build` through the proxy.** The `/session` hijack it depends on is
-  unit tested; no integration test runs an actual build. A legacy build DOES
-  work end to end (verified by hand against a real workspace).
-- **BuildKit is not available through the embedded CLI**, and this contradicts
-  what ADR 0009 originally corrected itself to say. buildx is a separate plugin
-  binary and is not vendored, so `docker build` silently uses the classic
-  builder even with `DOCKER_BUILDKIT=1` -- while the daemon advertises
-  `Builder-Version: 2`. The `/session` hijack therefore has no exercised
-  caller. Point a real docker CLI at the workspace's docker context to get
-  BuildKit.
-- **The Windows and macOS clients.** Cross-compiled on every push, executed
-  never. The integration suite runs the Linux client, and the endpoint code is
-  the one place they genuinely diverge.
+- **macOS, entirely.** Cross-compiled on every push, executed never -- no test
+  of any kind has run on it. The endpoint code and the fswatch backend are
+  where it genuinely diverges, and the kqueue backend (one fd per *file*) is
+  the larger risk of the two.
+- **Windows, beyond the unit tests.** `test (windows)` runs the client and
+  shared modules' tests on every pull request, which covers the named-pipe
+  endpoint and `processAlive`. What has never run there is the client itself:
+  the integration suite needs a Linux kernel's NFS client, so no Windows
+  machine has taken a session end to end in CI. Say "unit tested on Windows",
+  never "the Windows client is tested".
 - **The release pipeline.** No tag has been pushed.
 - **`docker compose` embedded.** Not attempted -- it works through the proxy,
   and embedding would pin docker/cli back a major version (ADR 0009).
