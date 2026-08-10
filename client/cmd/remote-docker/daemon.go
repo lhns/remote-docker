@@ -432,28 +432,20 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 // and until this line existed there was no way to see that from the outside,
 // which is exactly how it went unnoticed during development.
 func reportLocalSession(out io.Writer, cfg config.Config) {
-	endpoint := endpointOf(cfg)
-	if !proxy.Reachable(endpoint) {
-		row(out, "session", "not running")
+	f := gather(cfg)
+	row(out, "session", f.sessionLine())
+	if !f.answering {
 		return
 	}
-
-	var st proxy.Status
-	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
-		row(out, "session", "running, but not answering")
-		return
-	}
-
-	rowf(out, "session", "running (pid %d, since %s)", st.PID, st.Since)
 
 	// Reported as a difference, never as an ordering. A sha build names a
 	// commit and says nothing about when.
-	if st.Version == version {
-		row(out, "session version", orUnknown(st.Version))
+	if f.local.Version == version {
+		row(out, "session version", orUnknown(f.local.Version))
 		return
 	}
 	rowf(out, "session version", "%s  (this binary: %s, DIFFERENT)",
-		orUnknown(st.Version), orUnknown(version))
+		orUnknown(f.local.Version), orUnknown(version))
 }
 
 // warnTraceGoesNowhere says so when this process is tracing and the process

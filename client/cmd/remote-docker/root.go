@@ -307,9 +307,9 @@ func dockerHostOf(cfg config.Config) string {
 
 // row prints one aligned "key    value" line.
 //
-// `status`, `workspace inspect` and reportLocalSession print one table between
-// them (status calls reportLocalSession) so the width has to agree across
-// all three. It was a bare %-20s at thirteen call sites.
+// `status` and `workspace inspect` print one table each and share this width,
+// so a row added to one lines up in the other. It was a bare %-20s at thirteen
+// call sites.
 func row(out io.Writer, key, value string) {
 	if value != "" {
 		_, _ = fmt.Fprintf(out, "%-20s %s\n", key, value)
