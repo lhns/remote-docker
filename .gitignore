@@ -1,15 +1,28 @@
 # test image build artifact
 test/watchdir
 
-# go build output. Not anchored to the root: `go build ./cmd/remote-docker`
-# writes the binary into whatever directory it runs in, and the natural one to
-# run it from is client/, where a 95MB artifact was one `git add -A` from
-# being committed.
+# go build output.
+#
+# Every module root is listed, because `go build ./cmd/remote-docker` writes
+# the binary into the directory it runs in, and a 95MB artifact in client/ was
+# once one `git add -A` away from being committed.
+#
+# NOT the bare name `remote-docker`: an unanchored pattern matches directories
+# too, so it swallowed client/cmd/remote-docker/ and every new source file in
+# it, silently. The fix for one silent mistake made a worse one.
 /dist/
-remote-docker
-remote-docker.exe
-remote-dockerd
-remote-dockerd.exe
+/remote-docker
+/remote-docker.exe
+/remote-dockerd
+/remote-dockerd.exe
+/client/remote-docker
+/client/remote-docker.exe
+/client/remote-dockerd
+/client/remote-dockerd.exe
+/agent/remote-docker
+/agent/remote-docker.exe
+/agent/remote-dockerd
+/agent/remote-dockerd.exe
 *.test
 *.test.exe
 coverage.out

@@ -159,8 +159,10 @@ cd "$PROJECT" || exit 1
 # deadlock -- Close waiting on background goroutines that only stopped when
 # the caller's context was cancelled, which for a one-shot command it never
 # was.
-if timeout 90 "$WORK/remote-docker" status >"$WORK/status.log" 2>&1 && grep -q "nfs port" "$WORK/status.log"; then
-    ok "status reports the workspace parameters"
+if timeout 90 "$WORK/remote-docker" status >"$WORK/status.log" 2>&1 &&
+    grep -q "^status .*ready" "$WORK/status.log" &&
+    grep -q "tunnel port" "$WORK/status.log"; then
+    ok "status says ready and reports the workspace parameters"
     sed 's/^/        /' "$WORK/status.log"
 else
     bad "status failed"
@@ -173,7 +175,7 @@ fi
 # workspace behaves oddly and is not the same question as the client's build.
 # It is reported even when the workspace is too old to send one, because
 # silence there is indistinguishable from a failure to answer.
-if grep -qE "^agent +[^ ]" "$WORK/status.log"; then
+if grep -qE "^versions .*agent [^ ,]+" "$WORK/status.log"; then
     ok "status reports the agent's version"
 else
     bad "status did not report the agent version"
@@ -581,7 +583,7 @@ if [ "$provisioned2" != true ]; then
 else
     # `status` prints a human table, not KEY=VALUE -- the wire format is what
     # the client parses, not what it displays.
-    first_port=$(awk '/^nfs port/ {print $3}' "$WORK/status.log")
+    first_port=$(awk '/^account/ {print $NF}' "$WORK/status.log")
     if [ -z "$first_port" ]; then
         bad "could not determine the first account's port"
     else
@@ -592,6 +594,39 @@ else
             bad "SECURITY: $OTHER bound $ACCOUNT's NFS port $first_port"
         else
             ok "one account cannot bind another's NFS port"
+        fi
+
+        # And cannot DIAL it either, which is the other half and was missing.
+        #
+        # This suite runs the shared daemon (ADR 0012), where every account
+        # lives in the agent's network namespace, so 127.0.0.1:<their port> is
+        # genuinely reachable from another account's session. What answers is
+        # an NFS export with AuthFlavorNull, so reaching it is read and write
+        # access to the files on that person's machine.
+        #
+        # The forward has to be USED, not merely requested: ssh opens the local
+        # listener straight away and asks for the channel only when something
+        # connects, so a test that just starts `ssh -L` passes whatever the
+        # server decides. The refusal appears on ssh's stderr as
+        # "administratively prohibited" when the connection is made.
+        local_port=$((first_port + 5000))
+        timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ExitOnForwardFailure=yes -o BatchMode=yes \
+            -p "$SSH_PORT" -N -L "127.0.0.1:$local_port:127.0.0.1:$first_port" \
+            "$OTHER@127.0.0.1" >"$WORK/reach.log" 2>&1 </dev/null &
+        reach_pid=$!
+        sleep 2
+        timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$local_port" 2>/dev/null
+        sleep 1
+        kill "$reach_pid" 2>/dev/null
+        wait "$reach_pid" 2>/dev/null
+
+        if grep -qi "administratively prohibited\|open failed" "$WORK/reach.log"; then
+            ok "one account cannot dial another's NFS port"
+        else
+            bad "SECURITY: $OTHER reached $ACCOUNT's NFS port $first_port"
+            sed 's/^/        /' "$WORK/reach.log"
         fi
     fi
 fi

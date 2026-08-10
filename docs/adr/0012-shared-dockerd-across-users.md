@@ -42,8 +42,19 @@ enrolment.
   service per user. The uid-derived port scheme and the account model work
   unchanged with one account per container. What changes is deployment cost,
   not architecture.
+- **One network namespace, so one account can reach another's reverse tunnel.**
+  Found by the threat model, after this mode had stopped being the default.
+  Every account's tunnel listens on loopback in the agent's namespace, so
+  `127.0.0.1:<their port>` resolves from any account's session, and what
+  answers is their NFS export with AuthFlavorNull: read and write access to
+  the files on their machine. Binding another's port was already refused;
+  dialling it was not. `ForwardPolicy.AllowDial` now refuses a port another
+  account holds, and the shared-mode suite covers it. ADR 0019's mode never had
+  this, because each tunnel binds inside its own namespace.
 - Revisit when the user set stops being small and mutually trusted. That is the
-  trigger; there is no other reason this decision needs to change.
+  trigger; there is no other reason this decision needs to change. The tunnel
+  reachability above is a second, smaller one: it is fixed, but it is the kind
+  of thing one namespace keeps producing.
 
 ## Superseded in part by ADR 0019
 

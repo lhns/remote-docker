@@ -69,6 +69,36 @@ func (p *ForwardPolicy) Allow(account Account, host string, port uint32) (bool, 
 	return true, ""
 }
 
+// AllowDial reports whether an account may open a local forward to host:port,
+// and why not if it may not.
+//
+// The mirror of Allow, and needed for the same reason in the other direction.
+// Two rules:
+//
+//  1. loopback only, so the workspace cannot be used to reach the network it
+//     sits on.
+//  2. not a port another account currently holds. With one daemon for
+//     everybody (ADR 0012) every account shares this network namespace, so
+//     another account's reverse-tunnel port is reachable from here, and what
+//     answers is their NFS export with AuthFlavorNull: read and write access
+//     to the files on their machine. A daemon per account (ADR 0019, the
+//     default) puts each tunnel in a namespace of its own, where that address
+//     reaches nothing of theirs.
+//
+// Rule 2 asks the holder rather than the port range on purpose. PortForUID
+// maps onto PortBase and upwards, docker publishes host ports from 32768, and
+// refusing that range would break the forwarding this exists for. A port
+// nobody holds has nothing of ours listening on it anyway.
+func (p *ForwardPolicy) AllowDial(account Account, host string, port uint32) (bool, string) {
+	if !isLoopback(host) {
+		return false, "only loopback addresses may be reached"
+	}
+	if holder, taken := p.Holder(host, port); taken && holder != account.Name() {
+		return false, "that port is another account's file server"
+	}
+	return true, ""
+}
+
 // Bind records that an account holds a port. It returns false if somebody else
 // already does.
 func (p *ForwardPolicy) Bind(account Account, host string, port uint32) bool {
