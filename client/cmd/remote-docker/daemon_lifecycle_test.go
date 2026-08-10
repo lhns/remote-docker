@@ -17,7 +17,7 @@ import (
 // Both halves of that matter, and the second one cost a red CI run. A session
 // is orphaned by the time anything asks about it: `start` releases the child
 // and exits, so init reaps it. A test that keeps the process as its own child
-// tests something else -- on Unix a killed child stays in the process table as
+// tests something else: on Unix a killed child stays in the process table as
 // a zombie until its parent waits, and processAlive answers about the process
 // table, so `killPID` worked and the test watched the corpse for ten seconds
 // and failed.
@@ -83,7 +83,7 @@ func TestKillPIDEndsAChildWeStoppedParenting(t *testing.T) {
 
 // waitForExit returns as soon as the process is gone, and says so when it is
 // not. The zero pid is "nobody told us", which must not turn `stop` into a
-// failure -- an older session does not report one.
+// failure, since an older session does not report one.
 func TestWaitForExit(t *testing.T) {
 	if !waitForExit(0, time.Second) {
 		t.Error("a pid of 0 must be treated as already gone")

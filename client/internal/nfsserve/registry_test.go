@@ -112,7 +112,7 @@ func TestLookup(t *testing.T) {
 		{"dot segment", "/cwd/./src", "/src"},
 		{"missing leading slash", "cwd/src", "/src"},
 		// Cleaning resolves this to "/cwd", which is a legitimate spelling of
-		// a registered share -- not an escape. The boundary that matters is
+		// a registered share, not an escape. The boundary that matters is
 		// that nothing *unregistered* becomes reachable, which is asserted in
 		// TestLookupRefusesUnregisteredPaths.
 		{"parent of root", "/../cwd", "/"},
@@ -134,8 +134,8 @@ func TestLookup(t *testing.T) {
 }
 
 // The export root lists nothing, so only paths that were explicitly
-// registered are reachable. A client asking for anything else -- including a
-// path built to climb out of a share -- gets nothing.
+// registered are reachable. A client asking for anything else, including a
+// path built to climb out of a share, gets nothing.
 func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 	dir := t.TempDir()
 	r := newTestRegistry(t)
@@ -160,7 +160,7 @@ func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 }
 
 // A share and a sibling whose export path is a prefix of it must not be
-// confused -- "/m/aaa" must never serve a lookup of "/m/aaabbb".
+// confused: "/m/aaa" must never serve a lookup of "/m/aaabbb".
 func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
 	dir := t.TempDir()
 	r := newTestRegistry(t)

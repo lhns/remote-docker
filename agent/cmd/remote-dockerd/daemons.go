@@ -12,7 +12,7 @@ import (
 //
 // It exists because there was no way to act on them at all. A per-account
 // daemon is created once and started forever after, so a setting changed in
-// the stack file reached only accounts that did not yet have one -- and the
+// the stack file reached only accounts that did not yet have one, and the
 // remedy was a pair of `docker exec ... docker rm` commands somebody had to be
 // told, with the container and volume names worked out by hand.
 //

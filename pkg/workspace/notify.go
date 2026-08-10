@@ -8,7 +8,7 @@ import (
 // The change-notification channel.
 //
 // NFS carries no change notification, so a watcher inside a container sees
-// nothing at all when the user edits a file on their own machine -- measured,
+// nothing at all when the user edits a file on their own machine. Measured,
 // not assumed (ADR 0014). Every hot-reload workflow depends on inotify and so
 // does nothing while appearing to work.
 //
@@ -81,7 +81,7 @@ func (o FSOp) String() string {
 //
 // It carries no content and never will. The bytes are already in the container
 // through the NFS mount; what is missing is only the kernel's notification.
-// Shipping data here would turn this into a sync -- the thing ADR 0014 is
+// Shipping data here would turn this into a sync, the thing ADR 0014 is
 // trying not to become.
 type FSEvent struct {
 	// Export is the share the path belongs to: "/cwd" or "/m/<id>".
@@ -96,7 +96,7 @@ type FSEvent struct {
 
 	// Dir says the path is, or was, a directory. The agent needs it because
 	// the operation that makes a watcher notice a directory is not the one
-	// that makes it notice a file -- and after a removal it cannot go and
+	// that makes it notice a file, and after a removal it cannot go and
 	// look.
 	Dir bool `json:"d,omitempty"`
 }
@@ -163,7 +163,7 @@ func validateSharePath(p string) error {
 }
 
 // FSNotice tells the receiver that the client's view is incomplete under Path,
-// so it should do something coarser than replaying events -- or nothing, if
+// so it should do something coarser than replaying events, or nothing, if
 // the tool being served rescans anyway.
 //
 // Never omitted when something was lost. A receiver that silently believes it

@@ -27,7 +27,7 @@ import (
 // the per-account mode (ADR 0019) be the same code path with a different
 // value, instead of an `if manager == nil` at every call site. Those branches
 // were the thing most likely to route one account's traffic into another's
-// namespace, because getting it wrong does not fail -- it succeeds, somewhere
+// namespace, because getting it wrong does not fail. It succeeds, somewhere
 // else.
 //
 // It also means Listen and Dial work on the development machine for the shared
@@ -42,7 +42,7 @@ func Do(path string, fn func() error) error {
 // Listen binds a listener inside another network namespace.
 //
 // The listener is returned to the caller and used from wherever it likes; only
-// the bind has to happen inside -- socket(2) reads the calling thread's
+// the bind has to happen inside it: socket(2) reads the calling thread's
 // namespace, and nothing afterwards does.
 func Listen(path, network, address string) (net.Listener, error) {
 	var l net.Listener
@@ -79,7 +79,7 @@ func Dial(path, network, address string) (net.Conn, error) {
 // Untagged, unlike the rest of this package: it is string formatting, not a
 // system call, and it is needed by callers that only want to NAME a namespace
 // rather than enter one. It was declared once per build tag and a third time
-// in internal/server/daemons -- three copies of one path format that have to
+// in internal/server/daemons: three copies of one path format that have to
 // agree for anything here to work.
 func Path(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)

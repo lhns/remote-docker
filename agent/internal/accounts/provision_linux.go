@@ -81,7 +81,7 @@ func (p *UnixProvisioner) reconcileGroups(name string) {
 	// And BACK IN, which was missing and stranded people.
 	//
 	// Revoking was added so that switching to a daemon per account took the
-	// `docker` group away from accounts that already existed -- otherwise they
+	// `docker` group away from accounts that already existed, or they
 	// kept a socket reaching the parent daemon and the separation was a claim
 	// rather than a fact. It was written in one direction only, so switching
 	// BACK to the shared daemon left every existing account out of the group

@@ -39,19 +39,17 @@ func newDockerCommand() *cobra.Command {
 		Short: "Run any docker command against the workspace",
 		Long: `The complete Docker CLI, talking to the workspace daemon.
 
-It finds the session's endpoint on its own -- DOCKER_HOST does not have to be
-set, though an explicit one is respected -- and starts a session if none is
-running, so there is nothing to do first.
+It finds the session's endpoint itself and starts a session if none is
+running, so there is nothing to do first. An explicit DOCKER_HOST is respected.
 
-"docker compose" is NOT included: compose is not embedded in this binary. See
-the README.`,
+"docker compose" is not included; see the README.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 
 		// So `docker --version` and `docker -v` answer, which is the first
 		// thing anybody types at a docker they are not sure about. Cobra adds
 		// the flag because this field is set, and the shorthand because
-		// nothing at this level uses -v -- which matches the real CLI, where
+		// nothing at this level uses -v, which matches the real CLI, where
 		// -v is version at the root and --volume only under `run`.
 		Version: dockerVersionLine(),
 
@@ -72,7 +70,7 @@ the README.`,
 	// premise is not installed.
 	//
 	// Gated on the invocation actually BEING a docker command, because this
-	// function runs while the root command is built -- so `remote-docker gc`,
+	// function runs while the root command is built, so `remote-docker gc`,
 	// and even `--help`, used to probe the endpoint and could open a whole
 	// file-serving session that then raced the real command's own session
 	// inside one process.
@@ -82,23 +80,19 @@ the README.`,
 			ours := proxy.DockerHost(endpoint)
 			set := os.Getenv("DOCKER_HOST")
 
-			// Managed when the endpoint in play is ours -- whether we chose it
-			// or DOCKER_HOST names it. An explicitly set DOCKER_HOST used to
-			// skip this entirely, which meant pointing it at our OWN endpoint
-			// disabled starting a session and noticing a stale one. Anyone who
-			// has run `context install` or exported the printed value is in
-			// exactly that position, and the integration suite is too, which is
-			// how this was found.
+			// Managed whenever the endpoint in play is ours, whether we chose
+			// it or DOCKER_HOST names it. Skipping this when DOCKER_HOST was
+			// set meant that pointing it at our OWN endpoint, which is what
+			// the printed value and the docker context both do, disabled
+			// starting a session and noticing a stale one.
 			//
-			// Make a usable session available: start one if nothing is serving,
-			// and replace one built from a different commit if that costs
-			// nothing. Requiring `up` first made the embedded CLI -- the thing
-			// that exists so nothing has to be installed -- the one part of
-			// this tool with a setup step, and a stale session made a freshly
-			// updated client behave like the old one.
+			// Start one if nothing is serving, and replace one built from a
+			// different commit when that costs nothing. Requiring `start`
+			// first would give the embedded CLI, which exists so that nothing
+			// has to be installed, a setup step of its own.
 			//
-			// Which workspace this is comes from the same resolution as every
-			// other command, so `--workspace ci docker ps` uses ci.
+			// The workspace comes from the same resolution as every other
+			// command, so `--workspace ci docker ps` uses ci.
 			if set == "" || set == ours {
 				ensureDaemon(cfg, endpoint)
 			}
@@ -141,7 +135,7 @@ the README.`,
 // NoSessionEnv tells a docker command not to make a session available.
 //
 // Set on the docker commands this program runs itself. Once `docker` on PATH
-// IS this binary, `exec.LookPath("docker")` finds us -- so `workspace create`
+// IS this binary, `exec.LookPath("docker")` finds us, so `workspace create`
 // writing a docker context would spawn us, and we would start a whole
 // file-serving session in order to write a line of JSON. A docker command we
 // run ourselves must not start a session.
@@ -150,8 +144,8 @@ const NoSessionEnv = "REMOTE_DOCKER_NO_SESSION"
 // invokingDocker reports whether this process was asked to run a docker
 // command that should have a session made available for it.
 //
-// Crude on purpose. Cobra has not parsed anything yet -- it is still being
-// assembled -- so there is nothing better to ask, and being wrong costs only
+// Crude on purpose. Cobra has not parsed anything yet, it is still being
+// assembled, so there is nothing better to ask, and being wrong costs only
 // a session that is opened slightly too eagerly or not eagerly enough.
 func invokingDocker() bool {
 	if os.Getenv(NoSessionEnv) != "" {
@@ -175,9 +169,9 @@ func invokingDocker() bool {
 	// wrong so much as absurd: it opens an SSH connection, an NFS server and a
 	// reverse tunnel in order to write a file on this machine.
 	//
-	// No subcommand at all -- `docker`, `docker --help`, `docker --version` --
-	// is the same answer for the same reason. Printing help used to be enough
-	// to start a session.
+	// No subcommand at all (`docker`, `docker --help`, `docker --version`) is
+	// the same answer for the same reason. Printing help used to be enough to
+	// start a session.
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
 			continue
@@ -225,7 +219,7 @@ func afterDockerVerb(args []string) ([]string, bool) {
 //
 // Not an extra subcommand. Upstream, `docker build` IS `docker buildx build`
 // whenever buildx is installed, and the classic builder is only the fallback
-// for when it is not -- so adding a parallel `buildx` and leaving `build` on
+// for when it is not, so adding a parallel `buildx` and leaving `build` on
 // the old path would be a shape docker does not have.
 //
 // The classic builder is what we shipped until now, and it was not a choice:
@@ -234,7 +228,7 @@ func afterDockerVerb(args []string) ([]string, bool) {
 // the opposite and was wrong.
 //
 // `buildx` is registered too, because it is a real command with subcommands
-// docker exposes -- bake, imagetools, du -- and hiding them would be a
+// docker exposes (bake, imagetools, du) and hiding them would be a
 // different kind of surprise.
 func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
 	root := buildxcommands.NewRootCmd("buildx", true, dockerCli)
@@ -256,8 +250,8 @@ func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
 	}
 
 	// The buildx ROOT is deliberately not registered. Its subcommands expect
-	// the plugin harness to have run -- `docker buildx version` panics on a
-	// nil dereference without it -- and `build` is what docker's own tree
+	// the plugin harness to have run, and `docker buildx version` panics on a
+	// nil dereference without it, and `build` is what docker's own tree
 	// exposes anyway.
 	_ = root
 }

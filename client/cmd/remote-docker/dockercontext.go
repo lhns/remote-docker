@@ -7,7 +7,7 @@ package main
 // no way to tell which you wanted: `workspace add` already created a context,
 // and `context install` created it again. There is no case where somebody
 // wants a workspace configured and not reachable as `docker --context <name>`,
-// so it was never really a choice -- only a second place to look.
+// so it was never really a choice, only a second place to look.
 
 import (
 	"encoding/json"
@@ -34,7 +34,7 @@ const contextMarker = "remote-docker workspace"
 // `shim install` has put a `docker` on PATH, the docker that LookPath finds is
 // THIS BINARY. Without NoSessionEnv, writing a context would spawn us, and we
 // would open an SSH connection, an NFS server and a reverse tunnel in order to
-// write a file on this machine -- and then tear them all down again.
+// write a file on this machine, and then tear them all down again.
 //
 // It costs nothing when the docker found is a real one: a docker CLI that has
 // never heard of the variable ignores it.
@@ -56,7 +56,7 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 	endpoint := dockerHostOf(cfg)
 
 	if contextIsOurs(docker, name) {
-		// Ours, so replacing is safe -- and it is replaced rather than
+		// Ours, so replacing is safe, and it is replaced rather than
 		// updated, so a stale endpoint from an earlier run cannot survive.
 		_ = dockerCmd(docker, "context", "rm", "-f", name).Run()
 	} else if contextExists(docker, name) {
@@ -77,25 +77,17 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 
 // contextIsOurs reports whether a docker context carries our marker.
 //
-// The JSON is parsed rather than asking docker to format the field, and that
-// is not a preference. `--format '{{.Metadata.Description}}'` looks exactly
-// right against the JSON docker prints -- Metadata.Description is where the
-// description plainly is -- but the template does not run against that JSON.
-// It runs against docker's internal `store.Metadata`, whose Description lives
-// one level further in, so the template failed to evaluate for every context
-// that ever existed:
+// The JSON is parsed rather than asked for with `--format`, and that is not a
+// preference. A template like `{{.Metadata.Description}}` matches the JSON
+// docker prints, but it runs against docker's internal store.Metadata, where
+// Description sits one level deeper, so it fails to evaluate for every context
+// that has ever existed.
 //
-//	template: :1:11: executing "" at <.Metadata.Description>:
-//	can't evaluate field Description in type store.Metadata
-//
-// Output() discards stderr, so the failure arrived as an error and every
-// context was judged not ours. Nothing ever said so: `workspace rm` left the
-// context behind in silence, and re-running `workspace create` -- the
-// documented repair path -- refused with "already exists and was not created
-// by remote-docker", accusing the user of having made a context we made.
-//
-// The JSON shape is the documented interface and is stable across versions;
-// the field path through docker's own structs is neither.
+// Output() discards stderr, so that failure arrives as an error and every
+// context is then judged not ours: `workspace rm` leaves the context behind in
+// silence, and `workspace create` refuses to replace a context it wrote
+// itself. The JSON shape is documented and stable; the path through docker's
+// own structs is neither.
 func contextIsOurs(docker, name string) bool {
 	out, err := dockerCmd(docker, "context", "inspect", name).Output()
 	if err != nil {

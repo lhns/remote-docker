@@ -13,7 +13,7 @@ import (
 // A migration this mechanical gets exactly one thing wrong without noticing:
 // the output. `go build` proves nothing about it, and the two audiences --
 // somebody watching `start --foreground`, somebody reading `docker logs` on a
-// workspace -- would both be handed slog's `time=... level=INFO msg="..."`
+// workspace, would both be handed slog's `time=... level=INFO msg="..."`
 // instead of the prose they have always had.
 func TestTheClientsFormatIsUnchanged(t *testing.T) {
 	var out bytes.Buffer

@@ -13,7 +13,7 @@ import (
 //
 // A function rather than a constant, because on this platform the answer is
 // not known until it is asked: it comes from the user's runtime directory.
-// It used to be the empty string, resolved inside Listen -- which was fine
+// It used to be the empty string, resolved inside Listen, which was fine
 // for Listen and wrong for everybody else. A caller deriving a NAMED
 // workspace's endpoint appends to this, and appending to "" produced the
 // relative path "-dev": a socket in whatever directory the process happened
@@ -39,7 +39,7 @@ func Listen(endpoint string) (net.Listener, error) {
 	//
 	// A socket left by a process that did not shut down cleanly must be
 	// removed, or every later run fails with "address already in use". But
-	// removing it unconditionally -- which is what this did -- silently
+	// removing it unconditionally (which is what this did) silently
 	// unlinks a RUNNING process's socket and takes its place: the first keeps
 	// accepting on an inode nobody can reach, and when the second exits the
 	// path is bound to nothing while the first still looks healthy. Holding

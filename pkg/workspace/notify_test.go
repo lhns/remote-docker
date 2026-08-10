@@ -158,7 +158,7 @@ func TestFSOpString(t *testing.T) {
 
 // The export accepted by an event must be exactly the set the agent can turn
 // into a volume, or the client can send something well-formed that the agent
-// then refuses -- a disagreement that would present as "notifications
+// then refuses, a disagreement that would present as "notifications
 // mysteriously do not work for this one share".
 func TestValidateExportMatchesVolumeResolution(t *testing.T) {
 	for _, export := range []string{"/cwd", "/m/0123456789abcdef", "/m/zzz", "/etc", "", "/m/"} {

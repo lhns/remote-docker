@@ -18,7 +18,7 @@ import (
 
 // fakeProvisioner records what would have been created. Creating real unix
 // users needs root, which is exactly why the shell test suite could never run
-// in CI -- and why this is behind an interface.
+// in CI, and why this is behind an interface.
 type fakeProvisioner struct {
 	created map[string]int
 	err     error
@@ -398,7 +398,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // uid allocation must not depend on Go's map iteration order.
 //
 // Sync sorts the key files so a collision resolves deterministically, then
-// handed the result to reconcile as a map -- which ranged it to ASSIGN uids.
+// handed the result to reconcile as a map, which ranged it to ASSIGN uids.
 // So which account got which uid, and therefore which reverse-tunnel port,
 // differed between runs on a fresh workspace. It showed up as a test that
 // failed about one run in eight.

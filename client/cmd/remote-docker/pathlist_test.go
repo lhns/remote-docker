@@ -106,7 +106,7 @@ func TestRemoveFromPath(t *testing.T) {
 	})
 
 	// An empty entry in PATH means the current directory. Dropping one while
-	// tidying up would change what the user's shell resolves -- quietly, and
+	// tidying up would change what the user's shell resolves, quietly, and
 	// in a way that looks like nothing happened.
 	t.Run("an empty entry in the middle survives", func(t *testing.T) {
 		sep := string(filepath.ListSeparator)

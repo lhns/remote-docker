@@ -15,8 +15,8 @@ import (
 // every file in a share.
 //
 // They are synthesised rather than read from the local filesystem, and that is
-// the point. Windows has no uid or gid to report, which is why rclone -- whose
-// --uid/--gid/--umask are unsupported there -- made every file appear as uid
+// the point. Windows has no uid or gid to report, which is why rclone, whose
+// --uid/--gid/--umask are unsupported there, made every file appear as uid
 // 1000 and made chown inside a container fail. Serving the filesystem
 // ourselves means reporting the uid the workspace account actually has.
 type Attrs struct {
@@ -31,7 +31,7 @@ type Attrs struct {
 	// AlwaysExecutable reports every file as executable.
 	//
 	// Needed where the local filesystem has no execute bit to preserve, which
-	// means Windows. Without it nothing on the share can be run -- not a
+	// means Windows. Without it nothing on the share can be run, not a
 	// committed binary, not ./scripts/build.sh, not a Makefile's helper --
 	// because a synthesised 0644 has no execute bit and the container gets
 	// "permission denied". Mounting a FAT or NTFS volume on Linux makes the
@@ -118,7 +118,7 @@ type attrInfo struct {
 	path  string
 }
 
-// Mode keeps the type bits -- directory, symlink, device -- and replaces only
+// Mode keeps the type bits (directory, symlink, device) and replaces only
 // the permissions. Reporting a directory as a regular file would break
 // traversal outright.
 func (i *attrInfo) Mode() fs.FileMode {
@@ -132,7 +132,7 @@ func (i *attrInfo) Mode() fs.FileMode {
 	// Executability is the one permission taken from the real file rather than
 	// synthesised, because getting it wrong means a script on the share cannot
 	// be run at all. Where the local filesystem cannot express it, the share
-	// says yes -- see Attrs.AlwaysExecutable.
+	// says yes. See Attrs.AlwaysExecutable.
 	if i.attrs.AlwaysExecutable || mode&executableBits != 0 {
 		perm |= executableBits
 	}
@@ -155,8 +155,8 @@ func (i *attrInfo) Sys() any {
 //
 // NFS clients use it to tell files apart and to detect that two names are the
 // same file, so it must be stable for a given path and distinct between paths.
-// Windows exposes no inode through os.FileInfo, so it is derived from the path
-// -- which is what go-nfs itself does when it cannot find a real one.
+// Windows exposes no inode through os.FileInfo, so it is derived from the path,
+// which is what go-nfs itself does when it cannot find a real one.
 func fileID(p string) uint64 {
 	h := fnv.New64()
 	_, _ = h.Write([]byte(p))
@@ -183,7 +183,7 @@ func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 //
 // Ownership is synthesised (see Attrs), so there is nothing to record: a
 // container's `chown -R app:app .` cannot change what we report. Accepting it
-// is nonetheless the right behaviour -- refusing makes chown fail outright,
+// is nonetheless the right behaviour, because refusing makes chown fail,
 // which is the exact rclone limitation this package exists to remove, and
 // installers and entrypoint scripts that chown their working directory are
 // common. The following stat reports the configured uid either way.

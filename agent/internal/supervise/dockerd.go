@@ -20,7 +20,7 @@ import (
 // The entrypoint script started dockerd and never looked at it again. A daemon
 // that crashed left the container running and looking healthy, with sshd still
 // answering, so the workspace accepted connections and then failed every
-// Docker call -- and the Swarm deployment had no healthcheck at all to notice.
+// Docker call, and the Swarm deployment had no healthcheck at all to notice.
 type Dockerd struct {
 	// Command is the entrypoint to run. The dind image ships
 	// dockerd-entrypoint.sh, which prepends `dockerd` when the first argument
@@ -99,7 +99,7 @@ func (d *Dockerd) runOnce(ctx context.Context) error {
 // WaitReady blocks until the daemon's socket appears, or the timeout passes.
 //
 // Callers should not treat a timeout as fatal. The workspace is still worth
-// serving without a daemon -- a user can log in and see what went wrong, which
+// serving without a daemon: a user can log in and see what went wrong, which
 // is more useful than a container that exits and takes the evidence with it.
 func (d *Dockerd) WaitReady(ctx context.Context) error {
 	d.applyDefaults()

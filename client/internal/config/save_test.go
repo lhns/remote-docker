@@ -144,7 +144,7 @@ func TestKeyCommentIdentifiesTheMachine(t *testing.T) {
 // repeated field for field.
 //
 // encoding/json inlines an anonymous embedded struct's fields, tags and all,
-// so the shape is unchanged -- but that is a property of the encoder rather
+// so the shape is unchanged, but that is a property of the encoder rather
 // than of this code, and the config file is somebody's file on disk. Asserted
 // on the bytes, in both directions, so a future change to the struct that
 // nests them instead fails here rather than in a user's home directory.

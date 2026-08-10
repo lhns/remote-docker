@@ -9,7 +9,7 @@ import "testing"
 //
 // Beside rather than below, because one mkdir then covers every workspace.
 // Extension preserved because a unix socket path is a filename and tools that
-// glob for *.sock are ordinary -- docker.sock-dev would have worked and looked
+// glob for *.sock are ordinary. docker.sock-dev would have worked and looked
 // wrong, which is the kind of thing nobody reports.
 func TestJoinEndpointKeepsTheDirectoryAndTheExtension(t *testing.T) {
 	const base = "/run/user/1000/remote-docker/docker.sock"

@@ -32,7 +32,7 @@ type KeyPair struct {
 	Path string
 }
 
-// AuthorizedKey returns the public key in authorized_keys form -- the single
+// AuthorizedKey returns the public key in authorized_keys form: the single
 // line a user hands to whoever runs the workspace, whose filename becomes
 // their unix account.
 func (k KeyPair) AuthorizedKey(comment string) string {
@@ -50,7 +50,7 @@ func (k KeyPair) AuthorizedKey(comment string) string {
 //
 // ed25519 rather than RSA: small, fast, no key-size decision to get wrong, and
 // supported by every sshd this will meet. The key is never passphrase
-// protected -- it authenticates an automated tunnel that must come up without
+// protected, because it authenticates an automated tunnel that must come up without
 // a prompt, and a passphrase the user cannot be asked for is not a control.
 func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 	signer, err := loadKey(path)

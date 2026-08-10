@@ -11,7 +11,7 @@ import (
 // The warning must fire for vfs and stay silent for everything else.
 //
 // Both halves matter. A workspace that is configured correctly must print
-// nothing at all -- output belongs to the command being run -- and a workspace
+// nothing at all (output belongs to the command being run) and a workspace
 // on vfs must say so where somebody is standing when they notice the slowness,
 // which is any `remote-docker docker ...`, not `status` run on purpose.
 func TestSlowStorageWarning(t *testing.T) {

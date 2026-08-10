@@ -193,7 +193,7 @@ func TestPlanHonoursACustomHostSocketPath(t *testing.T) {
 // Args must read Remove rather than assume it.
 //
 // It did not: `--rm` was appended unconditionally while the field was set and
-// never consulted. Nothing caught it because nothing tested Args at all -- the
+// never consulted. Nothing caught it because nothing tested Args at all: the
 // suite covered Plan's decisions thoroughly and the rendering not once, and
 // the one caller happened to want the flag that was hardcoded.
 //
@@ -232,7 +232,7 @@ func TestPlanStillAsksForARemovedChild(t *testing.T) {
 // Asking means inspecting ourselves through the host's Docker socket, and
 // keeping that socket out of the privileged child is the whole trust boundary.
 // The agent needs the answer to give each account's daemon the same image as
-// the workspace -- the only one known to carry fuse-overlayfs, without which a
+// the workspace, the only one known to carry fuse-overlayfs, without which a
 // Ceph- or NFS-backed workspace cannot start one at all.
 func TestTheChildIsToldItsImage(t *testing.T) {
 	spec, err := Plan(ContainerInfo{ID: "abc", Name: "/ws", Image: "ghcr.io/x/ws:sha-1"}, Options{})

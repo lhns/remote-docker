@@ -25,7 +25,7 @@ func killPID(pid int) error {
 //
 // GetExitCodeProcess is the question. STILL_ACTIVE (259) means running;
 // anything else is an exit status. The ambiguity Windows is famous for here --
-// a process that genuinely exits WITH 259 reads as alive -- costs nothing in
+// a process that genuinely exits WITH 259 reads as alive, costs nothing in
 // this use: the session exits 0 or is killed, and the caller has a timeout.
 func processAlive(pid int) bool {
 	if pid <= 0 {

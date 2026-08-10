@@ -37,7 +37,7 @@ func TestIsDockerName(t *testing.T) {
 // A backslash path is only a path where a backslash separates paths.
 //
 // Asserted on Windows and NOT on Linux, because there `C:\Users\me\docker.exe`
-// is one ordinary filename with backslashes in it -- and a file may legally be
+// is one ordinary filename with backslashes in it, and a file may legally be
 // named that. Treating it as a path on both would mean answering to a name
 // nobody on Linux could have invoked us by, which is worse than not answering.
 func TestWindowsPathsAreOnlyPathsOnWindows(t *testing.T) {

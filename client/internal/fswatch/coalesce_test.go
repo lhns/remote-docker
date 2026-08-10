@@ -129,8 +129,8 @@ func TestFlushIsInArrivalOrder(t *testing.T) {
 	}
 }
 
-// Over capacity, individual paths stop being remembered -- that is what being
-// over capacity means -- but the loss is never silent.
+// Over capacity, individual paths stop being remembered, which is what being
+// over capacity means, but the loss is never silent.
 func TestPendingCapProducesANotice(t *testing.T) {
 	c := newCoalescer(10*time.Millisecond, time.Second, 2)
 
@@ -150,7 +150,7 @@ func TestPendingCapProducesANotice(t *testing.T) {
 	if n.Dropped != 2 {
 		t.Errorf("notice reports %d dropped, want 2", n.Dropped)
 	}
-	// The deepest directory covering both losses -- /a/b and /a/c -- is /a.
+	// The deepest directory covering both losses (/a/b and /a/c) is /a.
 	if n.Path != "/a" {
 		t.Errorf("notice covers %q, want %q", n.Path, "/a")
 	}

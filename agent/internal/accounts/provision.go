@@ -3,7 +3,7 @@ package accounts
 // The type lives here, untagged, and only its Ensure method is
 // platform-specific.
 //
-// It was declared twice -- once per build tag -- field for field. Both copies
+// It was declared twice (once per build tag) field for field. Both copies
 // were edited on the same day, which is exactly how a pair like that comes to
 // disagree: a field added to the Linux one and forgotten on the stub compiles
 // everywhere except the machine nobody builds on.
@@ -23,7 +23,7 @@ type UnixProvisioner struct {
 	// Revoke names groups an existing account must NOT be in.
 	//
 	// Needed because Ensure returns early for an account that already exists,
-	// so changing Groups alone would apply to new accounts only -- and on an
+	// so changing Groups alone would apply to new accounts only, and on an
 	// upgraded workspace every account already exists. With a daemon per
 	// account (ADR 0019) that would leave every one of them still in the
 	// `docker` group, holding a socket that reaches the PARENT daemon, which

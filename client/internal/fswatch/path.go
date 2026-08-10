@@ -7,7 +7,7 @@ import "strings"
 // two of the three platforms we ship.
 //
 // filepath.Rel compares bytes on every OS. But a share root comes from the
-// user's command line -- `c:\projects\Foo` -- while events come back from
+// user's command line (`c:\projects\Foo`) while events come back from
 // ReadDirectoryChangesW spelled the way the directory actually is on disk --
 // `C:\Projects\Foo\src\a.ts`. Rel either fails or returns nonsense, and the
 // failure is silent: no events for that share, no error anywhere.
@@ -21,8 +21,8 @@ import "strings"
 // components. The workspace's filesystem is case-sensitive; sending the root's
 // casing instead of the file's would name a path that is not there.
 //
-// workspace.CanonicalKey solves a neighbouring problem -- whether two paths
-// are the same directory -- and lowercases to do it. It is the right function
+// workspace.CanonicalKey solves a neighbouring problem, whether two paths
+// are the same directory, and lowercases to do it. It is the right function
 // for identity and the wrong one here.
 
 // splitLocal normalises separators and strips Windows extended-length
@@ -48,7 +48,7 @@ func splitLocal(goos, p string) []string {
 	// Empty components are dropped rather than preserved, which collapses a
 	// UNC path's leading "//" and any doubled separator. Components are only
 	// ever compared with each other and rejoined with single separators, so
-	// nothing downstream can tell the difference -- and a doubled separator
+	// nothing downstream can tell the difference, and a doubled separator
 	// in an event path would otherwise fail workspace validation.
 	parts := make([]string, 0, 8)
 	for part := range strings.SplitSeq(p, "/") {

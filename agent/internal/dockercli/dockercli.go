@@ -9,7 +9,7 @@
 // This package exists because four callers then made it separately, and each
 // re-decided the same four things: which binary, how to name the daemon, how
 // to trim the output, and how to wrap the error. Two of them spelled the host
-// flag differently -- `--host` in one, `-H` in another -- and the fourth
+// flag differently (`--host` in one, `-H` in another) and the fourth
 // hardcoded the binary with no seam at all, which is why the agent's version
 // lookup could not be tested.
 package dockercli
@@ -24,7 +24,7 @@ import (
 // CLI runs docker commands against one daemon.
 //
 // The zero value talks to the daemon on the default socket, which is the
-// workspace's own -- the parent of every per-account daemon (ADR 0019).
+// workspace's own, the parent of every per-account daemon (ADR 0019).
 type CLI struct {
 	// Host is the daemon to talk to, as a DOCKER_HOST-style value such as
 	// "unix:///run/rd/alice/docker.sock". Empty means the default socket.
@@ -35,11 +35,11 @@ type CLI struct {
 //
 // Three separate "empty means docker on PATH" fields existed across the agent
 // and no caller ever set any of them, so each was a knob that only ever had
-// one setting -- while making every call site carry a branch to honour it.
+// one setting, while making every call site carry a branch to honour it.
 const binary = "docker"
 
 // Cmd builds a command against this daemon, for callers that need to own the
-// process -- streaming its output, forwarding signals to it.
+// process: streaming its output, forwarding signals to it.
 func (c CLI) Cmd(ctx context.Context, args ...string) *exec.Cmd {
 	if c.Host != "" {
 		args = append([]string{"--host", c.Host}, args...)
@@ -62,7 +62,7 @@ func (c CLI) Line(ctx context.Context, args ...string) (string, error) {
 // Run performs a command for its effect, and includes docker's own output in
 // the error.
 //
-// what names the operation in the failure -- "starting alice's daemon" rather
+// what names the operation in the failure: "starting alice's daemon" rather
 // than "exit status 125". CombinedOutput, not Run: an exit status alone says
 // something failed without saying why, and docker's message is the whole
 // diagnosis.

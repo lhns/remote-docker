@@ -98,16 +98,16 @@ func New(cfg Config) (*Server, error) {
 
 		// Reverse forwarding carries the client's NFS export in; local
 		// forwarding lets the client reach published container ports. Both are
-		// needed, and both are constrained -- see ForwardPolicy.
+		// needed, and both are constrained. See ForwardPolicy.
 		//
 		// The callbacks are deliberately NOT set. gliderlabs invokes them from
 		// the handlers we replaced, so setting them here would leave the
-		// permission check in two places -- and allowReverseForward is not a
+		// permission check in two places, and allowReverseForward is not a
 		// predicate: it binds the port and arms the release. Called twice, the
 		// second call refuses its own reservation.
 
 		// Ours rather than gliderlabs', because both of theirs hardcode the
-		// namespace they listen and dial in -- see forward_tcpip.go.
+		// namespace they listen and dial in. See forward_tcpip.go.
 		RequestHandlers: map[string]gssh.RequestHandler{
 			"tcpip-forward":        s.handleForwardRequest,
 			"cancel-tcpip-forward": s.handleForwardRequest,
@@ -145,7 +145,7 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	ctx.SetValue(contextKey{}, sessionAccount{name: account.Name, uid: account.UID})
 
 	// Start this account's daemon now, in the background, so its boot hides
-	// behind the round trips that follow -- workspace-info, then the reverse
+	// behind the round trips that follow: workspace-info, then the reverse
 	// forward. A cold dind takes seconds; without this the client's first
 	// docker command pays for all of them, looking like a hang rather than a
 	// start.
@@ -195,7 +195,7 @@ func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32)
 // Unconstrained by port, deliberately: the ports a container publishes are not
 // knowable in advance, and everything reachable this way is inside the
 // workspace, which the account can already reach with a shell. Restricting to
-// loopback still matters -- it stops the workspace being used to reach the
+// loopback still matters: it stops the workspace being used to reach the
 // wider network it happens to sit on.
 func (s *Server) allowLocalForward(ctx gssh.Context, host string, port uint32) bool {
 	if _, ok := accountFor(ctx); !ok {

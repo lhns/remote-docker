@@ -30,7 +30,7 @@ type notifySink struct {
 // The handshake is not optional. The agent dispatches session commands on
 // exact strings and falls through to running whatever it does not recognise,
 // so an agent too old for this one runs `sh -c "workspace-notify"` and exits
-// 127 -- indistinguishable from a working channel that has nothing to say.
+// 127, indistinguishable from a working channel that has nothing to say.
 // Reading a greeting first is the only thing that tells them apart.
 func openNotify(client *sshx.Client) (*notifySink, error) {
 	stream, err := client.OpenStream(workspace.NotifyCommand)
@@ -120,7 +120,7 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 //
 // Registration already notifies directly, so this is the same belt-and-braces
 // the port manager uses: a periodic pass costs nothing and covers the paths
-// that do not go through the notifying one -- the working directory, which is
+// that do not go through the notifying one, such as the working directory,
 // registered inside Open before any of this exists.
 func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 	ticker := time.NewTicker(every)

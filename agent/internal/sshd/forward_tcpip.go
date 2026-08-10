@@ -15,7 +15,7 @@ import (
 
 // The forwarding handlers, replacing gliderlabs' own.
 //
-// Not because theirs are wrong -- these are near-copies of them -- but because
+// Not because theirs are wrong (these are near-copies of them) but because
 // both hardcode `net.Listen` and `net.Dial`, and with a daemon per account
 // (ADR 0019) the namespace those calls happen in is the whole question.
 //
@@ -64,7 +64,7 @@ type forwardedTCP struct {
 // listenFor binds the reverse forward where this account's containers can
 // reach it.
 //
-// One listener, in one namespace, chosen by mode -- NOT one in each.
+// One listener, in one namespace, chosen by mode. NOT one in each.
 //
 // With a daemon per account, the ONLY thing that needs to reach the client's
 // NFS export is that account's dockerd, and binding in the agent's namespace
@@ -79,13 +79,13 @@ type forwardedTCP struct {
 func (s *Server) listenFor(ctx context.Context, account sessionAccount, addr string) (net.Listener, error) {
 	// Ensure rather than Lookup: the client asks for this forward moments
 	// after authenticating, and Warm may still be booting the daemon. Waiting
-	// here is right -- there is nothing to bind into until it exists.
+	// here is right, because there is nothing to bind into until it exists.
 	target, err := s.cfg.Daemons.Ensure(ctx, account.Name())
 	if err != nil {
 		return nil, err
 	}
-	// An empty path is the agent's own namespace, which is where the shared
-	// daemon lives, so this one line serves both modes -- see netns.Do.
+	// An empty path is the agent's own namespace, where the shared daemon
+	// lives, so this one line serves both modes. See netns.Do.
 	return netns.Listen(target.NetNSPath, "tcp", addr)
 }
 
@@ -127,12 +127,12 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 		if err != nil {
 			// The RESERVATION has to go with the failure.
 			//
-			// allowReverseForward above does not only permit -- it BINDS the
+			// allowReverseForward above does not only permit: it BINDS the
 			// port and arms a release for when the connection ends. So a
 			// listen that fails here left the account's one reverse-tunnel
 			// port reserved by a forward that does not exist, and every retry
 			// was refused with "another session for this account may still be
-			// open" -- blaming a second session for the first one's failure.
+			// open", blaming a second session for the first one's failure.
 			s.forward.Release(account, payload.BindAddr, payload.BindPort)
 			s.log().Error("could not bind a forward", "addr", addr, "account", account.Name(), "err", err)
 			return false, []byte{}
@@ -216,8 +216,8 @@ func (s *Server) serveForwarded(conn *gossh.ServerConn, ln net.Listener, bindAdd
 // A near-copy of gliderlabs' DirectTCPIPHandler, differing in the dial.
 //
 // The meaning of "loopback" strengthens for free here. It used to mean the
-// agent's own loopback -- which carries the agent's own services, including
-// the SSH port -- and now means the account's dind's loopback, where nothing
+// agent's own loopback, which carries the agent's own services, including
+// the SSH port, and now means the account's dind's loopback, where nothing
 // of ours listens. Two accounts publishing 8080 also stop colliding, because
 // those are two different namespaces.
 func (s *Server) directTCPIP(_ *gssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx gssh.Context) {
@@ -233,8 +233,8 @@ func (s *Server) directTCPIP(_ *gssh.Server, _ *gossh.ServerConn, newChan gossh.
 	}
 
 	// Resolved here rather than inside dialFor, so the one case that must
-	// never be treated as permission -- a forward on a connection with no
-	// authenticated account -- is refused where the context still is.
+	// never be treated as permission (a forward on a connection with no
+	// authenticated account) is refused where the context still is.
 	account, ok := accountFor(ctx)
 	if !ok {
 		_ = newChan.Reject(gossh.Prohibited, errNoAccount.Error())

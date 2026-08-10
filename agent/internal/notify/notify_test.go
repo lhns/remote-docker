@@ -155,7 +155,7 @@ func TestCreatePokesTheFileAndItsParent(t *testing.T) {
 	}
 }
 
-// A removal has nothing to touch -- the file is gone, and unlink of an
+// A removal has nothing to touch: the file is gone, and unlink of an
 // already-gone name fails before the kernel generates anything. Only the
 // parent can be said, and the vanished path must NOT be poked: doing so with
 // O_CREAT semantics anywhere would recreate it.
@@ -239,7 +239,7 @@ func TestResolveRefusesEscapes(t *testing.T) {
 	}
 }
 
-// A share no container has mounted yet is ordinary -- the user shared a
+// A share no container has mounted yet is ordinary: the user shared a
 // directory and has not started anything using it. It must not become a stream
 // of docker calls.
 func TestUnknownVolumeIsCachedAndSilent(t *testing.T) {

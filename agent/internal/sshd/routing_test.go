@@ -83,8 +83,8 @@ func twoAccounts() *fakeTargets {
 }
 
 // Every path that reaches a daemon asks for the account that owns the session,
-// and never a fixed one. A resolver that ignored its argument -- which is what
-// a mode branch left behind would amount to -- fails here.
+// and never a fixed one. A resolver that ignored its argument, which is what
+// a mode branch left behind would amount to, fails here.
 func TestEveryPathResolvesTheSessionsOwnAccount(t *testing.T) {
 	for _, account := range []string{"alice", "bob"} {
 		targets := twoAccounts()
@@ -105,7 +105,7 @@ func TestEveryPathResolvesTheSessionsOwnAccount(t *testing.T) {
 
 // The four coordinates of a target belong to ONE daemon and must never be
 // mixed. Reading alice's root against bob's host would relocate a mountpoint
-// into the wrong container's filesystem -- a root process writing to a path
+// into the wrong container's filesystem: a root process writing to a path
 // that exists and belongs to somebody else.
 func TestATargetIsNotMixedBetweenAccounts(t *testing.T) {
 	targets := twoAccounts()
@@ -166,7 +166,7 @@ func TestSharedHonoursTheSocketItWasGiven(t *testing.T) {
 // version string the client only displays.
 //
 // So: Lookup, and a miss is an answer. This is the property a careless
-// unification destroys silently -- everything still works, just slowly, and
+// unification destroys silently: everything still works, just slowly, and
 // only on the first connection after a restart.
 func TestInfoQueriesNeverStartADaemon(t *testing.T) {
 	targets := twoAccounts()

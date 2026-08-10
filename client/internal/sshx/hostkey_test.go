@@ -55,7 +55,7 @@ func TestKnownHostsTrustsOnFirstUse(t *testing.T) {
 
 // The case that matters. A changed host key is either a rebuilt workspace or
 // an interception, and there is no interactive user on the far side of an
-// automated tunnel to make that judgement -- so it is refused, not prompted.
+// automated tunnel to make that judgement, so it is refused, not prompted.
 func TestKnownHostsRefusesAChangedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "known_hosts")
 	kh, err := NewKnownHosts(path)

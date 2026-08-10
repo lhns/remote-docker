@@ -11,7 +11,7 @@ import (
 // Binding an endpoint twice must be refused, not silently taken over.
 //
 // This is the whole point of the lock. On Unix, Listen removed any existing
-// socket before binding -- necessary to recover from a process that died
+// socket before binding, which is necessary to recover from a process that died
 // without cleaning up, and indiscriminate: a second process unlinked a RUNNING
 // one's socket and took its place. The first kept accepting on an inode nobody
 // could reach, and when the second exited the path was bound to nothing while
@@ -93,7 +93,7 @@ func TestLockPathIsAFilename(t *testing.T) {
 // This was real, on Windows, and it turned the one message that tells a user
 // what to do into a wrong one: the pid was written when the lock file was
 // OPENED, before the pipe bind decided anything, so a second process reported
-// "already serving (pid ...)" naming ITSELF -- a pid that no longer existed by
+// "already serving (pid ...)" naming ITSELF, a pid that no longer existed by
 // the time anyone looked. The owner's identity is the entire content of that
 // message.
 //

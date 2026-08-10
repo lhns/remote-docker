@@ -1,25 +1,24 @@
 # Docker Swarm deployment.
 #
-# Swarm cannot run privileged tasks. This service therefore starts
-# UNPRIVILEGED and immediately relaunches itself privileged through the host's
-# Docker socket -- `remote-dockerd elevate`. No launcher image is involved.
-# See docs/adr/0013.
-#
+#   docker node update --label-add workspace=true <node>
+#   ssh <node> "mkdir -p /var/lib/remote-docker/{state,authorized_keys.d}"
 #   docker stack deploy -c swarm.yml workspace
 #
-# Two things are yours to set. WORKSPACE_DATA is where this keeps its state on
-# the node; the default is a plain local path and works as-is. Point it at
-# shared storage only if you want the workspace to survive moving nodes -- and
-# read the note on WORKSPACE_DOCKERD_ARGS below before you do.
+# Both of those first two steps are required and neither fails loudly: without
+# the label the service never schedules, and a missing bind source becomes an
+# empty root-owned directory.
 #
-#   export WORKSPACE_DATA=/var/lib/remote-docker
-#   export WORKSPACE_IMAGE=ghcr.io/lhns/remote-docker-workspace:latest
+# Yours to set:
+#   WORKSPACE_DATA    where state lives on the node (default below)
+#   WORKSPACE_IMAGE   which image to run
 #
-# `version` is required here and only here. `docker stack deploy` parses with
-# the legacy Compose loader, which without it reads the file as format v1 --
-# and v1 has no `services:` key, so the whole thing is rejected. Plain
-# `docker compose` is the opposite: it deprecated the field and warns when it
-# is present, which is why deploy/docker-compose.yml has none.
+# Swarm cannot run privileged tasks, so this starts unprivileged and relaunches
+# itself through the node's Docker socket (ADR 0013).
+#
+# `version` is required here and only here: `docker stack deploy` uses the
+# legacy Compose loader, which without it reads the file as format v1, which
+# has no `services:` key. Plain `docker compose` warns about the same field,
+# which is why docker-compose.yml has none.
 version: "3.8"
 
 services:
@@ -28,52 +27,35 @@ services:
     command: ["elevate"]
 
     environment:
-      # How we find ourselves. Swarm expands service templates in environment
-      # values, so this is exact -- no parsing /proc and guessing. The
-      # privileged child joins THIS task's network namespace, which is what
-      # makes the published port below reach it.
+      # Swarm expands service templates in environment values, so the
+      # privileged child can find this task exactly rather than by guessing.
       WORKSPACE_SELF: "{{.Task.Name}}"
 
       TZ: ${TZ:-UTC}
       DOCKER_TLS_CERTDIR: ""
 
-      # Empty means overlay2, which is correct and fastest when
-      # /var/lib/docker is on real local disk -- which the default
-      # WORKSPACE_DATA below is.
-      #
-      # If you move WORKSPACE_DATA onto Ceph- or NFS-backed storage you MUST
-      # set this to --storage-driver=fuse-overlayfs: overlay2 refuses such a
-      # filesystem outright, and vfs, the other fallback, copies every layer.
+      # Empty means overlay2. On Ceph- or NFS-backed WORKSPACE_DATA you MUST
+      # set --storage-driver=fuse-overlayfs: overlay2 refuses such a filesystem
+      # and the fallback, vfs, copies every layer on every container create.
       WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
-      # NOT /var/run/docker.sock. dind runs its own daemon on that path inside
-      # the workspace, so the two would collide -- and mounting the host's
-      # socket somewhere distinct makes excluding it from the privileged child
-      # a matter of intent rather than of coincidence.
-      #
-      # This mount is the whole trust boundary: whoever can deploy this stack
-      # can already start privileged containers on the node.
+      # The trust boundary. Whoever can deploy this stack can already start
+      # privileged containers on the node. Not /var/run/docker.sock inside,
+      # because dind runs its own daemon on that path, and keeping this socket
+      # out of the privileged child is deliberate.
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/host-docker.sock
 
-      # Everything below is replicated onto the privileged child, which is why
-      # it is declared here rather than on it.
-      #
-      # The graph directory is per-slot: two replicas sharing one would corrupt
-      # it. {{.Task.Slot}} is a Swarm service template, expanded by Swarm at
-      # runtime, while ${WORKSPACE_DATA} is expanded by the CLI at deploy time.
-      # Both in one path is fine -- different things evaluate them, at
-      # different times.
+      # Per slot: two replicas sharing a graph directory would corrupt it.
       - type: bind
         source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/{{.Task.Slot}}/docker
         target: /var/lib/docker
 
-      # Shared across slots on purpose: host keys and the uid map. Persisting
-      # them is what stops clients seeing "REMOTE HOST IDENTIFICATION HAS
-      # CHANGED" after a redeploy, and what keeps each user's uid -- and
-      # therefore their reverse-tunnel port -- stable.
+      # Shared across slots on purpose. Host keys and the uid map: persisting
+      # them stops "REMOTE HOST IDENTIFICATION HAS CHANGED" after a redeploy
+      # and keeps each account's uid, and so its tunnel port, stable.
       - type: bind
         source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/state
         target: /etc/workspace
@@ -85,9 +67,8 @@ services:
         read_only: true
 
     ports:
-      # mode: host so the port lands on the node actually running the task.
-      # The routing mesh would round-robin it to nodes where the privileged
-      # container does not exist.
+      # mode: host so the port lands on the node running the task. The routing
+      # mesh would send it to nodes where the privileged container is not.
       - target: 2222
         published: 2222
         protocol: tcp
@@ -103,14 +84,7 @@ services:
         delay: 10s
 
     healthcheck:
-      # Checks the PRIVILEGED child, since this task shares its network
-      # namespace. Without it a workspace whose dockerd died would keep
-      # looking healthy.
-      #
-      # `nc -z` proved a port was open and nothing else. This asks the agent
-      # itself, which also checks the daemon when it can see its socket -- from
-      # here it cannot, since this task shares the child's network namespace
-      # but not its filesystem, and it says so rather than failing on it.
+      # Checks the privileged child, whose network namespace this task shares.
       test: ["CMD", "remote-dockerd", "healthcheck"]
       interval: 30s
       timeout: 10s

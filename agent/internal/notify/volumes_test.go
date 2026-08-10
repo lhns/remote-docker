@@ -20,13 +20,13 @@ func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
 	}
 }
 
-// With no root -- the shared daemon -- the path is already ours.
+// With no root (the shared daemon) the path is already ours.
 //
 // All three spellings of "no relocation" must work, and "/" is here because it
 // did not. daemons.Shared reports its root as "/", which is true; this function
 // took it for a prefix and asked whether the mountpoint began with "//", which
 // nothing does. Every replay on a shared-daemon workspace was refused as an
-// escape attempt, and the integration suite is what said so -- the unit tests
+// escape attempt, and the integration suite is what said so. The unit tests
 // asserted the value "/" without ever passing it through the code that reads
 // it, which is a test agreeing with a bug rather than catching it.
 func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
@@ -44,8 +44,8 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 }
 
 // A daemon we cannot locate must fail rather than fall back to the
-// unrelocated path. That path EXISTS in the agent's filesystem -- it is the
-// shared daemon's -- so a silent fallback would replay one account's edits
+// unrelocated path. That path EXISTS in the agent's filesystem: it is the
+// shared daemon's, so a silent fallback would replay one account's edits
 // into another daemon's volume.
 func TestRelocateFailsRatherThanFallingBack(t *testing.T) {
 	boom := errors.New("no such daemon")
@@ -64,7 +64,7 @@ func TestRelocateFailsRatherThanFallingBack(t *testing.T) {
 //
 // This is the test that found the hole. Joining looks like containment and is
 // not: path.Join CLEANS, so "/proc/42/root" joined to "/../../etc/shadow" is
-// "/proc/etc/shadow" -- outside the root, no error, looking right.
+// "/proc/etc/shadow": outside the root, no error, looking right.
 //
 // It matters because of what this input is. The mountpoint is whatever the
 // account's daemon says, and in per-account mode the account is root inside

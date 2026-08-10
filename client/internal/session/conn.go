@@ -2,8 +2,8 @@
 //
 // The ORDER in here is load-bearing and is the reason it is one file: the NFS
 // export has to be reachable before any container can mount a volume backed by
-// it, and the things that only a hosting session starts -- ports, notify, the
-// volume collector -- must not be started by one that merely asks a question.
+// it, and the things only a hosting session starts (ports, notify, the volume
+// collector) must not be started by one that merely asks a question.
 
 package session
 
@@ -60,7 +60,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	live := &liveConn{ssh: client, info: info}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	// One guard for this connection, shared by the two things that disagree
-	// about a volume's lifetime -- see rewrite.Guard.
+	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
 		Shares:  shareRegistrar{registry: s.registry, changed: s.sharesChanged},
@@ -84,7 +84,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// ports exists to make this session's containers reachable, and collecting
 	// volumes is housekeeping for a long-running `up`.
 	//
-	// A Query session -- `status`, `gc` -- only asks the workspace a
+	// A Query session (`status`, `gc`) only asks the workspace a
 	// question and then closes. Starting them there meant a status command
 	// began two background round trips and immediately tore the connection out
 	// from under them, so it printed its table followed by two errors about
@@ -137,7 +137,7 @@ func (s *Session) portsLogger() *slog.Logger {
 // been cancelled.
 //
 // Everything here talks over one SSH connection, so tearing that connection
-// down makes every goroutine still using it fail at once -- with EOF, or
+// down makes every goroutine still using it fail at once, with EOF, or
 // "unexpected packet in response to channel open", or a half-read stream.
 // Those are descriptions of shutdown, not of anything wrong, and printing them
 // after the user pressed Ctrl-C or after a one-shot command finished is how a
