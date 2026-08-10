@@ -136,11 +136,11 @@ account there.`,
 // withQuerySession opens a session that only ASKS the workspace things, runs
 // fn against it, and closes it.
 //
-// `Files: NoFiles` is the load-bearing part, and the reason this is shared
-// rather than written twice. An account has exactly one reverse-tunnel port
-// (ADR 0003), so a command that does not need to export files must not try --
-// it would fail the moment a session is running, which is precisely when
-// somebody runs `status` or `gc`.
+// `session.Query` is the load-bearing part, and the reason this is shared
+// rather than written twice. A query session takes neither the local endpoint
+// nor the account's one reverse-tunnel port (ADR 0003), so it still works while
+// a real session holds both -- which is precisely when somebody runs `status`
+// or `gc`. See session.Role for what each half of that prevents.
 func withQuerySession(fn func(ctx context.Context, s *session.Session) error) error {
 	cfg, err := resolve()
 	if err != nil {
@@ -157,7 +157,7 @@ func withQuerySession(fn func(ctx context.Context, s *session.Session) error) er
 		Config:   cfg,
 		WorkDir:  mustWorkDir(),
 		Endpoint: endpointOf(cfg),
-		Files:    session.NoFiles,
+		Role:     session.Query,
 		Log:      logger{},
 	})
 	if err != nil {
