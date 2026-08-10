@@ -53,7 +53,7 @@ func ensurePATH(out io.Writer, dir string) (bool, error) {
 		// "docker is not recognised" are both true at once.
 		if !onPath(dir) {
 			_, _ = fmt.Fprintln(out,
-				"This shell does not have it yet, though -- it kept the PATH it started with.")
+				"  note: this shell kept the PATH it started with, so open a new one")
 		}
 		return false, nil
 	}
@@ -73,9 +73,8 @@ func ensurePATH(out io.Writer, dir string) (bool, error) {
 
 	broadcastEnvChange()
 	_, _ = fmt.Fprintf(out,
-		"added %s to your user PATH (HKCU\\%s), at the END --\n"+
-			"so a real Docker installed later still wins.\n"+
-			"Undo it with `remote-docker shim uninstall`.\n", dir, userEnvKey)
+		"added %s to your user PATH (HKCU\\%s), at the end, so a real Docker later still wins\n"+
+			"  undo: remote-docker shim uninstall\n", dir, userEnvKey)
 	return true, nil
 }
 

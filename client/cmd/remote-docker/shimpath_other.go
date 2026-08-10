@@ -37,9 +37,8 @@ func reportPATH(out io.Writer, dir string) error {
 		return nil
 	}
 	_, _ = fmt.Fprintf(out,
-		"\n%s is NOT on your PATH. Add this to your shell's startup file:\n\n"+
-			"    export PATH=\"%s:$PATH\"\n\n"+
-			"(nothing here edits that file for you: which one it is depends on your shell)\n",
+		"\n%s is not on your PATH. Add this to your shell's startup file:\n"+
+			"    export PATH=\"%s:$PATH\"\n",
 		dir, dir)
 	return nil
 }

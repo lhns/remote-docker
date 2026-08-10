@@ -241,8 +241,6 @@ func installShim(out io.Writer, in io.Reader, self string, allowCopy bool) error
 	}
 	dir := filepath.Dir(path)
 
-	_, _ = fmt.Fprintf(out, "installing %s as %s\n", filepath.Base(self), path)
-
 	existing, err := inspectShim(self)
 	if err != nil {
 		return err
@@ -253,9 +251,8 @@ func installShim(out io.Writer, in io.Reader, self string, allowCopy bool) error
 		// invariant of the whole feature: a machine may get Docker Desktop
 		// tomorrow, and a shim that overwrote a real CLI is a broken machine.
 		return fmt.Errorf(
-			"%s already exists and is not a remote-docker binary, so it was left alone.\n"+
-				"That is almost certainly a real docker CLI. Remove it yourself if you\n"+
-				"meant to replace it, or set REMOTE_DOCKER_SHIM_DIR to install elsewhere",
+			"%s exists and is not ours, so it was left alone. It is probably a real docker.\n"+
+				"  fix: remove it yourself, or set REMOTE_DOCKER_SHIM_DIR to install elsewhere",
 			existing.path)
 	case existing.exists && existing.current:
 		// PATH is the caller's business rather than this function's: `install`
@@ -290,13 +287,9 @@ func installShim(out io.Writer, in io.Reader, self string, allowCopy bool) error
 	}
 
 	_, _ = fmt.Fprintf(out, "installed: %s (%s)\n", path, got)
-	switch got {
-	case formSymlink:
-		_, _ = fmt.Fprintln(out, "It follows this binary, so upgrading remote-docker upgrades docker with it.")
-	default:
+	if got != formSymlink {
 		_, _ = fmt.Fprintf(out,
-			"A %s does not follow this binary: after upgrading remote-docker, run\n"+
-				"`remote-docker shim install` again. `remote-docker status` says when it has drifted.\n", got)
+			"  note: a %s does not follow upgrades; run `shim install` again after one\n", got)
 	}
 	return nil
 }
@@ -309,8 +302,7 @@ func link(out io.Writer, in io.Reader, self, path string, allowCopy bool) (form,
 		// Not a failure worth reporting as one: it is the ordinary state of a
 		// Windows machine, and the hardlink below is a fine answer.
 		_, _ = fmt.Fprintln(out,
-			"Windows will not let this account create a symlink (that needs Developer Mode\n"+
-				"or an administrator), so a hardlink is used instead.")
+			"  note: symlinks need Developer Mode or an administrator here, so this is a hardlink")
 	}
 
 	err := os.Link(self, path)
@@ -325,12 +317,11 @@ func link(out io.Writer, in io.Reader, self, path string, allowCopy bool) (form,
 	if note, ok := crossDeviceNote(self, path); ok {
 		_, _ = fmt.Fprintf(out, "\n%s\n", note)
 		_, _ = fmt.Fprintf(out,
-			"So the only remaining option is a full copy of the binary (~%d MB), which\n"+
-				"will NOT follow future upgrades of remote-docker.\n"+
-				"Putting remote-docker beside %s and re-running this would avoid that.\n",
+			"That leaves a full copy: %d MB, and it will not follow upgrades.\n"+
+				"  avoid it by putting remote-docker on the same volume as %s\n",
 			sizeMB(self), filepath.Dir(path))
 	} else {
-		_, _ = fmt.Fprintf(out, "\nlinking %s failed (%v), so the only remaining option is a full copy.\n",
+		_, _ = fmt.Fprintf(out, "\nlinking %s failed: %v\nThat leaves a full copy of the binary.\n",
 			path, err)
 	}
 
@@ -442,14 +433,14 @@ func reportShim(out io.Writer, self string) {
 	}
 	switch {
 	case !in.exists:
-		rowf(out, "docker shim", "not installed (`remote-docker shim install` puts `docker` on PATH)")
+		rowf(out, "docker shim", "not installed; `remote-docker shim install` puts `docker` on PATH")
 	case !in.ours:
-		rowf(out, "docker shim", "%s -- NOT ours, left alone", in.path)
+		rowf(out, "docker shim", "%s, not ours, left alone", in.path)
 	case in.current:
 		rowf(out, "docker shim", "%s (%s)", in.path, in.form)
 	default:
-		rowf(out, "docker shim", "%s (%s) -- STALE: it points at an older build, "+
-			"run `remote-docker shim install` again", in.path, in.form)
+		rowf(out, "docker shim", "%s (%s), STALE: an older build. Run `shim install` again",
+			in.path, in.form)
 	}
 }
 
@@ -457,16 +448,16 @@ func newShimCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "shim",
 		Short: "Install this binary on PATH under the name docker",
-		Long: `Puts a "docker" on PATH that is this binary, so the ordinary commands work
+		Long: `Puts a "docker" on PATH that is this binary, so ordinary commands work
 without a prefix:
 
     docker run --rm -v .:/w alpine ls /w
 
-There is nothing to download. This binary already carries the complete Docker
-CLI, and it answers to the name it is invoked by -- so the shim is a link, not
-a second program. Renaming the binary to docker` + exeSuffixDoc() + ` does the same thing by hand.
+Nothing is downloaded. This binary already carries the Docker CLI and answers
+to the name it is invoked by, so the shim is a link rather than a second
+program. Renaming the binary to docker` + exeSuffixDoc() + ` does the same thing by hand.
 
-Note that "docker compose" is NOT included; see the README.`,
+"docker compose" is not included; see the README.`,
 	}
 	cmd.AddCommand(newShimInstallCommand(), newShimUninstallCommand(), newShimStatusCommand())
 	return cmd
@@ -506,7 +497,7 @@ func newShimInstallCommand() *cobra.Command {
 				return err
 			}
 			if noPath {
-				_, _ = fmt.Fprintf(out, "\nPATH was left alone, as asked. Add %s to it yourself.\n", dir)
+				_, _ = fmt.Fprintf(out, "PATH left alone. Add %s to it yourself.\n", dir)
 				return nil
 			}
 
@@ -523,10 +514,7 @@ func newShimInstallCommand() *cobra.Command {
 				}
 			}
 
-			_, _ = fmt.Fprintf(out,
-				"\nTry it: docker version\n"+
-					"If that says \"not recognised\", this shell has the PATH it started with --\n"+
-					"open a new one.\n")
+			_, _ = fmt.Fprintln(out, "\nTry `docker version`. If this shell cannot find it, open a new one.")
 			return nil
 		},
 	}

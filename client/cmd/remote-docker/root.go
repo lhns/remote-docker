@@ -28,10 +28,9 @@ func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "remote-docker",
 		Short: "Run Docker on a remote workspace with your local files really mounted",
-		Long: `remote-docker gives you a Docker daemon on a remote workspace while your
-own directories are genuinely mounted into the containers -- not copied, not
-synced -- so bind mounts, published ports and the standard Docker tooling all
-behave the way they would locally.
+		Long: `A Docker daemon on a remote workspace, with your own directories really
+mounted into the containers. Not copied, not synced, so bind mounts, published
+ports and the standard tooling behave the way they would locally.
 
 Nothing needs to be installed on this machine beyond this binary.`,
 		SilenceUsage:  true,
@@ -208,7 +207,7 @@ func newStatusCommand() *cobra.Command {
 				case "":
 					// An agent too old to report it, or a daemon not started.
 				case "vfs":
-					row(out, "storage", "vfs -- SLOW: every container create copies the whole image")
+					row(out, "storage", "vfs, SLOW: every container create copies the whole image")
 				default:
 					row(out, "storage", info.Storage)
 				}
@@ -296,15 +295,12 @@ func newGCCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
 		Short: "Remove share volumes this account is no longer using",
-		Long: `Each distinct directory bound into a container gets a volume on the
-workspace, and they outlive the containers that referenced them.
+		Long: `Each directory bound into a container gets a volume on the workspace, and
+they outlive the containers that used them.
 
-Only volumes this client created, for this account, and referenced by no
-container -- running or stopped -- are removed. A volume you created yourself
-is never touched, whatever it is named.
-
-The volume for the directory this runs in is also left alone: the session
-exports it, so it is about to be needed even when nothing holds it now.`,
+Only volumes this client created, for this account, that no container refers
+to. A volume you created yourself is never touched, whatever it is named, and
+neither is the one for the directory this runs in.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withQuerySession(func(ctx context.Context, s *session.Session) error {
 				removed, err := s.Collect(ctx)

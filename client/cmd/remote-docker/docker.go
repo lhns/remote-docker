@@ -39,12 +39,10 @@ func newDockerCommand() *cobra.Command {
 		Short: "Run any docker command against the workspace",
 		Long: `The complete Docker CLI, talking to the workspace daemon.
 
-It finds the session's endpoint on its own -- DOCKER_HOST does not have to be
-set, though an explicit one is respected -- and starts a session if none is
-running, so there is nothing to do first.
+It finds the session's endpoint itself and starts a session if none is
+running, so there is nothing to do first. An explicit DOCKER_HOST is respected.
 
-"docker compose" is NOT included: compose is not embedded in this binary. See
-the README.`,
+"docker compose" is not included; see the README.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 
