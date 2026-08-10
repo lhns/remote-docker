@@ -4,11 +4,15 @@ project_name: remote-docker
 
 before:
   hooks:
+    # Per module: the client is where the binary comes from, and a tidy at
+    # the repository root would only touch the shared module (ADR 0021).
     - go mod tidy
+    - sh -c "cd client && go mod tidy"
 
 builds:
   - id: remote-docker
     main: ./cmd/remote-docker
+    dir: client
     binary: remote-docker
     # The premise of the project is a machine that cannot have software
     # installed, so every target must be a single self-contained binary.

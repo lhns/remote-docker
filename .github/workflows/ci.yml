@@ -40,18 +40,33 @@ jobs:
             exit 1
           fi
 
+      # Per module, and every module named explicitly. `./...` stops at a
+      # module boundary, so a loop over the three is the only thing that
+      # actually covers the repository after ADR 0021 -- and a `go test ./...`
+      # at the root would pass while testing almost nothing.
       - name: go vet
-        run: go vet ./...
+        run: |
+          set -eux
+          for mod in . ./agent ./client; do
+            (cd "$mod" && go vet ./...)
+          done
 
       # -race needs cgo, which is why this runs here and not in the
       # cross-compile matrix below (that one is CGO_ENABLED=0 by necessity).
       - name: go test
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: |
+          set -eux
+          for mod in . agent client; do
+            (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
+          done
 
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: coverage.out
+          path: |
+            coverage.out
+            agent/coverage.out
+            client/coverage.out
 
   lint:
     name: lint
@@ -68,8 +83,17 @@ jobs:
       - name: install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
+      # Per module, and the agent TWICE. Its session handling is Linux-only,
+      # so a host-only lint does not see the file at all -- which is how a
+      # QF1002 reached CI once already. `./...` stops at a module boundary, so
+      # the loop is what makes this cover the repository.
       - name: golangci-lint
-        run: golangci-lint run --timeout 5m ./...
+        run: |
+          set -eux
+          for mod in . ./agent ./client; do
+            (cd "$mod" && golangci-lint run --timeout 5m ./...)
+          done
+          (cd agent && GOOS=linux golangci-lint run --timeout 5m ./...)
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -91,16 +115,25 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Every package, not just the binary: a dependency that quietly needs
-      # cgo, or a build-tagged file with no counterpart for this platform,
-      # should fail here rather than at release time. goreleaser below builds
-      # only ./cmd/remote-docker, so it would not notice.
+      # Every package of every module, not just the binary: a dependency that
+      # quietly needs cgo, or a build-tagged file with no counterpart for this
+      # platform, should fail here rather than at release time. goreleaser
+      # below builds only the client, so it would not notice.
+      #
+      # The agent is cross-compiled here too even though it only ever runs on
+      # Linux. It costs seconds, and it is what keeps the _other.go stubs
+      # honest -- they exist so the package still builds on the machine this
+      # project is developed on.
       - name: go build
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build ./...
+        run: |
+          set -eux
+          for mod in . ./agent ./client; do
+            (cd "$mod" && go build ./...)
+          done
 
       # The shippable binary, from .goreleaser.yaml -- the same file, flags and
       # naming a tagged release uses, so only the version string differs.

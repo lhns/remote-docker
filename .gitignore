@@ -14,3 +14,8 @@ coverage.out
 # local deployment state -- host keys, uidmap, enrolled public keys
 deploy/state/
 deploy/authorized_keys.d/
+
+# go.work.sum is a local artefact of the development workspace. CI and the
+# image build resolve through each module go.mod instead, so committing it
+# would be a file nothing verifies and everything conflicts on.
+go.work.sum

@@ -43,7 +43,7 @@ build_image() {
 
 # build_client builds the client binary into $WORK.
 build_client() {
-    (cd "$REPO" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker)
+    (cd "$REPO/client" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker)
 }
 
 # enrol generates a keypair for one account and stages its public half where

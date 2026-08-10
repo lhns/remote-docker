@@ -20,58 +20,66 @@ itself. Published ports become reachable locally as containers start.
 ## Layout
 
 ```
-cmd/remote-docker/       the client binary
-cmd/remote-dockerd/      the server agent (ADR 0010)
+go.mod                   THE SHARED MODULE (ADR 0021), depends on ~nothing
+  pkg/workspace/         THE CONTRACT, imported by both binaries
+  internal/logx/         the one log handler, so both look the same
+  test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
-pkg/workspace/           THE SHARED CONTRACT, imported by both binaries
+client/go.mod            the client module: docker/cli, buildx, 786 go.sum lines
+  cmd/remote-docker/     the client binary
+  internal/
+    config/              settings precedence, state paths
+    fswatch/             watches shared dirs, streams changes to the agent
+    sshx/                ssh client, keys, known_hosts, forwards
+    nfsserve/            in-process NFSv3 server, virtual export namespace
+    proxy/               Docker API proxy + a small API client of our own
+    rewrite/             binds -> NFS volumes, owner labelling, volume GC
+    ports/               published ports -> local forwards
+    session/             wires the above into one live connection
 
-internal/client/
-  config/                settings precedence, state paths
-  fswatch/               watches shared dirs, streams changes to the agent
-  sshx/                  ssh client, keys, known_hosts, forwards
-  nfsserve/              in-process NFSv3 server, virtual export namespace
-  proxy/                 Docker API proxy + a small API client of our own
-  rewrite/               binds -> NFS volumes, owner labelling, volume GC
-  ports/                 published ports -> local forwards
-  session/               wires the above into one live connection
-
-internal/server/
-  accounts/              one unix account per enrolled key
-  sshd/                  the SSH server: auth, sessions, forwards
-  supervise/             starts and watches the workspace's own dockerd
-  elevate/               relaunch privileged, for Swarm (ADR 0013)
-  notify/                replays the client's changes as real syscalls
-  daemons/               a dockerd per account: plan, start, adopt; and the
-                         one resolver both modes answer through (ADR 0020)
-  netns/                 run a function inside another process's netns
+agent/go.mod             the agent module: 7 third-party modules, 24 go.sum lines
+  cmd/remote-dockerd/    the server agent (ADR 0010)
+  internal/
+    accounts/            one unix account per enrolled key
+    sshd/                the SSH server: auth, sessions, forwards
+    supervise/           starts and watches the workspace's own dockerd
+    elevate/             relaunch privileged, for Swarm (ADR 0013)
+    notify/              replays the client's changes as real syscalls
+    daemons/             a dockerd per account, and the one resolver both
+                         modes answer through (ADR 0020)
+    netns/               run a function inside another process's netns
                          (an empty path means this one -- ADR 0020)
-  dockercli/             the one way this side runs the docker binary
+    dockercli/           the one way this side runs the docker binary
 
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose and swarm deployments
-test/                    lib.sh, integration.sh, per-user-dind.sh, probes
 docs/adr/                architecture decision records
 ```
 
 ## Build and test
 
 ```bash
-go build ./...
-go test ./...                    # unit tests; no daemon needed
-golangci-lint run ./...          # must be clean
+# THREE MODULES (ADR 0021), and `./...` stops at a module boundary. A bare
+# `go build ./...` at the root covers the shared module and nothing else --
+# it will pass while compiling almost none of this repository.
+for m in . ./agent ./client; do (cd $m && go build ./... && go test ./...); done
 
-# The agent's session handling is Linux-only, so a lint run on the development
-# machine does not see it at all. CI does, and will fail on what you did not
-# lint. Run this before pushing server changes:
-GOOS=linux golangci-lint run ./...
-CGO_ENABLED=0 GOOS=linux go build ./...
+# lint, four passes: one per module, plus the agent under Linux. Its session
+# handling is Linux-only, so a lint on the development machine does not see the
+# file at all. CI does, and will fail on what you did not lint.
+for m in . ./agent ./client; do (cd $m && golangci-lint run ./...); done
+(cd agent && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...)
 
 # the client
-go build -o remote-docker ./cmd/remote-docker
+(cd client && go build -o ../remote-docker ./cmd/remote-docker)
 
-# end to end — needs docker and a kernel with NFS client support
+# end to end -- needs docker and a kernel with NFS client support
 bash test/integration.sh
 ```
+
+`go.work` ties the three together for editors and local commands. CI and the
+image build deliberately ignore it and build one module at a time, so a missing
+`require` fails where it is wrong rather than being covered by the workspace.
 
 Lint is installed with the project's own toolchain
 (`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`),
@@ -95,6 +103,9 @@ premise of the project, and it applies to building it too. So:
 
 - **`pkg/workspace` is the contract, and only the contract.** A type goes in
   it if both binaries must *agree* on it, not merely if both use it. The
+  shared module around it (ADR 0021) is one step wider and no wider: something
+  goes there if both binaries must behave the *same way*, which is true of the
+  log handler and of half-closing a stream, and not of an env-var helper. The
   uid→port formula lives there because it used to live in two shell scripts
   and drifting copies presented as a network fault.
 - **The proxy must be transparent to hijacked and streamed connections — and
