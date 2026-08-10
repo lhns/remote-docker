@@ -167,6 +167,7 @@ func (s *Session) Status() any {
 		PID:       os.Getpid(),
 		Connected: connected,
 		Since:     s.started.Format(time.RFC3339),
+		Tracing:   proxy.Tracing(),
 	}
 	if connected {
 		st.User = live.info.User

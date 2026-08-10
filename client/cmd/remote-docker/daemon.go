@@ -65,7 +65,12 @@ tunnel, and makes published container ports reachable here.
 
 With --foreground it runs in this terminal instead and holds it until Ctrl-C.
 That is what the background one runs, so it is also how to watch what a session
-is doing.`,
+is doing.
+
+The session's environment is this command's, and it is the only one that
+matters: it forwards every request, so REMOTE_DOCKER_TRACE=1 (one timing line
+per Docker API request) and REMOTE_DOCKER_WATCH have to be set HERE, not on the
+docker command you are timing.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolve()
 			if err != nil {
@@ -314,6 +319,7 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 	}
 
 	warnSlowStorage(os.Stderr, st)
+	warnTraceGoesNowhere(os.Stderr, st)
 
 	if st.Version == version {
 		return
@@ -452,6 +458,35 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 	}
 	rowf(out, "session version", "%s  (this binary: %s -- DIFFERENT)",
 		orUnknown(st.Version), orUnknown(version))
+}
+
+// warnTraceGoesNowhere says so when this process is tracing and the process
+// that would print the traces is not.
+//
+// REMOTE_DOCKER_TRACE is read once, at start, by whichever process forwards
+// the requests -- and that is the background session, not this command. So
+// `REMOTE_DOCKER_TRACE=1 remote-docker docker ps` against a running session
+// prints nothing and explains nothing, which reads as "tracing does not work"
+// rather than "you set it on the wrong process".
+//
+// Only when the session is genuinely not tracing: somebody who started the
+// session with the variable set is already getting what they asked for and
+// must not be told otherwise.
+func warnTraceGoesNowhere(w io.Writer, st proxy.Status) {
+	if !proxy.Tracing() || st.Tracing {
+		return
+	}
+	writeTraceWarning(w, st)
+}
+
+// writeTraceWarning is the message, separated from the decision to print it so
+// a test can read it without owning the environment this process started with.
+func writeTraceWarning(w io.Writer, st proxy.Status) {
+	_, _ = fmt.Fprintf(w,
+		"\nwarning: %s is set here, but the requests are forwarded by the background\n"+
+			"session (pid %d), which was started without it. Restart it with the variable\n"+
+			"set -- `remote-docker restart` -- or run `remote-docker start --foreground`.\n",
+		proxy.TraceEnv, st.PID)
 }
 
 // warnSlowStorage says so when the workspace's daemon is on vfs.
