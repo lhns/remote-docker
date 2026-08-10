@@ -127,6 +127,9 @@ running, so there is nothing to do first. An explicit DOCKER_HOST is respected.
 		return cmd
 	}
 
+	// After Initialize, because that is what loads the config file this reads.
+	dropMissingCredentialHelpers(dockerCli.ConfigFile(), lookPath, os.Stderr)
+
 	commands.AddCommands(cmd, dockerCli)
 	installModernBuilder(cmd, dockerCli)
 	return cmd
