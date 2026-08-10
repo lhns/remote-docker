@@ -35,6 +35,18 @@ ports and the standard tooling behave the way they would locally.
 Nothing needs to be installed on this machine beyond this binary.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+
+		// Cobra decides HERE whether to traverse, and it decides for the whole
+		// tree: ExecuteC calls Find() unless the root sets this, and Find
+		// parses every flag at the deepest command it lands on. So
+		// `remote-docker docker --context dev ps` handed --context to `ps`,
+		// which has never heard of it, and `docker compose -f x up` handed -f
+		// to `up`. Both are flags of a command halfway down.
+		//
+		// The docker command sets it too, and that is not redundant: under the
+		// `docker` alias it IS the root (ADR 0022), which is why the alias
+		// parsed these correctly while the prefixed form did not.
+		TraverseChildren: true,
 	}
 
 	// No shorthands, and that is not an oversight.
