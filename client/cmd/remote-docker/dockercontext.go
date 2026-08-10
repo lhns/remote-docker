@@ -30,18 +30,43 @@ const contextMarker = "remote-docker workspace"
 
 // dockerCmd runs a docker command on this machine's behalf.
 //
-// Every docker invocation in this file goes through it, for one reason: once
-// `shim install` has put a `docker` on PATH, the docker that LookPath finds is
-// THIS BINARY. Without NoSessionEnv, writing a context would spawn us, and we
-// would open an SSH connection, an NFS server and a reverse tunnel in order to
-// write a file on this machine, and then tear them all down again.
+// There is always one to run: a docker on PATH first, and when there is none
+// this binary is one, so it invokes itself. Giving up instead left a machine
+// with nothing installed, which is this project's premise, with no docker
+// context at all, so every tool that resolves one found the platform default
+// and reported that the daemon was not running.
 //
-// It costs nothing when the docker found is a real one: a docker CLI that has
-// never heard of the variable ignores it.
-func dockerCmd(docker string, args ...string) *exec.Cmd {
-	cmd := exec.Command(docker, args...)
+// NoSessionEnv on both paths, because the docker on PATH may be this binary
+// under its other name. Without it, writing a context would spawn us and we
+// would open an SSH connection, an NFS server and a reverse tunnel in order to
+// write a file on this machine. A real docker CLI ignores the variable.
+func dockerCmd(args ...string) *exec.Cmd {
+	name, argv := dockerInvocation(exec.LookPath, os.Executable, args)
+	cmd := exec.Command(name, argv...)
 	cmd.Env = append(os.Environ(), NoSessionEnv+"=1")
 	return cmd
+}
+
+// dockerInvocation decides what to run and with which arguments.
+//
+// Separated from the exec so the fallback can be tested without one, and
+// because the argument shift is easy to get wrong: our own binary needs the
+// `docker` subcommand in front, and a docker on PATH must not have it.
+func dockerInvocation(
+	lookPath func(string) (string, error),
+	executable func() (string, error),
+	args []string,
+) (string, []string) {
+	if path, err := lookPath("docker"); err == nil {
+		return path, args
+	}
+	self, err := executable()
+	if err != nil {
+		// Nothing better to try. The command will fail and say so, which is
+		// more useful than deciding here that there is no docker.
+		return "docker", args
+	}
+	return self, append([]string{"docker"}, args...)
 }
 
 type installedContext struct {
@@ -51,22 +76,22 @@ type installedContext struct {
 
 // installContext writes one workspace's context, refusing to replace a context
 // this client did not create.
-func installContext(docker string, cfg config.Config) (installedContext, error) {
+func installContext(cfg config.Config) (installedContext, error) {
 	name := cfg.ContextName()
 	endpoint := dockerHostOf(cfg)
 
-	if contextIsOurs(docker, name) {
+	if contextIsOurs(name) {
 		// Ours, so replacing is safe, and it is replaced rather than
 		// updated, so a stale endpoint from an earlier run cannot survive.
-		_ = dockerCmd(docker, "context", "rm", "-f", name).Run()
-	} else if contextExists(docker, name) {
+		_ = dockerCmd("context", "rm", "-f", name).Run()
+	} else if contextExists(name) {
 		return installedContext{}, fmt.Errorf(
 			"a docker context named %q already exists and was not created by remote-docker, "+
 				"so it will not be replaced; rename the workspace, or remove that context yourself",
 			name)
 	}
 
-	create := dockerCmd(docker, "context", "create", name,
+	create := dockerCmd("context", "create", name,
 		"--description", contextMarker,
 		"--docker", "host="+endpoint)
 	if out, err := create.CombinedOutput(); err != nil {
@@ -88,8 +113,8 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 // silence, and `workspace create` refuses to replace a context it wrote
 // itself. The JSON shape is documented and stable; the path through docker's
 // own structs is neither.
-func contextIsOurs(docker, name string) bool {
-	out, err := dockerCmd(docker, "context", "inspect", name).Output()
+func contextIsOurs(name string) bool {
+	out, err := dockerCmd("context", "inspect", name).Output()
 	if err != nil {
 		return false
 	}
@@ -104,6 +129,6 @@ func contextIsOurs(docker, name string) bool {
 	return strings.TrimSpace(contexts[0].Metadata.Description) == contextMarker
 }
 
-func contextExists(docker, name string) bool {
-	return dockerCmd(docker, "context", "inspect", name).Run() == nil
+func contextExists(name string) bool {
+	return dockerCmd("context", "inspect", name).Run() == nil
 }

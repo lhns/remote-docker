@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -163,11 +162,21 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 }
 
 func newWorkspaceDefaultCommand() *cobra.Command {
-	return &cobra.Command{
+	var noContext bool
+
+	cmd := &cobra.Command{
 		Use:     "use <name>",
 		Aliases: []string{"default"},
-		Short:   "Choose which workspace commands use when none is named",
-		Args:    cobra.ExactArgs(1),
+		Short:   "Make a workspace the default, here and for docker",
+		Long: `Sets two things, because they are the same intent written in two files.
+
+Ours, in ~/.remote-docker.json, is which workspace remote-docker commands act
+on. Docker's, the "currentContext" in ~/.docker/config.json, is what every
+other tool resolves: compose, buildx, Testcontainers, an IDE plugin.
+
+That second one is a machine-wide setting, so this changes what those tools
+talk to. --no-context sets only ours. An exported DOCKER_HOST overrides both.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			file, err := config.Load("")
@@ -181,10 +190,32 @@ func newWorkspaceDefaultCommand() *cobra.Command {
 			if err := config.Save(file, ""); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "default workspace is now %q\n", name)
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(out, "default workspace is now %q\n", name)
+
+			if noContext {
+				return nil
+			}
+
+			// And docker's, which is what everything that is not this binary
+			// resolves. The context is ensured first: a workspace created on a
+			// machine with no docker CLI, or with --no-context, has none yet,
+			// and selecting one that does not exist only produces an error.
+			cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+			if err != nil {
+				return nil
+			}
+			reportContext(out, cfg)
+			useContext(out, cfg.ContextName())
 			return nil
 		},
 	}
+
+	// Same spelling and same meaning as `create --no-context`: leave docker's
+	// context alone. Someone who created a workspace without one has said what
+	// they want, and `use` must not quietly overrule it.
+	cmd.Flags().BoolVar(&noContext, "no-context", false, "set only our default, leave docker's context alone")
+	return cmd
 }
 
 func newWorkspaceListCommand() *cobra.Command {
@@ -237,19 +268,14 @@ func newWorkspaceListCommand() *cobra.Command {
 }
 
 // reportContext creates the docker context for a workspace, reporting rather
-// than failing.
+// than failing. A workspace is still usable without one.
 //
-// Not having a docker CLI is ordinary here, because the binary carries
-// its own, and the whole premise is a machine where nothing is installed, so
-// it must not turn adding a workspace into an error.
+// Having no docker CLI on PATH is ordinary here and no longer stops it: this
+// binary is one, and dockerCmd falls back to it. Giving up left the premise
+// machine with no context, so every tool that resolves one found the platform
+// default instead.
 func reportContext(out interface{ Write([]byte) (int, error) }, cfg config.Config) {
-	docker, err := exec.LookPath("docker")
-	if err != nil {
-		_, _ = fmt.Fprintf(out, "no docker CLI on PATH, so no context was created; "+
-			"use the built-in one with `remote-docker docker ...`\n")
-		return
-	}
-	installed, err := installContext(docker, cfg)
+	installed, err := installContext(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "workspace saved, but its docker context was not created: %v\n", err)
 		return
@@ -257,13 +283,27 @@ func reportContext(out interface{ Write([]byte) (int, error) }, cfg config.Confi
 	_, _ = fmt.Fprintf(out, "docker context %q -> %s\n", installed.name, installed.endpoint)
 }
 
-func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Config) {
-	docker, err := exec.LookPath("docker")
-	if err != nil {
+// useContext makes a workspace's context the one docker resolves by default.
+//
+// `workspace use` used to set only OUR default, which is what `remote-docker
+// docker ...` reads. Everything else on the machine reads docker's current
+// context, so compose and the rest kept talking to whatever was selected
+// before, usually the Docker Desktop pipe that is not there.
+//
+// Reported rather than fatal, for the same reason as reportContext: the
+// workspace default has already been saved and is the part that was asked for.
+func useContext(out interface{ Write([]byte) (int, error) }, name string) {
+	if outBytes, err := dockerCmd("context", "use", name).CombinedOutput(); err != nil {
+		_, _ = fmt.Fprintf(out, "docker context %q was not selected: %v: %s\n",
+			name, err, strings.TrimSpace(string(outBytes)))
 		return
 	}
+	_, _ = fmt.Fprintf(out, "docker context is now %q\n", name)
+}
+
+func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Config) {
 	name := cfg.ContextName()
-	if !contextIsOurs(docker, name) {
+	if !contextIsOurs(name) {
 		// Said out loud rather than passed over in silence. A context that is
 		// not ours is the expected case for a name the user created
 		// themselves, but it is also what a marker that failed to be written
@@ -275,11 +315,11 @@ func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Co
 	}
 	// Select default first: removing the active context would leave the CLI
 	// pointing at one that no longer exists.
-	_ = dockerCmd(docker, "context", "use", "default").Run()
+	_ = dockerCmd("context", "use", "default").Run()
 
 	// CombinedOutput, not Run: an exit status alone says a removal failed
 	// without saying why, and docker's own message is the whole diagnosis.
-	if out2, err := dockerCmd(docker, "context", "rm", "-f", name).CombinedOutput(); err != nil {
+	if out2, err := dockerCmd("context", "rm", "-f", name).CombinedOutput(); err != nil {
 		_, _ = fmt.Fprintf(out, "docker context %q was left in place: %v: %s\n",
 			name, err, strings.TrimSpace(string(out2)))
 		return

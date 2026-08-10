@@ -121,7 +121,7 @@ The reasoning behind each decision is in [`docs/adr/`](docs/adr/).
 | `remote-docker workspace create <name> --host …` | add a workspace and its docker context |
 | `remote-docker workspace rm <name>` | remove both again |
 | `remote-docker workspace ls` | list them |
-| `remote-docker workspace use <name>` | choose the default |
+| `remote-docker workspace use <name>` | make it the default here, and docker's current context |
 | `remote-docker workspace inspect [name]` | settings, endpoint, context, whether a session is up |
 | `remote-docker shim install` | put `docker` on PATH (`--no-path` skips the PATH edit) |
 | `remote-docker shim uninstall` | remove it again |
@@ -129,6 +129,15 @@ The reasoning behind each decision is in [`docs/adr/`](docs/adr/).
 
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
+
+`workspace use` sets two things: the default in `~/.remote-docker.json`, which
+only this binary reads, and `currentContext` in `~/.docker/config.json`, which
+is what compose, buildx, Testcontainers and IDE plugins resolve. The second is
+machine-wide, so it redirects those tools too. `--no-context` sets only ours,
+matching `create --no-context`, and an exported `DOCKER_HOST` overrides both.
+
+The context is created if it is missing, so this works on a machine that has
+never had a docker CLI: the binary is one, and writes the context itself.
 
 There is no `context` command. A docker context is written when a workspace is
 created and removed when it is
