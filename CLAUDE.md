@@ -346,3 +346,12 @@ function was.
   width is not ours to guess, so the answer is a message short enough not to
   need wrapping. Help text is the exception, since cobra does not reflow it.
 - A finding that contradicts an ADR gets the ADR corrected, not ignored.
+- **A claim about the outside world carries the date it was checked and the one
+  command that re-checks it.** Claims about our own code are covered by tests;
+  claims about anything else are covered by nothing and expire silently. Two
+  did, on the same day: ADR 0009 said embedding Compose would pin docker/cli
+  back a major version, which stopped being true when compose v5 shipped, and
+  ADR 0022 said Windows had no standalone docker CLI, which `winget install
+  Docker.DockerCLI` disproves. Both were quoted as current fact in the README,
+  in `--help`, and in advice to a user. If the check cannot be a command, say
+  the claim is a judgement and name who would re-make it.
