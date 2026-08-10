@@ -1,0 +1,12 @@
+// Local development across the three modules.
+//
+// Not what CI or the image build use -- each of those builds one module, with
+// the `replace` directives in its go.mod doing the resolving -- so a mistake
+// here cannot hide a mistake there.
+go 1.26.3
+
+use (
+	.
+	./agent
+	./client
+)
