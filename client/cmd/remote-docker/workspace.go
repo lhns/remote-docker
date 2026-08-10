@@ -167,15 +167,11 @@ func newWorkspaceDefaultCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "use <name>",
 		Aliases: []string{"default"},
-		Short:   "Make a workspace the default, here and for docker",
-		Long: `Sets two things, because they are the same intent written in two files.
+		Short:   "Make a workspace the default and select its docker context",
+		Long: `Makes this the workspace remote-docker commands use, and selects its docker
+context, so compose and other docker tools use it too.
 
-Ours, in ~/.remote-docker.json, is which workspace remote-docker commands act
-on. Docker's, the "currentContext" in ~/.docker/config.json, is what every
-other tool resolves: compose, buildx, Testcontainers, an IDE plugin.
-
-That second one is a machine-wide setting, so this changes what those tools
-talk to. --no-context sets only ours. An exported DOCKER_HOST overrides both.`,
+Creates the context first if it is missing.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -214,7 +210,7 @@ talk to. --no-context sets only ours. An exported DOCKER_HOST overrides both.`,
 	// Same spelling and same meaning as `create --no-context`: leave docker's
 	// context alone. Someone who created a workspace without one has said what
 	// they want, and `use` must not quietly overrule it.
-	cmd.Flags().BoolVar(&noContext, "no-context", false, "set only our default, leave docker's context alone")
+	cmd.Flags().BoolVar(&noContext, "no-context", false, "do not select the docker context")
 	return cmd
 }
 
