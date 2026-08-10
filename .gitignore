@@ -1,12 +1,15 @@
 # test image build artifact
 test/watchdir
 
-# go build output
+# go build output. Not anchored to the root: `go build ./cmd/remote-docker`
+# writes the binary into whatever directory it runs in, and the natural one to
+# run it from is client/, where a 95MB artifact was one `git add -A` from
+# being committed.
 /dist/
-/remote-docker
-/remote-docker.exe
-/remote-dockerd
-/remote-dockerd.exe
+remote-docker
+remote-docker.exe
+remote-dockerd
+remote-dockerd.exe
 *.test
 *.test.exe
 coverage.out
