@@ -21,11 +21,6 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	// This IS the file server. Failing to bind means another session is
-	// running for this account, which is worth reporting rather than
-	// half-working.
-	files := session.FilesRequired
-
 	// Parsed here rather than in config, which is the lowest layer and depends
 	// on nothing above it. A bad value is reported now, before anything
 	// connects, rather than being silently treated as off.
@@ -38,15 +33,12 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 		Config:      cfg,
 		WorkDir:     mustWorkDir(),
 		Endpoint:    endpointOf(cfg),
-		Files:       files,
 		IdleTimeout: cfg.IdleTimeout,
-		// The only command that binds the endpoint. Everything else either
-		// talks to whoever is serving it, or does not need it.
-		Serve:   true,
-		Version: version,
-		// A session exists to be held open and to say what it is doing; every
-		// other command has output of its own to protect.
-		Progress:     true,
+		// The only session that hosts: it binds the endpoint, takes the
+		// account's one export port, and narrates. Every other command either
+		// talks to whoever is serving, or only asks the workspace a question.
+		Role:         session.Host,
+		Version:      version,
 		Watch:        watch,
 		WatchBudget:  cfg.WatchBudget,
 		WatchExclude: cfg.WatchExclude,
