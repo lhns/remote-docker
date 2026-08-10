@@ -99,6 +99,28 @@ is doing.`,
 	return cmd
 }
 
+// waitForExit blocks until the process is gone, and reports whether it got
+// there before the deadline.
+//
+// A pid of 0 means nobody told us which process to watch -- an older session
+// that does not report one, or a status request that failed. Treated as done
+// rather than as a failure: the endpoint has already gone quiet, which is what
+// this command could check before, and refusing to return would turn a missing
+// nicety into a broken `stop`.
+func waitForExit(pid int, timeout time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
 func newStopCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
@@ -116,18 +138,45 @@ func newStopCommand() *cobra.Command {
 				return nil
 			}
 
+			// Asked for first, because after the shutdown there is nothing left
+			// to ask. Advisory: a pid we cannot read only costs the second wait
+			// below, never correctness.
+			var st proxy.Status
+			if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
+				st.PID = proxy.Owner(endpoint)
+			}
+
 			if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
 				return fmt.Errorf("stopping the session: %w", err)
 			}
 
 			// Confirmed rather than assumed: the daemon acknowledges before it
 			// acts, so a successful reply only means it agreed to stop.
-			if waitForEndpoint(endpoint, false, stopTimeout) {
-				_, _ = fmt.Fprintln(out, "stopped")
-				return nil
+			if !waitForEndpoint(endpoint, false, stopTimeout) {
+				return fmt.Errorf("the session acknowledged the stop but is still serving %s",
+					proxy.DockerHost(endpoint))
 			}
-			return fmt.Errorf("the session acknowledged the stop but is still serving %s",
-				proxy.DockerHost(endpoint))
+
+			// And then for the PROCESS, which is the part that matters to
+			// whatever runs next.
+			//
+			// The endpoint going quiet is not the end of the teardown, it is
+			// the START of it: Session.Close shuts the listener first -- so no
+			// new request can arrive mid-teardown -- and only then drops the
+			// SSH connection, the reverse tunnel and the NFS export. An account
+			// has exactly ONE reverse-tunnel port (ADR 0003) and a host session
+			// fails hard when it cannot take it, so a `stop` that returned at
+			// the listener left `stop && start` racing a port the workspace had
+			// not released yet.
+			if !waitForExit(st.PID, stopTimeout) {
+				return fmt.Errorf(
+					"the session stopped serving %s but process %d is still running; "+
+						"its workspace resources may not be released yet",
+					proxy.DockerHost(endpoint), st.PID)
+			}
+
+			_, _ = fmt.Fprintln(out, "stopped")
+			return nil
 		},
 	}
 }
@@ -178,8 +227,22 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	if waitForEndpoint(endpoint, true, startTimeout) {
 		return nil
 	}
-	return fmt.Errorf("the background session did not start within %s; see %s",
-		startTimeout, logPath)
+
+	// Killed, not left behind. Returning the error on its own leaves a child
+	// that is merely SLOW rather than dead: it binds the endpoint a moment
+	// later and serves a session the user was told had failed to start, with
+	// no pid on screen and nothing owning it. Worse, the next `start` then
+	// reports "already running" and points at the session its predecessor
+	// disowned.
+	//
+	// By pid, because cmd.Process was released above -- this process must not
+	// be the daemon's parent, so it cannot wait on it either.
+	stopped := "and was stopped"
+	if err := killPID(cmd.Process.Pid); err != nil {
+		stopped = fmt.Sprintf("and could not be stopped (pid %d: %v)", cmd.Process.Pid, err)
+	}
+	return fmt.Errorf("the background session did not start within %s %s; see %s",
+		startTimeout, stopped, logPath)
 }
 
 // daemonLogPath is where a background session's output goes.
