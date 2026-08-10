@@ -28,9 +28,9 @@ On Windows the same case hard-failed, because `winio` takes the pipe with
 `Access is denied`, so `remote-docker status` could not run while `up` was
 running — the one moment anybody would want to.
 
-Compounding both: `status` and `gc` passed `Files: NoFiles`, declining the
-workspace's single reverse-tunnel port with some care, and then bound the local
-endpoint anyway, which neither ever uses.
+Compounding both: `status` and `gc` declined the workspace's single
+reverse-tunnel port with some care, and then bound the local endpoint anyway,
+which neither ever uses.
 
 ## Decision
 
@@ -51,8 +51,18 @@ run by hand.
 - the embedded CLI — starts one rather than opening its own, so a detached
   container keeps its mounts after the command exits.
 
-**Only a session that serves the endpoint binds it.** `Options.Serve` is off by
-default, so a command added later has to ask.
+**Only a session that serves the endpoint binds it.** The default is not to,
+so a command added later has to ask.
+
+This began as three independent switches -- serve the endpoint, export files,
+report progress -- which were only ever set together, and each of which
+prevented a different one of the failures above. They are now one
+`session.Role`: `Query` for a command that asks the workspace something,
+`Host` for the session that serves it. Two call sites exist and always did.
+The reasoning for each refusal is kept on the constants, because the reasoning
+is the part worth having; and `Query` not binding the endpoint is now covered
+by a unit test that runs on Windows named pipes, which is where the failure was
+worst and where CI does not reach.
 
 **The endpoint has one owner.** A `flock` on Unix — chosen over a pid file with
 a liveness check because the kernel releases it when the holder dies, including
