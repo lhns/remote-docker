@@ -4,15 +4,14 @@ package netns
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"runtime"
 
 	"golang.org/x/sys/unix"
 )
 
-// Do runs fn inside the network namespace named by path, then restores this
-// thread's own.
+// enter runs fn inside the network namespace named by path, then restores this
+// thread's own. Callers reach it through Do, which handles the empty path.
 //
 // The discipline here is the whole package, and getting it wrong is silent.
 //
@@ -29,7 +28,7 @@ import (
 // arbitrarily, invisibly, and in a user's private namespace. Go retires a
 // locked thread when its goroutine exits, so leaking one thread is the cheap
 // and correct answer to a problem that has no safe recovery.
-func Do(path string, fn func() error) error {
+func enter(path string, fn func() error) error {
 	self, err := os.Open(Path(os.Getpid()))
 	if err != nil {
 		return fmt.Errorf("netns: opening our own namespace: %w", err)
@@ -68,40 +67,4 @@ func Do(path string, fn func() error) error {
 	}()
 
 	return <-done
-}
-
-// Listen binds a listener inside another network namespace.
-//
-// The listener is returned to the caller and used from wherever it likes; only
-// the bind has to happen inside.
-func Listen(path, network, address string) (net.Listener, error) {
-	var (
-		l   net.Listener
-		err error
-	)
-	if derr := Do(path, func() error {
-		l, err = net.Listen(network, address)
-		return err
-	}); derr != nil {
-		return nil, derr
-	}
-	return l, nil
-}
-
-// Dial connects from inside another network namespace.
-//
-// The connection outlives the switch for the same reason a listener does: the
-// namespace is decided when the socket is created.
-func Dial(path, network, address string) (net.Conn, error) {
-	var (
-		c   net.Conn
-		err error
-	)
-	if derr := Do(path, func() error {
-		c, err = net.Dial(network, address)
-		return err
-	}); derr != nil {
-		return nil, derr
-	}
-	return c, nil
 }

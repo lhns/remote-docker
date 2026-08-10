@@ -209,6 +209,11 @@ in the namespace where every account's shell runs.
 - **Readiness is a round trip, not a socket file.** dockerd binds its socket
   before initialising storage, so a daemon that dies during startup leaves one
   behind that looks healthy.
+- **Amended by ADR 0020.** This arrangement arrived as a nullable manager, so
+  every use of a daemon grew an `if Daemons != nil`. There were nine, guarding
+  an invariant that fails by succeeding, and none of them could be unit tested.
+  The mode is now chosen once and resolved through one interface; the shared
+  daemon of ADR 0012 is an implementation of it rather than the nil case.
 - Two things become correct for free: `rd-cwd` stops colliding across accounts
   (every account produced that same name, and the second `EnsureVolume`
   silently returned the first account's volume with the *first* account's NFS
