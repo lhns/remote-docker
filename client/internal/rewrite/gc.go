@@ -48,6 +48,11 @@ type Collector struct {
 	// Owner limits collection to this account's volumes.
 	Owner string
 
+	// Guard is shared with the Rewriter. Without it this can delete a volume a
+	// concurrent `docker run` created a moment ago and has not yet referenced
+	// from a container.
+	Guard *Guard
+
 	Log *slog.Logger
 }
 
@@ -81,17 +86,41 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 		if inUse[v.Name] {
 			continue
 		}
-		if err := c.Remover.RemoveVolume(ctx, v.Name); err != nil {
+		gone, err := c.remove(ctx, v.Name)
+		if err != nil {
 			// A volume that cannot be removed is not fatal: it may have been
 			// claimed by a container between the listing and now, which is a
 			// race we lose harmlessly and retry next time.
 			c.log().Warn("could not remove a volume", "volume", v.Name, "err", err)
 			continue
 		}
+		if !gone {
+			continue
+		}
 		removed++
 		c.log().Info("removed an unused share volume", "volume", v.Name)
 	}
 	return removed, nil
+}
+
+// remove deletes a volume unless this session is exporting the directory
+// behind it, and reports whether it went.
+//
+// The decision and the deletion happen under the guard, so a bind rewrite
+// either registered its share first -- and the volume is spared -- or arrives
+// after the removal and recreates it. The daemon's own answer cannot cover
+// this: a volume exists for a moment before any container names it, and that
+// moment is exactly when this runs.
+func (c *Collector) remove(ctx context.Context, name string) (bool, error) {
+	defer c.Guard.hold()()
+
+	if c.Guard.exported(name) {
+		return false, nil
+	}
+	if err := c.Remover.RemoveVolume(ctx, name); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ours reports whether a volume is one we created and may delete.

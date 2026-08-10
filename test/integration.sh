@@ -1121,6 +1121,37 @@ else
     bad "stopping twice did not report it was not running"
 fi
 
+# The sequence a person actually types, with nothing between the commands.
+#
+# `start` returns only once the endpoint answers, and `stop` only once the
+# process is gone -- so this must work with no sleep anywhere. It is the whole
+# claim of both commands, and it was not tested: the assertions above prove
+# `stop` SAYS "stopped", not that anything could run afterwards.
+#
+# `stop && start` is the half that used to race. stop waited for the endpoint
+# to go quiet, which is where Session.Close STARTS its teardown -- the SSH
+# connection, the reverse tunnel and the NFS export go afterwards. An account
+# has exactly one export port (ADR 0003), so a start that overtook the release
+# failed on a port the workspace had not let go of yet.
+if "$WORK/remote-docker" start >/dev/null 2>&1 &&
+    dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-start.txt" 2>&1 &&
+    grep -q "from the project directory" "$WORK/after-start.txt"; then
+    ok "start && docker run works with nothing in between"
+else
+    bad "a container run straight after start failed: $(tail -2 "$WORK/after-start.txt" 2>/dev/null | tr '\n' ' ')"
+fi
+
+if "$WORK/remote-docker" stop >/dev/null 2>&1 &&
+    "$WORK/remote-docker" start >/dev/null 2>&1 &&
+    dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-restart.txt" 2>&1 &&
+    grep -q "from the project directory" "$WORK/after-restart.txt"; then
+    ok "stop && start && docker run works with nothing in between"
+else
+    bad "a container run straight after stop && start failed: $(tail -2 "$WORK/after-restart.txt" 2>/dev/null | tr '\n' ' ')"
+fi
+
+"$WORK/remote-docker" stop >/dev/null 2>&1
+
 # A session built from a different commit is replaced when that costs nothing,
 # and reported when it does not. A stale session serves the endpoint, so an
 # updated client talks to the OLD build and behaves like it -- silently, until

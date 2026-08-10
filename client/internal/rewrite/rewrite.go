@@ -4,9 +4,60 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
+
+// Guard keeps garbage collection off the volume a bind rewrite is in the
+// middle of creating.
+//
+// The two halves of a volume's life do not overlap in the DAEMON's view: it
+// learns a volume is in use only when a container referencing it is created,
+// which is strictly after the volume exists. Between those two moments the
+// volume is ours, needed, and reported as unused -- and the collector runs
+// exactly then, because the connection it rides on is opened lazily by the
+// very request that is creating the volume.
+//
+// What happens when it loses is silent and looks like the file server broke:
+// the daemon RECREATES a missing named volume as an empty local one, so the
+// container starts with an empty directory where the user's project should be
+// and the first thing to read a file reports it missing. `remote-docker start
+// && docker run -v $PWD:/w` failed that way in CI.
+//
+// Exported answers whether a volume backs a directory this session is
+// exporting, which is the fact the daemon cannot know. The lock closes the
+// remaining window: a removal decides under it, and a rewrite holds it across
+// registering the share and creating the volume, so whichever goes first, the
+// other sees a settled world -- either the share is registered and the volume
+// is spared, or the volume goes and is immediately recreated.
+type Guard struct {
+	mu sync.Mutex
+
+	// Exported reports whether a volume name backs a currently exported
+	// directory. Nil means nothing is exported, which is what a rewriter
+	// without a session looks like.
+	Exported func(volume string) bool
+}
+
+// hold locks the guard and returns its release. A nil guard is a working
+// no-op, so a Rewriter or Collector constructed without one -- every unit test
+// that does not care -- behaves exactly as it did before.
+func (g *Guard) hold() func() {
+	if g == nil {
+		return func() {}
+	}
+	g.mu.Lock()
+	return g.mu.Unlock
+}
+
+// exported reports whether the volume backs a directory this session exports.
+func (g *Guard) exported(volume string) bool {
+	if g == nil || g.Exported == nil {
+		return false
+	}
+	return g.Exported(volume)
+}
 
 // Sharer registers a local directory for export and reports where it lands.
 //
@@ -41,6 +92,10 @@ type Rewriter struct {
 	// Owner identifies this client's containers on a daemon shared with other
 	// accounts. Empty disables labelling.
 	Owner string
+
+	// Guard is shared with the Collector, and is what stops one deleting the
+	// volume the other has just created.
+	Guard *Guard
 }
 
 // ContainerCreate rewrites the body of POST /containers/create.
@@ -262,6 +317,11 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
 func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, error) {
+	// Held across BOTH steps: registering the share is what tells the collector
+	// this volume is spoken for, and the volume does not exist until the step
+	// after it.
+	defer r.Guard.hold()()
+
 	exportPath, err := r.Shares.Share(localPath)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)

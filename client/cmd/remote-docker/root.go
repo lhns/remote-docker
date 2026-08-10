@@ -291,7 +291,10 @@ workspace, and they outlive the containers that referenced them.
 
 Only volumes this client created, for this account, and referenced by no
 container -- running or stopped -- are removed. A volume you created yourself
-is never touched, whatever it is named.`,
+is never touched, whatever it is named.
+
+The volume for the directory this runs in is also left alone: the session
+exports it, so it is about to be needed even when nothing holds it now.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withQuerySession(func(ctx context.Context, s *session.Session) error {
 				removed, err := s.Collect(ctx)
