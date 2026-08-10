@@ -12,6 +12,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -27,6 +28,22 @@ import (
 // when its description says we wrote it.
 const contextMarker = "remote-docker workspace"
 
+// dockerCmd runs a docker command on this machine's behalf.
+//
+// Every docker invocation in this file goes through it, for one reason: once
+// `shim install` has put a `docker` on PATH, the docker that LookPath finds is
+// THIS BINARY. Without NoSessionEnv, writing a context would spawn us, and we
+// would open an SSH connection, an NFS server and a reverse tunnel in order to
+// write a file on this machine -- and then tear them all down again.
+//
+// It costs nothing when the docker found is a real one: a docker CLI that has
+// never heard of the variable ignores it.
+func dockerCmd(docker string, args ...string) *exec.Cmd {
+	cmd := exec.Command(docker, args...)
+	cmd.Env = append(os.Environ(), NoSessionEnv+"=1")
+	return cmd
+}
+
 type installedContext struct {
 	name     string
 	endpoint string
@@ -41,7 +58,7 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 	if contextIsOurs(docker, name) {
 		// Ours, so replacing is safe -- and it is replaced rather than
 		// updated, so a stale endpoint from an earlier run cannot survive.
-		_ = exec.Command(docker, "context", "rm", "-f", name).Run()
+		_ = dockerCmd(docker, "context", "rm", "-f", name).Run()
 	} else if contextExists(docker, name) {
 		return installedContext{}, fmt.Errorf(
 			"a docker context named %q already exists and was not created by remote-docker, "+
@@ -49,7 +66,7 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 			name)
 	}
 
-	create := exec.Command(docker, "context", "create", name,
+	create := dockerCmd(docker, "context", "create", name,
 		"--description", contextMarker,
 		"--docker", "host="+endpoint)
 	if out, err := create.CombinedOutput(); err != nil {
@@ -80,7 +97,7 @@ func installContext(docker string, cfg config.Config) (installedContext, error) 
 // The JSON shape is the documented interface and is stable across versions;
 // the field path through docker's own structs is neither.
 func contextIsOurs(docker, name string) bool {
-	out, err := exec.Command(docker, "context", "inspect", name).Output()
+	out, err := dockerCmd(docker, "context", "inspect", name).Output()
 	if err != nil {
 		return false
 	}
@@ -96,5 +113,5 @@ func contextIsOurs(docker, name string) bool {
 }
 
 func contextExists(docker, name string) bool {
-	return exec.Command(docker, "context", "inspect", name).Run() == nil
+	return dockerCmd(docker, "context", "inspect", name).Run() == nil
 }

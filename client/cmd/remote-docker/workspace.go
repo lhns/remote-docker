@@ -275,11 +275,11 @@ func removeContextFor(out interface{ Write([]byte) (int, error) }, cfg config.Co
 	}
 	// Select default first: removing the active context would leave the CLI
 	// pointing at one that no longer exists.
-	_ = exec.Command(docker, "context", "use", "default").Run()
+	_ = dockerCmd(docker, "context", "use", "default").Run()
 
 	// CombinedOutput, not Run: an exit status alone says a removal failed
 	// without saying why, and docker's own message is the whole diagnosis.
-	if out2, err := exec.Command(docker, "context", "rm", "-f", name).CombinedOutput(); err != nil {
+	if out2, err := dockerCmd(docker, "context", "rm", "-f", name).CombinedOutput(); err != nil {
 		_, _ = fmt.Fprintf(out, "docker context %q was left in place: %v: %s\n",
 			name, err, strings.TrimSpace(string(out2)))
 		return
