@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/session"
 	"github.com/lhns/remote-docker/internal/client/sshx"
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // version is set at build time by the release workflow.
@@ -76,11 +78,12 @@ func resolve() (config.Config, error) {
 
 // logger prints session progress to stderr, so stdout stays usable for
 // anything a command genuinely outputs.
-type logger struct{}
-
-func (logger) Printf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
-}
+//
+// Two spaces and the message, which is what these lines have always looked
+// like: they sit under a command's own output and are read by a person, not
+// parsed. logx.Handler is what keeps that true through log/slog, whose own
+// TextHandler would render them as time=... level=INFO msg="...".
+func logger() *slog.Logger { return logx.Logger(os.Stderr, "  ", false) }
 
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
@@ -158,7 +161,7 @@ func withQuerySession(fn func(ctx context.Context, s *session.Session) error) er
 		WorkDir:  mustWorkDir(),
 		Endpoint: endpointOf(cfg),
 		Role:     session.Query,
-		Log:      logger{},
+		Log:      logger(),
 	})
 	if err != nil {
 		return err

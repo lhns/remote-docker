@@ -130,6 +130,6 @@ func managerForCommands() (*daemons.Manager, error) {
 	}
 	return &daemons.Manager{
 		Options: daemons.Options{Workspace: id},
-		Log:     logger{prefix: "daemons"}.Printf,
+		Log:     logger("daemons"),
 	}, nil
 }

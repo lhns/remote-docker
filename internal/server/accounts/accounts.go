@@ -14,6 +14,7 @@ package accounts
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -62,11 +64,6 @@ type Provisioner interface {
 	Ensure(name string, uid int, shell string) (home string, err error)
 }
 
-// Logger reports what changed.
-type Logger interface {
-	Printf(format string, args ...any)
-}
-
 // Store holds the accounts derived from a directory of public keys.
 type Store struct {
 	KeysDir  string
@@ -75,14 +72,14 @@ type Store struct {
 	Mapping  workspace.Mapping
 
 	Provisioner Provisioner
-	Log         Logger
+	Log         *slog.Logger
 
 	mu       sync.RWMutex
 	accounts map[string]*Account
 }
 
 // New returns an empty store.
-func New(keysDir, stateDir string, mapping workspace.Mapping, p Provisioner, log Logger) *Store {
+func New(keysDir, stateDir string, mapping workspace.Mapping, p Provisioner, log *slog.Logger) *Store {
 	return &Store{
 		KeysDir:     keysDir,
 		StateDir:    stateDir,
@@ -169,7 +166,7 @@ func (s *Store) Sync() error {
 		base := strings.TrimSuffix(file, ".pub")
 		name, err := SanitizeName(base)
 		if err != nil {
-			s.logf("ignoring %s: %v", file, err)
+			s.log().Warn("ignoring a key file", "file", file, "err", err)
 			continue
 		}
 
@@ -178,17 +175,18 @@ func (s *Store) Sync() error {
 		// the only safe answer: picking one would hand somebody an account
 		// they did not ask for.
 		if other, taken := claimed[name]; taken {
-			s.logf("ignoring %s: it maps to account %q, already claimed by %s", file, name, other)
+			s.log().Warn("ignoring a key file: its account name is already claimed",
+				"file", file, "account", name, "claimedBy", other)
 			continue
 		}
 
 		keys, err := parseKeys(filepath.Join(s.KeysDir, file))
 		if err != nil {
-			s.logf("ignoring %s: %v", file, err)
+			s.log().Warn("ignoring a key file", "file", file, "err", err)
 			continue
 		}
 		if len(keys) == 0 {
-			s.logf("ignoring %s: it contains no usable public key", file)
+			s.log().Warn("ignoring a key file: it holds no usable public key", "file", file)
 			continue
 		}
 
@@ -224,13 +222,13 @@ func (s *Store) reconcile(found map[string]*Account, uids map[string]int) error 
 
 		home, err := s.Provisioner.Ensure(name, uid, s.Shell)
 		if err != nil {
-			s.logf("could not provision %s: %v", name, err)
+			s.log().Error("could not provision an account", "account", name, "err", err)
 			continue
 		}
 		account.Home = home
 
 		if _, existed := s.accounts[name]; !existed {
-			s.logf("account %s (uid %d)", name, uid)
+			s.log().Info("account ready", "account", name, "uid", uid)
 		}
 		s.accounts[name] = account
 	}
@@ -243,7 +241,8 @@ func (s *Store) reconcile(found map[string]*Account, uids map[string]int) error 
 			continue
 		}
 		if len(account.Keys) > 0 {
-			s.logf("revoking %s (key file removed; account and home kept)", name)
+			s.log().Info("revoking an account: its key file is gone. the account and its home are kept",
+				"account", name)
 		}
 		account.Keys = nil
 	}
@@ -352,8 +351,12 @@ func parseKeys(path string) ([]ssh.PublicKey, error) {
 	return keys, nil
 }
 
-func (s *Store) logf(format string, args ...any) {
-	if s.Log != nil {
-		s.Log.Printf(format, args...)
+// log is the store's logger, or silence. A nil *slog.Logger panics on use
+// rather than doing nothing, so the zero value needs an answer -- and one
+// accessor is a better place for it than a check at every call.
+func (s *Store) log() *slog.Logger {
+	if s.Log == nil {
+		return logx.Discard()
 	}
+	return s.Log
 }

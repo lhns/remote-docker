@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/internal/server/accounts"
 	"github.com/lhns/remote-docker/internal/server/daemons"
 	"github.com/lhns/remote-docker/internal/server/elevate"
@@ -77,7 +79,7 @@ Replaces sshd, the key watcher, the mount helpers and sudo.`,
 }
 
 func serve(addr string) error {
-	log := logger{prefix: "workspace"}
+	log := logger("workspace")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -110,19 +112,19 @@ func serve(addr string) error {
 	dockerdArgs := supervise.SplitArgs(os.Getenv(envDockerd))
 	daemon := &supervise.Dockerd{
 		Args: dockerdArgs,
-		Log:  logger{prefix: "dockerd"},
+		Log:  logger("dockerd"),
 	}
 	if envOr(envEnableDind, "true") == "true" {
 		wg.Go(func() {
 			if err := daemon.Run(ctx); err != nil {
-				log.Printf("dockerd supervisor stopped: %v", err)
+				log.Warn("the dockerd supervisor stopped", "err", err)
 			}
 		})
 		if err := daemon.WaitReady(ctx); err != nil {
 			// Not fatal. A workspace that serves without a daemon lets someone
 			// log in and see what went wrong, which beats a container that
 			// exits and takes the evidence with it.
-			log.Printf("%v; serving anyway", err)
+			log.Warn("serving anyway", "err", err)
 		}
 	}
 
@@ -140,17 +142,17 @@ func serve(addr string) error {
 	}
 
 	store := accounts.New(keysDir, stateDir, mapping,
-		provisioner, logger{prefix: "accounts"})
+		provisioner, logger("accounts"))
 	store.Shell = envOr(envShell, "/bin/bash")
 
 	if err := ensureGroups(perUserDind); err != nil {
-		log.Printf("%v", err)
+		log.Warn(err.Error())
 	}
 
 	wg.Go(func() {
 		poll := time.Duration(envInt(envPollSecs, 60)) * time.Second
 		if err := store.Watch(ctx, poll); err != nil {
-			log.Printf("account watcher stopped: %v", err)
+			log.Warn("the account watcher stopped", "err", err)
 		}
 	})
 
@@ -188,7 +190,7 @@ func serve(addr string) error {
 		if storage == "" {
 			storage = daemons.StorageDriverFrom(dockerdArgs)
 			if storage != "" {
-				log.Printf("per-account daemons inherit --storage-driver=%s", storage)
+				log.Info("per-account daemons inherit a storage driver", "driver", storage)
 			}
 		}
 
@@ -204,7 +206,7 @@ func serve(addr string) error {
 			image = os.Getenv(elevate.ImageEnv)
 		}
 		if image != "" {
-			log.Printf("per-account daemons run %s", image)
+			log.Info("per-account daemons run an image", "image", image)
 		}
 
 		manager := &daemons.Manager{
@@ -213,19 +215,19 @@ func serve(addr string) error {
 				Image:         image,
 				StorageDriver: storage,
 			},
-			Log: logger{prefix: "daemons"}.Printf,
+			Log: logger("daemons"),
 		}
 		targets = manager
-		log.Printf("each account gets its own docker daemon (workspace %s)", id)
+		log.Info("each account gets its own docker daemon", "workspace", id)
 
 		// Adopt before serving. A restarted agent that did not would find
 		// every name taken -- `docker run --name` conflicts rather than
 		// replacing -- and every account locked out of the daemon holding its
 		// own running containers.
 		if n, err := manager.Adopt(ctx); err != nil {
-			log.Printf("could not adopt existing daemons: %v", err)
+			log.Warn("could not adopt existing daemons", "err", err)
 		} else if n > 0 {
-			log.Printf("adopted %d running daemon(s) from a previous run", n)
+			log.Info("adopted running daemons from a previous run", "count", n)
 		}
 	}
 
@@ -236,7 +238,7 @@ func serve(addr string) error {
 		Mapping:  mapping,
 		Daemons:  targets,
 		Version:  version,
-		Log:      logger{prefix: "sshd"},
+		Log:      logger("sshd"),
 	})
 	if err != nil {
 		return err
@@ -247,7 +249,7 @@ func serve(addr string) error {
 
 	select {
 	case <-ctx.Done():
-		log.Printf("shutting down")
+		log.Info("shutting down")
 	case err := <-serveErr:
 		if err != nil {
 			stop()
@@ -339,8 +341,11 @@ func envInt(name string, fallback int) int {
 }
 
 // logger prefixes messages so the container log says which part spoke.
-type logger struct{ prefix string }
-
-func (l logger) Printf(format string, args ...any) {
-	_, _ = fmt.Fprintf(os.Stderr, "["+l.prefix+"] "+format+"\n", args...)
+//
+// The prefix travels as an ordinary slog attribute and is rendered by
+// logx.Handler, so a subsystem asks for its own by naming itself, nothing
+// carries a second logging concept, and the line on screen is what it always
+// was.
+func logger(component string) *slog.Logger {
+	return logx.Logger(os.Stderr, "", true).With(logx.ComponentKey, component)
 }

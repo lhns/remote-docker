@@ -5,17 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
-)
 
-// Logger reports what the daemon is doing.
-type Logger interface {
-	Printf(format string, args ...any)
-}
+	"github.com/lhns/remote-docker/internal/logx"
+)
 
 // Dockerd runs the workspace's Docker daemon and restarts it if it dies.
 //
@@ -42,7 +40,9 @@ type Dockerd struct {
 	// RestartDelay is how long to wait before restarting a daemon that died.
 	RestartDelay time.Duration
 
-	Log Logger
+	// Log receives progress. Never nil after defaults(): logx.Discard() is the
+	// silence a nil used to mean.
+	Log *slog.Logger
 
 	mu      sync.Mutex
 	current *exec.Cmd
@@ -67,7 +67,7 @@ func (d *Dockerd) Run(ctx context.Context) error {
 
 	for ctx.Err() == nil {
 		if err := d.runOnce(ctx); err != nil && ctx.Err() == nil {
-			d.logf("dockerd exited: %v; restarting in %s", err, d.RestartDelay)
+			d.Log.Warn("dockerd exited; restarting", "err", err, "in", d.RestartDelay)
 		}
 
 		select {
@@ -92,7 +92,7 @@ func (d *Dockerd) runOnce(ctx context.Context) error {
 	d.current = cmd
 	d.mu.Unlock()
 
-	d.logf("started %s", d.Command)
+	d.Log.Info("started " + d.Command)
 	return cmd.Wait()
 }
 
@@ -107,7 +107,7 @@ func (d *Dockerd) WaitReady(ctx context.Context) error {
 	deadline := time.Now().Add(d.StartTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(d.Socket); err == nil {
-			d.logf("dockerd is ready")
+			d.Log.Info("dockerd is ready")
 			return nil
 		}
 		select {
@@ -156,11 +156,8 @@ func (d *Dockerd) applyDefaults() {
 	if d.RestartDelay == 0 {
 		d.RestartDelay = DefaultRestartDelay
 	}
-}
-
-func (d *Dockerd) logf(format string, args ...any) {
-	if d.Log != nil {
-		d.Log.Printf(format, args...)
+	if d.Log == nil {
+		d.Log = logx.Discard()
 	}
 }
 

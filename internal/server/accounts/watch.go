@@ -36,14 +36,16 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 	if err != nil {
 		// Not fatal: polling alone is a complete implementation, just a
 		// slower one. Refusing to start over this would be worse.
-		s.logf("cannot watch %s (%v); polling every %s instead", s.KeysDir, err, poll)
+		s.log().Warn("cannot watch the keys directory; polling instead",
+			"dir", s.KeysDir, "err", err, "every", poll)
 		s.pollOnly(ctx, poll)
 		return nil
 	}
 	defer func() { _ = watcher.Close() }()
 
 	if err := watcher.Add(s.KeysDir); err != nil {
-		s.logf("cannot watch %s (%v); polling every %s instead", s.KeysDir, err, poll)
+		s.log().Warn("cannot watch the keys directory; polling instead",
+			"dir", s.KeysDir, "err", err, "every", poll)
 		s.pollOnly(ctx, poll)
 		return nil
 	}
@@ -70,7 +72,7 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 			if !ok {
 				return nil
 			}
-			s.logf("watching %s: %v", s.KeysDir, err)
+			s.log().Warn("watching the keys directory", "dir", s.KeysDir, "err", err)
 
 		case <-pending:
 			pending = nil
@@ -99,6 +101,6 @@ func (s *Store) pollOnly(ctx context.Context, poll time.Duration) {
 // should not stop the agent serving the accounts it already has.
 func (s *Store) syncLogged() {
 	if err := s.Sync(); err != nil {
-		s.logf("syncing accounts: %v", err)
+		s.log().Error("syncing accounts", "err", err)
 	}
 }

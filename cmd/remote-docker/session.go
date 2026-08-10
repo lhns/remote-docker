@@ -42,7 +42,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 		Watch:        watch,
 		WatchBudget:  cfg.WatchBudget,
 		WatchExclude: cfg.WatchExclude,
-		Log:          logger{},
+		Log:          logger(),
 	})
 	if err != nil {
 		return err

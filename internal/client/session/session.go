@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"runtime"
 	"sync"
@@ -25,13 +26,9 @@ import (
 	"github.com/lhns/remote-docker/internal/client/proxy"
 	"github.com/lhns/remote-docker/internal/client/rewrite"
 	"github.com/lhns/remote-docker/internal/client/sshx"
+	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
-
-// Logger reports progress.
-type Logger interface {
-	Printf(format string, args ...any)
-}
 
 // Options configure a session.
 type Options struct {
@@ -62,7 +59,7 @@ type Options struct {
 	// asking whether it matches the client talking to it.
 	Version string
 
-	Log Logger
+	Log *slog.Logger
 }
 
 // Role is what a session is for. There are two, and the difference between
@@ -265,7 +262,7 @@ func (s *Session) listen(endpoint string) error {
 
 	s.wg.Go(func() {
 		if err := s.proxy.Serve(s.ctx, l); err != nil {
-			s.logf("docker endpoint stopped: %v", err)
+			s.log().Warn("the docker endpoint stopped", "err", err)
 		}
 	})
 	return nil
@@ -373,8 +370,12 @@ func attrsFor(info workspace.Info) nfsserve.Attrs {
 	return a
 }
 
-func (s *Session) logf(format string, args ...any) {
-	if s.opts.Log != nil {
-		s.opts.Log.Printf(format, args...)
+// log is the session's logger, or silence. A nil *slog.Logger panics on use
+// rather than doing nothing, so the zero value needs an answer -- and one
+// accessor is a better place for it than a check at every call.
+func (s *Session) log() *slog.Logger {
+	if s.opts.Log == nil {
+		return logx.Discard()
 	}
+	return s.opts.Log
 }

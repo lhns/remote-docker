@@ -2,6 +2,7 @@ package nfsserve
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -29,17 +30,11 @@ import (
 //
 // Package-level because go-nfs's logger is package-level; there is nothing
 // per-server to attach it to.
-func SetLogger(log Logger) {
+func SetLogger(log *slog.Logger) {
 	loggerOnce.Do(func() { nfs.SetLogger(&nfsLogger{log: log}) })
 }
 
 var loggerOnce sync.Once
-
-// Logger is the subset of logging this package needs, matching the convention
-// used by session and accounts.
-type Logger interface {
-	Printf(format string, args ...any)
-}
 
 // nfsLogger adapts go-nfs's logger to ours.
 //
@@ -48,7 +43,7 @@ type Logger interface {
 // circumstance. Warn and above are forwarded, so a real server fault still
 // surfaces.
 type nfsLogger struct {
-	log   Logger
+	log   *slog.Logger
 	mu    sync.Mutex
 	level nfs.LogLevel
 }
@@ -73,7 +68,7 @@ func (l *nfsLogger) forward(level nfs.LogLevel, msg string) {
 		}
 	}
 	if l.log != nil {
-		l.log.Printf("nfs: %s", msg)
+		l.log.Warn("nfs: " + msg)
 	}
 }
 

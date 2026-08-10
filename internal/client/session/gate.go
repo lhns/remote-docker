@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // connGate holds a connection open only while it is needed.
@@ -38,7 +41,7 @@ type connGate[T any] struct {
 	// for release. Zero or negative disables releasing.
 	idle time.Duration
 
-	log Logger
+	log *slog.Logger
 
 	mu       sync.Mutex
 	conn     T
@@ -101,7 +104,7 @@ func (g *connGate[T]) sweep(ctx context.Context) bool {
 		// Unable to tell is not the same as safe to drop. Holding a connection
 		// costs a socket; dropping one still in use costs a running container
 		// its filesystem.
-		g.logf("keeping the connection: %v", err)
+		g.logger().Warn("keeping the connection", "err", err)
 		return false
 	}
 	if busy {
@@ -120,7 +123,7 @@ func (g *connGate[T]) sweep(ctx context.Context) bool {
 	g.mu.Unlock()
 
 	g.shut(conn)
-	g.logf("released the idle connection; it reopens on the next request")
+	g.logger().Info("released the idle connection; it reopens on the next request")
 	return true
 }
 
@@ -163,8 +166,11 @@ func (g *connGate[T]) close() {
 	g.shut(conn)
 }
 
-func (g *connGate[T]) logf(format string, args ...any) {
-	if g.log != nil {
-		g.log.Printf(format, args...)
+// logger is the gate's, or silence. A nil *slog.Logger panics on use rather
+// than doing nothing, and a gate built by a test has none.
+func (g *connGate[T]) logger() *slog.Logger {
+	if g.log == nil {
+		return logx.Discard()
 	}
+	return g.log
 }

@@ -1,17 +1,29 @@
 package nfsserve
 
 import (
-	"fmt"
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 
 	nfs "github.com/willscott/go-nfs"
+
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
-type capture struct{ lines []string }
+// capture reads back what was actually rendered, rather than what was passed
+// to a Printf. The point of these tests is which go-nfs messages reach a user
+// at all, so the assertion belongs at the far end.
+type capture struct{ buf bytes.Buffer }
 
-func (c *capture) Printf(format string, args ...any) {
-	c.lines = append(c.lines, strings.TrimSpace(fmt.Sprintf(format, args...)))
+func (c *capture) logger() *slog.Logger { return slog.New(logx.New(&c.buf, "", false)) }
+
+func (c *capture) lines() []string {
+	out := strings.Split(strings.TrimSpace(c.buf.String()), "\n")
+	if len(out) == 1 && out[0] == "" {
+		return nil
+	}
+	return out
 }
 
 // The NFS_ACL probe is the first thing a Linux client does on every v3 mount.
@@ -19,12 +31,12 @@ func (c *capture) Printf(format string, args ...any) {
 // from a session was a red herring they had no way to judge.
 func TestACLProbeIsNotReported(t *testing.T) {
 	c := &capture{}
-	l := &nfsLogger{log: c}
+	l := &nfsLogger{log: c.logger()}
 
 	l.Errorf("No handler for %d.%d", 100227, 0)
 
-	if len(c.lines) != 0 {
-		t.Errorf("reported the ACL probe: %v", c.lines)
+	if len(c.lines()) != 0 {
+		t.Errorf("reported the ACL probe: %v", c.lines())
 	}
 }
 
@@ -32,23 +44,23 @@ func TestACLProbeIsNotReported(t *testing.T) {
 // everything.
 func TestRealErrorsAreReported(t *testing.T) {
 	c := &capture{}
-	l := &nfsLogger{log: c}
+	l := &nfsLogger{log: c.logger()}
 
 	l.Errorf("No handler for %d.%d", 100003, 42)
 	l.Warnf("something is wrong")
 
-	if len(c.lines) != 2 {
-		t.Fatalf("reported %v, want both messages", c.lines)
+	if len(c.lines()) != 2 {
+		t.Fatalf("reported %v, want both messages", c.lines())
 	}
 	for _, want := range []string{"100003", "something is wrong"} {
 		found := false
-		for _, line := range c.lines {
+		for _, line := range c.lines() {
 			if strings.Contains(line, want) {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("%q was not reported: %v", want, c.lines)
+			t.Errorf("%q was not reported: %v", want, c.lines())
 		}
 	}
 }
@@ -56,15 +68,15 @@ func TestRealErrorsAreReported(t *testing.T) {
 // go-nfs logs per-request detail at Info, which is a firehose in a CLI.
 func TestChatterIsDropped(t *testing.T) {
 	c := &capture{}
-	l := &nfsLogger{log: c}
+	l := &nfsLogger{log: c.logger()}
 
 	l.Infof("serving a request")
 	l.Debugf("detail")
 	l.Tracef("more detail")
 	l.Print("print")
 
-	if len(c.lines) != 0 {
-		t.Errorf("forwarded low-level chatter: %v", c.lines)
+	if len(c.lines()) != 0 {
+		t.Errorf("forwarded low-level chatter: %v", c.lines())
 	}
 }
 
