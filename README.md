@@ -103,7 +103,9 @@ unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
 that can reach it can start containers that read and write your filesystem.
 Nothing here needs administrator rights.
 
-The reasoning behind each decision is in [`docs/adr/`](docs/adr/).
+The reasoning behind each decision is in [`docs/adr/`](docs/adr/), and what
+this trusts, what it does not, and where the checks are is in
+[`docs/threat-model.md`](docs/threat-model.md).
 
 ## Commands
 
@@ -114,7 +116,7 @@ The reasoning behind each decision is in [`docs/adr/`](docs/adr/).
 | `remote-docker start --foreground` | run it in this terminal instead |
 | `remote-docker stop` | stop it |
 | `remote-docker restart` | stop and start, refusing while something depends on it |
-| `remote-docker status` | what the workspace reports about this account |
+| `remote-docker status` | is it working, and what is it talking to |
 | `remote-docker docker …` | the embedded Docker CLI |
 | `remote-docker gc` | remove share volumes nothing is using |
 | `remote-docker version` | |

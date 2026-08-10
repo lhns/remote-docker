@@ -192,17 +192,16 @@ func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32)
 // allowLocalForward gates `ssh -L`, which the client uses to reach published
 // container ports.
 //
-// Unconstrained by port, deliberately: the ports a container publishes are not
-// knowable in advance, and everything reachable this way is inside the
-// workspace, which the account can already reach with a shell. Restricting to
-// loopback still matters: it stops the workspace being used to reach the
-// wider network it happens to sit on.
+// The rules are ForwardPolicy.AllowDial, beside the ones for binding, because
+// they are the same question asked in the other direction.
 func (s *Server) allowLocalForward(ctx gssh.Context, host string, port uint32) bool {
-	if _, ok := accountFor(ctx); !ok {
+	account, ok := accountFor(ctx)
+	if !ok {
 		return false
 	}
-	if !isLoopback(host) {
-		s.log().Warn("refused a local forward: only loopback may be reached", "host", host, "port", port)
+	if ok, why := s.forward.AllowDial(account, host, port); !ok {
+		s.log().Warn("refused a local forward: "+why,
+			"host", host, "port", port, "account", account.Name())
 		return false
 	}
 	return true

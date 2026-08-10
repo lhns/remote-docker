@@ -174,70 +174,30 @@ func withQuerySession(fn func(ctx context.Context, s *session.Session) error) er
 func newStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show what the workspace reports about this account",
+		Short: "Is this working, and what is it talking to?",
+		Long: `Prints a verdict first: ready, or the first thing that is wrong.
+
+Then the detail behind it, grouped by question: whether a session is up and
+how other tools reach it, what is on the other end, and which builds are in
+play.
+
+Reports what it can even when the workspace cannot be reached, which is when
+somebody is most likely to be running it.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolve()
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
+			// The one thing worth failing on: with no host there is no
+			// workspace to have a status.
+			if err := cfg.RequireHost(); err != nil {
+				return err
+			}
 
-			return withQuerySession(func(ctx context.Context, s *session.Session) error {
-				// status is the one command whose whole job is to report what
-				// the workspace says, so it connects rather than waiting to be
-				// asked.
-				info, err := s.Info(ctx)
-				if err != nil {
-					return err
-				}
-
-				row(out, "name", cfg.Name)
-				rowf(out, "workspace", "%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
-				rowf(out, "account", "%s (uid %d)", info.User, info.UID)
-				rowf(out, "nfs port", "%d", info.NFSPort)
-				row(out, "docker", info.Docker)
-				row(out, "mode", info.Mode)
-
-				// Said plainly, because vfs is the difference between a
-				// container starting in a second and in minutes, and nothing
-				// about it fails. Reaching the daemon's own host to look is
-				// exactly what an account may not do, so this is the only
-				// place it can be seen.
-				switch info.Storage {
-				case "":
-					// An agent too old to report it, or a daemon not started.
-				case "vfs":
-					row(out, "storage", "vfs, SLOW: every container create copies the whole image")
-				default:
-					row(out, "storage", info.Storage)
-				}
-
-				// The agent's build. A different question from the local
-				// version, and the one that matters when the workspace behaves
-				// oddly.
-				//
-				// Reported even when empty rather than skipped: a workspace too
-				// old to send it looks exactly like one that failed to, and
-				// silence would leave an answerable question unanswerable.
-				agent := info.Agent
-				if agent == "" {
-					agent = "not reported (workspace predates it)"
-				}
-				row(out, "agent", agent)
-
-				row(out, "endpoint", s.Endpoint)
-				reportLocalSession(out, cfg)
-
-				// Where `docker` comes from, and whether it is still this
-				// build. A hardlink or a copy keeps serving the binary that
-				// existed when it was made, and an upgrade says nothing about
-				// it, so a stale shim is a silently OLD client, which is the
-				// same failure mode the session version check exists for.
-				if self, err := os.Executable(); err == nil {
-					reportShim(out, self)
-				}
-				return nil
-			})
+			f := gather(cfg)
+			f.askWorkspace()
+			reportStatus(cmd.OutOrStdout(), f)
+			return nil
 		},
 	}
 }
