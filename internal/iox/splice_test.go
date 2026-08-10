@@ -1,7 +1,8 @@
-package sshd
+package iox
 
 import (
 	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -78,7 +79,7 @@ func TestSpliceSignalsEndOfInputWhenTheDaemonFinishes(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		splice(client, daemon)
+		Splice(client, daemon)
 		close(done)
 	}()
 
@@ -106,7 +107,7 @@ func TestSpliceStillSignalsTheDaemon(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		splice(client, daemon)
+		Splice(client, daemon)
 		close(done)
 	}()
 
@@ -117,5 +118,51 @@ func TestSpliceStillSignalsTheDaemon(t *testing.T) {
 	}
 	if !daemon.closedWrite {
 		t.Error("the daemon was never told the client had finished")
+	}
+}
+
+// noHalfClose is a connection with no CloseWrite -- a Windows named pipe, or
+// anything wrapped enough to lose the method.
+type noHalfClose struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *noHalfClose) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// The two spellings differ for a connection that cannot half-close, and this
+// is the test that keeps them from being "simplified" into one.
+//
+// Splice leaves it alone: the stream it is on carries a container's output
+// back, and closing it in response to one direction ending is the failure ADR
+// 0005 records. SpliceAndClose closes it: a port forward carries no such
+// stream, and a reader with no way to learn the peer has gone sits in Read
+// forever, holding a goroutine and two connections.
+func TestTheTwoSplicesDifferOnAConnectionThatCannotHalfClose(t *testing.T) {
+	a, b := net.Pipe() // net.Pipe conns have no CloseWrite
+	defer func() { _ = a.Close() }()
+
+	wrapped := &noHalfClose{Conn: b, closed: make(chan struct{})}
+
+	// CloseWrite must not close it.
+	CloseWrite(wrapped)
+	select {
+	case <-wrapped.closed:
+		t.Fatal("CloseWrite closed a connection that cannot half-close; " +
+			"on the Docker API stream that is the container's output being cut")
+	default:
+	}
+
+	// closeWriteOrClose must.
+	closeWriteOrClose(wrapped)
+	select {
+	case <-wrapped.closed:
+	default:
+		t.Fatal("closeWriteOrClose left a connection open that cannot half-close; " +
+			"a forward would hold the goroutine and both connections forever")
 	}
 }

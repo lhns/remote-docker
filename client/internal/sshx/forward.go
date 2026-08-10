@@ -2,9 +2,10 @@ package sshx
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"sync"
+
+	"github.com/lhns/remote-docker/internal/iox"
 )
 
 // Forward is a local listener whose connections are carried to an address on
@@ -70,7 +71,7 @@ func (f *Forward) accept(c *Client) {
 				return
 			}
 			defer remote.Close()
-			pipe(local, remote)
+			iox.SpliceAndClose(local, remote)
 		})
 	}
 }
@@ -84,31 +85,4 @@ func (f *Forward) Close() error {
 	})
 	f.wg.Wait()
 	return err
-}
-
-// pipe copies in both directions until either side ends, then unblocks the
-// other by closing both. Without the close, one direction can sit in Read
-// forever after its peer has gone.
-func pipe(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		_, _ = io.Copy(a, b)
-		closeWrite(a)
-	})
-	wg.Go(func() {
-		_, _ = io.Copy(b, a)
-		closeWrite(b)
-	})
-	wg.Wait()
-}
-
-// closeWrite half-closes where the connection supports it, so the peer sees a
-// clean EOF rather than a reset. SSH channels and TCP both do.
-func closeWrite(c net.Conn) {
-	type writeCloser interface{ CloseWrite() error }
-	if wc, ok := c.(writeCloser); ok {
-		_ = wc.CloseWrite()
-		return
-	}
-	c.Close()
 }

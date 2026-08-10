@@ -23,6 +23,8 @@ itself. Published ports become reachable locally as containers start.
 go.mod                   THE SHARED MODULE (ADR 0021), depends on ~nothing
   pkg/workspace/         THE CONTRACT, imported by both binaries
   internal/logx/         the one log handler, so both look the same
+  internal/iox/          the one bidirectional copy, and the one answer to
+                         what half-closing means (ADR 0021)
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
 client/go.mod            the client module: docker/cli, buildx, 786 go.sum lines
@@ -119,7 +121,12 @@ premise of the project, and it applies to building it too. So:
   no transfer encoding.
 - **Half-close the upstream, never close it.** `docker run` without `-i`
   closes its stdin as soon as attach is established; closing the whole stream
-  in response tears down the session carrying the container's output.
+  in response tears down the session carrying the container's output. This now
+  lives once, in `internal/iox`, because the two binaries are the two ends of
+  one stream and their copies had drifted to OPPOSITE fallbacks. `Splice`
+  leaves a stream that cannot half-close alone; `SpliceAndClose` closes it, and
+  that difference is deliberate -- a port forward carries no output stream and
+  must not leak a blocked reader. A test pins both.
 - **Only `/containers/create` is ever decoded.** Everything else is copied
   through. The body is handled as generic JSON, never typed structs, so
   unknown fields survive.
