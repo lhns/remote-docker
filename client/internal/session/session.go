@@ -152,6 +152,7 @@ type liveConn struct {
 	info      workspace.Info
 	api       *proxy.APIClient
 	rewriter  *rewrite.Rewriter
+	guard     *rewrite.Guard
 	nfs       *nfsserve.Server
 	nfsTunnel net.Listener
 	ports     *ports.Manager

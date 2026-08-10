@@ -125,8 +125,29 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 		Remover: live.api,
 		InUse:   live.api,
 		Owner:   live.info.User,
+		Guard:   live.guard,
 		Log:     s.opts.Log,
 	}
+}
+
+// exportsVolume reports whether a managed volume backs a directory this
+// session is exporting right now.
+//
+// The registry is the only place that knows: the volume exists on the
+// workspace from the moment a bind is rewritten, and the daemon does not call
+// it in use until a container names it. Everything between those two is a
+// volume that must survive collection.
+func (s *Session) exportsVolume(volume string) bool {
+	for _, share := range s.registry.Shares() {
+		name, err := workspace.VolumeNameForExport(share.ExportPath)
+		if err != nil {
+			continue
+		}
+		if name == volume {
+			return true
+		}
+	}
+	return false
 }
 
 // Status answers the control endpoint, satisfying proxy.Control.
