@@ -65,7 +65,7 @@ func TestLeasedStreamReleasesOnce(t *testing.T) {
 
 // The wrapper must not hide CloseWrite. The proxy half-closes the upstream
 // when a client stops sending, and `docker run` without -i does exactly that
-// the moment attach is established -- losing that signal is how the container's
+// the moment attach is established, and losing that signal is how the container's
 // output disappears and the command exits 0 having printed nothing.
 func TestLeasedStreamForwardsCloseWrite(t *testing.T) {
 	inner := &halfCloser{}

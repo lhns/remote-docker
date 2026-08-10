@@ -310,7 +310,7 @@ func link(out io.Writer, in io.Reader, self, path string, allowCopy bool) (form,
 		return formHardlink, nil
 	}
 
-	// A hardlink cannot span volumes -- it is a second directory entry for one
+	// A hardlink cannot span volumes: it is a second directory entry for one
 	// file, and a file lives on one volume. Said plainly, with the reason,
 	// because the fix is to move the binary and nothing else on screen would
 	// suggest that.

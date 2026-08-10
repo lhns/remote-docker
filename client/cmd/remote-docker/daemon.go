@@ -105,7 +105,7 @@ REMOTE_DOCKER_TRACE here rather than on the docker command you run.`,
 // waitForExit blocks until the process is gone, and reports whether it got
 // there before the deadline.
 //
-// A pid of 0 means nobody told us which process to watch -- an older session
+// A pid of 0 means nobody told us which process to watch: an older session
 // that does not report one, or a status request that failed. Treated as done
 // rather than as a failure: the endpoint has already gone quiet, which is what
 // this command could check before, and refusing to return would turn a missing
@@ -238,7 +238,7 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	// reports "already running" and points at the session its predecessor
 	// disowned.
 	//
-	// By pid, because cmd.Process was released above -- this process must not
+	// By pid, because cmd.Process was released above: this process must not
 	// be the daemon's parent, so it cannot wait on it either.
 	stopped := "and was stopped"
 	if err := killPID(cmd.Process.Pid); err != nil {
@@ -311,7 +311,7 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
 		// Something is serving the endpoint but will not answer for itself:
 		// a daemon too old to have a control channel, or not ours at all.
-		// Left alone either way -- taking over something we cannot identify
+		// Left alone either way, because taking over something we cannot identify
 		// is worse than the mismatch.
 		return
 	}
@@ -487,7 +487,7 @@ func writeTraceWarning(w io.Writer, st proxy.Status) {
 // warnSlowStorage says so when the workspace's daemon is on vfs.
 //
 // vfs has no copy-on-write: it copies the entire image on every container
-// create. Nothing fails -- `docker ps` stays instant, `docker run` takes
+// create. Nothing fails: `docker ps` stays instant, `docker run` takes
 // minutes, so it presents as a hang, and it stays that way until somebody
 // changes the workspace's configuration. A real workspace lost a day to it.
 //

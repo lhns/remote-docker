@@ -53,7 +53,7 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
-	// Changes arrive in bursts -- an editor writing a key file produces
+	// Changes arrive in bursts: an editor writing a key file produces
 	// several events, so a change schedules one sync shortly after rather
 	// than one per event.
 	var pending <-chan time.Time

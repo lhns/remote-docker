@@ -144,7 +144,7 @@ const NoSessionEnv = "REMOTE_DOCKER_NO_SESSION"
 // invokingDocker reports whether this process was asked to run a docker
 // command that should have a session made available for it.
 //
-// Crude on purpose. Cobra has not parsed anything yet -- it is still being
+// Crude on purpose. Cobra has not parsed anything yet, it is still being
 // assembled, so there is nothing better to ask, and being wrong costs only
 // a session that is opened slightly too eagerly or not eagerly enough.
 func invokingDocker() bool {
@@ -250,7 +250,7 @@ func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
 	}
 
 	// The buildx ROOT is deliberately not registered. Its subcommands expect
-	// the plugin harness to have run -- `docker buildx version` panics on a
+	// the plugin harness to have run, and `docker buildx version` panics on a
 	// nil dereference without it, and `build` is what docker's own tree
 	// exposes anyway.
 	_ = root

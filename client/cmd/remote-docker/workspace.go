@@ -12,7 +12,7 @@ import (
 )
 
 // The workspace command manages ~/.remote-docker.json, which until now could
-// only be listed -- adding one meant writing JSON by hand, and the "no
+// only be listed. Adding one meant writing JSON by hand, and the "no
 // workspaces configured" message said so, which is not a thing a CLI should
 // ever have to admit.
 //
@@ -239,7 +239,7 @@ func newWorkspaceListCommand() *cobra.Command {
 // reportContext creates the docker context for a workspace, reporting rather
 // than failing.
 //
-// Not having a docker CLI is an ordinary situation here -- the binary carries
+// Not having a docker CLI is ordinary here, because the binary carries
 // its own, and the whole premise is a machine where nothing is installed, so
 // it must not turn adding a workspace into an error.
 func reportContext(out interface{ Write([]byte) (int, error) }, cfg config.Config) {

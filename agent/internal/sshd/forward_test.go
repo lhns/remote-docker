@@ -96,7 +96,7 @@ func TestOnePortHolderAtATime(t *testing.T) {
 		t.Errorf("holder = %q %v, want alice", holder, ok)
 	}
 
-	// Alice reconnecting is fine -- same account, and refusing would strand
+	// Alice reconnecting is fine: same account, and refusing would strand
 	// her after a dropped connection.
 	if !p.Bind(alice, "127.0.0.1", 30000) {
 		t.Error("alice could not rebind her own port")
@@ -176,13 +176,13 @@ func TestPolicyIsSafeUnderConcurrency(t *testing.T) {
 // A reservation that is never used has to be given back.
 //
 // Granting the port and opening the listener are two steps, and the second can
-// fail -- the account's daemon may not be up yet, and with a daemon per account
+// fail, because the account's daemon may not be up yet, and with one per account
 // the listener is bound inside it. When it did, the reservation stayed: the
 // account's one reverse-tunnel port was held by a forward that did not exist,
 // and every retry was refused as "another session for this account may still be
 // open", blaming a second session for the first one's failure.
 //
-// This asserts the policy supports that -- releasing without waiting for the
+// This asserts the policy supports that: releasing without waiting for the
 // connection to end, which is what the failure path in forward_tcpip.go does.
 func TestAReservationCanBeGivenBackImmediately(t *testing.T) {
 	p := newPolicy()

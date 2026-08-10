@@ -3,7 +3,7 @@
 // reports which inotify events a container sees, and pokeprobe is what the
 // workspace agent would do to produce them.
 //
-// Linux has no way to inject a synthetic inotify event -- fanotify(7) says so
+// Linux has no way to inject a synthetic inotify event, and fanotify(7) says so
 // outright, and there is no inotify_inject. The only mechanism available to
 // anyone, including Docker Desktop's "Event Injection", is to perform a real
 // VFS operation and let the kernel emit the event as a side effect. So the

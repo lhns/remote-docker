@@ -99,7 +99,7 @@ func poke(primitive, path string) (string, error) {
 //	else if (ia_valid & ATTR_MTIME)   mask |= FS_MODIFY;
 //
 // which is a real IN_MODIFY. Writing back the CURRENT mtime means nothing
-// observable changes -- no build system sees a newer file, and the SETATTR
+// observable changes: no build system sees a newer file, and the SETATTR
 // this produces over NFS is an identity the server can decline to apply.
 func setMtime(path string) (string, error) {
 	var st unix.Stat_t

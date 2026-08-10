@@ -38,7 +38,7 @@ func TestTraceWarningStaysQuietWhenItWouldBeWrong(t *testing.T) {
 }
 
 // And when it does fire it has to name the variable, the process, and what to
-// do -- a warning that only says "this did nothing" leaves the reader where
+// do. A warning that only says "this did nothing" leaves the reader where
 // they were.
 func TestTraceWarningNamesTheVariableAndThePID(t *testing.T) {
 	var buf bytes.Buffer

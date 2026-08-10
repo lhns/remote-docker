@@ -133,7 +133,7 @@ func serve(addr string) error {
 	// dind. Revoke covers the accounts that already exist, which on an
 	// upgraded workspace is all of them.
 	// Stated in both modes, because membership is reconciled to it on every
-	// pass -- an empty list would mean "reconcile to nothing" rather than
+	// pass. An empty list would mean "reconcile to nothing" rather than
 	// "leave alone".
 	provisioner := &accounts.UnixProvisioner{Groups: []string{"docker", "workspace"}}
 	if perUserDind {
@@ -183,7 +183,7 @@ func serve(addr string) error {
 		// Inherited from the workspace's own dockerd unless overridden. A
 		// deployment on Ceph- or NFS-backed storage sets fuse-overlayfs there,
 		// and a per-account daemon whose graph volume lives on that same
-		// filesystem needs the same answer -- otherwise dockerd falls back to
+		// filesystem needs the same answer, or dockerd falls back to
 		// vfs, which copies the whole image on every container create and says
 		// nothing about why everything became slow.
 		storage := os.Getenv(envDindStorage)
@@ -195,7 +195,7 @@ func serve(addr string) error {
 		}
 
 		// The workspace's OWN image by default, because it is the only one
-		// known to carry what this workspace decided it needs -- fuse-overlayfs
+		// known to carry what this workspace decided it needs, fuse-overlayfs
 		// above all, which stock docker:dind does not ship. elevate sets
 		// WORKSPACE_IMAGE from the container it inspected; a deployment that
 		// does not elevate sets it in the stack file. Without either, the
@@ -221,7 +221,7 @@ func serve(addr string) error {
 		log.Info("each account gets its own docker daemon", "workspace", id)
 
 		// Adopt before serving. A restarted agent that did not would find
-		// every name taken -- `docker run --name` conflicts rather than
+		// every name taken, so `docker run --name` conflicts rather than
 		// replacing, and every account locked out of the daemon holding its
 		// own running containers.
 		if n, err := manager.Adopt(ctx); err != nil {
@@ -269,7 +269,7 @@ func ensureGroups(perUserDind bool) error {
 	groups := []string{"docker", "workspace"}
 	if perUserDind {
 		// The `docker` group is not created, because nothing should be in it.
-		// It may still EXIST on an upgraded workspace -- the image or an
+		// It may still EXIST on an upgraded workspace, since the image or an
 		// earlier run made it, which is why accounts are revoked from it
 		// rather than the group being assumed absent.
 		groups = []string{"workspace"}

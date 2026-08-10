@@ -15,8 +15,8 @@ import (
 
 // ElevatedEnv marks a container as already elevated.
 //
-// Without it a misconfiguration -- the child somehow starting with the elevate
-// command again -- would fork containers until the node fell over. The guard
+// Without it a misconfiguration, the child somehow starting with the elevate
+// command again, would fork containers until the node fell over. The guard
 // costs one environment variable.
 const ElevatedEnv = "WORKSPACE_ELEVATED"
 
@@ -95,7 +95,7 @@ func (s RunSpec) Args() []string {
 
 	// Read from the field, which it did not used to be: `--rm` was appended
 	// unconditionally and `Remove` was set but never consulted. It happened to
-	// be harmless because the only caller wants --rm -- elevate's child is a
+	// be harmless because the only caller wants --rm: elevate's child is a
 	// singleton whose state is worthless, but a spec with a flag it ignores
 	// is a trap for the next caller, and the next caller is a per-user daemon
 	// holding somebody's running work.
@@ -178,7 +178,7 @@ func Plan(self ContainerInfo, opts Options) (RunSpec, error) {
 //
 // This exclusion is the difference between the design being safe and being a
 // host takeover. A privileged container holding the host socket gives every
-// enrolled workspace user root on the node -- they have access to the inner
+// enrolled workspace user root on the node, since they have access to the inner
 // daemon by design, and the inner daemon would be able to reach the outer one.
 //
 // A blanket --volumes-from would have been shorter and would have carried the
@@ -211,7 +211,7 @@ func isHostSocket(m Mount, hostSocket string) bool {
 // asking means the host's Docker socket, which childMounts deliberately keeps
 // out of it. The agent needs it to give each account's daemon the same image
 // as the workspace, which is the only one known to carry what the workspace
-// decided it needs -- fuse-overlayfs above all.
+// decided it needs, fuse-overlayfs above all.
 func childEnv(env []string, image string) []string {
 	out := make([]string, 0, len(env)+2)
 	if image != "" {

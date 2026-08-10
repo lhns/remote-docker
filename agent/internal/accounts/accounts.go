@@ -4,7 +4,7 @@
 // is a good one and deployments depend on it: a file named alice.pub becomes
 // the unix account "alice", uids are allocated once and persisted so an
 // account keeps the same uid, and therefore the same reverse-tunnel port and
-// the same file ownership -- across container recreations.
+// the same file ownership, across container recreations.
 //
 // What changes is that authentication happens in this process rather than
 // through authorized_keys files, so port ownership can be enforced by a
@@ -57,8 +57,8 @@ func (a Account) Authorized(key ssh.PublicKey) bool {
 //
 // An interface because creating users needs root, which unit tests do not
 // have. The shell suite could only run as root and therefore never ran in CI;
-// this is what lets the interesting logic -- naming, collisions, uid
-// allocation, revocation -- be tested anywhere.
+// this is what lets the interesting logic (naming, collisions, uid
+// allocation, revocation) be tested anywhere.
 type Provisioner interface {
 	// Ensure creates the account if it does not exist and returns its home.
 	Ensure(name string, uid int, shell string) (home string, err error)
@@ -119,7 +119,7 @@ func (s *Store) List() []*Account {
 }
 
 // uidmapPath is where allocated uids are persisted, in the same
-// "name:uid" format the shell implementation used -- an existing deployment's
+// "name:uid" format the shell implementation used, so an existing deployment's
 // uids must survive the change, because a uid determines both the account's
 // reverse-tunnel port and the ownership of everything it has written.
 func (s *Store) uidmapPath() string { return filepath.Join(s.StateDir, "uidmap") }
@@ -171,7 +171,7 @@ func (s *Store) Sync() error {
 		}
 
 		// The shell version let a second file silently overwrite the first's
-		// access -- Alice.pub and alice.pub both yield "alice". Refusing is
+		// access: Alice.pub and alice.pub both yield "alice". Refusing is
 		// the only safe answer: picking one would hand somebody an account
 		// they did not ask for.
 		if other, taken := claimed[name]; taken {

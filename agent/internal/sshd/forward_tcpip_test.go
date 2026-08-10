@@ -13,7 +13,7 @@ import (
 // would break the mode ADR 0012 keeps as the escape hatch.
 //
 // The mode arrives as a VALUE now rather than as a nil manager, and the
-// namespace it names is the empty path -- see netns.Do. This test is what says
+// namespace it names is the empty path (see netns.Do). This test is what says
 // the two spellings mean the same thing.
 func TestForwardsUseThisNamespaceForTheSharedDaemon(t *testing.T) {
 	s := &Server{cfg: Config{Daemons: daemons.Shared("")}}
@@ -53,7 +53,7 @@ func TestForwardsUseTheAskingAccountsNamespace(t *testing.T) {
 	}
 	s := &Server{cfg: Config{Daemons: targets}}
 
-	// The bind itself cannot succeed here -- entering a named namespace is
+	// The bind itself cannot succeed here, because entering a named namespace is
 	// Linux-only and those pids do not exist, and it does not need to. What
 	// is under test is WHICH namespace was asked for.
 	_, _ = s.listenFor(context.Background(), sessionAccount{name: "alice"}, "127.0.0.1:0")

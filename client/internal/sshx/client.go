@@ -27,7 +27,7 @@ type Config struct {
 	// aes128-gcm is the default for a reason worth keeping: AES-NI makes it
 	// several GB/s where ChaCha20 is markedly slower, and every byte of the
 	// NFS traffic crosses this connection. There is no double encryption to
-	// worry about -- NFS inside the tunnel is plaintext.
+	// worry about, because NFS inside the tunnel is plaintext.
 	Ciphers []string
 
 	// KeepAlive is how often to probe a connection that is otherwise idle.
@@ -144,7 +144,7 @@ func (c *Client) Close() error {
 // here. This is ssh -R, and it is how the client's NFS export reaches the
 // remote dockerd.
 //
-// The workspace will refuse an address that is not this account's -- see
+// The workspace will refuse an address that is not this account's. See
 // workspace.Mapping.OwnsPort. A refusal here is a policy decision on the far
 // side, not a transport failure, and reads as "port already bound" from the
 // SSH protocol's point of view.
@@ -209,7 +209,7 @@ func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 }
 
 // OpenStream runs a command and returns pipes to it, for the long-lived
-// bidirectional case -- notably `docker system dial-stdio`, which carries the
+// bidirectional case, notably `docker system dial-stdio`, which carries the
 // whole Docker API.
 func (c *Client) OpenStream(cmd string) (io.ReadWriteCloser, error) {
 	sess, err := c.ssh.NewSession()

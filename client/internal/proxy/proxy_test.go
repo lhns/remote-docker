@@ -371,7 +371,7 @@ func (f rewriterFunc) ContainerCreate(ctx context.Context, body []byte) ([]byte,
 // in the worst way: `docker run` exits 0 having printed nothing, because the
 // container's output was framed as an HTTP body nobody read.
 //
-// The integration suite found this -- every test that read container stdout
+// The integration suite found this: every test that read container stdout
 // failed empty while every test that did not passed.
 func TestProxyHijacksOnDockerStreamContentType(t *testing.T) {
 	for _, contentType := range []string{
@@ -500,8 +500,8 @@ func (d *halfCloseDialer) DialDocker(context.Context) (io.ReadWriteCloser, error
 // upstream would tear down the session carrying the container's output, and
 // the command would exit 0 having printed nothing at all.
 //
-// Every mount test in the integration suite failed this way -- empty output,
-// zero exit -- while writes and port forwarding passed, because only the
+// Every mount test in the integration suite failed this way, empty output and
+// zero exit, while writes and port forwarding passed, because only the
 // tests that read container stdout went through the attach path.
 func TestProxyHalfClosesUpstreamWhenClientStopsWriting(t *testing.T) {
 	// Upstream sends a hijack head, then holds the connection open.
@@ -571,7 +571,7 @@ func TestProxyHalfClosesUpstreamWhenClientStopsWriting(t *testing.T) {
 // `docker logs` uses the same content type as a hijacked attach, but is an
 // ordinary chunked response. Splicing it raw hands the chunk-size lines to
 // the client's stream demultiplexer, which reports
-// "Unrecognized input header: 49" -- 49 being the ASCII '1' that starts a hex
+// "Unrecognized input header: 49", 49 being the ASCII '1' that starts a hex
 // chunk length. The integration suite reported exactly that string.
 func TestProxyDoesNotHijackChunkedDockerStreams(t *testing.T) {
 	// One stdcopy frame: stdout, 5 bytes, "hello".
@@ -656,7 +656,7 @@ func TestServeReturnsPromptlyWithAnIdleKeepAliveConnection(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- p.Serve(ctx, l) }()
 
-	// A keep-alive client, deliberately NOT closed afterwards -- standing in
+	// A keep-alive client, deliberately NOT closed afterwards, standing in
 	// for the embedded CLI's transport, which lives as long as we do.
 	client := &http.Client{Transport: &http.Transport{}}
 	resp, err := client.Get("http://" + l.Addr().String() + "/_ping")

@@ -27,7 +27,7 @@ func TestDoWithNoPathRunsHere(t *testing.T) {
 }
 
 // The function's own error is returned, not swallowed or wrapped into
-// something about namespaces -- a bind failure must read as a bind failure.
+// something about namespaces: a bind failure must read as a bind failure.
 func TestDoWithNoPathReturnsTheFunctionsError(t *testing.T) {
 	want := errors.New("the address was already in use")
 	if got := Do("", func() error { return want }); !errors.Is(got, want) {

@@ -67,7 +67,7 @@ type Options struct {
 type Role int
 
 const (
-	// Query only asks the workspace things -- `status`, `gc`. It binds
+	// Query only asks the workspace things, as `status` and `gc` do. It binds
 	// nothing and exports nothing, and each half of that is load-bearing:
 	//
 	//   - It must not bind the local Docker endpoint. These commands never use
@@ -91,7 +91,7 @@ const (
 	// behind one.
 	//
 	// Exactly one of these can exist per account, and it fails rather than
-	// half-working when the export port is already taken -- two of them is a
+	// half-working when the export port is already taken, and two of them is a
 	// genuine conflict and saying so beats a session that silently serves no
 	// files.
 	Host
@@ -312,7 +312,7 @@ func (s *leasedStream) Close() error {
 
 // CloseWrite forwards the half-close the hijack path depends on. Without it
 // the wrapper would hide the method and `docker run` without -i would lose the
-// container's output -- the failure ADR 0005 records and the proxy's tests
+// container's output: the failure ADR 0005 records and the proxy's tests
 // pin down.
 func (s *leasedStream) CloseWrite() error {
 	if cw, ok := s.ReadWriteCloser.(interface{ CloseWrite() error }); ok {

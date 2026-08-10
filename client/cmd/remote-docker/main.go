@@ -11,7 +11,7 @@ func main() {
 	// Under the name `docker` the whole command line belongs to the Docker
 	// CLI, and so does the help: `docker run --help` must not describe itself
 	// as a subcommand of something else. The error prefix follows the name for
-	// the same reason -- a message beginning "remote-docker:" from a command
+	// the same reason: a message beginning "remote-docker:" from a command
 	// the user spelled `docker` names a program they may not know they have.
 	name, root := "remote-docker", newRootCommand()
 	if invokedAsDocker() {

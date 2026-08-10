@@ -134,7 +134,7 @@ func TestForwardCarriesLocalConnections(t *testing.T) {
 
 	// Read a known number of bytes rather than to EOF. Half-close does not
 	// survive gliderlabs' direct-tcpip handler, which tears down both
-	// directions as soon as either copy ends -- a property of the test
+	// directions as soon as either copy ends, a property of the test
 	// server, not of the forward under test.
 	const msg = "round trip"
 	if _, err := io.WriteString(conn, msg); err != nil {

@@ -2,8 +2,8 @@
 //
 // The ORDER in here is load-bearing and is the reason it is one file: the NFS
 // export has to be reachable before any container can mount a volume backed by
-// it, and the things that only a hosting session starts -- ports, notify, the
-// volume collector -- must not be started by one that merely asks a question.
+// it, and the things only a hosting session starts (ports, notify, the volume
+// collector) must not be started by one that merely asks a question.
 
 package session
 
@@ -60,7 +60,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	live := &liveConn{ssh: client, info: info}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	// One guard for this connection, shared by the two things that disagree
-	// about a volume's lifetime -- see rewrite.Guard.
+	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
 		Shares:  shareRegistrar{registry: s.registry, changed: s.sharesChanged},

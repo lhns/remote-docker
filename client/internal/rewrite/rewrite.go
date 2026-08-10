@@ -28,9 +28,9 @@ import (
 // Exported answers whether a volume backs a directory this session is
 // exporting, which is the fact the daemon cannot know. The lock closes the
 // remaining window: a removal decides under it, and a rewrite holds it across
-// registering the share and creating the volume, so whichever goes first, the
-// other sees a settled world -- either the share is registered and the volume
-// is spared, or the volume goes and is immediately recreated.
+// registering the share and creating the volume. Whichever goes first, the
+// other sees a settled world: either the share is registered and the volume is
+// spared, or the volume goes and is immediately recreated.
 type Guard struct {
 	mu sync.Mutex
 
@@ -41,8 +41,8 @@ type Guard struct {
 }
 
 // hold locks the guard and returns its release. A nil guard is a working
-// no-op, so a Rewriter or Collector constructed without one -- every unit test
-// that does not care -- behaves exactly as it did before.
+// no-op, so a Rewriter or Collector built without one, which is every unit
+// test that does not care, behaves as it did before.
 func (g *Guard) hold() func() {
 	if g == nil {
 		return func() {}
@@ -219,9 +219,9 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.
 			continue
 		}
 		if !IsLocalPath(parsed.Source) {
-			// A named volume. Leave it entirely alone -- rewriting one would
-			// replace the user's persistent data with an export of a
-			// directory that does not exist.
+			// A named volume. Left alone: rewriting one would replace the
+			// user's persistent data with an export of a directory that does
+			// not exist.
 			continue
 		}
 
@@ -268,8 +268,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 			continue
 		}
 		if mountType != "bind" {
-			// volume, tmpfs, npipe, cluster -- none of them name a path on
-			// this machine.
+			// volume, tmpfs, npipe and cluster name no path on this machine.
 			continue
 		}
 

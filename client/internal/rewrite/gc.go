@@ -65,7 +65,7 @@ type Collector struct {
 //  2. the volume carries our label
 //
 // A volume failing either is not ours, whatever it looks like. The prefix
-// alone is not enough -- a user is perfectly entitled to name a volume
+// alone is not enough, because a user is entitled to name a volume
 // "rd-backups".
 func (c *Collector) Collect(ctx context.Context) (int, error) {
 	volumes, err := c.Volumes.ListVolumes(ctx)

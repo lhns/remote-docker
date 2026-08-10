@@ -21,7 +21,7 @@ import "strings"
 // components. The workspace's filesystem is case-sensitive; sending the root's
 // casing instead of the file's would name a path that is not there.
 //
-// workspace.CanonicalKey solves a neighbouring problem -- whether two paths
+// workspace.CanonicalKey solves a neighbouring problem, whether two paths
 // are the same directory, and lowercases to do it. It is the right function
 // for identity and the wrong one here.
 

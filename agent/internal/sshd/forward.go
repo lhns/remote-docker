@@ -18,7 +18,7 @@ type Account interface {
 //
 // This is the whole of ADR 0010's central claim. Under sshd the equivalent
 // rule was a permitlisten="127.0.0.1:<port>" option generated into every key's
-// authorized_keys entry -- a policy of one comparison, implemented as string
+// authorized_keys entry: a policy of one comparison, implemented as string
 // generation into a file format with no schema, and enforced by a component
 // that had no idea why the number was what it was.
 //
@@ -40,7 +40,7 @@ func NewForwardPolicy(mapping workspace.Mapping) *ForwardPolicy {
 //
 // Three rules, in order of what they protect against:
 //
-//  1. loopback only. A workspace's NFS export is unauthenticated -- anything
+//  1. loopback only. A workspace's NFS export is unauthenticated, so anything
 //     that can reach the port can read and write the client's files, so it
 //     must never be published beyond the container.
 //  2. the account's own port, and only that one. This is what stops one user

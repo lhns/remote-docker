@@ -99,7 +99,7 @@ type Status struct {
 	// Compared, never ordered. A sha build says which commit and nothing about
 	// when: "sha-a7634c0" and "sha-95e42ac" cannot be put in sequence, and a
 	// release version cannot be compared with either. So a difference is
-	// reported as a difference, never as "outdated" -- claiming an order this
+	// reported as a difference, never as "outdated": claiming an order this
 	// cannot know would be worse than saying nothing.
 	Version string `json:"version"`
 
@@ -111,7 +111,7 @@ type Status struct {
 	// Storage is the graph driver of the daemon this session is talking to.
 	//
 	// Carried here so an ordinary `docker` command can warn about it. The
-	// session is the only thing that has spoken to the workspace -- every
+	// session is the only thing that has spoken to the workspace, since every
 	// other command talks to the session, so without this the fact would be
 	// reachable only by running `status` on purpose, which is not something
 	// somebody does while wondering why their container is slow.

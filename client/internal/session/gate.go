@@ -12,7 +12,7 @@ import (
 // connGate holds a connection open only while it is needed.
 //
 // An idle workspace otherwise costs a live SSH connection, a keepalive every
-// fifteen seconds, an events stream and a reconcile ticker -- per workspace,
+// fifteen seconds, an events stream and a reconcile ticker, per workspace,
 // and the whole point of contexts is to have several. The endpoint itself is
 // cheap and stays bound, because it is how we are found; only what sits behind
 // it comes and goes.
@@ -22,7 +22,7 @@ import (
 // mount from us: the remote daemon mounts the volume at container start and
 // keeps it for the container's life, so pulling the tunnel out gives that
 // container EIO. `soft,timeo=30` makes the failure clean rather than a hang,
-// but it is still a failure -- idleness alone is never enough.
+// but it is still a failure. Idleness alone is never enough.
 //
 // Generic over the connection type so the policy can be tested without an SSH
 // client, a daemon, or a workspace.

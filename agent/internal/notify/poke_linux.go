@@ -10,7 +10,7 @@ import (
 // it.
 //
 // Which syscalls, and why exactly these, is measured rather than reasoned
-// about -- test/integration.sh section 11d runs the matrix on every push, and
+// about: test/integration.sh section 11d runs the matrix on every push, and
 // ADR 0016 records it. In short:
 //
 //	utimensat with atime=UTIME_OMIT   IN_MODIFY
@@ -26,7 +26,7 @@ type SyscallPoker struct{}
 // used to be.
 //
 // While every path was resolved inside the agent's own filesystem, refusing to
-// follow a symlink was tidiness -- the client does not watch through them
+// follow a symlink was tidiness, since the client does not watch through them
 // either, so following one would replay somewhere the client never meant. With
 // a daemon per account (ADR 0019) these paths are reached through
 // /proc/<pid>/root of somebody else's container, so a symlink here is a symlink

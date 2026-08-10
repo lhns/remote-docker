@@ -53,7 +53,7 @@ func decode(mask uint32) string {
 // watch establishes an inotify watch on dir and calls report for every event,
 // with the mask decoded to its kernel names.
 //
-// The read loop runs on its own goroutine and is never unblocked -- inotify
+// The read loop runs on its own goroutine and is never unblocked, because inotify
 // has no wakeup and the process is short-lived, so the blocked thread simply
 // dies with it. Closing the descriptor from another goroutine to interrupt
 // the read is a race the probe does not need to take.
@@ -87,7 +87,7 @@ func watch(dir string, report func(mask, name string)) (func(), error) {
 				if name == "" {
 					// An event on the watched directory itself. Name it, so
 					// the log distinguishes "the directory changed" from "a
-					// file in it changed" -- the coarse fallback depends on
+					// file in it changed", and the coarse fallback depends on
 					// exactly that difference.
 					name = filepath.Base(dir) + "/"
 				}

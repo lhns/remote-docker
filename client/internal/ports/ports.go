@@ -1,7 +1,7 @@
 // Package ports makes published container ports reachable on the client.
 //
 // `docker run -p 8080:80` publishes on the daemon's network, which for
-// Docker-in-Docker is the workspace container's own namespace -- nothing on
+// Docker-in-Docker is the workspace container's own namespace, so nothing on
 // this machine can reach it. Watching the daemon's event stream and opening a
 // local forward per published port closes that gap without the user having to
 // know the ports in advance (ADR 0008).
@@ -41,7 +41,7 @@ type Container struct {
 
 // Published is one published port.
 type Published struct {
-	// PublicPort is the port on the workspace container's network -- what the
+	// PublicPort is the port on the workspace container's network, what the
 	// user asked for on the left of the colon.
 	PublicPort int
 
@@ -218,7 +218,7 @@ func (m *Manager) Active() []int {
 
 // publishedTCP returns the TCP ports a container publishes to the host.
 //
-// A port with no PublicPort is exposed but not published -- it has no host
+// A port with no PublicPort is exposed but not published: it has no host
 // side to forward. UDP is skipped because the SSH transport carries TCP only,
 // and pretending otherwise would produce a listener that silently drops
 // everything.

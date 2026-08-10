@@ -3,7 +3,7 @@
 //
 // This is the translation ADR 0006 rests on. The workspace daemon cannot see
 // the client's filesystem, so `-v D:\data:/data` has to become a volume the
-// daemon can mount for itself -- from the tunnelled NFS server, in its own
+// daemon can mount for itself, from the tunnelled NFS server, in its own
 // namespace, when the container starts.
 package rewrite
 
@@ -20,7 +20,7 @@ type BindSpec struct {
 	// Target is the path inside the container.
 	Target string
 
-	// Options is the raw trailing field -- "ro", "rw,z", "cached" and so on.
+	// Options is the raw trailing field: "ro", "rw,z", "cached" and so on.
 	// It is carried through untouched rather than parsed: the daemon
 	// understands more of them than we need to, and dropping one silently
 	// changes the mount.
@@ -74,7 +74,7 @@ func ParseBind(spec string) (BindSpec, error) {
 // distinguish them is the target: the workspace is Linux, so the container
 // path is always absolute and starts with a slash. Reading `c:/app` as a drive
 // leaves no target at all, and reading `c:/app:ro` as one makes the target
-// "ro" -- both impossible, so the volume reading is correct.
+// "ro", both impossible, so the volume reading is correct.
 //
 // A path spelled `C:\projects:/app` has no such ambiguity, and the drive
 // reading is the only one that yields a usable target.

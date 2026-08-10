@@ -11,14 +11,14 @@ import (
 // DockerVolumes resolves a volume to its mountpoint through the docker CLI,
 // which the workspace image already carries. The agent has no Go Docker
 // client, and adding one to ask a single question would be a large dependency
-// for a `--format` string -- the same trade internal/server/elevate makes.
+// for one `--format` string. The same trade elevate makes.
 type DockerVolumes struct {
 	// Host is the daemon to ask, as a -H value. Empty means the agent's own,
 	// which is the shared-daemon mode of ADR 0012.
 	//
 	// With a daemon per account (ADR 0019) the volume being replayed into
 	// belongs to that account's daemon and does not exist on any other, so
-	// asking the wrong one does not return a wrong path -- it returns no such
+	// asking the wrong one does not return a wrong path. It returns no such
 	// volume, which is at least loud.
 	//
 	// A func, and lazy, for the same reason Root is: resolving it eagerly would
@@ -72,8 +72,8 @@ func call(fn func() (string, error)) (string, error) {
 
 // relocate maps a mountpoint reported by another daemon into our filesystem.
 //
-// Separated from the exec above so it can be tested without one -- unit tests
-// here must run with no daemon and on a machine that is not Linux (CLAUDE.md).
+// Separated from the exec above so it can be tested without one: the tests
+// here run with no daemon, on a machine that is not Linux.
 //
 // `path`, not `path/filepath`: these are always Linux paths, produced by a
 // Linux daemon and consumed by a Linux agent, and running them through
@@ -87,7 +87,7 @@ func relocate(mp string, root func() (string, error)) (string, error) {
 	if err != nil {
 		// Never fall back to the unrelocated path. The agent's own
 		// /var/lib/docker is the SHARED daemon's, so that path exists and
-		// means something else -- a silent fallback would replay one account's
+		// means something else. A silent fallback would replay one account's
 		// edits into another daemon's volume.
 		return "", fmt.Errorf("notify: locating the daemon holding the volume: %w", err)
 	}
@@ -106,7 +106,7 @@ func relocate(mp string, root func() (string, error)) (string, error) {
 
 	// Joining is not containment, and assuming it was is a mistake this very
 	// test caught: path.Join CLEANS, so joining "/proc/42/root" to
-	// "/../../etc/shadow" yields "/proc/etc/shadow" -- outside the root, with
+	// "/../../etc/shadow" yields "/proc/etc/shadow", outside the root, with
 	// no error, having looked correct.
 	//
 	// That matters here and did not before. The mountpoint is whatever the

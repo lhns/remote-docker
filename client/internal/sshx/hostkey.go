@@ -19,7 +19,7 @@ import (
 //
 // First contact with a host records its key. Every later connection must match
 // it. An unknown host is a normal event; a *changed* host key is not, and is
-// refused rather than prompted for -- there is no interactive user on the far
+// refused rather than prompted for: there is no interactive user on the far
 // side of an automated tunnel to make that judgement.
 type KnownHosts struct {
 	Path string
@@ -50,7 +50,7 @@ func (k *KnownHosts) Callback() ssh.HostKeyCallback {
 		defer k.mu.Unlock()
 
 		// Reloaded per connection rather than cached: another process, or
-		// another connection from this one -- may have recorded a host since
+		// another connection from this one, may have recorded a host since
 		// the checker was built.
 		check, err := knownhosts.New(k.Path)
 		if err != nil {

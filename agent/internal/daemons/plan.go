@@ -50,7 +50,7 @@ const DefaultImage = "docker:28-dind"
 // Entrypoint is what a per-account daemon runs.
 //
 // Set explicitly because the image is the workspace's own, whose entrypoint is
-// the agent -- left alone, the daemon container would run `remote-dockerd`
+// the agent. Left alone, the daemon container would run `remote-dockerd`
 // handed dockerd's flags.
 //
 // It is dind's OWN entrypoint script, not `dockerd`, and that distinction cost
@@ -83,8 +83,8 @@ const (
 // The workspace label carries an id persisted in the state directory, NOT the
 // container id. A container id changes on every redeploy, so adopting by it
 // would orphan every user's daemon the first time somebody ran
-// `docker compose up -d` -- leaving the daemons running, unreferenced, holding
-// their volumes and their users' containers.
+// `docker compose up -d`, leaving them running, unreferenced, and holding
+// their users' containers.
 const (
 	ManagedLabel   = "remote-docker.daemon"
 	AccountLabel   = "remote-docker.account"
@@ -102,9 +102,9 @@ const (
 
 	// StorageLabel records the graph driver a daemon was CREATED with.
 	//
-	// A daemon that already exists is started, never re-run -- that is what
-	// keeps an account's containers and images across a redeploy, so its
-	// command line is fixed for life. Without this label there is no way to
+	// A daemon that already exists is started, never re-run, which is what
+	// keeps an account's containers and images across a redeploy. Its command
+	// line is fixed for life, and without this label there is no way to
 	// notice that the workspace's configuration has since changed and the
 	// running daemon is not what the current settings would produce.
 	//
@@ -157,7 +157,7 @@ type Options struct {
 
 	// StorageDriver is passed to the per-user dockerd. A deployment whose
 	// graph volume is Ceph-backed sets fuse-overlayfs, and that has to reach
-	// each account's daemon explicitly -- it is not inherited.
+	// each account's daemon explicitly, because it is not inherited.
 	StorageDriver string
 }
 
@@ -207,9 +207,9 @@ func Plan(account string, opts Options) (Spec, error) {
 		image = DefaultImage
 	}
 
-	// Flags only: dockerd itself is the entrypoint. Two listeners -- the one
-	// the agent dials, and the conventional path so anything running inside
-	// the daemon's own container still works.
+	// Flags only: dockerd itself is the entrypoint. Two listeners, the one the
+	// agent dials and the conventional path, so anything running inside the
+	// daemon's own container still works.
 	command := []string{
 		"-H", "unix://" + SocketMount + "/" + SocketName,
 		"-H", "unix:///var/run/docker.sock",
@@ -324,7 +324,7 @@ func StorageDriverFrom(dockerdArgs []string) string {
 //
 // The rendered arguments, hashed: image, entrypoint, flags, labels, mounts.
 // Comparing the digest rather than the arguments means a new setting is
-// noticed without anything having to be taught what settings exist -- adding
+// noticed without anything having to be taught what settings exist. Adding
 // one to Plan is enough.
 //
 // Its own label is excluded, since it is being computed.

@@ -17,7 +17,7 @@ const WorkspaceIDFile = "workspace-id"
 // on first run.
 //
 // Deliberately NOT the container id, and this is the whole point of the file.
-// A container id changes every time the workspace is redeployed -- every
+// A container id changes every time the workspace is redeployed, and every
 // `docker compose up -d`, every Swarm task replacement, so daemons labelled
 // with it would stop being recognised as ours on the first upgrade. They would
 // keep running, unadoptable, holding their volumes and their users' containers,

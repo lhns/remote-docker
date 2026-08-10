@@ -259,7 +259,7 @@ func dur(d time.Duration) string {
 }
 
 // jsonName is the field's spelling in the file, taken from the struct tag
-// rather than guessed -- the tag is the format, and a rename that forgot the
+// rather than guessed: the tag is the format, and a rename that forgot the
 // tag would otherwise pass by being wrong in both places at once.
 func jsonName(field string) string {
 	f, ok := reflect.TypeOf(Workspace{}).FieldByName(field)

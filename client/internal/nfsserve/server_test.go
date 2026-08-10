@@ -10,7 +10,7 @@ import (
 )
 
 // These tests drive the server over a real NFSv3 conversation, using a real
-// NFS client, on a real socket. They prove the wire protocol -- mount path
+// NFS client, on a real socket. They prove the wire protocol: mount path
 // resolution, file handles, attributes, reads and writes, without needing a
 // kernel mount, a container, or a Docker daemon, none of which exist on the
 // machine this is developed on.
@@ -107,7 +107,7 @@ func TestServeAnUnrelatedDirectory(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// One server, one port, one tunnel -- two unrelated local directories.
+	// One server, one port, one tunnel, two unrelated local directories.
 	target := mustMount(t, serve(t, r), share.ExportPath)
 
 	f, err := target.Open("data.bin")
@@ -187,7 +187,7 @@ func TestServeMountsASubdirectory(t *testing.T) {
 }
 
 // Ownership is synthesised, which is the documented fix for rclone's Windows
-// limitation -- every file appearing as uid 1000 with chown failing.
+// limitation: every file appearing as uid 1000 with chown failing.
 func TestServeReportsSynthesisedOwnership(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600); err != nil {
@@ -234,7 +234,7 @@ func TestServeRefusesAnUnregisteredExport(t *testing.T) {
 
 	// The refusals above must not have killed the server. go-nfs calls
 	// ToHandle on the returned filesystem before checking the mount status,
-	// so returning nil for a refusal panics it -- meaning any client could
+	// so returning nil for a refusal panics it, meaning any client could
 	// crash this process by asking for a path that does not exist.
 	if _, err := mountAt(t, addr, "/cwd"); err != nil {
 		t.Fatalf("the server stopped serving after refusing a mount: %v", err)
@@ -244,7 +244,7 @@ func TestServeRefusesAnUnregisteredExport(t *testing.T) {
 // A file on the share has to be runnable. Without this, a committed binary or
 // a ./scripts/build.sh in the mounted project cannot be executed at all: the
 // container gets "permission denied" from a synthesised mode with no execute
-// bit. The integration suite found this the hard way -- a probe binary placed
+// bit. The integration suite found this the hard way: a probe binary placed
 // on the share failed to start, producing no output and no explanation.
 func TestServeReportsExecutableFiles(t *testing.T) {
 	dir := t.TempDir()
@@ -273,7 +273,7 @@ func TestServeReportsExecutableFiles(t *testing.T) {
 }
 
 // Where the local filesystem does have an execute bit, it is preserved rather
-// than synthesised -- a data file should not become executable just because it
+// than synthesised, because a data file should not become executable just because it
 // shares a directory with a script.
 func TestServePreservesRealExecutableBits(t *testing.T) {
 	if runtime.GOOS == "windows" {

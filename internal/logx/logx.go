@@ -44,7 +44,7 @@ type Handler struct {
 
 // New builds a handler writing to out.
 //
-// indent is put before every line -- two spaces for the client, where the lines
+// indent is put before every line: two spaces for the client, where the lines
 // sit under a command's own output. prefix renders the component attribute as
 // `[name] `, which is the agent's format.
 func New(out io.Writer, indent string, prefix bool) *Handler {
@@ -75,7 +75,7 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 
 	// The component prefix comes from an attribute rather than a field on the
 	// handler, so `logger.With("component", "daemons")` is all a subsystem
-	// needs -- the same mechanism as any other attribute, not a parallel one.
+	// needs, the same mechanism as any other attribute rather than a parallel one.
 	rest := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
 	component := ""
 	for _, a := range h.attrs {

@@ -121,7 +121,7 @@ func TestSpliceStillSignalsTheDaemon(t *testing.T) {
 	}
 }
 
-// noHalfClose is a connection with no CloseWrite -- a Windows named pipe, or
+// noHalfClose is a connection with no CloseWrite: a Windows named pipe, or
 // anything wrapped enough to lose the method.
 type noHalfClose struct {
 	net.Conn

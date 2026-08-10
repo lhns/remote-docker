@@ -128,7 +128,7 @@ const cwdSuffix = "cwd"
 // It handles /cwd as well as /m/<id>, which matters more than it looks:
 // registering the working directory as a bind source returns the existing
 // /cwd share rather than minting a second one for the same directory, so the
-// commonest bind of all -- `-v .:/app` -- arrives here as "/cwd".
+// commonest bind of all, `-v .:/app`, arrives here as "/cwd".
 func VolumeNameForExport(exportPath string) (string, error) {
 	if exportPath == ExportCWD {
 		return VolumeNamePrefix + cwdSuffix, nil

@@ -13,7 +13,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 )
 
-// APIClient makes Docker API calls of our own -- creating the volumes that
+// APIClient makes Docker API calls of our own: creating the volumes that
 // back rewritten binds, and reading container state for port forwarding.
 //
 // It is deliberately tiny rather than the official SDK: we need three calls,
@@ -216,7 +216,7 @@ func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
 
 	// Decoded straight into the type the caller wants. There used to be a
 	// proxy.Volume declared here, identical to rewrite.Volume down to its doc
-	// comment, and a loop converting one to the other -- a conversion that
+	// comment, and a loop converting one to the other, a conversion that
 	// existed only because the same struct was written twice.
 	var payload struct {
 		Volumes []rewrite.Volume

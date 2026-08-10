@@ -18,7 +18,7 @@ func plan(t *testing.T, account string, opts Options) Spec {
 // The one that would be catastrophic.
 //
 // A user's daemon holds their running containers, their images and their
-// volumes. `--rm` would delete all of it the moment the daemon stopped -- on a
+// volumes. `--rm` would delete all of it the moment the daemon stopped: on a
 // restart, on an OOM kill, on a redeploy, and the user would have no idea
 // why their work evaporated. elevate's child DOES take --rm because it is a
 // singleton whose state is worthless; copying that here would be the single
@@ -136,7 +136,7 @@ func TestTheGraphVolumeIsMountedByName(t *testing.T) {
 }
 
 // A deployment on a Ceph-backed graph volume sets fuse-overlayfs, and it is
-// not inherited -- each account's daemon has to be told.
+// not inherited, so each account's daemon has to be told.
 func TestTheStorageDriverIsPropagated(t *testing.T) {
 	spec := plan(t, "alice", Options{StorageDriver: "fuse-overlayfs"})
 	command := strings.Join(spec.Command, " ")
@@ -194,7 +194,7 @@ func TestLabelValue(t *testing.T) {
 // Found in CI rather than by reasoning: after a workspace restart every
 // account's daemon stayed down until that account next connected, so adoption
 // found nothing to adopt and a detached container, which survives its
-// author's disconnect by design -- did not survive the restart.
+// author's disconnect by design, did not survive the restart.
 func TestADaemonAsksToBeRestarted(t *testing.T) {
 	spec := plan(t, "alice", Options{})
 
@@ -263,7 +263,7 @@ func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 }
 
 // The entrypoint is set, because the image is the workspace's own and its
-// entrypoint is the agent -- left alone the daemon container would run
+// entrypoint is the agent, so left alone the daemon container would run
 // `remote-dockerd` handed dockerd's flags.
 func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
 	spec := plan(t, "alice", Options{})
@@ -287,7 +287,7 @@ func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
 }
 
 // The image defaults to the workspace's own, which is the only one known to
-// carry fuse-overlayfs -- stock docker:dind does not, and a per-account daemon
+// carry fuse-overlayfs. Stock docker:dind does not, and a per-account daemon
 // inheriting that driver on the stock image dies in a restart loop with
 // `exec: "fuse-overlayfs": executable file not found in $PATH`.
 func TestTheImageDefaultsToWhateverTheWorkspaceRuns(t *testing.T) {

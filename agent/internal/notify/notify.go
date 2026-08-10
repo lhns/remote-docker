@@ -41,8 +41,8 @@ type Volumes interface {
 
 // Poker performs the operation that makes a watcher notice a path.
 //
-// An interface so the protocol above it -- framing, validation, path
-// resolution, coarsening -- is testable on a machine with no Linux kernel,
+// An interface so the protocol above it (framing, validation, path
+// resolution, coarsening) is testable on a machine with no Linux kernel,
 // which is every development machine this project has.
 type Poker interface {
 	Poke(path string, isDir bool) error
@@ -158,8 +158,8 @@ func (r *Replayer) apply(ctx context.Context, frame workspace.NotifyFrame) {
 			// Deliberately NOT open(O_CREAT), even though that was measured to
 			// produce a real IN_CREATE. Between the client observing the
 			// creation and this replay the file may have been deleted again,
-			// and O_CREAT would then create it -- writing to the user's own
-			// filesystem, through the very export we are notifying about.
+			// and O_CREAT would then create it, writing to the user's own
+			// filesystem through the very export we are notifying about.
 			// Replay must never mutate; IN_CREATE is worth less than that.
 			r.poke(ctx, e.Export, e.Path, e.Dir)
 			note(e.Export, parentDir(e.Path))
@@ -202,8 +202,8 @@ func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
 // the same export for the interactive shell, and separate mounts of one export
 // do not share an inode the way dockerd's bind mount does, so each had to be
 // poked separately. That mount went with ADR 0018 and only dockerd's volume
-// remains. The finding is worth keeping even though the code it justified is
-// not -- if a second mount ever returns, one poke will silently not reach it.
+// remains. Worth keeping even though the code it justified is gone: if a
+// second mount ever returns, one poke will silently not reach it.
 func (r *Replayer) root(ctx context.Context, export string) (string, bool) {
 	mp, err := r.mountpoint(ctx, export)
 	if err != nil || mp == "" {
@@ -267,7 +267,7 @@ func resolve(root, share string) (string, bool) {
 // The check both callers need, in one place, because it is the one that must
 // not be got wrong: JOINING IS NOT CONTAINMENT. path.Join and filepath.Join
 // both CLEAN, so joining "/proc/42/root" to "/../../etc/shadow" yields
-// "/proc/etc/shadow" -- outside the root, with no error, looking correct.
+// "/proc/etc/shadow": outside the root, with no error, looking correct.
 //
 // The separator is a parameter because the two callers genuinely differ:
 // resolve works in the agent's own filesystem and uses filepath so its tests
@@ -302,7 +302,7 @@ func (r *Replayer) log() *slog.Logger {
 	return r.Log
 }
 
-// debug is for the ordinary, expected failures -- a path that has changed
+// debug is for the ordinary, expected failures: a path that has changed
 // again, a container that never looked at it. A level now rather than a
 // separate do-nothing method, so raising it is a handler's decision instead of
 // an edit here.

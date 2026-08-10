@@ -24,7 +24,7 @@ const userEnvKey = `Environment`
 //
 // NEVER `setx`. It is the obvious way to do this and it is destructive: setx
 // truncates the value at 1024 characters, so a PATH longer than that, which
-// is most developer machines -- is silently CUT SHORT, and everything past the
+// is most developer machines, is silently CUT SHORT, and everything past the
 // cut is gone from the account for good. The registry is the interface;
 // setx is a wrapper around it with a limit the registry does not have.
 func ensurePATH(out io.Writer, dir string) (bool, error) {
@@ -60,7 +60,7 @@ func ensurePATH(out io.Writer, dir string) (bool, error) {
 
 	// The type is PRESERVED rather than chosen. A PATH holding %USERPROFILE%
 	// is REG_EXPAND_SZ, and rewriting it as REG_SZ would leave the percent
-	// signs as literal characters -- every entry using one silently stops
+	// signs as literal characters, so every entry using one silently stops
 	// resolving.
 	if valueType == registry.EXPAND_SZ {
 		err = key.SetExpandStringValue("Path", updated)
@@ -114,7 +114,7 @@ func removePATH(out io.Writer, dir string) error {
 //
 // Explorer and anything else listening will pick the new PATH up for the
 // programs they launch afterwards. A shell that is ALREADY open keeps the
-// environment it was started with -- nothing can change that from outside --
+// environment it was started with, which nothing can change from outside,
 // which is why the caller says so in as many words.
 //
 // SendMessageTimeout rather than SendMessage: a single hung top-level window

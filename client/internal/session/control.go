@@ -46,7 +46,7 @@ func (s *Session) releaseIfIdle() {
 // running container of ours may have published ports whose forwards exist only
 // while we are connected.
 //
-// A third used to be listed here -- an interactive shell using the ~/workspace
+// A third used to be listed here: an interactive shell using the ~/workspace
 // mount, and was counted separately on liveConn. It never reached this
 // function: Shell holds its gate lease for its whole life, and sweep bails on
 // users > 0 long before busy is consulted. Now that every stream holds its
@@ -55,7 +55,7 @@ func (s *Session) releaseIfIdle() {
 //
 // The volume match is scoped to volumes WE created. It used to accept any
 // rd- prefix, so on a shared daemon (ADR 0012) another account's volume pinned
-// this connection open forever -- an idle release that could never fire, for a
+// this connection open forever: an idle release that could never fire, for a
 // dependency that was not ours.
 func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
 	containers, err := live.api.ListContainers(ctx)
@@ -222,7 +222,7 @@ func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	}
 	// Never used means idle since the session began, not idle for no time at
 	// all. Reading the zero time as "just now" meant a daemon that had served
-	// nothing could never expire -- the one case where reclaiming it is most
+	// nothing could never expire, which is the case where reclaiming it is most
 	// obviously right, and the case `start` leaves behind every time somebody
 	// opens a session and then does not use it.
 	if last.IsZero() {

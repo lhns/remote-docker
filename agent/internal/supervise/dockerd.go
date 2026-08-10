@@ -99,7 +99,7 @@ func (d *Dockerd) runOnce(ctx context.Context) error {
 // WaitReady blocks until the daemon's socket appears, or the timeout passes.
 //
 // Callers should not treat a timeout as fatal. The workspace is still worth
-// serving without a daemon -- a user can log in and see what went wrong, which
+// serving without a daemon: a user can log in and see what went wrong, which
 // is more useful than a container that exits and takes the evidence with it.
 func (d *Dockerd) WaitReady(ctx context.Context) error {
 	d.applyDefaults()

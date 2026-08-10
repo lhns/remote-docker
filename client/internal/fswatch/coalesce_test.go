@@ -129,7 +129,7 @@ func TestFlushIsInArrivalOrder(t *testing.T) {
 	}
 }
 
-// Over capacity, individual paths stop being remembered -- that is what being
+// Over capacity, individual paths stop being remembered, which is what being
 // over capacity means, but the loss is never silent.
 func TestPendingCapProducesANotice(t *testing.T) {
 	c := newCoalescer(10*time.Millisecond, time.Second, 2)

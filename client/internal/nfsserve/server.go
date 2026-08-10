@@ -62,7 +62,7 @@ func (s *Server) Serve(l net.Listener) error {
 //
 // This is where the virtual namespace lives. go-nfs hands us the requested
 // directory and lets us return the filesystem for it, so each mount gets a
-// filesystem bound to its own share -- no mux filesystem, and no path in one
+// filesystem bound to its own share. No mux filesystem, and no path in one
 // share can address another.
 type mountHandler struct {
 	registry *Registry

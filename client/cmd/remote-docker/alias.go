@@ -26,7 +26,7 @@ const dockerName = "docker"
 // invokedAsDocker reports whether this process was started under the name
 // docker.
 //
-// os.Args[0], never os.Executable(). The second RESOLVES SYMLINKS -- on Linux
+// os.Args[0], never os.Executable(). The second RESOLVES SYMLINKS: on Linux
 // it reads /proc/self/exe, so it reports "remote-docker" for exactly the
 // installation this feature creates, and the feature would be silently dead on
 // the platform where the symlink is the good answer. argv[0] is the name the
