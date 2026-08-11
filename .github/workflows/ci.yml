@@ -141,6 +141,11 @@ jobs:
       matrix:
         goos: [windows, linux, darwin]
         goarch: [amd64, arm64]
+        # Android added as legs rather than as a row of the grid, so that the
+        # windows/darwin/linux cross product stays what it is.
+        include:
+          - goos: android
+            goarch: arm64
     steps:
       - uses: actions/checkout@v7
         with:

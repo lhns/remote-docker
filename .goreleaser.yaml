@@ -29,14 +29,57 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    ldflags:
+    ldflags: &ldflags
       - -s -w -X main.version={{.Version}} -X github.com/docker/compose/v5/internal.Version={{ .Env.COMPOSE_VERSION }}
     goos: [windows, linux, darwin]
     goarch: [amd64, arm64]
 
+  # Android is its own GOOS, and has to be.
+  #
+  # The Linux build will not run there, in two ways that have to be fixed
+  # together, so fixing either one alone just reaches the next message:
+  #
+  #   has unexpected e_type: 2
+  #     Android has required position-independent executables since Android 5.
+  #     Go's default is ET_EXEC, which is the 2.
+  #   executable's TLS segment is underaligned:
+  #   alignment is 8, needs to be at least 64 for ARM64 Bionic
+  #     what a linux/arm64 PIE gets instead. Go emits PT_TLS with align 8, and
+  #     bionic requires 64.
+  #
+  # And -buildmode=pie on Linux is not a fix even ignoring that, because it
+  # makes the binary DYNAMIC: it gains PT_INTERP /lib/ld-linux-aarch64.so.1 and
+  # so requires glibc, which is a regression everywhere the current static
+  # binary works today, Alpine first among them.
+  #
+  # GOOS=android answers all of it. It is ET_DYN, it emits no PT_TLS at all, and
+  # its interpreter is /system/bin/linker64, which is the one the device has.
+  # No -buildmode needed: that is already the default there.
+  #
+  #   go run ./path/to/an/elf/reader   is the check; the three facts to read off
+  #   a binary are its ELF type, its PT_TLS alignment and its PT_INTERP.
+  #
+  # arm64 only, and not by preference: android/amd64 refuses to build without
+  # cgo, so it would make the NDK a build dependency here and at release time.
+  # arm64 links internally and needs nothing. x86 Android is emulators and
+  # Chromebooks, which is not worth carrying an NDK for until somebody asks.
+  #
+  # Loadable is all this claims. Nothing has been run on Android.
+  - id: remote-docker-android
+    main: ./cmd/remote-docker
+    dir: client
+    binary: remote-docker
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags: *ldflags
+    goos: [android]
+    goarch: [arm64]
+
 archives:
   - id: remote-docker
-    ids: [remote-docker]
+    ids: [remote-docker, remote-docker-android]
     # A zip on Windows and a tarball elsewhere, matching what each platform's
     # tooling expects to be handed.
     formats: [tar.gz]
