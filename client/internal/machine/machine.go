@@ -65,6 +65,18 @@ type Spec struct {
 
 	// Account is the workspace account this machine's owner logs in as.
 	Account string
+
+	// PublicKey is the key that account logs in with.
+	//
+	// Part of the Spec because one backend needs it at creation: a Hyper-V
+	// machine has no door but the SSH this key opens, so the key goes into the
+	// Ignition document or it never gets in at all. The WSL backend writes it
+	// afterwards through Enrol, which is why this is not the only path.
+	//
+	// Deliberately NOT part of Generation. A rotated key would otherwise mean a
+	// rebuild deciding itself, and a rebuild discards every image in the
+	// machine (ADR 0026).
+	PublicKey string
 }
 
 // Generation identifies a Spec, so a machine built from older settings can be

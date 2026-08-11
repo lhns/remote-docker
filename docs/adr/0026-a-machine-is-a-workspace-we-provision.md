@@ -50,6 +50,37 @@ machine that had stopped two and a half minutes after its own agent reported it
 was listening. So locating a machine starts it, and starting a running machine
 is what keeps it running.
 
+## Both backends are located the same way, and Hyper-V uses no hvsock
+
+The design for Hyper-V originally called for Hyper-V sockets, on the argument
+that they avoid discovering a NAT address that changes on every boot -- the
+fragile thing tools in this space get wrong first.
+
+That argument was answered by building WSL. Discovering the address is one
+platform call per connection, it is measured, and it costs no agent change at
+all. hvsock would have meant a pluggable listener in the agent, an AF_HYPERV
+listener on the Linux side, a service GUID registered per machine on the host,
+and a new dependency -- all of it in code no CI can execute and nobody involved
+can run. The same reasoning that makes the decisions pure functions says to pick
+the transport that adds nothing untestable.
+
+So a Hyper-V machine is on the Default Switch, which is NAT with DHCP that
+Hyper-V maintains itself, and `Address` asks `Get-VMNetworkAdapter`. If that
+turns out not to work on a real machine, hvsock is still there, and this record
+is where to start.
+
+Two things do differ from WSL, and both are the platform rather than a choice:
+
+- **A Hyper-V machine has no idle timeout**, so its `Hold` is nothing. A WSL
+  distribution shuts down when nobody is in it, which is the harder case and the
+  one the interface is shaped by.
+- **A key can only be enrolled at creation.** The guest is Linux, so PowerShell
+  Direct does not apply, and the only door is the SSH the key is for. The key
+  goes into the Ignition document, its fingerprint into the VM's Notes, and
+  `Enrol` on an existing machine reports a mismatch rather than writing
+  anything. It is deliberately not part of the generation: a rotated key would
+  then trigger a rebuild on its own, and a rebuild discards every image.
+
 **Nothing is installed at provisioning time.** No package manager runs, on any
 path, ever. The unit of change is a published artifact named in that block, and
 moving between versions replaces the artifact rather than mutating what is

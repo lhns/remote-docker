@@ -63,7 +63,7 @@ type machineOptions struct {
 func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.backend, "backend", "wsl", "wsl or hyperv")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
-		"the workspace image's filesystem, as a tar file")
+		"what the machine is built from: the workspace image's filesystem as a tar file (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
 	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
 
@@ -159,6 +159,15 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return err
 	}
 
+	// Read before anything is built. One backend needs it at creation and the
+	// other writes it afterwards, and failing on a missing key after building a
+	// machine would leave one nobody can reach.
+	key, err := enrolledPublicKey()
+	if err != nil {
+		return err
+	}
+	spec.PublicKey = key
+
 	observed, err := backend.Inspect(ctx, name)
 	if err != nil {
 		return fmt.Errorf("cannot tell what is there: %w", err)
@@ -226,11 +235,8 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 
 	// Enrolled every time, including when nothing else happened: it is how a
-	// rotated key reaches an existing machine without a rebuild.
-	key, err := enrolledPublicKey()
-	if err != nil {
-		return err
-	}
+	// rotated key reaches an existing machine without a rebuild. On a backend
+	// where that is impossible it reports rather than writes.
 	if err := backend.Enrol(ctx, name, spec.Account, key); err != nil {
 		return fmt.Errorf("enrolling this machine's key: %w", err)
 	}
