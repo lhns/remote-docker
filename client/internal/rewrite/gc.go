@@ -58,9 +58,17 @@ type Collector struct {
 	// be.
 	//
 	// Empty collects regardless, which is what a workspace only ever reached
-	// from one machine wants and what an explicit sweep of volumes left by an
-	// older version needs.
+	// from one machine wants.
 	Client string
+
+	// Orphans also collects volumes that name NO machine, which is what a
+	// version before machines were named left behind, or what this machine
+	// left when its key was replaced.
+	//
+	// It widens by exactly that and no further. Collecting everything with the
+	// right account instead would take the OTHER machine's volumes, which is
+	// the failure this whole scoping exists to prevent.
+	Orphans bool
 
 	// Guard is shared with the Rewriter. Without it this can delete a volume a
 	// concurrent `docker run` created a moment ago and has not yet referenced
@@ -156,8 +164,13 @@ func (c *Collector) ours(v Volume) bool {
 	// named. It is left alone here rather than treated as ours, because "no
 	// label" is not "mine": an older session of the other machine may still be
 	// using it. `remote gc --orphans` is how those go, deliberately by asking.
-	if c.Client != "" && v.Labels[ClientLabel] != c.Client {
-		return false
+	if c.Client != "" {
+		switch client := v.Labels[ClientLabel]; {
+		case client == c.Client:
+		case client == "" && c.Orphans:
+		default:
+			return false
+		}
 	}
 	return true
 }

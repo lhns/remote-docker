@@ -157,3 +157,44 @@ func TestCollectWithoutOwner(t *testing.T) {
 		t.Error("an unmanaged volume was removed")
 	}
 }
+
+// A machine collects its own volumes and never another machine's.
+//
+// One account used from two computers labels both the same, so the account is
+// not enough to tell them apart. Losing one is not a tidy failure: the daemon
+// recreates a missing named volume as an empty local one, so the container
+// starts with an empty directory where the project should be.
+func TestCollectorLeavesAnotherMachineAlone(t *testing.T) {
+	mine := Volume{
+		Name:   "rd-aabbccdd-0123456789abcdef",
+		Labels: map[string]string{ManagedLabel: "share", OwnerLabel: "alice", ClientLabel: "aabbccdd"},
+	}
+	theirs := Volume{
+		Name:   "rd-11223344-0123456789abcdef",
+		Labels: map[string]string{ManagedLabel: "share", OwnerLabel: "alice", ClientLabel: "11223344"},
+	}
+	unnamed := Volume{
+		Name:   "rd-0123456789abcdef",
+		Labels: map[string]string{ManagedLabel: "share", OwnerLabel: "alice"},
+	}
+
+	c := &Collector{Owner: "alice", Client: "aabbccdd"}
+	if !c.ours(mine) {
+		t.Error("a machine does not recognise its own volume")
+	}
+	if c.ours(theirs) {
+		t.Error("a machine claimed another machine's volume")
+	}
+	if c.ours(unnamed) {
+		t.Error("a volume naming no machine was claimed without --orphans")
+	}
+
+	// --orphans widens by exactly the unnamed ones.
+	c.Orphans = true
+	if !c.ours(unnamed) {
+		t.Error("--orphans did not reach a volume naming no machine")
+	}
+	if c.ours(theirs) {
+		t.Error("--orphans reached the other machine's volumes")
+	}
+}

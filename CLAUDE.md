@@ -458,6 +458,14 @@ at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
 is in the `docker` group, and that restarting the agent adopts the running
 daemons with their containers intact.
 
+A suite of its own, `test/two-clients.sh`, runs ONE account from TWO client
+machines at the same time (ADR 0029): two state directories with a key each,
+both enrolled in one key file. It proves neither is refused its reverse tunnel,
+that the workspace recorded a different port for each, that each container reads
+ITS OWN machine's file through a bind mount, that both see a container the other
+started, and that a collection on one leaves the other's volumes alone and its
+mounts working.
+
 A fourth suite, `.github/workflows/machine.yml`, is the only one that runs a
 WINDOWS machine end to end. A Linux job exports the workspace image as a rootfs;
 a windows-latest job imports it with the real client and proves the thing the

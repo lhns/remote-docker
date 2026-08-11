@@ -213,3 +213,30 @@ jobs:
       - name: workspace logs on failure
         if: failure()
         run: docker logs remote-docker-peruser 2>&1 | tail -100 || true
+
+  # One account from TWO machines at once (ADR 0029), which is the only way to
+  # test the claim at all: the two clients need separate state directories and
+  # separate keys, and the thing being proven is that they hold sessions at the
+  # same time rather than one after the other.
+  two-clients:
+    name: two machines, one account
+    runs-on: ubuntu-latest
+    needs: nfs-capability
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      - name: run the suite
+        run: bash test/two-clients.sh
+
+      - name: workspace logs on failure
+        if: failure()
+        run: docker logs remote-docker-twoclients 2>&1 | tail -100 || true

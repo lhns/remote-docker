@@ -125,15 +125,34 @@ func (live *liveConn) close() {
 	}
 }
 
+// CollectOptions widens what a collection is allowed to remove.
+type CollectOptions struct {
+	// Orphans also removes unused share volumes that name no machine.
+	//
+	// Those are what a version before machines were named left behind, or what
+	// this machine left when its key was replaced. Asked for rather than
+	// assumed, because "names no machine" is not "mine": another of this
+	// account's machines running an older build may still be using one.
+	Orphans bool
+}
+
 // Collect removes share volumes this account is no longer using.
-func (s *Session) Collect(ctx context.Context) (int, error) {
+func (s *Session) Collect(ctx context.Context, opts ...CollectOptions) (int, error) {
 	live, done, err := s.acquire(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer done()
 
-	n, err := s.collector(live).Collect(ctx)
+	collector := s.collector(live)
+	if len(opts) > 0 && opts[0].Orphans {
+		// Widened to volumes naming no machine, and NOT to every machine's:
+		// clearing Client entirely would collect the other computer's, which
+		// is the failure the scoping exists to prevent.
+		collector.Orphans = true
+	}
+
+	n, err := collector.Collect(ctx)
 	if err == nil {
 		s.pruneShareRecord(ctx, live)
 	}
