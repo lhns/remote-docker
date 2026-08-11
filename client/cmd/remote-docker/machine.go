@@ -201,6 +201,16 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	// that hands the user a workspace whose first command fails with a refused
 	// connection.
 	//
+	// Held open for the whole wait. Without this the machine shuts down about
+	// thirty seconds in, restarts on the next poke, and its dockerd never gets
+	// far enough to be ready -- so the agent never listens and the wait times
+	// out against a machine that keeps starting from scratch.
+	hold, err := machine.Hold(ctx, spec.Backend, name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = hold.Close() }()
+
 	// Located, not assumed. The machine answers at its own address on a virtual
 	// network, and not on this computer's loopback: with WSL that would depend
 	// on its localhost relay, which was measured refusing the connection while
@@ -211,14 +221,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return err
 	}
 
-	// Kept warm while waiting, because a machine with nobody in it goes away.
-	// WSL shuts a distribution down when it is idle, and a TCP connection from
-	// Windows is not use it counts -- so the first attempt at this dialled a
-	// machine that had already stopped, three minutes after its agent said it
-	// was listening. Start is the poke: it starts a stopped machine and counts
-	// as use of a running one. A failed poke is not reported, because what
-	// matters is whether the agent answers and that is what the wait says.
-	if err := waitForAgent(ctx, host, spec.Port, func() { _ = backend.Start(ctx, name) }); err != nil {
+	if err := waitForAgent(ctx, host, spec.Port); err != nil {
 		return err
 	}
 
@@ -240,17 +243,11 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 // A dial rather than a handshake: this is asking whether the listener is open,
 // and anything further is the session's job to report properly. The timeout is
 // generous because a machine's first start does more than a later one.
-func waitForAgent(ctx context.Context, host string, port int, keepWarm func()) error {
+func waitForAgent(ctx context.Context, host string, port int) error {
 	addr := net.JoinHostPort(host, fmt.Sprint(port))
 	deadline := time.Now().Add(agentStartTimeout)
 
-	for attempt := 0; time.Now().Before(deadline); attempt++ {
-		// Every tenth second of waiting, which is well inside the idle timeout
-		// and cheap: a poke is one process that runs `true`.
-		if attempt%10 == 0 && keepWarm != nil {
-			keepWarm()
-		}
-
+	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err == nil {
 			_ = conn.Close()

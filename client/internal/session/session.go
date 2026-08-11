@@ -161,6 +161,10 @@ type liveConn struct {
 	// not support it or watching is off.
 	notify io.Closer
 
+	// machine holds a local machine open, nil for a workspace that is simply
+	// there. Closing it lets the machine shut itself down.
+	machine io.Closer
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }

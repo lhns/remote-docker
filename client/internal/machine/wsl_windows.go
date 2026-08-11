@@ -11,6 +11,7 @@ package machine
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -143,6 +144,35 @@ func (b wslBackend) Start(ctx context.Context, name string) error {
 	_, err := b.wsl(ctx, wslRunArgs(WSLName(name), "true")...)
 	return err
 }
+
+// Hold opens a session that stays open, which is what keeps a distribution
+// running. See Backend.Hold for why a poke is not enough.
+//
+// `sleep` with a large number rather than `sleep infinity`: busybox is what an
+// alpine rootfs has, and its sleep does not take a word. A day is far longer
+// than any session and the process dies with its context anyway.
+func (b wslBackend) Hold(ctx context.Context, name string) (io.Closer, error) {
+	held, cancel := context.WithCancel(context.WithoutCancel(ctx))
+
+	cmd := exec.CommandContext(held, "wsl.exe", wslRunArgs(WSLName(name), "sleep", "86400")...)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("holding the machine %q open: %w", name, err)
+	}
+
+	return closerFunc(func() error {
+		cancel()
+		// Reaped, so the process does not outlive the program that started it.
+		// The error is the kill itself and says nothing a caller can act on.
+		_ = cmd.Wait()
+		return nil
+	}), nil
+}
+
+// closerFunc makes a func into an io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 func (b wslBackend) Address(ctx context.Context, name string) (string, error) {
 	out, err := b.wsl(ctx, wslAddressArgs(WSLName(name))...)

@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -214,6 +215,21 @@ type Backend interface {
 	Enrol(ctx context.Context, name, account, publicKey string) error
 	Start(ctx context.Context, name string) error
 
+	// Hold keeps the machine from going away, until the returned Closer is
+	// closed.
+	//
+	// A machine with nobody in it shuts down, and what counts as somebody is
+	// not what you would expect: WSL counts its own sessions, so a TCP
+	// connection from the host does not, and neither does a command that runs
+	// and exits. Poking one every ten seconds was measured failing exactly that
+	// way -- the machine started, ran for about thirty seconds, stopped, and
+	// started again on the next poke, so its dockerd never got far enough to be
+	// ready and its agent never opened a listener.
+	//
+	// So the hold is one session that stays open, and it is the caller's job to
+	// keep it for as long as the machine is needed.
+	Hold(ctx context.Context, name string) (io.Closer, error)
+
 	// Address is where this machine can be reached from here.
 	//
 	// Asked rather than assumed, and asked every time. A local machine is on a
@@ -224,6 +240,16 @@ type Backend interface {
 
 	Stop(ctx context.Context, name string) error
 	Destroy(ctx context.Context, name string) error
+}
+
+// Hold keeps a machine alive until the returned Closer is closed. See
+// Backend.Hold.
+func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
+	backend, err := Find(backendName)
+	if err != nil {
+		return nil, err
+	}
+	return backend.Hold(ctx, name)
 }
 
 // Locate starts a machine if it is stopped and returns where to reach it.

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"time"
@@ -46,9 +47,18 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// comes through this function -- a check at `machine create` would be right
 	// for the first connection and wrong for every one after a reboot.
 	host := s.opts.Config.Host
+	var hold io.Closer
 	if m := s.opts.Config.Machine; m != nil {
+		// Held first, for as long as this connection lives. A machine with
+		// nobody in it shuts down, and an open TCP connection is not somebody:
+		// WSL counts its own sessions, so without this the machine can go away
+		// underneath a working session.
+		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
+			return nil, err
+		}
 		host, err = machine.Locate(ctx, m.Backend, m.Name)
 		if err != nil {
+			_ = hold.Close()
 			return nil, err
 		}
 	}
@@ -74,7 +84,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// files are owned by whoever will read them.
 	s.registry.SetAttrs(attrsFor(info))
 
-	live := &liveConn{ssh: client, info: info}
+	live := &liveConn{ssh: client, info: info, machine: hold}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	// One guard for this connection, shared by the two things that disagree
 	// about a volume's lifetime. See rewrite.Guard.
