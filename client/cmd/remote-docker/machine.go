@@ -1,0 +1,355 @@
+package main
+
+// `remote machine`: the Linux system a workspace runs on, when this machine
+// has none.
+//
+// What these commands produce is an ordinary workspace (ADR 0026). `remote ls`
+// lists it, `remote use` selects it, `docker run` reaches it through the same
+// session, the same NFS export and the same rewriting as a host in another
+// country. The only command that knows the difference is `rm`, which has a
+// machine to destroy as well as an entry to delete.
+
+import (
+	"context"
+	"fmt"
+	"io"
+
+	"github.com/spf13/cobra"
+
+	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/client/internal/machine"
+	"github.com/lhns/remote-docker/client/internal/sshx"
+)
+
+func newMachineCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "machine",
+		Short: "Create and manage the local Linux system a workspace runs on",
+		Long: `Provisions a Linux system on this machine and registers it as a workspace.
+
+What comes out is an ordinary workspace: "remote ls" lists it and docker
+commands reach it exactly as they reach one on another host. These commands are
+its lifecycle, and nothing else treats it specially.
+
+Nothing is installed. The machine is the workspace image's filesystem, and
+changing versions replaces it rather than upgrading it, so there is no
+half-finished state to be in. "rebuild" is the ordinary path run again, and it
+discards what is inside the machine: images and containers, never your files,
+which live here and are served to it.`,
+		Args: onlySubcommands,
+		RunE: helpWhenBare,
+	}
+	cmd.AddCommand(
+		newMachineCreateCommand(),
+		newMachineStartCommand(),
+		newMachineStopCommand(),
+		newMachineRebuildCommand(),
+		newMachineStatusCommand(),
+	)
+	return cmd
+}
+
+// machineOptions are the settings a machine is built from, shared by create
+// and rebuild so the two cannot drift into building different things.
+type machineOptions struct {
+	backend  string
+	rootfs   string
+	cpus     int
+	memoryMB int
+}
+
+func (o *machineOptions) install(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&o.backend, "backend", "wsl", "wsl or hyperv")
+	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
+		"the workspace image's filesystem, as a tar file")
+	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
+	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
+
+	// No --port or --user here. `remote` already carries both persistently and
+	// they mean exactly this, so declaring them again would put two flags of
+	// the same name on one command line -- where pflag silently skips the
+	// duplicate and which one wins depends on where it was declared. That is
+	// the hazard ADR 0024 moved our flags off the root to avoid, and it would
+	// be a poor thing to reintroduce two levels down.
+}
+
+// spec turns the flags and a name into what the backend is asked to build.
+//
+// The port and the account come from `remote`'s own flags, which is where they
+// already live, falling back to the same defaults the resolver uses so that a
+// machine and a hand-written workspace agree about what "unset" means.
+func (o *machineOptions) spec(name string) machine.Spec {
+	account := overrides.User
+	if account == "" {
+		account = config.DefaultUser()
+	}
+	port := overrides.Port
+	if port == 0 {
+		port = config.DefaultSSHPort
+	}
+	return machine.Spec{
+		Name:     name,
+		Backend:  o.backend,
+		Rootfs:   o.rootfs,
+		Port:     port,
+		CPUs:     o.cpus,
+		MemoryMB: o.memoryMB,
+		Account:  account,
+	}
+}
+
+func newMachineCreateCommand() *cobra.Command {
+	var opts machineOptions
+
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a machine and register it as a workspace",
+		Long: `Creates the Linux system, enrols this machine's key in it, and writes the
+workspace and its docker context.
+
+Idempotent: run against a machine that already matches, it says so and does
+nothing. Run against one built from different settings, it reports the mismatch
+rather than acting on it, because recreating discards what is inside and that
+is not a thing a create command should decide.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return createMachine(cmd, args[0], opts.spec(args[0]), false)
+		},
+	}
+	opts.install(cmd)
+	return cmd
+}
+
+func newMachineRebuildCommand() *cobra.Command {
+	var opts machineOptions
+
+	cmd := &cobra.Command{
+		Use:   "rebuild <name>",
+		Short: "Destroy and recreate the machine",
+		Long: `Destroys the machine and builds it again from the same settings.
+
+This is the repair path, and it is the ordinary path run again rather than a
+special mode: the machine is defined entirely by its configuration, so there is
+nothing to repair in place.
+
+Images, containers and volumes INSIDE the machine are lost. Your files are not:
+they are on this machine and are served to it.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return createMachine(cmd, args[0], opts.spec(args[0]), true)
+		},
+	}
+	opts.install(cmd)
+	return cmd
+}
+
+// createMachine is the whole of create and rebuild, which differ only in
+// whether they are allowed to destroy what is there.
+func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild bool) error {
+	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+
+	backend, err := machine.Find(spec.Backend)
+	if err != nil {
+		return err
+	}
+	if err := backend.Available(ctx); err != nil {
+		return err
+	}
+
+	observed, err := backend.Inspect(ctx, name)
+	if err != nil {
+		return fmt.Errorf("cannot tell what is there: %w", err)
+	}
+
+	switch action := machine.Plan(spec, observed); {
+	case rebuild && observed.State != machine.Absent:
+		_, _ = fmt.Fprintf(out, "destroying %q; images and containers inside it are lost\n", name)
+		if err := backend.Destroy(ctx, name); err != nil {
+			return fmt.Errorf("destroying %s: %w", name, err)
+		}
+		fallthrough
+
+	case action == machine.Create:
+		_, _ = fmt.Fprintf(out, "creating the %s machine %q\n", spec.Backend, spec.Name)
+		if err := backend.Create(ctx, spec); err != nil {
+			return fmt.Errorf("creating %s: %w", name, err)
+		}
+
+	case action == machine.Start:
+		_, _ = fmt.Fprintf(out, "%q exists and matches; starting it\n", name)
+		if err := backend.Start(ctx, name); err != nil {
+			return fmt.Errorf("starting %s: %w", name, err)
+		}
+
+	case action == machine.Recreate:
+		// Reported, not acted on. Recreating discards everything inside, and a
+		// create command deciding that on somebody's behalf is the surprise
+		// this whole design exists to avoid.
+		return fmt.Errorf("%q was built from different settings\n"+
+			"  fix: `%s` to destroy and rebuild it, which discards its images and containers",
+			name, ourCommand("machine rebuild "+name))
+
+	default:
+		_, _ = fmt.Fprintf(out, "%q already matches; nothing to do\n", name)
+	}
+
+	// Enrolled every time, including when nothing else happened: it is how a
+	// rotated key reaches an existing machine without a rebuild.
+	key, err := enrolledPublicKey()
+	if err != nil {
+		return err
+	}
+	if err := backend.Enrol(ctx, name, spec.Account, key); err != nil {
+		return fmt.Errorf("enrolling this machine's key: %w", err)
+	}
+
+	return saveMachineWorkspace(cmd, name, spec)
+}
+
+// saveMachineWorkspace writes the workspace entry, which is what makes the
+// machine an ordinary workspace everywhere else.
+func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) error {
+	file, err := config.Load("")
+	if err != nil {
+		return err
+	}
+
+	ws := file.Workspaces[name]
+	ws.Host = "127.0.0.1"
+	ws.Port = spec.Port
+	ws.User = spec.Account
+	ws.Machine = &config.Machine{
+		Backend:    spec.Backend,
+		Name:       spec.Name,
+		Image:      spec.Image,
+		Rootfs:     spec.Rootfs,
+		CPUs:       spec.CPUs,
+		MemoryMB:   spec.MemoryMB,
+		Generation: spec.Generation(),
+	}
+	if err := file.Set(name, ws); err != nil {
+		return err
+	}
+	if file.Default == "" {
+		file.Default = name
+	}
+	if err := config.Save(file, ""); err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+	_, _ = fmt.Fprintf(out, "workspace %q -> %s@127.0.0.1:%d\n", name, spec.Account, spec.Port)
+
+	cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+	if err == nil {
+		reportContext(out, cfg)
+	}
+	_, _ = fmt.Fprintf(out, "\nTry `%s`.\n", programName()+" run --rm -v .:/w alpine ls /w")
+	return nil
+}
+
+// enrolledPublicKey is this machine's public half, generating the pair if this
+// is the first thing that has needed it.
+func enrolledPublicKey() (string, error) {
+	key, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
+	if err != nil {
+		return "", err
+	}
+	return key.AuthorizedKey(config.KeyComment()), nil
+}
+
+func newMachineStartCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "start <name>",
+		Short: "Start the machine",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+				if err := b.Start(ctx, m.Name); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", m.Name)
+				return nil
+			})
+		},
+	}
+}
+
+func newMachineStopCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <name>",
+		Short: "Stop the machine",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+				if err := b.Stop(ctx, m.Name); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "stopped %q\n", m.Name)
+				return nil
+			})
+		},
+	}
+}
+
+func newMachineStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <name>",
+		Short: "Is the machine there, running, and built from the current settings?",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+				observed, err := b.Inspect(ctx, m.Name)
+				if err != nil {
+					return err
+				}
+				out := cmd.OutOrStdout()
+				row(out, "machine", fmt.Sprintf("%s (%s)", m.Name, m.Backend))
+				row(out, "state", observed.State.String())
+				reportGeneration(out, m, observed)
+				return nil
+			})
+		},
+	}
+}
+
+// reportGeneration says whether the machine matches the settings it would be
+// built from now, which is the question `status` is really asked.
+func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
+	switch observed.Generation {
+	case "":
+		row(out, "settings", "cannot be read from the machine")
+	case m.Generation:
+		row(out, "settings", "current")
+	default:
+		rowf(out, "settings", "built from older ones (run `%s`)",
+			ourCommand("machine rebuild "+m.Name))
+	}
+}
+
+// mObserved is machine.Observed, aliased so the signature above reads without
+// a package qualifier in every line.
+type mObserved = machine.Observed
+
+// withMachine looks up a workspace's machine and hands it to fn.
+func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, *config.Machine) error) error {
+	file, err := config.Load("")
+	if err != nil {
+		return err
+	}
+	ws, ok := file.Workspaces[name]
+	if !ok {
+		return fmt.Errorf("no workspace named %q; `%s` shows what there is", name, ourCommand("ls"))
+	}
+	if ws.Machine == nil {
+		return fmt.Errorf("workspace %q is not backed by a machine this program built\n"+
+			"  fix: these commands manage machines created with `%s`",
+			name, ourCommand("machine create <name>"))
+	}
+	backend, err := machine.Find(ws.Machine.Backend)
+	if err != nil {
+		return err
+	}
+	return fn(cmd.Context(), backend, ws.Machine)
+}

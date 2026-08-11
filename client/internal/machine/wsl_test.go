@@ -1,0 +1,162 @@
+package machine
+
+// The WSL backend's decisions, tested on a machine with no WSL.
+//
+// The output samples are real shapes from `wsl -l -v`: UTF-16 with a BOM, an
+// asterisk column for the default distribution, and a header row in whatever
+// language the Windows speaks.
+
+import (
+	"testing"
+	"unicode/utf16"
+)
+
+// utf16le encodes a string the way wsl.exe writes one, so the tests exercise
+// the decoder rather than a convenient fiction.
+func utf16le(s string) []byte {
+	units := utf16.Encode([]rune(s))
+	out := make([]byte, 0, len(units)*2+2)
+	out = append(out, 0xff, 0xfe) // the BOM wsl.exe writes
+	for _, u := range units {
+		out = append(out, byte(u), byte(u>>8))
+	}
+	return out
+}
+
+func TestDecodeWSLOutput(t *testing.T) {
+	// The failure this exists for: read as bytes, UTF-16 looks like text with
+	// a NUL between every character, and every Contains against it fails for a
+	// reason nothing on screen explains.
+	if got := decodeWSLOutput(utf16le("Running\n")); got != "Running\n" {
+		t.Errorf("UTF-16 decoded to %q", got)
+	}
+	// Older builds write plain ASCII, and must still work.
+	if got := decodeWSLOutput([]byte("Running\n")); got != "Running\n" {
+		t.Errorf("ASCII decoded to %q", got)
+	}
+	if got := decodeWSLOutput(nil); got != "" {
+		t.Errorf("empty output decoded to %q", got)
+	}
+}
+
+func TestParseWSLList(t *testing.T) {
+	listing := utf16le(
+		"  NAME                   STATE           VERSION\n" +
+			"* Ubuntu                 Running         2\n" +
+			"  rd-dev                 Stopped         2\n" +
+			"  docker-desktop         Running         2\n" +
+			"  legacy                 Stopped         1\n")
+
+	got := parseWSLList(listing)
+	if len(got) != 4 {
+		t.Fatalf("parsed %d distributions, want 4: %+v", len(got), got)
+	}
+
+	// The asterisk is a COLUMN. Read as part of the name, a machine that
+	// happens to be the user's default is called "*rd-dev" and never found.
+	if got[0].Name != "Ubuntu" {
+		t.Errorf("the default distribution is named %q, want Ubuntu", got[0].Name)
+	}
+	if got[1].Name != "rd-dev" || got[1].State != "Stopped" || got[1].Version != 2 {
+		t.Errorf("rd-dev parsed as %+v", got[1])
+	}
+	if got[3].Version != 1 {
+		t.Errorf("a version 1 distribution parsed as %+v", got[3])
+	}
+}
+
+// The header is skipped by shape rather than by its words, so a Windows in
+// another language does not produce a distribution called "NAME".
+func TestParseWSLListSkipsAHeaderInAnyLanguage(t *testing.T) {
+	german := utf16le(
+		"  NAME                   STATUS          VERSION\n" +
+			"* rd-dev                 Wird ausgeführt 2\n")
+
+	got := parseWSLList(german)
+	if len(got) != 1 {
+		t.Fatalf("parsed %d rows, want 1: %+v", len(got), got)
+	}
+	if got[0].Name != "rd-dev" || got[0].Version != 2 {
+		t.Errorf("parsed %+v", got[0])
+	}
+}
+
+func TestObserveWSL(t *testing.T) {
+	distros := []WSLDistribution{
+		{Name: "Ubuntu", State: "Running", Version: 2},
+		{Name: "rd-dev", State: "Stopped", Version: 2},
+		{Name: "rd-old", State: "Running", Version: 1},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		which string
+		want  State
+	}{
+		{"a stopped machine", "rd-dev", Stopped},
+		{"one that is not there", "rd-missing", Absent},
+
+		// Version 1 cannot run the agent: no real kernel, so no dockerd and no
+		// NFS mount. Reported as absent so the caller creates rather than
+		// starting something that will fail obscurely.
+		{"a version 1 distribution", "rd-old", Absent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := observeWSL(distros, tc.which, "abc"); got.State != tc.want {
+				t.Errorf("observeWSL(%s) = %v, want %v", tc.which, got.State, tc.want)
+			}
+		})
+	}
+
+	// Case, because Windows is.
+	if got := observeWSL(distros, "RD-DEV", "abc"); got.State != Stopped {
+		t.Errorf("a differently cased name was not found: %v", got.State)
+	}
+	if got := observeWSL(distros, "rd-dev", "abc"); got.Generation != "abc" {
+		t.Errorf("the generation was not carried through: %q", got.Generation)
+	}
+}
+
+func TestWSLName(t *testing.T) {
+	// A distribution list is the user's own namespace, holding their Ubuntu
+	// and whatever else. Taking a bare name there is the mistake ADR 0025
+	// records for unix accounts.
+	if got := WSLName("dev"); got != "rd-dev" {
+		t.Errorf("WSLName(dev) = %q", got)
+	}
+}
+
+func TestWSLArgs(t *testing.T) {
+	imp := wslImportArgs("rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`, 2)
+	want := []string{"--import", "rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`, "--version", "2"}
+	for i := range want {
+		if imp[i] != want[i] {
+			t.Fatalf("import args = %v, want %v", imp, want)
+		}
+	}
+
+	run := wslRunArgs("rd-dev", "sh", "-c", "echo hi")
+	// --user root, because an imported rootfs's default user need not stay
+	// root; --cd /, because WSL otherwise starts in the Windows working
+	// directory translated into /mnt, which may not exist.
+	joined := ""
+	for _, a := range run {
+		joined += a + " "
+	}
+	for _, want := range []string{"--user root", "--cd /", "-d rd-dev", "-- sh"} {
+		if !contains(joined, want) {
+			t.Errorf("run args %q are missing %q", joined, want)
+		}
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (func() bool {
+		for i := 0; i+len(needle) <= len(haystack); i++ {
+			if haystack[i:i+len(needle)] == needle {
+				return true
+			}
+		}
+		return false
+	})()
+}

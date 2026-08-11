@@ -1,0 +1,143 @@
+package machine
+
+// The WSL backend's decisions, separated from running anything.
+//
+// Everything here compiles and is tested on every platform; wsl_windows.go is
+// the thin part that actually executes wsl.exe. That split is not tidiness:
+// nobody working on this project has WSL, so the more of it that is a pure
+// function of a string, the more of it has been run before it ships.
+//
+// The two things that are genuinely easy to get wrong are both here. wsl.exe
+// writes UTF-16, so its output is not the ASCII it looks like in a terminal.
+// And `wsl -l -v` marks the default distribution with an asterisk in the first
+// column, so the name of a default distribution is not the first field.
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"unicode/utf16"
+)
+
+// WSLName is the distribution name for a machine.
+//
+// Prefixed, because a WSL distribution list is the user's own namespace: it
+// holds their Ubuntu, their Docker Desktop distributions, whatever else. Taking
+// a bare name there is the same mistake as taking a bare unix account name on
+// a VM (ADR 0025).
+func WSLName(machine string) string { return "rd-" + machine }
+
+// generationFile is where a machine's generation is kept, inside the
+// distribution itself.
+//
+// Inside rather than beside: a distribution exported, moved or re-imported by
+// hand carries it, and a distribution somebody deleted takes it with it. The
+// alternative -- a file next to the config -- can disagree with reality, and a
+// generation that lies is worse than one that is missing, because Plan trusts
+// a mismatch enough to recreate.
+const generationFile = "/etc/remote-docker-generation"
+
+// decodeWSLOutput turns wsl.exe's output into a string.
+//
+// wsl.exe writes UTF-16LE with a BOM. Read as bytes and printed, it looks like
+// text with NULs between every character, and every naive `strings.Contains`
+// against it fails for a reason nothing on screen explains. Older builds write
+// plain ASCII, so both have to work.
+func decodeWSLOutput(raw []byte) string {
+	if len(raw) >= 2 && raw[0] == 0xff && raw[1] == 0xfe {
+		raw = raw[2:]
+	} else if !bytes.Contains(raw, []byte{0x00}) {
+		// No BOM and no NULs: this build speaks ASCII.
+		return string(raw)
+	}
+
+	if len(raw)%2 != 0 {
+		raw = raw[:len(raw)-1]
+	}
+	units := make([]uint16, 0, len(raw)/2)
+	for i := 0; i < len(raw); i += 2 {
+		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
+	}
+	return string(utf16.Decode(units))
+}
+
+// WSLDistribution is one row of `wsl -l -v`.
+type WSLDistribution struct {
+	Name    string
+	State   string
+	Version int
+}
+
+// parseWSLList reads `wsl --list --verbose` output.
+//
+// The asterisk marking the default distribution is a column, not part of the
+// name, and a machine that happens to be the user's default would otherwise be
+// called "*rd-dev" and never found.
+func parseWSLList(raw []byte) []WSLDistribution {
+	var out []WSLDistribution
+
+	for line := range strings.SplitSeq(decodeWSLOutput(raw), "\n") {
+		line = strings.TrimSpace(strings.ReplaceAll(line, "\r", ""))
+		if line == "" {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "*"))
+
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		// The header, in whatever language this Windows speaks. Recognised by
+		// its shape rather than its words: the last column of a real row is a
+		// number and the header's never is.
+		version := 0
+		if _, err := fmt.Sscanf(fields[len(fields)-1], "%d", &version); err != nil {
+			continue
+		}
+		out = append(out, WSLDistribution{
+			Name:    fields[0],
+			State:   fields[1],
+			Version: version,
+		})
+	}
+	return out
+}
+
+// observeWSL turns a distribution list into what Plan needs.
+//
+// A version 1 distribution is reported as absent, deliberately. It cannot run
+// the agent -- there is no real kernel under it, so there is no dockerd and no
+// NFS mount -- and calling it "stopped" would send the caller into `start`,
+// which would fail with something obscure. Absent means `create`, and create
+// says what is wrong.
+func observeWSL(distros []WSLDistribution, name, generation string) Observed {
+	for _, d := range distros {
+		if !strings.EqualFold(d.Name, name) {
+			continue
+		}
+		if d.Version < 2 {
+			return Observed{State: Absent}
+		}
+		state := Stopped
+		if strings.EqualFold(d.State, "Running") {
+			state = Running
+		}
+		return Observed{State: state, Generation: generation}
+	}
+	return Observed{State: Absent}
+}
+
+// wslImportArgs is the command that creates a distribution from a rootfs.
+func wslImportArgs(name, dir, rootfs string, version int) []string {
+	return []string{"--import", name, dir, rootfs, "--version", fmt.Sprint(version)}
+}
+
+// wslRunArgs runs a command inside a distribution as root.
+//
+// --user root and --cd / are both deliberate. WSL runs as the default user of
+// the distribution, which for an imported rootfs is root but need not stay so,
+// and it starts in the Windows working directory translated into /mnt, which
+// is a path that may not exist and is never what the agent wants.
+func wslRunArgs(name string, command ...string) []string {
+	return append([]string{"-d", name, "--user", "root", "--cd", "/", "--"}, command...)
+}

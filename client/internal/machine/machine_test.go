@@ -11,12 +11,15 @@ import (
 
 func spec() Spec {
 	return Spec{
-		Name:     "rd-dev",
-		Backend:  "wsl",
-		Image:    "ghcr.io/lhns/remote-docker-workspace:0.1.0",
+		Name:    "rd-dev",
+		Backend: "wsl",
+		Image:   "ghcr.io/lhns/remote-docker-workspace:0.1.0",
+		Rootfs: `C:
+ootfs.tar`,
 		CPUs:     4,
 		MemoryMB: 4096,
 		Port:     2222,
+		Account:  "alice",
 	}
 }
 
@@ -64,9 +67,11 @@ func TestEveryFieldChangesTheGeneration(t *testing.T) {
 		{"Name", func(s *Spec) { s.Name = "rd-other" }},
 		{"Backend", func(s *Spec) { s.Backend = "hyperv" }},
 		{"Image", func(s *Spec) { s.Image = "ghcr.io/lhns/remote-docker-workspace:0.2.0" }},
+		{"Rootfs", func(s *Spec) { s.Rootfs = `C:\other.tar` }},
 		{"CPUs", func(s *Spec) { s.CPUs = 8 }},
 		{"MemoryMB", func(s *Spec) { s.MemoryMB = 8192 }},
 		{"Port", func(s *Spec) { s.Port = 2223 }},
+		{"Account", func(s *Spec) { s.Account = "bob" }},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			changed := spec()

@@ -247,6 +247,13 @@ premise of the project, and it applies to building it too. So:
   name, and a test that asks the unix side must ask for `rd-<account>` --
   spelling it `<account>` made `id -nG` fail and the suite read the failure as
   a pass.
+- **The WSL backend's decisions live in `wsl.go`, which has no build tag.**
+  Only running wsl.exe is Windows-only. Two things there are worth keeping:
+  wsl.exe writes UTF-16, so its output read as bytes looks like text with NULs
+  between the characters and every `Contains` against it fails silently; and
+  `wsl -l -v` marks the default distribution with an asterisk COLUMN, so the
+  name of a default distribution is not the first field. Both are tested on a
+  machine with no WSL, which is the only way they are tested at all.
 - **A machine-backed workspace is an ordinary workspace with a lifecycle.**
   The `machine` block in the config is the only thing that differs anywhere,
   and the only command that reads it is `rm`, which has a machine to destroy
@@ -392,6 +399,12 @@ function was.
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}`, `mode: host` publishing, placement --
   needs a real cluster. CI cannot cover it.
+- **Hyper-V, entirely.** Not implemented, and GitHub's runners do not offer
+  it, so it will have no automated coverage when it is.
+  `docs/testing-machines.md` is its whole verification.
+- **WSL beyond one runner image.** `machine.yml` runs the backend end to end on
+  windows-latest, which is real coverage and is one Windows version on one
+  image. Nobody working on this has WSL on their own machine.
 - **macOS, entirely.** Cross-compiled on every push, executed never -- no test
   of any kind has run on it. The endpoint code and the fswatch backend are
   where it genuinely diverges, and the kqueue backend (one fd per *file*) is
