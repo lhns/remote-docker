@@ -169,11 +169,6 @@ func (b wslBackend) Hold(ctx context.Context, name string) (io.Closer, error) {
 	}), nil
 }
 
-// closerFunc makes a func into an io.Closer.
-type closerFunc func() error
-
-func (f closerFunc) Close() error { return f() }
-
 func (b wslBackend) Address(ctx context.Context, name string) (string, error) {
 	out, err := b.wsl(ctx, wslAddressArgs(WSLName(name))...)
 	if err != nil {

@@ -344,11 +344,29 @@ func newMachineStartCommand() *cobra.Command {
 		Short: "Start the machine",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
-				if err := b.Start(ctx, m.Name); err != nil {
+			return withMachine(cmd, args[0], func(ctx context.Context, _ machine.Backend, ws config.Workspace) error {
+				// Waited for, for the same reason create waits: "started" has
+				// to mean "usable". Starting a machine and returning leaves its
+				// agent still generating a host key and opening a listener, so
+				// whatever runs next races it and loses.
+				//
+				// Held while waiting, because a WSL machine nobody is in shuts
+				// down again -- a start that allowed that would be a command
+				// which reliably undid itself.
+				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
+				if err != nil {
 					return err
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", m.Name)
+				defer func() { _ = hold.Close() }()
+
+				host, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name)
+				if err != nil {
+					return err
+				}
+				if err := waitForAgent(ctx, host, ws.Port); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", ws.Machine.Name)
 				return nil
 			})
 		},
@@ -361,7 +379,8 @@ func newMachineStopCommand() *cobra.Command {
 		Short: "Stop the machine",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
+				m := ws.Machine
 				if err := b.Stop(ctx, m.Name); err != nil {
 					return err
 				}
@@ -378,7 +397,8 @@ func newMachineStatusCommand() *cobra.Command {
 		Short: "Is the machine there, running, and built from the current settings?",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
+				m := ws.Machine
 				observed, err := b.Inspect(ctx, m.Name)
 				if err != nil {
 					return err
@@ -412,7 +432,7 @@ func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
 type mObserved = machine.Observed
 
 // withMachine looks up a workspace's machine and hands it to fn.
-func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, *config.Machine) error) error {
+func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, config.Workspace) error) error {
 	file, err := config.Load("")
 	if err != nil {
 		return err
@@ -430,5 +450,5 @@ func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machi
 	if err != nil {
 		return err
 	}
-	return fn(cmd.Context(), backend, ws.Machine)
+	return fn(cmd.Context(), backend, ws)
 }

@@ -114,6 +114,49 @@ jobs:
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
 
+      # The machine is a machine: it stops, starts, and what was inside it is
+      # still inside it. A rebuild is the only thing that discards, and a stop
+      # that quietly did the same would be found by nobody until it had.
+      - name: it survives being stopped and started
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          .\client\rd.exe run -d --name survivor alpine:3 sleep 600
+          .\client\rd.exe remote machine stop ci
+          .\client\rd.exe remote machine start ci
+
+          $out = (.\client\rd.exe ps -a --filter name=survivor --format '{{.Names}}') -join "`n"
+          $out
+          if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
+          .\client\rd.exe rm -f survivor
+
+      # The failure this exists for, and the only one nothing else here would
+      # catch. WSL shuts an idle distribution down, and a TCP connection from
+      # Windows is not use it counts -- so a session has to HOLD its machine
+      # open, and until this ran nothing proved that it did. `create` was the
+      # first thing to hit it and took five CI rounds to diagnose (ADR 0026);
+      # a session hitting it would present as a workspace that worked and then
+      # stopped working while nobody touched it.
+      - name: a session outlives the idle timeout
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          # A background session, which is the thing holding the machine. A
+          # one-shot `docker run` would take its hold with it when it exits and
+          # prove nothing about a machine left alone.
+          .\client\rd.exe remote start
+          Start-Sleep -Seconds 180
+
+          $state = (wsl -l -v | Out-String)
+          $state
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
+          $out
+          if ($out -notmatch 'from the runner') { throw "the machine went away under a live session" }
+          .\client\rd.exe remote stop
+
       # rm destroys the machine as well as the entry, and leaving a
       # distribution behind is the failure worth catching: it is a running
       # Linux system with nothing naming it.

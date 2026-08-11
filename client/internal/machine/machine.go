@@ -254,6 +254,16 @@ type Backend interface {
 	Destroy(ctx context.Context, name string) error
 }
 
+// closerFunc makes a func into an io.Closer.
+//
+// Here rather than beside the backend that first needed it, because a test is
+// a platform too: a fake backend has to return a hold, and a helper compiled
+// only on Windows makes the test compile only on Windows -- which is how it
+// would go unrun on the machine it was written on and fail in CI.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
 // Hold keeps a machine alive until the returned Closer is closed. See
 // Backend.Hold.
 func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
