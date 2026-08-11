@@ -573,7 +573,7 @@ cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$OTHER.pub"
 
 provisioned2=false
 for _ in $(seq 1 90); do
-    if hostdocker exec "$CONTAINER" id "$OTHER" >/dev/null 2>&1; then
+    if hostdocker exec "$CONTAINER" id "rd-$OTHER" >/dev/null 2>&1; then
         provisioned2=true
         break
     fi

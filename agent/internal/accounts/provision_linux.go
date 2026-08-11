@@ -19,7 +19,7 @@ import (
 // Keyed on the UID rather than on the name, because that is the identity: the
 // uidmap binds it, the reverse-tunnel port comes from it, and the files are
 // owned by it. See claim() in unixname.go for the three answers.
-func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, error) {
+func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, string, error) {
 	prefix := p.Prefix
 	if prefix == "" {
 		prefix = DefaultPrefix
@@ -34,15 +34,15 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, er
 	case adoptAccount:
 		u, err := user.Lookup(holder)
 		if err != nil {
-			return "", fmt.Errorf("accounts: %s holds uid %d but cannot be looked up: %w", holder, uid, err)
+			return "", "", fmt.Errorf("accounts: %s holds uid %d but cannot be looked up: %w", holder, uid, err)
 		}
 		p.reconcileGroups(holder)
-		return u.HomeDir, nil
+		return holder, u.HomeDir, nil
 
 	case refuseAccount:
 		// Named, and not provisioned. Adopting it would hand whoever holds
 		// this key the files of a user the workspace never created.
-		return "", fmt.Errorf(
+		return "", "", fmt.Errorf(
 			"accounts: uid %d belongs to %q, which this workspace did not create, so %q was not provisioned\n"+
 				"  fix: move WORKSPACE_UID_BASE to a free range, or remove that user",
 			uid, holder, name)
@@ -63,7 +63,7 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, er
 		unix,
 	}
 	if out, err := exec.Command("useradd", args...).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("useradd %s: %w: %s", unix, err, out)
+		return "", "", fmt.Errorf("useradd %s: %w: %s", unix, err, out)
 	}
 	name = unix
 
@@ -72,24 +72,24 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, er
 	// failure is silent and baffling. Kept even though this agent does its own
 	// authentication, because a deployment may still run sshd alongside.
 	if out, err := exec.Command("usermod", "-p", "*", name).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("usermod %s: %w: %s", name, err, out)
+		return "", "", fmt.Errorf("usermod %s: %w: %s", name, err, out)
 	}
 
 	u, err := user.Lookup(name)
 	if err != nil {
-		return "", fmt.Errorf("accounts: %s was created but cannot be looked up: %w", name, err)
+		return "", "", fmt.Errorf("accounts: %s was created but cannot be looked up: %w", name, err)
 	}
 
 	// The workspace mount point, owned by the account so it can mount into it.
 	workspaceDir := filepath.Join(u.HomeDir, "workspace")
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
-		return "", fmt.Errorf("accounts: creating %s: %w", workspaceDir, err)
+		return "", "", fmt.Errorf("accounts: creating %s: %w", workspaceDir, err)
 	}
 	if err := os.Chown(workspaceDir, uid, uid); err != nil {
-		return "", fmt.Errorf("accounts: owning %s: %w", workspaceDir, err)
+		return "", "", fmt.Errorf("accounts: owning %s: %w", workspaceDir, err)
 	}
 
-	return u.HomeDir, nil
+	return name, u.HomeDir, nil
 }
 
 // revoke removes an existing account from groups it must no longer be in.

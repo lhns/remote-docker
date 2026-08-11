@@ -24,15 +24,18 @@ type fakeProvisioner struct {
 	err     error
 }
 
-func (f *fakeProvisioner) Ensure(name string, uid int, _ string) (string, error) {
+func (f *fakeProvisioner) Ensure(name string, uid int, _ string) (string, string, error) {
 	if f.err != nil {
-		return "", f.err
+		return "", "", f.err
 	}
 	if f.created == nil {
 		f.created = map[string]int{}
 	}
 	f.created[name] = uid
-	return "/home/" + name, nil
+	// Prefixed, as the real one does, so a test that confuses the account name
+	// with the unix name fails here rather than on a workspace.
+	unix := DefaultPrefix + name
+	return unix, "/home/" + unix, nil
 }
 
 type testStore struct {

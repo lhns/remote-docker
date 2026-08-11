@@ -42,6 +42,9 @@ trap cleanup EXIT
 # this suite can print it.
 start_agent() {
     local per_user_dind=$1
+    # SC2024: the redirect is the CALLING user's on purpose. The log has to be
+    # readable by this suite, which does not run as root.
+    # shellcheck disable=SC2024
     sudo -b env \
         WORKSPACE_ENABLE_DIND=false \
         WORKSPACE_PER_USER_DIND="$per_user_dind" \
@@ -109,6 +112,12 @@ else
 fi
 
 echo
+export REMOTE_DOCKER_STATE_DIR="$WORK/state"
+export REMOTE_DOCKER_HOST=127.0.0.1
+export REMOTE_DOCKER_PORT=$SSH_PORT
+export REMOTE_DOCKER_USER=$ACCOUNT
+export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
+
 echo "== 2. build both binaries =="
 mkdir -p "$WORK/keys" "$WORK/wsstate/host_keys" "$WORK/state" "$WORK/project"
 echo "served from the machine" >"$WORK/project/marker"
@@ -161,10 +170,9 @@ fi
 
 echo
 echo "== 4. a session, and a bind mount through it =="
-SOCK="$WORK/state/docker.sock"
-session "$SOCK" "$WORK/client.log"
+session "$WORK/client.log"
 
-if wait_endpoint "$SOCK" "$CLIENT_PID"; then
+if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     ok "the client reached the agent and served an endpoint"
 else
     bad "no endpoint; the session never came up"
@@ -174,7 +182,7 @@ else
 fi
 
 # The whole point of the project, against an agent with no container around it.
-if out=$(cd "$WORK/project" && DOCKER_HOST="unix://$SOCK" timeout 300 \
+if out=$(cd "$WORK/project" && timeout 300 \
         "$WORK/remote-docker" run --rm -v "$WORK/project:/w" alpine:3 cat /w/marker 2>&1) &&
     echo "$out" | grep -q "served from the machine"; then
     ok "a bind mount resolved through NFS to this machine's own directory"
@@ -182,7 +190,7 @@ else
     bad "the bind mount did not resolve: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
-if out=$(DOCKER_HOST="unix://$SOCK" timeout 60 "$WORK/remote-docker" remote status 2>&1) &&
+if out=$(timeout 60 "$WORK/remote-docker" remote status 2>&1) &&
     echo "$out" | grep -q "^status"; then
     ok "remote status answers against a machine workspace"
 else
@@ -210,10 +218,9 @@ else
         dump_agent_log false
     fi
 
-    SOCK2="$WORK/state/docker2.sock"
-    session "$SOCK2" "$WORK/client2.log"
+    session "$WORK/client2.log"
 
-    if wait_endpoint "$SOCK2" "$CLIENT_PID"; then
+    if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
         ok "a session against the machine's own daemon"
     else
         bad "no endpoint in shared mode"
@@ -221,7 +228,7 @@ else
         dump_agent_log false
     fi
 
-    if out=$(cd "$WORK/project" && DOCKER_HOST="unix://$SOCK2" timeout 300 \
+    if out=$(cd "$WORK/project" && timeout 300 \
             "$WORK/remote-docker" run --rm -v "$WORK/project:/w" alpine:3 cat /w/marker 2>&1) &&
         echo "$out" | grep -q "served from the machine"; then
         ok "a bind mount resolved with the machine's own daemon mounting it"
