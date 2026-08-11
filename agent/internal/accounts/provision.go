@@ -20,6 +20,10 @@ type UnixProvisioner struct {
 	// inner daemon, and "workspace" marks the account as ours.
 	Groups []string
 
+	// Prefix goes in front of the unix user name. Empty means DefaultPrefix;
+	// see unixname.go for why the unix name is not the account name.
+	Prefix string
+
 	// Revoke names groups an existing account must NOT be in.
 	//
 	// Needed because Ensure returns early for an account that already exists,

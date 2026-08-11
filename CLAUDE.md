@@ -225,6 +225,18 @@ premise of the project, and it applies to building it too. So:
 - **Accounts use `usermod -p '*'`, not a locked (`!`) password.** Some sshd
   builds refuse public-key auth for locked accounts. Kept even though the agent
   authenticates itself, since a deployment may run sshd alongside.
+- **The unix account name is not the account name, and the uid is what
+  identifies it.** An enrolled `alice` logs in as `alice`; the unix user is
+  `rd-alice` (ADR 0025). `Ensure` keys on the uid, because that is what the
+  uidmap binds and what the port and the file ownership come from -- so an
+  older workspace's `alice` is adopted as it stands, and a uid held by someone
+  this workspace did not create is REFUSED rather than adopted. Adopting one
+  hands an enrolled key another user's files, which is a failure that succeeds.
+  Only `UnixProvisioner` ever sees the prefixed name: the keys filename, the
+  login name, the port ownership and `rd-dind-<account>` all use the account
+  name, and a test that asks the unix side must ask for `rd-<account>` --
+  spelling it `<account>` made `id -nG` fail and the suite read the failure as
+  a pass.
 - **A VM workspace is the same agent, not a mode.** ADR 0025 moves two things
   to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
   shared-daemon mode only, the NFS client -- and changes nothing else. Never

@@ -129,6 +129,12 @@ in the namespace where every account's shell runs.
 
 ## Consequences
 
+*(2026-08-11: the sentence below is harder on a VM. In a container, an account
+breaking out of its dind reaches the workspace container -- disposable, and
+holding nothing but other accounts' work. On a machine (ADR 0025) it reaches
+the machine: its files, its other services, its network position. Nothing about
+the code differs; the blast radius does.)*
+
 - **Layer cache duplication.** ADR 0012 named the shared cache as a benefit
   rather than a saving, and it was right. Five accounts on `node:22` and
   `golang:1.25` is five copies. A registry mirror recovers bandwidth but **not**

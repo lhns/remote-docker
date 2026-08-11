@@ -15,11 +15,40 @@ import (
 )
 
 // Ensure creates the account if it is missing and returns its home directory.
+//
+// Keyed on the UID rather than on the name, because that is the identity: the
+// uidmap binds it, the reverse-tunnel port comes from it, and the files are
+// owned by it. See claim() in unixname.go for the three answers.
 func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, error) {
-	if u, err := user.Lookup(name); err == nil {
-		p.reconcileGroups(name)
-		return u.HomeDir, nil
+	prefix := p.Prefix
+	if prefix == "" {
+		prefix = DefaultPrefix
 	}
+
+	var holder string
+	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
+		holder = u.Username
+	}
+
+	switch claim(name, prefix, holder) {
+	case adoptAccount:
+		u, err := user.Lookup(holder)
+		if err != nil {
+			return "", fmt.Errorf("accounts: %s holds uid %d but cannot be looked up: %w", holder, uid, err)
+		}
+		p.reconcileGroups(holder)
+		return u.HomeDir, nil
+
+	case refuseAccount:
+		// Named, and not provisioned. Adopting it would hand whoever holds
+		// this key the files of a user the workspace never created.
+		return "", fmt.Errorf(
+			"accounts: uid %d belongs to %q, which this workspace did not create, so %q was not provisioned\n"+
+				"  fix: move WORKSPACE_UID_BASE to a free range, or remove that user",
+			uid, holder, name)
+	}
+
+	unix := unixName(prefix, name)
 
 	groups := p.Groups
 	if len(groups) == 0 {
@@ -31,11 +60,12 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, er
 		"--create-home",
 		"--shell", shell,
 		"--groups", strings.Join(groups, ","),
-		name,
+		unix,
 	}
 	if out, err := exec.Command("useradd", args...).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("useradd %s: %w: %s", name, err, out)
+		return "", fmt.Errorf("useradd %s: %w: %s", unix, err, out)
 	}
+	name = unix
 
 	// '*' disables password login. Deliberately NOT '!' (locked): some sshd
 	// builds refuse public-key authentication for a locked account, and that
