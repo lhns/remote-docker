@@ -127,6 +127,11 @@ type Session struct {
 	// rather than orphaning a set per connection.
 	registry *nfsserve.Registry
 
+	// shares is what this workspace has been asked to export, across sessions.
+	// Nil on a session that does not serve, which is how a query session comes
+	// to restore nothing.
+	shares *shareStore
+
 	// watch outlives any single connection too, and for the same reason the
 	// registry does: watches are a local resource, and re-walking a large
 	// tree on every idle reconnect would cost more than the connection. Only
@@ -194,6 +199,14 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		// Corrected once the workspace reports its uid. Nothing is served
 		// before that, so the defaults are never observed.
 		registry: nfsserve.NewRegistry(defaultAttrs()),
+	}
+
+	// Only a session that serves may restore a share. A query session exports
+	// nothing, and giving it the record would let asking a question re-export
+	// a directory.
+	if opts.Role.hosting() {
+		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
+		s.registry.Restore = s.shares.restore
 	}
 
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {

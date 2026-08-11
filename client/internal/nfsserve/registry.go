@@ -35,6 +35,23 @@ type Share struct {
 type Registry struct {
 	attrs Attrs
 
+	// Restore is consulted when a mount names an export this registry does not
+	// hold, and returns the local directory that export stands for.
+	//
+	// It exists because registration is per process while the VOLUME naming an
+	// export outlives it. `docker compose up -d` on containers that already
+	// exist only starts them, so no /containers/create arrives, so nothing
+	// registers the share, while dockerd still mounts the volume created last
+	// time and is told there is no such file or directory. Recreating the
+	// containers was the only way back.
+	//
+	// Nil means a miss is a miss, which is what a query session and every test
+	// without a record want. What it must NOT be is a way for the far side to
+	// name a directory: see session.shareStore, where the answer comes from
+	// what this machine wrote down and the id is recomputed from the path
+	// before it is believed.
+	Restore func(exportPath string) (localPath string, ok bool)
+
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
 	byPath map[string]*Share // keyed by canonical local path
@@ -117,6 +134,34 @@ func (r *Registry) Lookup(exportPath string) (*Share, string, bool) {
 		}
 	}
 	return nil, "", false
+}
+
+// LookupOrRestore is Lookup, with one chance to bring a share back.
+//
+// Separate from Lookup on purpose: only a MOUNT may resurrect a share. Shares,
+// which the volume collector and the file watcher both read, has to keep
+// answering with what is exported right now, and a lookup that quietly
+// registered things would make "in use" depend on who asked.
+func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
+	if share, rest, ok := r.Lookup(exportPath); ok {
+		return share, rest, true
+	}
+	if r.Restore == nil {
+		return nil, "", false
+	}
+
+	// Only the export itself, never a subdirectory of one. A mount of
+	// /m/<id>/sub can only follow a mount of /m/<id>, and restoring from a
+	// deeper path would mean deriving the share from something the far side
+	// composed.
+	local, ok := r.Restore(normalizeExport(exportPath))
+	if !ok {
+		return nil, "", false
+	}
+	if _, err := r.register(normalizeExport(exportPath), local); err != nil {
+		return nil, "", false
+	}
+	return r.Lookup(exportPath)
 }
 
 // Shares returns every registered share, ordered by export path.

@@ -211,6 +211,20 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
+- **A recorded export is a capability the workspace may name, never a path it
+  may supply.** The registry is per process and a volume outlives one, so
+  `compose up -d` on containers that already exist starts them without creating
+  them, registers nothing, and the mount for the volume made last time is
+  answered "no such file or directory" against a directory that is right there
+  (ADR 0027). The record fixes that, and it is checked again every time it is
+  read: the id is RECOMPUTED from the path, the file is bound to this host and
+  account and refused wholesale if either differs, and `/cwd` is never restored.
+  Restore only from a MOUNT that missed; `Lookup` and `Shares` must never
+  resurrect, or "in use" depends on who asked. And never feed the record to
+  `rewrite.Guard`: a stopped container already pins its volume, so the collector
+  was never the hazard, and doing so would keep every recorded volume alive
+  until the record expired.
+
 - **A gate hands out a connection only after asking whether it is alive, and a
   dead one is dropped rather than asked whether anything depends on it.**
   Detection existed and went nowhere: the keepalive closed the SSH client and

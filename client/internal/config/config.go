@@ -537,6 +537,19 @@ func KeyPath() string { return filepath.Join(StateDir(), "id_ed25519") }
 // KnownHostsPath records workspace host keys.
 func KnownHostsPath() string { return filepath.Join(StateDir(), "known_hosts") }
 
+// SharesPath records which local directories a workspace has been asked to
+// export.
+//
+// Per workspace, because the volumes naming those exports live on that
+// workspace's daemon, and one workspace's record must never answer another's
+// mount.
+func SharesPath(workspace string) string {
+	if workspace == "" {
+		workspace = "default"
+	}
+	return filepath.Join(StateDir(), "shares", workspace+".json")
+}
+
 // KeyComment identifies this machine on the key it generates.
 //
 // It is the only thing distinguishing one file from another in a workspace's

@@ -122,7 +122,36 @@ func (s *Session) Collect(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer done()
-	return s.collector(live).Collect(ctx)
+
+	n, err := s.collector(live).Collect(ctx)
+	if err == nil {
+		s.pruneShareRecord(ctx, live)
+	}
+	return n, err
+}
+
+// pruneShareRecord drops what this workspace no longer has a volume for.
+//
+// The record exists to answer a mount, so an entry whose volume is gone can
+// never be asked for again. Best effort and after the collection: failing to
+// tidy a record is not a reason to report a collection that happened as a
+// failure.
+func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
+	if s.shares == nil {
+		return
+	}
+
+	volumes, err := live.api.ListVolumes(ctx)
+	if err != nil {
+		return
+	}
+	keep := make(map[string]bool, len(volumes))
+	for _, v := range volumes {
+		if id, err := workspace.ParseID(v.Name); err == nil {
+			keep[workspace.ExportPathForID(id)] = true
+		}
+	}
+	s.shares.forget(keep)
 }
 
 func (s *Session) collector(live *liveConn) *rewrite.Collector {

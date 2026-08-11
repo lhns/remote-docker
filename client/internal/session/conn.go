@@ -90,7 +90,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
-		Shares:  shareRegistrar{registry: s.registry, changed: s.sharesChanged},
+		Shares:  shareRegistrar{registry: s.registry, shares: s.shares, changed: s.sharesChanged},
 		Volumes: live.api,
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
