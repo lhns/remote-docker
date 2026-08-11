@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 	"io"
 
 	"github.com/lhns/remote-docker/client/internal/sshx"
@@ -17,7 +18,7 @@ import (
 // The Go workspace agent will eventually offer a direct channel to the socket
 // with no CLI in the path (ADR 0010). Using dial-stdio is what lets the client
 // be built and proven against stock sshd first.
-const DialStdioCommand = "docker system dial-stdio"
+const DialStdioCommand = tunnel.DialStdioCommand
 
 // SSHDialer opens Docker connections over an SSH client.
 type SSHDialer struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 	"io"
 	"net"
 	"strings"
@@ -183,7 +184,7 @@ func (c *Client) keepAlive() {
 			// blocked on a receive that has gone.
 			answered := make(chan error, 1)
 			go func() {
-				_, _, err := c.ssh.SendRequest("keepalive@openssh.com", true, nil)
+				_, _, err := c.ssh.SendRequest(tunnel.KeepAliveRequest, true, nil)
 				answered <- err
 			}()
 

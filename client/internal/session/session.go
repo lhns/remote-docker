@@ -27,6 +27,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/client/internal/sshx"
 	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -372,7 +373,7 @@ func (s *Session) acquire(ctx context.Context) (*liveConn, func(), error) {
 }
 
 func readInfo(ctx context.Context, client *sshx.Client) (workspace.Info, error) {
-	out, err := client.Run(ctx, "workspace-info")
+	out, err := client.Run(ctx, tunnel.InfoCommand)
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("reading workspace info: %w", err)
 	}

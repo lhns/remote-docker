@@ -12,6 +12,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/fswatch"
 	"github.com/lhns/remote-docker/client/internal/nfsserve"
 	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -33,7 +34,7 @@ type notifySink struct {
 // 127, indistinguishable from a working channel that has nothing to say.
 // Reading a greeting first is the only thing that tells them apart.
 func openNotify(client *sshx.Client) (*notifySink, error) {
-	stream, err := client.OpenStream(workspace.NotifyCommand)
+	stream, err := client.OpenStream(tunnel.NotifyCommand)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +49,7 @@ func openNotify(client *sshx.Client) (*notifySink, error) {
 	var frame workspace.NotifyFrame
 	if err := json.Unmarshal([]byte(line), &frame); err != nil || frame.Hello == nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("the workspace did not answer %q", workspace.NotifyCommand)
+		return nil, fmt.Errorf("the workspace did not answer %q", tunnel.NotifyCommand)
 	}
 	if frame.Hello.Version != workspace.NotifyVersion {
 		_ = stream.Close()
