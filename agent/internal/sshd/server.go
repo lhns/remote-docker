@@ -70,10 +70,17 @@ var errNoAccount = errors.New("sshd: no authenticated account on this connection
 type sessionAccount struct {
 	name string
 	uid  int
+
+	// client names the MACHINE this session came from, derived from the key
+	// that just authenticated rather than from anything the client sent. Two
+	// of somebody's machines share an account and a daemon; only this tells
+	// their exports and volumes apart.
+	client string
 }
 
-func (s sessionAccount) Name() string { return s.name }
-func (s sessionAccount) UID() int     { return s.uid }
+func (s sessionAccount) Name() string   { return s.name }
+func (s sessionAccount) UID() int       { return s.uid }
+func (s sessionAccount) Client() string { return s.client }
 
 // contextKey is the type under which the authenticated account is stored.
 type contextKey struct{}
@@ -142,7 +149,13 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 		return false
 	}
 
-	ctx.SetValue(contextKey{}, sessionAccount{name: account.Name, uid: account.UID})
+	ctx.SetValue(contextKey{}, sessionAccount{
+		name: account.Name,
+		uid:  account.UID,
+		// From the key that just passed, which is what makes the id
+		// authenticated rather than asserted.
+		client: workspace.ClientID(key.Marshal()),
+	})
 
 	// Start this account's daemon now, in the background, so its boot hides
 	// behind the round trips that follow: workspace-info, then the reverse

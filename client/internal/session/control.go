@@ -85,7 +85,7 @@ func (s *Session) ourVolumes() map[string]bool {
 	shares := s.registry.Shares()
 	out := make(map[string]bool, len(shares))
 	for _, share := range shares {
-		if name, err := workspace.VolumeNameForExport(share.ExportPath); err == nil {
+		if name, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath); err == nil {
 			out[name] = true
 		}
 	}
@@ -147,8 +147,12 @@ func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
 	}
 	keep := make(map[string]bool, len(volumes))
 	for _, v := range volumes {
-		if id, err := workspace.ParseID(v.Name); err == nil {
-			keep[workspace.ExportPathForID(id)] = true
+		client, share, ok := workspace.ParseVolumeName(v.Name)
+		if !ok || (client != "" && client != s.clientID) {
+			continue
+		}
+		if share != "cwd" {
+			keep[workspace.ExportPathForID(share)] = true
 		}
 	}
 	s.shares.forget(keep)
@@ -160,6 +164,7 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 		Remover: live.api,
 		InUse:   live.api,
 		Owner:   live.info.User,
+		Client:  s.clientID,
 		Guard:   live.guard,
 		Log:     s.opts.Log,
 	}
@@ -174,7 +179,7 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 // volume that must survive collection.
 func (s *Session) exportsVolume(volume string) bool {
 	for _, share := range s.registry.Shares() {
-		name, err := workspace.VolumeNameForExport(share.ExportPath)
+		name, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath)
 		if err != nil {
 			continue
 		}

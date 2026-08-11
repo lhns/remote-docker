@@ -171,7 +171,10 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	replayer := &notify.Replayer{
 		Volumes: volumes,
 		Poker:   notify.SyscallPoker{},
-		Log:     s.cfg.Log,
+		// The volume an export lives in belongs to the machine that created
+		// it, so a poke has to name the same one the client's rewriter did.
+		Client: account.Client(),
+		Log:    s.cfg.Log,
 	}
 	if err := replayer.Serve(session.Context(), session); err != nil {
 		s.log().Info("a notify session ended", "account", account.Name(), "err", err)

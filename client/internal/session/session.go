@@ -127,6 +127,11 @@ type Session struct {
 	// rather than orphaning a set per connection.
 	registry *nfsserve.Registry
 
+	// clientID names this MACHINE, derived from its key on the first connect.
+	// Empty before then, which nothing that uses it can observe: everything
+	// asking is downstream of a connection.
+	clientID string
+
 	// shares is what this workspace has been asked to export, across sessions.
 	// Nil on a session that does not serve, which is how a query session comes
 	// to restore nothing.

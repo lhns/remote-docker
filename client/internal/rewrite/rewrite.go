@@ -93,6 +93,13 @@ type Rewriter struct {
 	// accounts. Empty disables labelling.
 	Owner string
 
+	// Client identifies THIS MACHINE, as distinct from the account. Two of
+	// somebody's machines share an account and therefore a daemon, but the
+	// files behind a share are on one of them, so the volumes are named and
+	// labelled per client. Empty produces the old names, which is what a
+	// volume created before this looks like.
+	Client string
+
 	// Guard is shared with the Collector, and is what stops one deleting the
 	// volume the other has just created.
 	Guard *Guard
@@ -170,8 +177,22 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 // docker compose up.
 const OwnerLabel = "com.github.lhns.remote-docker.owner"
 
-// label stamps OwnerLabel onto the container's labels, preserving any the
-// caller set.
+// ClientLabel marks which of an account's MACHINES created something.
+//
+// The owner label is not enough once one account is used from two machines:
+// both label their volumes and containers with the same account, so each
+// machine's collector would delete the other's volumes and each machine would
+// think the other's containers depended on its connection. The name carries the
+// client too, but a label is what a filter can ask about.
+const ClientLabel = "com.github.lhns.remote-docker.client"
+
+// label stamps OwnerLabel and ClientLabel onto the container's labels,
+// preserving any the caller set.
+//
+// Both, because the account says whose container it is and the client says
+// which of that account's machines started it. Only the second can tell one
+// machine's containers from the other's, which is what decides whether a
+// connection may be released.
 func (r *Rewriter) label(payload map[string]json.RawMessage, changed *bool) error {
 	if r.Owner == "" {
 		return nil
@@ -185,10 +206,13 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, changed *bool) erro
 			return nil
 		}
 	}
-	if labels[OwnerLabel] == r.Owner {
+	if labels[OwnerLabel] == r.Owner && (r.Client == "" || labels[ClientLabel] == r.Client) {
 		return nil
 	}
 	labels[OwnerLabel] = r.Owner
+	if r.Client != "" {
+		labels[ClientLabel] = r.Client
+	}
 
 	encoded, err := json.Marshal(labels)
 	if err != nil {
@@ -326,7 +350,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, err
 		return "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
 	}
 
-	name, err := workspace.VolumeNameForExport(exportPath)
+	name, err := workspace.VolumeNameForExport(r.Client, exportPath)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: %w", err)
 	}
@@ -335,6 +359,9 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, err
 	labels := map[string]string{ManagedLabel: "share"}
 	if r.Owner != "" {
 		labels[OwnerLabel] = r.Owner
+	}
+	if r.Client != "" {
+		labels[ClientLabel] = r.Client
 	}
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
 		return "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)

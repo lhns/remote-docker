@@ -23,6 +23,8 @@ import (
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/client/internal/sshx"
+
+	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
 // connect brings up everything that needs the workspace. The order matters:
@@ -33,6 +35,14 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// This machine's name for itself, and the workspace derives the same one
+	// from the key it authenticates rather than from anything sent to it. See
+	// workspace.ClientID: the account is the identity, the client is the
+	// machine, and only the second can tell one of somebody's computers from
+	// another when both use one account.
+	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
+
 	known, err := sshx.NewKnownHosts(config.KnownHostsPath())
 	if err != nil {
 		return nil, err
