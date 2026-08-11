@@ -96,7 +96,12 @@ jobs:
           REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           "from the runner" | Out-File -Encoding ascii marker
-          $out = .\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker
+          # Joined before matching. PowerShell's -match on an ARRAY is a filter
+          # rather than a test: it returns the lines that matched, so -notmatch
+          # on multi-line output returns the other lines and is truthy whether
+          # or not the thing being looked for is there. It failed a step whose
+          # command had printed exactly what the step demanded.
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
           $out
           if ($out -notmatch 'from the runner') { throw "the bind mount did not resolve" }
 
@@ -105,7 +110,7 @@ jobs:
         env:
           REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
-          $out = .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar
+          $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar) -join "`n"
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
 
