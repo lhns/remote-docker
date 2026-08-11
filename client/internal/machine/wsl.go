@@ -127,6 +127,30 @@ func observeWSL(distros []WSLDistribution, name, generation string) Observed {
 	return Observed{State: Absent}
 }
 
+// wslReadGenerationArgs reads a machine's generation from inside it.
+func wslReadGenerationArgs(name string) []string {
+	return wslRunArgs(name, "cat", generationFile)
+}
+
+// wslWriteArgs writes a file inside a distribution.
+//
+// printf rather than a heredoc or tee: one process, no shell features beyond
+// quoting, and nothing that behaves differently between the shells a rootfs
+// might ship.
+func wslWriteArgs(name, path, content string) []string {
+	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
+}
+
+// shellQuote wraps a string for `sh -c`.
+//
+// Single quotes, with the only escape sh understands for them: end the quote,
+// an escaped quote, start again. Nothing passed here is hostile -- it is our
+// own config and a hex digest -- so this exists so that a newline in the
+// content does not end the command.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // wslImportArgs is the command that creates a distribution from a rootfs.
 func wslImportArgs(name, dir, rootfs string, version int) []string {
 	return []string{"--import", name, dir, rootfs, "--version", fmt.Sprint(version)}

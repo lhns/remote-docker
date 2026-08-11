@@ -47,13 +47,15 @@ func (b wslBackend) Available(ctx context.Context) error {
 func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) {
 	distro := WSLName(name)
 
-	// A failure to list is not "there is nothing there". Reporting Absent on
-	// an error would make the caller create a second machine beside a first
-	// one it could not see.
-	raw, err := b.wsl(ctx, "--list", "--verbose")
-	if err != nil {
-		return Observed{}, err
-	}
+	// The exit status is deliberately not consulted. WSL exits NON-ZERO when
+	// there are no distributions at all -- "Windows Subsystem for Linux has no
+	// installed distributions" -- which is not a failure to look, it is the
+	// answer, and treating it as a failure made the very first `machine create`
+	// on a fresh WSL refuse with "cannot tell what is there".
+	//
+	// A real failure to reach WSL was already caught by Available, which ran
+	// immediately before this and asked the service directly.
+	raw, _ := b.wsl(ctx, "--list", "--verbose")
 
 	observed := observeWSL(parseWSLList(raw), distro, "")
 	if observed.State == Absent {
@@ -65,7 +67,7 @@ func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) 
 	// generation empty, which Plan treats as a match rather than a mismatch --
 	// deliberately, because destroying a machine over an unreadable file would
 	// take somebody's containers with it.
-	if gen, err := b.wsl(ctx, wslRunArgs(distro, "cat", generationFile)...); err == nil {
+	if gen, err := b.wsl(ctx, wslReadGenerationArgs(distro)...); err == nil {
 		observed.Generation = strings.TrimSpace(decodeWSLOutput(gen))
 	}
 	return observed, nil
@@ -98,12 +100,13 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 	// Everything below is written INTO the distribution, so a rebuild starts
 	// from the same rootfs and applies the same settings, and nothing about
 	// the machine lives only in this program's memory.
-	for _, step := range [][]string{
-		{"mkdir", "-p", "/etc/workspace/authorized_keys.d", "/etc/workspace/host_keys"},
-		{"sh", "-c", "printf '%s' " + shellQuote(spec.Generation()) + " > " + generationFile},
-		{"sh", "-c", "printf '%s' " + shellQuote(wslConf(spec)) + " > /etc/wsl.conf"},
+	for _, args := range [][]string{
+		wslRunArgs(distro, "mkdir", "-p",
+			"/etc/workspace/authorized_keys.d", "/etc/workspace/host_keys"),
+		wslWriteArgs(distro, generationFile, spec.Generation()),
+		wslWriteArgs(distro, "/etc/wsl.conf", wslConf(spec)),
 	} {
-		if _, err := b.wsl(ctx, wslRunArgs(distro, step...)...); err != nil {
+		if _, err := b.wsl(ctx, args...); err != nil {
 			return err
 		}
 	}
@@ -183,14 +186,4 @@ func wslStateDir(name string) (string, error) {
 		return "", fmt.Errorf("LOCALAPPDATA is not set, so there is nowhere to put the machine's disk")
 	}
 	return filepath.Join(local, "remote-docker", "machines", name), nil
-}
-
-// shellQuote wraps a string for `sh -c`.
-//
-// Single quotes, with the only escape sh understands for them: end the quote,
-// an escaped quote, start again. The generation is hex and the config is ours,
-// so nothing here is hostile -- this exists so that a newline in the config
-// does not end the command.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

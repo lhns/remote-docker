@@ -7,6 +7,7 @@ package machine
 // language the Windows speaks.
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf16"
 )
@@ -159,4 +160,50 @@ func contains(haystack, needle string) bool {
 		}
 		return false
 	})()
+}
+
+// Quoting, which was wrong once already: an escaping mistake here turns a file
+// write into whatever the content happens to say.
+func TestShellQuote(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"abc123", `'abc123'`},
+		{"", `''`},
+		// The reason this exists: a newline in the content must not end the
+		// command.
+		{"[boot]\ncommand=x", "'[boot]\ncommand=x'"},
+		// The only escape sh understands inside single quotes: end the quote,
+		// an escaped quote, start again.
+		{"it's", `'it'\''s'`},
+	} {
+		if got := shellQuote(tc.in); got != tc.want {
+			t.Errorf("shellQuote(%q) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestWSLWriteArgs(t *testing.T) {
+	args := wslWriteArgs("rd-dev", "/etc/wsl.conf", "[boot]\nsystemd=false\n")
+
+	// The command must reach sh as ONE argument, or the shell sees the config's
+	// own newlines as command separators.
+	last := args[len(args)-1]
+	if !contains(last, "/etc/wsl.conf") || !contains(last, "systemd=false") {
+		t.Fatalf("the write command lost its content or its path: %q", last)
+	}
+	if !contains(last, "printf") {
+		t.Errorf("expected printf, got %q", last)
+	}
+}
+
+func TestWSLReadGenerationArgs(t *testing.T) {
+	args := wslReadGenerationArgs("rd-dev")
+	joined := strings.Join(args, " ")
+	if !contains(joined, "cat "+generationFile) {
+		t.Errorf("the generation is not read from %s: %q", generationFile, joined)
+	}
+	// Inside the distribution, so a machine exported and re-imported by hand
+	// carries its own answer rather than trusting a file next to the config.
+	if !strings.HasPrefix(generationFile, "/") {
+		t.Errorf("the generation file is not an absolute path inside the machine: %q", generationFile)
+	}
 }
