@@ -200,7 +200,10 @@ func ignition(spec Spec, publicKey string) (string, error) {
 func hyperVUnit(spec Spec) string {
 	image := spec.Image
 	if image == "" {
-		image = DefaultImage
+		// Only when a Spec reached here without one, which createMachine does
+		// not allow. The unversioned tag is the honest fallback: nothing here
+		// knows which client asked.
+		image = DefaultImageRepo + ":latest"
 	}
 
 	return strings.Join([]string{
@@ -223,9 +226,6 @@ func hyperVUnit(spec Spec) string {
 		"",
 	}, "\n")
 }
-
-// DefaultImage is the workspace image a machine runs when the Spec names none.
-const DefaultImage = "ghcr.io/lhns/remote-docker-workspace:latest"
 
 // urlEncode percent-encodes for a data: URL.
 //

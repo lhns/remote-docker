@@ -108,6 +108,31 @@ Two things do differ from WSL, and both are the platform rather than a choice:
   anything. It is deliberately not part of the generation: a rotated key would
   then trigger a rebuild on its own, and a rebuild discards every image.
 
+## The image is the artifact, and there is no second one
+
+A machine is built by pulling the workspace image and flattening it, in the
+client, with no docker involved: a container image IS a rootfs, and
+`mutate.Extract` is what `docker export` does. So nothing is published for
+machines specifically.
+
+The alternative, briefly taken and then removed, was to publish a rootfs tarball
+with each release. It worked and it was wrong in a way worth recording: it made
+a second name for one thing. The image reference in a machine's configuration
+said one version, an arch-named tarball on a release page said another, and
+nothing made them agree -- a release whose upload step failed would have served
+a machine built from the previous version, silently.
+
+Pulling the image instead means the version in the config IS what the machine is
+made of, the registry resolves the architecture rather than a filename spelling
+it, and the digest verifies the download for free. `--rootfs` remains for the
+cases a registry cannot serve: air-gapped, an image of your own, a version
+pinned by hand.
+
+The client already depended on go-containerregistry through docker/cli, so this
+cost no new dependency. If client-side flattening ever proves a problem, the
+fallback is to push a flattened tar as an OCI artifact -- which keeps the
+registry's addressing and verification, and reintroduces a publish step.
+
 **Nothing is installed at provisioning time.** No package manager runs, on any
 path, ever. The unit of change is a published artifact named in that block, and
 moving between versions replaces the artifact rather than mutating what is

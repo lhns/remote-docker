@@ -64,7 +64,7 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.backend, "backend", "wsl",
 		"wsl, or hyperv (never executed by anybody -- see docs/testing-machines.md)")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
-		"what the machine is built from: the workspace image's filesystem as a tar file (wsl), or a Flatcar disk image (hyperv)")
+		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
 	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
 
@@ -91,8 +91,13 @@ func (o *machineOptions) spec(name string) machine.Spec {
 		port = config.DefaultSSHPort
 	}
 	return machine.Spec{
-		Name:     name,
-		Backend:  o.backend,
+		Name:    name,
+		Backend: o.backend,
+		// The image is what a machine IS (ADR 0026), and it is named here so it
+		// is recorded in the machine's configuration and therefore part of its
+		// generation: a client on a new version builds a new machine rather
+		// than adopting one made from an older image.
+		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
 		Port:     port,
 		CPUs:     o.cpus,
@@ -261,6 +266,15 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		fallthrough
 
 	case action == machine.Create:
+		// Fetched only when one is actually being built. A create that finds a
+		// machine already matching should not download several hundred
+		// megabytes in order to say there was nothing to do.
+		if spec.Rootfs == "" {
+			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
+				return err
+			}
+		}
+
 		_, _ = fmt.Fprintf(out, "creating the %s machine %q\n", spec.Backend, spec.Name)
 		if err := backend.Create(ctx, spec); err != nil {
 			return fmt.Errorf("creating %s: %w", name, err)

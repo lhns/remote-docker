@@ -224,26 +224,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The rootfs a local machine is built from (ADR 0026).
-      #
-      # Published because without it the feature cannot be used by the people it
-      # is for: `remote machine create` takes the workspace image's filesystem,
-      # and getting one out of an image needs docker -- which is the thing being
-      # installed. A published artifact closes that circle, and it is the same
-      # image this workflow pushed a moment ago rather than a second thing built
-      # a second way.
-      #
-      # Gzipped, and `wsl --import` reads that directly. Not an assumption:
-      # `machine.yml` imports the gzipped file on every run, so the format
-      # people download is the format CI proves.
-      - name: publish the workspace rootfs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eux
-          docker build -t rd-workspace:release -f image/Dockerfile .
-          id=$(docker create rd-workspace:release)
-          docker export "$id" | gzip -9 > workspace-rootfs-amd64.tar.gz
-          docker rm "$id"
-          ls -lh workspace-rootfs-amd64.tar.gz
-          gh release upload "$GITHUB_REF_NAME" workspace-rootfs-amd64.tar.gz --clobber

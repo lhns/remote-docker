@@ -66,12 +66,15 @@ it as an ordinary workspace. It needs WSL, which Windows installs itself
 (`wsl --install`, then reboot).
 
 ```powershell
-# the machine is the workspace image's filesystem, published with each release
-curl.exe -LO https://github.com/lhns/remote-docker/releases/latest/download/workspace-rootfs-amd64.tar.gz
-
-remote-docker remote machine create dev --rootfs .\workspace-rootfs-amd64.tar.gz
+remote-docker remote machine create dev
 remote-docker run --rm -v .:/w alpine ls /w
 ```
+
+`create` pulls the workspace image — the same one the container deployment runs,
+built and tested on every push — and flattens it into the machine's filesystem.
+It is kept, by digest, so a second machine or a `rebuild` costs nothing.
+`--rootfs <file>` builds from a file you supply instead, for an air-gapped
+machine or an image of your own.
 
 What comes out is a workspace like any other: `remote ls` lists it, the docker
 context is created for it, bind mounts and published ports work exactly as they
