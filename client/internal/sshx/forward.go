@@ -5,7 +5,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/lhns/remote-docker/internal/iox"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 )
 
 // Forward is a local listener whose connections are carried to an address on
@@ -71,7 +71,7 @@ func (f *Forward) accept(c *Client) {
 				return
 			}
 			defer remote.Close()
-			iox.SpliceAndClose(local, remote)
+			tunnel.SpliceAndClose(local, remote)
 		})
 	}
 }

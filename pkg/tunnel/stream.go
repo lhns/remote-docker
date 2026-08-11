@@ -1,11 +1,18 @@
-// Package iox is the one bidirectional copy, and the one answer to what
-// half-closing means.
+// Package tunnel is what the client and the agent must agree about: one SSH
+// connection carrying Docker API streams, an NFS export, port forwards and
+// change notifications.
 //
-// Shared because the two binaries are the two ends of the same stream. Each
-// had its own copy, and the copies had opposite fallbacks for a connection
-// that cannot half-close: one did nothing, the other closed the whole
-// connection, which the project's own invariant forbids.
-package iox
+// It holds the agreements and nothing platform-specific. `tunnel/client` dials
+// and `tunnel/server` serves; this package must import neither SSH library, so
+// that the client never links a server it does not run.
+//
+// This file is the first agreement, and the reason the package exists. The
+// bidirectional copy and the meaning of half-closing lived in both binaries,
+// and the copies had OPPOSITE fallbacks for a connection that cannot
+// half-close: one did nothing, the other closed the whole connection, which the
+// project's own invariant forbids. It failed as `docker run` exiting 0 having
+// printed nothing.
+package tunnel
 
 import (
 	"io"

@@ -22,7 +22,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/notify"
-	"github.com/lhns/remote-docker/internal/iox"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -143,7 +143,7 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 	}
 	defer func() { _ = conn.Close() }()
 
-	iox.Splice(session, conn)
+	tunnel.Splice(session, conn)
 	_ = session.Exit(0)
 }
 
