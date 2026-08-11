@@ -119,40 +119,6 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 	return b.Start(ctx, spec.Name)
 }
 
-// wslConf is the distribution's own configuration.
-//
-// `[boot] command` is what starts the agent, and it is why nothing here
-// supervises anything: WSL runs it every time the distribution starts, so a
-// machine that was terminated, rebooted or shut down comes back with the agent
-// running and no help from this program. A supervisor on the Windows side
-// would be a second thing to keep alive, and the first thing to be missing
-// after a reboot.
-//
-// systemd is off: the agent is the only thing that has to run, it does its own
-// dockerd supervision (ADR 0010), and systemd inside WSL is one more moving
-// part between a user and a working daemon.
-func wslConf(spec Spec) string {
-	env := []string{
-		"WORKSPACE_STATE_DIR=/etc/workspace",
-		"WORKSPACE_KEYS_DIR=/etc/workspace/authorized_keys.d",
-		"WORKSPACE_HOSTKEY_DIR=/etc/workspace/host_keys",
-		"WORKSPACE_ENABLE_DIND=true",
-	}
-	// Bound to every interface INSIDE the machine, not to its loopback.
-	//
-	// WSL2's default networking is NAT with a localhost relay, and the relay
-	// connects to the machine's own address -- so a service on 127.0.0.1 in
-	// there is reachable from in there and from nowhere else. It presented as
-	// the agent visibly running, `ps` and all, and Windows refusing the
-	// connection.
-	//
-	// Not an exposure: that interface is a host-only virtual network, and the
-	// agent authenticates every connection by key wherever it came from.
-	return "[boot]\nsystemd=false\ncommand=/usr/bin/env " +
-		strings.Join(env, " ") +
-		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, agentLog)
-}
-
 // Enrol writes a public key where the agent's watcher will find it.
 //
 // The filename is the account name, which is the enrolment convention
