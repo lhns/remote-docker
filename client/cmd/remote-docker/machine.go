@@ -21,7 +21,6 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
-	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
@@ -161,11 +160,11 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	if err != nil {
 		return
 	}
+	// Asked unconditionally rather than after a Reachable check. A session
+	// that is starting up holds the endpoint before it answers questions about
+	// itself, so a check can say "nothing there" about a process that is very
+	// much there -- and then the machine is stopped underneath it.
 	endpoint := endpointOf(cfg)
-	if !proxy.Reachable(endpoint) {
-		return
-	}
-
 	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
 		return
 	}

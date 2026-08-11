@@ -129,6 +129,13 @@ jobs:
           .\client\rd.exe remote machine stop ci
           .\client\rd.exe remote machine start ci
 
+          # What is holding the endpoint, if anything, and what the client says
+          # about itself. An EOF on the local pipe names the wrong layer
+          # entirely, so this asks the two questions that separate "no session
+          # at all" from "a session whose machine went away underneath it".
+          .\client\rd.exe remote status
+          Get-Process rd -ErrorAction SilentlyContinue | Format-Table Id, StartTime
+
           $out = (.\client\rd.exe ps -a --filter name=survivor --format '{{.Names}}') -join "`n"
           $out
           if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
