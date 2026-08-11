@@ -149,6 +149,15 @@ premise of the project, and it applies to building it too. So:
   answering to the name `docker` (ADR 0022) would be silently dead on the
   platform where a symlink is the right answer. The shim command is the
   opposite: it needs the real file to link *to*, so it uses `os.Executable`.
+- **This binary's own path comes from `selfPath`, never `os.Executable`.**
+  Termux runs a program as `linker64 <absolute path>`, because Android refuses
+  to execute files in app data directories, so the process really IS the
+  linker and `/proc/self/exe` says so. libtermux-exec patches that up in libc,
+  which a Go binary never loads. It fails at a distance and never names the
+  cause: `start` spawned the linker with the session's arguments and logged
+  `expected absolute path: "start"`, and `shim install` would have put a
+  `docker` on PATH that was the Android dynamic linker. One function, six call
+  sites, and `os.Executable` appears once in the whole client.
 - **Never touch a `docker` we did not write, and never execute one to find
   out.** A machine may get Docker Desktop tomorrow. Ours is `os.SameFile`
   against this binary, or a marker file beside it; anything else is left where

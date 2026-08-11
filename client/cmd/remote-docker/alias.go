@@ -51,6 +51,40 @@ func isDockerName(arg0 string) bool {
 // dropSelfArgument.
 const termuxSelfExeEnv = "TERMUX_EXEC__PROC_SELF_EXE"
 
+// selfPath is this binary's path on disk.
+//
+// os.Executable reads /proc/self/exe, and under Termux that is the SYSTEM
+// LINKER. A program there is run as `linker64 <absolute path>` to get around
+// Android's refusal to execute files in app data directories, so the process
+// really is the linker. libtermux-exec patches the answer back up in libc,
+// which a Go binary never loads, so os.Executable returns
+// /system/bin/linker64 and nothing says so.
+//
+// It fails at a distance. `start` spawns this binary with the session's
+// arguments, so it spawned the LINKER with them, and the log read
+//
+//	error: expected absolute path: "start"
+//
+// which is the linker rejecting an argument it was never meant to be given.
+// `shim install` would have put a `docker` on PATH that was the linker.
+//
+// TERMUX_EXEC__PROC_SELF_EXE is what Termux sets to the real path. Preferred
+// only where os.Executable disagrees with it and the file is there, so an
+// ordinary machine keeps the kernel's answer and a stale variable cannot
+// redirect anything.
+func selfPath() (string, error) {
+	exe, err := os.Executable()
+
+	hinted := os.Getenv(termuxSelfExeEnv)
+	if hinted == "" || (err == nil && sameFile(exe, hinted)) {
+		return exe, err
+	}
+	if _, statErr := os.Stat(hinted); statErr != nil {
+		return exe, err
+	}
+	return hinted, nil
+}
+
 // dropSelfArgument removes a first argument that is this binary.
 //
 // Termux execs a program as `linker64 <absolute path> <args>`, so the path
@@ -69,11 +103,9 @@ const termuxSelfExeEnv = "TERMUX_EXEC__PROC_SELF_EXE"
 // is not, and it is measurable -- /proc/self/cmdline shows the extra path for
 // EVERY program there, cat included.
 //
-// Two anchors because it is not settled which one Termux leaves intact.
-// /proc/self/exe is the linker under this scheme, and libtermux-exec patches
-// the answer back up in libc, which a Go binary never loads. So os.Executable
-// may report the linker, and the environment variable is what Termux sets to
-// the real path. Either matching is enough; both being wrong changes nothing.
+// Takes several anchors because there is more than one answer to "which file
+// am I" here: see selfPath, where os.Executable is the linker and the
+// environment variable is the way home. Either matching is enough.
 //
 // Compared with os.SameFile and not by string, because the inserted path is
 // absolute whatever was typed and the two spellings never match.

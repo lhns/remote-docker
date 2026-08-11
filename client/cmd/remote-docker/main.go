@@ -12,7 +12,7 @@ func main() {
 	// own path in the arguments. See dropSelfArgument. os.Args rather than
 	// cobra's SetArgs, because the embedded Docker CLI reads os.Args in its own
 	// right and would still see the extra word.
-	self, _ := os.Executable()
+	self, _ := selfPath()
 	os.Args = dropSelfArgument(os.Args, self, os.Getenv(termuxSelfExeEnv))
 
 	// Under the name `docker` the whole command line belongs to the Docker

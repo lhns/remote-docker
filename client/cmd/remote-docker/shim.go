@@ -481,13 +481,15 @@ func newShimInstallCommand() *cobra.Command {
 		Use:   "install",
 		Short: "Put `docker` on PATH",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			self, err := os.Executable()
+			self, err := selfPath()
 			if err != nil {
 				return fmt.Errorf("finding this binary: %w", err)
 			}
-			// os.Executable here and NOT os.Args[0], which is the opposite of
+			// selfPath here and NOT os.Args[0], which is the opposite of
 			// alias.go and for the opposite reason: this needs the real file
-			// to link TO, not the name we were called by.
+			// to link TO, not the name we were called by. selfPath rather than
+			// os.Executable because on Termux that is the system linker, and
+			// this would have put a `docker` on PATH that was the linker.
 			out := cmd.OutOrStdout()
 
 			if err := installShim(out, cmd.InOrStdin(), self, copyOK); err != nil {
@@ -530,7 +532,7 @@ func newShimUninstallCommand() *cobra.Command {
 		Use:   "uninstall",
 		Short: "Remove the `docker` this installed",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			self, err := os.Executable()
+			self, err := selfPath()
 			if err != nil {
 				return fmt.Errorf("finding this binary: %w", err)
 			}
@@ -544,7 +546,7 @@ func newShimStatusCommand() *cobra.Command {
 		Use:   "status",
 		Short: "Say where the `docker` shim is and whether it is current",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			self, err := os.Executable()
+			self, err := selfPath()
 			if err != nil {
 				return fmt.Errorf("finding this binary: %w", err)
 			}

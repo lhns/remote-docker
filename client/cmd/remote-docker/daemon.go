@@ -186,7 +186,7 @@ func newStopCommand() *cobra.Command {
 
 // startDaemon spawns a foreground session, detached, and waits for it to answer.
 func startDaemon(cfg config.Config, endpoint string) error {
-	self, err := os.Executable()
+	self, err := selfPath()
 	if err != nil {
 		return fmt.Errorf("finding this binary: %w", err)
 	}

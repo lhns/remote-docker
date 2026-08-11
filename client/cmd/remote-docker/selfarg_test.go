@@ -174,3 +174,53 @@ func TestArgv0Survives(t *testing.T) {
 		t.Errorf("argv[0] became %q", got[0])
 	}
 }
+
+// selfPath, which is the other half of the same problem: under Termux
+// os.Executable is /system/bin/linker64, so `start` spawned the linker and
+// `shim install` would have linked to it.
+func TestSelfPath(t *testing.T) {
+	me := self(t)
+
+	// An ordinary machine: nothing set, the kernel's answer stands.
+	t.Setenv(termuxSelfExeEnv, "")
+	got, err := selfPath()
+	if err != nil || !sameFile(got, me) {
+		t.Errorf("selfPath() = %q, %v; want this binary", got, err)
+	}
+
+	// Termux, agreeing with itself: the variable names the same file, so
+	// nothing changes hands.
+	t.Setenv(termuxSelfExeEnv, me)
+	if got, err := selfPath(); err != nil || !sameFile(got, me) {
+		t.Errorf("selfPath() = %q, %v; want this binary", got, err)
+	}
+
+	// A variable naming a file that is not there is not an answer. It must not
+	// displace the one we have.
+	t.Setenv(termuxSelfExeEnv, filepath.Join(t.TempDir(), "gone"))
+	if got, err := selfPath(); err != nil || !sameFile(got, me) {
+		t.Errorf("a missing hinted path was used: %q, %v", got, err)
+	}
+}
+
+// The case that matters: os.Executable is something else entirely, and the
+// variable is the only thing that knows where this binary is.
+//
+// Simulated by pointing the variable at a DIFFERENT real file, since
+// os.Executable cannot be made to lie in a test. If selfPath returns it, it
+// preferred the variable over the kernel, which is the behaviour Termux needs.
+func TestSelfPathPrefersTheHintWhenTheyDisagree(t *testing.T) {
+	other := filepath.Join(t.TempDir(), "linker64")
+	if err := os.WriteFile(other, []byte("not really a linker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(termuxSelfExeEnv, other)
+
+	got, err := selfPath()
+	if err != nil {
+		t.Fatalf("selfPath: %v", err)
+	}
+	if !sameFile(got, other) {
+		t.Errorf("selfPath() = %q, want the hinted %q", got, other)
+	}
+}
