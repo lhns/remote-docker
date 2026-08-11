@@ -203,13 +203,32 @@ jobs:
       # One artifact per platform rather than one holding all six. GitHub zips
       # an artifact whole, so a combined one meant downloading every platform
       # to get the one you wanted.
+      #
+      # The paths are exact rather than `remote-docker*`, which also matched
+      # `remote-dockerd` and swept the AGENT into the client's artifact. It was
+      # built and uploaded and nobody could find it, because it was inside
+      # something named for the other binary.
       - uses: actions/upload-artifact@v7
         with:
           name: remote-docker-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/**/remote-docker*
+          path: |
+            dist/**/remote-docker
+            dist/**/remote-docker.exe
           if-no-files-found: error
           # Short: six binaries per commit, and the tagged releases are the
           # ones worth keeping.
+          retention-days: 14
+
+      # The agent, on the platforms it has (ADR 0025). Its own artifact,
+      # because an operator setting up a VM workspace wants 6MB of agent and
+      # not 70MB of Docker CLI, and because a binary nobody can find is a
+      # binary nobody will use.
+      - uses: actions/upload-artifact@v7
+        if: matrix.goos == 'linux'
+        with:
+          name: remote-dockerd-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/**/remote-dockerd
+          if-no-files-found: error
           retention-days: 14
 
   shell:
