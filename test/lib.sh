@@ -47,7 +47,9 @@ build_client() {
 }
 
 # enrol generates a keypair for one account and stages its public half where
-# the workspace will find it. The FILENAME becomes the unix account there.
+# the workspace will find it. The FILENAME becomes the ACCOUNT name, which is
+# what a client logs in as; the unix user behind it is `rd-<account>`
+# (ADR 0025).
 enrol() {
     local account=$1 statedir=$2
     REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" remote enroll >/dev/null 2>&1
@@ -84,12 +86,16 @@ start_workspace() {
 }
 
 # wait_provisioned waits for the agent to create the named accounts.
+#
+# Asked for the UNIX user, `rd-<account>`, which is what useradd made. Asking
+# for the account name would wait the full timeout on a workspace that had
+# provisioned everything correctly.
 wait_provisioned() {
     local seconds=${WAIT_PROVISION:-90} account
     for _ in $(seq 1 "$seconds"); do
         local all=true
         for account in "$@"; do
-            hostdocker exec "$CONTAINER" id "$account" >/dev/null 2>&1 || all=false
+            hostdocker exec "$CONTAINER" id "rd-$account" >/dev/null 2>&1 || all=false
         done
         [ "$all" = true ] && return 0
         sleep 1

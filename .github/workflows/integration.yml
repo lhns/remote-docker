@@ -85,7 +85,7 @@ jobs:
   nfs-capability:
     name: nfs client in a privileged container
     runs-on: ubuntu-latest
-    # The two suites below hang off this job, so gating it gates all three.
+    # Every suite below hangs off this job, so gating it gates all of them.
     needs: gate
     if: needs.gate.outputs.run == 'true'
     steps:
@@ -153,6 +153,36 @@ jobs:
       - name: workspace logs on failure
         if: failure()
         run: docker logs remote-docker-itest 2>&1 | tail -100 || true
+
+  # The agent on the runner itself, with no container around it (ADR 0025).
+  #
+  # The runner IS the machine, which is what makes the VM deployment testable
+  # when macOS and Android are not. It needs an NFS client of its own for the
+  # shared-daemon half -- the per-account half mounts inside docker:dind, which
+  # ships one -- so nfs-common is installed here and nowhere else.
+  vm:
+    name: the agent on a machine
+    runs-on: ubuntu-latest
+    needs: nfs-capability
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      # Only this job needs it. In every other suite the mount happens inside a
+      # container that carries its own client.
+      - name: install an NFS client on the runner
+        run: sudo apt-get update && sudo apt-get install -y nfs-common
+
+      - name: run the suite
+        run: bash test/vm.sh
 
   # A daemon per account (ADR 0019), with two accounts, which is the only way
   # to test the claim at all.

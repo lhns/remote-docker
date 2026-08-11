@@ -349,6 +349,13 @@ that workspace rather than the default, and **a docker context we did not
 create being left completely alone** -- which is a promise to other software on
 the user's machine and the only one of these that fails silently.
 
+A third suite, `test/vm.sh`, runs the agent ON THE RUNNER with no container
+around it (ADR 0025), which is the VM deployment: `WORKSPACE_ENABLE_DIND=false`,
+a real unix account provisioned on the runner itself, a session, and a bind
+mount resolving through NFS in both daemon modes. The runner is an Ubuntu
+machine with docker, so that is exactly what is proven -- not systemd, which
+starts nothing here, and not any other distro.
+
 A second suite, `test/per-user-dind.sh`, runs the same workspace with two
 enrolled accounts and a daemon each (the default since ADR 0019): that they reach
 different daemons, that neither can list or stop the other's containers, that
@@ -378,7 +385,12 @@ function was.
   the integration suite needs a Linux kernel's NFS client, so no Windows
   machine has taken a session end to end in CI. Say "unit tested on Windows",
   never "the Windows client is tested".
-- **The release pipeline.** No tag has been pushed.
+- **The release pipeline.** No tag has been pushed. The agent archive and the
+  systemd unit in it are built by `goreleaser release --snapshot` and have
+  never been installed on a machine.
+- **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
+  `test/vm.sh` starts the agent directly, because what it tests is the agent as
+  a guest rather than systemd's ability to run a binary.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.
