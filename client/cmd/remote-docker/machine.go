@@ -21,6 +21,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
+	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
@@ -165,10 +166,27 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	// itself, so a check can say "nothing there" about a process that is very
 	// much there -- and then the machine is stopped underneath it.
 	endpoint := endpointOf(cfg)
+
+	// Asked for first, because after the shutdown there is nothing left to ask.
+	var st proxy.Status
+	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
+		st.PID = proxy.Owner(endpoint)
+	}
+
 	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
 		return
 	}
 	_ = waitForEndpoint(endpoint, false, stopTimeout)
+
+	// And then for the PROCESS, which is the part that matters here. The
+	// endpoint going quiet is the START of the teardown: only afterwards does
+	// the session drop its SSH connection, its reverse tunnel and its NFS
+	// export. An account has exactly ONE reverse-tunnel port (ADR 0003) and a
+	// session fails hard when it cannot take it -- so returning at the listener
+	// let the next session start against a port the workspace had not released,
+	// which killed its NFS server ("the nfs server stopped err=EOF") and took
+	// the session down with it. What the user saw was EOF on a local pipe.
+	_ = waitForExit(st.PID, stopTimeout)
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
 }
 
