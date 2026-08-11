@@ -50,6 +50,33 @@ machine that had stopped two and a half minutes after its own agent reported it
 was listening. So locating a machine starts it, and starting a running machine
 is what keeps it running.
 
+## The Hyper-V backend was merged unverified, on purpose
+
+The plan for this feature said the backends merge when somebody has run
+`docs/testing-machines.md` against them and said what happened, not on green CI
+alone. WSL cleared that bar. Hyper-V cannot: no CI offers it and nobody
+involved has it, so the bar would hold the code in a branch indefinitely,
+rotting against a moving codebase, for a verification that has no scheduled
+date.
+
+So it merged unrun, deliberately, on the argument that it costs nothing until
+somebody types `--backend hyperv`: no other path reaches it, and the WSL backend
+does not import a line of it.
+
+What that costs is honesty, and the price is paid in four places that must stay
+in step, because a claim nobody re-checks is one that expires silently:
+
+- the program says it, on every `machine create` with that backend, in a warning
+  it prints itself;
+- `--backend`'s help says it, since that is where somebody choosing looks;
+- CLAUDE.md's NOT-tested list calls it the strongest entry there;
+- the README says the backend has never been run by anybody.
+
+The first of those goes away when somebody has run the runbook and reported
+what happened. Until then it is not a supported option, it is a written-down
+attempt, and anything that says otherwise -- release notes, a summary, an
+answer to a user -- is wrong.
+
 ## Both backends are located the same way, and Hyper-V uses no hvsock
 
 The design for Hyper-V originally called for Hyper-V sockets, on the argument

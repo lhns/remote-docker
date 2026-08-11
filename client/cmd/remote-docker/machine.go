@@ -61,7 +61,8 @@ type machineOptions struct {
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&o.backend, "backend", "wsl", "wsl or hyperv")
+	cmd.Flags().StringVar(&o.backend, "backend", "wsl",
+		"wsl, or hyperv (never executed by anybody -- see docs/testing-machines.md)")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"what the machine is built from: the workspace image's filesystem as a tar file (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
@@ -145,6 +146,14 @@ they are on this machine and are served to it.`,
 	return cmd
 }
 
+// unproven names the backends that have never been executed.
+//
+// Not a capability check: hyperv COMPILES, is unit tested as far as a string
+// can be, and may well work. What it has never done is run, and that is a
+// different claim from "unavailable" -- which is why it is a warning and not a
+// refusal. See CLAUDE.md's NOT-tested list, which this must agree with.
+var unproven = map[string]bool{"hyperv": true}
+
 // createMachine is the whole of create and rebuild, which differ only in
 // whether they are allowed to destroy what is there.
 func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild bool) error {
@@ -157,6 +166,17 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 	if err := backend.Available(ctx); err != nil {
 		return err
+	}
+
+	// Said out loud, every time, by the program itself. A backend nobody has
+	// ever run is not the same kind of thing as one CI proves on every change,
+	// and a flag list that spells them the same way is the one place somebody
+	// choosing between them actually looks. It stays until somebody has run
+	// docs/testing-machines.md and said what happened.
+	if unproven[spec.Backend] {
+		_, _ = fmt.Fprintf(out, "warning: the %s backend has never been run by anybody\n"+
+			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
+			spec.Backend)
 	}
 
 	// Read before anything is built. One backend needs it at creation and the
