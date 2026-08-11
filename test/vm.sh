@@ -29,6 +29,7 @@ CLIENT_PID=
 cleanup() {
     [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" 2>/dev/null
     [ -n "$AGENT_PID" ] && sudo kill "$AGENT_PID" 2>/dev/null
+    wait 2>/dev/null
     # The per-account daemon outlives the agent deliberately -- it holds
     # somebody's containers (ADR 0019) -- so this suite takes its own away.
     hostdocker rm -f "rd-dind-$ACCOUNT" >/dev/null 2>&1
@@ -69,6 +70,33 @@ wait_unix_account() {
         sleep 1
     done
     return 1
+}
+
+# stop_session ends the client and WAITS for it.
+#
+# Waiting is the point. The endpoint is held until the process is gone, so a
+# second session started a tenth of a second later finds it bound and exits
+# with "already serving" -- which is the same race `stop && start` is
+# documented for, arriving here as "no endpoint in shared mode".
+stop_session() {
+    [ -z "$CLIENT_PID" ] && return 0
+    kill "$CLIENT_PID" 2>/dev/null
+    wait "$CLIENT_PID" 2>/dev/null
+    CLIENT_PID=
+}
+
+# stop_agent ends the agent and waits for its port.
+#
+# Not a child of this shell -- sudo -b detached it -- so `wait` cannot see it
+# and the process table is what there is to ask.
+stop_agent() {
+    [ -z "$AGENT_PID" ] && return 0
+    sudo kill "$AGENT_PID" 2>/dev/null
+    for _ in $(seq 1 30); do
+        pgrep -f "$WORK/remote-dockerd serve" >/dev/null || break
+        sleep 1
+    done
+    AGENT_PID=
 }
 
 dump_agent_log() {
@@ -200,10 +228,8 @@ else
     bad "status failed: $(echo "$out" | tail -2 | tr '\n' ' ')"
 fi
 
-kill "$CLIENT_PID" 2>/dev/null
-CLIENT_PID=
-sudo kill "$AGENT_PID" 2>/dev/null
-AGENT_PID=
+stop_session
+stop_agent
 hostdocker rm -f "rd-dind-$ACCOUNT" >/dev/null 2>&1
 
 echo
