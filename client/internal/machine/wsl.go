@@ -37,6 +37,14 @@ func WSLName(machine string) string { return "rd-" + machine }
 // a mismatch enough to recreate.
 const generationFile = "/etc/remote-docker-generation"
 
+// agentLog is where the agent's output goes inside the machine.
+//
+// WSL's boot command has no console and nothing collects its output, so without
+// this an agent that refuses to start is a machine that is simply unreachable,
+// with the reason written to a closed file descriptor. It is a shell
+// redirection because the boot command is run by a shell.
+const agentLog = "/var/log/remote-dockerd.log"
+
 // decodeWSLOutput turns wsl.exe's output into a string.
 //
 // wsl.exe writes UTF-16LE with a BOM. Read as bytes and printed, it looks like

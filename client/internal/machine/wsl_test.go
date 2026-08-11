@@ -207,3 +207,25 @@ func TestWSLReadGenerationArgs(t *testing.T) {
 		t.Errorf("the generation file is not an absolute path inside the machine: %q", generationFile)
 	}
 }
+
+// The agent binds every interface inside the machine, not its loopback.
+//
+// WSL2's localhost relay connects to the machine's own address, so a service on
+// 127.0.0.1 in there is reachable from in there and nowhere else. It presented
+// as the agent visibly running -- `ps` showed it -- and Windows refusing the
+// connection.
+func TestWSLConfBindsBeyondLoopback(t *testing.T) {
+	conf := wslConf(Spec{Name: "dev", Port: 2222})
+
+	if strings.Contains(conf, "127.0.0.1:2222") {
+		t.Error("the agent is bound to the machine's loopback, which Windows cannot reach")
+	}
+	if !strings.Contains(conf, "--addr :2222") {
+		t.Errorf("expected --addr :2222 in:\n%s", conf)
+	}
+	// The boot command is what starts the agent after a reboot, with nothing
+	// on the Windows side supervising anything.
+	if !strings.Contains(conf, "[boot]") || !strings.Contains(conf, "command=") {
+		t.Errorf("no boot command in:\n%s", conf)
+	}
+}

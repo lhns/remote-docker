@@ -13,6 +13,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -194,6 +196,14 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		_, _ = fmt.Fprintf(out, "%q already matches; nothing to do\n", name)
 	}
 
+	// Waited for, because "created" has to mean "usable". The agent has to
+	// start, generate a host key and open its listener, and returning before
+	// that hands the user a workspace whose first command fails with a refused
+	// connection.
+	if err := waitForAgent(ctx, spec.Port); err != nil {
+		return err
+	}
+
 	// Enrolled every time, including when nothing else happened: it is how a
 	// rotated key reaches an existing machine without a rebuild.
 	key, err := enrolledPublicKey()
@@ -206,6 +216,34 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	return saveMachineWorkspace(cmd, name, spec)
 }
+
+// waitForAgent blocks until the machine's agent accepts a connection.
+//
+// A dial rather than a handshake: this is asking whether the listener is open,
+// and anything further is the session's job to report properly. The timeout is
+// generous because a machine's first start does more than a later one.
+func waitForAgent(ctx context.Context, port int) error {
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	deadline := time.Now().Add(agentStartTimeout)
+
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return fmt.Errorf("the machine was created but its agent is not answering on %s\n"+
+		"  fix: `%s` shows what state it is in", addr, ourCommand("machine status"))
+}
+
+// agentStartTimeout is how long the agent has to open its listener.
+const agentStartTimeout = 90 * time.Second
 
 // saveMachineWorkspace writes the workspace entry, which is what makes the
 // machine an ordinary workspace everywhere else.

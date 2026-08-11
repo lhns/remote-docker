@@ -138,9 +138,19 @@ func wslConf(spec Spec) string {
 		"WORKSPACE_HOSTKEY_DIR=/etc/workspace/host_keys",
 		"WORKSPACE_ENABLE_DIND=true",
 	}
+	// Bound to every interface INSIDE the machine, not to its loopback.
+	//
+	// WSL2's default networking is NAT with a localhost relay, and the relay
+	// connects to the machine's own address -- so a service on 127.0.0.1 in
+	// there is reachable from in there and from nowhere else. It presented as
+	// the agent visibly running, `ps` and all, and Windows refusing the
+	// connection.
+	//
+	// Not an exposure: that interface is a host-only virtual network, and the
+	// agent authenticates every connection by key wherever it came from.
 	return "[boot]\nsystemd=false\ncommand=/usr/bin/env " +
 		strings.Join(env, " ") +
-		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr 127.0.0.1:%d\n", spec.Port)
+		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, agentLog)
 }
 
 // Enrol writes a public key where the agent's watcher will find it.

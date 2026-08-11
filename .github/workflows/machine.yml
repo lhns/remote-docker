@@ -130,3 +130,5 @@ jobs:
           wsl -l -v
           wsl -d rd-ci --user root -- cat /etc/wsl.conf
           wsl -d rd-ci --user root -- ps aux
+          wsl -d rd-ci --user root -- cat /var/log/remote-dockerd.log
+          wsl -d rd-ci --user root -- sh -c "netstat -lnt 2>/dev/null || ss -lnt"
