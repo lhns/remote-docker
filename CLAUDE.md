@@ -149,23 +149,19 @@ premise of the project, and it applies to building it too. So:
   answering to the name `docker` (ADR 0022) would be silently dead on the
   platform where a symlink is the right answer. The shim command is the
   opposite: it needs the real file to link *to*, so it uses `os.Executable`.
-- **This binary's own path comes from `selfPath`, never `os.Executable`.**
-  Termux runs a program as `linker64 <absolute path>`, because Android refuses
-  to execute files in app data directories, so the process really IS the
-  linker and `/proc/self/exe` says so. libtermux-exec patches that up in libc,
-  which a Go binary never loads. It fails at a distance and never names the
-  cause: `start` spawned the linker with the session's arguments and logged
-  `expected absolute path: "start"`, and `shim install` would have put a
-  `docker` on PATH that was the Android dynamic linker. One function, six call
-  sites, and `os.Executable` appears once in the whole client.
-- **Respawning this binary goes through `selfCommand`, never
-  `exec.Command(self)`.** Android refuses to execute a file in an app data
-  directory at all, which is why programs there run through the linker in the
-  first place, so a direct respawn is denied outright and `start` cannot launch
-  its own background session. It re-execs through whatever loader is running
-  this process, which `os.Executable` names, so no linker path is written down:
-  hardcoding `/system/bin/linker64` would be a guess about a platform nothing
-  tests. Where the two agree it is an ordinary exec of an ordinary file.
+- **This binary asks `self.go` which file it is and how to run itself again,
+  never `os.Executable` or `exec.Command` directly.** Android refuses to
+  execute files in app data directories, so Termux runs a program as
+  `linker64 <absolute path>` and the process really IS the linker.
+  libtermux-exec hides that in libc, which a Go binary never loads. So
+  `selfPath` for the path, because `/proc/self/exe` is the linker and
+  `shim install` would have put THAT on PATH as `docker`; and `selfCommand` for
+  a respawn, because the file cannot be exec'd at all and `start` could not
+  launch its own session. Both failed naming the linker or nothing:
+  `expected absolute path: "start"`, then `fork/exec ...: permission denied`.
+  No linker path is written down -- `os.Executable` names the loader already
+  running us, and hardcoding one would be a guess about a platform nothing
+  tests.
 - **Never touch a `docker` we did not write, and never execute one to find
   out.** A machine may get Docker Desktop tomorrow. Ours is `os.SameFile`
   against this binary, or a marker file beside it; anything else is left where

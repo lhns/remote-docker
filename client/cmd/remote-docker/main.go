@@ -9,11 +9,11 @@ import (
 
 func main() {
 	// Before anything reads them: an exec wrapper may have left this binary's
-	// own path in the arguments. See dropSelfArgument. os.Args rather than
-	// cobra's SetArgs, because the embedded Docker CLI reads os.Args in its own
-	// right and would still see the extra word.
+	// own path in the arguments (see self.go). os.Args rather than cobra's
+	// SetArgs, because the embedded Docker CLI reads os.Args in its own right
+	// and would still see the extra word.
 	self, _ := selfPath()
-	os.Args = dropSelfArgument(os.Args, self, os.Getenv(termuxSelfExeEnv))
+	os.Args = dropSelfArgument(os.Args, self)
 
 	// Under the name `docker` the whole command line belongs to the Docker
 	// CLI, and so does the help: `docker run --help` must not describe itself
