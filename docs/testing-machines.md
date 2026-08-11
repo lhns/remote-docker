@@ -113,9 +113,12 @@ showing nothing left behind.
 - the command and its whole output, not the last line;
 - `remote-docker remote machine status <name>`;
 - `wsl -l -v`;
-- the agent's own view: `wsl -d rd-<name> --user root -- cat /var/log/...`, or
+- the agent's own view:
+  `wsl -d rd-<name> --user root -- cat /var/log/remote-dockerd.log`, and
   `wsl -d rd-<name> --user root -- ps aux` to see whether the agent is running
   at all;
+- if it is running, what it is listening on:
+  `wsl -d rd-<name> --user root -- sh -c "netstat -lnt || ss -lnt"`;
 - the client log, whose path `remote start` prints;
 - `wsl --version` and `winver`.
 
@@ -126,3 +129,10 @@ look:
 ```powershell
 wsl -d rd-dev --user root -- cat /etc/wsl.conf
 ```
+
+If it *is* running and Windows still cannot reach it, check the address it
+bound. WSL2's default networking is NAT with a localhost relay, and the relay
+connects to the machine's own address, so an agent on the machine's loopback is
+reachable from inside it and nowhere else. The boot command binds every
+interface for exactly this reason, and a listener showing `127.0.0.1:<port>`
+rather than `0.0.0.0:<port>` is the bug reappearing.
