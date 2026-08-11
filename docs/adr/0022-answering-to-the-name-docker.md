@@ -44,6 +44,12 @@ resolves symlinks — on Linux it reads `/proc/self/exe` — so it reports
 `remote-docker` for exactly the installation this creates, and the feature
 would be silently dead on the platform where a symlink is the right answer.
 
+*(2026-08-11: this turned out to hold somewhere it was not written for. On
+Android the process really is the system linker and `/proc/self/exe` says so,
+so `argv[0]` is the only identity left standing. `shim install` works there,
+which is the measurement. See [ADR 0023](0023-running-where-the-loader-is-not-us.md);
+the shim's own `os.Executable` call had to become `selfPath`.)*
+
 `remote-docker shim install` arranges for that name to exist, and is
 deliberately not the mechanism: renaming the downloaded binary to `docker.exe`
 is a complete installation on its own.
@@ -92,11 +98,10 @@ installed later still wins.
   instead is what left a premise machine with no context at all, so compose
   fell through to the Docker Desktop pipe and reported that the daemon was not
   running.
-- **`docker compose` is still not there.** Compose is not embedded (ADR 0009:
-  it pins `docker/cli` back a major version and buildx back seven minors), so
-  it fails under the new name exactly as it did under the old one. Making it
-  work means wiring docker/cli's cli-plugins manager so a downloaded
-  `docker-compose` plugin is found. Not done here, and worth doing.
+- **`docker compose` works under the new name.** This record originally said it
+  did not, because ADR 0009 had ruled compose out as too expensive to embed.
+  That stopped being true when compose v5 shipped and it is embedded now, so it
+  answers under both names. *(Corrected 2026-08-11.)*
 - **Not a `.cmd` wrapper**, which would have avoided the whole symlink
   question. It puts a `cmd.exe` between the user and every `docker run -ti`,
   mangling quoting, exit codes and Ctrl-C, and a tool that execs `docker`
