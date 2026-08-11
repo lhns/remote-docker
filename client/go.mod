@@ -14,6 +14,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.9.1
+	github.com/google/go-containerregistry v0.21.7
 	github.com/lhns/remote-docker v0.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/willscott/go-nfs v0.0.4
@@ -122,7 +123,6 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/certificate-transparency-go v1.3.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/go-containerregistry v0.21.7 // indirect
 	github.com/google/go-dap v0.12.1-0.20250904181021-d7a2259b058b // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect

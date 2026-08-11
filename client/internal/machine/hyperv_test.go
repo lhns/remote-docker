@@ -158,7 +158,7 @@ func TestHyperVUnit(t *testing.T) {
 	}
 
 	// Without an image it runs the published one rather than nothing.
-	if !strings.Contains(hyperVUnit(Spec{Port: 22}), DefaultImage) {
+	if !strings.Contains(hyperVUnit(Spec{Port: 22}), DefaultImageRepo) {
 		t.Error("a spec with no image produces a unit that runs nothing")
 	}
 }

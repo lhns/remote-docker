@@ -169,7 +169,7 @@ jobs:
   # workflow artifacts.
   binaries:
     name: release binaries (tags only)
-    needs: [ci, meta, manifest]
+    needs: [ci]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -224,38 +224,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The rootfs a local machine is built from (ADR 0026).
-      #
-      # Published because without it the feature cannot be used by the people it
-      # is for: `remote machine create` takes the workspace image's filesystem,
-      # and getting one out of an image needs docker -- which is the thing being
-      # installed. A published artifact closes that circle, and it is the same
-      # image this workflow pushed a moment ago rather than a second thing built
-      # a second way.
-      #
-      # Gzipped, and `wsl --import` reads that directly. Not an assumption:
-      # `machine.yml` imports the gzipped file on every run, so the format
-      # people download is the format CI proves.
-      - name: publish the workspace rootfs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eux
-          image="$(echo '${{ needs.meta.outputs.tags }}' | cut -d, -f1)"
-
-          # Both architectures the client will ask for, taken from the image
-          # this workflow just published rather than built again here -- a
-          # second build is a second thing that can differ from what was tested.
-          #
-          # No emulation is needed and none is installed: `create` and `export`
-          # move layers around and execute nothing, so a foreign-architecture
-          # image exports on this runner exactly as a native one does.
-          for arch in amd64 arm64; do
-            docker pull --platform "linux/$arch" "$image"
-            id=$(docker create --platform "linux/$arch" "$image")
-            docker export "$id" | gzip -9 > "workspace-rootfs-$arch.tar.gz"
-            docker rm "$id"
-          done
-
-          ls -lh workspace-rootfs-*.tar.gz
-          gh release upload "$GITHUB_REF_NAME" workspace-rootfs-*.tar.gz --clobber

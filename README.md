@@ -70,10 +70,11 @@ remote-docker remote machine create dev
 remote-docker run --rm -v .:/w alpine ls /w
 ```
 
-`create` downloads the machine's filesystem — the workspace image, published
-with each release — and keeps it, so a second machine or a `rebuild` costs
-nothing. `--rootfs <file>` builds from a file you supply instead, for an
-air-gapped machine or an image of your own.
+`create` pulls the workspace image — the same one the container deployment runs,
+built and tested on every push — and flattens it into the machine's filesystem.
+It is kept, by digest, so a second machine or a `rebuild` costs nothing.
+`--rootfs <file>` builds from a file you supply instead, for an air-gapped
+machine or an image of your own.
 
 What comes out is a workspace like any other: `remote ls` lists it, the docker
 context is created for it, bind mounts and published ports work exactly as they

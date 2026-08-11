@@ -91,8 +91,13 @@ func (o *machineOptions) spec(name string) machine.Spec {
 		port = config.DefaultSSHPort
 	}
 	return machine.Spec{
-		Name:     name,
-		Backend:  o.backend,
+		Name:    name,
+		Backend: o.backend,
+		// The image is what a machine IS (ADR 0026), and it is named here so it
+		// is recorded in the machine's configuration and therefore part of its
+		// generation: a client on a new version builds a new machine rather
+		// than adopting one made from an older image.
+		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
 		Port:     port,
 		CPUs:     o.cpus,
@@ -265,7 +270,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		// machine already matching should not download several hundred
 		// megabytes in order to say there was nothing to do.
 		if spec.Rootfs == "" {
-			if spec.Rootfs, err = machine.EnsureRootfs(ctx, version, out); err != nil {
+			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
 				return err
 			}
 		}
