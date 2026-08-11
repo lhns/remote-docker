@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -23,6 +25,11 @@ type testServer struct {
 	HostKey  ssh.PublicKey
 	listener net.Listener
 	srv      *gssh.Server
+
+	// silent makes the server accept global requests and never answer them,
+	// which is what a link that has stopped carrying anything looks like from
+	// this end. A server that is merely gone is a different test.
+	silent atomic.Bool
 }
 
 // startTestServer runs a server that accepts any public key, echoes commands
@@ -41,6 +48,7 @@ func startTestServer(t *testing.T) *testServer {
 
 	forwardHandler := &gssh.ForwardedTCPHandler{}
 
+	ts := &testServer{}
 	srv := &gssh.Server{
 		PublicKeyHandler: func(gssh.Context, gssh.PublicKey) bool { return true },
 
@@ -52,6 +60,19 @@ func startTestServer(t *testing.T) *testServer {
 		RequestHandlers: map[string]gssh.RequestHandler{
 			"tcpip-forward":        forwardHandler.HandleSSHRequest,
 			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
+
+			// Registered so that silence can be arranged. A request with no
+			// handler is answered with a refusal, which is still an ANSWER and
+			// so is not the case being tested: the probe wants to know what
+			// happens when nothing comes back at all. Blocking here sends no
+			// reply, and the request dies with the connection.
+			"keepalive@openssh.com": func(ctx gssh.Context, _ *gssh.Server, _ *ssh.Request) (bool, []byte) {
+				if ts.silent.Load() {
+					<-ctx.Done()
+					return false, nil
+				}
+				return true, nil
+			},
 		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
@@ -85,12 +106,10 @@ func startTestServer(t *testing.T) *testServer {
 		t.Fatalf("listen: %v", err)
 	}
 
-	ts := &testServer{
-		Addr:     l.Addr(),
-		HostKey:  hostSigner.PublicKey(),
-		listener: l,
-		srv:      srv,
-	}
+	ts.Addr = l.Addr()
+	ts.HostKey = hostSigner.PublicKey()
+	ts.listener = l
+	ts.srv = srv
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
 	return ts
@@ -98,6 +117,13 @@ func startTestServer(t *testing.T) *testServer {
 
 // dial builds a client against the test server, with state under t.TempDir().
 func (ts *testServer) dial(t *testing.T) *Client {
+	t.Helper()
+	return ts.dialWith(t, 0)
+}
+
+// dialWith is dial with a keepalive interval of its own, for the tests about
+// what happens when probes go unanswered.
+func (ts *testServer) dialWith(t *testing.T, keepAlive time.Duration) *Client {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -120,6 +146,7 @@ func (ts *testServer) dial(t *testing.T) *Client {
 		User:       "tester",
 		Key:        key,
 		KnownHosts: kh,
+		KeepAlive:  keepAlive,
 	})
 	if err != nil {
 		t.Fatalf("Dial: %v", err)

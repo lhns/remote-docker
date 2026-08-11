@@ -135,9 +135,24 @@ func (f facts) sessionLine() string {
 		return "not running"
 	case !f.answering:
 		return "running, but not answering"
+	case f.local.Drops > 0 && !f.local.Connected:
+		return fmt.Sprintf("running (pid %d, since %s), reconnecting on the next command",
+			f.local.PID, f.local.Since)
+	case f.local.Drops > 0:
+		return fmt.Sprintf("running (pid %d, since %s), reconnected %s (last %s)",
+			f.local.PID, f.local.Since, times(f.local.Drops), f.local.LastDrop)
 	default:
 		return fmt.Sprintf("running (pid %d, since %s)", f.local.PID, f.local.Since)
 	}
+}
+
+// times reads "once" or "3 times", because "reconnected 1 times" is the kind
+// of thing that makes a reader doubt the number.
+func times(n int) string {
+	if n == 1 {
+		return "once"
+	}
+	return fmt.Sprintf("%d times", n)
 }
 
 // dockerReach is what a tool that is not this binary will talk to.

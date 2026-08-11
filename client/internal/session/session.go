@@ -229,8 +229,11 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			live.close()
 		},
 		busy: s.hasLiveDependents,
-		idle: opts.IdleTimeout,
-		log:  opts.Log,
+		// Asked before every request, so a dropped connection is replaced
+		// rather than handed out again.
+		alive: func(live *liveConn) bool { return live.ssh.Alive() },
+		idle:  opts.IdleTimeout,
+		log:   opts.Log,
 	}
 
 	s.started = time.Now()

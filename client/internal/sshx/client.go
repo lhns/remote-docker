@@ -129,21 +129,77 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		done: make(chan struct{}),
 	}
 	go c.keepAlive()
+
+	// The transport failing is noticed at once rather than at the next probe.
+	// Wait returns as soon as the connection is torn down, which a reset or a
+	// close by the far side does in milliseconds.
+	go func() {
+		_ = c.ssh.Wait()
+		_ = c.Close()
+	}()
 	return c, nil
+}
+
+// Dead is closed once this connection can no longer carry anything, however it
+// died: the keepalive noticed, the transport failed, or it was closed here.
+//
+// Published because nothing else can tell. A request handed a dead connection
+// fails in a way that reads as the workspace refusing rather than as a tunnel
+// that went away, and whatever holds the connection has no other way to learn
+// it must open another.
+func (c *Client) Dead() <-chan struct{} { return c.done }
+
+// Alive is Dead asked without waiting.
+func (c *Client) Alive() bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // keepAlive probes the connection so a silently dead tunnel is detected in
 // seconds rather than whenever something next tries to use it.
+//
+// The reply is waited for on its own clock, not SendRequest's. SendRequest
+// blocks until an answer or until the transport gives up, and a link that has
+// stopped carrying anything without breaking -- a NAT idling the flow out, a
+// laptop suspended and resumed -- stays writable for as long as TCP keeps
+// retransmitting, which is minutes. Config.KeepAlive promises seconds.
+//
+// Two missed replies rather than one, so a workspace briefly too busy to answer
+// is not mistaken for a workspace that is gone.
 func (c *Client) keepAlive() {
 	t := time.NewTicker(c.cfg.KeepAlive)
 	defer t.Stop()
+
+	missed := 0
 	for {
 		select {
 		case <-c.done:
 			return
 		case <-t.C:
-			if _, _, err := c.ssh.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-				_ = c.Close()
+			answered := make(chan error, 1)
+			go func() {
+				_, _, err := c.ssh.SendRequest("keepalive@openssh.com", true, nil)
+				answered <- err
+			}()
+
+			select {
+			case err := <-answered:
+				if err != nil {
+					_ = c.Close()
+					return
+				}
+				missed = 0
+			case <-time.After(c.cfg.KeepAlive):
+				missed++
+				if missed >= 2 {
+					_ = c.Close()
+					return
+				}
+			case <-c.done:
 				return
 			}
 		}

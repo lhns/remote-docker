@@ -163,7 +163,10 @@ func (s *Session) exportsVolume(volume string) bool {
 // daemon asked to describe itself must not go and establish a connection it
 // had let go, which would make asking the question change the answer.
 func (s *Session) Status() any {
-	live, connected := s.gate.current()
+	// currentLive, not current: a session holding a connection that has died
+	// is not connected, and saying so is the difference between `status`
+	// reporting the truth and reporting a field.
+	live, connected := s.gate.currentLive()
 	st := proxy.Status{
 		Version:   s.opts.Version,
 		Workspace: s.opts.Config.Name,
@@ -174,6 +177,10 @@ func (s *Session) Status() any {
 		Connected: connected,
 		Since:     s.started.Format(time.RFC3339),
 		Tracing:   proxy.Tracing(),
+	}
+	if drops, last := s.gate.dropped(); drops > 0 {
+		st.Drops = drops
+		st.LastDrop = last.Format(time.RFC3339)
 	}
 	if connected {
 		st.User = live.info.User
@@ -236,7 +243,11 @@ func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	}
 	quiet := time.Since(last)
 
-	live, connected := s.gate.current()
+	// currentLive, so a dead connection takes the "nothing depends on this"
+	// branch instead of being asked over a transport that cannot answer. That
+	// is also what stops `remote restart` refusing on a session whose
+	// connection dropped, which used to leave --force as the only way out.
+	live, connected := s.gate.currentLive()
 	if !connected {
 		return quiet, true
 	}

@@ -211,6 +211,16 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
+- **A gate hands out a connection only after asking whether it is alive, and a
+  dead one is dropped rather than asked whether anything depends on it.**
+  Detection existed and went nowhere: the keepalive closed the SSH client and
+  told nobody, so `held` still meant "we have one" and every later request got
+  the corpse. The sweep then asked that corpse whether it was busy, got an
+  error, and "cannot tell means keep" made it unreleasable, so the session
+  wedged until `remote restart` -- which also refused, because `IdleFor` asked
+  the same dead connection. `alive` must never do I/O: it runs before every
+  request, where `busy`'s round trip cannot.
+
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,
   including a second session of the same account, and `Release` takes the token

@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRun(t *testing.T) {
@@ -194,5 +195,64 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
+	}
+}
+
+// A connection that goes away is known to have gone.
+//
+// Detection existed before this and went nowhere: the keepalive closed the
+// client and told nobody, so whatever held the connection kept handing it out.
+// Dead is how the session learns it must open another.
+func TestDeadClosesWhenTheServerGoesAway(t *testing.T) {
+	ts := startTestServer(t)
+	c := ts.dial(t)
+
+	if !c.Alive() {
+		t.Fatal("a fresh connection reported itself dead")
+	}
+
+	ts.srv.Close()
+	_ = ts.listener.Close()
+
+	select {
+	case <-c.Dead():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection did not notice the server going away")
+	}
+	if c.Alive() {
+		t.Error("Alive still says yes after Dead closed")
+	}
+}
+
+// Closing here is a death like any other, so a holder waiting on Dead is woken
+// rather than left waiting for a keepalive that will never run again.
+func TestDeadClosesOnClose(t *testing.T) {
+	ts := startTestServer(t)
+	c := ts.dial(t)
+
+	_ = c.Close()
+	select {
+	case <-c.Dead():
+	case <-time.After(time.Second):
+		t.Fatal("Dead did not close when the client did")
+	}
+}
+
+// The case the probe exists for: a link that stopped carrying anything without
+// breaking.
+//
+// A server that accepts the request and never answers leaves SendRequest
+// blocked until TCP gives up, which is minutes, while KeepAlive promises
+// seconds. The probe waits on its own clock instead.
+func TestKeepAliveGivesUpOnAnUnansweredProbe(t *testing.T) {
+	ts := startTestServer(t)
+	ts.silent.Store(true)
+
+	c := ts.dialWith(t, 50*time.Millisecond)
+
+	select {
+	case <-c.Dead():
+	case <-time.After(5 * time.Second):
+		t.Fatal("an unanswered keepalive never gave up")
 	}
 }

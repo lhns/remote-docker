@@ -100,3 +100,30 @@ threatened. The reconnect path this record calls load-bearing was not exercised
 by anything. `test/integration.sh` section 11c now proves a release happens
 when nothing depends on the session, *and* that one does not while a container
 does.
+
+**A connection could die and nothing noticed.** The gate treated `held` as "this
+works", and nothing ever cleared it on failure, so a connection that dropped
+between two requests was handed to every request after it. The keepalive did
+detect the drop within seconds and closed the SSH client, but it told nobody.
+Worse, the release path made the wedge permanent: the sweep asked the *dead*
+connection whether anything depended on it, the question failed, and the "cannot
+tell is not safe to drop" rule above kept it forever. Recovery needed `remote
+restart`, and `restart` itself refused because `IdleFor` asked the same dead
+connection.
+
+The rule is unchanged and still right for a connection that is alive. What
+changed is that a connection known to be dead is dropped rather than questioned:
+`sshx.Client` publishes `Dead`, the gate is given an `alive` check consulted
+before every acquire, and both `acquire` and `sweep` drop a dead connection
+first. `Status` and `IdleFor` ask `currentLive` rather than `current`, so a
+wedged session stops reporting itself ready.
+
+Three consequences worth writing down. A stream in flight at the moment of the
+drop is cut and is not resumed: a hijacked stream has no resume point, and
+re-attaching silently would produce a log with an invisible hole in it. The
+lease counter is deliberately not reset when a dead connection is dropped, since
+it counts leases rather than leases on the current connection, and that stream
+will still release its own when it closes. And a workspace that is genuinely
+down now costs a dial and a timeout on every command, which is what it already
+cost when no connection was held.
+
