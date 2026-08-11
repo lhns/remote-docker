@@ -13,9 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -306,12 +304,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	// on its localhost relay, which was measured refusing the connection while
 	// the machine was running and its agent listening (2026-08-11, the `a
 	// machine on wsl` job).
-	host, err := machine.Locate(ctx, spec.Backend, name)
-	if err != nil {
-		return err
-	}
-
-	if err := waitForAgent(ctx, host, spec.Port); err != nil {
+	if _, err := machine.Locate(ctx, spec.Backend, name, spec.Port); err != nil {
 		return err
 	}
 
@@ -324,40 +317,6 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	return saveMachineWorkspace(cmd, name, spec)
 }
-
-// waitForAgent blocks until the machine's agent accepts a connection.
-//
-// A dial rather than a handshake: this is asking whether the listener is open,
-// and anything further is the session's job to report properly. The timeout is
-// generous because a machine's first start does more than a later one.
-func waitForAgent(ctx context.Context, host string, port int) error {
-	addr := net.JoinHostPort(host, fmt.Sprint(port))
-	deadline := time.Now().Add(agentStartTimeout)
-
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
-	return fmt.Errorf("the machine was created but its agent is not answering on %s\n"+
-		"  fix: `%s` shows what state it is in", addr, ourCommand("machine status"))
-}
-
-// agentStartTimeout is how long the agent has to open its listener.
-//
-// Longer than the agent's own wait for dockerd, deliberately. It gives the
-// daemon ninety seconds and then serves anyway, on the argument that a
-// workspace somebody can log into beats one that took the evidence with it --
-// so a client that waits ninety seconds gives up at the exact moment the agent
-// would have started answering, and reports a machine that was about to work.
-const agentStartTimeout = 3 * time.Minute
 
 // machinePlaceholderHost stands in for an address nobody should read. See
 // saveMachineWorkspace.
@@ -454,11 +413,7 @@ func newMachineStartCommand() *cobra.Command {
 				}
 				defer func() { _ = hold.Close() }()
 
-				host, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name)
-				if err != nil {
-					return err
-				}
-				if err := waitForAgent(ctx, host, ws.Port); err != nil {
+				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
 					return err
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", ws.Machine.Name)

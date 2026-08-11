@@ -20,10 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Spec is what a machine should be, derived entirely from configuration.
@@ -332,7 +335,7 @@ func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
 // cannot be dialled the way a workspace on another host is: the host is always
 // there and the machine is not. Starting is also what makes the address
 // answerable, since a stopped machine has none.
-func Locate(ctx context.Context, backendName, name string) (string, error) {
+func Locate(ctx context.Context, backendName, name string, port int) (string, error) {
 	backend, err := Find(backendName)
 	if err != nil {
 		return "", err
@@ -349,8 +352,54 @@ func Locate(ctx context.Context, backendName, name string) (string, error) {
 	if addr == "" {
 		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
 	}
+
+	// And then waited for, because "located" has to mean "dialable". A machine
+	// that was stopped is up before its agent is: the agent generates a host
+	// key and waits for dockerd before it opens a listener. Returning the
+	// address at the moment the machine boots hands the caller a connection
+	// that is refused, and a second attempt a minute later works -- which is
+	// how a deterministic failure comes to look like a flaky one.
+	//
+	// It lives here rather than in each caller because there are three, and the
+	// one that forgot was the session: leave a machine-backed workspace alone
+	// for a few minutes and its first command failed.
+	if err := waitForListener(ctx, addr, port); err != nil {
+		return "", fmt.Errorf("the %s machine %q is running but %w", backendName, name, err)
+	}
 	return addr, nil
 }
+
+// waitForListener blocks until something accepts a connection at the address.
+//
+// A dial rather than a handshake: this asks whether the listener is open, and
+// anything further is the session's job to report properly.
+func waitForListener(ctx context.Context, host string, port int) error {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	deadline := time.Now().Add(AgentStartTimeout)
+
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return fmt.Errorf("its agent is not answering on %s", addr)
+}
+
+// AgentStartTimeout is how long the agent has to open its listener.
+//
+// Longer than the agent's own wait for dockerd, deliberately. It gives the
+// daemon ninety seconds and then serves anyway, on the argument that a
+// workspace somebody can log into beats one that took the evidence with it --
+// so a client that waits ninety seconds gives up at the exact moment the agent
+// would have started answering, and reports a machine that was about to work.
+var AgentStartTimeout = 3 * time.Minute
 
 // Backends returns the backends compiled into this build, by name.
 //

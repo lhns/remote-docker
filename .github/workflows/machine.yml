@@ -146,14 +146,16 @@ jobs:
           if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
           .\client\rd.exe rm -f survivor
 
-      # The failure this exists for, and the only one nothing else here would
-      # catch. WSL shuts an idle distribution down, and a TCP connection from
-      # Windows is not use it counts -- so a session has to HOLD its machine
-      # open, and until this ran nothing proved that it did. `create` was the
-      # first thing to hit it and took five CI rounds to diagnose (ADR 0026);
-      # a session hitting it would present as a workspace that worked and then
-      # stopped working while nobody touched it.
-      - name: a session outlives the idle timeout
+      # Left alone, and then used again.
+      #
+      # A session that has been idle DISCONNECTS on purpose (ADR 0015), which
+      # releases the machine and lets WSL shut it down. All of that is correct,
+      # and the machine being stopped here is not the failure -- the failure is
+      # the command after it. This found one: the machine was started again and
+      # dialled immediately, before its agent was listening, so the first
+      # command failed and the second worked, which reads as flakiness rather
+      # than as the deterministic bug it was.
+      - name: a machine comes back after sitting idle
         shell: pwsh
         timeout-minutes: 8
         env:
@@ -169,7 +171,7 @@ jobs:
           $state
           $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
           $out
-          if ($out -notmatch 'from the runner') { throw "the machine went away under a live session" }
+          if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }
           .\client\rd.exe remote stop
 
       # rm destroys the machine as well as the entry, and leaving a

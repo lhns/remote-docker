@@ -66,7 +66,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
 			return nil, err
 		}
-		host, err = machine.Locate(ctx, m.Backend, m.Name)
+		host, err = machine.Locate(ctx, m.Backend, m.Name, s.opts.Config.Port)
 		if err != nil {
 			_ = hold.Close()
 			return nil, err

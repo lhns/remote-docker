@@ -13,8 +13,37 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"strings"
 	"testing"
+	"time"
 )
+
+// listening opens a socket for the duration of a test and returns its port, so
+// a located machine has something to answer the dial Locate makes.
+func listening(t *testing.T) int {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// nothingListening returns a port with nothing behind it.
+func nothingListening(t *testing.T) int {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return port
+}
 
 // fakeBackend records the calls made to it and answers as told.
 type fakeBackend struct {
@@ -87,14 +116,14 @@ func register(t *testing.T, f *fakeBackend) {
 }
 
 func TestLocateStartsBeforeAsking(t *testing.T) {
-	fake := &fakeBackend{name: "fake", address: "172.19.4.7"}
+	fake := &fakeBackend{name: "fake", address: "127.0.0.1"}
 	register(t, fake)
 
-	got, err := Locate(context.Background(), "fake", "dev")
+	got, err := Locate(context.Background(), "fake", "dev", listening(t))
 	if err != nil {
 		t.Fatalf("Locate: %v", err)
 	}
-	if got != "172.19.4.7" {
+	if got != "127.0.0.1" {
 		t.Errorf("Locate = %q", got)
 	}
 
@@ -115,7 +144,7 @@ func TestLocateRefusesAMachineWithNoAddress(t *testing.T) {
 	fake := &fakeBackend{name: "fake", address: ""}
 	register(t, fake)
 
-	if _, err := Locate(context.Background(), "fake", "dev"); err == nil {
+	if _, err := Locate(context.Background(), "fake", "dev", 2222); err == nil {
 		t.Fatal("a machine with no address was reported as reachable")
 	}
 }
@@ -124,7 +153,7 @@ func TestLocateReportsAMachineThatWillNotStart(t *testing.T) {
 	fake := &fakeBackend{name: "fake", startErr: errors.New("no such distribution")}
 	register(t, fake)
 
-	_, err := Locate(context.Background(), "fake", "dev")
+	_, err := Locate(context.Background(), "fake", "dev", 2222)
 	if err == nil {
 		t.Fatal("a machine that would not start was located anyway")
 	}
@@ -138,6 +167,56 @@ func TestLocateReportsAMachineThatWillNotStart(t *testing.T) {
 		if c == "address" {
 			t.Error("a machine that failed to start was asked for its address")
 		}
+	}
+}
+
+// A located machine is one that can be dialled.
+//
+// The bug this pins: Locate started the machine, returned its address and let
+// the caller dial immediately. A machine that was stopped is UP before its
+// agent is -- the agent generates a host key and waits for dockerd before it
+// listens -- so the first command after a machine had been left alone failed
+// with a refused connection and the second worked, which is how a deterministic
+// failure comes to look like a flaky one.
+func TestLocateWaitsForTheAgent(t *testing.T) {
+	port := nothingListening(t)
+	fake := &fakeBackend{name: "fake", address: "127.0.0.1"}
+	register(t, fake)
+
+	// Shortened, or this test would take the three minutes a real machine is
+	// allowed. The duration itself is argued for where it is declared.
+	restore := AgentStartTimeout
+	AgentStartTimeout = 2 * time.Second
+	t.Cleanup(func() { AgentStartTimeout = restore })
+
+	_, err := Locate(context.Background(), "fake", "dev", port)
+	if err == nil {
+		t.Fatal("a machine whose agent never answered was located anyway")
+	}
+	// The machine, the address and the port, because the caller is otherwise
+	// told only that a connection was refused.
+	for _, want := range []string{"dev", "127.0.0.1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not name %q: %v", want, err)
+		}
+	}
+}
+
+// And a machine whose agent answers is returned without waiting the timeout out.
+func TestLocateReturnsAsSoonAsTheAgentAnswers(t *testing.T) {
+	fake := &fakeBackend{name: "fake", address: "127.0.0.1"}
+	register(t, fake)
+
+	restore := AgentStartTimeout
+	AgentStartTimeout = time.Minute
+	t.Cleanup(func() { AgentStartTimeout = restore })
+
+	start := time.Now()
+	if _, err := Locate(context.Background(), "fake", "dev", listening(t)); err != nil {
+		t.Fatalf("Locate: %v", err)
+	}
+	if waited := time.Since(start); waited > 10*time.Second {
+		t.Errorf("Locate waited %s for a machine that was already answering", waited)
 	}
 }
 
@@ -168,7 +247,7 @@ func TestLocateAndHoldNameAnUnknownBackend(t *testing.T) {
 	// Every path to a machine goes through one of these two, so a workspace
 	// naming a backend this build does not have must say so here rather than
 	// failing later as a connection error.
-	if _, err := Locate(context.Background(), "nonesuch", "dev"); err == nil {
+	if _, err := Locate(context.Background(), "nonesuch", "dev", 2222); err == nil {
 		t.Error("Locate accepted a backend that does not exist")
 	}
 	if _, err := Hold(context.Background(), "nonesuch", "dev"); err == nil {
