@@ -186,11 +186,10 @@ func wslConf(spec Spec) string {
 	}
 	// Bound to every interface INSIDE the machine, not to its loopback.
 	//
-	// WSL2's default networking is NAT with a localhost relay, and the relay
-	// connects to the machine's own address -- so a service on 127.0.0.1 in
-	// there is reachable from in there and from nowhere else. It presented as
-	// the agent visibly running, `ps` and all, and Windows refusing the
-	// connection.
+	// WSL2's default networking is NAT, and Windows reaches the machine either
+	// through its localhost relay or at the machine's own address. A service on
+	// the machine's loopback can only ever be reached by the first of those, so
+	// binding wider costs nothing and keeps the second possible.
 	//
 	// Not an exposure: that interface is a host-only virtual network, and the
 	// agent authenticates every connection by key wherever it came from.

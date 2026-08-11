@@ -210,10 +210,9 @@ func TestWSLReadGenerationArgs(t *testing.T) {
 
 // The agent binds every interface inside the machine, not its loopback.
 //
-// WSL2's localhost relay connects to the machine's own address, so a service on
-// 127.0.0.1 in there is reachable from in there and nowhere else. It presented
-// as the agent visibly running -- `ps` showed it -- and Windows refusing the
-// connection.
+// Windows reaches the machine either through WSL2's localhost relay or at the
+// machine's own address, and a service on the machine's loopback can only ever
+// be reached by the first of those.
 func TestWSLConfBindsBeyondLoopback(t *testing.T) {
 	conf := wslConf(Spec{Name: "dev", Port: 2222})
 
