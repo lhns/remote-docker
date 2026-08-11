@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,6 +126,68 @@ func (ts *testServer) dial(t *testing.T) *Client {
 // what happens when probes go unanswered.
 func (ts *testServer) dialWith(t *testing.T, keepAlive time.Duration) *Client {
 	t.Helper()
+	return ts.dialAddr(t, ts.Addr, keepAlive)
+}
+
+// cutter sits between the client and the server so a test can take the
+// transport away.
+//
+// Closing the SERVER is not the same thing and is not what these tests mean:
+// whether that drops connections already established is up to the library and
+// the platform, and a test that depends on it passes on one and hangs on the
+// other. Cutting the wire is the case the code is about anyway, since a link
+// dying is what happens to a laptop that loses its network.
+type cutter struct {
+	Addr net.Addr
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func startCutter(t *testing.T, to net.Addr) *cutter {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	c := &cutter{Addr: l.Addr()}
+	t.Cleanup(func() { _ = l.Close(); c.cut() })
+
+	go func() {
+		for {
+			from, err := l.Accept()
+			if err != nil {
+				return
+			}
+			up, err := net.Dial("tcp", to.String())
+			if err != nil {
+				_ = from.Close()
+				return
+			}
+			c.mu.Lock()
+			c.conns = append(c.conns, from, up)
+			c.mu.Unlock()
+
+			go func() { _, _ = io.Copy(up, from) }()
+			go func() { _, _ = io.Copy(from, up) }()
+		}
+	}()
+	return c
+}
+
+func (c *cutter) cut() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, conn := range c.conns {
+		_ = conn.Close()
+	}
+	c.conns = nil
+}
+
+// dialAddr builds a client against an address, with state under t.TempDir().
+func (ts *testServer) dialAddr(t *testing.T, addr net.Addr, keepAlive time.Duration) *Client {
+	t.Helper()
 
 	dir := t.TempDir()
 	key, err := LoadOrCreateKey(dir+"/id_ed25519", "test")
@@ -136,7 +199,7 @@ func (ts *testServer) dialWith(t *testing.T, keepAlive time.Duration) *Client {
 		t.Fatalf("NewKnownHosts: %v", err)
 	}
 
-	host, portStr, _ := net.SplitHostPort(ts.Addr.String())
+	host, portStr, _ := net.SplitHostPort(addr.String())
 	var port int
 	fmt.Sscanf(portStr, "%d", &port)
 

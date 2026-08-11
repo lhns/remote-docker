@@ -203,21 +203,21 @@ func TestCloseIsIdempotent(t *testing.T) {
 // Detection existed before this and went nowhere: the keepalive closed the
 // client and told nobody, so whatever held the connection kept handing it out.
 // Dead is how the session learns it must open another.
-func TestDeadClosesWhenTheServerGoesAway(t *testing.T) {
+func TestDeadClosesWhenTheTransportGoesAway(t *testing.T) {
 	ts := startTestServer(t)
-	c := ts.dial(t)
+	cut := startCutter(t, ts.Addr)
+	c := ts.dialAddr(t, cut.Addr, 0)
 
 	if !c.Alive() {
 		t.Fatal("a fresh connection reported itself dead")
 	}
 
-	ts.srv.Close()
-	_ = ts.listener.Close()
+	cut.cut()
 
 	select {
 	case <-c.Dead():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the connection did not notice the server going away")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the connection did not notice the transport going away")
 	}
 	if c.Alive() {
 		t.Error("Alive still says yes after Dead closed")

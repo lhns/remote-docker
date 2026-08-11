@@ -109,9 +109,24 @@ func ExportPathForID(id string) string {
 	return ExportMountPrefix + id
 }
 
-// VolumeNameForID is the Docker volume name backing a share with this id.
-func VolumeNameForID(id string) string {
-	return VolumeNamePrefix + id
+// VolumeNameForID is the Docker volume name backing a share with this id, on
+// the given client machine.
+//
+// The client is part of the NAME and not merely a label, because the daemon is
+// shared between an account's machines while the files behind a share are on
+// one of them. Without it both machines derive `rd-cwd` for their own working
+// directory, the second create silently returns the first's volume, and a
+// container comes up reading somebody else's project. That is the same failure
+// ADR 0019 records across accounts, one level down.
+//
+// An empty client yields the old shape, which is what a volume created before
+// this looks like. Those still parse and are still collectable; nothing creates
+// one.
+func VolumeNameForID(client, id string) string {
+	if client == "" {
+		return VolumeNamePrefix + id
+	}
+	return VolumeNamePrefix + client + "-" + id
 }
 
 // IsManagedVolume reports whether a volume name is one of ours. Used before
@@ -129,15 +144,71 @@ const cwdSuffix = "cwd"
 // registering the working directory as a bind source returns the existing
 // /cwd share rather than minting a second one for the same directory, so the
 // commonest bind of all, `-v .:/app`, arrives here as "/cwd".
-func VolumeNameForExport(exportPath string) (string, error) {
+func VolumeNameForExport(client, exportPath string) (string, error) {
 	if exportPath == ExportCWD {
-		return VolumeNamePrefix + cwdSuffix, nil
+		return VolumeNameForID(client, cwdSuffix), nil
 	}
 	id, err := ParseID(exportPath)
 	if err != nil {
 		return "", err
 	}
-	return VolumeNameForID(id), nil
+	return VolumeNameForID(client, id), nil
+}
+
+// ParseVolumeName splits a managed volume name into the client that created it
+// and the share it backs.
+//
+// A volume from before clients were named has no client, which is reported as
+// the empty string rather than an error: it is still ours, still collectable,
+// and still tells its share apart from the next one.
+func ParseVolumeName(name string) (client, share string, ok bool) {
+	if !IsManagedVolume(name) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(name, VolumeNamePrefix)
+
+	client, share, found := strings.Cut(rest, "-")
+	if !found {
+		// rd-<id> or rd-cwd, from before this.
+		return "", rest, validShare(rest)
+	}
+	if len(client) != clientIDLen || !isHex(client) {
+		return "", "", false
+	}
+	return client, share, validShare(share)
+}
+
+// validShare reports whether a volume name suffix names a share this program
+// could have created.
+func validShare(share string) bool {
+	if share == cwdSuffix {
+		return true
+	}
+	return len(share) == idLen && isHex(share)
+}
+
+// isHex reports whether every character is a lowercase hex digit, which is
+// what both ids are made of.
+func isHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidExport reports whether a path is one this program exports, which is
+// exactly /cwd and /m/<id>.
+func ValidExport(exportPath string) error {
+	if exportPath == ExportCWD {
+		return nil
+	}
+	_, err := ParseID(exportPath)
+	return err
 }
 
 // ParseID extracts the share id from an export path or a managed volume name.
