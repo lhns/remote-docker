@@ -19,14 +19,6 @@ import (
 	"unicode/utf16"
 )
 
-// WSLName is the distribution name for a machine.
-//
-// Prefixed, because a WSL distribution list is the user's own namespace: it
-// holds their Ubuntu, their Docker Desktop distributions, whatever else. Taking
-// a bare name there is the same mistake as taking a bare unix account name on
-// a VM (ADR 0025).
-func WSLName(machine string) string { return "rd-" + machine }
-
 // generationFile is where a machine's generation is kept, inside the
 // distribution itself.
 //
@@ -214,11 +206,11 @@ func wslAddressArgs(name string) []string {
 func parseWSLAddress(raw []byte) string {
 	fields := strings.Fields(decodeWSLOutput(raw))
 	for i, f := range fields {
-		if f != "inet" || i+1 >= len(fields) {
-			continue
+		if f == "inet" && i+1 < len(fields) {
+			if addr := firstIPv4(fields[i+1 : i+2]); addr != "" {
+				return addr
+			}
 		}
-		// inet 172.24.110.158/20 -- the mask is the machine's, not ours.
-		return strings.TrimSpace(strings.SplitN(fields[i+1], "/", 2)[0])
 	}
 	return ""
 }

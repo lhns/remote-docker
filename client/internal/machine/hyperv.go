@@ -26,13 +26,6 @@ import (
 	"strings"
 )
 
-// HyperVName is the virtual machine name for a machine.
-//
-// Prefixed for the same reason as a WSL distribution and a unix account: the
-// VM list is the user's own namespace, and `Get-VM dev` is a poor thing to
-// have taken from them (ADR 0025).
-func HyperVName(machine string) string { return "rd-" + machine }
-
 // hyperVSwitch is the network the machine is attached to.
 //
 // The Default Switch, which Hyper-V creates and maintains itself: it is NAT
@@ -143,16 +136,9 @@ func parseVMState(raw string) State {
 // answer; link-local (169.254/16) means DHCP has not finished, which is a
 // machine that is up but not ready rather than one to connect to.
 func parseVMAddress(raw string) string {
-	for _, field := range strings.FieldsFunc(raw, func(r rune) bool {
+	return firstIPv4(strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
-	}) {
-		field = strings.TrimSpace(field)
-		if strings.Count(field, ".") != 3 || strings.HasPrefix(field, "169.254.") {
-			continue
-		}
-		return field
-	}
-	return ""
+	}))
 }
 
 // ignition is the machine's entire configuration, applied at first boot.

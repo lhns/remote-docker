@@ -77,7 +77,7 @@ func (b hyperVBackend) Available(ctx context.Context) error {
 }
 
 func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, error) {
-	out, err := b.ps(ctx, psGetVM(HyperVName(name)))
+	out, err := b.ps(ctx, psGetVM(machineName(name)))
 	if err != nil {
 		// A machine that is not there is not an error, and Get-VM with
 		// -ErrorAction SilentlyContinue says so by printing nothing.
@@ -107,7 +107,7 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 			"  fix: see docs/testing-machines.md for the one command that downloads it")
 	}
 
-	dir, err := hyperVStateDir(spec.Name)
+	dir, err := stateDir(spec.Name)
 	if err != nil {
 		return err
 	}
@@ -137,14 +137,14 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("writing the machine's configuration: %w", err)
 	}
 
-	if _, err := b.ps(ctx, psNewVM(HyperVName(spec.Name), vhd, dir, spec)); err != nil {
+	if _, err := b.ps(ctx, psNewVM(machineName(spec.Name), vhd, dir, spec)); err != nil {
 		return fmt.Errorf("creating the machine: %w", err)
 	}
 
 	// Recorded after creation so a machine that failed halfway is not marked as
 	// built with a key it never received.
 	notes := hyperVNotes{Generation: spec.Generation(), Key: keyFingerprint(spec.PublicKey)}
-	if _, err := b.ps(ctx, psSetNotes(HyperVName(spec.Name), notes)); err != nil {
+	if _, err := b.ps(ctx, psSetNotes(machineName(spec.Name), notes)); err != nil {
 		return err
 	}
 	return b.Start(ctx, spec.Name)
@@ -156,7 +156,7 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 // afterwards the only way in is the SSH that key is for -- PowerShell Direct is
 // Windows-guest only. See hyperVEnrolment.
 func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) error {
-	out, err := b.ps(ctx, psGetVM(HyperVName(name)))
+	out, err := b.ps(ctx, psGetVM(machineName(name)))
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) err
 }
 
 func (b hyperVBackend) Start(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, fmt.Sprintf("Start-VM -Name %s -ErrorAction SilentlyContinue", psQuote(HyperVName(name))))
+	_, err := b.ps(ctx, fmt.Sprintf("Start-VM -Name %s -ErrorAction SilentlyContinue", psQuote(machineName(name))))
 	return err
 }
 
@@ -181,7 +181,7 @@ func (hyperVBackend) Hold(context.Context, string) (io.Closer, error) {
 }
 
 func (b hyperVBackend) Address(ctx context.Context, name string) (string, error) {
-	out, err := b.ps(ctx, psAddress(HyperVName(name)))
+	out, err := b.ps(ctx, psAddress(machineName(name)))
 	if err != nil {
 		return "", err
 	}
@@ -193,26 +193,17 @@ func (b hyperVBackend) Address(ctx context.Context, name string) (string, error)
 // Stop-VM without -TurnOff, so the guest flushes its docker state. -Force means
 // "do not ask about signed-in users", not "pull the plug".
 func (b hyperVBackend) Stop(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(HyperVName(name))))
+	_, err := b.ps(ctx, fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(machineName(name))))
 	return err
 }
 
 func (b hyperVBackend) Destroy(ctx context.Context, name string) error {
-	dir, err := hyperVStateDir(name)
+	dir, err := stateDir(name)
 	if err != nil {
 		return err
 	}
-	_, err = b.ps(ctx, psRemoveVM(HyperVName(name), dir))
+	_, err = b.ps(ctx, psRemoveVM(machineName(name), dir))
 	return err
-}
-
-// hyperVStateDir is where a machine's disk and configuration live.
-func hyperVStateDir(name string) (string, error) {
-	local := os.Getenv("LOCALAPPDATA")
-	if local == "" {
-		return "", errors.New("LOCALAPPDATA is not set, so there is nowhere to put the machine's disk")
-	}
-	return filepath.Join(local, "remote-docker", "machines", name), nil
 }
 
 // copyFile copies a file, creating the destination.

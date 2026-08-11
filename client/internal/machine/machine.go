@@ -17,8 +17,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -252,6 +255,53 @@ type Backend interface {
 
 	Stop(ctx context.Context, name string) error
 	Destroy(ctx context.Context, name string) error
+}
+
+// namePrefix keeps our machines out of the user's own namespace.
+//
+// A WSL distribution list and a Hyper-V VM list are both places the user has
+// their own things, and `Get-VM dev` or `wsl -d dev` are poor names to take
+// from somebody. Same argument as the unix account prefix (ADR 0025), and the
+// same prefix, so one machine is spelled the same way everywhere it appears.
+const namePrefix = "rd-"
+
+// machineName is what a machine is called on the platform hosting it.
+func machineName(name string) string { return namePrefix + name }
+
+// stateDir is where a machine's disk and configuration live.
+//
+// One function rather than one per backend: they differ in what they put there,
+// never in where it goes, and two copies of a path is two answers to "what does
+// `rm` delete".
+func stateDir(name string) (string, error) {
+	local := os.Getenv("LOCALAPPDATA")
+	if local == "" {
+		return "", errors.New("LOCALAPPDATA is not set, so there is nowhere to put the machine's disk")
+	}
+	return filepath.Join(local, "remote-docker", "machines", name), nil
+}
+
+// firstIPv4 picks an address to reach a machine at, out of whatever the
+// platform reported.
+//
+// Link-local (169.254/16) is skipped rather than returned: it means DHCP has
+// not finished, so the machine is up and not ready. Returning it produces a
+// connection error naming an address nobody recognises, where returning nothing
+// makes the caller wait, which is the correct thing to do about a machine that
+// is still starting.
+func firstIPv4(fields []string) string {
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		// A prefix length is the machine's, not ours: 172.24.110.158/20.
+		if i := strings.IndexByte(f, '/'); i >= 0 {
+			f = f[:i]
+		}
+		if strings.Count(f, ".") != 3 || strings.HasPrefix(f, "169.254.") {
+			continue
+		}
+		return f
+	}
+	return ""
 }
 
 // closerFunc makes a func into an io.Closer.

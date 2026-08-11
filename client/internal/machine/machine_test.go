@@ -5,6 +5,7 @@ package machine
 // not covered here is covered by somebody running docs/testing-machines.md.
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -106,5 +107,51 @@ func TestFindWithoutABackend(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "remote create") {
 		t.Errorf("the error does not say what to do instead:\n%v", err)
+	}
+}
+
+// One address rule for both backends.
+//
+// The link-local guard used to be Hyper-V's alone, so a WSL machine whose DHCP
+// had not finished would hand back a 169.254 address for somebody to dial. Both
+// now wait instead, which is the right thing to do about a machine that is up
+// and not ready.
+func TestFirstIPv4(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		in         []string
+	}{
+		{"an ordinary address", "172.19.4.7", []string{"fe80::1", "172.19.4.7"}},
+		{"a prefix length is the machine's, not ours", "172.24.110.158", []string{"172.24.110.158/20"}},
+		{"link-local means DHCP has not finished", "", []string{"169.254.12.9", "fe80::1"}},
+		{"nothing reported", "", nil},
+		{"only IPv6", "", []string{"fe80::215:5dff:fe00:1", "2001:db8::1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := firstIPv4(tc.in); got != tc.want {
+				t.Errorf("firstIPv4(%v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// One state directory for both backends. They differ in what they put there,
+// never in where it goes, and two copies of a path is two answers to what `rm`
+// deletes.
+func TestStateDir(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", filepath.Join("C:", "Users", "x", "AppData", "Local"))
+	dir, err := stateDir("dev")
+	if err != nil {
+		t.Fatalf("stateDir: %v", err)
+	}
+	if !strings.HasSuffix(dir, filepath.Join("remote-docker", "machines", "dev")) {
+		t.Errorf("stateDir = %q", dir)
+	}
+
+	// Reported rather than guessed at: a machine built under a path we invented
+	// is one `rm` would not find.
+	t.Setenv("LOCALAPPDATA", "")
+	if _, err := stateDir("dev"); err == nil {
+		t.Error("stateDir invented a location with nowhere to put it")
 	}
 }

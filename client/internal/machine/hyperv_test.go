@@ -13,14 +13,6 @@ import (
 	"testing"
 )
 
-func TestHyperVName(t *testing.T) {
-	// The VM list is the user's own namespace. `Get-VM dev` is a poor thing to
-	// take from somebody (ADR 0025).
-	if got := HyperVName("dev"); got != "rd-dev" {
-		t.Errorf("HyperVName(dev) = %q", got)
-	}
-}
-
 func TestParseVMState(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
