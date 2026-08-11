@@ -249,3 +249,14 @@ func TestWSLConfCarriesTheImageEnvironment(t *testing.T) {
 		t.Errorf("DOCKER_TLS_CERTDIR is not set to empty:\n%s", conf)
 	}
 }
+
+// A machine runs one daemon, not one per account.
+//
+// It has exactly one account -- the person whose computer it is -- so a daemon
+// each separates nobody from anybody and costs a nested dind container, a
+// second graph store and a duplicated layer cache.
+func TestWSLConfUsesTheSharedDaemon(t *testing.T) {
+	if conf := wslConf(Spec{Name: "dev", Port: 2222}); !strings.Contains(conf, "WORKSPACE_PER_USER_DIND=false") {
+		t.Errorf("a machine asks for a daemon per account:\n%s", conf)
+	}
+}

@@ -130,5 +130,9 @@ jobs:
           wsl -l -v
           wsl -d rd-ci --user root -- cat /etc/wsl.conf
           wsl -d rd-ci --user root -- ps aux
-          wsl -d rd-ci --user root -- cat /var/log/remote-dockerd.log
           wsl -d rd-ci --user root -- sh -c "netstat -lnt 2>/dev/null || ss -lnt"
+          # SIGQUIT makes a Go program print every goroutine's stack before it
+          # dies, which is the one thing that says where an agent that is
+          # running but not listening actually is. It kills the agent, so it
+          # goes last and only on the failure path.
+          wsl -d rd-ci --user root -- sh -c "pkill -QUIT -f remote-dockerd; sleep 3; cat /var/log/remote-dockerd.log"

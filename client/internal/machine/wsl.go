@@ -172,6 +172,17 @@ func wslConf(spec Spec) string {
 		"WORKSPACE_KEYS_DIR=/etc/workspace/authorized_keys.d",
 		"WORKSPACE_HOSTKEY_DIR=/etc/workspace/host_keys",
 		"WORKSPACE_ENABLE_DIND=true",
+
+		// One daemon, not one per account. A machine on somebody's own computer
+		// has exactly one account -- them -- so a daemon each separates nobody
+		// from anybody, and ADR 0012's argument for the shared daemon applies
+		// in full: it would cost a nested dind container, a second graph store
+		// and a duplicated layer cache to give the user privacy from
+		// themselves. It also stops the workspace's own daemon standing between
+		// a fresh machine and its first connection: with a daemon per account
+		// the agent adopts running daemons before it serves, and adoption asks
+		// dockerd.
+		"WORKSPACE_PER_USER_DIND=false",
 	}
 	// Bound to every interface INSIDE the machine, not to its loopback.
 	//
