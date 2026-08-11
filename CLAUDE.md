@@ -247,6 +247,13 @@ premise of the project, and it applies to building it too. So:
   name, and a test that asks the unix side must ask for `rd-<account>` --
   spelling it `<account>` made `id -nG` fail and the suite read the failure as
   a pass.
+- **A machine-backed workspace is an ordinary workspace with a lifecycle.**
+  The `machine` block in the config is the only thing that differs anywhere,
+  and the only command that reads it is `rm`, which has a machine to destroy
+  (ADR 0026). Never add a second data path: the session, the export, the port
+  forwarding and the rewriting do not know a machine from a host in another
+  country. And `rm` REFUSES when it cannot destroy the machine, because the
+  config entry is the only record that one was ever built.
 - **A VM workspace is the same agent, not a mode.** ADR 0025 moves two things
   to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
   shared-daemon mode only, the NFS client -- and changes nothing else. Never

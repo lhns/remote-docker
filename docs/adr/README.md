@@ -36,6 +36,7 @@ survives that document being superseded.
 | [0023](0023-running-where-the-loader-is-not-us.md) | Running where the loader is not us | Accepted; extends 0004 |
 | [0024](0024-the-docker-cli-is-the-root.md) | The Docker CLI is the root | Accepted; supersedes 0022 |
 | [0025](0025-the-agent-as-a-guest.md) | The agent as a guest on a machine it does not own | Accepted; extends 0010 |
+| [0026](0026-a-machine-is-a-workspace-we-provision.md) | A machine is a workspace we provision | Accepted; extends 0025 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next
