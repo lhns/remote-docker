@@ -34,6 +34,13 @@ import (
 var settingSources = map[string]struct {
 	env      string // the environment variable, "" if none
 	override bool   // whether Overrides carries it
+
+	// record marks a field that is not a setting at all: something this
+	// program WROTE about what it built, rather than something a user
+	// provides from a source. It still has to be declared here -- the point of
+	// this table is that a new field cannot be added silently -- but there is
+	// no source to honour it from, so the tests below skip it and say why.
+	record bool
 	// sample is what to set it to, in the string form the file and the
 	// environment both use.
 	sample string
@@ -83,6 +90,12 @@ var settingSources = map[string]struct {
 		env: EnvDaemonIdle, override: false, sample: "45m0s",
 		want: func(c Config) string { return dur(c.DaemonIdle) },
 	},
+
+	// Not a setting. `machine create` writes it and `rm` reads it to know
+	// there is a machine to destroy; no environment variable or flag provides
+	// it, and Resolve does not carry it, because the commands that care read
+	// the file directly.
+	"Machine": {record: true},
 }
 
 // Every field of Workspace is accounted for. A new setting fails here first,
@@ -103,6 +116,9 @@ func TestEverySettingHasASource(t *testing.T) {
 func TestEverySettingIsHonouredFromTheFile(t *testing.T) {
 	for name, src := range settingSources {
 		t.Run(name, func(t *testing.T) {
+			if src.record {
+				t.Skip("a record of what was built, not a setting any source provides")
+			}
 			path := writeConfigJSON(t, map[string]any{jsonName(name): typed(name, src.sample)})
 
 			cfg, err := Resolve(Overrides{}, path)
@@ -120,6 +136,9 @@ func TestEverySettingIsHonouredFromTheFile(t *testing.T) {
 func TestEverySettingIsHonouredFromAKeyedWorkspace(t *testing.T) {
 	for name, src := range settingSources {
 		t.Run(name, func(t *testing.T) {
+			if src.record {
+				t.Skip("a record of what was built, not a setting any source provides")
+			}
 			path := writeConfigJSON(t, map[string]any{
 				"workspaces": map[string]any{
 					"dev": map[string]any{jsonName(name): typed(name, src.sample)},

@@ -122,6 +122,47 @@ type Workspace struct {
 	WatchExclude []string `json:"watchExclude,omitempty"`
 	IdleTimeout  string   `json:"idleTimeout,omitempty"`
 	DaemonIdle   string   `json:"daemonIdle,omitempty"`
+
+	// Machine is set when this program provisioned the Linux system the
+	// workspace runs on, rather than being pointed at one that already
+	// existed.
+	//
+	// Its presence is what makes a machine-backed workspace an ordinary
+	// workspace everywhere else: `ls` lists it, `use` selects it, a session
+	// reaches it over SSH like any other. The one place it changes anything is
+	// `rm`, which has a machine to destroy as well as an entry to delete --
+	// leaving that behind would strand a running Linux system on somebody's
+	// laptop with nothing in the config naming it.
+	Machine *Machine `json:"machine,omitempty"`
+}
+
+// Machine records what this program built, so that it can be recognised,
+// rebuilt identically, and taken away again.
+//
+// Everything here is an input to the build. Nothing describes the machine's
+// current state: that is asked of the backend, because a cached answer about a
+// thing the user can stop from outside this program is a lie waiting to
+// happen.
+type Machine struct {
+	// Backend is "wsl" or "hyperv".
+	Backend string `json:"backend"`
+
+	// Name is what the machine is called on the host, which is not the
+	// workspace's name.
+	Name string `json:"name"`
+
+	// Image is the workspace image it runs, by full reference. Pinned rather
+	// than floating: a machine that quietly became a different version on
+	// restart is the failure this whole design is arranged to avoid.
+	Image string `json:"image,omitempty"`
+
+	CPUs     int `json:"cpus,omitempty"`
+	MemoryMB int `json:"memoryMb,omitempty"`
+
+	// Generation is the hash of the settings it was built from. A mismatch
+	// against the current ones is how "this machine is out of date" is known
+	// without inspecting it.
+	Generation string `json:"generation,omitempty"`
 }
 
 // Names lists the configured workspaces in a stable order.

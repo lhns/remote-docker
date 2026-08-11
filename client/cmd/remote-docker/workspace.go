@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
@@ -101,7 +102,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 }
 
 func newWorkspaceRemoveCommand() *cobra.Command {
-	var keepContext bool
+	var keepContext, keepMachine bool
 
 	cmd := &cobra.Command{
 		Use:     "rm <name>",
@@ -119,6 +120,21 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			// from the workspace and there is nothing to derive it from
 			// afterwards.
 			cfg, cfgErr := config.Resolve(config.Overrides{Workspace: name}, "")
+
+			// And the machine, for the same reason and a heavier one: the
+			// config entry is the only record that a Linux system was ever
+			// built for this workspace. Delete it first and the machine is
+			// still running on somebody's laptop with nothing naming it.
+			//
+			// Destroyed BEFORE the entry goes, so a failure leaves a workspace
+			// that still knows about its machine and can be told to try again.
+			// The other order leaves an orphan and no way to ask for it back.
+			machine := file.Workspaces[name].Machine
+			if machine != nil && !keepMachine {
+				if err := destroyMachine(cmd, machine); err != nil {
+					return err
+				}
+			}
 
 			if !file.Remove(name) {
 				return fmt.Errorf("no workspace named %q; `%s` shows what there is", name, ourCommand("ls"))
@@ -141,7 +157,28 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&keepContext, "keep-context", false, "leave the docker context in place")
+	cmd.Flags().BoolVar(&keepMachine, "keep-machine", false,
+		"leave the local machine running instead of destroying it")
 	return cmd
+}
+
+// destroyMachine takes away the Linux system this program built for a
+// workspace.
+//
+// A backend that is not compiled into this build is reported rather than
+// ignored. Removing the config entry anyway would leave a machine running with
+// nothing on the system naming it, which is worse than refusing: the user can
+// at least be told what to remove by hand.
+func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
+	backend, err := machine.Find(m.Backend)
+	if err != nil {
+		return fmt.Errorf("cannot destroy the %s machine %q: %w", m.Backend, m.Name, err)
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "destroying the %s machine %q\n", m.Backend, m.Name)
+	if err := backend.Destroy(cmd.Context(), m.Name); err != nil {
+		return fmt.Errorf("destroying the %s machine %q: %w", m.Backend, m.Name, err)
+	}
+	return nil
 }
 
 func newWorkspaceUseCommand() *cobra.Command {
@@ -235,10 +272,15 @@ func newWorkspaceListCommand() *cobra.Command {
 				if name == file.Default {
 					marker = "*"
 				}
+				where := fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
+				if m := file.Workspaces[name].Machine; m != nil {
+					// Which backend, because `rm` will destroy it and the
+					// person reading this table is usually deciding whether
+					// that is what they want.
+					where += " (" + m.Backend + ")"
+				}
 				_, _ = fmt.Fprintf(out, "%s%-13s %-30s %s\n",
-					marker, name,
-					fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port),
-					dockerHostOf(cfg))
+					marker, name, where, dockerHostOf(cfg))
 			}
 			_, _ = fmt.Fprintln(out, "\n* default")
 			return nil
