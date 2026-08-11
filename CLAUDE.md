@@ -211,6 +211,15 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
+- **A port reservation belongs to a session, not to an account.** One listener
+  can hold a port, so `Bind` refuses anybody who is not already nobody,
+  including a second session of the same account, and `Release` takes the token
+  minted when the reservation was taken. Releasing by name meant a second
+  machine's FAILED bind deleted the first machine's live reservation, after
+  which `AllowDial` reported the port as free and, on a shared daemon (ADR
+  0012), any other account could reach an NFS export that authenticates nobody.
+  An ordinary action reached it: opening the client on a second machine.
+
 - **Never range a map to assign something durable.** Account uids are handed
   out in `accounts.reconcile`, which used to range the `found` map -- so which
   account got which uid, and therefore which reverse-tunnel port, differed

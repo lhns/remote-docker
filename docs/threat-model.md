@@ -250,6 +250,16 @@ predicate: it binds the port and arms the release. A listen that failed after
 it once left the account's only port reserved by a forward that did not exist,
 and every retry was refused while blaming a second session.
 
+**E — releasing somebody else's reservation (4, 5).** The fix for D released by
+ACCOUNT NAME, which is not who holds a port. Opening the client on a second
+machine was enough to reach it: the second session's bind fails, its failure
+path releases, and the first machine's live reservation is deleted. `AllowDial`
+below then finds the port unheld and permits any other account to dial it, so
+control 4 of flow 4 stops holding while the export it protects is still
+serving. A reservation now carries a token minted when it was taken, and only
+that token releases it. `TestAFailedBindDoesNotReleaseTheLiveHolder` walks the
+whole sequence, ending at the dial being refused.
+
 ---
 
 ## Flow 4: reaching a published port, and the gap this model found

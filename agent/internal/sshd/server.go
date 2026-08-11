@@ -161,32 +161,38 @@ func accountFor(ctx gssh.Context) (sessionAccount, bool) {
 
 // allowReverseForward gates `ssh -R`, which is how the client's NFS export
 // reaches the workspace. This is where ADR 0010's claim is enforced.
-func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32) bool {
+// It returns the token that releases the reservation again, which the caller
+// must carry: a reservation belongs to this session and nothing else may give
+// it up.
+func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32) (uint64, bool) {
 	account, ok := accountFor(ctx)
 	if !ok {
-		return false
+		return 0, false
 	}
 
 	allowed, why := s.forward.Allow(account, host, port)
 	if !allowed {
 		s.log().Warn("refused a reverse forward", "host", host, "port", port, "account", account.Name(), "why", why)
-		return false
+		return 0, false
 	}
-	if !s.forward.Bind(account, host, port) {
+	token, ok := s.forward.Bind(account, host, port)
+	if !ok {
+		holder, _ := s.forward.Holder(host, port)
 		s.log().Warn("refused a reverse forward: the port is already held",
-			"host", host, "port", port, "account", account.Name())
-		return false
+			"host", host, "port", port, "account", account.Name(), "holder", holder)
+		return 0, false
 	}
 
 	// Released when the connection ends, so a dropped client does not keep its
-	// port reserved forever.
+	// port reserved forever. By token, so a connection ending late cannot
+	// release the reservation whoever came after it now holds.
 	go func() {
 		<-ctx.Done()
-		s.forward.Release(account, host, port)
+		s.forward.Release(token, host, port)
 	}()
 
 	s.log().Info("forwarding", "account", account.Name(), "host", host, "port", port)
-	return true
+	return token, true
 }
 
 // allowLocalForward gates `ssh -L`, which the client uses to reach published

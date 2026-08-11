@@ -113,7 +113,8 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 			s.log().Warn("unparseable tcpip-forward request", "err", err)
 			return false, []byte{}
 		}
-		if !s.allowReverseForward(ctx, payload.BindAddr, payload.BindPort) {
+		token, allowed := s.allowReverseForward(ctx, payload.BindAddr, payload.BindPort)
+		if !allowed {
 			return false, []byte("port forwarding is disabled")
 		}
 
@@ -125,7 +126,7 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 		addr := net.JoinHostPort(payload.BindAddr, strconv.Itoa(int(payload.BindPort)))
 		ln, err := s.listenFor(ctx, account, addr)
 		if err != nil {
-			// The RESERVATION has to go with the failure.
+			// The RESERVATION has to go with the failure, and only OURS.
 			//
 			// allowReverseForward above does not only permit: it BINDS the
 			// port and arms a release for when the connection ends. So a
@@ -133,7 +134,12 @@ func (s *Server) handleForwardRequest(ctx gssh.Context, _ *gssh.Server, req *gos
 			// port reserved by a forward that does not exist, and every retry
 			// was refused with "another session for this account may still be
 			// open", blaming a second session for the first one's failure.
-			s.forward.Release(account, payload.BindAddr, payload.BindPort)
+			//
+			// By token, because releasing by account name released whatever
+			// reservation existed: a second machine failing to bind deleted the
+			// first machine's live one, and AllowDial then reported the port as
+			// free to every other account on a shared daemon.
+			s.forward.Release(token, payload.BindAddr, payload.BindPort)
 			s.log().Error("could not bind a forward", "addr", addr, "account", account.Name(), "err", err)
 			return false, []byte{}
 		}
