@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Binding the endpoint is not a lock, and on one platform it is the opposite
@@ -110,8 +111,58 @@ type lockedListener struct {
 	lock *Lock
 }
 
+// closeRetry is how long to wait for a Close before signalling again, and how
+// many times. Generous, because every attempt after the first is a symptom.
+const (
+	closeRetry    = 250 * time.Millisecond
+	closeAttempts = 8
+)
+
+// Close releases the endpoint's claim, and keeps asking if the listener will
+// not close.
+//
+// Asking twice is the fix rather than a workaround. go-winio's pipe listener
+// signals its accept goroutine over an unbuffered channel and then waits to be
+// told it finished (microsoft/go-winio#85, PR #369 unmerged as of 2026-08-11;
+// re-check at github.com/microsoft/go-winio/issues/85). A client connecting at
+// that exact moment can have the signal consumed by the connect path and
+// reported back as ERROR_PIPE_CONNECTED or ERROR_NO_DATA, neither of which the
+// caller recognises as "we are closing" -- so the signal is spent, the listener
+// goes back to waiting for one, and Close blocks forever on a channel nobody
+// will close. Accept never returns either, so the whole session hangs behind
+// it. It presented as one CI run in many timing out after ten minutes.
+//
+// After swallowing a signal the listener is back in a select that will receive
+// the next one, on both of the paths that can swallow it. So a second Close
+// lands, the listener finishes, and every waiting Close returns together.
+//
+// Not conditioned on GOOS: a listener that closes promptly is closed on the
+// first attempt and never reaches the timer, which is every listener on every
+// other platform.
 func (l *lockedListener) Close() error {
-	err := l.Listener.Close()
-	l.lock.Release()
-	return err
+	defer l.lock.Release()
+
+	// Buffered, so an attempt that finishes after we stop waiting does not
+	// leak the goroutine holding it.
+	done := make(chan error, closeAttempts)
+	closeOnce := func() { done <- l.Listener.Close() }
+	go closeOnce()
+
+	for attempt := 1; ; attempt++ {
+		timer := time.NewTimer(closeRetry)
+		select {
+		case err := <-done:
+			timer.Stop()
+			return err
+		case <-timer.C:
+			if attempt >= closeAttempts {
+				// Give the caller its thread back. The endpoint stays bound
+				// until the process exits, which for the background session is
+				// immediately, and the lock is released by the defer either
+				// way.
+				return fmt.Errorf("proxy: the listener on %s did not close", l.Addr())
+			}
+			go closeOnce()
+		}
+	}
 }

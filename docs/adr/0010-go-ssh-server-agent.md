@@ -122,3 +122,15 @@ Linux-only — dropping privilege needs `syscall.Credential` — so it is
 build-tagged, and a lint or vet run on a non-Linux development machine does not
 see it. That cost a CI round trip before it was noticed, and the fix is a
 documented `GOOS=linux` pass rather than anything structural.
+
+**Revoking on an unusable key file takes two reads.** An account is enrolled
+exactly while its file holds at least one key, so emptying the file is how a
+deployment revokes somebody and that had to keep working. But a file being
+saved is empty for a moment, and one read cannot tell that moment from an
+emptying meant on purpose: enrolling by hand on Windows, where the file is
+created and filled as two steps, revoked the account and logged that the file
+was gone. A file that is *present* and holds nothing now has to say so twice,
+the second read being the next event or the next poll; a file that is *absent*
+still revokes at once, having no write window to be caught in. The file is
+parsed line by line for the same reason — several keys per file is the format,
+and one corrupt line should cost that line rather than every key under it.

@@ -181,6 +181,16 @@ premise of the project, and it applies to building it too. So:
   nobody could reach. Clearing a stale socket is only safe once the lock is
   held (ADR 0017). On Windows the pipe bind does exclude, which is why the two
   platforms failed differently and neither failure named the owner.
+- **Closing the endpoint listener asks more than once.** go-winio's pipe
+  listener signals its accept goroutine over an unbuffered channel and then
+  waits to be told it finished, and a client connecting at that moment can have
+  the signal consumed by the connect path and reported as ERROR_PIPE_CONNECTED
+  or ERROR_NO_DATA -- neither of which it recognises as a close
+  (microsoft/go-winio#85, PR #369 unmerged as of 2026-08-11). The signal is
+  spent, the listener waits for another, `Close` waits for the listener, and
+  `Accept` never returns, so the session hangs behind it. Signalling again lands,
+  because the listener is back in a receptive select on both paths. It presented
+  as one CI run in many timing out after ten minutes on Windows.
 - **A stream holds its gate lease until it closes.** Releasing it when the
   stream opened meant `docker attach`, `exec -it` and `logs -f` pinned nothing,
   and survived an idle release only because their container happened to be
