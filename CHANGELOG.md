@@ -36,9 +36,11 @@ they live on your machine and are served to it.
   far as a string can be and everything past `powershell.exe` is unproven.
   `docs/testing-machines.md` is a runbook for whoever runs it first. Do not
   believe it works.
-- The workspace rootfs is now published with each release
-  (`workspace-rootfs-amd64.tar.gz`), because getting one out of an image
-  otherwise needs docker — which is the thing being installed.
+- **`remote machine create` needs nothing but a name.** It downloads the
+  machine's filesystem itself and caches it, so a second machine or a `rebuild`
+  costs nothing; `--rootfs` builds from a file you supply instead. The rootfs is
+  published with each release for both architectures, because getting one out of
+  an image otherwise needs docker — which is the thing being installed.
 
 Four things were found by measurement while building this, each of which had
 presented as an unexplained refused connection (ADR 0026):

@@ -169,7 +169,7 @@ jobs:
   # workflow artifacts.
   binaries:
     name: release binaries (tags only)
-    needs: [ci]
+    needs: [ci, meta, manifest]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -241,9 +241,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eux
-          docker build -t rd-workspace:release -f image/Dockerfile .
-          id=$(docker create rd-workspace:release)
-          docker export "$id" | gzip -9 > workspace-rootfs-amd64.tar.gz
-          docker rm "$id"
-          ls -lh workspace-rootfs-amd64.tar.gz
-          gh release upload "$GITHUB_REF_NAME" workspace-rootfs-amd64.tar.gz --clobber
+          image="$(echo '${{ needs.meta.outputs.tags }}' | cut -d, -f1)"
+
+          # Both architectures the client will ask for, taken from the image
+          # this workflow just published rather than built again here -- a
+          # second build is a second thing that can differ from what was tested.
+          #
+          # No emulation is needed and none is installed: `create` and `export`
+          # move layers around and execute nothing, so a foreign-architecture
+          # image exports on this runner exactly as a native one does.
+          for arch in amd64 arm64; do
+            docker pull --platform "linux/$arch" "$image"
+            id=$(docker create --platform "linux/$arch" "$image")
+            docker export "$id" | gzip -9 > "workspace-rootfs-$arch.tar.gz"
+            docker rm "$id"
+          done
+
+          ls -lh workspace-rootfs-*.tar.gz
+          gh release upload "$GITHUB_REF_NAME" workspace-rootfs-*.tar.gz --clobber
