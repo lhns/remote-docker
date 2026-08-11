@@ -251,11 +251,32 @@ func serve(addr string) error {
 		}
 	}
 
+	// One port per MACHINE rather than per account (ADR 0029). The uid still
+	// decides the first, so a workspace reached from one computer is on the
+	// port it always was and allocates nothing.
+	ports := &accounts.Ports{
+		Dir:     stateDir,
+		Mapping: mapping,
+		// An account that exists is entitled to the port its uid derives,
+		// whether or not it has ever connected, so an allocation must not take
+		// it. Asked of the store rather than remembered, because accounts come
+		// and go while this file does not.
+		Reserved: func(uid int) bool {
+			for _, a := range store.List() {
+				if a.UID == uid {
+					return true
+				}
+			}
+			return false
+		},
+	}
+
 	server, err := sshd.New(sshd.Config{
 		Addr:     addr,
 		HostKeys: hostKeys,
 		Accounts: store,
 		Mapping:  mapping,
+		Ports:    ports,
 		Daemons:  targets,
 		Version:  version,
 		Log:      logger("sshd"),

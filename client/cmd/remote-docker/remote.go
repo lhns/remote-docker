@@ -134,18 +134,25 @@ account there.`,
 //
 
 func newGCCommand() *cobra.Command {
-	return &cobra.Command{
+	var orphans bool
+
+	cmd := &cobra.Command{
 		Use:   "gc",
 		Short: "Remove share volumes this account is no longer using",
 		Long: `Each directory bound into a container gets a volume on the workspace, and
 they outlive the containers that used them.
 
-Only volumes this client created, for this account, that no container refers
+Only volumes this machine created, for this account, that no container refers
 to. A volume you created yourself is never touched, whatever it is named, and
-neither is the one for the directory this runs in.`,
+neither is the one for the directory this runs in.
+
+Volumes another of your machines created are left alone, because this one
+cannot tell whether that machine is still using them. --orphans additionally
+removes those that name no machine at all, which are the ones left by a version
+before machines were named, or by this machine before its key was replaced.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withQuerySession(func(ctx context.Context, s *session.Session) error {
-				removed, err := s.Collect(ctx)
+				removed, err := s.Collect(ctx, session.CollectOptions{Orphans: orphans})
 				if err != nil {
 					return err
 				}
@@ -154,4 +161,7 @@ neither is the one for the directory this runs in.`,
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&orphans, "orphans", false,
+		"also remove unused share volumes that name no machine")
+	return cmd
 }

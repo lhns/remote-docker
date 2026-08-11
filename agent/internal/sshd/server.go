@@ -42,6 +42,11 @@ type Config struct {
 	// against somebody else's containers.
 	Daemons daemons.Targets
 
+	// Ports decides which port serves which of an account's machines, and
+	// remembers it. Nil falls back to the uid-derived port for everybody,
+	// which is one machine per account and how this worked before ADR 0029.
+	Ports *accounts.Ports
+
 	// Version is the agent's build, reported in workspace-info so a client can
 	// see which workspace agent it is talking to.
 	Version string
@@ -70,10 +75,17 @@ var errNoAccount = errors.New("sshd: no authenticated account on this connection
 type sessionAccount struct {
 	name string
 	uid  int
+
+	// client names the MACHINE this session came from, derived from the key
+	// that just authenticated rather than from anything the client sent. Two
+	// of somebody's machines share an account and a daemon; only this tells
+	// their exports and volumes apart.
+	client string
 }
 
-func (s sessionAccount) Name() string { return s.name }
-func (s sessionAccount) UID() int     { return s.uid }
+func (s sessionAccount) Name() string   { return s.name }
+func (s sessionAccount) UID() int       { return s.uid }
+func (s sessionAccount) Client() string { return s.client }
 
 // contextKey is the type under which the authenticated account is stored.
 type contextKey struct{}
@@ -90,7 +102,16 @@ func New(cfg Config) (*Server, error) {
 		cfg.Daemons = daemons.Shared("")
 	}
 
+	// A nil allocator is not an error: with nowhere to remember, every client
+	// of an account gets the uid-derived port, which is what every version
+	// before ADR 0029 did and is right for the one-machine case. Defaulted
+	// here so that nothing downstream has to ask whether it has one.
+	if cfg.Ports == nil {
+		cfg.Ports = &accounts.Ports{Mapping: cfg.Mapping}
+	}
+
 	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}
+	s.forward.Ports = cfg.Ports
 
 	s.ssh = &gssh.Server{
 		Addr:             cfg.Addr,
@@ -142,7 +163,13 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 		return false
 	}
 
-	ctx.SetValue(contextKey{}, sessionAccount{name: account.Name, uid: account.UID})
+	ctx.SetValue(contextKey{}, sessionAccount{
+		name: account.Name,
+		uid:  account.UID,
+		// From the key that just passed, which is what makes the id
+		// authenticated rather than asserted.
+		client: workspace.ClientID(key.Marshal()),
+	})
 
 	// Start this account's daemon now, in the background, so its boot hides
 	// behind the round trips that follow: workspace-info, then the reverse
@@ -161,32 +188,38 @@ func accountFor(ctx gssh.Context) (sessionAccount, bool) {
 
 // allowReverseForward gates `ssh -R`, which is how the client's NFS export
 // reaches the workspace. This is where ADR 0010's claim is enforced.
-func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32) bool {
+// It returns the token that releases the reservation again, which the caller
+// must carry: a reservation belongs to this session and nothing else may give
+// it up.
+func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32) (uint64, bool) {
 	account, ok := accountFor(ctx)
 	if !ok {
-		return false
+		return 0, false
 	}
 
 	allowed, why := s.forward.Allow(account, host, port)
 	if !allowed {
 		s.log().Warn("refused a reverse forward", "host", host, "port", port, "account", account.Name(), "why", why)
-		return false
+		return 0, false
 	}
-	if !s.forward.Bind(account, host, port) {
+	token, ok := s.forward.Bind(account, host, port)
+	if !ok {
+		holder, _ := s.forward.Holder(host, port)
 		s.log().Warn("refused a reverse forward: the port is already held",
-			"host", host, "port", port, "account", account.Name())
-		return false
+			"host", host, "port", port, "account", account.Name(), "holder", holder)
+		return 0, false
 	}
 
 	// Released when the connection ends, so a dropped client does not keep its
-	// port reserved forever.
+	// port reserved forever. By token, so a connection ending late cannot
+	// release the reservation whoever came after it now holds.
 	go func() {
 		<-ctx.Done()
-		s.forward.Release(account, host, port)
+		s.forward.Release(token, host, port)
 	}()
 
 	s.log().Info("forwarding", "account", account.Name(), "host", host, "port", port)
-	return true
+	return token, true
 }
 
 // allowLocalForward gates `ssh -L`, which the client uses to reach published

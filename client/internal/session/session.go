@@ -127,6 +127,16 @@ type Session struct {
 	// rather than orphaning a set per connection.
 	registry *nfsserve.Registry
 
+	// clientID names this MACHINE, derived from its key on the first connect.
+	// Empty before then, which nothing that uses it can observe: everything
+	// asking is downstream of a connection.
+	clientID string
+
+	// shares is what this workspace has been asked to export, across sessions.
+	// Nil on a session that does not serve, which is how a query session comes
+	// to restore nothing.
+	shares *shareStore
+
 	// watch outlives any single connection too, and for the same reason the
 	// registry does: watches are a local resource, and re-walking a large
 	// tree on every idle reconnect would cost more than the connection. Only
@@ -196,6 +206,14 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		registry: nfsserve.NewRegistry(defaultAttrs()),
 	}
 
+	// Only a session that serves may restore a share. A query session exports
+	// nothing, and giving it the record would let asking a question re-export
+	// a directory.
+	if opts.Role.hosting() {
+		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
+		s.registry.Restore = s.shares.restore
+	}
+
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
 		cancel()
 		return nil, err
@@ -229,8 +247,11 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			live.close()
 		},
 		busy: s.hasLiveDependents,
-		idle: opts.IdleTimeout,
-		log:  opts.Log,
+		// Asked before every request, so a dropped connection is replaced
+		// rather than handed out again.
+		alive: func(live *liveConn) bool { return live.ssh.Alive() },
+		idle:  opts.IdleTimeout,
+		log:   opts.Log,
 	}
 
 	s.started = time.Now()

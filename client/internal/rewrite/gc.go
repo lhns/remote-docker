@@ -48,6 +48,28 @@ type Collector struct {
 	// Owner limits collection to this account's volumes.
 	Owner string
 
+	// Client limits collection to THIS MACHINE's volumes.
+	//
+	// The owner label is not enough once one account is used from two
+	// machines: both label with the same account, so each machine's collector
+	// would delete the other's volumes, and losing one is not a tidy failure.
+	// The daemon recreates a missing named volume as an empty local one, so
+	// the container comes up with an empty directory where the project should
+	// be.
+	//
+	// Empty collects regardless, which is what a workspace only ever reached
+	// from one machine wants.
+	Client string
+
+	// Orphans also collects volumes that name NO machine, which is what a
+	// version before machines were named left behind, or what this machine
+	// left when its key was replaced.
+	//
+	// It widens by exactly that and no further. Collecting everything with the
+	// right account instead would take the OTHER machine's volumes, which is
+	// the failure this whole scoping exists to prevent.
+	Orphans bool
+
 	// Guard is shared with the Rewriter. Without it this can delete a volume a
 	// concurrent `docker run` created a moment ago and has not yet referenced
 	// from a container.
@@ -135,6 +157,19 @@ func (c *Collector) ours(v Volume) bool {
 	// remove even though they carry the same prefix and label.
 	if c.Owner != "" && v.Labels[OwnerLabel] != c.Owner {
 		return false
+	}
+	// Nor are another MACHINE's, which carry this account's label as well.
+	//
+	// A volume with no client label at all was created before machines were
+	// named. It is left alone here rather than treated as ours, because "no
+	// label" is not "mine": an older session of the other machine may still be
+	// using it. `remote gc --orphans` is how those go, deliberately by asking.
+	if c.Client != "" {
+		client := v.Labels[ClientLabel]
+		unnamed := client == "" && c.Orphans
+		if client != c.Client && !unnamed {
+			return false
+		}
 	}
 	return true
 }

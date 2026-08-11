@@ -24,6 +24,7 @@ import (
 // it exists rather than up to a reconcile interval later.
 type shareRegistrar struct {
 	registry *nfsserve.Registry
+	shares   *shareStore
 	changed  func()
 }
 
@@ -32,6 +33,10 @@ func (s shareRegistrar) Share(localPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Recorded here because this is the one funnel every rewrite goes through,
+	// and the record is what lets a container STARTED in some later session
+	// still be served.
+	s.shares.remember(share.ExportPath, share.LocalPath)
 	if s.changed != nil {
 		s.changed()
 	}

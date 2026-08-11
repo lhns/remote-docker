@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
 // These tests drive the server over a real NFSv3 conversation, using a real
@@ -307,5 +309,48 @@ func TestServePreservesRealExecutableBits(t *testing.T) {
 	}
 	if data.Mode()&0o111 != 0 {
 		t.Errorf("data mode = %04o, want no execute bit", data.Mode()&0o777)
+	}
+}
+
+// A mount for an export this session never registered, answered from the
+// record, over the real protocol.
+//
+// This is the failure the record exists for, in the shape it actually took:
+// dockerd mounts a volume created in an earlier session, the MOUNT names an
+// export nothing has registered, and the answer used to be MNT3ERR_NOENT --
+// "no such file or directory" against a project directory that was right
+// there.
+func TestServeRestoresAnUnregisteredExport(t *testing.T) {
+	dir := t.TempDir()
+	const content = "the project, mounted by a container started later\n"
+	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing but the working directory is registered, which is what a fresh
+	// session looks like.
+	r := NewRegistry(DefaultAttrs)
+	if _, err := r.RegisterCWD(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	export := workspace.ExportPathForID(workspace.ShareID(dir))
+	r.Restore = func(path string) (string, bool) {
+		return dir, path == export
+	}
+
+	target := mustMount(t, serve(t, r), export)
+
+	f, err := target.Open("marker.txt")
+	if err != nil {
+		t.Fatalf("Open through a restored export: %v", err)
+	}
+	defer f.Close()
+
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("read %q, want %q", got, content)
 	}
 }

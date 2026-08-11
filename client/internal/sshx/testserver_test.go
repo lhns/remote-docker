@@ -7,7 +7,10 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -23,6 +26,11 @@ type testServer struct {
 	HostKey  ssh.PublicKey
 	listener net.Listener
 	srv      *gssh.Server
+
+	// silent makes the server accept global requests and never answer them,
+	// which is what a link that has stopped carrying anything looks like from
+	// this end. A server that is merely gone is a different test.
+	silent atomic.Bool
 }
 
 // startTestServer runs a server that accepts any public key, echoes commands
@@ -41,6 +49,7 @@ func startTestServer(t *testing.T) *testServer {
 
 	forwardHandler := &gssh.ForwardedTCPHandler{}
 
+	ts := &testServer{}
 	srv := &gssh.Server{
 		PublicKeyHandler: func(gssh.Context, gssh.PublicKey) bool { return true },
 
@@ -52,6 +61,19 @@ func startTestServer(t *testing.T) *testServer {
 		RequestHandlers: map[string]gssh.RequestHandler{
 			"tcpip-forward":        forwardHandler.HandleSSHRequest,
 			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
+
+			// Registered so that silence can be arranged. A request with no
+			// handler is answered with a refusal, which is still an ANSWER and
+			// so is not the case being tested: the probe wants to know what
+			// happens when nothing comes back at all. Blocking here sends no
+			// reply, and the request dies with the connection.
+			"keepalive@openssh.com": func(ctx gssh.Context, _ *gssh.Server, _ *ssh.Request) (bool, []byte) {
+				if ts.silent.Load() {
+					<-ctx.Done()
+					return false, nil
+				}
+				return true, nil
+			},
 		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
@@ -85,12 +107,10 @@ func startTestServer(t *testing.T) *testServer {
 		t.Fatalf("listen: %v", err)
 	}
 
-	ts := &testServer{
-		Addr:     l.Addr(),
-		HostKey:  hostSigner.PublicKey(),
-		listener: l,
-		srv:      srv,
-	}
+	ts.Addr = l.Addr()
+	ts.HostKey = hostSigner.PublicKey()
+	ts.listener = l
+	ts.srv = srv
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
 	return ts
@@ -98,6 +118,75 @@ func startTestServer(t *testing.T) *testServer {
 
 // dial builds a client against the test server, with state under t.TempDir().
 func (ts *testServer) dial(t *testing.T) *Client {
+	t.Helper()
+	return ts.dialWith(t, 0)
+}
+
+// dialWith is dial with a keepalive interval of its own, for the tests about
+// what happens when probes go unanswered.
+func (ts *testServer) dialWith(t *testing.T, keepAlive time.Duration) *Client {
+	t.Helper()
+	return ts.dialAddr(t, ts.Addr, keepAlive)
+}
+
+// cutter sits between the client and the server so a test can take the
+// transport away.
+//
+// Closing the SERVER is not the same thing and is not what these tests mean:
+// whether that drops connections already established is up to the library and
+// the platform, and a test that depends on it passes on one and hangs on the
+// other. Cutting the wire is the case the code is about anyway, since a link
+// dying is what happens to a laptop that loses its network.
+type cutter struct {
+	Addr net.Addr
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func startCutter(t *testing.T, to net.Addr) *cutter {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	c := &cutter{Addr: l.Addr()}
+	t.Cleanup(func() { _ = l.Close(); c.cut() })
+
+	go func() {
+		for {
+			from, err := l.Accept()
+			if err != nil {
+				return
+			}
+			up, err := net.Dial("tcp", to.String())
+			if err != nil {
+				_ = from.Close()
+				return
+			}
+			c.mu.Lock()
+			c.conns = append(c.conns, from, up)
+			c.mu.Unlock()
+
+			go func() { _, _ = io.Copy(up, from) }()
+			go func() { _, _ = io.Copy(from, up) }()
+		}
+	}()
+	return c
+}
+
+func (c *cutter) cut() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, conn := range c.conns {
+		_ = conn.Close()
+	}
+	c.conns = nil
+}
+
+// dialAddr builds a client against an address, with state under t.TempDir().
+func (ts *testServer) dialAddr(t *testing.T, addr net.Addr, keepAlive time.Duration) *Client {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -110,7 +199,7 @@ func (ts *testServer) dial(t *testing.T) *Client {
 		t.Fatalf("NewKnownHosts: %v", err)
 	}
 
-	host, portStr, _ := net.SplitHostPort(ts.Addr.String())
+	host, portStr, _ := net.SplitHostPort(addr.String())
 	var port int
 	fmt.Sscanf(portStr, "%d", &port)
 
@@ -120,6 +209,7 @@ func (ts *testServer) dial(t *testing.T) *Client {
 		User:       "tester",
 		Key:        key,
 		KnownHosts: kh,
+		KeepAlive:  keepAlive,
 	})
 	if err != nil {
 		t.Fatalf("Dial: %v", err)

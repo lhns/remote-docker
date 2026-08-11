@@ -102,7 +102,7 @@ func TestExportAndVolumeNamesRoundTrip(t *testing.T) {
 	if !strings.HasPrefix(export, ExportMountPrefix) {
 		t.Errorf("ExportPathForID(%q) = %q, want the %q prefix", id, export, ExportMountPrefix)
 	}
-	volume := VolumeNameForID(id)
+	volume := VolumeNameForID("", id)
 	if !IsManagedVolume(volume) {
 		t.Errorf("VolumeNameForID(%q) = %q, which IsManagedVolume rejects", id, volume)
 	}
@@ -176,5 +176,100 @@ func TestNFSVolumeOptions(t *testing.T) {
 		if !strings.Contains(o, want) {
 			t.Errorf("options %q are missing %q", o, want)
 		}
+	}
+}
+
+// A volume belongs to the machine that created it, because the daemon is
+// shared between an account's machines and the files behind a share are on one
+// of them.
+//
+// Without this both machines derive `rd-cwd` for their own working directory,
+// the second create silently returns the first's volume, and a container comes
+// up reading somebody else's project.
+func TestVolumeNamesCarryTheClient(t *testing.T) {
+	id := ShareID("/home/alice/project")
+
+	phone := VolumeNameForID("aabbccdd", id)
+	pc := VolumeNameForID("11223344", id)
+	if phone == pc {
+		t.Fatalf("two machines derived the same volume name for one path: %q", phone)
+	}
+	for _, name := range []string{phone, pc} {
+		if !IsManagedVolume(name) {
+			t.Errorf("%q is not recognised as ours", name)
+		}
+	}
+
+	// And the working directory, which is the one that actually collided.
+	phoneCWD, err := VolumeNameForExport("aabbccdd", ExportCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCWD, err := VolumeNameForExport("11223344", ExportCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phoneCWD == pcCWD {
+		t.Errorf("both machines named the working directory volume %q", phoneCWD)
+	}
+}
+
+func TestParseVolumeName(t *testing.T) {
+	id := ShareID("/home/alice/project")
+
+	for _, tc := range []struct {
+		name         string
+		wantClient   string
+		wantShare    string
+		wantAccepted bool
+	}{
+		{VolumeNameForID("aabbccdd", id), "aabbccdd", id, true},
+		{VolumeNameForID("aabbccdd", "cwd"), "aabbccdd", "cwd", true},
+
+		// From before clients were named. Still ours, still collectable, and
+		// reported with no client rather than refused.
+		{VolumeNameForID("", id), "", id, true},
+		{"rd-cwd", "", "cwd", true},
+
+		// A volume somebody else named. The prefix alone is not enough: a user
+		// is entitled to call a volume rd-backups.
+		{"rd-backups", "", "", false},
+		{"rd-", "", "", false},
+		{"postgres-data", "", "", false},
+		{"rd-aabbccdd-nothex", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, share, ok := ParseVolumeName(tc.name)
+			if ok != tc.wantAccepted {
+				t.Fatalf("ParseVolumeName(%q) accepted = %v, want %v", tc.name, ok, tc.wantAccepted)
+			}
+			if !ok {
+				return
+			}
+			if client != tc.wantClient || share != tc.wantShare {
+				t.Errorf("ParseVolumeName(%q) = %q, %q; want %q, %q",
+					tc.name, client, share, tc.wantClient, tc.wantShare)
+			}
+		})
+	}
+}
+
+// The same key is the same machine, and a different key is a different one.
+func TestClientID(t *testing.T) {
+	a := ClientID([]byte("ssh-ed25519 AAAA...alice-laptop"))
+	b := ClientID([]byte("ssh-ed25519 AAAA...alice-phone"))
+
+	if a == b {
+		t.Error("two keys produced one client id")
+	}
+	if a != ClientID([]byte("ssh-ed25519 AAAA...alice-laptop")) {
+		t.Error("one key produced two client ids")
+	}
+	if len(a) != clientIDLen {
+		t.Errorf("client id %q is %d characters, want %d", a, len(a), clientIDLen)
+	}
+	// It goes in a volume name, so it has to survive being read back out.
+	if _, _, ok := ParseVolumeName(VolumeNameForID(a, "cwd")); !ok {
+		t.Errorf("a volume named for client %q does not parse", a)
 	}
 }

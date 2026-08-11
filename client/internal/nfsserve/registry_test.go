@@ -191,3 +191,69 @@ func TestNormalizeExport(t *testing.T) {
 		}
 	}
 }
+
+// Only a MOUNT may bring a share back, and only for an export the resolver
+// already knows.
+func TestLookupOrRestore(t *testing.T) {
+	dir := t.TempDir()
+	export := workspace.ExportPathForID(workspace.ShareID(dir))
+
+	r := NewRegistry(Attrs{})
+	asked := 0
+	r.Restore = func(path string) (string, bool) {
+		asked++
+		if path == export {
+			return dir, true
+		}
+		return "", false
+	}
+
+	// A miss the resolver knows about comes back.
+	share, rest, ok := r.LookupOrRestore(export)
+	if !ok {
+		t.Fatal("a known export was not restored")
+	}
+	if share.LocalPath != dir || rest != "/" {
+		t.Errorf("restored %q rest %q, want %q", share.LocalPath, rest, dir)
+	}
+
+	// And is then an ordinary registration: the resolver is not asked again.
+	before := asked
+	if _, _, ok := r.LookupOrRestore(export); !ok {
+		t.Error("a restored share was not found on the next lookup")
+	}
+	if asked != before {
+		t.Error("the resolver was asked about a share already registered")
+	}
+
+	// A miss it does not know stays a miss.
+	if _, _, ok := r.LookupOrRestore("/m/0123456789abcdef"); ok {
+		t.Error("an export the resolver refused was restored anyway")
+	}
+}
+
+// Lookup and Shares must never resurrect anything. The volume collector and
+// the watcher read them, and "in use" cannot depend on who asked.
+func TestOnlyMountRestores(t *testing.T) {
+	dir := t.TempDir()
+	export := workspace.ExportPathForID(workspace.ShareID(dir))
+
+	r := NewRegistry(Attrs{})
+	r.Restore = func(string) (string, bool) { return dir, true }
+
+	if _, _, ok := r.Lookup(export); ok {
+		t.Error("Lookup restored a share")
+	}
+	if n := len(r.Shares()); n != 0 {
+		t.Errorf("Shares reported %d shares before anything was registered", n)
+	}
+}
+
+// A registry with no resolver behaves exactly as it did, which is what a query
+// session and every test without a record need.
+func TestNoResolverMeansAMissIsAMiss(t *testing.T) {
+	r := NewRegistry(Attrs{})
+	if _, _, ok := r.LookupOrRestore("/m/0123456789abcdef"); ok {
+		t.Error("a registry with no resolver restored something")
+	}
+}

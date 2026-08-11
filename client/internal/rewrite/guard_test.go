@@ -14,7 +14,7 @@ import (
 // when the container starts. `remote-docker start && docker run -v $PWD:/w`
 // failed in CI with the project directory mounted empty.
 func TestCollectSparesAVolumeThisSessionIsExporting(t *testing.T) {
-	name, err := workspace.VolumeNameForExport(workspace.ExportCWD)
+	name, err := workspace.VolumeNameForExport("", workspace.ExportCWD)
 	if err != nil {
 		t.Fatalf("naming the cwd volume: %v", err)
 	}
@@ -56,7 +56,7 @@ func (b *blockingVolumes) EnsureVolume(context.Context, string, map[string]strin
 // held section, so without the lock a collector that read the registry a
 // moment earlier would still delete it.
 func TestARewriteInProgressBlocksCollection(t *testing.T) {
-	name, err := workspace.VolumeNameForExport(workspace.ExportCWD)
+	name, err := workspace.VolumeNameForExport("", workspace.ExportCWD)
 	if err != nil {
 		t.Fatalf("naming the cwd volume: %v", err)
 	}

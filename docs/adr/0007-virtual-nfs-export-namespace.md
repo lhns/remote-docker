@@ -42,6 +42,16 @@ everywhere, so two spellings of the same directory produce one share.
 - **Only directories explicitly named by a bind mount are reachable.** The
   export root lists nothing else, so the workspace's view of the client is
   exactly the set of paths the user asked for.
+
+  Amended by ADR 0027: it is that, plus directories this machine previously
+  offered to this workspace and which that workspace still holds a volume for.
+  Registration is per process while a volume outlives one, so starting a
+  container created in an earlier session found no share and failed to mount
+  against a directory that was right there. What restores a share is a MOUNT
+  that missed, never a session starting, and the workspace names an id rather
+  than a path: the record is a capability list this machine checks again on
+  every read, and `ShareID` cannot be inverted, so an id nobody wrote down
+  resolves to nothing.
 - Share ids are stable across runs, because they are derived from the path
   rather than allocated. A reconnecting client keeps its NFS handles and its
   remote volumes instead of orphaning one set per session.

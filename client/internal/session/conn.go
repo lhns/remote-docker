@@ -23,6 +23,8 @@ import (
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/client/internal/sshx"
+
+	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
 // connect brings up everything that needs the workspace. The order matters:
@@ -33,6 +35,14 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// This machine's name for itself, and the workspace derives the same one
+	// from the key it authenticates rather than from anything sent to it. See
+	// workspace.ClientID: the account is the identity, the client is the
+	// machine, and only the second can tell one of somebody's computers from
+	// another when both use one account.
+	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
+
 	known, err := sshx.NewKnownHosts(config.KnownHostsPath())
 	if err != nil {
 		return nil, err
@@ -90,10 +100,11 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
-		Shares:  shareRegistrar{registry: s.registry, changed: s.sharesChanged},
+		Shares:  shareRegistrar{registry: s.registry, shares: s.shares, changed: s.sharesChanged},
 		Volumes: live.api,
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
+		Client:  s.clientID,
 		Guard:   live.guard,
 	}
 	if s.opts.Role.hosting() {
@@ -123,7 +134,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
 				s.logQuiet(liveCtx, "collecting unused share volumes", "err", err)
+				return
 			}
+			// Here rather than in Session.Collect, which is the `gc` command
+			// and runs on a QUERY session: a query session keeps no record, so
+			// pruning there could only ever be a no-op.
+			s.pruneShareRecord(liveCtx, live)
 		})
 	}
 

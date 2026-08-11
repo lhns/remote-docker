@@ -37,6 +37,15 @@ type connGate[T any] struct {
 	// means "cannot tell", which is treated as busy.
 	busy func(ctx context.Context, conn T) (bool, error)
 
+	// alive reports whether a held connection can still carry anything. Nil
+	// means always, which is what a gate over something with no transport
+	// wants.
+	//
+	// UNLIKE busy this must not do I/O: it is consulted on the acquire path,
+	// under no lock and before every request. busy asks the workspace a
+	// question; this asks the connection whether it is still there.
+	alive func(conn T) bool
+
 	// idle is how long a connection may sit unused before being considered
 	// for release. Zero or negative disables releasing.
 	idle time.Duration
@@ -47,7 +56,46 @@ type connGate[T any] struct {
 	conn     T
 	held     bool
 	lastUsed time.Time
-	users    int
+	// users counts LEASES, not leases on the connection currently held. A
+	// stream opened over a connection that has since died still holds one and
+	// still releases it when it closes, so invalidate leaves this alone:
+	// zeroing it would drive the count negative on that release and let a sweep
+	// close a connection genuinely in use.
+	users  int
+	drops  int
+	lastDr time.Time
+}
+
+// invalidate drops a connection that has died, returning it to be shut.
+//
+// Nothing else clears held. Without this a connection that died between two
+// requests is handed to every request after it, and the sweep asks the dead
+// connection whether anything depends on it, gets an error, and the "cannot
+// tell means keep" rule below makes it permanently unreleasable. That was the
+// wedge that needed `remote restart` to clear.
+func (g *connGate[T]) invalidate() (T, bool) {
+	var zero T
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.held || g.alive == nil || g.alive(g.conn) {
+		return zero, false
+	}
+	dead := g.conn
+	g.held = false
+	g.conn = zero
+	g.drops++
+	g.lastDr = time.Now()
+	return dead, true
+}
+
+// drops reports how many times this gate has found its connection dead, and
+// when it last did.
+func (g *connGate[T]) dropped() (int, time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.drops, g.lastDr
 }
 
 // acquire returns a live connection, establishing one if needed, and a
@@ -56,6 +104,15 @@ type connGate[T any] struct {
 // The user count is what stops a sweep closing a connection out from under a
 // request in flight.
 func (g *connGate[T]) acquire(ctx context.Context) (T, func(), error) {
+	// Shut outside the lock: tearing a connection down waits on the goroutines
+	// riding it, and holding the gate across that would stall every request.
+	// Only one caller is ever handed the dead connection back, so however many
+	// arrive together it is shut once.
+	if dead, ok := g.invalidate(); ok {
+		g.logger().Warn("the connection to the workspace had dropped; opening another")
+		g.shut(dead)
+	}
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -89,6 +146,14 @@ func (g *connGate[T]) acquire(ctx context.Context) (T, func(), error) {
 // sweep releases the connection if it has been idle and nothing depends on it.
 // It reports whether the connection was released.
 func (g *connGate[T]) sweep(ctx context.Context) bool {
+	// A dead connection is dropped rather than asked. Asking is what wedged it:
+	// busy fails over a dead transport, and "cannot tell means keep" then holds
+	// it forever.
+	if dead, ok := g.invalidate(); ok {
+		g.shut(dead)
+		return true
+	}
+
 	g.mu.Lock()
 	if !g.held || g.idle <= 0 || g.users > 0 || time.Since(g.lastUsed) < g.idle {
 		g.mu.Unlock()
@@ -148,6 +213,22 @@ func (g *connGate[T]) current() (T, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.conn, g.held
+}
+
+// currentLive returns the connection only while it can still carry something.
+//
+// Holding a connection object is not the same as having a connection, and
+// reporting the first as the second is how `remote status` printed "ready"
+// while every container's filesystem returned EIO.
+func (g *connGate[T]) currentLive() (T, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.held || (g.alive != nil && !g.alive(g.conn)) {
+		var zero T
+		return zero, false
+	}
+	return g.conn, true
 }
 
 // close tears the connection down for good.

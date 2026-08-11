@@ -82,7 +82,7 @@ var refusedFS = memfs.New()
 func (h *mountHandler) Mount(_ context.Context, _ net.Conn, req nfs.MountRequest) (nfs.MountStatus, billy.Filesystem, []nfs.AuthFlavor) {
 	auths := []nfs.AuthFlavor{nfs.AuthFlavorNull}
 
-	share, rest, ok := h.registry.Lookup(string(req.Dirpath))
+	share, rest, ok := h.registry.LookupOrRestore(string(req.Dirpath))
 	if !ok {
 		// Not an error worth logging loudly: an unregistered path is the
 		// normal answer for a stale mount attempt after a share was dropped.

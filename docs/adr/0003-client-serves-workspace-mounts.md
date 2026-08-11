@@ -37,10 +37,23 @@ port = PORT_BASE + (uid - UID_BASE)
   exposure, and the file server binds loopback only.
 - No coordination between users and no collisions, because the mapping is a
   pure function rather than an allocation.
+
+  **Amended by ADR 0029.** One port per uid is one port per PERSON, and a
+  person has more than one computer. The uid still decides an account's first
+  port, so nothing renumbers and a workspace reached from one machine still
+  allocates nothing; further machines of that account are allocated a port each
+  by the agent, which is coordination and is the cost of the second machine
+  working at all.
 - **The port is stable**, which turned out to matter more than the collision
   property. A dropped tunnel reconnects to the same endpoint, so the existing
   NFS mount keeps working and no remount is needed. See ADR 0006 for why
   avoiding a remount was worth designing around.
+
+  Still true under ADR 0029, and re-based: stable per CLIENT rather than per
+  uid. The allocation is remembered in `clientports` beside `uidmap`, so a
+  machine reconnecting is offered the port it had and the volumes it created go
+  on mounting. This is the property the allocation had to preserve, and the one
+  that would have made a per-session port wrong.
 - The formula must be identical on both sides. Originally it lived in two shell
   scripts, and when those disagreed the client tunnelled to one port while the
   mount read another — a failure that presents as a network fault. ADR 0011

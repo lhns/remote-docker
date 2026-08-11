@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/client/internal/rewrite"
+
+	"maps"
 )
 
 // APIClient makes Docker API calls of our own: creating the volumes that
@@ -63,12 +65,25 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 	return resp, conn, nil
 }
 
-// EnsureVolume creates an NFS-backed volume if it is not already present.
+// EnsureVolume creates an NFS-backed volume, replacing one whose definition no
+// longer matches.
 //
-// Docker's volume create is idempotent for an identical definition and returns
-// the existing volume, so a reconnecting client re-uses what it made last time
-// rather than failing or duplicating.
+// Docker's volume create is idempotent in a way that is easy to read as more
+// than it is: given a name that exists it returns THAT volume and ignores the
+// options entirely, reporting success. So a volume goes on carrying the port
+// and the export path it was made with, however far those have since drifted,
+// and the only sign is a container that mounts something unexpected or fails to
+// mount at all.
+//
+// A mismatch is therefore checked for and replaced. Never while the volume is
+// in use: removing it under a running container would take its filesystem away,
+// so that case is reported instead, naming the volume so the remedy is
+// obvious.
 func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error {
+	if err := c.replaceIfStale(ctx, name, driverOpts); err != nil {
+		return err
+	}
+
 	body := map[string]any{
 		"Name":       name,
 		"Driver":     "local",
@@ -90,6 +105,63 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 		return fmt.Errorf("proxy: creating volume %s: %s", name, apiError(resp))
 	}
 	return nil
+}
+
+// replaceIfStale removes a managed volume whose driver options have changed.
+//
+// Only ours, and only when unused. Anything else is left exactly as it is: a
+// volume the user made is never ours to remove, and one a container holds is
+// worse to remove than to leave wrong.
+func (c *APIClient) replaceIfStale(ctx context.Context, name string, want map[string]string) error {
+	existing, ok := c.inspectVolume(ctx, name)
+	if !ok {
+		// Not there, or not answerable. Create will say what is wrong.
+		return nil
+	}
+	if existing.Labels[rewrite.ManagedLabel] != "share" {
+		return nil
+	}
+	if maps.Equal(existing.Options, want) {
+		return nil
+	}
+
+	inUse, err := c.VolumesInUse(ctx)
+	if err == nil && inUse[name] {
+		return fmt.Errorf("the volume %s was built for a different export and a container is using it\n"+
+			"  fix: stop and remove that container, and it will be rebuilt", name)
+	}
+	return c.RemoveVolume(ctx, name)
+}
+
+// volumeDetail is what inspecting a volume tells us that listing does not.
+type volumeDetail struct {
+	Options map[string]string `json:"Options"`
+	Labels  map[string]string `json:"Labels"`
+}
+
+// inspectVolume returns a volume's definition, and whether there is one to
+// report.
+//
+// No error, because there is nothing a caller could do with one. Every reason
+// this fails -- absent, unreachable, unparseable -- means the same thing here:
+// go on and let create answer, which is what says something useful anyway.
+func (c *APIClient) inspectVolume(ctx context.Context, name string) (volumeDetail, bool) {
+	var detail volumeDetail
+
+	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil)
+	if err != nil {
+		return detail, false
+	}
+	defer conn.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return detail, false
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return detail, false
+	}
+	return detail, true
 }
 
 // Container is the subset of container state the client needs.
