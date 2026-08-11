@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	dockerconfig "github.com/docker/cli/cli/config"
+	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -47,8 +48,6 @@ type facts struct {
 	// the command somebody runs when the workspace is unreachable.
 	info    workspace.Info
 	infoErr error
-
-	shim installed
 }
 
 // gather collects the local facts, which never fail as a whole.
@@ -58,9 +57,6 @@ func gather(cfg config.Config) facts {
 	f.serving = proxy.Reachable(f.endpoint)
 	if f.serving {
 		f.answering = control(f.endpoint, http.MethodGet, "status", &f.local) == nil
-	}
-	if self, err := selfPath(); err == nil {
-		f.shim, _ = inspectShim(self)
 	}
 	return f
 }
@@ -87,19 +83,16 @@ func (f facts) verdict() string {
 	case f.infoErr != nil:
 		return "cannot reach the workspace: " + firstLine(f.infoErr.Error())
 	case !f.serving:
-		return "no session (run `remote-docker start`)"
+		return "no session (run `" + ourCommand("start") + "`)"
 	case !f.answering:
 		return "a session is serving the endpoint but will not answer"
 	case f.local.Version != version:
-		return fmt.Sprintf("the running session is a different build, %s (run `remote-docker restart`)",
+		return fmt.Sprintf("the running session is a different build, %s (run `"+ourCommand("restart")+"`)",
 			orUnknown(f.local.Version))
 	}
 
-	switch {
-	case f.info.Storage == "vfs":
+	if f.info.Storage == "vfs" {
 		return "ready, but the workspace daemon is on vfs, so containers start slowly"
-	case f.shim.exists && f.shim.ours && !f.shim.current:
-		return "ready, but the docker shim is an older build (run `remote-docker shim install`)"
 	}
 	return "ready"
 }
@@ -162,7 +155,7 @@ func dockerReach(cfg config.Config) string {
 	case ours:
 		return fmt.Sprintf("context %q is selected", ours)
 	case "":
-		return fmt.Sprintf("no context selected (run `remote-docker workspace use %s`)", contextHint(cfg))
+		return fmt.Sprintf("no context selected (run `%s`)", ourCommand("use "+contextHint(cfg)))
 	default:
 		return fmt.Sprintf("context %q is selected, not %q", current, ours)
 	}
@@ -224,16 +217,6 @@ func versionsLine(f facts) string {
 	if f.answering && f.local.Version != version {
 		parts = append(parts, "session "+orUnknown(f.local.Version)+" (DIFFERENT)")
 	}
-	switch {
-	case !f.shim.exists:
-		parts = append(parts, "no docker shim")
-	case !f.shim.ours:
-		parts = append(parts, "docker shim not ours")
-	case f.shim.current:
-		parts = append(parts, "shim current")
-	default:
-		parts = append(parts, "shim STALE")
-	}
 	return strings.Join(parts, ", ")
 }
 
@@ -244,4 +227,51 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return strings.TrimSpace(s)
+}
+
+func newStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Is this working, and what is it talking to?",
+		Long: `Prints a verdict first: ready, or the first thing that is wrong.
+
+Then the detail behind it, grouped by question: whether a session is up and
+how other tools reach it, what is on the other end, and which builds are in
+play.
+
+Reports what it can even when the workspace cannot be reached, which is when
+somebody is most likely to be running it.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := resolve()
+			if err != nil {
+				return err
+			}
+			// The one thing worth failing on: with no host there is no
+			// workspace to have a status.
+			if err := cfg.RequireHost(); err != nil {
+				return err
+			}
+
+			f := gather(cfg)
+			f.askWorkspace()
+			reportStatus(cmd.OutOrStdout(), f)
+			return nil
+		},
+	}
+}
+
+// row prints one aligned "key    value" line.
+//
+// `status` and `workspace inspect` print one table each and share this width,
+// so a row added to one lines up in the other. It was a bare %-20s at thirteen
+// call sites.
+func row(out io.Writer, key, value string) {
+	if value != "" {
+		_, _ = fmt.Fprintf(out, "%-20s %s\n", key, value)
+	}
+}
+
+// rowf is row with a formatted value.
+func rowf(out io.Writer, key, format string, args ...any) {
+	row(out, key, fmt.Sprintf(format, args...))
 }

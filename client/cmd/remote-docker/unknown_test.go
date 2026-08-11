@@ -34,9 +34,8 @@ func TestAnUnknownCommandIsAnError(t *testing.T) {
 		word string
 		path string
 	}{
-		{"at the root", []string{"bogus"}, `"bogus"`, "remote-docker"},
-		{"under workspace", []string{"workspace", "bogus"}, `"bogus"`, "remote-docker workspace"},
-		{"under shim", []string{"shim", "bogus"}, `"bogus"`, "remote-docker shim"},
+		{"at the root", []string{"bogus"}, `"bogus"`, programName()},
+		{"under remote", []string{"remote", "bogus"}, `"bogus"`, programName() + " remote"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := run(t, tc.args...)
@@ -63,9 +62,9 @@ func TestANearMissNamesTheCommandYouMeant(t *testing.T) {
 		args   []string
 		expect string
 	}{
-		{[]string{"statuss"}, "remote-docker status"},
-		{[]string{"workspace", "creat"}, "remote-docker workspace create"},
-		{[]string{"shim", "instal"}, "remote-docker shim install"},
+		{[]string{"pss"}, programName() + " ps"},
+		{[]string{"remote", "creat"}, programName() + " remote create"},
+		{[]string{"remote", "statu"}, programName() + " remote status"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			err := run(t, tc.args...)
@@ -79,13 +78,13 @@ func TestANearMissNamesTheCommandYouMeant(t *testing.T) {
 	}
 }
 
-// The worst version of the bug: `workspace` lists when given no subcommand, so
-// a misspelled `create` fell through to the parent, listed the workspaces and
-// exited 0 having created nothing.
+// The worst version of the bug: a parent that runs on its own swallowed a
+// misspelled subcommand, did its own job instead, and exited 0 having not done
+// the one that was asked for.
 func TestAMisspelledSubcommandDoesNotRunItsParent(t *testing.T) {
-	err := run(t, "workspace", "creat", "dev")
+	err := run(t, "remote", "creat", "dev")
 	if err == nil {
-		t.Fatal("`workspace creat dev` succeeded, which means it ran the list")
+		t.Fatal("`remote creat dev` succeeded, which means it ran the help")
 	}
 }
 
@@ -93,12 +92,12 @@ func TestAMisspelledSubcommandDoesNotRunItsParent(t *testing.T) {
 // what the Args rule must not break.
 func TestBareCommandsStillRun(t *testing.T) {
 	for _, args := range [][]string{
-		{},          // help, and exit 0
-		{"shim"},    // help, and exit 0
-		{"version"}, //
-		{"shim", "status"},
+		{},         // help, and exit 0
+		{"remote"}, // help, and exit 0
+		{"remote", "version"},
+		{"remote", "ls"},
 	} {
-		t.Run(strings.Join(append([]string{"remote-docker"}, args...), " "), func(t *testing.T) {
+		t.Run(strings.Join(append([]string{programName()}, args...), " "), func(t *testing.T) {
 			if err := run(t, args...); err != nil {
 				t.Errorf("%v failed: %v", args, err)
 			}

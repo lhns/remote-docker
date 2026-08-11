@@ -43,7 +43,7 @@ services:
 	var err error
 	out := captureStdout(t, func() {
 		root := newTestRoot(t)
-		root.SetArgs([]string{"docker", "compose", "-f", file, "config"})
+		root.SetArgs([]string{"compose", "-f", file, "config"})
 		err = root.Execute()
 	})
 
@@ -104,7 +104,7 @@ func TestAMidChainFlagIsNotHandedToTheLeaf(t *testing.T) {
 	absent := filepath.Join(t.TempDir(), "absent.yaml")
 
 	root := newTestRoot(t)
-	root.SetArgs([]string{"docker", "compose", "-f", absent, "config"})
+	root.SetArgs([]string{"compose", "-f", absent, "config"})
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
 

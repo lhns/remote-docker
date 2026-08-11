@@ -26,6 +26,12 @@ import (
 // "dev" could easily already mean something else to the user. Destroying that
 // would be a poor way to discover the collision, so a context is only replaced
 // when its description says we wrote it.
+// Written into every context this program creates, and read back to decide
+// whether a context is ours to replace or remove.
+//
+// The string is a STORED VALUE, not a label: changing it orphans every context
+// already written, which then cannot be updated or cleaned up and are silently
+// treated as somebody else's. It stays what it has always been.
 const contextMarker = "remote-docker workspace"
 
 // dockerCmd runs a docker command on this machine's behalf.
@@ -49,9 +55,12 @@ func dockerCmd(args ...string) *exec.Cmd {
 
 // dockerInvocation decides what to run and with which arguments.
 //
-// Separated from the exec so the fallback can be tested without one, and
-// because the argument shift is easy to get wrong: our own binary needs the
-// `docker` subcommand in front, and a docker on PATH must not have it.
+// Separated from the exec so the fallback can be tested without one.
+//
+// The arguments are the same either way now: this binary's root IS the Docker
+// CLI (ADR 0024), so `context inspect x` means the same thing to us as to a
+// docker on PATH. It used to need a `docker` subcommand in front of it, and
+// forgetting the shift was the bug this function exists to have one answer to.
 func dockerInvocation(
 	lookPath func(string) (string, error),
 	executable func() (string, error),
@@ -66,7 +75,7 @@ func dockerInvocation(
 		// more useful than deciding here that there is no docker.
 		return "docker", args
 	}
-	return self, append([]string{"docker"}, args...)
+	return self, args
 }
 
 type installedContext struct {

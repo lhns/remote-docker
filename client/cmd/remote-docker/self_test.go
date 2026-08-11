@@ -206,7 +206,7 @@ func asMain(t *testing.T, argv []string, self string) error {
 func TestTermuxArgvWouldBreakEveryCommand(t *testing.T) {
 	me := self(t)
 
-	err := asMain(t, termuxArgv(me, "version"), "")
+	err := asMain(t, termuxArgv(me, "remote", "version"), "")
 	if err == nil {
 		t.Fatal("the unstripped argv was accepted, so this test proves nothing")
 	}
@@ -219,14 +219,17 @@ func TestTermuxArgvWouldBreakEveryCommand(t *testing.T) {
 
 func TestTermuxArgvRunsTheCommand(t *testing.T) {
 	me := self(t)
+	// Commands that need no configuration, because CI has none: `remote
+	// status` wants a workspace to have a status about, and passing here only
+	// because the developer's machine has one is not a test.
 	for _, args := range [][]string{
-		{"version"},
-		{"shim", "status"},
-		{"workspace", "list"},
+		{"remote", "version"},
+		{"remote", "ls"},
+		{"remote", "--help"},
 		// A flag after the inserted path failed differently and worse: cobra
 		// never reached the subcommand, so this came back "unknown flag:
 		// --no-path" and sent the reader after a flag that exists.
-		{"shim", "install", "--no-path", "--help"},
+		{"remote", "create", "--help"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			if err := asMain(t, termuxArgv(me, args...), me); err != nil {

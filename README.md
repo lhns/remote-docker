@@ -25,10 +25,13 @@ You need a workspace to connect to. If nobody has set one up yet, see
 export REMOTE_DOCKER_HOST=workspace.example
 
 # 2. print your public key and hand it to whoever runs the workspace
-remote-docker enroll
+remote-docker remote enroll
 
 # 3. once your key is enrolled, start a session
-remote-docker start
+remote-docker remote start
+
+# 4. and then it is just docker
+remote-docker run --rm -v .:/w alpine ls /w
 ```
 
 `start` prints the endpoint and returns. No terminal has to stay open.
@@ -39,24 +42,22 @@ remote-docker start
 docker --context <workspace> ps          # the context is created with the workspace
 ```
 
-**If you do not**, this binary is one:
+**If you do not**, this binary is one. Rename it:
 
 ```bash
-remote-docker shim install               # puts `docker` on your PATH
+mv remote-docker docker                  # docker.exe on Windows
 docker run --rm -v .:/w alpine ls /w
 ```
 
-You do not need a docker CLI at all, because this binary is one. A standalone
-one does exist for Windows if you want it (`winget install Docker.DockerCLI`,
-or the static zip from download.docker.com), but that is a second thing to
-install, update and keep in step with the daemon. `shim install` links this
-binary onto your PATH under the name `docker`, and on Windows adds one
-directory to your user PATH, at the end, so a real Docker installed later
-still wins. Open a new terminal afterwards. `remote-docker shim uninstall`
-reverses both. Renaming the binary to `docker.exe` yourself does the same
-thing.
+That is the whole installation. The Docker CLI is this program's root command,
+so the file's name is the only thing that decides how you spell it, and there
+is nothing to put on PATH, keep in step, or uninstall. A standalone docker CLI
+does exist if you want one (`winget install Docker.DockerCLI` on Windows, or
+the static zip from download.docker.com), but it is a second thing to install
+and update.
 
-`docker compose` is included too, so the whole toolchain is one binary.
+`docker compose` and `docker build` (BuildKit, through buildx) are included, so
+the whole toolchain is one file.
 
 ## What works
 
@@ -113,25 +114,28 @@ this trusts, what it does not, and where the checks are is in
 
 ## Commands
 
+**This binary is the Docker CLI.** `remote-docker run`, `remote-docker ps`,
+`remote-docker compose up` are the real commands with their real flags, talking
+to the workspace. Rename the file to `docker` and they are spelled the way they
+are everywhere else, with no install step and nothing on PATH to manage.
+
+Everything that is ours lives under `remote`:
+
 | | |
 |---|---|
-| `remote-docker enroll` | print the public key to hand over for enrolment |
-| `remote-docker start` | start a background session and return |
-| `remote-docker start --foreground` | run it in this terminal instead |
-| `remote-docker stop` | stop it |
-| `remote-docker restart` | stop and start, refusing while something depends on it |
-| `remote-docker status` | is it working, and what is it talking to |
-| `remote-docker docker …` | the embedded Docker CLI |
-| `remote-docker gc` | remove share volumes nothing is using |
-| `remote-docker version` | |
-| `remote-docker workspace create <name> --host …` | add a workspace and its docker context |
-| `remote-docker workspace rm <name>` | remove both again |
-| `remote-docker workspace ls` | list them |
-| `remote-docker workspace use <name>` | make it the default here, and docker's current context |
-| `remote-docker workspace inspect [name]` | settings, endpoint, context, whether a session is up |
-| `remote-docker shim install` | put `docker` on PATH (`--no-path` skips the PATH edit) |
-| `remote-docker shim uninstall` | remove it again |
-| `remote-docker shim status` | where it is, and whether it is still this build |
+| `remote-docker remote enroll` | print the public key to hand over for enrolment |
+| `remote-docker remote start` | start a background session and return |
+| `remote-docker remote start --foreground` | run it in this terminal instead |
+| `remote-docker remote stop` | stop it |
+| `remote-docker remote restart` | stop and start, refusing while something depends on it |
+| `remote-docker remote status` | is it working, and what is it talking to |
+| `remote-docker remote gc` | remove share volumes nothing is using |
+| `remote-docker remote version` | |
+| `remote-docker remote create <name> --host …` | add a workspace and its docker context |
+| `remote-docker remote rm <name>` | remove both again |
+| `remote-docker remote ls` | list them |
+| `remote-docker remote use <name>` | make it the default here, and docker's current context |
+| `remote-docker remote inspect [name]` | settings, endpoint, context, whether a session is up |
 
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
@@ -176,14 +180,14 @@ Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 
 `REMOTE_DOCKER_TRACE` belongs to the **session**, which is the process that
 forwards the requests, so set it there:
-`REMOTE_DOCKER_TRACE=1 remote-docker start`. On a docker command it does
+`REMOTE_DOCKER_TRACE=1 remote-docker remote start`. On a docker command it does
 nothing, and says so.
 
 ### Several workspaces
 
 ```bash
-remote-docker workspace create dev --host dev.example --user alice --watch partial
-remote-docker workspace create ci  --host ci.example  --user alice
+remote-docker remote create dev --host dev.example --user alice --watch partial
+remote-docker remote create ci  --host ci.example  --user alice
 ```
 
 which writes `~/.remote-docker.json` and creates a docker context for each:
@@ -203,7 +207,7 @@ of them, or inside one workspace, where it applies to that one. Each workspace
 gets its own endpoint, so sessions run side by side:
 
 ```bash
-remote-docker start --workspace dev
+remote-docker remote start --workspace dev
 docker --context dev ps
 ```
 
@@ -346,7 +350,7 @@ Per-account daemons inherit that setting, so this is the one place to set it.
 **If it is set and anything it needs is missing, dockerd falls back to vfs
 rather than failing.** vfs has no copy-on-write, so it copies the whole image
 on every `docker create`. Nothing errors, `docker ps` stays instant, and
-`docker run` takes minutes. The agent logs it and `remote-docker status` shows
+`docker run` takes minutes. The agent logs it and `remote-docker remote status` shows
 it, because the cost of this one is entirely in how quiet it is.
 
 fuse-overlayfs needs a **4.18 kernel or newer** with `CONFIG_FUSE_FS`
@@ -450,7 +454,7 @@ Three consequences of that nesting:
 
 `rd-*` share volumes are the exception and can be destroyed freely. They hold
 no data, only a pointer to a directory on a client's machine, and
-`remote-docker gc` removes the unused ones as a matter of routine.
+`remote-docker remote gc` removes the unused ones as a matter of routine.
 
 #### Upgrading an existing workspace is a breaking change
 

@@ -34,11 +34,11 @@ func TestDockerInvocation(t *testing.T) {
 		if name != "/opt/remote-docker" {
 			t.Errorf("ran %q, want this binary", name)
 		}
-		// With "docker" in front, because that is the subcommand carrying the
-		// CLI. Under the `docker` alias the shim would not need it, but this
-		// path invokes the binary by its own name.
-		if !slices.Equal(argv, []string{"docker", "context", "use", "dev"}) {
-			t.Errorf("argv = %v, want the docker subcommand in front", argv)
+		// The same arguments as a real docker gets. This binary's root IS the
+		// Docker CLI (ADR 0024), so there is no subcommand to put in front and
+		// no shift to get wrong.
+		if !slices.Equal(argv, []string{"context", "use", "dev"}) {
+			t.Errorf("argv = %v, want the arguments unchanged", argv)
 		}
 	})
 

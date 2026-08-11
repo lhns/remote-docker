@@ -36,6 +36,9 @@ which neither ever uses.
 
 One background session per workspace, which every command talks to.
 
+*(2026-08-11: `up` no longer exists as a command; see ADR 0018. What it named
+is still the daemon body, reached as `remote start --foreground`.)*
+
 **`up` is the daemon body.** It keeps its behaviour — foreground, blocking,
 reporting — and `start` spawns exactly that, detached, with its output going to
 a log. There is no second implementation of a session to keep in step with the

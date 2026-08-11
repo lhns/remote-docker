@@ -162,7 +162,7 @@ cd "$PROJECT" || exit 1
 # No session is running yet, so the verdict is "no session" and that is
 # correct. What this proves is that the workspace answered: the account row
 # only exists when it did.
-if timeout 90 "$WORK/remote-docker" status >"$WORK/status.log" 2>&1 &&
+if timeout 90 "$WORK/remote-docker" remote status >"$WORK/status.log" 2>&1 &&
     grep -q "^status " "$WORK/status.log" &&
     grep -q "tunnel port" "$WORK/status.log"; then
     ok "status reports a verdict and the workspace parameters"
@@ -189,7 +189,7 @@ echo "== 6. open a session =="
 # --foreground because the suite wants the session as a child it can kill and
 # whose log it can read. `start` on its own detaches, which is right for a
 # person and wrong for a test that needs to end it deterministically.
-"$WORK/remote-docker" start --foreground >"$WORK/up.log" 2>&1 &
+"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 
 ready=false
@@ -781,7 +781,7 @@ services:
       - .:/usr/share/nginx/html:ro
 COMPOSE
 
-if timeout 180 "$WORK/remote-docker" docker compose -f "$PROJECT/embedded/compose.yaml" up -d \
+if timeout 180 "$WORK/remote-docker" compose -f "$PROJECT/embedded/compose.yaml" up -d \
     >"$WORK/compose-embedded.log" 2>&1; then
     ok "the embedded compose brought a stack up"
 
@@ -800,7 +800,7 @@ if timeout 180 "$WORK/remote-docker" docker compose -f "$PROJECT/embedded/compos
         sed 's/^/        /' "$WORK/compose-embedded.log" | tail -20
     fi
 
-    timeout 120 "$WORK/remote-docker" docker compose -f "$PROJECT/embedded/compose.yaml" down -v \
+    timeout 120 "$WORK/remote-docker" compose -f "$PROJECT/embedded/compose.yaml" down -v \
         >/dev/null 2>&1 && ok "and tore it down again" || bad "the embedded compose down failed"
 else
     bad "the embedded compose could not bring a stack up"
@@ -867,7 +867,7 @@ else
 fi
 
 # The embedded CLI: the client's own docker, not the runner's.
-if out=$(timeout 60 "$WORK/remote-docker" docker ps --format '{{.Names}}' 2>&1); then
+if out=$(timeout 60 "$WORK/remote-docker" ps --format '{{.Names}}' 2>&1); then
     ok "the embedded docker CLI talks to the workspace"
 else
     bad "the embedded docker CLI failed: $(echo "$out" | tail -2)"
@@ -877,14 +877,14 @@ fi
 # reverse-tunnel port, so a session that needlessly reserves it fails the
 # moment `up` is running -- which is exactly when someone would run another
 # command. This is the case that broke.
-if out=$(timeout 60 "$WORK/remote-docker" status 2>&1); then
+if out=$(timeout 60 "$WORK/remote-docker" remote status 2>&1); then
     ok "status works while up is running"
 else
     bad "status failed while up was running: $(echo "$out" | tail -2)"
 fi
 
 # gc must not remove a volume that is in use, and must not fail.
-if out=$(timeout 90 "$WORK/remote-docker" gc 2>&1); then
+if out=$(timeout 90 "$WORK/remote-docker" remote gc 2>&1); then
     if echo "$out" | grep -q "removed"; then
         ok "gc ran and reported what it removed"
     else
@@ -916,7 +916,7 @@ ADD sub /sub
 RUN cat /marker.txt /sub/nested.txt
 DOCKERFILE
 
-if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" docker build -t itest-build . 2>&1); then
+if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" build -t itest-build . 2>&1); then
     # THE builder assertion: is this BuildKit, or the classic builder wearing
     # its name?
     #
@@ -968,7 +968,7 @@ FROM alpine:3
 COPY . /ctx
 RUN ls /ctx
 DOCKERFILE
-if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" docker build -t itest-ignore . 2>&1); then
+if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" build -t itest-ignore . 2>&1); then
     if echo "$out" | grep -q "secret.txt"; then
         bad ".dockerignore was not honoured; the excluded file was uploaded"
     else
@@ -1064,7 +1064,7 @@ mkdir -p "$REPLAYDIR"
 echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
 if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
-    REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" start --foreground >"$WORK/watch-up.log" 2>&1 &
+    REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 
     ready=false
@@ -1141,7 +1141,7 @@ wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
 sleep 2
 
-if "$WORK/remote-docker" start >"$WORK/start.log" 2>&1; then
+if "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
     ok "start returned without holding a terminal"
     sed 's/^/        /' "$WORK/start.log"
 else
@@ -1155,10 +1155,10 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
 
         # And the verdict, which is the whole point of `status`. A session is
         # demonstrably up: the command above went through it.
-        if "$WORK/remote-docker" status 2>&1 | grep -q "^status  *ready"; then
+        if "$WORK/remote-docker" remote status 2>&1 | grep -q "^status  *ready"; then
             ok "status says ready while a session is serving"
         else
-            bad "status did not say ready: $("$WORK/remote-docker" status 2>&1 | head -1)"
+            bad "status did not say ready: $("$WORK/remote-docker" remote status 2>&1 | head -1)"
         fi
     else
         bad "unexpected output through the daemon: $out"
@@ -1168,7 +1168,7 @@ else
 fi
 
 # Idempotent: a second start must not fight the first for the endpoint.
-if "$WORK/remote-docker" start 2>&1 | grep -q "already running"; then
+if "$WORK/remote-docker" remote start 2>&1 | grep -q "already running"; then
     ok "a second start reports the running one rather than racing it"
 else
     bad "a second start did not recognise the running session"
@@ -1178,15 +1178,12 @@ fi
 # which on Unix it silently used to do, unlinking the socket and leaving the
 # first session accepting on an inode nobody could reach.
 #
-# Deliberately spelled `up` rather than `start --foreground`: `up` is a hidden
-# alias kept for scripts, and an alias nothing exercises is an alias nobody
-# notices breaking. This is its coverage.
-if out=$("$WORK/remote-docker" up 2>&1); then
-    bad "a second up took the endpoint from the running session"
+if out=$("$WORK/remote-docker" remote start --foreground 2>&1); then
+    bad "a second session took the endpoint from the running one"
 else
     case "$out" in
-        *"already serving"*) ok "a second up is refused, naming the owner" ;;
-        *) bad "a second up failed for the wrong reason: $out" ;;
+        *"already serving"*) ok "a second session is refused, naming the owner" ;;
+        *) bad "a second session failed for the wrong reason: $out" ;;
     esac
 fi
 
@@ -1206,12 +1203,12 @@ else
     bad "could not start the detached container"
 fi
 
-if "$WORK/remote-docker" stop 2>&1 | grep -q "stopped"; then
+if "$WORK/remote-docker" remote stop 2>&1 | grep -q "stopped"; then
     ok "stop ends the background session"
 else
     bad "stop did not end the background session"
 fi
-if "$WORK/remote-docker" stop 2>&1 | grep -q "not running"; then
+if "$WORK/remote-docker" remote stop 2>&1 | grep -q "not running"; then
     ok "stopping an already-stopped session says so"
 else
     bad "stopping twice did not report it was not running"
@@ -1229,7 +1226,7 @@ fi
 # connection, the reverse tunnel and the NFS export go afterwards. An account
 # has exactly one export port (ADR 0003), so a start that overtook the release
 # failed on a port the workspace had not let go of yet.
-if "$WORK/remote-docker" start >/dev/null 2>&1 &&
+if "$WORK/remote-docker" remote start >/dev/null 2>&1 &&
     dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-start.txt" 2>&1 &&
     grep -q "from the project directory" "$WORK/after-start.txt"; then
     ok "start && docker run works with nothing in between"
@@ -1237,8 +1234,8 @@ else
     bad "a container run straight after start failed: $(tail -2 "$WORK/after-start.txt" 2>/dev/null | tr '\n' ' ')"
 fi
 
-if "$WORK/remote-docker" stop >/dev/null 2>&1 &&
-    "$WORK/remote-docker" start >/dev/null 2>&1 &&
+if "$WORK/remote-docker" remote stop >/dev/null 2>&1 &&
+    "$WORK/remote-docker" remote start >/dev/null 2>&1 &&
     dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-restart.txt" 2>&1 &&
     grep -q "from the project directory" "$WORK/after-restart.txt"; then
     ok "stop && start && docker run works with nothing in between"
@@ -1246,34 +1243,39 @@ else
     bad "a container run straight after stop && start failed: $(tail -2 "$WORK/after-restart.txt" 2>/dev/null | tr '\n' ' ')"
 fi
 
-"$WORK/remote-docker" stop >/dev/null 2>&1
+"$WORK/remote-docker" remote stop >/dev/null 2>&1
 
-# A session built from a different commit is replaced when that costs nothing,
+# A session built from a different build is replaced when that costs nothing,
 # and reported when it does not. A stale session serves the endpoint, so an
 # updated client talks to the OLD build and behaves like it -- silently, until
 # something it should have fixed does not work.
 #
 # Two binaries, same source, different stamps: the versions cannot be ordered
 # and nothing here tries to.
-if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"         -o "$WORK/remote-docker-old" ./cmd/remote-docker); then
+#
+# Named for what it is rather than "-old". It is not an older build, it is THIS
+# build wearing another version, and the name saying otherwise is what made a
+# rename of the whole command shape skip straight past it -- it does not match
+# "remote-docker", so it kept calling commands that had moved.
+if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-otherbuild"         -o "$WORK/remote-docker-otherbuild" ./cmd/remote-docker); then
 
-    "$WORK/remote-docker-old" start >/dev/null 2>&1
+    "$WORK/remote-docker-otherbuild" remote start >/dev/null 2>&1
 
     # (a) nothing depends on it -> replaced silently.
-    "$WORK/remote-docker" docker ps >/dev/null 2>&1
-    if "$WORK/remote-docker" status 2>/dev/null | grep -q "DIFFERENT"; then
-        bad "an unused session built from another commit was not replaced"
+    "$WORK/remote-docker" ps >/dev/null 2>&1
+    if "$WORK/remote-docker" remote status 2>/dev/null | grep -q "DIFFERENT"; then
+        bad "an unused session from another build was not replaced"
     else
         ok "an unused session from another commit is replaced silently"
     fi
 
     # (b) something depends on it -> warned about, left alone. The old binary
     # starts the container so the session holding it is the old one.
-    "$WORK/remote-docker" stop >/dev/null 2>&1
-    "$WORK/remote-docker-old" start >/dev/null 2>&1
-    if "$WORK/remote-docker-old" docker run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
+    "$WORK/remote-docker" remote stop >/dev/null 2>&1
+    "$WORK/remote-docker-otherbuild" remote start >/dev/null 2>&1
+    if "$WORK/remote-docker-otherbuild" run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
 
-        warned=$("$WORK/remote-docker" docker ps 2>&1)
+        warned=$("$WORK/remote-docker" ps 2>&1)
         case "$warned" in
             *"different version"*) ok "a session in use from another commit is reported, not restarted" ;;
             *) bad "no version warning while a container depended on the old session" ;;
@@ -1281,8 +1283,8 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ol
         # Captured rather than piped, so a failure can show what status said.
         # Which build is serving is exactly the question here, and "it did not
         # match" without the output leaves nothing to reason from.
-        insitu=$("$WORK/remote-docker" status 2>&1)
-        if echo "$insitu" | grep -q "sha-oldbuild"; then
+        insitu=$("$WORK/remote-docker" remote status 2>&1)
+        if echo "$insitu" | grep -q "sha-otherbuild"; then
             ok "the in-use session was left running"
         else
             bad "the in-use session was replaced, taking its container's mount with it"
@@ -1290,17 +1292,17 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ol
         fi
 
         # restart must refuse rather than break it.
-        if "$WORK/remote-docker" restart >/dev/null 2>&1; then
+        if "$WORK/remote-docker" remote restart >/dev/null 2>&1; then
             bad "restart proceeded while a container depended on the session"
         else
             ok "restart refuses while something depends on the session"
         fi
 
-        "$WORK/remote-docker" docker rm -f itest-pin >/dev/null 2>&1
+        "$WORK/remote-docker" rm -f itest-pin >/dev/null 2>&1
     else
         bad "could not start the pinning container"
     fi
-    "$WORK/remote-docker" stop >/dev/null 2>&1
+    "$WORK/remote-docker" remote stop >/dev/null 2>&1
 else
     bad "could not build a second client for the version test"
 fi
@@ -1308,13 +1310,13 @@ fi
 # It reclaims itself. A session that has never been used is the case that
 # should go soonest, and the one that used to be unable to: with no last-use
 # time, it reported zero idle and could never expire.
-if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" start >/dev/null 2>&1; then
+if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" remote start >/dev/null 2>&1; then
     reclaimed=false
     for _ in $(seq 1 6); do
         sleep 5
-        if ! "$WORK/remote-docker" start 2>&1 | grep -q "already running"; then
+        if ! "$WORK/remote-docker" remote start 2>&1 | grep -q "already running"; then
             reclaimed=true
-            "$WORK/remote-docker" stop >/dev/null 2>&1
+            "$WORK/remote-docker" remote stop >/dev/null 2>&1
             break
         fi
     done
@@ -1353,7 +1355,7 @@ restore_ws() {
 }
 trap 'cleanup; restore_ws' EXIT
 
-if out=$("$WORK/remote-docker" workspace create itest-ws --host 127.0.0.1 --port "$SSH_PORT" --user "$ACCOUNT" 2>&1); then
+if out=$("$WORK/remote-docker" remote create itest-ws --host 127.0.0.1 --port "$SSH_PORT" --user "$ACCOUNT" 2>&1); then
     ok "workspace create added a workspace"
 else
     bad "workspace create failed: $(echo "$out" | tail -2)"
@@ -1369,7 +1371,7 @@ fi
 # said nothing but "did not show the workspace" -- so the first two occurrences
 # bought a re-run and no diagnosis. What ls printed, and what is actually in the
 # file it reads, are the whole answer, and they cost two lines.
-wsls=$("$WORK/remote-docker" workspace ls 2>&1)
+wsls=$("$WORK/remote-docker" remote ls 2>&1)
 if echo "$wsls" | grep -q "itest-ws"; then
     ok "workspace ls shows it"
 else
@@ -1380,7 +1382,7 @@ fi
 # inspect is the one place the four derivations meet: the config file's view,
 # the endpoint derived from the name, the context named after it, and whether
 # anything is serving it.
-inspected=$("$WORK/remote-docker" workspace inspect itest-ws 2>&1)
+inspected=$("$WORK/remote-docker" remote inspect itest-ws 2>&1)
 if echo "$inspected" | grep -q "docker context" && echo "$inspected" | grep -q "endpoint"; then
     ok "workspace inspect reports the endpoint and the docker context together"
 else
@@ -1388,8 +1390,8 @@ else
 ' ' ')"
 fi
 
-if "$WORK/remote-docker" workspace use itest-ws >/dev/null 2>&1 &&
-   "$WORK/remote-docker" workspace ls 2>&1 | grep -q "\*itest-ws"; then
+if "$WORK/remote-docker" remote use itest-ws >/dev/null 2>&1 &&
+   "$WORK/remote-docker" remote ls 2>&1 | grep -q "\*itest-ws"; then
     ok "workspace use makes it the default"
 else
     bad "workspace use did not set the default"
@@ -1409,15 +1411,41 @@ else
     bad "docker's current context is $current, want itest-ws"
 fi
 
+# A context we did NOT create must be left entirely alone.
+#
+# The endpoint is arranged before cobra parses anything, and it used to do so by
+# setting DOCKER_HOST, which outranks --context in docker's own resolution. So
+# every foreign context on the machine silently resolved to us. There is no way
+# to see that from inside the process, which is why it is asserted here: the
+# command must FAIL to reach a daemon that is not there, rather than succeed
+# against ours.
+hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/dev/null 2>&1 || true
+if out=$(timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps 2>&1); then
+    bad "a foreign context was redirected to our daemon"
+    info "output: $(echo "$out" | head -2 | tr '
+' '; ')"
+else
+    ok "a docker context we did not create is left alone"
+fi
+hostdocker context rm -f itest-foreign >/dev/null 2>&1 || true
+
+# And ours, named explicitly, reaches the workspace it names rather than the
+# default one.
+if out=$(timeout 60 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-ws ps 2>&1); then
+    ok "--context <ours> reaches that workspace"
+else
+    bad "--context itest-ws did not work: $(echo "$out" | tail -2)"
+fi
+
 # The old verbs are aliases, not history: something out there is scripted
 # against them.
-if "$WORK/remote-docker" workspace list 2>&1 | grep -q "itest-ws"; then
+if "$WORK/remote-docker" remote list 2>&1 | grep -q "itest-ws"; then
     ok "the old verb 'list' still works"
 else
     bad "the list alias stopped working"
 fi
 
-if out=$("$WORK/remote-docker" workspace rm itest-ws 2>&1); then
+if out=$("$WORK/remote-docker" remote rm itest-ws 2>&1); then
     ok "workspace rm removed it"
 else
     bad "workspace rm failed: $(echo "$out" | tail -2)"
@@ -1438,32 +1466,33 @@ else
     ok "removing the workspace removed its docker context"
 fi
 
-# `context` is gone, and gone means gone -- a command that still half-exists is
-# worse than one that does not.
-if "$WORK/remote-docker" --help 2>&1 | grep -qE '^  context'; then
-    bad "the context command is still in the help"
+# `remote` has to be FINDABLE. It is the only way in to everything this program
+# does that docker does not, and the root's help is sixty commands long, so a
+# command that is present but unlisted is a command nobody will type.
+if "$WORK/remote-docker" --help 2>&1 | grep -qE '^  remote '; then
+    ok "remote is listed in the help"
 else
-    ok "context is no longer a command"
+    bad "remote is missing from the help, so nothing points at it"
 fi
 
 restore_ws
 trap cleanup EXIT
 
 echo
-echo "== 18. the client answering to the name docker =="
+echo "== 18. the client under the name docker =="
 # The claim is that a machine with no Docker installed can type `docker run`.
 # It rests on one thing -- the binary looking at the name it was invoked by --
 # and the only way to test that is to invoke it by that name.
 #
 # Deliberately with NO DOCKER_HOST and no session running: that is the state a
-# person is in after `shim install`, and everything the alias has to do for
+# person is in after renaming the binary, and everything it has to do for
 # itself (resolve the workspace, start a session, point the CLI at it) happens
 # in this one command or not at all.
 ALIASDIR="$WORK/aliasbin"
 mkdir -p "$ALIASDIR"
 ln -sf "$WORK/remote-docker" "$ALIASDIR/docker"
 
-"$WORK/remote-docker" stop >/dev/null 2>&1 || true
+"$WORK/remote-docker" remote stop >/dev/null 2>&1 || true
 
 if out=$(cd "$PROJECT" && env -u DOCKER_HOST PATH="$ALIASDIR:$PATH" \
         timeout "$DOCKER_TIMEOUT" docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1) &&
@@ -1486,46 +1515,41 @@ fi
 #
 # Asserted through `stop`, which says "not running" when there is nothing to
 # stop and "stopped" when there was.
-if "$WORK/remote-docker" stop 2>&1 | grep -q "stopped"; then
+if "$WORK/remote-docker" remote stop 2>&1 | grep -q "stopped"; then
     ok "the session the alias started was there to stop"
 else
     bad "no session was running after docker run under the alias"
 fi
 env -u DOCKER_HOST PATH="$ALIASDIR:$PATH" timeout 60 docker context ls >/dev/null 2>&1
-if "$WORK/remote-docker" stop 2>&1 | grep -q "not running"; then
+if "$WORK/remote-docker" remote stop 2>&1 | grep -q "not running"; then
     ok "docker context ls started no session"
 else
     bad "a command that reaches no daemon opened a session anyway"
-    "$WORK/remote-docker" stop >/dev/null 2>&1
+    "$WORK/remote-docker" remote stop >/dev/null 2>&1
 fi
 
-# And the command that puts the name there in the first place. On this runner a
-# symlink is available, so this also pins the form: a copy would mean the ladder
-# fell all the way down without saying why.
-SHIMDIR="$WORK/shimbin"
-if out=$(REMOTE_DOCKER_SHIM_DIR="$SHIMDIR" "$WORK/remote-docker" shim install 2>&1); then
-    if echo "$out" | grep -q "symlink"; then
-        ok "shim install linked rather than copied"
-    else
-        bad "shim install did not produce a symlink: $(echo "$out" | tr '\n' ' ')"
-    fi
-    if env -u DOCKER_HOST timeout 60 "$SHIMDIR/docker" version --format '{{.Client.Version}}' >/dev/null 2>&1; then
-        ok "the installed shim runs the docker CLI"
-    else
-        bad "the installed shim did not run"
-    fi
+# A COPY of the binary named `docker`, which is the documented installation now
+# that there is no shim: the root is the Docker CLI, so the file's name is the
+# whole of it. A copy rather than the symlink above, because they are different
+# claims -- a symlink could be resolved back to the original somewhere, and this
+# one cannot be.
+COPYDIR="$WORK/copybin"
+mkdir -p "$COPYDIR"
+cp "$WORK/remote-docker" "$COPYDIR/docker"
+if env -u DOCKER_HOST timeout 60 "$COPYDIR/docker" version --format '{{.Client.Version}}' >/dev/null 2>&1; then
+    ok "a copy of the binary named docker is a working docker CLI"
 else
-    bad "shim install failed: $(echo "$out" | tail -3 | tr '\n' ' ')"
+    bad "the renamed copy did not run"
 fi
 
-if REMOTE_DOCKER_SHIM_DIR="$SHIMDIR" "$WORK/remote-docker" shim uninstall >/dev/null 2>&1 &&
-    [ ! -e "$SHIMDIR/docker" ]; then
-    ok "shim uninstall took it away again"
+# And it still finds our own commands, under the name the reader typed.
+if env -u DOCKER_HOST timeout 60 "$COPYDIR/docker" remote version >/dev/null 2>&1; then
+    ok "the renamed copy still carries the remote commands"
 else
-    bad "shim uninstall left the shim behind"
+    bad "remote is unreachable from the renamed copy"
 fi
 
-"$WORK/remote-docker" stop >/dev/null 2>&1 || true
+"$WORK/remote-docker" remote stop >/dev/null 2>&1 || true
 
 
 if [ "$FAIL" -ne 0 ]; then

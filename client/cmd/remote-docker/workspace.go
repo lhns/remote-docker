@@ -11,44 +11,25 @@ import (
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
-// The workspace command manages ~/.remote-docker.json, which until now could
-// only be listed. Adding one meant writing JSON by hand, and the "no
-// workspaces configured" message said so, which is not a thing a CLI should
-// ever have to admit.
+// The workspaces in ~/.remote-docker.json, which until now could only be
+// listed. Adding one meant writing JSON by hand, and the "no workspaces
+// configured" message said so, which is not a thing a CLI should ever have to
+// admit.
 //
 // Docker contexts are written as a side effect rather than by a separate
 // command. There is no case where you want a workspace configured and not
 // reachable as `docker --context <name>`, so making that a second thing to
 // remember was a split in the tool that was never a split in the task.
 //
-// The verbs are docker's (create, ls, use, rm, inspect) because a
-// workspace IS the thing a docker context points at, and borrowing the
-// vocabulary costs nothing and saves explaining. The noun stays ours: the
-// config file's key is `workspaces`, the wire protocol is `workspace-info`,
-// the server's variables are WORKSPACE_*, and a CLI that disagreed with all
-// of them would trade one confusion for another. The old verbs remain as
-// aliases.
-func newWorkspaceCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "workspace",
-		Aliases: []string{"workspaces"},
-		Short:   "Add, remove and list your workspaces",
-		Args:    onlySubcommands,
-	}
-	cmd.AddCommand(
-		newWorkspaceAddCommand(),
-		newWorkspaceRemoveCommand(),
-		newWorkspaceListCommand(),
-		newWorkspaceDefaultCommand(),
-		newWorkspaceInspectCommand(),
-	)
-	// Bare `remote-docker workspaces` still lists, which is what it did
-	// before this command existed.
-	cmd.RunE = newWorkspaceListCommand().RunE
-	return cmd
-}
-
-func newWorkspaceAddCommand() *cobra.Command {
+// The verbs are docker's (create, ls, use, rm, inspect) because a workspace IS
+// the thing a docker context points at, and borrowing the vocabulary costs
+// nothing and saves explaining. They are reached as `remote create` and so on,
+// because a remote IS a workspace (ADR 0024), but the noun stays ours in the
+// code: the config file's key is `workspaces`, the wire protocol is
+// `workspace-info`, the server's variables are WORKSPACE_*, and a CLI that
+// disagreed with all of them would trade one confusion for another. The old
+// verbs remain as aliases.
+func newWorkspaceCreateCommand() *cobra.Command {
 	var host, user, endpoint, watch string
 	var port int
 	var makeDefault, noContext bool
@@ -140,7 +121,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			cfg, cfgErr := config.Resolve(config.Overrides{Workspace: name}, "")
 
 			if !file.Remove(name) {
-				return fmt.Errorf("no workspace named %q; `remote-docker workspace ls` shows what there is", name)
+				return fmt.Errorf("no workspace named %q; `%s` shows what there is", name, ourCommand("ls"))
 			}
 			if err := config.Save(file, ""); err != nil {
 				return err
@@ -154,7 +135,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			}
 			if file.Default == "" && len(file.Names()) > 1 {
 				_, _ = fmt.Fprintf(out,
-					"no default workspace now; set one with `remote-docker workspace use <name>`\n")
+					"no default workspace now; set one with `%s`\n", ourCommand("use <name>"))
 			}
 			return nil
 		},
@@ -163,14 +144,14 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 	return cmd
 }
 
-func newWorkspaceDefaultCommand() *cobra.Command {
+func newWorkspaceUseCommand() *cobra.Command {
 	var noContext bool
 
 	cmd := &cobra.Command{
 		Use:     "use <name>",
 		Aliases: []string{"default"},
 		Short:   "Make a workspace the default and select its docker context",
-		Long: `Makes this the workspace remote-docker commands use, and selects its docker
+		Long: `Makes this the workspace the "remote" commands use, and selects its docker
 context, so compose and other docker tools use it too.
 
 Creates the context first if it is missing.`,
@@ -239,7 +220,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				// a command for it now.
 				_, _ = fmt.Fprintf(out,
 					"no workspaces configured. Add one:\n\n"+
-						"    remote-docker workspace create dev --host dev.example --user alice\n")
+						"    %s\n", ourCommand("create dev --host dev.example --user alice"))
 				return nil
 			}
 
@@ -330,7 +311,7 @@ func removeContextFor(out io.Writer, cfg config.Config) {
 func enrolledKey() string {
 	kp, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
-		return "(run `remote-docker enroll` to generate one)"
+		return "(run `" + ourCommand("enroll") + "` to generate one)"
 	}
 	return strings.TrimSpace(kp.AuthorizedKey(config.KeyComment()))
 }
@@ -357,8 +338,8 @@ func newWorkspaceInspectCommand() *cobra.Command {
 				return err
 			}
 			if cfg.Host == "" {
-				return fmt.Errorf("no workspace is configured; add one with " +
-					"`remote-docker workspace create <name> --host <host>`")
+				return fmt.Errorf("no workspace is configured; add one with `%s`",
+					ourCommand("create <name> --host <host>"))
 			}
 
 			out := cmd.OutOrStdout()

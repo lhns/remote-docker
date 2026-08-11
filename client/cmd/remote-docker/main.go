@@ -15,18 +15,13 @@ func main() {
 	self, _ := selfPath()
 	os.Args = dropSelfArgument(os.Args, self)
 
-	// Under the name `docker` the whole command line belongs to the Docker
-	// CLI, and so does the help: `docker run --help` must not describe itself
-	// as a subcommand of something else. The error prefix follows the name for
-	// the same reason: a message beginning "remote-docker:" from a command
-	// the user spelled `docker` names a program they may not know they have.
-	name, root := "remote-docker", newRootCommand()
-	if invokedAsDocker() {
-		name, root = dockerName, newDockerCommand()
-	}
-
+	// The error prefix is the name this binary was installed as, because that
+	// is the name the user typed. A message beginning "remote-docker:" from a
+	// command they spelled `docker` names a program they may not know they
+	// have.
+	root := newRootCommand()
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, name+":", err)
+		fmt.Fprintln(os.Stderr, programName()+":", err)
 		os.Exit(1)
 	}
 }

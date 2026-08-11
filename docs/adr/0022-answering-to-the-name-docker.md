@@ -1,6 +1,11 @@
 # 0022. The client answers to the name `docker`
 
-- Status: Accepted; completes [ADR 0009](0009-embedding-the-docker-cli.md)
+- Status: **Superseded by [ADR 0024](0024-the-docker-cli-is-the-root.md)**
+
+*(2026-08-11: the Docker CLI is the root now, so the binary does not answer to a
+second name -- it simply is one, and renaming the file is the whole
+installation. The argv[0] dispatch and `shim install` are deleted. The record
+stands as written for the reasoning that led there.)*
 - Date: 2026-08-10
 
 ## Context

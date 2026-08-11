@@ -85,11 +85,12 @@ rots unnoticed. Other exec wrappers do the same thing.
 - **`shim install` was broken here and nobody had reported it**, because nobody
   had got that far. It links to this binary, so it would have put a `docker` on
   PATH that was the Android dynamic linker. It works on the device now.
-- **`os.Args[0]` survives the loader.** ADR 0022 takes the invoked name from
-  `argv[0]` and never from `os.Executable`, for a reason that predates this
-  platform. It turns out to be the only identity that stays meaningful when the
-  process really is the linker, and `shim install` working on Android is the
-  measurement.
+- **`os.Args[0]` survives the loader.** ADR 0022 took the invoked name from
+  `argv[0]` and never from `os.Executable`, for a reason that predated this
+  platform, and it turned out to be the only identity that stays meaningful
+  when the process really is the linker. *(2026-08-11: ADR 0024 deleted the
+  feature that depended on it. The finding about the platform stands; the rule
+  it was about no longer exists.)*
 - **Loadable is not tested.** The client reaches a real workspace from a phone:
   `status`, `start`, `stop` and `docker run` all work. Nothing in CI runs on
   Android, no integration test does, and the release pipeline cross-compiles

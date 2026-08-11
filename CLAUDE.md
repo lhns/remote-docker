@@ -28,8 +28,8 @@ go.mod                   THE SHARED MODULE (ADR 0021), depends on ~nothing
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
 client/go.mod            the client module: docker/cli, buildx, 786 go.sum lines
-  cmd/remote-docker/     the client binary, which also answers to the name
-                         `docker` (ADR 0022)
+  cmd/remote-docker/     the client binary, whose root command IS the Docker
+                         CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
     fswatch/             watches shared dirs, streams changes to the agent
@@ -143,38 +143,35 @@ premise of the project, and it applies to building it too. So:
   empty directory where the project should be. `rewrite.Guard` is the answer --
   the share registry decides, and one lock spans registering a share and
   creating its volume, so the two orders both end correctly.
-- **The alias reads `os.Args[0]`, never `os.Executable()`.** The second
-  resolves symlinks -- `/proc/self/exe` on Linux -- so it reports
-  `remote-docker` for exactly the installation `shim install` creates, and
-  answering to the name `docker` (ADR 0022) would be silently dead on the
-  platform where a symlink is the right answer. The shim command is the
-  opposite: it needs the real file to link *to*, so it uses `os.Executable`.
+- **The Docker CLI is the root, and nothing of ours sits beside it.** Ours is
+  all under `remote` (ADR 0024). Putting a flag or a command at the top level
+  puts it in docker's own namespace, where `--host` and `--user` already exist
+  and where pflag skips the duplicate silently while a clashing SHORTHAND
+  panics the whole subtree. This is also what deleted the shim: renaming the
+  file to `docker` is the installation, and it needs no code.
 - **This binary asks `self.go` which file it is and how to run itself again,
   never `os.Executable` or `exec.Command` directly.** Android refuses to
   execute files in app data directories, so Termux runs a program as
   `linker64 <absolute path>` and the process really IS the linker.
   libtermux-exec hides that in libc, which a Go binary never loads. So
-  `selfPath` for the path, because `/proc/self/exe` is the linker and
-  `shim install` would have put THAT on PATH as `docker`; and `selfCommand` for
-  a respawn, because the file cannot be exec'd at all and `start` could not
-  launch its own session. Both failed naming the linker or nothing:
+  `selfPath` for the path, because `/proc/self/exe` is the linker and the help
+  text would have named THAT as the program; and `selfCommand` for a respawn,
+  because the file cannot be exec'd at all and `start` could not launch its own
+  session. Both failed naming the linker or nothing:
   `expected absolute path: "start"`, then `fork/exec ...: permission denied`.
   No linker path is written down -- `os.Executable` names the loader already
   running us, and hardcoding one would be a guess about a platform nothing
   tests.
-- **Never touch a `docker` we did not write, and never execute one to find
-  out.** A machine may get Docker Desktop tomorrow. Ours is `os.SameFile`
-  against this binary, or a marker file beside it; anything else is left where
-  it is and named on screen. Running the file to ask what it is would be
-  running an unknown binary from PATH.
-- **Never `setx`.** It truncates PATH at 1024 characters and what is past the
-  cut is gone -- silently, and from an account's own configuration. The
-  registry (`HKCU\Environment`, preserving `REG_EXPAND_SZ`) is the interface.
-  And appended, never prepended: a real Docker installed later must win.
 - **A docker command this program runs itself carries
-  `REMOTE_DOCKER_NO_SESSION=1`.** `exec.LookPath("docker")` may now find *us*,
-  so without it `workspace create` writing a context opens an SSH connection,
-  an NFS server and a reverse tunnel to write a line of JSON.
+  `REMOTE_DOCKER_NO_SESSION=1`.** `exec.LookPath("docker")` may find *us*, so
+  without it `remote create` writing a context opens an SSH connection, an NFS
+  server and a reverse tunnel to write a line of JSON.
+- **One scan reads a docker command line, and it knows which root flags take a
+  value.** `invokingDocker` and the context rule both have to read argv before
+  cobra parses it, and a scan that treats every non-flag word as the subcommand
+  reads `docker --context remote ps` as our own namespace and runs the command
+  with no session. `scanRootArgs` is the one walk and `rootFlags` the list;
+  they were two loops with the same rules, and one of them had it wrong.
 - **Binding the endpoint is not a lock.** On Unix a bind used to remove any
   existing socket first, so a second process silently unlinked a *running*
   one's socket and took its place -- the first kept accepting on an inode
@@ -323,6 +320,13 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 `COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
+
+Since the root became the Docker CLI (ADR 0024): the binary working under the
+name `docker` as a symlink AND as a copy with `remote` still reachable through
+it, `remote` being findable in the root's help, `--context <ours>` reaching
+that workspace rather than the default, and **a docker context we did not
+create being left completely alone** -- which is a promise to other software on
+the user's machine and the only one of these that fails silently.
 
 A second suite, `test/per-user-dind.sh`, runs the same workspace with two
 enrolled accounts and a daemon each (the default since ADR 0019): that they reach
