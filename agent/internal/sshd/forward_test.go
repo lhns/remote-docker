@@ -8,20 +8,22 @@ import (
 )
 
 type account struct {
-	name string
-	uid  int
+	name   string
+	uid    int
+	client string
 }
 
-func (a account) Name() string { return a.name }
-func (a account) UID() int     { return a.uid }
+func (a account) Name() string   { return a.name }
+func (a account) UID() int       { return a.uid }
+func (a account) Client() string { return a.client }
 
 func newPolicy() *ForwardPolicy {
 	return NewForwardPolicy(workspace.DefaultMapping())
 }
 
 var (
-	alice = account{"alice", 10000} // port 30000
-	bob   = account{"bob", 10001}   // port 30001
+	alice = account{name: "alice", uid: 10000} // port 30000
+	bob   = account{name: "bob", uid: 10001}   // port 30001
 )
 
 func TestAllowOwnPort(t *testing.T) {
@@ -183,7 +185,7 @@ func TestAStaleTokenReleasesNothing(t *testing.T) {
 // mapping to something below the base that may belong to the system.
 func TestAccountWithNoPort(t *testing.T) {
 	p := newPolicy()
-	root := account{"root", 0}
+	root := account{name: "root"}
 
 	if ok, why := p.Allow(root, "127.0.0.1", 30000); ok {
 		t.Error("an account outside the workspace uid range was allowed a port")
@@ -238,4 +240,54 @@ func TestAReservationCanBeGivenBackImmediately(t *testing.T) {
 	if _, ok := p.Bind(alice, "127.0.0.1", 30000); !ok {
 		t.Error("the port is still held after being released; a retry would be refused")
 	}
+}
+
+// Zero is never a live reservation, so the refusal path is safe even when a
+// caller releases without checking whether it got one.
+func TestTheZeroTokenReleasesNothing(t *testing.T) {
+	p := newPolicy()
+	if _, ok := p.Bind(alice, "127.0.0.1", 30000); !ok {
+		t.Fatal("the first bind was refused")
+	}
+
+	p.Release(0, "127.0.0.1", 30000)
+	if _, ok := p.Holder("127.0.0.1", 30000); !ok {
+		t.Error("the zero token released a live reservation")
+	}
+}
+
+// A machine binds the port the workspace GAVE it, which for a second machine of
+// one account is not the port the uid derives.
+//
+// The rule asks the allocator rather than recomputing, because recomputing
+// would refuse a port the agent had itself just handed out.
+func TestASecondMachineBindsItsOwnPort(t *testing.T) {
+	p := newPolicy()
+	p.Ports = fakePorts{"alice": {30000, 65535}}
+
+	phone := account{name: "alice", uid: 10000, client: "aabbccdd"}
+	if ok, why := p.Allow(phone, "127.0.0.1", 65535); !ok {
+		t.Errorf("a machine was refused the port it was given: %s", why)
+	}
+
+	// And still nobody else's.
+	if ok, _ := p.Allow(phone, "127.0.0.1", 65534); ok {
+		t.Error("a machine was allowed a port it was never given")
+	}
+	bob := account{name: "bob", uid: 10001, client: "11223344"}
+	if ok, _ := p.Allow(bob, "127.0.0.1", 65535); ok {
+		t.Error("another account was allowed alice's allocated port")
+	}
+}
+
+// fakePorts is an allocation table without a state directory.
+type fakePorts map[string][]int
+
+func (f fakePorts) Owns(account string, _ int, port int) bool {
+	for _, p := range f[account] {
+		if p == port {
+			return true
+		}
+	}
+	return false
 }

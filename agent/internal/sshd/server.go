@@ -42,6 +42,11 @@ type Config struct {
 	// against somebody else's containers.
 	Daemons daemons.Targets
 
+	// Ports decides which port serves which of an account's machines, and
+	// remembers it. Nil falls back to the uid-derived port for everybody,
+	// which is one machine per account and how this worked before ADR 0029.
+	Ports *accounts.Ports
+
 	// Version is the agent's build, reported in workspace-info so a client can
 	// see which workspace agent it is talking to.
 	Version string
@@ -97,7 +102,16 @@ func New(cfg Config) (*Server, error) {
 		cfg.Daemons = daemons.Shared("")
 	}
 
+	// A nil allocator is not an error: with nowhere to remember, every client
+	// of an account gets the uid-derived port, which is what every version
+	// before ADR 0029 did and is right for the one-machine case. Defaulted
+	// here so that nothing downstream has to ask whether it has one.
+	if cfg.Ports == nil {
+		cfg.Ports = &accounts.Ports{Mapping: cfg.Mapping}
+	}
+
 	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}
+	s.forward.Ports = cfg.Ports
 
 	s.ssh = &gssh.Server{
 		Addr:             cfg.Addr,

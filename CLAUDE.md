@@ -235,6 +235,17 @@ premise of the project, and it applies to building it too. So:
   the same dead connection. `alive` must never do I/O: it runs before every
   request, where `busy`'s round trip cannot.
 
+- **The account is the identity and the machine is the client.** One account's
+  machines share the daemon, and therefore containers and images, which is the
+  point of using one account from both. They do not share files, because those
+  are on one machine, so the export, its port and the volumes behind it are per
+  CLIENT (ADR 0029). The client is the digest of the key the agent has already
+  authenticated: stable per machine, and impossible to claim, which an id the
+  client sent would not be. The uid still decides an account's FIRST port, so
+  nothing renumbers; `accounts.Ports` allocates the rest and `Allow` asks it
+  rather than recomputing `PortForUID`, because recomputing would refuse a port
+  the agent had just handed out.
+
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,
   including a second session of the same account, and `Release` takes the token

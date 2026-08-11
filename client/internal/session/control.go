@@ -64,8 +64,18 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 	}
 	ours := s.ourVolumes()
 	for _, c := range containers {
+		// This account's containers, started from THIS machine. Scoped by
+		// client as well, because one account used from two computers labels
+		// both the same: without it, machine A could never release its
+		// connection while machine B had anything running, which is ADR 0015's
+		// idle release quietly becoming unreachable.
+		//
+		// A container with no client label was started before machines were
+		// named, and counts: it may well be this one's.
 		if c.Labels[rewrite.OwnerLabel] == live.info.User {
-			return true, nil
+			if client := c.Labels[rewrite.ClientLabel]; client == "" || client == s.clientID {
+				return true, nil
+			}
 		}
 		for _, m := range c.Mounts {
 			if m.Type == "volume" && ours[m.Name] {

@@ -12,6 +12,19 @@ import (
 type Account interface {
 	Name() string
 	UID() int
+
+	// Client names the machine the session came from. Empty means a client
+	// too old to be named, which gets the uid-derived port.
+	Client() string
+}
+
+// PortOwner answers which reverse-tunnel ports an account has been given.
+//
+// An interface rather than the allocator itself, so the policy can be tested
+// without a state directory and so the rule reads as a question rather than as
+// arithmetic. Nil falls back to the mapping, which is one port per account.
+type PortOwner interface {
+	Owns(account string, uid, port int) bool
 }
 
 // ForwardPolicy decides which loopback ports an account may bind.
@@ -26,8 +39,20 @@ type Account interface {
 type ForwardPolicy struct {
 	Mapping workspace.Mapping
 
-	mu    sync.Mutex
-	next  uint64 // the last token handed out
+	// Ports is what an account has actually been given, which is more than the
+	// uid decides once one account is used from two machines (ADR 0029).
+	Ports PortOwner
+
+	mu sync.Mutex
+	// next is the last token handed out. Pre-incremented, so the first is 1
+	// and ZERO IS NEVER A LIVE RESERVATION -- which is what Bind returns when
+	// it refuses, so a caller that released without checking cannot match
+	// somebody else's entry.
+	//
+	// A counter rather than anything unguessable: it never leaves this
+	// process, and the only code that can present one is the code Bind handed
+	// it to.
+	next  uint64
 	bound map[string]reservation
 }
 
@@ -69,12 +94,16 @@ func (p *ForwardPolicy) Allow(account Account, host string, port uint32) (bool, 
 		return false, "only loopback addresses may be forwarded: the NFS export is unauthenticated"
 	}
 
-	want, err := p.Mapping.PortForUID(account.UID())
-	if err != nil {
-		return false, "this account has no reverse-tunnel port"
-	}
-	if int(port) != want {
-		return false, "this account may only bind port " + strconv.Itoa(want)
+	// Asked of the allocator rather than computed, because the agent is what
+	// hands ports out once an account has more than one machine, and a rule
+	// that recomputed the answer would refuse a port the agent itself had just
+	// told a client to use.
+	if !p.owns(account, int(port)) {
+		want, err := p.Mapping.PortForUID(account.UID())
+		if err != nil {
+			return false, "this account has no reverse-tunnel port"
+		}
+		return false, "this account may only bind the port it was given, " + strconv.Itoa(want)
 	}
 
 	p.mu.Lock()
@@ -113,6 +142,15 @@ func (p *ForwardPolicy) AllowDial(account Account, host string, port uint32) (bo
 		return false, "that port is another account's file server"
 	}
 	return true, ""
+}
+
+// owns reports whether this account is entitled to a port.
+func (p *ForwardPolicy) owns(account Account, port int) bool {
+	if p.Ports != nil {
+		return p.Ports.Owns(account.Name(), account.UID(), port)
+	}
+	want, err := p.Mapping.PortForUID(account.UID())
+	return err == nil && port == want
 }
 
 // Bind records that a session holds a port, returning the token that releases
