@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	buildxcommands "github.com/docker/buildx/commands"
 
@@ -84,7 +83,7 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	opts, _ := cli.SetupRootCommand(cmd)
 
 	if invokingDocker() {
-		pointAtOurEndpoint()
+		arrangeSession()
 	}
 
 	// After SetupRootCommand, which sets its own. Both would render
@@ -134,14 +133,15 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	return cmd
 }
 
-// pointAtOurEndpoint aims the embedded CLI at this workspace, and makes a
-// session available to answer.
+// arrangeSession makes a session available for this invocation, and points the
+// embedded CLI at it -- or does neither, when the invocation is aimed at a
+// daemon that is not ours.
 //
 // Called only when the invocation is actually a docker command, because the
 // tree is built for every command: `remote gc`, and even `--help`, used to
 // probe the endpoint and could open a whole file-serving session that then
 // raced the real command's own, inside one process.
-func pointAtOurEndpoint() {
+func arrangeSession() {
 	// What the invocation is aimed at, which may be nothing of ours. See
 	// target.go: a context we did not create is an instruction to talk to
 	// somebody else, and honouring it means doing nothing at all here.
@@ -201,50 +201,11 @@ func invokingDocker() bool {
 	//
 	// No subcommand at all (`docker`, `--help`, `--version`) is the same answer
 	// for the same reason. Printing help used to be enough to start a session.
-	verb, ok := firstArgument(os.Args[1:])
-	if !ok {
-		return false
-	}
-	switch verb {
-	case "remote", "context", "completion", "help":
+	switch scanRootArgs(os.Args[1:]).verb {
+	case "", "remote", "context", "completion", "help":
 		return false
 	}
 	return true
-}
-
-// valuedRootFlags are the docker root flags that consume the argument after
-// them, which is what lets a scan tell a flag's VALUE from a subcommand.
-//
-// `docker --context remote ps` is the case that makes this necessary rather
-// than tidy: without it, a context somebody named "remote" reads as our own
-// namespace and the docker command silently runs with no session.
-var valuedRootFlags = map[string]bool{
-	"--config":  true,
-	"--context": true, "-c": true,
-	"--host": true, "-H": true,
-	"--log-level": true, "-l": true,
-	"--tlscacert": true, "--tlscert": true, "--tlskey": true,
-}
-
-// firstArgument returns the first argument that is not a flag or a flag's
-// value, which is the subcommand.
-func firstArgument(args []string) (string, bool) {
-	skip := false
-	for _, arg := range args {
-		if skip {
-			skip = false
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			// --flag=value carries its own value, so nothing follows it.
-			if name, _, hasValue := strings.Cut(arg, "="); !hasValue && valuedRootFlags[name] {
-				skip = true
-			}
-			continue
-		}
-		return arg, true
-	}
-	return "", false
 }
 
 // installModernBuilder replaces `build` with buildx's, which is what the real
@@ -287,4 +248,20 @@ func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
 	// nil dereference without it, and `build` is what docker's own tree
 	// exposes anyway.
 	_ = root
+}
+
+// newRootCommand is the whole command line: the Docker CLI, plus ours.
+//
+// The Docker CLI IS the root, rather than a subcommand of one. `docker run` is
+// what a person types, and the program that has to stand in for docker should
+// answer to that shape without an installation step in front of it. Renaming
+// this binary to `docker` is then a complete installation, with no code behind
+// it at all -- which is what replaced 550 lines of shim.
+//
+// Everything of ours is under `remote`, and nothing of ours is at this level.
+// See remote.go for why the flags in particular had to move.
+func newRootCommand() *cobra.Command {
+	root := newDockerCommand()
+	root.AddCommand(newRemoteCommand())
+	return root
 }

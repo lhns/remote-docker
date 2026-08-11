@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/fswatch"
 	"github.com/lhns/remote-docker/client/internal/session"
+	"github.com/lhns/remote-docker/internal/logx"
 )
 
 // runSession holds a session open until something ends it.
@@ -75,4 +81,59 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	}
 	_, _ = fmt.Fprintln(out, "\nclosing session")
 	return nil
+}
+
+// logger prints session progress to stderr, so stdout stays usable for
+// anything a command genuinely outputs.
+//
+// Two spaces and the message, which is what these lines have always looked
+// like: they sit under a command's own output and are read by a person, not
+// parsed. logx.Handler is what keeps that true through log/slog, whose own
+// TextHandler would render them as time=... level=INFO msg="...".
+func logger() *slog.Logger { return logx.Logger(os.Stderr, "  ", false) }
+
+// `session.Query` is the load-bearing part, and the reason this is shared
+// rather than written twice. A query session takes neither the local endpoint
+// nor the account's one reverse-tunnel port (ADR 0003), so it still works while
+// a real session holds both, which is precisely when somebody runs `status`
+// or `gc`. See session.Role for what each half of that prevents.
+func withQuerySession(fn func(ctx context.Context, s *session.Session) error) error {
+	cfg, err := resolve()
+	if err != nil {
+		return err
+	}
+	if err := cfg.RequireHost(); err != nil {
+		return err
+	}
+
+	ctx, cancel := signalContext()
+	defer cancel()
+
+	s, err := session.Open(ctx, session.Options{
+		Config:   cfg,
+		WorkDir:  mustWorkDir(),
+		Endpoint: endpointOf(cfg),
+		Role:     session.Query,
+		Log:      logger(),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	return fn(ctx, s)
+}
+
+func mustWorkDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
+}
+
+// signalContext cancels on Ctrl-C so a session is torn down rather than
+// leaving its reverse forward bound on the workspace.
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }

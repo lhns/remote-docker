@@ -55,3 +55,17 @@ func TestInvokingDocker(t *testing.T) {
 		}
 	}
 }
+
+// The variable is the whole reason `remote create` can write a docker context
+// now that the docker LookPath finds may be us.
+func TestNoSessionEnvStopsIt(t *testing.T) {
+	withArgs(t, []string{"docker", "ps"})
+	if !invokingDocker() {
+		t.Fatal("the case being suppressed does not hold, so this proves nothing")
+	}
+
+	t.Setenv(NoSessionEnv, "1")
+	if invokingDocker() {
+		t.Errorf("%s did not stop a session being made available", NoSessionEnv)
+	}
+}

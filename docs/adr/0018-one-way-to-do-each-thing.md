@@ -32,6 +32,13 @@ added the better spelling without removing the worse one.
 
 Collapse each to one.
 
+*(2026-08-11: `up` is deleted. ADR 0024 moved every command of ours under
+`remote`, so the scripts this alias was kept for are broken whatever it does,
+and `remote up` is a spelling nobody has ever had. `add` and `list` remain,
+still exercised. The consequence below about hidden aliases being a
+maintenance claim is the reason this was easy to retire, not a reason it should
+not have existed.)*
+
 **`up` becomes `start --foreground`.** The body is the same code, so there is
 no second behaviour to keep in step, and running a session in a terminal shows
 exactly what the background one does. `up` survives as a hidden alias: it is in

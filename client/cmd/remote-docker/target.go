@@ -73,9 +73,11 @@ func realLookups() lookups {
 // parsed anything, so it cannot be observed from a test any other way, and the
 // case it exists for is the one where doing nothing is the right answer.
 func decideTarget(args []string, look lookups) target {
+	scan := scanRootArgs(args)
+
 	// An explicit -H or --host outranks everything, including a context, and
 	// says plainly that the user meant somewhere else.
-	if _, ok := flagValue(args, "--host", "-H"); ok {
+	if _, ok := scan.flags["--host"]; ok {
 		return leaveAlone
 	}
 
@@ -97,7 +99,7 @@ func decideTarget(args []string, look lookups) target {
 	// `docker --context` with nothing after it is a request docker will reject,
 	// and quietly picking the default behind it would open a session for a
 	// command that cannot run.
-	name, asked := flagValue(args, "--context", "-c")
+	name, asked := scan.flags["--context"]
 	if !asked {
 		if fromEnv := look.getenv("DOCKER_CONTEXT"); fromEnv != "" {
 			name, asked = fromEnv, true
@@ -124,37 +126,67 @@ func decideTarget(args []string, look lookups) target {
 	}
 }
 
-// flagValue finds a flag's value in an unparsed argument list.
+// rootArgs is what a docker command line says before its subcommand.
 //
-// Stops at the first non-flag word, which is the subcommand: `docker run -c 2`
-// is a container flag and none of our business. Handles --flag=value and
-// --flag value, and the shorthands docker gives these two.
-func flagValue(args []string, long, short string) (string, bool) {
+// One walk answers both questions anyone asks of an unparsed argument list:
+// which subcommand it is, and what a root flag was set to. It used to be two
+// loops with the same skip rules, and one of them was wrong: a context named
+// `remote` read as our own namespace and the command ran with no session.
+type rootArgs struct {
+	// verb is the subcommand, or "" when there is none.
+	verb string
+
+	// flags holds the root flags that were given, by their long name. A flag
+	// named with nothing after it is present with an empty value, which is
+	// the difference between "no context asked for" and "an empty one".
+	flags map[string]string
+}
+
+// rootFlags are the docker root flags that consume the argument after them,
+// mapped from every spelling to one name. Knowing them is what lets a scan
+// tell a flag's VALUE from a subcommand.
+var rootFlags = map[string]string{
+	"--config":  "--config",
+	"--context": "--context", "-c": "--context",
+	"--host": "--host", "-H": "--host",
+	"--log-level": "--log-level", "-l": "--log-level",
+	"--tlscacert": "--tlscacert",
+	"--tlscert":   "--tlscert",
+	"--tlskey":    "--tlskey",
+}
+
+// scanRootArgs reads a command line as far as its subcommand.
+//
+// Stops there, because everything after it belongs to that subcommand:
+// `docker run -c 512` is a container flag and none of our business.
+func scanRootArgs(args []string) rootArgs {
+	out := rootArgs{flags: map[string]string{}}
+
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") {
-			return "", false
+			out.verb = arg
+			return out
 		}
-		name, value, hasValue := strings.Cut(arg, "=")
-		if name != long && name != short {
-			// Skip a value that belongs to some other flag, or it reads as the
-			// subcommand and ends the scan early.
-			if !hasValue && valuedRootFlags[name] {
-				i++
-			}
+
+		spelling, value, joined := strings.Cut(arg, "=")
+		name, carriesValue := rootFlags[spelling]
+		if !carriesValue {
+			// A boolean flag, or one we have never heard of. Either way it
+			// takes nothing with it.
 			continue
 		}
-		if hasValue {
-			return value, true
+		switch {
+		case joined:
+			out.flags[name] = value
+		case i+1 < len(args):
+			i++
+			out.flags[name] = args[i]
+		default:
+			out.flags[name] = ""
 		}
-		if i+1 < len(args) {
-			return args[i+1], true
-		}
-		// Named with nothing after it. Docker will reject it; what matters here
-		// is that a context WAS asked for, so we do not go picking a default.
-		return "", true
 	}
-	return "", false
+	return out
 }
 
 // endpointIsOurs reports whether a DOCKER_HOST value is an endpoint this

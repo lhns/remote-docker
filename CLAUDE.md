@@ -166,11 +166,12 @@ premise of the project, and it applies to building it too. So:
   `REMOTE_DOCKER_NO_SESSION=1`.** `exec.LookPath("docker")` may find *us*, so
   without it `remote create` writing a context opens an SSH connection, an NFS
   server and a reverse tunnel to write a line of JSON.
-- **An argv scan knows which docker root flags take a value.** `invokingDocker`
-  and the context rule both have to read argv before cobra parses it, and a
-  scan that treats every non-flag word as the subcommand reads
-  `docker --context remote ps` as our own namespace and runs the command with
-  no session. `valuedRootFlags` is the list; `--flag=value` carries its own.
+- **One scan reads a docker command line, and it knows which root flags take a
+  value.** `invokingDocker` and the context rule both have to read argv before
+  cobra parses it, and a scan that treats every non-flag word as the subcommand
+  reads `docker --context remote ps` as our own namespace and runs the command
+  with no session. `scanRootArgs` is the one walk and `rootFlags` the list;
+  they were two loops with the same rules, and one of them had it wrong.
 - **Binding the endpoint is not a lock.** On Unix a bind used to remove any
   existing socket first, so a second process silently unlinked a *running*
   one's socket and took its place -- the first kept accepting on an inode
@@ -319,6 +320,13 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 `COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
+
+Since the root became the Docker CLI (ADR 0024): the binary working under the
+name `docker` as a symlink AND as a copy with `remote` still reachable through
+it, `remote` being findable in the root's help, `--context <ours>` reaching
+that workspace rather than the default, and **a docker context we did not
+create being left completely alone** -- which is a promise to other software on
+the user's machine and the only one of these that fails silently.
 
 A second suite, `test/per-user-dind.sh`, runs the same workspace with two
 enrolled accounts and a daemon each (the default since ADR 0019): that they reach

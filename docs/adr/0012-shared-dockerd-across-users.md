@@ -80,6 +80,6 @@ the note about the shared layer cache being a real benefit: 0019 gives that up,
 and lists it as a cost rather than pretending otherwise.
 
 Either mode is a supported configuration, chosen by `WORKSPACE_PER_USER_DIND`,
-and `remote-docker status` reports which one is in force -- the answer changes
+and `remote status` reports which one is in force -- the answer changes
 whose daemon its other lines describe, and it is not otherwise visible from the
 client.

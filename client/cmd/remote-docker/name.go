@@ -43,3 +43,8 @@ const defaultName = "remote-docker"
 func ourCommand(command string) string {
 	return programName() + " remote " + command
 }
+
+// version is set at build time by the release workflow. It identifies which
+// build a session was started by, which is what lets a client notice it is
+// talking to a session from a different one.
+var version = "dev"

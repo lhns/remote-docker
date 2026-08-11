@@ -2,24 +2,7 @@ package main
 
 import (
 	"testing"
-
-	"github.com/spf13/cobra"
 )
-
-// newTestRoot builds the real command tree, docker and compose included.
-//
-// Per call rather than shared: cobra commands hold the flags they parsed, so a
-// root reused across cases would carry the previous one's state into the next.
-func newTestRoot(t *testing.T) *cobra.Command {
-	t.Helper()
-
-	// The root's flags write into a package variable, so anything that parses
-	// one has to put it back.
-	saved := overrides
-	t.Cleanup(func() { overrides = saved })
-
-	return newRootCommand()
-}
 
 // A flag belongs to the command that declares it, wherever that command sits
 // in the chain. `--context` is the root's; `-f` is compose's; both have

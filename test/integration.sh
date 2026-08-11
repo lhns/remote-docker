@@ -1178,15 +1178,12 @@ fi
 # which on Unix it silently used to do, unlinking the socket and leaving the
 # first session accepting on an inode nobody could reach.
 #
-# Deliberately spelled `up` rather than `start --foreground`: `up` is a hidden
-# alias kept for scripts, and an alias nothing exercises is an alias nobody
-# notices breaking. This is its coverage.
-if out=$("$WORK/remote-docker" remote up 2>&1); then
-    bad "a second up took the endpoint from the running session"
+if out=$("$WORK/remote-docker" remote start --foreground 2>&1); then
+    bad "a second session took the endpoint from the running one"
 else
     case "$out" in
-        *"already serving"*) ok "a second up is refused, naming the owner" ;;
-        *) bad "a second up failed for the wrong reason: $out" ;;
+        *"already serving"*) ok "a second session is refused, naming the owner" ;;
+        *) bad "a second session failed for the wrong reason: $out" ;;
     esac
 fi
 

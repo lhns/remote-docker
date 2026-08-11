@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	dockerconfig "github.com/docker/cli/cli/config"
+	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -226,4 +227,51 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return strings.TrimSpace(s)
+}
+
+func newStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Is this working, and what is it talking to?",
+		Long: `Prints a verdict first: ready, or the first thing that is wrong.
+
+Then the detail behind it, grouped by question: whether a session is up and
+how other tools reach it, what is on the other end, and which builds are in
+play.
+
+Reports what it can even when the workspace cannot be reached, which is when
+somebody is most likely to be running it.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := resolve()
+			if err != nil {
+				return err
+			}
+			// The one thing worth failing on: with no host there is no
+			// workspace to have a status.
+			if err := cfg.RequireHost(); err != nil {
+				return err
+			}
+
+			f := gather(cfg)
+			f.askWorkspace()
+			reportStatus(cmd.OutOrStdout(), f)
+			return nil
+		},
+	}
+}
+
+// row prints one aligned "key    value" line.
+//
+// `status` and `workspace inspect` print one table each and share this width,
+// so a row added to one lines up in the other. It was a bare %-20s at thirteen
+// call sites.
+func row(out io.Writer, key, value string) {
+	if value != "" {
+		_, _ = fmt.Fprintf(out, "%-20s %s\n", key, value)
+	}
+}
+
+// rowf is row with a formatted value.
+func rowf(out io.Writer, key, format string, args ...any) {
+	row(out, key, fmt.Sprintf(format, args...))
 }

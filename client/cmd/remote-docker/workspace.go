@@ -11,23 +11,24 @@ import (
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
-// The workspace command manages ~/.remote-docker.json, which until now could
-// only be listed. Adding one meant writing JSON by hand, and the "no
-// workspaces configured" message said so, which is not a thing a CLI should
-// ever have to admit.
+// The workspaces in ~/.remote-docker.json, which until now could only be
+// listed. Adding one meant writing JSON by hand, and the "no workspaces
+// configured" message said so, which is not a thing a CLI should ever have to
+// admit.
 //
 // Docker contexts are written as a side effect rather than by a separate
 // command. There is no case where you want a workspace configured and not
 // reachable as `docker --context <name>`, so making that a second thing to
 // remember was a split in the tool that was never a split in the task.
 //
-// The verbs are docker's (create, ls, use, rm, inspect) because a
-// workspace IS the thing a docker context points at, and borrowing the
-// vocabulary costs nothing and saves explaining. The noun stays ours: the
-// config file's key is `workspaces`, the wire protocol is `workspace-info`,
-// the server's variables are WORKSPACE_*, and a CLI that disagreed with all
-// of them would trade one confusion for another. The old verbs remain as
-// aliases.
+// The verbs are docker's (create, ls, use, rm, inspect) because a workspace IS
+// the thing a docker context points at, and borrowing the vocabulary costs
+// nothing and saves explaining. They are reached as `remote create` and so on,
+// because a remote IS a workspace (ADR 0024), but the noun stays ours in the
+// code: the config file's key is `workspaces`, the wire protocol is
+// `workspace-info`, the server's variables are WORKSPACE_*, and a CLI that
+// disagreed with all of them would trade one confusion for another. The old
+// verbs remain as aliases.
 func newWorkspaceCreateCommand() *cobra.Command {
 	var host, user, endpoint, watch string
 	var port int

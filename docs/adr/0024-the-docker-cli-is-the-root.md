@@ -103,7 +103,8 @@ belongs.
 - **An argv scan has to know docker's root flags.** `invokingDocker` reads argv
   before cobra parses, and a scan that took the first non-flag word as the
   subcommand read `docker --context remote ps` as our namespace and ran the
-  command with no session. A test caught it; `valuedRootFlags` is the fix.
+  command with no session. A test caught it. `scanRootArgs` is the one walk
+  that answers both this and the context question; it began as two.
 - **ADR 0022's `os.Args[0]` rule ends here**, and it was right for its whole
   life. ADR 0023 records that it was the only identity surviving Termux's
   loader, which remains a true and useful finding about that platform even
