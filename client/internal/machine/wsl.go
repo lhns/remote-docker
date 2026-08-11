@@ -198,6 +198,31 @@ func wslConf(spec Spec) string {
 		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, agentLog)
 }
 
+// wslAddressArgs asks a distribution for its own address.
+//
+// eth0 by name: WSL2 gives a distribution one NAT interface, and reading the
+// route table instead would answer with the gateway, which is the Windows side.
+func wslAddressArgs(name string) []string {
+	return wslRunArgs(name, "ip", "-4", "-o", "addr", "show", "eth0")
+}
+
+// parseWSLAddress reads an address out of `ip -4 -o addr show eth0`.
+//
+// Written here rather than as a shell pipeline in the command: `hostname -I`
+// does not exist in busybox, and an awk field passed through two layers of
+// quoting is a thing that fails silently and returns the whole line.
+func parseWSLAddress(raw []byte) string {
+	fields := strings.Fields(decodeWSLOutput(raw))
+	for i, f := range fields {
+		if f != "inet" || i+1 >= len(fields) {
+			continue
+		}
+		// inet 172.24.110.158/20 -- the mask is the machine's, not ours.
+		return strings.TrimSpace(strings.SplitN(fields[i+1], "/", 2)[0])
+	}
+	return ""
+}
+
 // wslReadGenerationArgs reads a machine's generation from inside it.
 func wslReadGenerationArgs(name string) []string {
 	return wslRunArgs(name, "cat", generationFile)

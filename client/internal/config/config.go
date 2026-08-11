@@ -31,6 +31,15 @@ type Config struct {
 	// Port is the workspace's SSH port.
 	Port int
 
+	// Machine is the local machine this workspace runs on, or nil for a
+	// workspace somewhere else.
+	//
+	// Carried this far because a machine has to be located before it can be
+	// dialled: it is started on demand and its address is given to it at boot,
+	// so Host is not the answer for one and a stored address goes stale when it
+	// restarts.
+	Machine *Machine
+
 	// User is the workspace account, which is also the name of the .pub file
 	// enrolled for this machine.
 	User string
@@ -337,6 +346,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	}
 	if ws.Port != 0 {
 		cfg.Port = ws.Port
+	}
+	if ws.Machine != nil {
+		cfg.Machine = ws.Machine
 	}
 	if ws.User != "" {
 		cfg.User = ws.User

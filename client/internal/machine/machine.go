@@ -213,8 +213,45 @@ type Backend interface {
 	// price for a thing people are supposed to do often.
 	Enrol(ctx context.Context, name, account, publicKey string) error
 	Start(ctx context.Context, name string) error
+
+	// Address is where this machine can be reached from here.
+	//
+	// Asked rather than assumed, and asked every time. A local machine is on a
+	// virtual network whose address it is given at boot, so the answer changes
+	// when it restarts and a stored one goes stale silently -- the connection
+	// is refused, or worse, reaches whatever has the address now.
+	Address(ctx context.Context, name string) (string, error)
+
 	Stop(ctx context.Context, name string) error
 	Destroy(ctx context.Context, name string) error
+}
+
+// Locate starts a machine if it is stopped and returns where to reach it.
+//
+// Both halves are why this exists, and neither is optional. A machine that
+// nobody is using goes away -- WSL shuts an idle distribution down, and a TCP
+// connection from the host is not use it counts -- so a workspace on a machine
+// cannot be dialled the way a workspace on another host is: the host is always
+// there and the machine is not. Starting is also what makes the address
+// answerable, since a stopped machine has none.
+func Locate(ctx context.Context, backendName, name string) (string, error) {
+	backend, err := Find(backendName)
+	if err != nil {
+		return "", err
+	}
+	// Start rather than Inspect-then-start: starting a running machine is what
+	// keeps it running, and there is no window between the two answers.
+	if err := backend.Start(ctx, name); err != nil {
+		return "", fmt.Errorf("starting the %s machine %q: %w", backendName, name, err)
+	}
+	addr, err := backend.Address(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if addr == "" {
+		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
+	}
+	return addr, nil
 }
 
 // Backends returns the backends compiled into this build, by name.

@@ -259,3 +259,41 @@ func TestWSLConfUsesTheSharedDaemon(t *testing.T) {
 		t.Errorf("a machine asks for a daemon per account:\n%s", conf)
 	}
 }
+
+// The machine's own address, which is the one Windows can reach.
+//
+// Measured on 2026-08-11 in the `a machine on wsl` job: with the machine
+// running and its agent listening, 127.0.0.1:2222 was refused and the machine's
+// own 172.24.110.158:2222 answered. So the localhost relay is not something to
+// rely on, and this parse is what stands between a workspace and its machine.
+func TestParseWSLAddress(t *testing.T) {
+	real := []byte(`2: eth0    inet 172.24.110.158/20 brd 172.24.111.255 scope global eth0\       valid_lft forever preferred_lft forever`)
+	if got := parseWSLAddress(real); got != "172.24.110.158" {
+		t.Errorf("parseWSLAddress = %q, want 172.24.110.158", got)
+	}
+	// UTF-16, because wsl.exe writes it and every naive read of this output
+	// fails silently.
+	if got := parseWSLAddress(utf16le("3: eth0    inet 10.1.2.3/20 scope global eth0")); got != "10.1.2.3" {
+		t.Errorf("a UTF-16 answer parsed as %q", got)
+	}
+	// A machine that has not got an address yet says nothing, and must not be
+	// reported as reachable at the empty string.
+	if got := parseWSLAddress(nil); got != "" {
+		t.Errorf("no output parsed as %q", got)
+	}
+	if got := parseWSLAddress([]byte("2: eth0    <NO-CARRIER>")); got != "" {
+		t.Errorf("an interface with no address parsed as %q", got)
+	}
+}
+
+func TestWSLAddressArgs(t *testing.T) {
+	joined := strings.Join(wslAddressArgs("rd-dev"), " ")
+	// eth0 by name: reading the route table instead answers with the gateway,
+	// which is the Windows side of the NAT and not the machine.
+	if !contains(joined, "ip -4 -o addr show eth0") {
+		t.Errorf("the address is not read from eth0: %q", joined)
+	}
+	if !contains(joined, "-d rd-dev") {
+		t.Errorf("the wrong distribution is asked: %q", joined)
+	}
+}

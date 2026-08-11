@@ -144,6 +144,14 @@ func (b wslBackend) Start(ctx context.Context, name string) error {
 	return err
 }
 
+func (b wslBackend) Address(ctx context.Context, name string) (string, error) {
+	out, err := b.wsl(ctx, wslAddressArgs(WSLName(name))...)
+	if err != nil {
+		return "", err
+	}
+	return parseWSLAddress(out), nil
+}
+
 func (b wslBackend) Stop(ctx context.Context, name string) error {
 	_, err := b.wsl(ctx, "--terminate", WSLName(name))
 	return err

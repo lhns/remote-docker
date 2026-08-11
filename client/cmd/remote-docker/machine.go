@@ -201,15 +201,24 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	// that hands the user a workspace whose first command fails with a refused
 	// connection.
 	//
+	// Located, not assumed. The machine answers at its own address on a virtual
+	// network, and not on this computer's loopback: with WSL that would depend
+	// on its localhost relay, which was measured refusing the connection while
+	// the machine was running and its agent listening (2026-08-11, the `a
+	// machine on wsl` job).
+	host, err := machine.Locate(ctx, spec.Backend, name)
+	if err != nil {
+		return err
+	}
+
 	// Kept warm while waiting, because a machine with nobody in it goes away.
 	// WSL shuts a distribution down when it is idle, and a TCP connection from
-	// Windows is not what it counts -- so the first attempt at this dialled a
+	// Windows is not use it counts -- so the first attempt at this dialled a
 	// machine that had already stopped, three minutes after its agent said it
 	// was listening. Start is the poke: it starts a stopped machine and counts
-	// as use of a running one.
-	// A failed poke is not reported: what matters is whether the agent answers,
-	// and that is what the wait's own error says.
-	if err := waitForAgent(ctx, spec.Port, func() { _ = backend.Start(ctx, name) }); err != nil {
+	// as use of a running one. A failed poke is not reported, because what
+	// matters is whether the agent answers and that is what the wait says.
+	if err := waitForAgent(ctx, host, spec.Port, func() { _ = backend.Start(ctx, name) }); err != nil {
 		return err
 	}
 
@@ -231,8 +240,8 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 // A dial rather than a handshake: this is asking whether the listener is open,
 // and anything further is the session's job to report properly. The timeout is
 // generous because a machine's first start does more than a later one.
-func waitForAgent(ctx context.Context, port int, keepWarm func()) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+func waitForAgent(ctx context.Context, host string, port int, keepWarm func()) error {
+	addr := net.JoinHostPort(host, fmt.Sprint(port))
 	deadline := time.Now().Add(agentStartTimeout)
 
 	for attempt := 0; time.Now().Before(deadline); attempt++ {
@@ -266,6 +275,10 @@ func waitForAgent(ctx context.Context, port int, keepWarm func()) error {
 // would have started answering, and reports a machine that was about to work.
 const agentStartTimeout = 3 * time.Minute
 
+// machinePlaceholderHost stands in for an address nobody should read. See
+// saveMachineWorkspace.
+const machinePlaceholderHost = "127.0.0.1"
+
 // saveMachineWorkspace writes the workspace entry, which is what makes the
 // machine an ordinary workspace everywhere else.
 func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) error {
@@ -275,7 +288,11 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	}
 
 	ws := file.Workspaces[name]
-	ws.Host = "127.0.0.1"
+	// A placeholder, and only that. A machine's address is asked for at every
+	// connection (session.connect), because it is given out at boot and a
+	// stored one is wrong the moment the machine restarts. It is written at all
+	// so the entry is a complete workspace to everything that reads one.
+	ws.Host = machinePlaceholderHost
 	ws.Port = spec.Port
 	ws.User = spec.Account
 	ws.Machine = &config.Machine{
