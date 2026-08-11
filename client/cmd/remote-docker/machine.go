@@ -14,12 +14,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
+	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
@@ -144,6 +146,31 @@ they are on this machine and are served to it.`,
 	}
 	opts.install(cmd)
 	return cmd
+}
+
+// stopSessionFor shuts down the background session for a workspace, if one is
+// serving.
+//
+// Best effort by design: this runs before stopping a machine, and every way it
+// can fail -- no config, nothing listening, a session that will not answer --
+// means the same thing to the caller, which is that there is nothing to shut
+// down first. A machine that would not stop is what the caller is told about,
+// and that error comes from the stop itself.
+func stopSessionFor(cmd *cobra.Command, name string) {
+	cfg, err := config.Resolve(overrides, name)
+	if err != nil {
+		return
+	}
+	endpoint := endpointOf(cfg)
+	if !proxy.Reachable(endpoint) {
+		return
+	}
+
+	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
+		return
+	}
+	_ = waitForEndpoint(endpoint, false, stopTimeout)
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
 }
 
 // unproven names the backends that have never been executed.
@@ -401,6 +428,13 @@ func newMachineStopCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
 				m := ws.Machine
+				// The session goes first. It is holding this machine open and
+				// serving a Docker API backed by it, so stopping the machine
+				// underneath leaves a session answering for something that is
+				// gone -- which presents as the NEXT command failing with EOF
+				// on a local pipe, naming nothing that suggests a machine.
+				stopSessionFor(cmd, args[0])
+
 				if err := b.Stop(ctx, m.Name); err != nil {
 					return err
 				}
