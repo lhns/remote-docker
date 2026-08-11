@@ -157,8 +157,17 @@ they are on this machine and are served to it.`,
 // down first. A machine that would not stop is what the caller is told about,
 // and that error comes from the stop itself.
 func stopSessionFor(cmd *cobra.Command, name string) {
+	// Every failure below is reported, not swallowed. Best effort meant silent,
+	// and silent meant three CI rounds spent asking whether this ran at all --
+	// while the answer, that a session survived both stop and start, was
+	// visible only in an unrelated status command.
+	warn := func(format string, args ...any) {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
+	}
+
 	cfg, err := config.Resolve(overrides, name)
 	if err != nil {
+		warn("cannot tell which endpoint %q uses, so a session may still be serving it: %v", name, err)
 		return
 	}
 	// Asked unconditionally rather than after a Reachable check. A session
@@ -174,6 +183,11 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	}
 
 	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
+		// Nothing serving is the ordinary case and not worth a line; anything
+		// else means a session is about to lose its machine underneath it.
+		if proxy.Reachable(endpoint) {
+			warn("a session is serving %s and would not stop: %v", endpoint, err)
+		}
 		return
 	}
 	_ = waitForEndpoint(endpoint, false, stopTimeout)
