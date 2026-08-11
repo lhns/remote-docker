@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.1.0 — 2026-08-11
 
 The first release. There is no earlier version to compare against, so what
 follows is what the thing is rather than what moved.
@@ -104,7 +104,7 @@ than buried. The load-bearing ones:
   port ownership are the entire control.
 - A per-account daemon is **separation, not isolation**. Each runs privileged.
 
-## Not proven
+### Not proven
 
 Kept honest deliberately. Everything above is exercised end to end in CI
 against a real dind daemon and a real kernel NFS mount, except:
