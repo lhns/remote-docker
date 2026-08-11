@@ -42,14 +42,17 @@ jobs:
         run: |
           set -eux
           id=$(docker create rd-workspace:ci)
-          docker export "$id" -o rootfs.tar
+          # Gzipped, because that is what a release publishes and what somebody
+          # downloads. `wsl --import` reads it directly, and this is where that
+          # is proven rather than assumed.
+          docker export "$id" | gzip -9 > rootfs.tar.gz
           docker rm "$id"
-          ls -lh rootfs.tar
+          ls -lh rootfs.tar.gz
 
       - uses: actions/upload-artifact@v7
         with:
           name: workspace-rootfs
-          path: rootfs.tar
+          path: rootfs.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -84,7 +87,7 @@ jobs:
         env:
           REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
-          .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar
+          .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz
           .\client\rd.exe remote ls
           .\client\rd.exe remote machine status ci
 
@@ -110,7 +113,7 @@ jobs:
         env:
           REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
-          $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar) -join "`n"
+          $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz) -join "`n"
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
 
