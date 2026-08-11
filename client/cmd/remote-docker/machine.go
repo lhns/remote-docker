@@ -223,6 +223,9 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	switch action := machine.Plan(spec, observed); {
 	case rebuild && observed.State != machine.Absent:
 		_, _ = fmt.Fprintf(out, "destroying %q; images and containers inside it are lost\n", name)
+		// The same reason stopping does it: a session serving a machine that is
+		// about to be destroyed goes on answering for something gone.
+		stopSessionFor(cmd, name)
 		if err := backend.Destroy(ctx, name); err != nil {
 			return fmt.Errorf("destroying %s: %w", name, err)
 		}
