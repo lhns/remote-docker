@@ -18,6 +18,7 @@ import (
 	"github.com/docker/cli/cli/command/commands"
 	"github.com/spf13/cobra"
 
+	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 )
 
@@ -141,7 +142,15 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 // probe the endpoint and could open a whole file-serving session that then
 // raced the real command's own, inside one process.
 func pointAtOurEndpoint() {
-	cfg, err := resolve()
+	// What the invocation is aimed at, which may be nothing of ours. See
+	// target.go: a context we did not create is an instruction to talk to
+	// somebody else, and honouring it means doing nothing at all here.
+	aim := decideTarget(os.Args[1:], realLookups())
+	if !aim.ensure {
+		return
+	}
+
+	cfg, err := config.Resolve(config.Overrides{Workspace: aim.workspace}, "")
 	if err != nil {
 		// No workspace resolved, so there is nothing to aim at beyond the
 		// default endpoint.
@@ -151,29 +160,18 @@ func pointAtOurEndpoint() {
 		return
 	}
 
-	endpoint := endpointOf(cfg)
-	ours := proxy.DockerHost(endpoint)
-	set := os.Getenv("DOCKER_HOST")
-
-	// Managed whenever the endpoint in play is ours, whether we chose it or
-	// DOCKER_HOST names it. Skipping this when DOCKER_HOST was set meant that
-	// pointing it at our OWN endpoint, which is what the printed value and the
-	// docker context both do, disabled starting a session and noticing a stale
-	// one.
-	//
 	// Start one if nothing is serving, and replace one built from a different
 	// commit when that costs nothing. Requiring `start` first would give the
 	// embedded CLI, which exists so that nothing has to be installed, a setup
 	// step of its own.
-	//
-	// The workspace comes from the same resolution as every other command.
-	if set == "" || set == ours {
-		ensureDaemon(cfg, endpoint)
-	}
-	// A DOCKER_HOST naming something else is left alone: it is a deliberate
-	// instruction to talk to that, not to us.
-	if set == "" {
-		_ = os.Setenv("DOCKER_HOST", ours)
+	endpoint := endpointOf(cfg)
+	ensureDaemon(cfg, endpoint)
+
+	// Only where a context is not already pointing at it. DOCKER_HOST outranks
+	// --context in docker's own resolution, so setting it here would override
+	// the context we just agreed to honour.
+	if aim.setHost {
+		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}
 }
 

@@ -50,6 +50,37 @@ docker's own mechanism and one we already write a context for. `remote use`
 selects it. That is the one integration point, and it is not an invention: a
 workspace has been a context since ADR 0018.
 
+Making that true meant giving up the shortcut it replaced. Docker resolves a
+target in a fixed order:
+
+```
+--host / -H  >  DOCKER_HOST  >  --context / DOCKER_CONTEXT  >  current context
+```
+
+Setting `DOCKER_HOST` whenever it was empty, which is what we did, put us at
+the top of that list and overrode everything below it. Two things were wrong
+and only one of them was about us:
+
+- `docker --context ci ps` reached the **default** workspace, not `ci`;
+- `docker --context desktop ps`, a context we never created, reached **us**
+  instead of Docker Desktop.
+
+The second is the one that matters. A machine may have real docker contexts,
+and a tool that quietly redirects them is worse than one that needs a prefix.
+
+So the decision is now four outcomes, in `target.go`:
+
+| the invocation says | what we do |
+|---|---|
+| `--host`/`-H`, or `DOCKER_HOST` naming something not ours | nothing |
+| a context that is ours | a session for **that** workspace, and `DOCKER_HOST` left unset so docker reads the endpoint off the context |
+| a context that is not ours | nothing |
+| no context and no host | the default workspace, session ensured, `DOCKER_HOST` set |
+
+It is a pure function of its inputs, because it runs before cobra has parsed
+anything and the case it exists for is the one where the correct behaviour is
+to do nothing, which cannot be observed from outside the process.
+
 We also call docker's own `cli.SetupRootCommand`, which was hand-rolled before.
 Its help layout — Common, Management and Commands — is what makes sixty
 subcommands readable, and `remote` lands among the management commands where it
@@ -77,6 +108,9 @@ belongs.
   life. ADR 0023 records that it was the only identity surviving Termux's
   loader, which remains a true and useful finding about that platform even
   though the rule it described is gone.
+- **A context we did not create is never touched.** That is a new promise, and
+  the integration suite makes it: a context pointing at a dead address must
+  FAIL rather than succeed against our daemon.
 - **`--help` is docker's now.** The program's own description has to fit in
   docker's Long, which is a smaller space than a dedicated root gave it, and
   discovering `remote` depends on it being visible in that list.

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -203,7 +202,9 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	// Itself, in the foreground. `start` used to spawn `up`, which was a
 	// second command doing the same job; folding them left one code path and
 	// one thing to describe.
-	args := []string{"start", "--foreground"}
+	// Under `remote`, because that is where our commands are: the root is the
+	// Docker CLI, so a bare "start" reaches nothing.
+	args := []string{"remote", "start", "--foreground"}
 	if cfg.Name != "" {
 		args = append(args, "--workspace", cfg.Name)
 	}
@@ -346,7 +347,7 @@ func warnVersionMismatch(st proxy.Status) {
 			"  session: %s (pid %d)\n"+
 			"  this:    %s\n"+
 			"  fix: `%s` once nothing needs it, or `restart --force` now\n",
-		orUnknown(st.Version), st.PID, orUnknown(version), ours("restart"))
+		orUnknown(st.Version), st.PID, orUnknown(version), ourCommand("restart"))
 }
 
 func orUnknown(v string) string {
@@ -402,12 +403,12 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 				// "cannot tell" is not a reason to break something.
 				if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil {
 					return fmt.Errorf("cannot tell whether the running session is in use: %w\n"+
-						"  fix: `%s` to restart anyway", err, ours("restart --force"))
+						"  fix: `%s` to restart anyway", err, ourCommand("restart --force"))
 				}
 				if !idle.Safe {
-					return errors.New("the running session is in use, and restarting takes its " +
-						"file server away from whatever is using it\n" +
-						"  fix: `remote-docker restart --force` to restart anyway")
+					return fmt.Errorf("the running session is in use, and restarting takes its "+
+						"file server away from whatever is using it\n"+
+						"  fix: `%s` to restart anyway", ourCommand("restart --force"))
 				}
 			}
 
@@ -469,8 +470,8 @@ func warnTraceGoesNowhere(w io.Writer, st proxy.Status) {
 func writeTraceWarning(w io.Writer, st proxy.Status) {
 	_, _ = fmt.Fprintf(w,
 		"\nwarning: %s is set here, but the session forwarding the requests (pid %d) was started without it.\n"+
-			"  fix: %s=1 remote-docker restart\n",
-		proxy.TraceEnv, st.PID, proxy.TraceEnv)
+			"  fix: %s=1 %s\n",
+		proxy.TraceEnv, st.PID, proxy.TraceEnv, ourCommand("restart"))
 }
 
 // warnSlowStorage says so when the workspace's daemon is on vfs.

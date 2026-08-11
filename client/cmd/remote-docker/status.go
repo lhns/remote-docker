@@ -82,11 +82,11 @@ func (f facts) verdict() string {
 	case f.infoErr != nil:
 		return "cannot reach the workspace: " + firstLine(f.infoErr.Error())
 	case !f.serving:
-		return "no session (run `remote-docker start`)"
+		return "no session (run `" + ourCommand("start") + "`)"
 	case !f.answering:
 		return "a session is serving the endpoint but will not answer"
 	case f.local.Version != version:
-		return fmt.Sprintf("the running session is a different build, %s (run `remote-docker restart`)",
+		return fmt.Sprintf("the running session is a different build, %s (run `"+ourCommand("restart")+"`)",
 			orUnknown(f.local.Version))
 	}
 
@@ -154,7 +154,7 @@ func dockerReach(cfg config.Config) string {
 	case ours:
 		return fmt.Sprintf("context %q is selected", ours)
 	case "":
-		return fmt.Sprintf("no context selected (run `remote-docker workspace use %s`)", contextHint(cfg))
+		return fmt.Sprintf("no context selected (run `%s`)", ourCommand("use "+contextHint(cfg)))
 	default:
 		return fmt.Sprintf("context %q is selected, not %q", current, ours)
 	}

@@ -120,7 +120,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			cfg, cfgErr := config.Resolve(config.Overrides{Workspace: name}, "")
 
 			if !file.Remove(name) {
-				return fmt.Errorf("no workspace named %q; `remote-docker workspace ls` shows what there is", name)
+				return fmt.Errorf("no workspace named %q; `%s` shows what there is", name, ourCommand("ls"))
 			}
 			if err := config.Save(file, ""); err != nil {
 				return err
@@ -134,7 +134,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			}
 			if file.Default == "" && len(file.Names()) > 1 {
 				_, _ = fmt.Fprintf(out,
-					"no default workspace now; set one with `remote-docker workspace use <name>`\n")
+					"no default workspace now; set one with `%s`\n", ourCommand("use <name>"))
 			}
 			return nil
 		},
@@ -150,7 +150,7 @@ func newWorkspaceUseCommand() *cobra.Command {
 		Use:     "use <name>",
 		Aliases: []string{"default"},
 		Short:   "Make a workspace the default and select its docker context",
-		Long: `Makes this the workspace remote-docker commands use, and selects its docker
+		Long: `Makes this the workspace the "remote" commands use, and selects its docker
 context, so compose and other docker tools use it too.
 
 Creates the context first if it is missing.`,
@@ -219,7 +219,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				// a command for it now.
 				_, _ = fmt.Fprintf(out,
 					"no workspaces configured. Add one:\n\n"+
-						"    remote-docker workspace create dev --host dev.example --user alice\n")
+						"    %s\n", ourCommand("create dev --host dev.example --user alice"))
 				return nil
 			}
 
@@ -310,7 +310,7 @@ func removeContextFor(out io.Writer, cfg config.Config) {
 func enrolledKey() string {
 	kp, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
-		return "(run `remote-docker enroll` to generate one)"
+		return "(run `" + ourCommand("enroll") + "` to generate one)"
 	}
 	return strings.TrimSpace(kp.AuthorizedKey(config.KeyComment()))
 }
@@ -337,8 +337,8 @@ func newWorkspaceInspectCommand() *cobra.Command {
 				return err
 			}
 			if cfg.Host == "" {
-				return fmt.Errorf("no workspace is configured; add one with " +
-					"`remote-docker workspace create <name> --host <host>`")
+				return fmt.Errorf("no workspace is configured; add one with `%s`",
+					ourCommand("create <name> --host <host>"))
 			}
 
 			out := cmd.OutOrStdout()

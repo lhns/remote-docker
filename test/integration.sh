@@ -1409,6 +1409,32 @@ else
     bad "docker's current context is $current, want itest-ws"
 fi
 
+# A context we did NOT create must be left entirely alone.
+#
+# The endpoint is arranged before cobra parses anything, and it used to do so by
+# setting DOCKER_HOST, which outranks --context in docker's own resolution. So
+# every foreign context on the machine silently resolved to us. There is no way
+# to see that from inside the process, which is why it is asserted here: the
+# command must FAIL to reach a daemon that is not there, rather than succeed
+# against ours.
+hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/dev/null 2>&1 || true
+if out=$(timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps 2>&1); then
+    bad "a foreign context was redirected to our daemon"
+    info "output: $(echo "$out" | head -2 | tr '
+' '; ')"
+else
+    ok "a docker context we did not create is left alone"
+fi
+hostdocker context rm -f itest-foreign >/dev/null 2>&1 || true
+
+# And ours, named explicitly, reaches the workspace it names rather than the
+# default one.
+if out=$(timeout 60 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-ws ps 2>&1); then
+    ok "--context <ours> reaches that workspace"
+else
+    bad "--context itest-ws did not work: $(echo "$out" | tail -2)"
+fi
+
 # The old verbs are aliases, not history: something out there is scripted
 # against them.
 if "$WORK/remote-docker" remote list 2>&1 | grep -q "itest-ws"; then

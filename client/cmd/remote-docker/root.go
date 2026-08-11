@@ -182,8 +182,8 @@ func newUpCommand() *cobra.Command {
 	cmd.Short = "Deprecated: use `start --foreground`"
 	cmd.Long = `Runs a session in this terminal and holds it open.
 
-Superseded by "remote-docker start --foreground", which is the same thing.
-Kept working because it appears in scripts.`
+Superseded by "start --foreground", which is the same thing. Kept working
+because it appears in scripts.`
 	cmd.Hidden = true
 
 	// Foreground by default, because that is what `up` always did. `start` on
