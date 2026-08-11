@@ -1257,7 +1257,7 @@ fi
 # and nothing here tries to.
 if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"         -o "$WORK/remote-docker-old" ./cmd/remote-docker); then
 
-    "$WORK/remote-docker-old" start >/dev/null 2>&1
+    "$WORK/remote-docker-old" remote start >/dev/null 2>&1
 
     # (a) nothing depends on it -> replaced silently.
     "$WORK/remote-docker" ps >/dev/null 2>&1
@@ -1270,8 +1270,8 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ol
     # (b) something depends on it -> warned about, left alone. The old binary
     # starts the container so the session holding it is the old one.
     "$WORK/remote-docker" remote stop >/dev/null 2>&1
-    "$WORK/remote-docker-old" start >/dev/null 2>&1
-    if "$WORK/remote-docker-old" docker run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
+    "$WORK/remote-docker-old" remote start >/dev/null 2>&1
+    if "$WORK/remote-docker-old" run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
 
         warned=$("$WORK/remote-docker" ps 2>&1)
         case "$warned" in
@@ -1464,25 +1464,26 @@ else
     ok "removing the workspace removed its docker context"
 fi
 
-# `context` is gone, and gone means gone -- a command that still half-exists is
-# worse than one that does not.
-if "$WORK/remote-docker" --help 2>&1 | grep -qE '^  context'; then
-    bad "the context command is still in the help"
+# `remote` has to be FINDABLE. It is the only way in to everything this program
+# does that docker does not, and the root's help is sixty commands long, so a
+# command that is present but unlisted is a command nobody will type.
+if "$WORK/remote-docker" --help 2>&1 | grep -qE '^  remote '; then
+    ok "remote is listed in the help"
 else
-    ok "context is no longer a command"
+    bad "remote is missing from the help, so nothing points at it"
 fi
 
 restore_ws
 trap cleanup EXIT
 
 echo
-echo "== 18. the client answering to the name docker =="
+echo "== 18. the client under the name docker =="
 # The claim is that a machine with no Docker installed can type `docker run`.
 # It rests on one thing -- the binary looking at the name it was invoked by --
 # and the only way to test that is to invoke it by that name.
 #
 # Deliberately with NO DOCKER_HOST and no session running: that is the state a
-# person is in after `shim install`, and everything the alias has to do for
+# person is in after renaming the binary, and everything it has to do for
 # itself (resolve the workspace, start a session, point the CLI at it) happens
 # in this one command or not at all.
 ALIASDIR="$WORK/aliasbin"
@@ -1525,30 +1526,25 @@ else
     "$WORK/remote-docker" remote stop >/dev/null 2>&1
 fi
 
-# And the command that puts the name there in the first place. On this runner a
-# symlink is available, so this also pins the form: a copy would mean the ladder
-# fell all the way down without saying why.
-SHIMDIR="$WORK/shimbin"
-if out=$(REMOTE_DOCKER_SHIM_DIR="$SHIMDIR" "$WORK/remote-docker" shim install 2>&1); then
-    if echo "$out" | grep -q "symlink"; then
-        ok "shim install linked rather than copied"
-    else
-        bad "shim install did not produce a symlink: $(echo "$out" | tr '\n' ' ')"
-    fi
-    if env -u DOCKER_HOST timeout 60 "$SHIMDIR/docker" version --format '{{.Client.Version}}' >/dev/null 2>&1; then
-        ok "the installed shim runs the docker CLI"
-    else
-        bad "the installed shim did not run"
-    fi
+# A COPY of the binary named `docker`, which is the documented installation now
+# that there is no shim: the root is the Docker CLI, so the file's name is the
+# whole of it. A copy rather than the symlink above, because they are different
+# claims -- a symlink could be resolved back to the original somewhere, and this
+# one cannot be.
+COPYDIR="$WORK/copybin"
+mkdir -p "$COPYDIR"
+cp "$WORK/remote-docker" "$COPYDIR/docker"
+if env -u DOCKER_HOST timeout 60 "$COPYDIR/docker" version --format '{{.Client.Version}}' >/dev/null 2>&1; then
+    ok "a copy of the binary named docker is a working docker CLI"
 else
-    bad "shim install failed: $(echo "$out" | tail -3 | tr '\n' ' ')"
+    bad "the renamed copy did not run"
 fi
 
-if REMOTE_DOCKER_SHIM_DIR="$SHIMDIR" "$WORK/remote-docker" shim uninstall >/dev/null 2>&1 &&
-    [ ! -e "$SHIMDIR/docker" ]; then
-    ok "shim uninstall took it away again"
+# And it still finds our own commands, under the name the reader typed.
+if env -u DOCKER_HOST timeout 60 "$COPYDIR/docker" remote version >/dev/null 2>&1; then
+    ok "the renamed copy still carries the remote commands"
 else
-    bad "shim uninstall left the shim behind"
+    bad "remote is unreachable from the renamed copy"
 fi
 
 "$WORK/remote-docker" remote stop >/dev/null 2>&1 || true

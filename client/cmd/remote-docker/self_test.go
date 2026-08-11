@@ -219,10 +219,13 @@ func TestTermuxArgvWouldBreakEveryCommand(t *testing.T) {
 
 func TestTermuxArgvRunsTheCommand(t *testing.T) {
 	me := self(t)
+	// Commands that need no configuration, because CI has none: `remote
+	// status` wants a workspace to have a status about, and passing here only
+	// because the developer's machine has one is not a test.
 	for _, args := range [][]string{
 		{"remote", "version"},
-		{"remote", "status"},
 		{"remote", "ls"},
+		{"remote", "--help"},
 		// A flag after the inserted path failed differently and worse: cobra
 		// never reached the subcommand, so this came back "unknown flag:
 		// --no-path" and sent the reader after a flag that exists.
