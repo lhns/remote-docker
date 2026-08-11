@@ -33,6 +33,7 @@ func newWorkspaceCommand() *cobra.Command {
 		Use:     "workspace",
 		Aliases: []string{"workspaces"},
 		Short:   "Add, remove and list your workspaces",
+		Args:    onlySubcommands,
 	}
 	cmd.AddCommand(
 		newWorkspaceAddCommand(),

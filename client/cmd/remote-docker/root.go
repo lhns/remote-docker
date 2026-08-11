@@ -47,6 +47,11 @@ Nothing needs to be installed on this machine beyond this binary.`,
 		// `docker` alias it IS the root (ADR 0022), which is why the alias
 		// parsed these correctly while the prefixed form did not.
 		TraverseChildren: true,
+
+		// A word that is not a command is an error, not a help screen. See
+		// unknown.go: the RunE is what makes the rule reachable at all.
+		Args: onlySubcommands,
+		RunE: helpWhenBare,
 	}
 
 	// No shorthands, and that is not an oversight.
