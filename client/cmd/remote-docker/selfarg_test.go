@@ -224,3 +224,75 @@ func TestSelfPathPrefersTheHintWhenTheyDisagree(t *testing.T) {
 		t.Errorf("selfPath() = %q, want the hinted %q", got, other)
 	}
 }
+
+// The respawn, which is what `start` does and what failed on the device twice
+// for two different reasons.
+//
+// Ordinary machine: this binary, executed directly.
+func TestSelfCommandRunsThisBinaryDirectly(t *testing.T) {
+	me := self(t)
+	t.Setenv(termuxSelfExeEnv, "")
+
+	cmd, err := selfCommand("start", "--foreground")
+	if err != nil {
+		t.Fatalf("selfCommand: %v", err)
+	}
+	if !sameFile(cmd.Path, me) {
+		t.Errorf("cmd.Path = %q, want this binary", cmd.Path)
+	}
+	if got := cmd.Args[len(cmd.Args)-2:]; got[0] != "start" || got[1] != "--foreground" {
+		t.Errorf("arguments came through as %v", cmd.Args)
+	}
+}
+
+// Termux: this binary cannot be executed at all, so it goes through the loader
+// that is running us, with its own path as the loader's first argument.
+//
+// Simulated by pointing the variable at a different real file, which is what
+// makes selfPath and os.Executable disagree the way they do there.
+func TestSelfCommandGoesThroughTheLoaderWhenTheyDisagree(t *testing.T) {
+	me := self(t)
+	other := filepath.Join(t.TempDir(), "remote-docker")
+	if err := os.WriteFile(other, []byte("stand-in"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(termuxSelfExeEnv, other)
+
+	cmd, err := selfCommand("start", "--foreground")
+	if err != nil {
+		t.Fatalf("selfCommand: %v", err)
+	}
+	// The loader runs, ...
+	if !sameFile(cmd.Path, me) {
+		t.Errorf("cmd.Path = %q, want the loader (%q)", cmd.Path, me)
+	}
+	// ... and what it runs is the first argument after it.
+	if len(cmd.Args) < 2 || cmd.Args[1] != other {
+		t.Fatalf("the binary is not the loader's first argument: %v", cmd.Args)
+	}
+	// Absolute, because the loader rejects anything else: `expected absolute
+	// path: "start"` is what a relative one produced.
+	if !filepath.IsAbs(cmd.Args[1]) {
+		t.Errorf("the path handed to the loader is relative: %q", cmd.Args[1])
+	}
+}
+
+// A relative path in the variable is made absolute. The child's directory is
+// changed before it runs, so a relative one would resolve somewhere else, and
+// the loader refuses one outright.
+func TestSelfPathIsAlwaysAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "remote-docker"), []byte("stand-in"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv(termuxSelfExeEnv, "remote-docker")
+
+	got, err := selfPath()
+	if err != nil {
+		t.Fatalf("selfPath: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("selfPath() = %q, which is relative", got)
+	}
+}

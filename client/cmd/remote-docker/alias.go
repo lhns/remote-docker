@@ -15,7 +15,9 @@ package main
 // docker.exe is a complete installation on its own.
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -72,6 +74,11 @@ const termuxSelfExeEnv = "TERMUX_EXEC__PROC_SELF_EXE"
 // only where os.Executable disagrees with it and the file is there, so an
 // ordinary machine keeps the kernel's answer and a stale variable cannot
 // redirect anything.
+//
+// Always absolute. The variable holds the path as it was typed, so it is
+// relative whenever the user typed a relative one, and both callers need it to
+// survive a change of directory: the respawn sets the child's Dir, and a shim
+// is a link that has to keep resolving from wherever it is used.
 func selfPath() (string, error) {
 	exe, err := os.Executable()
 
@@ -82,7 +89,38 @@ func selfPath() (string, error) {
 	if _, statErr := os.Stat(hinted); statErr != nil {
 		return exe, err
 	}
-	return hinted, nil
+	abs, absErr := filepath.Abs(hinted)
+	if absErr != nil {
+		return exe, err
+	}
+	return abs, nil
+}
+
+// selfCommand builds a command that runs this binary again.
+//
+// Not exec.Command(selfPath()). Android refuses to execute a file in an app
+// data directory at all, which is the reason programs there are run as
+// `linker64 <absolute path>` in the first place, so a direct respawn is denied
+// outright:
+//
+//	starting the background session: fork/exec .../remote-docker:
+//	permission denied
+//
+// So it re-execs the way it was itself exec'd: through whatever loader is
+// running this process. os.Executable IS that loader here, which is why no
+// linker path is written down anywhere. Hardcoding /system/bin/linker64 would
+// be a guess about a platform nothing tests; this is a measurement, and on a
+// machine where the two agree it is an ordinary exec of an ordinary file.
+func selfCommand(args ...string) (*exec.Cmd, error) {
+	self, err := selfPath()
+	if err != nil {
+		return nil, fmt.Errorf("finding this binary: %w", err)
+	}
+
+	if loader, err := os.Executable(); err == nil && !sameFile(loader, self) {
+		return exec.Command(loader, append([]string{self}, args...)...), nil
+	}
+	return exec.Command(self, args...), nil
 }
 
 // dropSelfArgument removes a first argument that is this binary.

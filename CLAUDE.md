@@ -158,6 +158,14 @@ premise of the project, and it applies to building it too. So:
   `expected absolute path: "start"`, and `shim install` would have put a
   `docker` on PATH that was the Android dynamic linker. One function, six call
   sites, and `os.Executable` appears once in the whole client.
+- **Respawning this binary goes through `selfCommand`, never
+  `exec.Command(self)`.** Android refuses to execute a file in an app data
+  directory at all, which is why programs there run through the linker in the
+  first place, so a direct respawn is denied outright and `start` cannot launch
+  its own background session. It re-execs through whatever loader is running
+  this process, which `os.Executable` names, so no linker path is written down:
+  hardcoding `/system/bin/linker64` would be a guess about a platform nothing
+  tests. Where the two agree it is an ordinary exec of an ordinary file.
 - **Never touch a `docker` we did not write, and never execute one to find
   out.** A machine may get Docker Desktop tomorrow. Ours is `os.SameFile`
   against this binary, or a marker file beside it; anything else is left where
