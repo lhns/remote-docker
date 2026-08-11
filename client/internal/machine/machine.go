@@ -17,10 +17,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Spec is what a machine should be, derived entirely from configuration.
@@ -65,6 +71,18 @@ type Spec struct {
 
 	// Account is the workspace account this machine's owner logs in as.
 	Account string
+
+	// PublicKey is the key that account logs in with.
+	//
+	// Part of the Spec because one backend needs it at creation: a Hyper-V
+	// machine has no door but the SSH this key opens, so the key goes into the
+	// Ignition document or it never gets in at all. The WSL backend writes it
+	// afterwards through Enrol, which is why this is not the only path.
+	//
+	// Deliberately NOT part of Generation. A rotated key would otherwise mean a
+	// rebuild deciding itself, and a rebuild discards every image in the
+	// machine (ADR 0026).
+	PublicKey string
 }
 
 // Generation identifies a Spec, so a machine built from older settings can be
@@ -242,6 +260,63 @@ type Backend interface {
 	Destroy(ctx context.Context, name string) error
 }
 
+// namePrefix keeps our machines out of the user's own namespace.
+//
+// A WSL distribution list and a Hyper-V VM list are both places the user has
+// their own things, and `Get-VM dev` or `wsl -d dev` are poor names to take
+// from somebody. Same argument as the unix account prefix (ADR 0025), and the
+// same prefix, so one machine is spelled the same way everywhere it appears.
+const namePrefix = "rd-"
+
+// machineName is what a machine is called on the platform hosting it.
+func machineName(name string) string { return namePrefix + name }
+
+// stateDir is where a machine's disk and configuration live.
+//
+// One function rather than one per backend: they differ in what they put there,
+// never in where it goes, and two copies of a path is two answers to "what does
+// `rm` delete".
+func stateDir(name string) (string, error) {
+	local := os.Getenv("LOCALAPPDATA")
+	if local == "" {
+		return "", errors.New("LOCALAPPDATA is not set, so there is nowhere to put the machine's disk")
+	}
+	return filepath.Join(local, "remote-docker", "machines", name), nil
+}
+
+// firstIPv4 picks an address to reach a machine at, out of whatever the
+// platform reported.
+//
+// Link-local (169.254/16) is skipped rather than returned: it means DHCP has
+// not finished, so the machine is up and not ready. Returning it produces a
+// connection error naming an address nobody recognises, where returning nothing
+// makes the caller wait, which is the correct thing to do about a machine that
+// is still starting.
+func firstIPv4(fields []string) string {
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		// A prefix length is the machine's, not ours: 172.24.110.158/20.
+		if i := strings.IndexByte(f, '/'); i >= 0 {
+			f = f[:i]
+		}
+		if strings.Count(f, ".") != 3 || strings.HasPrefix(f, "169.254.") {
+			continue
+		}
+		return f
+	}
+	return ""
+}
+
+// closerFunc makes a func into an io.Closer.
+//
+// Here rather than beside the backend that first needed it, because a test is
+// a platform too: a fake backend has to return a hold, and a helper compiled
+// only on Windows makes the test compile only on Windows -- which is how it
+// would go unrun on the machine it was written on and fail in CI.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
 // Hold keeps a machine alive until the returned Closer is closed. See
 // Backend.Hold.
 func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
@@ -260,7 +335,7 @@ func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
 // cannot be dialled the way a workspace on another host is: the host is always
 // there and the machine is not. Starting is also what makes the address
 // answerable, since a stopped machine has none.
-func Locate(ctx context.Context, backendName, name string) (string, error) {
+func Locate(ctx context.Context, backendName, name string, port int) (string, error) {
 	backend, err := Find(backendName)
 	if err != nil {
 		return "", err
@@ -277,8 +352,54 @@ func Locate(ctx context.Context, backendName, name string) (string, error) {
 	if addr == "" {
 		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
 	}
+
+	// And then waited for, because "located" has to mean "dialable". A machine
+	// that was stopped is up before its agent is: the agent generates a host
+	// key and waits for dockerd before it opens a listener. Returning the
+	// address at the moment the machine boots hands the caller a connection
+	// that is refused, and a second attempt a minute later works -- which is
+	// how a deterministic failure comes to look like a flaky one.
+	//
+	// It lives here rather than in each caller because there are three, and the
+	// one that forgot was the session: leave a machine-backed workspace alone
+	// for a few minutes and its first command failed.
+	if err := waitForListener(ctx, addr, port); err != nil {
+		return "", fmt.Errorf("the %s machine %q is running but %w", backendName, name, err)
+	}
 	return addr, nil
 }
+
+// waitForListener blocks until something accepts a connection at the address.
+//
+// A dial rather than a handshake: this asks whether the listener is open, and
+// anything further is the session's job to report properly.
+func waitForListener(ctx context.Context, host string, port int) error {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	deadline := time.Now().Add(AgentStartTimeout)
+
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return fmt.Errorf("its agent is not answering on %s", addr)
+}
+
+// AgentStartTimeout is how long the agent has to open its listener.
+//
+// Longer than the agent's own wait for dockerd, deliberately. It gives the
+// daemon ninety seconds and then serves anyway, on the argument that a
+// workspace somebody can log into beats one that took the evidence with it --
+// so a client that waits ninety seconds gives up at the exact moment the agent
+// would have started answering, and reports a machine that was about to work.
+var AgentStartTimeout = 3 * time.Minute
 
 // Backends returns the backends compiled into this build, by name.
 //

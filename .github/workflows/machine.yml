@@ -42,14 +42,17 @@ jobs:
         run: |
           set -eux
           id=$(docker create rd-workspace:ci)
-          docker export "$id" -o rootfs.tar
+          # Gzipped, because that is what a release publishes and what somebody
+          # downloads. `wsl --import` reads it directly, and this is where that
+          # is proven rather than assumed.
+          docker export "$id" | gzip -9 > rootfs.tar.gz
           docker rm "$id"
-          ls -lh rootfs.tar
+          ls -lh rootfs.tar.gz
 
       - uses: actions/upload-artifact@v7
         with:
           name: workspace-rootfs
-          path: rootfs.tar
+          path: rootfs.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -84,7 +87,7 @@ jobs:
         env:
           REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
-          .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar
+          .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz
           .\client\rd.exe remote ls
           .\client\rd.exe remote machine status ci
 
@@ -110,9 +113,66 @@ jobs:
         env:
           REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
-          $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar) -join "`n"
+          $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz) -join "`n"
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
+
+      # The machine is a machine: it stops, starts, and what was inside it is
+      # still inside it. A rebuild is the only thing that discards, and a stop
+      # that quietly did the same would be found by nobody until it had.
+      - name: it survives being stopped and started
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          .\client\rd.exe run -d --name survivor alpine:3 sleep 600
+          .\client\rd.exe remote machine stop ci
+          .\client\rd.exe remote machine start ci
+
+          # What is holding the endpoint, if anything, and what the client says
+          # about itself. An EOF on the local pipe names the wrong layer
+          # entirely, so this asks the two questions that separate "no session
+          # at all" from "a session whose machine went away underneath it".
+          .\client\rd.exe remote status
+          Get-Process rd -ErrorAction SilentlyContinue | Format-Table Id, StartTime
+
+          # The session's own log. `remote status` answering while a docker
+          # request gets EOF means the failure is inside the session rather
+          # than in reaching it, and this is the only place that says why.
+          Get-Content "$env:REMOTE_DOCKER_STATE_DIR\logs\*.log" -Tail 40 -ErrorAction SilentlyContinue
+
+          $out = (.\client\rd.exe ps -a --filter name=survivor --format '{{.Names}}') -join "`n"
+          $out
+          if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
+          .\client\rd.exe rm -f survivor
+
+      # Left alone, and then used again.
+      #
+      # A session that has been idle DISCONNECTS on purpose (ADR 0015), which
+      # releases the machine and lets WSL shut it down. All of that is correct,
+      # and the machine being stopped here is not the failure -- the failure is
+      # the command after it. This found one: the machine was started again and
+      # dialled immediately, before its agent was listening, so the first
+      # command failed and the second worked, which reads as flakiness rather
+      # than as the deterministic bug it was.
+      - name: a machine comes back after sitting idle
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          # A background session, which is the thing holding the machine. A
+          # one-shot `docker run` would take its hold with it when it exits and
+          # prove nothing about a machine left alone.
+          .\client\rd.exe remote start
+          Start-Sleep -Seconds 180
+
+          $state = (wsl -l -v | Out-String)
+          $state
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
+          $out
+          if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }
+          .\client\rd.exe remote stop
 
       # rm destroys the machine as well as the entry, and leaving a
       # distribution behind is the failure worth catching: it is a running

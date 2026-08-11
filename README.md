@@ -59,6 +59,35 @@ and update.
 `docker compose` and `docker build` (BuildKit, through buildx) are included, so
 the whole toolchain is one file.
 
+## A workspace on this machine (Windows)
+
+When there is no Linux host to point at, this builds one locally and registers
+it as an ordinary workspace. It needs WSL, which Windows installs itself
+(`wsl --install`, then reboot).
+
+```powershell
+# the machine is the workspace image's filesystem, published with each release
+curl.exe -LO https://github.com/lhns/remote-docker/releases/latest/download/workspace-rootfs-amd64.tar.gz
+
+remote-docker remote machine create dev --rootfs .\workspace-rootfs-amd64.tar.gz
+remote-docker run --rm -v .:/w alpine ls /w
+```
+
+What comes out is a workspace like any other: `remote ls` lists it, the docker
+context is created for it, bind mounts and published ports work exactly as they
+do against a host in another country. `remote machine start` and `stop` are its
+lifecycle, and `remote rm dev` removes the workspace **and** the machine.
+
+Nothing is installed into it and no package manager ever runs. Changing
+versions replaces the filesystem rather than upgrading it, which is why
+`remote machine rebuild` is the repair path: it is this same command run again.
+It discards the images and containers inside the machine, never your files —
+those live here and are served to it.
+
+A Hyper-V backend exists (`--backend hyperv`, from a Flatcar disk image) and
+**has never been run by anybody**; see `docs/testing-machines.md` if you have
+Hyper-V and are willing to be the first.
+
 ## What works
 
 - **Bind mounts from anywhere on your machine.** Another drive, above the

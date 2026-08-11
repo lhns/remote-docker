@@ -487,9 +487,15 @@ function was.
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}`, `mode: host` publishing, placement --
   needs a real cluster. CI cannot cover it.
-- **Hyper-V, entirely.** Not implemented, and GitHub's runners do not offer
-  it, so it will have no automated coverage when it is.
-  `docs/testing-machines.md` is its whole verification.
+- **Hyper-V, entirely.** Implemented and NEVER EXECUTED. GitHub's runners do
+  not offer it and nobody working on this has it, so it has no automated
+  coverage and cannot get any: `docs/testing-machines.md` is its whole
+  verification. Its decisions are unit tested as far as a string can be -- the
+  PowerShell it builds, the Ignition document, the state and address parsing,
+  the key fingerprint -- and everything past `powershell.exe` is unproven. The
+  least certain part, named in the runbook, is whether Flatcar's Hyper-V image
+  reads the Ignition config from where `Create` writes it. This is the
+  strongest entry on this list: WSL at least runs on a runner.
 - **WSL beyond one runner image.** `machine.yml` runs the backend end to end on
   windows-latest, which is real coverage and is one Windows version on one
   image. Nobody working on this has WSL on their own machine.

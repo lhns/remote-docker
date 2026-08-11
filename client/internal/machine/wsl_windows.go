@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -46,7 +45,7 @@ func (b wslBackend) Available(ctx context.Context) error {
 }
 
 func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) {
-	distro := WSLName(name)
+	distro := machineName(name)
 
 	// The exit status is deliberately not consulted. WSL exits NON-ZERO when
 	// there are no distributions at all -- "Windows Subsystem for Linux has no
@@ -84,9 +83,9 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 	if spec.Rootfs == "" {
 		return fmt.Errorf("no rootfs to import: a machine is created from the workspace image's filesystem")
 	}
-	distro := WSLName(spec.Name)
+	distro := machineName(spec.Name)
 
-	dir, err := wslStateDir(spec.Name)
+	dir, err := stateDir(spec.Name)
 	if err != nil {
 		return err
 	}
@@ -131,7 +130,7 @@ func (b wslBackend) Enrol(ctx context.Context, name, account, publicKey string) 
 	// Backquoted, so the \n reaches printf as two characters for IT to
 	// interpret. A Go "\n" here would put a real newline in the middle of the
 	// shell command, which happens to work and reads like a mistake.
-	_, err := b.wsl(ctx, wslRunArgs(WSLName(name),
+	_, err := b.wsl(ctx, wslRunArgs(machineName(name),
 		"sh", "-c", `printf '%s\n' `+shellQuote(strings.TrimSpace(publicKey))+" > "+path)...)
 	return err
 }
@@ -141,7 +140,7 @@ func (b wslBackend) Enrol(ctx context.Context, name, account, publicKey string) 
 // `wsl -d <name> true` is the whole of it: WSL starts a distribution on first
 // use and there is no separate start verb.
 func (b wslBackend) Start(ctx context.Context, name string) error {
-	_, err := b.wsl(ctx, wslRunArgs(WSLName(name), "true")...)
+	_, err := b.wsl(ctx, wslRunArgs(machineName(name), "true")...)
 	return err
 }
 
@@ -154,7 +153,7 @@ func (b wslBackend) Start(ctx context.Context, name string) error {
 func (b wslBackend) Hold(ctx context.Context, name string) (io.Closer, error) {
 	held, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
-	cmd := exec.CommandContext(held, "wsl.exe", wslRunArgs(WSLName(name), "sleep", "86400")...)
+	cmd := exec.CommandContext(held, "wsl.exe", wslRunArgs(machineName(name), "sleep", "86400")...)
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("holding the machine %q open: %w", name, err)
@@ -169,13 +168,8 @@ func (b wslBackend) Hold(ctx context.Context, name string) (io.Closer, error) {
 	}), nil
 }
 
-// closerFunc makes a func into an io.Closer.
-type closerFunc func() error
-
-func (f closerFunc) Close() error { return f() }
-
 func (b wslBackend) Address(ctx context.Context, name string) (string, error) {
-	out, err := b.wsl(ctx, wslAddressArgs(WSLName(name))...)
+	out, err := b.wsl(ctx, wslAddressArgs(machineName(name))...)
 	if err != nil {
 		return "", err
 	}
@@ -183,21 +177,12 @@ func (b wslBackend) Address(ctx context.Context, name string) (string, error) {
 }
 
 func (b wslBackend) Stop(ctx context.Context, name string) error {
-	_, err := b.wsl(ctx, "--terminate", WSLName(name))
+	_, err := b.wsl(ctx, "--terminate", machineName(name))
 	return err
 }
 
 // Destroy unregisters the distribution, which deletes its disk.
 func (b wslBackend) Destroy(ctx context.Context, name string) error {
-	_, err := b.wsl(ctx, "--unregister", WSLName(name))
+	_, err := b.wsl(ctx, "--unregister", machineName(name))
 	return err
-}
-
-// wslStateDir is where a distribution's disk lives.
-func wslStateDir(name string) (string, error) {
-	local := os.Getenv("LOCALAPPDATA")
-	if local == "" {
-		return "", fmt.Errorf("LOCALAPPDATA is not set, so there is nowhere to put the machine's disk")
-	}
-	return filepath.Join(local, "remote-docker", "machines", name), nil
 }

@@ -125,9 +125,78 @@ Four things it found, worth knowing before reading a failure here:
 
 ## Hyper-V
 
-Not implemented yet. When it is, this section gets the same treatment, plus:
-whether it asks for elevation and says why, and `Get-VM` / `Get-VMSwitch`
-showing nothing left behind.
+**Nothing below has ever been executed.** The WSL section describes a path CI
+runs on every change; this one describes code that compiles, is unit tested as
+far as a string can be, and has never met Hyper-V. GitHub's runners do not offer
+it and nobody working on the project has it. If you run this, you are the first,
+and a report saying "step 3 printed X" is worth more than a patch.
+
+### Before you start
+
+```powershell
+# Is Hyper-V there at all? Windows Pro/Enterprise only.
+Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V
+
+# The machine needs a disk image. Flatcar publishes one for Hyper-V; this is
+# the only download in the whole procedure, and it is a published artifact
+# rather than an installer that runs.
+# (Checked 2026-08-11: https://www.flatcar.org/docs/latest/installing/vms/hyper-v/)
+curl.exe -LO https://stable.release.flatcar-linux.net/amd64-usr/current/flatcar_production_hyperv_image.vhdx.bz2
+# unpack it with 7-Zip or bunzip2 to flatcar.vhdx
+```
+
+Hyper-V machine management needs administrator, or membership of the local
+Hyper-V Administrators group. `remote machine create` reports that and stops; it
+does not elevate itself. **This is where the project's "nothing needs to be
+installed" premise ends**, and ADR 0026 says so.
+
+### The procedure
+
+```powershell
+remote-docker remote machine create dev --backend hyperv --rootfs .latcar.vhdx
+remote-docker remote machine status dev
+remote-docker remote ls
+
+# The one that matters. Everything else is setup.
+"hello" | Out-File -Encoding ascii marker
+remote-docker run --rm -v "${PWD}:/w" alpine:3 cat /w/marker
+```
+
+Expected: `create` prints that it is creating the machine, waits for the agent,
+and returns. The `docker run` prints `hello`.
+
+### What to check, and what is most likely to be wrong
+
+In the order they are likely to fail:
+
+1. **The machine has no address.** `Get-VMNetworkAdapter -VMName rd-dev | Select
+   -ExpandProperty IPAddresses`. Empty or only `169.254.x.x` means the guest is
+   not telling Hyper-V its address: either Ignition did not run, or the Default
+   Switch gave it nothing. The client waits rather than connecting to a
+   link-local address, so this presents as a create that times out.
+2. **Ignition did not apply.** The config is written to
+   `%LOCALAPPDATA%emote-docker\machines\dev\config.ign`. Whether Flatcar's
+   Hyper-V image reads it from there is the single least certain thing in this
+   backend -- it may need the config attached another way, and if so this is
+   where it fails and the fix belongs in `hyperVBackend.Create`.
+3. **The workspace container is not running.** Connect to the VM's console
+   (`vmconnect.exe localhost rd-dev`) and look at
+   `systemctl status remote-dockerd` and `journalctl -u remote-dockerd`.
+4. **Secure boot.** A machine that never boots at all, with no console output,
+   is usually this -- the create command turns it off, so if you see it, say so.
+
+### Leaving nothing behind
+
+```powershell
+remote-docker remote rm dev
+Get-VM                                   # no rd-dev
+Get-ChildItem $env:LOCALAPPDATAemote-docker\machines
+docker context ls                        # no rd-dev
+```
+
+`rm` removes the disk as well as the machine. Remove-VM on its own leaves it,
+which quietly keeps gigabytes per machine somebody believes they removed, so
+the directory being gone is the thing to check.
 
 ## What to capture when something fails
 

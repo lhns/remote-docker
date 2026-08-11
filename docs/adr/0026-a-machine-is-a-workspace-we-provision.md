@@ -50,6 +50,64 @@ machine that had stopped two and a half minutes after its own agent reported it
 was listening. So locating a machine starts it, and starting a running machine
 is what keeps it running.
 
+## The Hyper-V backend was merged unverified, on purpose
+
+The plan for this feature said the backends merge when somebody has run
+`docs/testing-machines.md` against them and said what happened, not on green CI
+alone. WSL cleared that bar. Hyper-V cannot: no CI offers it and nobody
+involved has it, so the bar would hold the code in a branch indefinitely,
+rotting against a moving codebase, for a verification that has no scheduled
+date.
+
+So it merged unrun, deliberately, on the argument that it costs nothing until
+somebody types `--backend hyperv`: no other path reaches it, and the WSL backend
+does not import a line of it.
+
+What that costs is honesty, and the price is paid in four places that must stay
+in step, because a claim nobody re-checks is one that expires silently:
+
+- the program says it, on every `machine create` with that backend, in a warning
+  it prints itself;
+- `--backend`'s help says it, since that is where somebody choosing looks;
+- CLAUDE.md's NOT-tested list calls it the strongest entry there;
+- the README says the backend has never been run by anybody.
+
+The first of those goes away when somebody has run the runbook and reported
+what happened. Until then it is not a supported option, it is a written-down
+attempt, and anything that says otherwise -- release notes, a summary, an
+answer to a user -- is wrong.
+
+## Both backends are located the same way, and Hyper-V uses no hvsock
+
+The design for Hyper-V originally called for Hyper-V sockets, on the argument
+that they avoid discovering a NAT address that changes on every boot -- the
+fragile thing tools in this space get wrong first.
+
+That argument was answered by building WSL. Discovering the address is one
+platform call per connection, it is measured, and it costs no agent change at
+all. hvsock would have meant a pluggable listener in the agent, an AF_HYPERV
+listener on the Linux side, a service GUID registered per machine on the host,
+and a new dependency -- all of it in code no CI can execute and nobody involved
+can run. The same reasoning that makes the decisions pure functions says to pick
+the transport that adds nothing untestable.
+
+So a Hyper-V machine is on the Default Switch, which is NAT with DHCP that
+Hyper-V maintains itself, and `Address` asks `Get-VMNetworkAdapter`. If that
+turns out not to work on a real machine, hvsock is still there, and this record
+is where to start.
+
+Two things do differ from WSL, and both are the platform rather than a choice:
+
+- **A Hyper-V machine has no idle timeout**, so its `Hold` is nothing. A WSL
+  distribution shuts down when nobody is in it, which is the harder case and the
+  one the interface is shaped by.
+- **A key can only be enrolled at creation.** The guest is Linux, so PowerShell
+  Direct does not apply, and the only door is the SSH the key is for. The key
+  goes into the Ignition document, its fingerprint into the VM's Notes, and
+  `Enrol` on an existing machine reports a mismatch rather than writing
+  anything. It is deliberately not part of the generation: a rotated key would
+  then trigger a rebuild on its own, and a rebuild discards every image.
+
 **Nothing is installed at provisioning time.** No package manager runs, on any
 path, ever. The unit of change is a published artifact named in that block, and
 moving between versions replaces the artifact rather than mutating what is

@@ -118,12 +118,13 @@ func TestObserveWSL(t *testing.T) {
 	}
 }
 
-func TestWSLName(t *testing.T) {
-	// A distribution list is the user's own namespace, holding their Ubuntu
-	// and whatever else. Taking a bare name there is the mistake ADR 0025
-	// records for unix accounts.
-	if got := WSLName("dev"); got != "rd-dev" {
-		t.Errorf("WSLName(dev) = %q", got)
+// A distribution list and a VM list are both the user's own namespace, holding
+// their Ubuntu, their Docker Desktop distributions, whatever else. Taking a
+// bare name there is the mistake ADR 0025 records for unix accounts, and both
+// backends make it the same way now.
+func TestMachineName(t *testing.T) {
+	if got := machineName("dev"); got != "rd-dev" {
+		t.Errorf("machineName(dev) = %q", got)
 	}
 }
 

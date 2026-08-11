@@ -13,13 +13,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"time"
+	"net/http"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
+	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/sshx"
 )
 
@@ -61,9 +61,10 @@ type machineOptions struct {
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&o.backend, "backend", "wsl", "wsl or hyperv")
+	cmd.Flags().StringVar(&o.backend, "backend", "wsl",
+		"wsl, or hyperv (never executed by anybody -- see docs/testing-machines.md)")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
-		"the workspace image's filesystem, as a tar file")
+		"what the machine is built from: the workspace image's filesystem as a tar file (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
 	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
 
@@ -145,6 +146,70 @@ they are on this machine and are served to it.`,
 	return cmd
 }
 
+// stopSessionFor shuts down the background session for a workspace, if one is
+// serving.
+//
+// Best effort by design: this runs before stopping a machine, and every way it
+// can fail -- no config, nothing listening, a session that will not answer --
+// means the same thing to the caller, which is that there is nothing to shut
+// down first. A machine that would not stop is what the caller is told about,
+// and that error comes from the stop itself.
+func stopSessionFor(cmd *cobra.Command, name string) {
+	// Every failure below is reported, not swallowed. Best effort meant silent,
+	// and silent meant three CI rounds spent asking whether this ran at all --
+	// while the answer, that a session survived both stop and start, was
+	// visible only in an unrelated status command.
+	warn := func(format string, args ...any) {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
+	}
+
+	cfg, err := config.Resolve(overrides, name)
+	if err != nil {
+		warn("cannot tell which endpoint %q uses, so a session may still be serving it: %v", name, err)
+		return
+	}
+	// Asked unconditionally rather than after a Reachable check. A session
+	// that is starting up holds the endpoint before it answers questions about
+	// itself, so a check can say "nothing there" about a process that is very
+	// much there -- and then the machine is stopped underneath it.
+	endpoint := endpointOf(cfg)
+
+	// Asked for first, because after the shutdown there is nothing left to ask.
+	var st proxy.Status
+	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
+		st.PID = proxy.Owner(endpoint)
+	}
+
+	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
+		// Nothing serving is the ordinary case and not worth a line; anything
+		// else means a session is about to lose its machine underneath it.
+		if proxy.Reachable(endpoint) {
+			warn("a session is serving %s and would not stop: %v", endpoint, err)
+		}
+		return
+	}
+	_ = waitForEndpoint(endpoint, false, stopTimeout)
+
+	// And then for the PROCESS, which is the part that matters here. The
+	// endpoint going quiet is the START of the teardown: only afterwards does
+	// the session drop its SSH connection, its reverse tunnel and its NFS
+	// export. An account has exactly ONE reverse-tunnel port (ADR 0003) and a
+	// session fails hard when it cannot take it -- so returning at the listener
+	// let the next session start against a port the workspace had not released,
+	// which killed its NFS server ("the nfs server stopped err=EOF") and took
+	// the session down with it. What the user saw was EOF on a local pipe.
+	_ = waitForExit(st.PID, stopTimeout)
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
+}
+
+// unproven names the backends that have never been executed.
+//
+// Not a capability check: hyperv COMPILES, is unit tested as far as a string
+// can be, and may well work. What it has never done is run, and that is a
+// different claim from "unavailable" -- which is why it is a warning and not a
+// refusal. See CLAUDE.md's NOT-tested list, which this must agree with.
+var unproven = map[string]bool{"hyperv": true}
+
 // createMachine is the whole of create and rebuild, which differ only in
 // whether they are allowed to destroy what is there.
 func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild bool) error {
@@ -159,6 +224,26 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return err
 	}
 
+	// Said out loud, every time, by the program itself. A backend nobody has
+	// ever run is not the same kind of thing as one CI proves on every change,
+	// and a flag list that spells them the same way is the one place somebody
+	// choosing between them actually looks. It stays until somebody has run
+	// docs/testing-machines.md and said what happened.
+	if unproven[spec.Backend] {
+		_, _ = fmt.Fprintf(out, "warning: the %s backend has never been run by anybody\n"+
+			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
+			spec.Backend)
+	}
+
+	// Read before anything is built. One backend needs it at creation and the
+	// other writes it afterwards, and failing on a missing key after building a
+	// machine would leave one nobody can reach.
+	key, err := enrolledPublicKey()
+	if err != nil {
+		return err
+	}
+	spec.PublicKey = key
+
 	observed, err := backend.Inspect(ctx, name)
 	if err != nil {
 		return fmt.Errorf("cannot tell what is there: %w", err)
@@ -167,6 +252,9 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	switch action := machine.Plan(spec, observed); {
 	case rebuild && observed.State != machine.Absent:
 		_, _ = fmt.Fprintf(out, "destroying %q; images and containers inside it are lost\n", name)
+		// The same reason stopping does it: a session serving a machine that is
+		// about to be destroyed goes on answering for something gone.
+		stopSessionFor(cmd, name)
 		if err := backend.Destroy(ctx, name); err != nil {
 			return fmt.Errorf("destroying %s: %w", name, err)
 		}
@@ -216,61 +304,19 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	// on its localhost relay, which was measured refusing the connection while
 	// the machine was running and its agent listening (2026-08-11, the `a
 	// machine on wsl` job).
-	host, err := machine.Locate(ctx, spec.Backend, name)
-	if err != nil {
-		return err
-	}
-
-	if err := waitForAgent(ctx, host, spec.Port); err != nil {
+	if _, err := machine.Locate(ctx, spec.Backend, name, spec.Port); err != nil {
 		return err
 	}
 
 	// Enrolled every time, including when nothing else happened: it is how a
-	// rotated key reaches an existing machine without a rebuild.
-	key, err := enrolledPublicKey()
-	if err != nil {
-		return err
-	}
+	// rotated key reaches an existing machine without a rebuild. On a backend
+	// where that is impossible it reports rather than writes.
 	if err := backend.Enrol(ctx, name, spec.Account, key); err != nil {
 		return fmt.Errorf("enrolling this machine's key: %w", err)
 	}
 
 	return saveMachineWorkspace(cmd, name, spec)
 }
-
-// waitForAgent blocks until the machine's agent accepts a connection.
-//
-// A dial rather than a handshake: this is asking whether the listener is open,
-// and anything further is the session's job to report properly. The timeout is
-// generous because a machine's first start does more than a later one.
-func waitForAgent(ctx context.Context, host string, port int) error {
-	addr := net.JoinHostPort(host, fmt.Sprint(port))
-	deadline := time.Now().Add(agentStartTimeout)
-
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
-	return fmt.Errorf("the machine was created but its agent is not answering on %s\n"+
-		"  fix: `%s` shows what state it is in", addr, ourCommand("machine status"))
-}
-
-// agentStartTimeout is how long the agent has to open its listener.
-//
-// Longer than the agent's own wait for dockerd, deliberately. It gives the
-// daemon ninety seconds and then serves anyway, on the argument that a
-// workspace somebody can log into beats one that took the evidence with it --
-// so a client that waits ninety seconds gives up at the exact moment the agent
-// would have started answering, and reports a machine that was about to work.
-const agentStartTimeout = 3 * time.Minute
 
 // machinePlaceholderHost stands in for an address nobody should read. See
 // saveMachineWorkspace.
@@ -338,11 +384,39 @@ func newMachineStartCommand() *cobra.Command {
 		Short: "Start the machine",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
-				if err := b.Start(ctx, m.Name); err != nil {
+			return withMachine(cmd, args[0], func(ctx context.Context, _ machine.Backend, ws config.Workspace) error {
+				// Waited for, for the same reason create waits: "started" has
+				// to mean "usable". Starting a machine and returning leaves its
+				// agent still generating a host key and opening a listener, so
+				// whatever runs next races it and loses.
+				//
+				// Held while waiting, because a WSL machine nobody is in shuts
+				// down again -- a start that allowed that would be a command
+				// which reliably undid itself.
+				// Any session serving this workspace predates the machine
+				// being started, so it is holding a connection to a machine
+				// that was stopped -- and to an ADDRESS the machine no longer
+				// has, since it is given a new one at every boot. Left alone,
+				// the next docker command finds that endpoint reachable, uses
+				// it, and gets EOF from a session serving over a dead
+				// connection: an error naming a local pipe and nothing else.
+				//
+				// Together with the shutdown in `stop` this closes the race
+				// from both ends. `stop` can miss a session that was still
+				// starting and had not bound its endpoint yet; by the time
+				// `start` runs, it has.
+				stopSessionFor(cmd, args[0])
+
+				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
+				if err != nil {
 					return err
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", m.Name)
+				defer func() { _ = hold.Close() }()
+
+				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", ws.Machine.Name)
 				return nil
 			})
 		},
@@ -355,7 +429,15 @@ func newMachineStopCommand() *cobra.Command {
 		Short: "Stop the machine",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
+				m := ws.Machine
+				// The session goes first. It is holding this machine open and
+				// serving a Docker API backed by it, so stopping the machine
+				// underneath leaves a session answering for something that is
+				// gone -- which presents as the NEXT command failing with EOF
+				// on a local pipe, naming nothing that suggests a machine.
+				stopSessionFor(cmd, args[0])
+
 				if err := b.Stop(ctx, m.Name); err != nil {
 					return err
 				}
@@ -372,7 +454,8 @@ func newMachineStatusCommand() *cobra.Command {
 		Short: "Is the machine there, running, and built from the current settings?",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, m *config.Machine) error {
+			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
+				m := ws.Machine
 				observed, err := b.Inspect(ctx, m.Name)
 				if err != nil {
 					return err
@@ -406,7 +489,7 @@ func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
 type mObserved = machine.Observed
 
 // withMachine looks up a workspace's machine and hands it to fn.
-func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, *config.Machine) error) error {
+func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, config.Workspace) error) error {
 	file, err := config.Load("")
 	if err != nil {
 		return err
@@ -424,5 +507,5 @@ func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machi
 	if err != nil {
 		return err
 	}
-	return fn(cmd.Context(), backend, ws.Machine)
+	return fn(cmd.Context(), backend, ws)
 }

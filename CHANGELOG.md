@@ -8,6 +8,51 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### A workspace can now be a machine on your own computer
+
+`remote machine create <name>` provisions a Linux system here and registers it
+as an ordinary workspace: `remote ls` lists it, the docker context is created
+for it, and bind mounts, published ports and streams work exactly as they do
+against a host somewhere else. `remote rm` removes the workspace and destroys
+the machine with it. This is the answer to "I have no Linux host to point at",
+which on Windows is most people.
+
+Nothing is installed into a machine and no package manager runs on any path.
+The machine IS the workspace image's filesystem — the same artifact CI builds
+and tests on every push — so changing versions replaces it rather than upgrading
+it, and there is no half-finished install to be in. `remote machine rebuild` is
+therefore not a repair mode: it is the ordinary path run again. It discards the
+images and containers inside the machine; your files are never at risk, because
+they live on your machine and are served to it.
+
+- **WSL backend: proven end to end in CI** on every change, on a Windows runner.
+  Create, a `docker run` with a bind mount from the Windows side, idempotent
+  create, surviving stop and start with its containers, a background session
+  outliving three minutes of idleness, and `rm` taking the distribution with it.
+- **Hyper-V backend: shipped and NEVER EXECUTED.** No CI anywhere offers
+  Hyper-V and nobody working on this has it. Its decisions are unit tested as
+  far as a string can be and everything past `powershell.exe` is unproven.
+  `docs/testing-machines.md` is a runbook for whoever runs it first. Do not
+  believe it works.
+- The workspace rootfs is now published with each release
+  (`workspace-rootfs-amd64.tar.gz`), because getting one out of an image
+  otherwise needs docker — which is the thing being installed.
+
+Four things were found by measurement while building this, each of which had
+presented as an unexplained refused connection (ADR 0026):
+
+- `docker export` writes a filesystem, not an image: `ENV` and `PATH` are not in
+  the tarball, so a machine's environment has to be restored explicitly.
+- WSL2's localhost relay did not carry the connection at all on the runner. A
+  machine is reached at its own address.
+- That address is handed out at boot, so it is asked for at every connection and
+  never stored.
+- A machine with nobody in it shuts down, and neither an open TCP connection nor
+  a command that runs and exits counts as somebody. A session holds its machine
+  open for as long as it is connected.
+
 ## 0.1.0 — 2026-08-11
 
 The first release. There is no earlier version to compare against, so what
