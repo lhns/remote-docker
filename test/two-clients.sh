@@ -169,12 +169,22 @@ else
     bad "both machines were given the same port"
 fi
 
+# Pulled before anything reads command output. One daemon serves both machines
+# so this happens once, but it still has to happen first: an unpulled image puts
+# "Unable to find image locally" into the output an assertion is reading, and
+# then the assertion is about docker's progress messages rather than about the
+# file. per-user-dind.sh records the same finding; this suite repeated it.
+info "pulling the test image"
+dpc pull -q alpine:3 >/dev/null 2>&1 || info "could not pre-pull alpine:3"
+
 echo
 echo "== 6. each machine mounts ITS OWN files =="
 # The one that matters. Both bind a directory of their own at the same path
 # inside the container, and the volume names used to collide on rd-cwd.
-pc_saw=$(dpc run --rm -v "$WORK/project-$PC:/w" alpine:3 cat /w/marker 2>&1)
-phone_saw=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1)
+# The last line only: anything docker says on its way to running the container
+# is not the file, and reading it as the file is how this failed the first time.
+pc_saw=$(dpc run --rm -v "$WORK/project-$PC:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
+phone_saw=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
 
 if [ "$pc_saw" = "from the pc" ]; then
     ok "the pc's container read the pc's file"
@@ -203,7 +213,18 @@ echo "== 8. neither machine collects the other's volumes =="
 # must leave the other's alone. Losing one is not tidy: the daemon recreates a
 # missing named volume as an empty local one, so the container comes up with an
 # empty directory where the project should be.
-before=$(hostdocker exec "$CONTAINER" docker volume ls -q 2>/dev/null | grep -c '^rd-')
+# Named rather than counted. A count says "something survived", which is also
+# what a run that never created the second volume says, and that is exactly the
+# way this first reported a pass it had not earned.
+volumes() { hostdocker exec "$CONTAINER" docker volume ls -q 2>/dev/null | grep '^rd-' | sort; }
+
+before=$(volumes)
+echo "$before" | sed 's/^/    /'
+if [ "$(echo "$before" | grep -c .)" -ge 2 ]; then
+    ok "each machine created a volume of its own"
+else
+    bad "the two machines did not create two volumes"
+fi
 (
     cd "$WORK/project-$PC" || exit 1
     REMOTE_DOCKER_STATE_DIR="$WORK/state-$PC" \
@@ -212,17 +233,27 @@ before=$(hostdocker exec "$CONTAINER" docker volume ls -q 2>/dev/null | grep -c 
     REMOTE_DOCKER_USER="$ACCOUNT" \
         "$WORK/remote-docker" remote gc
 ) >/dev/null 2>&1
-after=$(hostdocker exec "$CONTAINER" docker volume ls -q 2>/dev/null | grep -c '^rd-')
+after=$(volumes)
 
-if [ "$before" -ge 2 ] && [ "$after" -ge 1 ]; then
-    ok "volumes survive the other machine's collection ($before -> $after)"
+# Every volume the pc did NOT create must still be there. The pc's own may go:
+# collecting those is what gc is for.
+for volume in $(echo "$before" | grep .); do
+    if ! echo "$after" | grep -qx "$volume"; then
+        # Naming what went, either way. One of them going is correct -- the
+        # pc's own is what gc is for -- and the phone still mounting below is
+        # the check on whether the right one went.
+        info "the pc's collection removed $volume"
+    fi
+done
+if [ "$(echo "$after" | grep -c .)" -ge 1 ]; then
+    ok "a volume survived the other machine's collection"
 else
-    bad "a collection on one machine took the other's volumes ($before -> $after)"
+    bad "a collection on one machine took every volume"
 fi
 
 # And the phone can still mount, which is what catches a volume having been
 # collected and recreated empty.
-phone_again=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1)
+phone_again=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
 if [ "$phone_again" = "from the phone" ]; then
     ok "the phone still mounts its own directory after the pc collected"
 else
