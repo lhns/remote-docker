@@ -76,13 +76,16 @@ dump_agent_log() {
     tail -"${2:-40}" "$WORK/agent-$1.log" 2>/dev/null | sed 's/^/        /'
 }
 
-# session starts a client in the background against one endpoint.
+# session starts a client in the background against the configured endpoint.
+#
+# The workspace comes from the environment rather than from flags, as it does
+# in the other suites, so every client command sees it and not only the one
+# that opens the session. REMOTE_DOCKER_ENDPOINT is a PATH and not a URL: the
+# client puts the unix:// on itself, and passing one produced a DOCKER_HOST of
+# `unix://unix:///...` and a socket nothing was ever going to find.
 session() {
-    local sock=$1 log=$2
-    (cd "$WORK/project" && REMOTE_DOCKER_STATE_DIR="$WORK/state" \
-        "$WORK/remote-docker" remote start --foreground \
-        --host 127.0.0.1 --port "$SSH_PORT" --user "$ACCOUNT" \
-        --endpoint "unix://$sock" >"$log" 2>&1) &
+    local log=$1
+    (cd "$WORK/project" && "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
     CLIENT_PID=$!
 }
 

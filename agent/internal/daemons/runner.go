@@ -61,6 +61,20 @@ type Manager struct {
 	// Log receives progress. Nil means silence.
 	Log *slog.Logger
 
+	// IDs resolves an account to the uid and gid that must own its socket.
+	//
+	// Injected, because this package cannot work it out. The unix user behind
+	// an account is `rd-<account>` (ADR 0025) or, on a workspace older than
+	// that, the bare name -- and the accounts store already holds the answer
+	// for both. Deriving it here would put the naming rule in a second place,
+	// which is how the socket came to be left owned by root: user.Lookup of
+	// the ACCOUNT name found nothing, the chown never happened, and every
+	// account got "permission denied" from its own daemon.
+	//
+	// Nil falls back to looking the account name up directly, which is what
+	// the tests and an unprefixed workspace need.
+	IDs func(account string) (uid, gid int, err error)
+
 	mu      sync.Mutex
 	byName  map[string]*Daemon
 	pending map[string]chan struct{}
@@ -491,7 +505,7 @@ func labelValue(labels, key string) string {
 // daemon and nobody else can reach it at all, which is what lets the shared
 // `docker` group go away.
 func (m *Manager) chown(account, socket string) error {
-	uid, gid, err := lookupIDs(account)
+	uid, gid, err := m.ids(account)
 	if err != nil {
 		return err
 	}
@@ -505,6 +519,14 @@ func (m *Manager) chown(account, socket string) error {
 		return err
 	}
 	return os.Chmod(socket, 0o660)
+}
+
+// ids resolves an account to the uid and gid that own its socket.
+func (m *Manager) ids(account string) (int, int, error) {
+	if m.IDs != nil {
+		return m.IDs(account)
+	}
+	return lookupIDs(account)
 }
 
 // log is the manager's logger, or silence. A nil *slog.Logger panics on use

@@ -154,7 +154,7 @@ sequenceDiagram
 
     U->>CLI: docker run -v $PWD:/app img
     CLI->>CLI: resolve the registry login<br/>from THIS machine's config or keychain
-    CLI->>EP: POST /images/create, X-Registry-Auth: &lt;token&gt;
+    CLI->>EP: POST /images/create, X-Registry-Auth: your token
     EP->>D: forwarded verbatim
     D->>D: pull, authenticating AS YOU
     CLI->>EP: POST /containers/create
@@ -339,7 +339,7 @@ sequenceDiagram
 
     W->>Ch: FSEvent{export:/m/ab12, path:/src/a.ts, op:write}
     Ch->>Ag: validate on arrival
-    Ag->>Ag: export is /cwd or /m/&lt;16 hex&gt;?
+    Ag->>Ag: export is /cwd, or /m/ and 16 hex?
     Ag->>Ag: path whitelisted? (never path.Clean)
     Ag->>Ag: resolve volume, relocate under the daemon's root
     Ag->>Ag: containment re-checked after the join
@@ -390,7 +390,7 @@ sequenceDiagram
     Sock->>Child: started
     Child->>Child: WORKSPACE_ELEVATED=1
     Note over Child: the guard against forking<br/>containers until the node falls over
-    Task-->>Task: exit; the child serves
+    Task-->>Task: exit, and the child serves
 ```
 
 **E — the socket mount is the trust boundary (1, 2).** Access to the node's

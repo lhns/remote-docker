@@ -224,6 +224,18 @@ func serve(addr string) error {
 				StorageDriver: storage,
 			},
 			Log: logger("daemons"),
+
+			// The store is the authority on an account's uid: it allocated it,
+			// and it knows the unix user behind the name. Asking the passwd
+			// file for the ACCOUNT name would find nothing now that the unix
+			// user is prefixed.
+			IDs: func(account string) (int, int, error) {
+				a, ok := store.Lookup(account)
+				if !ok {
+					return 0, 0, fmt.Errorf("no such account: %s", account)
+				}
+				return a.UID, a.GID, nil
+			},
 		}
 		targets = manager
 		log.Info("each account gets its own docker daemon", "workspace", id)
