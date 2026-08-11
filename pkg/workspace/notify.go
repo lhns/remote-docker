@@ -112,7 +112,7 @@ func (e FSEvent) Validate() error {
 	// VolumeNameForExport accepts exactly /cwd and /m/<16 hex> and rejects
 	// everything else, which is the same set the agent can resolve to a
 	// volume. Reusing it means the two cannot drift apart.
-	if _, err := VolumeNameForExport(e.Export); err != nil {
+	if err := ValidExport(e.Export); err != nil {
 		return fmt.Errorf("workspace: notify event export: %w", err)
 	}
 	if err := validateSharePath(e.Path); err != nil {

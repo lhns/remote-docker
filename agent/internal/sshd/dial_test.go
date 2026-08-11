@@ -41,7 +41,7 @@ func TestAllowDialRefusesNonLoopback(t *testing.T) {
 func TestAllowDialRefusesAnotherAccountsTunnel(t *testing.T) {
 	p := newPolicy()
 
-	if !p.Bind(alice, "127.0.0.1", 30000) {
+	if _, ok := p.Bind(alice, "127.0.0.1", 30000); !ok {
 		t.Fatal("alice could not take her own port, so this proves nothing")
 	}
 
@@ -77,8 +77,8 @@ func TestAllowDialLeavesUnheldPortsAlone(t *testing.T) {
 func TestAllowDialAfterRelease(t *testing.T) {
 	p := newPolicy()
 
-	p.Bind(alice, "127.0.0.1", 30000)
-	p.Release(alice, "127.0.0.1", 30000)
+	token, _ := p.Bind(alice, "127.0.0.1", 30000)
+	p.Release(token, "127.0.0.1", 30000)
 
 	if ok, why := p.AllowDial(bob, "127.0.0.1", 30000); !ok {
 		t.Errorf("a released port stayed protected: %s", why)

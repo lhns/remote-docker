@@ -13,6 +13,7 @@ import (
 type fakeConn struct {
 	id     int
 	closed atomic.Bool
+	dead   atomic.Bool
 }
 
 // gateFixture builds a gate over fake connections and records what it did.
@@ -23,8 +24,9 @@ type gateFixture struct {
 	opened int
 	conns  []*fakeConn
 
-	busy    bool
-	busyErr error
+	busy      bool
+	busyErr   error
+	busyCalls int
 }
 
 func newGate(t *testing.T, idle time.Duration) *gateFixture {
@@ -43,9 +45,11 @@ func newGate(t *testing.T, idle time.Duration) *gateFixture {
 		busy: func(context.Context, *fakeConn) (bool, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			f.busyCalls++
 			return f.busy, f.busyErr
 		},
-		idle: idle,
+		alive: func(c *fakeConn) bool { return !c.dead.Load() },
+		idle:  idle,
 	}
 	return f
 }
@@ -259,4 +263,195 @@ func TestGateIsSafeUnderConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 	f.gate.close()
+}
+
+// A connection that died is replaced, not handed out again.
+//
+// Nothing used to clear held, so every request after a drop was given the same
+// dead connection and failed in a way that read as the workspace refusing.
+func TestGateReplacesADeadConnection(t *testing.T) {
+	f := newGate(t, time.Minute)
+	ctx := context.Background()
+
+	conn, release, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+	conn.dead.Store(true)
+
+	again, release2, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire after the drop: %v", err)
+	}
+	defer release2()
+
+	if again == conn {
+		t.Fatal("the dead connection was handed out again")
+	}
+	if !conn.closed.Load() {
+		t.Error("the dead connection was dropped without being shut")
+	}
+	if n := f.openCount(); n != 2 {
+		t.Errorf("opened %d connections, want 2", n)
+	}
+	if drops, _ := f.gate.dropped(); drops != 1 {
+		t.Errorf("counted %d drops, want 1", drops)
+	}
+}
+
+// The wedge itself: a dead connection must be DROPPED rather than asked whether
+// anything depends on it.
+//
+// busy fails over a dead transport, and "cannot tell means keep" then held the
+// connection forever, so the session could never reopen and `remote restart`
+// was the only way out.
+func TestGateDropsADeadConnectionWithoutAskingIt(t *testing.T) {
+	f := newGate(t, time.Millisecond)
+	ctx := context.Background()
+
+	conn, release, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+
+	conn.dead.Store(true)
+	f.setBusy(false, errors.New("connection is dead"))
+	time.Sleep(2 * time.Millisecond)
+
+	if !f.gate.sweep(ctx) {
+		t.Fatal("the sweep kept a dead connection")
+	}
+	f.mu.Lock()
+	calls := f.busyCalls
+	f.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("the dead connection was asked whether it was busy %d times", calls)
+	}
+}
+
+// Whatever arrives together, the dead connection is shut once.
+func TestGateShutsADeadConnectionOnce(t *testing.T) {
+	f := newGate(t, time.Minute)
+	ctx := context.Background()
+
+	conn, release, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+
+	var shuts atomic.Int32
+	f.gate.shut = func(c *fakeConn) {
+		c.closed.Store(true)
+		shuts.Add(1)
+	}
+	conn.dead.Store(true)
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			c, rel, err := f.gate.acquire(ctx)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if c.dead.Load() {
+				t.Error("a dead connection was handed out")
+			}
+			rel()
+		})
+	}
+	wg.Wait()
+
+	if n := shuts.Load(); n != 1 {
+		t.Errorf("the dead connection was shut %d times, want 1", n)
+	}
+}
+
+// A lease outstanding over a connection that then dies must still release
+// cleanly, and must not make the gate think a live connection is in use by
+// somebody who has gone.
+//
+// The lease count is over LEASES, not over the connection currently held, so a
+// stream opened before the drop still decrements when it closes. Zeroing the
+// count on invalidate would drive it negative here.
+func TestGateDeadConnectionWithALeaseOutstanding(t *testing.T) {
+	f := newGate(t, time.Millisecond)
+	ctx := context.Background()
+
+	conn, releaseOld, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	conn.dead.Store(true)
+
+	fresh, releaseNew, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire after the drop: %v", err)
+	}
+	if fresh == conn {
+		t.Fatal("the dead connection was handed out again")
+	}
+	releaseNew()
+
+	// The stream over the dead connection notices and closes.
+	releaseOld()
+
+	time.Sleep(2 * time.Millisecond)
+	if !f.gate.sweep(ctx) {
+		t.Error("the fresh connection could not be released once idle")
+	}
+}
+
+// Aliveness is optional: a gate over something with no transport must behave
+// exactly as it did.
+func TestGateWithoutALivenessCheck(t *testing.T) {
+	f := newGate(t, time.Minute)
+	f.gate.alive = nil
+	ctx := context.Background()
+
+	conn, release, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+	conn.dead.Store(true)
+
+	again, release2, err := f.gate.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer release2()
+	if again != conn {
+		t.Error("a gate with no liveness check replaced its connection")
+	}
+}
+
+// currentLive answers what Status asks: not "do we hold one" but "have we got
+// one".
+func TestCurrentLive(t *testing.T) {
+	f := newGate(t, time.Minute)
+
+	if _, ok := f.gate.currentLive(); ok {
+		t.Error("a gate holding nothing reported a live connection")
+	}
+
+	conn, release, err := f.gate.acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+	if _, ok := f.gate.currentLive(); !ok {
+		t.Error("a live connection was reported dead")
+	}
+
+	conn.dead.Store(true)
+	if _, ok := f.gate.currentLive(); ok {
+		t.Error("a dead connection was reported live")
+	}
+	if _, ok := f.gate.current(); !ok {
+		t.Error("current stopped reporting what is held")
+	}
 }

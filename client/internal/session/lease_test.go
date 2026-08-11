@@ -118,7 +118,7 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 
 	// Another account's managed volume carries the same prefix and must not
 	// be claimed.
-	theirs := workspace.VolumeNameForID(workspace.ShareID("/somebody/elses/project"))
+	theirs := workspace.VolumeNameForID("", workspace.ShareID("/somebody/elses/project"))
 	if ours[theirs] {
 		t.Errorf("claimed %s, which belongs to another session", theirs)
 	}

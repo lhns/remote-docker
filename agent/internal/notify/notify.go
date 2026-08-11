@@ -58,7 +58,14 @@ const mountpointTTL = 10 * time.Second
 type Replayer struct {
 	Volumes Volumes
 	Poker   Poker
-	Log     *slog.Logger
+
+	// Client is the machine whose session this is, which is what names the
+	// volume an export lives in. A poke has to reach the same volume the
+	// client's rewriter created, and two of an account's machines have
+	// different ones for the same directory.
+	Client string
+
+	Log *slog.Logger
 
 	mu     sync.Mutex
 	cached map[string]cachedMountpoint
@@ -213,7 +220,7 @@ func (r *Replayer) root(ctx context.Context, export string) (string, bool) {
 }
 
 func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error) {
-	volume, err := workspace.VolumeNameForExport(export)
+	volume, err := workspace.VolumeNameForExport(r.Client, export)
 	if err != nil {
 		return "", err
 	}

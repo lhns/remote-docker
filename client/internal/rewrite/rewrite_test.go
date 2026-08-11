@@ -76,7 +76,7 @@ func TestRewriteBinds(t *testing.T) {
 	binds := decodeHostConfig(t, out)["Binds"].([]any)
 	got := binds[0].(string)
 
-	wantVolume := workspace.VolumeNameForID(workspace.ShareID("/home/alice/project"))
+	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))
 	want := wantVolume + ":/app:ro"
 	if got != want {
 		t.Errorf("bind = %q, want %q", got, want)
@@ -137,7 +137,7 @@ func TestRewriteBindOutsideTheWorkingDirectory(t *testing.T) {
 		t.Errorf("first bind = %q, want the cwd volume", first)
 	}
 	second := binds[1].(string)
-	wantVolume := workspace.VolumeNameForID(workspace.ShareID("/mnt/data"))
+	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/mnt/data"))
 	if second != wantVolume+":/data" {
 		t.Errorf("second bind = %q, want %q", second, wantVolume+":/data")
 	}
@@ -187,7 +187,7 @@ func TestRewriteMounts(t *testing.T) {
 	if first["Type"] != "volume" {
 		t.Errorf("Type = %v, want volume", first["Type"])
 	}
-	wantVolume := workspace.VolumeNameForID(workspace.ShareID("/home/alice/src"))
+	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/src"))
 	if first["Source"] != wantVolume {
 		t.Errorf("Source = %v, want %q", first["Source"], wantVolume)
 	}
@@ -422,7 +422,7 @@ func TestRewritePreservesVolumeDriver(t *testing.T) {
 
 	// Ours is created explicitly with the local driver, so the name is already
 	// taken by the time the container is created.
-	wantVolume := workspace.VolumeNameForID(workspace.ShareID("/src"))
+	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/src"))
 	if _, ok := volumes.created[wantVolume]; !ok {
 		t.Errorf("volume %q was not created ahead of the container", wantVolume)
 	}

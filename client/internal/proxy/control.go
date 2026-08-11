@@ -130,6 +130,17 @@ type Status struct {
 	Since     string   `json:"since"`
 	Watching  string   `json:"watching,omitempty"`
 	Shares    []string `json:"shares,omitempty"`
+
+	// Drops is how many times this session has found its connection dead and
+	// opened another, and LastDrop when it last did.
+	//
+	// Reported because reconnecting is invisible otherwise: a session that
+	// does it once is working, one that does it every few minutes is a link
+	// worth looking at, and neither can be told from the outside. Carried with
+	// the time so "twice, an hour ago" reads differently from "twice, just
+	// now"; a session that recovered is not a session with a problem.
+	Drops    int    `json:"drops,omitempty"`
+	LastDrop string `json:"lastDrop,omitempty"`
 }
 
 // Idle is what the daemon reports about whether it can be ended.

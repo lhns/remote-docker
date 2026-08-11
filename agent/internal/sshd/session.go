@@ -78,7 +78,11 @@ const infoQueryTimeout = 5 * time.Second
 
 // serveInfo answers the client's parameters from the shared contract.
 func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
-	port, err := s.cfg.Mapping.PortForUID(account.UID())
+	// The port belongs to this MACHINE, not just to the account (ADR 0029).
+	// The uid still decides the first one, so a workspace anybody reaches from
+	// one computer is on exactly the port it always was; a second computer is
+	// given one of its own rather than being refused the first one's.
+	port, err := s.cfg.Ports.For(account.Name(), account.UID(), account.Client())
 	if err != nil {
 		_, _ = fmt.Fprintln(session.Stderr(), "workspace-info:", err)
 		_ = session.Exit(1)
@@ -171,7 +175,10 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	replayer := &notify.Replayer{
 		Volumes: volumes,
 		Poker:   notify.SyscallPoker{},
-		Log:     s.cfg.Log,
+		// The volume an export lives in belongs to the machine that created
+		// it, so a poke has to name the same one the client's rewriter did.
+		Client: account.Client(),
+		Log:    s.cfg.Log,
 	}
 	if err := replayer.Serve(session.Context(), session); err != nil {
 		s.log().Info("a notify session ended", "account", account.Name(), "err", err)

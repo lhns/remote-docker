@@ -64,8 +64,18 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 	}
 	ours := s.ourVolumes()
 	for _, c := range containers {
+		// This account's containers, started from THIS machine. Scoped by
+		// client as well, because one account used from two computers labels
+		// both the same: without it, machine A could never release its
+		// connection while machine B had anything running, which is ADR 0015's
+		// idle release quietly becoming unreachable.
+		//
+		// A container with no client label was started before machines were
+		// named, and counts: it may well be this one's.
 		if c.Labels[rewrite.OwnerLabel] == live.info.User {
-			return true, nil
+			if client := c.Labels[rewrite.ClientLabel]; client == "" || client == s.clientID {
+				return true, nil
+			}
 		}
 		for _, m := range c.Mounts {
 			if m.Type == "volume" && ours[m.Name] {
@@ -85,7 +95,7 @@ func (s *Session) ourVolumes() map[string]bool {
 	shares := s.registry.Shares()
 	out := make(map[string]bool, len(shares))
 	for _, share := range shares {
-		if name, err := workspace.VolumeNameForExport(share.ExportPath); err == nil {
+		if name, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath); err == nil {
 			out[name] = true
 		}
 	}
@@ -115,14 +125,66 @@ func (live *liveConn) close() {
 	}
 }
 
+// CollectOptions widens what a collection is allowed to remove.
+type CollectOptions struct {
+	// Orphans also removes unused share volumes that name no machine.
+	//
+	// Those are what a version before machines were named left behind, or what
+	// this machine left when its key was replaced. Asked for rather than
+	// assumed, because "names no machine" is not "mine": another of this
+	// account's machines running an older build may still be using one.
+	Orphans bool
+}
+
 // Collect removes share volumes this account is no longer using.
-func (s *Session) Collect(ctx context.Context) (int, error) {
+func (s *Session) Collect(ctx context.Context, opts ...CollectOptions) (int, error) {
 	live, done, err := s.acquire(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer done()
-	return s.collector(live).Collect(ctx)
+
+	collector := s.collector(live)
+	if len(opts) > 0 && opts[0].Orphans {
+		// Widened to volumes naming no machine, and NOT to every machine's:
+		// clearing Client entirely would collect the other computer's, which
+		// is the failure the scoping exists to prevent.
+		collector.Orphans = true
+	}
+
+	n, err := collector.Collect(ctx)
+	if err == nil {
+		s.pruneShareRecord(ctx, live)
+	}
+	return n, err
+}
+
+// pruneShareRecord drops what this workspace no longer has a volume for.
+//
+// The record exists to answer a mount, so an entry whose volume is gone can
+// never be asked for again. Best effort and after the collection: failing to
+// tidy a record is not a reason to report a collection that happened as a
+// failure.
+func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
+	if s.shares == nil {
+		return
+	}
+
+	volumes, err := live.api.ListVolumes(ctx)
+	if err != nil {
+		return
+	}
+	keep := make(map[string]bool, len(volumes))
+	for _, v := range volumes {
+		client, share, ok := workspace.ParseVolumeName(v.Name)
+		if !ok || (client != "" && client != s.clientID) {
+			continue
+		}
+		if share != "cwd" {
+			keep[workspace.ExportPathForID(share)] = true
+		}
+	}
+	s.shares.forget(keep)
 }
 
 func (s *Session) collector(live *liveConn) *rewrite.Collector {
@@ -131,6 +193,7 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 		Remover: live.api,
 		InUse:   live.api,
 		Owner:   live.info.User,
+		Client:  s.clientID,
 		Guard:   live.guard,
 		Log:     s.opts.Log,
 	}
@@ -145,7 +208,7 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 // volume that must survive collection.
 func (s *Session) exportsVolume(volume string) bool {
 	for _, share := range s.registry.Shares() {
-		name, err := workspace.VolumeNameForExport(share.ExportPath)
+		name, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath)
 		if err != nil {
 			continue
 		}
@@ -163,7 +226,10 @@ func (s *Session) exportsVolume(volume string) bool {
 // daemon asked to describe itself must not go and establish a connection it
 // had let go, which would make asking the question change the answer.
 func (s *Session) Status() any {
-	live, connected := s.gate.current()
+	// currentLive, not current: a session holding a connection that has died
+	// is not connected, and saying so is the difference between `status`
+	// reporting the truth and reporting a field.
+	live, connected := s.gate.currentLive()
 	st := proxy.Status{
 		Version:   s.opts.Version,
 		Workspace: s.opts.Config.Name,
@@ -174,6 +240,10 @@ func (s *Session) Status() any {
 		Connected: connected,
 		Since:     s.started.Format(time.RFC3339),
 		Tracing:   proxy.Tracing(),
+	}
+	if drops, last := s.gate.dropped(); drops > 0 {
+		st.Drops = drops
+		st.LastDrop = last.Format(time.RFC3339)
 	}
 	if connected {
 		st.User = live.info.User
@@ -236,7 +306,11 @@ func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	}
 	quiet := time.Since(last)
 
-	live, connected := s.gate.current()
+	// currentLive, so a dead connection takes the "nothing depends on this"
+	// branch instead of being asked over a transport that cannot answer. That
+	// is also what stops `remote restart` refusing on a session whose
+	// connection dropped, which used to leave --force as the only way out.
+	live, connected := s.gate.currentLive()
 	if !connected {
 		return quiet, true
 	}

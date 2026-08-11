@@ -211,6 +211,50 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
+- **A recorded export is a capability the workspace may name, never a path it
+  may supply.** The registry is per process and a volume outlives one, so
+  `compose up -d` on containers that already exist starts them without creating
+  them, registers nothing, and the mount for the volume made last time is
+  answered "no such file or directory" against a directory that is right there
+  (ADR 0027). The record fixes that, and it is checked again every time it is
+  read: the id is RECOMPUTED from the path, the file is bound to this host and
+  account and refused wholesale if either differs, and `/cwd` is never restored.
+  Restore only from a MOUNT that missed; `Lookup` and `Shares` must never
+  resurrect, or "in use" depends on who asked. And never feed the record to
+  `rewrite.Guard`: a stopped container already pins its volume, so the collector
+  was never the hazard, and doing so would keep every recorded volume alive
+  until the record expired.
+
+- **A gate hands out a connection only after asking whether it is alive, and a
+  dead one is dropped rather than asked whether anything depends on it.**
+  Detection existed and went nowhere: the keepalive closed the SSH client and
+  told nobody, so `held` still meant "we have one" and every later request got
+  the corpse. The sweep then asked that corpse whether it was busy, got an
+  error, and "cannot tell means keep" made it unreleasable, so the session
+  wedged until `remote restart` -- which also refused, because `IdleFor` asked
+  the same dead connection. `alive` must never do I/O: it runs before every
+  request, where `busy`'s round trip cannot.
+
+- **The account is the identity and the machine is the client.** One account's
+  machines share the daemon, and therefore containers and images, which is the
+  point of using one account from both. They do not share files, because those
+  are on one machine, so the export, its port and the volumes behind it are per
+  CLIENT (ADR 0029). The client is the digest of the key the agent has already
+  authenticated: stable per machine, and impossible to claim, which an id the
+  client sent would not be. The uid still decides an account's FIRST port, so
+  nothing renumbers; `accounts.Ports` allocates the rest and `Allow` asks it
+  rather than recomputing `PortForUID`, because recomputing would refuse a port
+  the agent had just handed out.
+
+- **A port reservation belongs to a session, not to an account.** One listener
+  can hold a port, so `Bind` refuses anybody who is not already nobody,
+  including a second session of the same account, and `Release` takes the token
+  minted when the reservation was taken. Releasing by name meant a second
+  machine's FAILED bind deleted the first machine's live reservation, after
+  which `AllowDial` reported the port as free and, on a shared daemon (ADR
+  0012), any other account could reach an NFS export that authenticates nobody.
+  An ordinary action reached it: opening the client on a second machine.
+
 - **Never range a map to assign something durable.** Account uids are handed
   out in `accounts.reconcile`, which used to range the `found` map -- so which
   account got which uid, and therefore which reverse-tunnel port, differed
@@ -413,6 +457,14 @@ tunnel was bound inside that account's netns), that both publish the same port
 at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
 is in the `docker` group, and that restarting the agent adopts the running
 daemons with their containers intact.
+
+A suite of its own, `test/two-clients.sh`, runs ONE account from TWO client
+machines at the same time (ADR 0029): two state directories with a key each,
+both enrolled in one key file. It proves neither is refused its reverse tunnel,
+that the workspace recorded a different port for each, that each container reads
+ITS OWN machine's file through a bind mount, that both see a container the other
+started, and that a collection on one leaves the other's volumes alone and its
+mounts working.
 
 A fourth suite, `.github/workflows/machine.yml`, is the only one that runs a
 WINDOWS machine end to end. A Linux job exports the workspace image as a rootfs;

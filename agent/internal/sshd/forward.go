@@ -12,6 +12,19 @@ import (
 type Account interface {
 	Name() string
 	UID() int
+
+	// Client names the machine the session came from. Empty means a client
+	// too old to be named, which gets the uid-derived port.
+	Client() string
+}
+
+// PortOwner answers which reverse-tunnel ports an account has been given.
+//
+// An interface rather than the allocator itself, so the policy can be tested
+// without a state directory and so the rule reads as a question rather than as
+// arithmetic. Nil falls back to the mapping, which is one port per account.
+type PortOwner interface {
+	Owns(account string, uid, port int) bool
 }
 
 // ForwardPolicy decides which loopback ports an account may bind.
@@ -26,13 +39,39 @@ type Account interface {
 type ForwardPolicy struct {
 	Mapping workspace.Mapping
 
-	mu    sync.Mutex
-	bound map[string]string // "host:port" -> account that holds it
+	// Ports is what an account has actually been given, which is more than the
+	// uid decides once one account is used from two machines (ADR 0029).
+	Ports PortOwner
+
+	mu sync.Mutex
+	// next is the last token handed out. Pre-incremented, so the first is 1
+	// and ZERO IS NEVER A LIVE RESERVATION -- which is what Bind returns when
+	// it refuses, so a caller that released without checking cannot match
+	// somebody else's entry.
+	//
+	// A counter rather than anything unguessable: it never leaves this
+	// process, and the only code that can present one is the code Bind handed
+	// it to.
+	next  uint64
+	bound map[string]reservation
+}
+
+// reservation is one held port, and WHICH session holds it.
+//
+// The token is the whole point. Keyed by account name, a reservation could be
+// released by any session of that account, including one that had just failed
+// to bind: a second machine's failed attempt deleted the first machine's live
+// reservation, after which AllowDial reported the port as free and, on a shared
+// daemon (ADR 0012), another account could reach an NFS export that
+// authenticates nobody.
+type reservation struct {
+	account string
+	token   uint64
 }
 
 // NewForwardPolicy returns a policy over the given uid/port mapping.
 func NewForwardPolicy(mapping workspace.Mapping) *ForwardPolicy {
-	return &ForwardPolicy{Mapping: mapping, bound: map[string]string{}}
+	return &ForwardPolicy{Mapping: mapping, bound: map[string]reservation{}}
 }
 
 // Allow reports whether an account may bind host:port, and why not if it may
@@ -47,23 +86,29 @@ func NewForwardPolicy(mapping workspace.Mapping) *ForwardPolicy {
 //     binding another's port before they connect and serving them a
 //     filesystem of the attacker's choosing.
 //  3. one holder at a time, so a second session cannot displace the first's
-//     tunnel and silently take over its mounts.
+//     tunnel and silently take over its mounts. Enforced by Bind rather than
+//     here: this rule refuses another ACCOUNT, and Bind refuses anybody at all,
+//     including a second session of this one.
 func (p *ForwardPolicy) Allow(account Account, host string, port uint32) (bool, string) {
 	if !isLoopback(host) {
 		return false, "only loopback addresses may be forwarded: the NFS export is unauthenticated"
 	}
 
-	want, err := p.Mapping.PortForUID(account.UID())
-	if err != nil {
-		return false, "this account has no reverse-tunnel port"
-	}
-	if int(port) != want {
-		return false, "this account may only bind port " + strconv.Itoa(want)
+	// Asked of the allocator rather than computed, because the agent is what
+	// hands ports out once an account has more than one machine, and a rule
+	// that recomputed the answer would refuse a port the agent itself had just
+	// told a client to use.
+	if !p.owns(account, int(port)) {
+		want, err := p.Mapping.PortForUID(account.UID())
+		if err != nil {
+			return false, "this account has no reverse-tunnel port"
+		}
+		return false, "this account may only bind the port it was given, " + strconv.Itoa(want)
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if holder, taken := p.bound[key(host, port)]; taken && holder != account.Name() {
+	if res, taken := p.bound[key(host, port)]; taken && res.account != account.Name() {
 		return false, "that port is held by another session"
 	}
 	return true, ""
@@ -99,28 +144,47 @@ func (p *ForwardPolicy) AllowDial(account Account, host string, port uint32) (bo
 	return true, ""
 }
 
-// Bind records that an account holds a port. It returns false if somebody else
-// already does.
-func (p *ForwardPolicy) Bind(account Account, host string, port uint32) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	k := key(host, port)
-	if holder, taken := p.bound[k]; taken && holder != account.Name() {
-		return false
+// owns reports whether this account is entitled to a port.
+func (p *ForwardPolicy) owns(account Account, port int) bool {
+	if p.Ports != nil {
+		return p.Ports.Owns(account.Name(), account.UID(), port)
 	}
-	p.bound[k] = account.Name()
-	return true
+	want, err := p.Mapping.PortForUID(account.UID())
+	return err == nil && port == want
 }
 
-// Release gives a port up. Only the holder can, so a session ending cannot
-// release a port another session has since taken.
-func (p *ForwardPolicy) Release(account Account, host string, port uint32) {
+// Bind records that a session holds a port, returning the token that releases
+// it again. It refuses if anybody already holds that port, including another
+// session of the same account.
+//
+// Refusing a second session of one account is not a policy about accounts, it
+// is the truth about the port: one listener can hold it, and pretending
+// otherwise is what let a failed attempt speak for the session that had
+// succeeded. A client whose previous connection is still being torn down is
+// refused here rather than allowed to take a port its own live listener is
+// using.
+func (p *ForwardPolicy) Bind(account Account, host string, port uint32) (uint64, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	k := key(host, port)
-	if p.bound[k] == account.Name() {
+	if _, taken := p.bound[k]; taken {
+		return 0, false
+	}
+	p.next++
+	p.bound[k] = reservation{account: account.Name(), token: p.next}
+	return p.next, true
+}
+
+// Release gives a port up. Only the session holding it can, so neither a
+// session ending nor one failing to bind can release a port another session
+// holds.
+func (p *ForwardPolicy) Release(token uint64, host string, port uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	k := key(host, port)
+	if res, taken := p.bound[k]; taken && res.token == token {
 		delete(p.bound, k)
 	}
 }
@@ -129,8 +193,8 @@ func (p *ForwardPolicy) Release(account Account, host string, port uint32) {
 func (p *ForwardPolicy) Holder(host string, port uint32) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	holder, ok := p.bound[key(host, port)]
-	return holder, ok
+	res, ok := p.bound[key(host, port)]
+	return res.account, ok
 }
 
 func key(host string, port uint32) string {

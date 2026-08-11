@@ -20,6 +20,11 @@ shows somebody else's work. `docker system prune` removes it. A name collision
 on `rd-cwd` hands one account another's volume, complete with the first
 account's NFS port.
 
+That collision was later found one level down, between one account's own
+machines, and it is fixed rather than separated: a volume carries the CLIENT
+that created it (ADR 0029), so `rd-cwd` no longer exists as a name two parties
+can both derive.
+
 The requirement that shaped the answer: **one SSH port.** One published port,
 one Swarm service, one address to hand out.
 

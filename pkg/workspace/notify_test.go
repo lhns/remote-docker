@@ -162,10 +162,10 @@ func TestFSOpString(t *testing.T) {
 // mysteriously do not work for this one share".
 func TestValidateExportMatchesVolumeResolution(t *testing.T) {
 	for _, export := range []string{"/cwd", "/m/0123456789abcdef", "/m/zzz", "/etc", "", "/m/"} {
-		_, volErr := VolumeNameForExport(export)
+		volErr := ValidExport(export)
 		evErr := FSEvent{Export: export, Path: "/a", Op: OpWrite}.Validate()
 		if (volErr == nil) != (evErr == nil) {
-			t.Errorf("export %q: VolumeNameForExport err=%v but Validate err=%v", export, volErr, evErr)
+			t.Errorf("export %q: ValidExport err=%v but Validate err=%v", export, volErr, evErr)
 		}
 	}
 }
