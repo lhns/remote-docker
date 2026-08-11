@@ -279,6 +279,48 @@ has written.
 The container is privileged, because dind runs its own daemon, sets up its own
 bridge and iptables rules, and mounts NFS in its own namespace.
 
+### On a VM, with no container
+
+The same binary, as a systemd service, when the workspace is a machine rather
+than an image ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Nothing
+about the agent changes: it obeys the same switches, and the one that differs
+is `WORKSPACE_ENABLE_DIND=false`, because the machine already has a dockerd and
+a second would fight it for the socket.
+
+```bash
+tar xf remote-dockerd_<version>_linux_amd64.tar.gz
+install -m 0755 remote-dockerd /usr/local/bin/
+install -d -m 0700 /etc/workspace/authorized_keys.d /etc/workspace/host_keys
+install -D -m 0600 remote-dockerd.env.example /etc/remote-docker/env
+install -m 0644 remote-dockerd.service /etc/systemd/system/
+systemctl enable --now remote-dockerd
+
+cp /path/to/alice.pub /etc/workspace/authorized_keys.d/alice.pub
+```
+
+What the machine has to provide, which depends on the daemon mode:
+
+| | a daemon per account (default) | one shared daemon |
+|---|---|---|
+| docker engine, CLI on `PATH` | yes | yes |
+| `useradd` / `usermod` (shadow) | yes | yes |
+| NFS client (`nfs-common`) | no | **yes** |
+
+The last row is the one that catches people. With a daemon per account the NFS
+mount happens inside `docker:dind`, which ships an NFS client; with one shared
+daemon this machine mounts, and a missing client shows up as a container that
+will not start, naming the volume rather than the package.
+
+`/etc/workspace` must persist for the same reason `state/` does above: it holds
+the host keys and the uid map.
+
+Two things are worth knowing before running this on a machine that does other
+work. Enrolled keys become **real users on that machine**, not disposable
+container ones. And a per-account daemon is separation, not isolation
+([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)) — each runs privileged, so
+an account that breaks out of one reaches the VM itself rather than a workspace
+container somebody can recreate.
+
 ### Docker Swarm
 
 Swarm cannot run privileged tasks, so the service starts **unprivileged** and

@@ -1,0 +1,43 @@
+# The workspace agent on a VM rather than in a container (ADR 0025).
+#
+#   install -m 0755 remote-dockerd /usr/local/bin/
+#   install -d -m 0700 /etc/workspace/authorized_keys.d /etc/workspace/host_keys
+#   install -m 0600 remote-dockerd.env.example /etc/remote-docker/env
+#   systemctl enable --now remote-dockerd
+#
+# Prerequisites are in the README. The short version: a docker engine with its
+# CLI on PATH, the shadow tools, and -- in shared-daemon mode only -- an NFS
+# client on this machine.
+
+[Unit]
+Description=remote-docker workspace agent
+Documentation=https://github.com/lhns/remote-docker
+# The agent shells out to docker for everything it does, so it has nothing to
+# do until there is one. Wants rather than Requires: a docker that is slow to
+# start should delay us, not stop us, and the agent already serves without a
+# daemon so that somebody can log in and see why.
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/remote-docker/env
+ExecStart=/usr/local/bin/remote-dockerd serve
+
+# Root, and not negotiable: the agent creates unix accounts, enters other
+# processes' network namespaces, and drops privilege per session itself.
+User=root
+
+Restart=on-failure
+RestartSec=5s
+
+# No tini here. The image needs it because the agent is PID 1 there and has to
+# reap the processes it forks per session; under systemd those reparent to init
+# and are reaped for us.
+
+# Logs go to the journal, which is where an operator on a VM will look.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

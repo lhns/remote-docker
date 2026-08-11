@@ -55,7 +55,8 @@ agent/go.mod             the agent module: 7 third-party modules, 24 go.sum line
     dockercli/           the one way this side runs the docker binary
 
 image/                   the workspace container (Dockerfile only)
-deploy/                  compose and swarm deployments
+deploy/                  compose, swarm, and the systemd unit for a VM
+                         workspace (ADR 0025)
 docs/adr/                architecture decision records
 ```
 
@@ -224,6 +225,14 @@ premise of the project, and it applies to building it too. So:
 - **Accounts use `usermod -p '*'`, not a locked (`!`) password.** Some sshd
   builds refuse public-key auth for locked accounts. Kept even though the agent
   authenticates itself, since a deployment may run sshd alongside.
+- **A VM workspace is the same agent, not a mode.** ADR 0025 moves two things
+  to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
+  shared-daemon mode only, the NFS client -- and changes nothing else. Never
+  add an `if onAVM`: both daemon modes already read one switch and a VM obeys
+  it unchanged, which is the same argument ADR 0020 makes about daemon targets.
+  The asymmetry that is easy to get wrong: with a daemon per account the NFS
+  mount happens inside `docker:dind`, which ships a client; in shared mode the
+  machine itself mounts.
 - **`shadow` must stay in the image.** The agent shells out to `useradd`, which
   handles the locking between passwd, group and gshadow that hand-editing gets
   wrong.

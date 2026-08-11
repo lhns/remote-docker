@@ -77,6 +77,30 @@ builds:
     goos: [android]
     goarch: [arm64]
 
+  # The agent, for a workspace that is a VM rather than a container.
+  #
+  # The image builds this from source and always has; what was missing is a way
+  # to get it onto a machine that is not running the image. See ADR 0025.
+  #
+  # Its own module, which is why this is a separate block with `dir: agent`
+  # rather than another target of the client's -- and why it is cheap: 24 lines
+  # of go.sum against the client's 786 (ADR 0021).
+  #
+  # Linux only. The agent drives useradd, netns and inotify; there is nowhere
+  # else for it to run and a cross-compile would only prove it links.
+  - id: remote-dockerd
+    main: ./cmd/remote-dockerd
+    dir: agent
+    binary: remote-dockerd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [linux]
+    goarch: [amd64, arm64]
+
 archives:
   - id: remote-docker
     ids: [remote-docker, remote-docker-android]
@@ -90,6 +114,23 @@ archives:
       - README.md
       - LICENSE
       - NOTICE
+
+  # Its own archive, so `remote-docker_<v>_linux_amd64` stays the client and an
+  # operator downloading a workspace does not get 70MB of Docker CLI with it.
+  - id: remote-dockerd
+    ids: [remote-dockerd]
+    name_template: >-
+      remote-dockerd_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - NOTICE
+      # Flattened, so the install lines in the README and in the unit's own
+      # header work on what comes out of the tarball.
+      - src: deploy/remote-dockerd.service
+        strip_parent: true
+      - src: deploy/remote-dockerd.env.example
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
