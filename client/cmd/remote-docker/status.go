@@ -59,7 +59,7 @@ func gather(cfg config.Config) facts {
 	if f.serving {
 		f.answering = control(f.endpoint, http.MethodGet, "status", &f.local) == nil
 	}
-	if self, err := os.Executable(); err == nil {
+	if self, err := selfPath(); err == nil {
 		f.shim, _ = inspectShim(self)
 	}
 	return f

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -186,11 +185,6 @@ func newStopCommand() *cobra.Command {
 
 // startDaemon spawns a foreground session, detached, and waits for it to answer.
 func startDaemon(cfg config.Config, endpoint string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("finding this binary: %w", err)
-	}
-
 	logPath := daemonLogPath(cfg)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return fmt.Errorf("creating the log directory: %w", err)
@@ -214,7 +208,10 @@ func startDaemon(cfg config.Config, endpoint string) error {
 		args = append(args, "--workspace", cfg.Name)
 	}
 
-	cmd := exec.Command(self, args...)
+	cmd, err := selfCommand(args...)
+	if err != nil {
+		return err
+	}
 	cmd.Dir = mustWorkDir()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
