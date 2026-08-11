@@ -59,9 +59,9 @@ and update.
 `docker compose` and `docker build` (BuildKit, through buildx) are included, so
 the whole toolchain is one file.
 
-## No workspace? Make one on this machine (Windows)
+## A workspace on this machine (Windows)
 
-If there is no Linux host to point at, this can build one locally and register
+When there is no Linux host to point at, this builds one locally and registers
 it as an ordinary workspace. It needs WSL, which Windows installs itself
 (`wsl --install`, then reboot).
 
