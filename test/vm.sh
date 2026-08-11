@@ -111,9 +111,14 @@ dump_agent_log() {
 # that opens the session. REMOTE_DOCKER_ENDPOINT is a PATH and not a URL: the
 # client puts the unix:// on itself, and passing one produced a DOCKER_HOST of
 # `unix://unix:///...` and a socket nothing was ever going to find.
+# exec, so the subshell BECOMES the client rather than waiting for it. Without
+# it `$!` is the subshell's pid, killing that leaves the client running, and the
+# next session finds the endpoint held by a process this suite thinks it stopped:
+# "another remote-docker is already serving ... (pid N)". The other suites do
+# not need it because they have no directory to change into first.
 session() {
     local log=$1
-    (cd "$WORK/project" && "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
+    (cd "$WORK/project" && exec "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
     CLIENT_PID=$!
 }
 
