@@ -131,6 +131,21 @@ jobs:
           wsl -d rd-ci --user root -- cat /etc/wsl.conf
           wsl -d rd-ci --user root -- ps aux
           wsl -d rd-ci --user root -- sh -c "netstat -lnt 2>/dev/null || ss -lnt"
+
+          # Which address Windows can actually reach.
+          #
+          # The agent logged `listening on :2222` and Windows still refused the
+          # connection for three minutes, so the question is no longer whether
+          # the agent is up. WSL2 forwards localhost into the machine through a
+          # relay, and this asks whether that relay works here at all, or
+          # whether the machine is only reachable at its own address.
+          wsl --version
+          $ip = (wsl -d rd-ci --user root -- sh -c "ip -4 -o addr show eth0 | awk '{print `$4}' | cut -d/ -f1") -replace '\s',''
+          "the machine's own address: $ip"
+          Test-NetConnection -ComputerName 127.0.0.1 -Port 2222 -InformationLevel Detailed
+          if ($ip) { Test-NetConnection -ComputerName $ip -Port 2222 -InformationLevel Detailed }
+          Get-Content "$env:USERPROFILE\.wslconfig" -ErrorAction SilentlyContinue
+
           # SIGQUIT makes a Go program print every goroutine's stack before it
           # dies, which is the one thing that says where an agent that is
           # running but not listening actually is. It kills the agent, so it
