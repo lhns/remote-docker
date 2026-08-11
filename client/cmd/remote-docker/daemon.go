@@ -345,8 +345,8 @@ func warnVersionMismatch(st proxy.Status) {
 		"\nwarning: the running session is a different version, and is in use, so it was left alone.\n"+
 			"  session: %s (pid %d)\n"+
 			"  this:    %s\n"+
-			"  fix: `remote-docker restart` once nothing needs it, or `restart --force` now\n",
-		orUnknown(st.Version), st.PID, orUnknown(version))
+			"  fix: `%s` once nothing needs it, or `restart --force` now\n",
+		orUnknown(st.Version), st.PID, orUnknown(version), ours("restart"))
 }
 
 func orUnknown(v string) string {
@@ -402,7 +402,7 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 				// "cannot tell" is not a reason to break something.
 				if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil {
 					return fmt.Errorf("cannot tell whether the running session is in use: %w\n"+
-						"  fix: `remote-docker restart --force` to restart anyway", err)
+						"  fix: `%s` to restart anyway", err, ours("restart --force"))
 				}
 				if !idle.Safe {
 					return errors.New("the running session is in use, and restarting takes its " +

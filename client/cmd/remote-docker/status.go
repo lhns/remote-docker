@@ -47,8 +47,6 @@ type facts struct {
 	// the command somebody runs when the workspace is unreachable.
 	info    workspace.Info
 	infoErr error
-
-	shim installed
 }
 
 // gather collects the local facts, which never fail as a whole.
@@ -58,9 +56,6 @@ func gather(cfg config.Config) facts {
 	f.serving = proxy.Reachable(f.endpoint)
 	if f.serving {
 		f.answering = control(f.endpoint, http.MethodGet, "status", &f.local) == nil
-	}
-	if self, err := selfPath(); err == nil {
-		f.shim, _ = inspectShim(self)
 	}
 	return f
 }
@@ -95,11 +90,8 @@ func (f facts) verdict() string {
 			orUnknown(f.local.Version))
 	}
 
-	switch {
-	case f.info.Storage == "vfs":
+	if f.info.Storage == "vfs" {
 		return "ready, but the workspace daemon is on vfs, so containers start slowly"
-	case f.shim.exists && f.shim.ours && !f.shim.current:
-		return "ready, but the docker shim is an older build (run `remote-docker shim install`)"
 	}
 	return "ready"
 }
@@ -223,16 +215,6 @@ func versionsLine(f facts) string {
 	}
 	if f.answering && f.local.Version != version {
 		parts = append(parts, "session "+orUnknown(f.local.Version)+" (DIFFERENT)")
-	}
-	switch {
-	case !f.shim.exists:
-		parts = append(parts, "no docker shim")
-	case !f.shim.ours:
-		parts = append(parts, "docker shim not ours")
-	case f.shim.current:
-		parts = append(parts, "shim current")
-	default:
-		parts = append(parts, "shim STALE")
 	}
 	return strings.Join(parts, ", ")
 }

@@ -108,7 +108,7 @@ start_session() {
         REMOTE_DOCKER_USER="$account" \
         REMOTE_DOCKER_ENDPOINT="$endpoint" \
         REMOTE_DOCKER_IDLE_TIMEOUT=8s \
-        "$WORK/remote-docker" start --foreground
+        "$WORK/remote-docker" remote start --foreground
     ) >"$log" 2>&1 &
     echo $!
 }

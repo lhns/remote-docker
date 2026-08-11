@@ -24,68 +24,19 @@ var version = "dev"
 // overrides collects the global flags.
 var overrides config.Overrides
 
+// newRootCommand is the whole command line: the Docker CLI, plus ours.
+//
+// The Docker CLI IS the root, rather than a subcommand of one. `docker run` is
+// what a person types, and the program that has to stand in for docker should
+// answer to that shape without an installation step in front of it. Renaming
+// this binary to `docker` is then a complete installation, with no code behind
+// it at all -- which is what replaced 550 lines of shim.
+//
+// Everything of ours is under `remote`, and nothing of ours is at this level.
+// See remote.go for why the flags in particular had to move.
 func newRootCommand() *cobra.Command {
-	root := &cobra.Command{
-		Use:   "remote-docker",
-		Short: "Run Docker on a remote workspace with your local files really mounted",
-		Long: `A Docker daemon on a remote workspace, with your own directories really
-mounted into the containers. Not copied, not synced, so bind mounts, published
-ports and the standard tooling behave the way they would locally.
-
-Nothing needs to be installed on this machine beyond this binary.`,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-
-		// Cobra decides HERE whether to traverse, and it decides for the whole
-		// tree: ExecuteC calls Find() unless the root sets this, and Find
-		// parses every flag at the deepest command it lands on. So
-		// `remote-docker docker --context dev ps` handed --context to `ps`,
-		// which has never heard of it, and `docker compose -f x up` handed -f
-		// to `up`. Both are flags of a command halfway down.
-		//
-		// The docker command sets it too, and that is not redundant: under the
-		// `docker` alias it IS the root (ADR 0022), which is why the alias
-		// parsed these correctly while the prefixed form did not.
-		TraverseChildren: true,
-
-		// A word that is not a command is an error, not a help screen. See
-		// unknown.go: the RunE is what makes the rule reachable at all.
-		Args: onlySubcommands,
-		RunE: helpWhenBare,
-	}
-
-	// No shorthands, and that is not an oversight.
-	//
-	// Cobra merges a root's persistent flags into every subcommand, and this
-	// root has the entire Docker CLI underneath it. pflag SKIPS a flag whose
-	// long name is already taken, which is why --user and --host coexist
-	// with docker's own, but a clashing SHORTHAND panics outright:
-	//
-	//	panic: unable to redefine 'w' shorthand in "run" flagset:
-	//	       it's already used for "workdir" flag
-	//
-	// So `remote-docker docker run -ti debian bash` crashed, because -w meant
-	// --workspace here and --workdir there. A shorthand that turns a whole
-	// subcommand tree into a panic is worth less than typing the long form.
-	root.PersistentFlags().StringVar(&overrides.Workspace, "workspace", "", "which configured workspace to use")
-	root.PersistentFlags().StringVar(&overrides.Host, "host", "", "workspace address")
-	root.PersistentFlags().IntVar(&overrides.Port, "port", 0, "workspace SSH port")
-	root.PersistentFlags().StringVar(&overrides.User, "user", "", "workspace account")
-	root.PersistentFlags().StringVar(&overrides.Endpoint, "endpoint", "", "local Docker endpoint to serve")
-
-	root.AddCommand(
-		newEnrollCommand(),
-		newStatusCommand(),
-		newUpCommand(),
-		newGCCommand(),
-		newDockerCommand(),
-		newVersionCommand(),
-		newWorkspaceCommand(),
-		newStartCommand(),
-		newStopCommand(),
-		newRestartCommand(),
-		newShimCommand(),
-	)
+	root := newDockerCommand()
+	root.AddCommand(newRemoteCommand())
 	return root
 }
 

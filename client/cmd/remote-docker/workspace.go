@@ -28,27 +28,7 @@ import (
 // the server's variables are WORKSPACE_*, and a CLI that disagreed with all
 // of them would trade one confusion for another. The old verbs remain as
 // aliases.
-func newWorkspaceCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "workspace",
-		Aliases: []string{"workspaces"},
-		Short:   "Add, remove and list your workspaces",
-		Args:    onlySubcommands,
-	}
-	cmd.AddCommand(
-		newWorkspaceAddCommand(),
-		newWorkspaceRemoveCommand(),
-		newWorkspaceListCommand(),
-		newWorkspaceDefaultCommand(),
-		newWorkspaceInspectCommand(),
-	)
-	// Bare `remote-docker workspaces` still lists, which is what it did
-	// before this command existed.
-	cmd.RunE = newWorkspaceListCommand().RunE
-	return cmd
-}
-
-func newWorkspaceAddCommand() *cobra.Command {
+func newWorkspaceCreateCommand() *cobra.Command {
 	var host, user, endpoint, watch string
 	var port int
 	var makeDefault, noContext bool
@@ -163,7 +143,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 	return cmd
 }
 
-func newWorkspaceDefaultCommand() *cobra.Command {
+func newWorkspaceUseCommand() *cobra.Command {
 	var noContext bool
 
 	cmd := &cobra.Command{

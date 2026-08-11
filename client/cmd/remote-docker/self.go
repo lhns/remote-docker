@@ -101,3 +101,16 @@ func dropSelfArgument(args []string, self string) []string {
 	// Capped at 1 so the append allocates rather than writing over args[1].
 	return append(args[:1:1], args[2:]...)
 }
+
+// sameFile reports whether two paths are one file, following symlinks.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
+}

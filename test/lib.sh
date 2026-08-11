@@ -50,7 +50,7 @@ build_client() {
 # the workspace will find it. The FILENAME becomes the unix account there.
 enrol() {
     local account=$1 statedir=$2
-    REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" enroll >/dev/null 2>&1
+    REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" remote enroll >/dev/null 2>&1
     if [ -f "$statedir/id_ed25519.pub" ]; then
         cp "$statedir/id_ed25519.pub" "$WORK/keys/$account.pub"
         return 0

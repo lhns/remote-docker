@@ -13,16 +13,16 @@ import (
 	_ "github.com/docker/buildx/driver/docker"
 	_ "github.com/docker/buildx/driver/docker-container"
 	_ "github.com/docker/buildx/driver/remote"
+	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
-	"github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/proxy"
 )
 
-// newDockerCommand mounts the real Docker CLI's command tree under
-// `remote-docker docker ...`.
+// newDockerCommand builds the real Docker CLI's command tree, which is this
+// program's root.
 //
 // The premise of the project is a machine that cannot have software installed,
 // and the docker CLI is software. Solving the daemon and the filesystem while
@@ -35,15 +35,20 @@ func newDockerCommand() *cobra.Command {
 	nameTheEmbeddedCLI()
 
 	cmd := &cobra.Command{
-		Use:   "docker",
-		Short: "Run any docker command against the workspace",
-		Long: `The complete Docker CLI, talking to the workspace daemon.
+		Use:   programName(),
+		Short: "Docker on a remote workspace, with your local files really mounted",
+		Long: `The complete Docker CLI, talking to a remote workspace's daemon, with your
+own directories really mounted into the containers. Not copied, not synced, so
+bind mounts, published ports and the standard tooling behave the way they would
+locally.
 
 It finds the session's endpoint itself and starts a session if none is
 running, so there is nothing to do first. An explicit DOCKER_HOST is respected.
 
-"docker compose" is included: compose v5 builds against the same docker/cli,
-buildx and buildkit this binary carries.`,
+Nothing needs to be installed on this machine beyond this binary. Rename it to
+"docker" and every command below is spelled the way it is everywhere else.
+
+"remote" is where this program's own commands live.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 
@@ -54,25 +59,37 @@ buildx and buildkit this binary carries.`,
 		// -v is version at the root and --volume only under `run`.
 		Version: dockerVersionLine(),
 
-		// The client options below go on Flags() rather than PersistentFlags(),
-		// which is what the real CLI does and is not a style choice: cobra
-		// merges persistent flags into every subcommand, and `--context` has
-		// the shorthand -c, which `build` already uses for --cpu-shares.
-		// Installing them persistently panics on `docker build --help`.
-		//
-		// TraverseChildren so that `docker --context x ps` parses under the
-		// `docker` alias, where this command is the root. On the prefixed
-		// form the ROOT's setting is what decides, which is why that one was
-		// broken until it had one too.
+		// Cobra decides traversal HERE and for the whole tree: ExecuteC calls
+		// Find() unless the root sets this, and Find parses every flag at the
+		// deepest command it lands on. So `docker --context dev ps` handed
+		// --context to `ps`, which has never heard of it, and `compose -f x up`
+		// handed -f to `up`. Both are flags of a command halfway down.
 		TraverseChildren: true,
+
+		// A word that is not a command is an error, not a help screen. See
+		// unknown.go: the RunE is what makes the rule reachable at all.
+		Args: onlySubcommands,
+		RunE: helpWhenBare,
 	}
-	// Cobra's default template would render "docker version Docker version
-	// 29.7.2, build ...". The line is already the whole answer.
-	cmd.SetVersionTemplate("{{.Version}}\n")
+	// docker's own root setup: the real help layout, with its Common,
+	// Management and Commands sections, its flag error format and exit code,
+	// and the client options installed on Flags() rather than
+	// PersistentFlags(). The last part is not a style choice -- `--context`
+	// has the shorthand -c, which `build` already uses for --cpu-shares, so
+	// installing them persistently panics on `docker build --help`.
+	//
+	// Hand-rolled here until now, which meant cobra's default help: one flat
+	// list of sixty commands where docker's own groups them.
+	opts, _ := cli.SetupRootCommand(cmd)
 
 	if invokingDocker() {
 		pointAtOurEndpoint()
 	}
+
+	// After SetupRootCommand, which sets its own. Both would render
+	// "Docker version Docker version 29.7.2, build ...": the line we build is
+	// already the whole answer.
+	cmd.SetVersionTemplate("{{.Version}}\n")
 
 	dockerCli, err := command.NewDockerCli()
 	if err != nil {
@@ -84,8 +101,6 @@ buildx and buildkit this binary carries.`,
 		return cmd
 	}
 
-	opts := flags.NewClientOptions()
-	opts.InstallFlags(cmd.Flags())
 	opts.SetDefaultOptions(cmd.Flags())
 
 	if err := dockerCli.Initialize(opts); err != nil {
@@ -122,9 +137,9 @@ buildx and buildkit this binary carries.`,
 // session available to answer.
 //
 // Called only when the invocation is actually a docker command, because the
-// tree is built for every command: `remote-docker gc`, and even `--help`,
-// used to probe the endpoint and could open a whole file-serving session that
-// then raced the real command's own, inside one process.
+// tree is built for every command: `remote gc`, and even `--help`, used to
+// probe the endpoint and could open a whole file-serving session that then
+// raced the real command's own, inside one process.
 func pointAtOurEndpoint() {
 	cfg, err := resolve()
 	if err != nil {
@@ -151,8 +166,7 @@ func pointAtOurEndpoint() {
 	// embedded CLI, which exists so that nothing has to be installed, a setup
 	// step of its own.
 	//
-	// The workspace comes from the same resolution as every other command, so
-	// `--workspace ci docker ps` uses ci.
+	// The workspace comes from the same resolution as every other command.
 	if set == "" || set == ours {
 		ensureDaemon(cfg, endpoint)
 	}
@@ -165,11 +179,10 @@ func pointAtOurEndpoint() {
 
 // NoSessionEnv tells a docker command not to make a session available.
 //
-// Set on the docker commands this program runs itself. Once `docker` on PATH
-// IS this binary, `exec.LookPath("docker")` finds us, so `workspace create`
-// writing a docker context would spawn us, and we would start a whole
-// file-serving session in order to write a line of JSON. A docker command we
-// run ourselves must not start a session.
+// Set on the docker commands this program runs itself. This binary may BE the
+// `docker` on PATH, so `exec.LookPath("docker")` finds us, and `remote create`
+// writing a docker context would spawn us to start a whole file-serving
+// session in order to write a line of JSON.
 const NoSessionEnv = "REMOTE_DOCKER_NO_SESSION"
 
 // invokingDocker reports whether this process was asked to run a docker
@@ -183,66 +196,57 @@ func invokingDocker() bool {
 		return false
 	}
 
-	args := os.Args[1:]
-	if !invokedAsDocker() {
-		// Under our own name the docker tree is a subcommand, so the first
-		// non-flag argument has to BE "docker". Under the alias every argument
-		// is already docker's and the same scan asks a different question:
-		// which docker subcommand it is.
-		var found bool
-		if args, found = afterDockerVerb(args); !found {
-			return false
-		}
-	}
-
 	// Some docker commands never reach a daemon, and one of them is how we
 	// invoke ourselves. Starting a session for `docker context create` is not
 	// wrong so much as absurd: it opens an SSH connection, an NFS server and a
 	// reverse tunnel in order to write a file on this machine.
 	//
-	// No subcommand at all (`docker`, `docker --help`, `docker --version`) is
-	// the same answer for the same reason. Printing help used to be enough to
-	// start a session.
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			continue
-		}
-		switch arg {
-		case "context", "completion", "help":
-			return false
-		}
-		return true
+	// No subcommand at all (`docker`, `--help`, `--version`) is the same answer
+	// for the same reason. Printing help used to be enough to start a session.
+	verb, ok := firstArgument(os.Args[1:])
+	if !ok {
+		return false
 	}
-	return false
+	switch verb {
+	case "remote", "context", "completion", "help":
+		return false
+	}
+	return true
 }
 
-// afterDockerVerb finds the "docker" subcommand among our own arguments and
-// returns what follows it.
-func afterDockerVerb(args []string) ([]string, bool) {
-	// Every root flag takes a value, so a flag consumes the token after it
-	// unless it was written as --flag=value.
-	takesValue := map[string]bool{
-		"--workspace": true, "--host": true, "--port": true,
-		"--user": true, "--endpoint": true,
-	}
+// valuedRootFlags are the docker root flags that consume the argument after
+// them, which is what lets a scan tell a flag's VALUE from a subcommand.
+//
+// `docker --context remote ps` is the case that makes this necessary rather
+// than tidy: without it, a context somebody named "remote" reads as our own
+// namespace and the docker command silently runs with no session.
+var valuedRootFlags = map[string]bool{
+	"--config":  true,
+	"--context": true, "-c": true,
+	"--host": true, "-H": true,
+	"--log-level": true, "-l": true,
+	"--tlscacert": true, "--tlscert": true, "--tlskey": true,
+}
+
+// firstArgument returns the first argument that is not a flag or a flag's
+// value, which is the subcommand.
+func firstArgument(args []string) (string, bool) {
 	skip := false
-	for i, arg := range args {
+	for _, arg := range args {
 		if skip {
 			skip = false
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
-			if name, _, hasValue := strings.Cut(arg, "="); !hasValue && takesValue[name] {
+			// --flag=value carries its own value, so nothing follows it.
+			if name, _, hasValue := strings.Cut(arg, "="); !hasValue && valuedRootFlags[name] {
 				skip = true
 			}
 			continue
 		}
-		if arg != dockerName {
-			return nil, false
-		}
-		return args[i+1:], true
+		return arg, true
 	}
-	return nil, false
+	return "", false
 }
 
 // installModernBuilder replaces `build` with buildx's, which is what the real
