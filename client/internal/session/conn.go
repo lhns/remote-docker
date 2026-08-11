@@ -104,6 +104,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Volumes: live.api,
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
+		Client:  s.clientID,
 		Guard:   live.guard,
 	}
 	if s.opts.Role.hosting() {

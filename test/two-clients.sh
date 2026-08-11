@@ -225,6 +225,17 @@ if [ "$(echo "$before" | grep -c .)" -ge 2 ]; then
 else
     bad "the two machines did not create two volumes"
 fi
+
+# The NAME has to carry the machine, which is the whole mechanism: rd-<client>-
+# rather than rd-cwd. Asserted on the shape because a count cannot see it -- the
+# first run of this suite counted one volume called `rd-cwd` and every other
+# assertion still passed, because the client had never been set on the rewriter
+# and each machine was silently rebuilding the other's volume under it.
+if [ "$(echo "$before" | grep -c '^rd-[0-9a-f]\{8\}-')" -ge 2 ]; then
+    ok "the volume names carry the machine that created them"
+else
+    bad "a volume does not name the machine that created it"
+fi
 (
     cd "$WORK/project-$PC" || exit 1
     REMOTE_DOCKER_STATE_DIR="$WORK/state-$PC" \
