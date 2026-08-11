@@ -1248,21 +1248,26 @@ fi
 
 "$WORK/remote-docker" remote stop >/dev/null 2>&1
 
-# A session built from a different commit is replaced when that costs nothing,
+# A session built from a different build is replaced when that costs nothing,
 # and reported when it does not. A stale session serves the endpoint, so an
 # updated client talks to the OLD build and behaves like it -- silently, until
 # something it should have fixed does not work.
 #
 # Two binaries, same source, different stamps: the versions cannot be ordered
 # and nothing here tries to.
-if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-oldbuild"         -o "$WORK/remote-docker-old" ./cmd/remote-docker); then
+#
+# Named for what it is rather than "-old". It is not an older build, it is THIS
+# build wearing another version, and the name saying otherwise is what made a
+# rename of the whole command shape skip straight past it -- it does not match
+# "remote-docker", so it kept calling commands that had moved.
+if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-otherbuild"         -o "$WORK/remote-docker-otherbuild" ./cmd/remote-docker); then
 
-    "$WORK/remote-docker-old" remote start >/dev/null 2>&1
+    "$WORK/remote-docker-otherbuild" remote start >/dev/null 2>&1
 
     # (a) nothing depends on it -> replaced silently.
     "$WORK/remote-docker" ps >/dev/null 2>&1
     if "$WORK/remote-docker" remote status 2>/dev/null | grep -q "DIFFERENT"; then
-        bad "an unused session built from another commit was not replaced"
+        bad "an unused session from another build was not replaced"
     else
         ok "an unused session from another commit is replaced silently"
     fi
@@ -1270,8 +1275,8 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ol
     # (b) something depends on it -> warned about, left alone. The old binary
     # starts the container so the session holding it is the old one.
     "$WORK/remote-docker" remote stop >/dev/null 2>&1
-    "$WORK/remote-docker-old" remote start >/dev/null 2>&1
-    if "$WORK/remote-docker-old" run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
+    "$WORK/remote-docker-otherbuild" remote start >/dev/null 2>&1
+    if "$WORK/remote-docker-otherbuild" run -d --name itest-pin -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
 
         warned=$("$WORK/remote-docker" ps 2>&1)
         case "$warned" in
@@ -1282,7 +1287,7 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ol
         # Which build is serving is exactly the question here, and "it did not
         # match" without the output leaves nothing to reason from.
         insitu=$("$WORK/remote-docker" remote status 2>&1)
-        if echo "$insitu" | grep -q "sha-oldbuild"; then
+        if echo "$insitu" | grep -q "sha-otherbuild"; then
             ok "the in-use session was left running"
         else
             bad "the in-use session was replaced, taking its container's mount with it"
