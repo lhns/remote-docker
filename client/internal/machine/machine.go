@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -42,6 +43,17 @@ type Spec struct {
 	// deployment uses and CI builds on every push.
 	Image string
 
+	// Rootfs is where the workspace image's filesystem comes from: a local
+	// path or a URL.
+	//
+	// A container image IS a rootfs, so this is the same artifact the container
+	// deployment runs and CI builds on every push -- which is what makes
+	// "nothing is installed at provisioning time" true rather than aspirational.
+	// It is not derived from Image here: getting a rootfs out of a reference
+	// needs either a docker daemon, which is the thing being installed, or a
+	// registry client, and the caller is where that decision belongs.
+	Rootfs string
+
 	// CPUs and MemoryMB are what the machine is given. Zero means the
 	// backend's own default, because a number invented here would be worse
 	// than the one the platform already chose.
@@ -50,6 +62,9 @@ type Spec struct {
 
 	// Port is where the agent's SSH listener is reachable on this host.
 	Port int
+
+	// Account is the workspace account this machine's owner logs in as.
+	Account string
 }
 
 // Generation identifies a Spec, so a machine built from older settings can be
@@ -71,9 +86,11 @@ func (s Spec) Generation() string {
 		"name=" + s.Name,
 		"backend=" + s.Backend,
 		"image=" + s.Image,
+		"rootfs=" + s.Rootfs,
 		fmt.Sprintf("cpus=%d", s.CPUs),
 		fmt.Sprintf("memory=%d", s.MemoryMB),
 		fmt.Sprintf("port=%d", s.Port),
+		"account=" + s.Account,
 	}
 	sort.Strings(parts)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
@@ -188,9 +205,79 @@ type Backend interface {
 
 	Inspect(ctx context.Context, name string) (Observed, error)
 	Create(ctx context.Context, spec Spec) error
+
+	// Enrol makes a public key able to log in as an account.
+	//
+	// Separate from Create so that rotating a key costs nothing. It is not part
+	// of the generation for the same reason: a new key would otherwise mean a
+	// rebuild, and a rebuild discards every image in the machine -- a heavy
+	// price for a thing people are supposed to do often.
+	Enrol(ctx context.Context, name, account, publicKey string) error
 	Start(ctx context.Context, name string) error
+
+	// Hold keeps the machine from going away, until the returned Closer is
+	// closed.
+	//
+	// A machine with nobody in it shuts down, and what counts as somebody is
+	// not what you would expect: WSL counts its own sessions, so a TCP
+	// connection from the host does not, and neither does a command that runs
+	// and exits. Poking one every ten seconds was measured failing exactly that
+	// way -- the machine started, ran for about thirty seconds, stopped, and
+	// started again on the next poke, so its dockerd never got far enough to be
+	// ready and its agent never opened a listener.
+	//
+	// So the hold is one session that stays open, and it is the caller's job to
+	// keep it for as long as the machine is needed.
+	Hold(ctx context.Context, name string) (io.Closer, error)
+
+	// Address is where this machine can be reached from here.
+	//
+	// Asked rather than assumed, and asked every time. A local machine is on a
+	// virtual network whose address it is given at boot, so the answer changes
+	// when it restarts and a stored one goes stale silently -- the connection
+	// is refused, or worse, reaches whatever has the address now.
+	Address(ctx context.Context, name string) (string, error)
+
 	Stop(ctx context.Context, name string) error
 	Destroy(ctx context.Context, name string) error
+}
+
+// Hold keeps a machine alive until the returned Closer is closed. See
+// Backend.Hold.
+func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
+	backend, err := Find(backendName)
+	if err != nil {
+		return nil, err
+	}
+	return backend.Hold(ctx, name)
+}
+
+// Locate starts a machine if it is stopped and returns where to reach it.
+//
+// Both halves are why this exists, and neither is optional. A machine that
+// nobody is using goes away -- WSL shuts an idle distribution down, and a TCP
+// connection from the host is not use it counts -- so a workspace on a machine
+// cannot be dialled the way a workspace on another host is: the host is always
+// there and the machine is not. Starting is also what makes the address
+// answerable, since a stopped machine has none.
+func Locate(ctx context.Context, backendName, name string) (string, error) {
+	backend, err := Find(backendName)
+	if err != nil {
+		return "", err
+	}
+	// Start rather than Inspect-then-start: starting a running machine is what
+	// keeps it running, and there is no window between the two answers.
+	if err := backend.Start(ctx, name); err != nil {
+		return "", fmt.Errorf("starting the %s machine %q: %w", backendName, name, err)
+	}
+	addr, err := backend.Address(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if addr == "" {
+		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
+	}
+	return addr, nil
 }
 
 // Backends returns the backends compiled into this build, by name.

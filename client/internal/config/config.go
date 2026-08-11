@@ -31,6 +31,15 @@ type Config struct {
 	// Port is the workspace's SSH port.
 	Port int
 
+	// Machine is the local machine this workspace runs on, or nil for a
+	// workspace somewhere else.
+	//
+	// Carried this far because a machine has to be located before it can be
+	// dialled: it is started on demand and its address is given to it at boot,
+	// so Host is not the answer for one and a stored address goes stale when it
+	// restarts.
+	Machine *Machine
+
 	// User is the workspace account, which is also the name of the .pub file
 	// enrolled for this machine.
 	User string
@@ -156,6 +165,10 @@ type Machine struct {
 	// restart is the failure this whole design is arranged to avoid.
 	Image string `json:"image,omitempty"`
 
+	// Rootfs is where that image's filesystem came from, so a rebuild starts
+	// from the same one rather than from whatever is current.
+	Rootfs string `json:"rootfs,omitempty"`
+
 	CPUs     int `json:"cpus,omitempty"`
 	MemoryMB int `json:"memoryMb,omitempty"`
 
@@ -242,7 +255,7 @@ const (
 // The file is optional and a missing one is not an error: `enroll` has to work
 // before anything is configured, since that is how a key gets issued.
 func Resolve(o Overrides, path string) (Config, error) {
-	cfg := Config{Port: DefaultSSHPort, User: defaultUser()}
+	cfg := Config{Port: DefaultSSHPort, User: DefaultUser()}
 
 	file, err := Load(path)
 	if err != nil {
@@ -333,6 +346,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	}
 	if ws.Port != 0 {
 		cfg.Port = ws.Port
+	}
+	if ws.Machine != nil {
+		cfg.Machine = ws.Machine
 	}
 	if ws.User != "" {
 		cfg.User = ws.User
@@ -546,9 +562,9 @@ func KeyComment() string {
 	return "remote-docker-" + host + "-" + user
 }
 
-// defaultUser guesses the workspace account from the local username, because
+// DefaultUser guesses the workspace account from the local username, because
 // the enrolled .pub file is usually named after it.
-func defaultUser() string {
+func DefaultUser() string {
 	for _, key := range []string{"USER", "USERNAME", "LOGNAME"} {
 		if v := os.Getenv(key); v != "" {
 			return sanitizeUser(v)

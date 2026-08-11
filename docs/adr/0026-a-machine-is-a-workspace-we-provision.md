@@ -28,8 +28,27 @@ What is added is a lifecycle, held in one new config block:
 "machine": { "backend": "wsl", "name": "rd-dev", "image": "...", "generation": "..." }
 ```
 
-Its presence is the only thing that changes anywhere: `remote rm` has a machine
-to destroy as well as an entry to delete.
+Its presence changes two things, and this record originally claimed one.
+
+`remote rm` has a machine to destroy as well as an entry to delete. And a
+session **locates** the machine before it dials it, which a workspace on another
+host never needs: that host is simply there, at an address that was written down
+once. A machine is not. It is started on demand and given its address at boot,
+so `host` in the entry is a placeholder and the real answer is asked for at
+every connection, in `session.connect` and nowhere else.
+
+Measured on 2026-08-11, in the `a machine on wsl` job, which is why the
+placeholder is not simply `127.0.0.1`: with the machine running and its agent
+listening, Windows could not reach `127.0.0.1:2222` at all and reached the
+machine's own `172.24.110.158:2222` immediately. WSL2 forwards localhost through
+a relay that did not carry it there, and re-checking that is one CI run.
+
+The same job established the other half: a machine nobody is using goes away.
+WSL shuts an idle distribution down, and a TCP connection from Windows is not
+use it counts -- the first version of `create` spent three minutes dialling a
+machine that had stopped two and a half minutes after its own agent reported it
+was listening. So locating a machine starts it, and starting a running machine
+is what keeps it running.
 
 **Nothing is installed at provisioning time.** No package manager runs, on any
 path, ever. The unit of change is a published artifact named in that block, and

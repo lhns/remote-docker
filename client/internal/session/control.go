@@ -107,6 +107,12 @@ func (live *liveConn) close() {
 	}
 	_ = live.ssh.Close()
 	live.wg.Wait()
+
+	// Last: the machine may go away once nothing is holding it, and everything
+	// above wanted it there.
+	if live.machine != nil {
+		_ = live.machine.Close()
+	}
 }
 
 // Collect removes share volumes this account is no longer using.

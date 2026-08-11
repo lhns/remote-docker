@@ -11,11 +11,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/client/internal/nfsserve"
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -36,8 +38,33 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
+	// THE one place a machine is located.
+	//
+	// A workspace on another host is simply there; a machine on this one has to
+	// be running before it can answer, and its address is given to it at boot,
+	// so a stored one goes stale the moment it restarts. Locate does both, and
+	// it is here rather than in the commands because every path to a session
+	// comes through this function -- a check at `machine create` would be right
+	// for the first connection and wrong for every one after a reboot.
+	host := s.opts.Config.Host
+	var hold io.Closer
+	if m := s.opts.Config.Machine; m != nil {
+		// Held first, for as long as this connection lives. A machine with
+		// nobody in it shuts down, and an open TCP connection is not somebody:
+		// WSL counts its own sessions, so without this the machine can go away
+		// underneath a working session.
+		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
+			return nil, err
+		}
+		host, err = machine.Locate(ctx, m.Backend, m.Name)
+		if err != nil {
+			_ = hold.Close()
+			return nil, err
+		}
+	}
+
 	client, err := sshx.Dial(ctx, sshx.Config{
-		Host:       s.opts.Config.Host,
+		Host:       host,
 		Port:       s.opts.Config.Port,
 		User:       s.opts.Config.User,
 		Key:        key,
@@ -57,7 +84,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// files are owned by whoever will read them.
 	s.registry.SetAttrs(attrsFor(info))
 
-	live := &liveConn{ssh: client, info: info}
+	live := &liveConn{ssh: client, info: info, machine: hold}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	// One guard for this connection, shared by the two things that disagree
 	// about a volume's lifetime. See rewrite.Guard.

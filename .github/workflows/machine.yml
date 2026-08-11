@@ -1,0 +1,163 @@
+name: machine
+
+# The WSL backend, end to end, on a Windows runner.
+#
+# This exists because of a measurement rather than a hope: a spike established
+# that a GitHub Windows runner runs real WSL2 and can import a rootfs
+# (ADR 0026). Without that, the whole backend would ship having never run.
+#
+# It cannot be one job. A Windows runner runs Windows containers, so the Linux
+# image cannot be built there; a Linux runner builds it and hands the rootfs
+# over as an artifact. That split is the reason for the shape below and not an
+# accident of taste.
+#
+# Hyper-V gets no job at all. The runners do not offer it, and
+# docs/testing-machines.md is the whole of its verification.
+on:
+  pull_request:
+    paths:
+      - client/internal/machine/**
+      - client/cmd/remote-docker/machine*.go
+      - image/**
+      - .github/workflows/machine.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # A container image IS a rootfs, which is the whole reason the backend is
+  # short: what gets installed into the machine is the artifact CI already
+  # builds and tests on every push, and no package manager runs anywhere.
+  rootfs:
+    name: export the workspace image as a rootfs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: build the workspace image
+        run: docker build -t rd-workspace:ci -f image/Dockerfile .
+
+      - name: export its filesystem
+        run: |
+          set -eux
+          id=$(docker create rd-workspace:ci)
+          docker export "$id" -o rootfs.tar
+          docker rm "$id"
+          ls -lh rootfs.tar
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: workspace-rootfs
+          path: rootfs.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  wsl:
+    name: a machine on wsl
+    runs-on: windows-latest
+    needs: rootfs
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: workspace-rootfs
+
+      - name: install wsl
+        run: wsl --install --no-distribution
+
+      - name: build the client
+        run: go build -o rd.exe ./cmd/remote-docker
+        working-directory: client
+
+      # State of its own, so nothing here depends on or disturbs whatever the
+      # runner image already has.
+      - name: create the machine
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar
+          .\client\rd.exe remote ls
+          .\client\rd.exe remote machine status ci
+
+      # The one that matters: the session, the SSH transport, the NFS export,
+      # the bind rewriting and the daemon inside the machine, in one command.
+      - name: docker run, with a bind mount from this machine
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          "from the runner" | Out-File -Encoding ascii marker
+          # Joined before matching. PowerShell's -match on an ARRAY is a filter
+          # rather than a test: it returns the lines that matched, so -notmatch
+          # on multi-line output returns the other lines and is truthy whether
+          # or not the thing being looked for is there. It failed a step whose
+          # command had printed exactly what the step demanded.
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
+          $out
+          if ($out -notmatch 'from the runner') { throw "the bind mount did not resolve" }
+
+      - name: creating it again changes nothing
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar) -join "`n"
+          $out
+          if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
+
+      # rm destroys the machine as well as the entry, and leaving a
+      # distribution behind is the failure worth catching: it is a running
+      # Linux system with nothing naming it.
+      - name: rm takes the machine with it
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          .\client\rd.exe remote rm ci
+          $distros = (wsl -l -q) -join "`n"
+          $distros
+          if ($distros -match 'rd-ci') { throw "the distribution outlived the workspace" }
+
+      - name: what the machine had to say
+        if: failure()
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          wsl -l -v
+          wsl -d rd-ci --user root -- cat /etc/wsl.conf
+          wsl -d rd-ci --user root -- ps aux
+          wsl -d rd-ci --user root -- sh -c "netstat -lnt 2>/dev/null || ss -lnt"
+
+          # Which address Windows can actually reach.
+          #
+          # The agent logged `listening on :2222` and Windows still refused the
+          # connection for three minutes, so the question is no longer whether
+          # the agent is up. WSL2 forwards localhost into the machine through a
+          # relay, and this asks whether that relay works here at all, or
+          # whether the machine is only reachable at its own address.
+          wsl --version
+          # No shell and no awk: busybox's hostname has no -I, and a shell
+          # pipeline here loses its $-fields to PowerShell's quoting. The
+          # parsing happens on this side, where it can be seen.
+          $addr = (wsl -d rd-ci --user root -- ip -4 -o addr show eth0) -join ' '
+          "eth0: $addr"
+          $ip = ([regex]::Match($addr, 'inet\s+(\d+\.\d+\.\d+\.\d+)')).Groups[1].Value
+          "the machine's own address: $ip"
+          Test-NetConnection -ComputerName 127.0.0.1 -Port 2222 -InformationLevel Detailed
+          if ($ip) { Test-NetConnection -ComputerName $ip -Port 2222 -InformationLevel Detailed }
+          Get-Content "$env:USERPROFILE\.wslconfig" -ErrorAction SilentlyContinue
+
+          # SIGQUIT makes a Go program print every goroutine's stack before it
+          # dies, which is the one thing that says where an agent that is
+          # running but not listening actually is. It kills the agent, so it
+          # goes last and only on the failure path.
+          wsl -d rd-ci --user root -- sh -c "pkill -QUIT -f remote-dockerd; sleep 3; cat /var/log/remote-dockerd.log"

@@ -70,6 +70,7 @@ workspace the current docker context names.`,
 		newRestartCommand(),
 
 		// The rest.
+		newMachineCommand(),
 		newEnrollCommand(),
 		newGCCommand(),
 		newVersionCommand(),
