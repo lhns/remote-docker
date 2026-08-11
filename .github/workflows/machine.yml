@@ -136,6 +136,11 @@ jobs:
           .\client\rd.exe remote status
           Get-Process rd -ErrorAction SilentlyContinue | Format-Table Id, StartTime
 
+          # The session's own log. `remote status` answering while a docker
+          # request gets EOF means the failure is inside the session rather
+          # than in reaching it, and this is the only place that says why.
+          Get-Content "$env:REMOTE_DOCKER_STATE_DIR\logs\*.log" -Tail 40 -ErrorAction SilentlyContinue
+
           $out = (.\client\rd.exe ps -a --filter name=survivor --format '{{.Names}}') -join "`n"
           $out
           if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }

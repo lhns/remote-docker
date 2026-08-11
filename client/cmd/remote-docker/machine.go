@@ -402,6 +402,20 @@ func newMachineStartCommand() *cobra.Command {
 				// Held while waiting, because a WSL machine nobody is in shuts
 				// down again -- a start that allowed that would be a command
 				// which reliably undid itself.
+				// Any session serving this workspace predates the machine
+				// being started, so it is holding a connection to a machine
+				// that was stopped -- and to an ADDRESS the machine no longer
+				// has, since it is given a new one at every boot. Left alone,
+				// the next docker command finds that endpoint reachable, uses
+				// it, and gets EOF from a session serving over a dead
+				// connection: an error naming a local pipe and nothing else.
+				//
+				// Together with the shutdown in `stop` this closes the race
+				// from both ends. `stop` can miss a session that was still
+				// starting and had not bound its endpoint yet; by the time
+				// `start` runs, it has.
+				stopSessionFor(cmd, args[0])
+
 				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
 				if err != nil {
 					return err
