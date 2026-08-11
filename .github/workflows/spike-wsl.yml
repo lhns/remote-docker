@@ -1,0 +1,96 @@
+name: spike (wsl capability)
+
+# Can a GitHub Windows runner run WSL2?
+#
+# One question, asked before anything is designed around the answer. The local
+# machine backend (a workspace this program provisions rather than connects to)
+# has a testing problem that no other part of this project has: nobody working
+# on it has WSL or Hyper-V, so the code would otherwise be written, merged and
+# released without ever having run.
+#
+# This is the same move `nfs-capability` makes in integration.yml -- settle
+# whether the runner can do the thing at all, cheaply, before building a suite
+# that depends on it. Hyper-V is not asked about: GitHub's Windows runners do
+# not offer it, and the interesting question is only whether WSL2 is reachable.
+#
+# Every step continues on error on purpose. A spike that stops at the first
+# unavailable feature answers one question; this one is meant to come back with
+# the whole picture in a single run.
+#
+# Delete this file once the answer is recorded in an ADR. It is a measurement,
+# not a check.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/spike-wsl.yml
+
+permissions:
+  contents: read
+
+jobs:
+  wsl:
+    name: can this runner run wsl2
+    runs-on: windows-latest
+    steps:
+      - name: is there a wsl at all
+        continue-on-error: true
+        run: |
+          wsl --version
+          wsl --status
+
+      - name: what the optional features say
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-WindowsOptionalFeature -Online |
+            Where-Object FeatureName -match 'Linux|Hyper|Virtual' |
+            Select-Object FeatureName, State | Format-Table -AutoSize
+
+      # WSL2 needs the hypervisor platform, which needs nested virtualisation on
+      # the Azure VM behind the runner. This is the question that decides it.
+      - name: is virtualisation exposed to this VM
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $c = Get-CimInstance Win32_ComputerSystem
+          "HypervisorPresent : $($c.HypervisorPresent)"
+          $p = Get-CimInstance Win32_Processor
+          "VirtualizationFirmwareEnabled: $($p.VirtualizationFirmwareEnabled)"
+          "SecondLevelAddressTranslation: $($p.SecondLevelAddressTranslationExtensions)"
+
+      - name: install wsl without a distribution
+        continue-on-error: true
+        run: wsl --install --no-distribution
+
+      # The real test: import a rootfs and run something in it. Alpine's
+      # minirootfs is 3MB, which keeps the spike cheap; the actual backend would
+      # import this project's own workspace image instead.
+      - name: import a rootfs and run a command in it
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $url = 'https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.1-x86_64.tar.gz'
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\rootfs.tar.gz" $url
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\wsl" | Out-Null
+          wsl --import spike "$env:RUNNER_TEMP\wsl" "$env:RUNNER_TEMP\rootfs.tar.gz"
+          wsl -l -v
+          wsl -d spike -- uname -a
+          wsl -d spike -- cat /etc/os-release
+
+      - name: what version did it get
+        continue-on-error: true
+        run: wsl -l -v
+
+      - name: clean up
+        continue-on-error: true
+        run: wsl --unregister spike
+
+      - name: verdict
+        run: |
+          echo "Read the steps above. What matters, in order:"
+          echo "  1. did 'wsl --version' answer at all"
+          echo "  2. HypervisorPresent, which decides whether WSL2 is possible"
+          echo "  3. did the import succeed, and did 'wsl -l -v' say VERSION 2"
+          echo "A version 1 distribution is not enough: the backend needs a real"
+          echo "kernel to run dockerd in."
