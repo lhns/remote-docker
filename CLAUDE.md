@@ -132,6 +132,16 @@ premise of the project, and it applies to building it too. So:
 - **Only `/containers/create` is ever decoded.** Everything else is copied
   through. The body is handled as generic JSON, never typed structs, so
   unknown fields survive.
+- **A rewritten mount keeps every option it arrived with, `ro` above all.**
+  A bind becomes an NFS volume the workspace daemon mounts for itself, and that
+  export is read-write -- so the read-only flag surviving the rewrite is the
+  only thing between a container and the user's files. Both paths carry it
+  because neither interprets what it does not have to: `Binds` keeps the
+  trailing option field verbatim, and a `Mounts` entry stays a generic map with
+  only `Type` and `Source` touched. `BindOptions` is the one deliberate
+  deletion, because the daemon rejects it on a volume mount. Unit tests pin
+  both, and `test/integration.sh` section 9b pins the end of it: the container
+  is refused AND the directory on this machine is unchanged.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.

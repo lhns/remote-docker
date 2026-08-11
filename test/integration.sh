@@ -259,6 +259,56 @@ else
 fi
 
 echo
+echo "== 9b. a read-only bind mount stays read-only =="
+# `-v src:/w:ro` says the container must not write. Every bind here is rewritten
+# into an NFS volume the workspace daemon mounts for itself (ADR 0006), and the
+# export is read-write, so the ONLY thing standing between a container and this
+# machine's files is that the read-only flag survived the rewrite and the daemon
+# honoured it.
+#
+# Section 9 above is the control: writes do land when they are allowed, so a
+# pass here is the flag working rather than writes being broken.
+#
+# Both spellings, because they take different paths through the rewriter: `-v`
+# arrives as HostConfig.Binds, a string whose options are carried verbatim, and
+# `--mount` as HostConfig.Mounts, a JSON object whose ReadOnly field has to
+# survive the type being changed from bind to volume.
+before=$(ls "$PROJECT" | sort | tr '
+' ' ')
+
+if dockert run --rm -v "$PROJECT:/w:ro" alpine:3         sh -c 'echo nope > /w/ro-v' >/dev/null 2>&1; then
+    bad "a container wrote through a -v ...:ro mount"
+else
+    ok "-v with :ro refused the write"
+fi
+
+if dockert run --rm --mount "type=bind,source=$PROJECT,target=/w,readonly" alpine:3         sh -c 'echo nope > /w/ro-mount' >/dev/null 2>&1; then
+    bad "a container wrote through a --mount readonly mount"
+else
+    ok "--mount with readonly refused the write"
+fi
+
+# The assertion that matters. A refused command proves the daemon reported an
+# error; only the directory proves nothing reached this machine.
+after=$(ls "$PROJECT" | sort | tr '
+' ' ')
+if [ "$before" = "$after" ]; then
+    ok "nothing new appeared on this machine"
+else
+    bad "the directory changed under a read-only mount: [$before] -> [$after]"
+fi
+
+# And read-only means readable. A mount that refuses writes by being broken
+# would pass everything above.
+if out=$(dockert run --rm -v "$PROJECT:/w:ro" alpine:3 cat /w/marker 2>&1) &&
+    echo "$out" | grep -q "from the project directory"; then
+    ok "a read-only mount is still readable"
+else
+    bad "a read-only mount could not be read: $(echo "$out" | tail -2 | tr '
+' ' ')"
+fi
+
+echo
 echo "== 10. a published port is reachable here =="
 dockert run -d --name itest-web -p 18080:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
 echo "<h1>served from the client</h1>" >"$PROJECT/index.html"
