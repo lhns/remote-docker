@@ -102,6 +102,27 @@ Get-ChildItem $env:LOCALAPPDATA\remote-docker\machines
 cannot, it must refuse and leave the entry — that entry is the only record the
 machine exists.
 
+## What CI already proves about WSL
+
+Since 2026-08-11, `.github/workflows/machine.yml` runs this whole WSL section on
+a windows-latest runner on every change to the backend: create, a `docker run`
+with a bind mount from the Windows side, create again for idempotence, and `rm`
+taking the distribution with it. So a report from a real machine is now about
+what differs from that runner -- a different Windows build, a WSL configured by
+hand, an existing distribution list, a machine left running for days -- rather
+than about whether the path works at all.
+
+Four things it found, worth knowing before reading a failure here:
+
+- The machine is reached at its OWN address, not through `localhost`. WSL2's
+  localhost relay did not carry the connection on the runner at all.
+- A machine with nobody in it shuts down, so the client holds a `wsl.exe`
+  session open for as long as it is using one. If a machine stops mid-session,
+  that hold is what to look at.
+- The agent's output goes to `/var/log/remote-dockerd.log` inside the machine.
+- The machine's environment is written into `/etc/wsl.conf`, because a rootfs
+  tarball does not carry the image's `ENV` or `PATH`.
+
 ## Hyper-V
 
 Not implemented yet. When it is, this section gets the same treatment, plus:

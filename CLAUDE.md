@@ -256,11 +256,36 @@ premise of the project, and it applies to building it too. So:
   machine with no WSL, which is the only way they are tested at all.
 - **A machine-backed workspace is an ordinary workspace with a lifecycle.**
   The `machine` block in the config is the only thing that differs anywhere,
-  and the only command that reads it is `rm`, which has a machine to destroy
-  (ADR 0026). Never add a second data path: the session, the export, the port
-  forwarding and the rewriting do not know a machine from a host in another
-  country. And `rm` REFUSES when it cannot destroy the machine, because the
-  config entry is the only record that one was ever built.
+  and two commands read it: `rm`, which has a machine to destroy (ADR 0026),
+  and `session.connect`, which has one to locate. Never add a second data path
+  beyond those: the export, the port forwarding and the rewriting do not know a
+  machine from a host in another country. And `rm` REFUSES when it cannot
+  destroy the machine, because the config entry is the only record that one was
+  ever built.
+- **A machine is located and held, every time, and `host` in its config is a
+  placeholder.** Both halves were measured on a Windows runner
+  (`.github/workflows/machine.yml`, 2026-08-11) and both fail as a refused
+  connection that names nothing:
+  - Windows could not reach `127.0.0.1:2222` while the machine was running and
+    its agent listening, and reached the machine's own `172.24.110.158:2222` at
+    once. WSL2 forwards localhost through a relay that did not carry it. The
+    address is also given out at boot, so a stored one is wrong from the moment
+    the machine restarts -- hence asked at every connection, never saved.
+  - A machine with nobody in it shuts down, and neither an open TCP connection
+    nor a command that runs and exits is somebody. Poking one every ten seconds
+    produced a machine that ran for thirty seconds, stopped, and started again
+    on the next poke, so its dockerd never became ready and its agent never
+    listened. A hold is one wsl.exe session that STAYS OPEN, and the session
+    closes it last, after everything that wanted the machine there.
+- **A rootfs is a filesystem, and the image's environment is not in it.**
+  `docker export` writes layers; `ENV`, `PATH` and the entrypoint live in the
+  image config beside them. A machine imported from one starts with the
+  backend's environment and none of the image's, which surfaces a long way from
+  the cause: dockerd's entrypoint is not on a `PATH` without `/usr/local/bin`,
+  the agent restarts it every two seconds forever and blocks its own listener
+  for ninety seconds waiting for a socket that will never appear.
+  `DOCKER_TLS_CERTDIR` must be EMPTY rather than unset, which is how
+  `image/Dockerfile` turns dind's TLS off.
 - **A VM workspace is the same agent, not a mode.** ADR 0025 moves two things
   to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
   shared-daemon mode only, the NFS client -- and changes nothing else. Never
@@ -388,6 +413,17 @@ tunnel was bound inside that account's netns), that both publish the same port
 at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
 is in the `docker` group, and that restarting the agent adopts the running
 daemons with their containers intact.
+
+A fourth suite, `.github/workflows/machine.yml`, is the only one that runs a
+WINDOWS machine end to end. A Linux job exports the workspace image as a rootfs;
+a windows-latest job imports it with the real client and proves the thing the
+whole backend is for: `docker run --rm -v ${PWD}:/w alpine:3 cat /w/marker`
+reading, inside a container in a machine created ninety seconds earlier, a file
+the runner wrote on the Windows side. That single command covers the session,
+the SSH transport, the NFS export, the bind rewriting and the daemon in the
+machine. It also proves create is idempotent and that `remote rm` takes the
+distribution with it, which is the failure worth catching: a running Linux
+system with nothing naming it.
 
 ### NOT tested, and do not claim otherwise
 
