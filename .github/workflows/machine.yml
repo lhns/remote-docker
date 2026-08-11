@@ -140,7 +140,12 @@ jobs:
           # relay, and this asks whether that relay works here at all, or
           # whether the machine is only reachable at its own address.
           wsl --version
-          $ip = ((wsl -d rd-ci --user root -- hostname -I) -split '\s+')[0]
+          # No shell and no awk: busybox's hostname has no -I, and a shell
+          # pipeline here loses its $-fields to PowerShell's quoting. The
+          # parsing happens on this side, where it can be seen.
+          $addr = (wsl -d rd-ci --user root -- ip -4 -o addr show eth0) -join ' '
+          "eth0: $addr"
+          $ip = ([regex]::Match($addr, 'inet\s+(\d+\.\d+\.\d+\.\d+)')).Groups[1].Value
           "the machine's own address: $ip"
           Test-NetConnection -ComputerName 127.0.0.1 -Port 2222 -InformationLevel Detailed
           if ($ip) { Test-NetConnection -ComputerName $ip -Port 2222 -InformationLevel Detailed }
