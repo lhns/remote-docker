@@ -239,6 +239,9 @@ watched, never your whole disk, and there is a budget. What that costs, why
 deletions are the honest gap, and what to do when the budget runs out are in
 [Caveats](#file-watching-in-detail).
 
+What is in this release, and what is still unproven:
+[`CHANGELOG.md`](CHANGELOG.md).
+
 ## Running a workspace
 
 The workspace runs one binary, `remote-dockerd`. It supervises dockerd,

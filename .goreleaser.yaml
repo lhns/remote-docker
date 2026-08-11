@@ -112,6 +112,7 @@ archives:
         formats: [zip]
     files:
       - README.md
+      - CHANGELOG.md
       - LICENSE
       - NOTICE
 
@@ -123,6 +124,7 @@ archives:
       remote-dockerd_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats: [tar.gz]
     files:
+      - CHANGELOG.md
       - LICENSE
       - NOTICE
       # Flattened, so the install lines in the README and in the unit's own
