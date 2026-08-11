@@ -55,7 +55,8 @@ agent/go.mod             the agent module: 7 third-party modules, 24 go.sum line
     dockercli/           the one way this side runs the docker binary
 
 image/                   the workspace container (Dockerfile only)
-deploy/                  compose and swarm deployments
+deploy/                  compose, swarm, and the systemd unit for a VM
+                         workspace (ADR 0025)
 docs/adr/                architecture decision records
 ```
 
@@ -224,6 +225,26 @@ premise of the project, and it applies to building it too. So:
 - **Accounts use `usermod -p '*'`, not a locked (`!`) password.** Some sshd
   builds refuse public-key auth for locked accounts. Kept even though the agent
   authenticates itself, since a deployment may run sshd alongside.
+- **The unix account name is not the account name, and the uid is what
+  identifies it.** An enrolled `alice` logs in as `alice`; the unix user is
+  `rd-alice` (ADR 0025). `Ensure` keys on the uid, because that is what the
+  uidmap binds and what the port and the file ownership come from -- so an
+  older workspace's `alice` is adopted as it stands, and a uid held by someone
+  this workspace did not create is REFUSED rather than adopted. Adopting one
+  hands an enrolled key another user's files, which is a failure that succeeds.
+  Only `UnixProvisioner` ever sees the prefixed name: the keys filename, the
+  login name, the port ownership and `rd-dind-<account>` all use the account
+  name, and a test that asks the unix side must ask for `rd-<account>` --
+  spelling it `<account>` made `id -nG` fail and the suite read the failure as
+  a pass.
+- **A VM workspace is the same agent, not a mode.** ADR 0025 moves two things
+  to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
+  shared-daemon mode only, the NFS client -- and changes nothing else. Never
+  add an `if onAVM`: both daemon modes already read one switch and a VM obeys
+  it unchanged, which is the same argument ADR 0020 makes about daemon targets.
+  The asymmetry that is easy to get wrong: with a daemon per account the NFS
+  mount happens inside `docker:dind`, which ships a client; in shared mode the
+  machine itself mounts.
 - **`shadow` must stay in the image.** The agent shells out to `useradd`, which
   handles the locking between passwd, group and gshadow that hand-editing gets
   wrong.
@@ -328,6 +349,13 @@ that workspace rather than the default, and **a docker context we did not
 create being left completely alone** -- which is a promise to other software on
 the user's machine and the only one of these that fails silently.
 
+A third suite, `test/vm.sh`, runs the agent ON THE RUNNER with no container
+around it (ADR 0025), which is the VM deployment: `WORKSPACE_ENABLE_DIND=false`,
+a real unix account provisioned on the runner itself, a session, and a bind
+mount resolving through NFS in both daemon modes. The runner is an Ubuntu
+machine with docker, so that is exactly what is proven -- not systemd, which
+starts nothing here, and not any other distro.
+
 A second suite, `test/per-user-dind.sh`, runs the same workspace with two
 enrolled accounts and a daemon each (the default since ADR 0019): that they reach
 different daemons, that neither can list or stop the other's containers, that
@@ -357,7 +385,12 @@ function was.
   the integration suite needs a Linux kernel's NFS client, so no Windows
   machine has taken a session end to end in CI. Say "unit tested on Windows",
   never "the Windows client is tested".
-- **The release pipeline.** No tag has been pushed.
+- **The release pipeline.** No tag has been pushed. The agent archive and the
+  systemd unit in it are built by `goreleaser release --snapshot` and have
+  never been installed on a machine.
+- **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
+  `test/vm.sh` starts the agent directly, because what it tests is the agent as
+  a guest rather than systemd's ability to run a binary.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

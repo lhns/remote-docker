@@ -573,7 +573,7 @@ cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$OTHER.pub"
 
 provisioned2=false
 for _ in $(seq 1 90); do
-    if hostdocker exec "$CONTAINER" id "$OTHER" >/dev/null 2>&1; then
+    if hostdocker exec "$CONTAINER" id "rd-$OTHER" >/dev/null 2>&1; then
         provisioned2=true
         break
     fi
@@ -844,10 +844,15 @@ else
     bad "no pty from the agent: $(trim "$shellout")"
 fi
 
-if echo "$shellout" | grep -q "^$ACCOUNT"; then
-    ok "the shell runs as the enrolled account"
+# `id -un` names the UNIX user, which is not the account name: an enrolled
+# `alice` logs in as `alice` and the unix user behind it is `rd-alice`
+# (ADR 0025), so that the workspace does not take a name in the machine's own
+# passwd file. This is the only assertion anywhere that sees the unix side, and
+# it is the end-to-end proof of the prefix.
+if echo "$shellout" | grep -q "^rd-$ACCOUNT"; then
+    ok "the shell runs as the unix user behind the enrolled account"
 else
-    bad "the shell was not $ACCOUNT: $(trim "$shellout")"
+    bad "the shell was not rd-$ACCOUNT: $(trim "$shellout")"
 fi
 
 # ...and can USE the shared daemon, which needs its supplementary groups.

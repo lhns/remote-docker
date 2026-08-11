@@ -81,11 +81,19 @@ fi
 # The shared `docker` group grants a socket reaching the PARENT daemon, which
 # holds every account's dind. In this mode nobody may be in it, or the
 # separation ends at the first shell.
+#
+# Asked of the UNIX user, which is `rd-<account>` and not the account name
+# (ADR 0025). Spelled `$account` this looked like it passed: `id` failed for a
+# user that does not exist, the grep found nothing, and "not in the docker
+# group" is what a missing user and a correct one produce alike. So the lookup
+# has to succeed before the membership means anything.
 for account in "$A" "$B"; do
-    if hostdocker exec "$CONTAINER" id -nG "$account" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
-        bad "$account is still in the docker group; it can reach the parent daemon"
+    if ! groups=$(hostdocker exec "$CONTAINER" id -nG "rd-$account" 2>&1); then
+        bad "no unix user rd-$account: $groups"
+    elif echo "$groups" | tr ' ' '\n' | grep -qx docker; then
+        bad "rd-$account is still in the docker group; it can reach the parent daemon"
     else
-        ok "$account is not in the docker group"
+        ok "rd-$account is not in the docker group"
     fi
 done
 

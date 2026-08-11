@@ -107,3 +107,8 @@ daemon output and the client's lookalike is unrelated.
 - The client tree moved to `client/`, so `goreleaser`'s `dir:`, the
   Dockerfile's `COPY`s, the test suites' build lines and every documented
   command changed with it. One-time cost, paid here.
+
+*(2026-08-11: the split paid a dividend it was not designed for. Shipping the
+agent as its own release artifact for a VM workspace (ADR 0025) is a goreleaser
+block with `dir: agent` and 24 lines of go.sum, where the same binary built out
+of the single module would have dragged docker/cli and buildx behind it.)*

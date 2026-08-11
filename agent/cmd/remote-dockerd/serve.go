@@ -40,6 +40,11 @@ const (
 	envEnableDind = "WORKSPACE_ENABLE_DIND"
 	envPollSecs   = "WORKSPACE_KEY_POLL_INTERVAL"
 
+	// envAccountPrefix goes in front of the unix user name, so an enrolled
+	// `alice` does not take the name `alice` in the machine's own passwd file
+	// (ADR 0025). The account name, the login name and the port are unchanged.
+	envAccountPrefix = "WORKSPACE_ACCOUNT_PREFIX"
+
 	// envPerUserDind gives each account its own dockerd (ADR 0019) instead of
 	// sharing one (ADR 0012).
 	//
@@ -135,7 +140,10 @@ func serve(addr string) error {
 	// Stated in both modes, because membership is reconciled to it on every
 	// pass. An empty list would mean "reconcile to nothing" rather than
 	// "leave alone".
-	provisioner := &accounts.UnixProvisioner{Groups: []string{"docker", "workspace"}}
+	provisioner := &accounts.UnixProvisioner{
+		Groups: []string{"docker", "workspace"},
+		Prefix: envOr(envAccountPrefix, accounts.DefaultPrefix),
+	}
 	if perUserDind {
 		provisioner.Groups = []string{"workspace"}
 		provisioner.Revoke = []string{"docker"}
@@ -216,6 +224,18 @@ func serve(addr string) error {
 				StorageDriver: storage,
 			},
 			Log: logger("daemons"),
+
+			// The store is the authority on an account's uid: it allocated it,
+			// and it knows the unix user behind the name. Asking the passwd
+			// file for the ACCOUNT name would find nothing now that the unix
+			// user is prefixed.
+			IDs: func(account string) (int, int, error) {
+				a, ok := store.Lookup(account)
+				if !ok {
+					return 0, 0, fmt.Errorf("no such account: %s", account)
+				}
+				return a.UID, a.GID, nil
+			},
 		}
 		targets = manager
 		log.Info("each account gets its own docker daemon", "workspace", id)

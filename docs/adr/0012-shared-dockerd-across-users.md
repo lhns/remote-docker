@@ -29,6 +29,12 @@ enrolment.
 
 ## Consequences
 
+*(2026-08-11: on a VM (ADR 0025) this mode is a different bargain. Sharing a
+dind's daemon means accounts see each other's containers; sharing a machine's
+means they also see, and can stop, whatever else that machine runs. It is also
+the only mode that needs an NFS client on the machine itself, because there is
+no dind image supplying one.)*
+
 - One container, one image pull, one layer cache, one `/var/lib/docker`. The
   shared layer cache is a real benefit and not only a cost saving: cold builds
   across a small team get much faster.

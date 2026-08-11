@@ -123,6 +123,16 @@ build-tagged, and a lint or vet run on a non-Linux development machine does not
 see it. That cost a CI round trip before it was noticed, and the fix is a
 documented `GOOS=linux` pass rather than anything structural.
 
+**The unix name is no longer the account name, and the uid is the identity.**
+An enrolled `alice` still logs in as `alice`; the unix user behind it is
+`rd-alice` (ADR 0025), because on a VM the passwd file is the machine's and not
+ours to take names in. `Ensure` keys on the **uid** rather than the name, which
+is what the uidmap binds and what the reverse-tunnel port and the file
+ownership already come from -- so a workspace whose accounts predate the prefix
+is adopted exactly as it stands, with no rename and no new uid. A uid held by a
+user this workspace did not create is refused and named, rather than adopted:
+adopting one would hand an enrolled key somebody else's files.
+
 **Revoking on an unusable key file takes two reads.** An account is enrolled
 exactly while its file holds at least one key, so emptying the file is how a
 deployment revokes somebody and that had to keep working. But a file being

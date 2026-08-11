@@ -43,6 +43,13 @@ type Account struct {
 	// file was removed or emptied: access is revoked, but the account and its
 	// home directory stay.
 	Keys []ssh.PublicKey
+
+	// Unix is the unix user behind this account, which is NOT its name:
+	// `alice` is provisioned as `rd-alice` (ADR 0025). Anything asking the
+	// operating system about the account -- its groups, what USER should say
+	// in a shell -- has to ask about this one, and asking about Name instead
+	// silently finds nothing rather than failing.
+	Unix string
 }
 
 // Authorized reports whether a key may authenticate as this account.
@@ -62,8 +69,13 @@ func (a Account) Authorized(key ssh.PublicKey) bool {
 // this is what lets the interesting logic (naming, collisions, uid
 // allocation, revocation) be tested anywhere.
 type Provisioner interface {
-	// Ensure creates the account if it does not exist and returns its home.
-	Ensure(name string, uid int, shell string) (home string, err error)
+	// Ensure creates the account if it does not exist.
+	//
+	// It returns the UNIX user it settled on as well as the home directory,
+	// because that name is no longer derivable from the account name: `alice`
+	// is provisioned as `rd-alice`, and an older workspace's `alice` is adopted
+	// under the name it already has (ADR 0025).
+	Ensure(name string, uid int, shell string) (unix, home string, err error)
 }
 
 // Store holds the accounts derived from a directory of public keys.
@@ -239,11 +251,12 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 		account.UID = uid
 		account.GID = uid
 
-		home, err := s.Provisioner.Ensure(name, uid, s.Shell)
+		unix, home, err := s.Provisioner.Ensure(name, uid, s.Shell)
 		if err != nil {
 			s.log().Error("could not provision an account", "account", name, "err", err)
 			continue
 		}
+		account.Unix = unix
 		account.Home = home
 
 		if _, existed := s.accounts[name]; !existed {

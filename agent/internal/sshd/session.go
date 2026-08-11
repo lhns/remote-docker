@@ -205,8 +205,8 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 	cmd.Dir = stored.Home
 	cmd.Env = append(os.Environ(),
 		"HOME="+stored.Home,
-		"USER="+stored.Name,
-		"LOGNAME="+stored.Name,
+		"USER="+stored.Unix,
+		"LOGNAME="+stored.Unix,
 		"SHELL="+shell,
 	)
 
@@ -243,7 +243,7 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 		Credential: &syscall.Credential{
 			Uid:    uint32(stored.UID),
 			Gid:    uint32(stored.GID),
-			Groups: supplementaryGroups(stored.Name, stored.GID),
+			Groups: supplementaryGroups(stored.Unix, stored.GID),
 		},
 		Setsid: true,
 	}
