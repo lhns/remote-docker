@@ -153,15 +153,18 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	// Only the export itself, never a subdirectory of one. A mount of
 	// /m/<id>/sub can only follow a mount of /m/<id>, and restoring from a
 	// deeper path would mean deriving the share from something the far side
-	// composed.
-	local, ok := r.Restore(normalizeExport(exportPath))
+	// composed. Which is also why the rest is "/" without asking: a restore
+	// registers exactly the path it was given.
+	clean := normalizeExport(exportPath)
+	local, ok := r.Restore(clean)
 	if !ok {
 		return nil, "", false
 	}
-	if _, err := r.register(normalizeExport(exportPath), local); err != nil {
+	share, err := r.register(clean, local)
+	if err != nil {
 		return nil, "", false
 	}
-	return r.Lookup(exportPath)
+	return share, "/", true
 }
 
 // Shares returns every registered share, ordered by export path.

@@ -168,18 +168,19 @@ func (c *Client) Alive() bool {
 // laptop suspended and resumed -- stays writable for as long as TCP keeps
 // retransmitting, which is minutes. Config.KeepAlive promises seconds.
 //
-// Two missed replies rather than one, so a workspace briefly too busy to answer
-// is not mistaken for a workspace that is gone.
+// The wait is twice the interval, so a workspace briefly too busy to answer is
+// not mistaken for a workspace that is gone.
 func (c *Client) keepAlive() {
 	t := time.NewTicker(c.cfg.KeepAlive)
 	defer t.Stop()
 
-	missed := 0
 	for {
 		select {
 		case <-c.done:
 			return
 		case <-t.C:
+			// Buffered, so the goroutine writing the answer is never left
+			// blocked on a receive that has gone.
 			answered := make(chan error, 1)
 			go func() {
 				_, _, err := c.ssh.SendRequest("keepalive@openssh.com", true, nil)
@@ -192,13 +193,11 @@ func (c *Client) keepAlive() {
 					_ = c.Close()
 					return
 				}
-				missed = 0
-			case <-time.After(c.cfg.KeepAlive):
-				missed++
-				if missed >= 2 {
-					_ = c.Close()
-					return
-				}
+			case <-time.After(2 * c.cfg.KeepAlive):
+				// Twice the interval rather than once, so a workspace briefly
+				// too busy to answer is not mistaken for one that is gone.
+				_ = c.Close()
+				return
 			case <-c.done:
 				return
 			}

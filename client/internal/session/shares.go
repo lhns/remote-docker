@@ -20,12 +20,12 @@ import (
 	"log/slog"
 	"os"
 	"os/user"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -225,38 +225,19 @@ func (s *shareStore) save() {
 }
 
 // writeShares replaces the file atomically, so a reader never sees half of one.
+//
+// Through config.WriteAtomic rather than its own dance, which is not only
+// shorter: that one retries the rename, because a rename can fail with a
+// sharing violation while a reader has the file open, and this file is read at
+// every session start and written on every share. 0o600 because it names
+// directories on this machine, which is not something to hand to every account
+// on it.
 func writeShares(path string, file shareFile) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-
-	tmp, err := os.CreateTemp(dir, ".shares-*.json")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	// It names directories on this machine, which is not something to hand to
-	// every account on it.
-	if err := os.Chmod(name, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	return config.WriteAtomic(path, append(data, '\n'), 0o600)
 }
 
 // thisMachine names the host and local account a record belongs to.

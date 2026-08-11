@@ -165,10 +165,9 @@ func (c *Collector) ours(v Volume) bool {
 	// label" is not "mine": an older session of the other machine may still be
 	// using it. `remote gc --orphans` is how those go, deliberately by asking.
 	if c.Client != "" {
-		switch client := v.Labels[ClientLabel]; {
-		case client == c.Client:
-		case client == "" && c.Orphans:
-		default:
+		client := v.Labels[ClientLabel]
+		unnamed := client == "" && c.Orphans
+		if client != c.Client && !unnamed {
 			return false
 		}
 	}

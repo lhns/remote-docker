@@ -134,7 +134,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
 				s.logQuiet(liveCtx, "collecting unused share volumes", "err", err)
+				return
 			}
+			// Here rather than in Session.Collect, which is the `gc` command
+			// and runs on a QUERY session: a query session keeps no record, so
+			// pruning there could only ever be a no-op.
+			s.pruneShareRecord(liveCtx, live)
 		})
 	}
 

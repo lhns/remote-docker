@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/client/internal/rewrite"
+
+	"maps"
 )
 
 // APIClient makes Docker API calls of our own: creating the volumes that
@@ -111,15 +113,15 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 // volume the user made is never ours to remove, and one a container holds is
 // worse to remove than to leave wrong.
 func (c *APIClient) replaceIfStale(ctx context.Context, name string, want map[string]string) error {
-	existing, err := c.inspectVolume(ctx, name)
-	if err != nil || existing == nil {
+	existing, ok := c.inspectVolume(ctx, name)
+	if !ok {
 		// Not there, or not answerable. Create will say what is wrong.
 		return nil
 	}
 	if existing.Labels[rewrite.ManagedLabel] != "share" {
 		return nil
 	}
-	if sameOptions(existing.Options, want) {
+	if maps.Equal(existing.Options, want) {
 		return nil
 	}
 
@@ -137,40 +139,29 @@ type volumeDetail struct {
 	Labels  map[string]string `json:"Labels"`
 }
 
-// inspectVolume returns a volume's definition, or nil if it is not there.
-func (c *APIClient) inspectVolume(ctx context.Context, name string) (*volumeDetail, error) {
-	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes/"+name, nil)
+// inspectVolume returns a volume's definition, and whether there is one to
+// report.
+//
+// No error, because there is nothing a caller could do with one. Every reason
+// this fails -- absent, unreachable, unparseable -- means the same thing here:
+// go on and let create answer, which is what says something useful anyway.
+func (c *APIClient) inspectVolume(ctx context.Context, name string) (volumeDetail, bool) {
+	var detail volumeDetail
+
+	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil)
 	if err != nil {
-		return nil, err
+		return detail, false
 	}
 	defer conn.Close()
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("proxy: inspecting volume %s: %s", name, apiError(resp))
+		return detail, false
 	}
-
-	var detail volumeDetail
 	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
-		return nil, fmt.Errorf("proxy: decoding volume %s: %w", name, err)
+		return detail, false
 	}
-	return &detail, nil
-}
-
-// sameOptions compares two driver option sets.
-func sameOptions(have, want map[string]string) bool {
-	if len(have) != len(want) {
-		return false
-	}
-	for k, v := range want {
-		if have[k] != v {
-			return false
-		}
-	}
-	return true
+	return detail, true
 }
 
 // Container is the subset of container state the client needs.

@@ -619,11 +619,6 @@ func Save(file File, path string) error {
 	if path == "" {
 		path = DefaultPath()
 	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("config: creating %s: %w", dir, err)
-		}
-	}
 
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
@@ -631,7 +626,24 @@ func Save(file File, path string) error {
 	}
 	data = append(data, '\n')
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".remote-docker-*.json")
+	return WriteAtomic(path, data, 0)
+}
+
+// WriteAtomic replaces a file with new contents, or leaves it as it was.
+//
+// Shared rather than copied, because what follows is the part that is easy to
+// get subtly wrong and this client writes more than one file that must never
+// be read half-written. A mode of 0 keeps whatever the temporary file had,
+// which is what the config wants; a file naming local directories asks for
+// 0o600.
+func WriteAtomic(path string, data []byte, mode os.FileMode) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("config: creating %s: %w", dir, err)
+		}
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".remote-docker-*")
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
@@ -644,6 +656,11 @@ func Save(file File, path string) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if mode != 0 {
+		if err := os.Chmod(tmpName, mode); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	// Renamed straight over the old file, NEVER unlinked first.
 	//

@@ -51,8 +51,8 @@ type assignment struct {
 	client  string
 }
 
-// portsPath is where assignments are persisted, in the same one-line-per-entry
-// shape as uidmap so an operator can read both with `cat`.
+// path is where assignments are persisted, in the same one-line-per-entry shape
+// as uidmap so an operator can read both with `cat`.
 func (p *Ports) path() string { return filepath.Join(p.Dir, "clientports") }
 
 // For returns the port this account's machine should use, allocating one if
@@ -85,33 +85,27 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 		return port, nil
 	}
 
+	// One walk of the record, since this machine is not in it: everything
+	// assigned belongs to somebody else.
+	taken := make(map[int]bool, len(p.assigned))
+	for _, v := range p.assigned {
+		taken[v] = true
+	}
+
 	port := base
-	if p.heldByAnother(base, key) {
-		port = p.allocate(key)
-		if port == 0 {
+	if taken[base] {
+		if port = p.allocate(taken); port == 0 {
 			return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", account)
 		}
 	}
 
 	p.assigned[key] = port
-	if err := p.save(); err != nil {
-		// Not fatal: the session works, and the cost of losing the record is
-		// that this machine may be given a different port next time, which
-		// costs it its volumes rather than its connection.
-		return port, nil
-	}
-	return port, nil
-}
 
-// heldByAnother reports whether a port is already promised to a different
-// machine.
-func (p *Ports) heldByAnother(port int, key assignment) bool {
-	for k, v := range p.assigned {
-		if v == port && k != key {
-			return true
-		}
-	}
-	return false
+	// A record that cannot be written is not fatal: the session works, and the
+	// cost is that this machine may be given a different port next time, which
+	// costs it its volumes rather than its connection.
+	_ = p.save()
+	return port, nil
 }
 
 // allocate picks a free port, counting DOWN from the top of the range.
@@ -125,14 +119,7 @@ func (p *Ports) heldByAnother(port int, key assignment) bool {
 //
 // Deterministic rather than random, so an operator can predict the range and
 // a rerun of the same sequence produces the same file.
-func (p *Ports) allocate(key assignment) int {
-	taken := map[int]bool{}
-	for k, v := range p.assigned {
-		if k != key {
-			taken[v] = true
-		}
-	}
-
+func (p *Ports) allocate(taken map[int]bool) int {
 	for port := workspace.MaxPort; port >= p.Mapping.PortBase; port-- {
 		if taken[port] {
 			continue
@@ -155,21 +142,23 @@ func (p *Ports) allocate(key assignment) int {
 // which is what the forward policy asks instead of doing the arithmetic
 // itself.
 func (p *Ports) Owns(account string, uid, port int) bool {
-	if base, err := p.Mapping.PortForUID(uid); err == nil && port == base {
-		return true
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := p.load(); err != nil {
 		return false
 	}
+
+	// The record first, and it decides. The derived port belongs to this
+	// account only while nobody else has been given it: once it is assigned,
+	// answering from the formula would say two accounts own one port.
 	for k, v := range p.assigned {
-		if v == port && k.account == account {
-			return true
+		if v == port {
+			return k.account == account
 		}
 	}
-	return false
+
+	base, err := p.Mapping.PortForUID(uid)
+	return err == nil && port == base
 }
 
 // load reads the record once.

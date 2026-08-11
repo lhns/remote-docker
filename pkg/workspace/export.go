@@ -172,7 +172,7 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 		// rd-<id> or rd-cwd, from before this.
 		return "", rest, validShare(rest)
 	}
-	if len(client) != clientIDLen || !isHex(client) {
+	if !validClient(client) {
 		return "", "", false
 	}
 	return client, share, validShare(share)
@@ -180,25 +180,29 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 
 // validShare reports whether a volume name suffix names a share this program
 // could have created.
+//
+// Asked of ParseID rather than re-derived. What a share id looks like is a rule
+// that has to exist once: the uid to port formula lived in two places, the
+// copies drifted, and CLAUDE.md keeps that as a retired invariant precisely so
+// it is not done again.
 func validShare(share string) bool {
 	if share == cwdSuffix {
 		return true
 	}
-	return len(share) == idLen && isHex(share)
+	_, err := ParseID(VolumeNamePrefix + share)
+	return err == nil
 }
 
-// isHex reports whether every character is a lowercase hex digit, which is
-// what both ids are made of.
-func isHex(s string) bool {
-	if s == "" {
+// validClient reports whether a string could be a client id.
+//
+// hex.DecodeString accepts uppercase, which nothing here emits. Matching one
+// costs nothing, and is not worth a second rule about hex to prevent.
+func validClient(s string) bool {
+	if len(s) != clientIDLen {
 		return false
 	}
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // ValidExport reports whether a path is one this program exports, which is
