@@ -243,7 +243,13 @@ func waitForAgent(ctx context.Context, port int) error {
 }
 
 // agentStartTimeout is how long the agent has to open its listener.
-const agentStartTimeout = 90 * time.Second
+//
+// Longer than the agent's own wait for dockerd, deliberately. It gives the
+// daemon ninety seconds and then serves anyway, on the argument that a
+// workspace somebody can log into beats one that took the evidence with it --
+// so a client that waits ninety seconds gives up at the exact moment the agent
+// would have started answering, and reports a machine that was about to work.
+const agentStartTimeout = 3 * time.Minute
 
 // saveMachineWorkspace writes the workspace entry, which is what makes the
 // machine an ordinary workspace everywhere else.

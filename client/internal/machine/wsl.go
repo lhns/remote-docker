@@ -149,6 +149,25 @@ func observeWSL(distros []WSLDistribution, name, generation string) Observed {
 // part between a user and a working daemon.
 func wslConf(spec Spec) string {
 	env := []string{
+		// The image's own environment, restored by hand.
+		//
+		// `docker export` writes a FILESYSTEM. The image config -- ENV, PATH,
+		// the entrypoint -- lives beside the layers and is not in the tarball,
+		// so a machine imported from one starts with WSL's environment and none
+		// of the image's. It fails a long way from here: the agent starts,
+		// cannot find `dockerd-entrypoint.sh` on a PATH without /usr/local/bin,
+		// restarts it every two seconds forever, and blocks its own listener for
+		// ninety seconds waiting for a socket that will never appear. What
+		// Windows sees is a refused connection.
+		//
+		// PATH and DOCKER_TLS_CERTDIR are the two that have no default in the
+		// agent's own code. DOCKER_TLS_CERTDIR is EMPTY on purpose: it is how
+		// image/Dockerfile turns dind's TLS off, and unset is not the same
+		// answer as empty -- dind generates certificates and listens on 2376
+		// instead.
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"DOCKER_TLS_CERTDIR=",
+
 		"WORKSPACE_STATE_DIR=/etc/workspace",
 		"WORKSPACE_KEYS_DIR=/etc/workspace/authorized_keys.d",
 		"WORKSPACE_HOSTKEY_DIR=/etc/workspace/host_keys",

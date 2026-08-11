@@ -229,3 +229,23 @@ func TestWSLConfBindsBeyondLoopback(t *testing.T) {
 		t.Errorf("no boot command in:\n%s", conf)
 	}
 }
+
+// The image's environment has to be restored by hand.
+//
+// `docker export` writes a filesystem; ENV and PATH live in the image config
+// beside the layers and are not in the tarball. It fails a long way from the
+// cause: dockerd-entrypoint.sh is not on a PATH without /usr/local/bin, the
+// agent restarts it forever and blocks its own listener, and Windows sees a
+// refused connection.
+func TestWSLConfCarriesTheImageEnvironment(t *testing.T) {
+	conf := wslConf(Spec{Name: "dev", Port: 2222})
+
+	if !strings.Contains(conf, "/usr/local/bin") {
+		t.Errorf("PATH has no /usr/local/bin, where the agent and dockerd's entrypoint live:\n%s", conf)
+	}
+	// Empty, not absent: this is how the image turns dind's TLS off, and unset
+	// means dind generates certificates and listens on another port instead.
+	if !strings.Contains(conf, "DOCKER_TLS_CERTDIR= ") {
+		t.Errorf("DOCKER_TLS_CERTDIR is not set to empty:\n%s", conf)
+	}
+}
