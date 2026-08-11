@@ -200,7 +200,16 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	// start, generate a host key and open its listener, and returning before
 	// that hands the user a workspace whose first command fails with a refused
 	// connection.
-	if err := waitForAgent(ctx, spec.Port); err != nil {
+	//
+	// Kept warm while waiting, because a machine with nobody in it goes away.
+	// WSL shuts a distribution down when it is idle, and a TCP connection from
+	// Windows is not what it counts -- so the first attempt at this dialled a
+	// machine that had already stopped, three minutes after its agent said it
+	// was listening. Start is the poke: it starts a stopped machine and counts
+	// as use of a running one.
+	// A failed poke is not reported: what matters is whether the agent answers,
+	// and that is what the wait's own error says.
+	if err := waitForAgent(ctx, spec.Port, func() { _ = backend.Start(ctx, name) }); err != nil {
 		return err
 	}
 
@@ -222,11 +231,17 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 // A dial rather than a handshake: this is asking whether the listener is open,
 // and anything further is the session's job to report properly. The timeout is
 // generous because a machine's first start does more than a later one.
-func waitForAgent(ctx context.Context, port int) error {
+func waitForAgent(ctx context.Context, port int, keepWarm func()) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	deadline := time.Now().Add(agentStartTimeout)
 
-	for time.Now().Before(deadline) {
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		// Every tenth second of waiting, which is well inside the idle timeout
+		// and cheap: a poke is one process that runs `true`.
+		if attempt%10 == 0 && keepWarm != nil {
+			keepWarm()
+		}
+
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err == nil {
 			_ = conn.Close()

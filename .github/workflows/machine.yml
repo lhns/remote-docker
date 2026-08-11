@@ -140,7 +140,7 @@ jobs:
           # relay, and this asks whether that relay works here at all, or
           # whether the machine is only reachable at its own address.
           wsl --version
-          $ip = (wsl -d rd-ci --user root -- sh -c "ip -4 -o addr show eth0 | awk '{print `$4}' | cut -d/ -f1") -replace '\s',''
+          $ip = ((wsl -d rd-ci --user root -- hostname -I) -split '\s+')[0]
           "the machine's own address: $ip"
           Test-NetConnection -ComputerName 127.0.0.1 -Port 2222 -InformationLevel Detailed
           if ($ip) { Test-NetConnection -ComputerName $ip -Port 2222 -InformationLevel Detailed }
