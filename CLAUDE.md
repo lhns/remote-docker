@@ -33,18 +33,28 @@ go.mod                   THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
   internal/logx/         the one log handler, so both look the same
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
-client/go.mod            the client module: docker/cli, buildx, 857 go.sum lines
+host/go.mod              YOUR OWN MACHINE, minus Docker. 0 docker packages in
+                         its graph, against the client's 191 -- which is the
+                         claim this whole split was for, and it is measured.
+  nfsserve/              in-process NFSv3 server, virtual export namespace
+  fswatch/               watches shared dirs on three platforms, budget,
+                         excludes, overflow
+  keys/                  the keypair and known_hosts: this machine's identity
+
+client/go.mod            the client module: THE GLUE. docker/cli, buildx
   cmd/remote-docker/     the client binary, whose root command IS the Docker
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    fswatch/             watches shared dirs, streams changes to the agent
-    sshx/                keys, known_hosts, and the enrolment hint: this
-                         client's identity, wired to pkg/tunnel/client
-    nfsserve/            in-process NFSv3 server, virtual export namespace
+    sshx/                where host/keys meets pkg/tunnel/client, and the
+                         enrolment hint, which knows this project's rule for
+                         who may log in
+    machine/             provisioning a workspace on this machine (ADR 0026)
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
-    ports/               published ports -> local forwards
+    ports/               published ports -> local forwards. Stays glue whole:
+                         its manager is keyed on container ids throughout, and
+                         the generic forward is already pkg/tunnel/client's
     session/             wires the above into one live connection
 
 space/go.mod             THE WORKSPACE SIDE, minus Docker. Reaches none of
@@ -78,16 +88,16 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# FOUR MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary.
+# FIVE MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary.
 # A bare `go build ./...` at the root covers the shared module and nothing
 # else -- it will pass while compiling almost none of this repository.
-for m in . ./agent ./space ./client; do (cd $m && go build ./... && go test ./...); done
+for m in . ./agent ./space ./host ./client; do (cd $m && go build ./... && go test ./...); done
 
-# lint, six passes: one per module, plus the agent AND space under Linux. Both
+# lint, seven passes: one per module, plus the agent AND space under Linux. Both
 # carry Linux-only files -- session handling, netns, the unix provisioner, the
 # inotify poker -- which a lint on the development machine does not see at all.
 # CI does, and will fail on what you did not lint.
-for m in . ./agent ./space ./client; do (cd $m && golangci-lint run ./...); done
+for m in . ./agent ./space ./host ./client; do (cd $m && golangci-lint run ./...); done
 for m in agent space; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
@@ -102,7 +112,7 @@ gofmt -l .   # must print nothing
 bash test/integration.sh
 ```
 
-`go.work` ties the four together for editors and local commands. CI and the
+`go.work` ties the five together for editors and local commands. CI and the
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the

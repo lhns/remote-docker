@@ -39,14 +39,14 @@ Four in one restructuring is the argument that the rule is worth its cost.
 
 ```
 github.com/lhns/remote-docker          SHARED: what both ends must agree on
+github.com/lhns/remote-docker/host     THE USER'S MACHINE, minus Docker
 github.com/lhns/remote-docker/space    THE WORKSPACE, minus Docker
 github.com/lhns/remote-docker/agent    the agent binary: glue
 github.com/lhns/remote-docker/client   the client binary: glue
 ```
 
-`space` holds `accounts`, `notify` and `netns`. A `host` module for the
-machinery on the user's own side — `nfsserve`, `fswatch`, the generic half of
-port forwarding — is the same move on the other end and is not done yet.
+`host` holds `nfsserve`, `fswatch` and `keys`; `space` holds `accounts`,
+`notify` and `netns`.
 
 **The names are places, not roles.** `client` and `server` invert depending on
 the mechanism: for the Docker API the user's machine is the client, and for NFS
@@ -72,8 +72,18 @@ stayed with the replayer deliberately — what it enforces is containment, the
 mountpoint it checks is reported by a daemon the account is root inside, and
 `path.Join` is not containment because it CLEANS.
 
-`ports` is the one still split down the middle: the forwarding is generic and
-the discovery asks the Docker API which containers published what.
+`ports` was expected to split down the middle, with a generic forwarder moving
+out and the container discovery staying. It stays whole instead, for two reasons
+found by looking: the generic part -- a local listener whose connections are
+carried to an address on the workspace -- is ALREADY `pkg/tunnel/client.Forward`,
+and what remains is keyed on container ids from end to end. Splitting further
+would have invented an abstraction with exactly one user.
+
+The same rule kept `keys` and the enrolment hint apart. A keypair and a
+known_hosts file are this machine's identity and know nothing about what they
+authenticate to; the hint names a file in the workspace's `authorized_keys.d`,
+which is this project's rule for who may log in. So `host/keys` produces the two
+values and `client/internal/sshx` is where they meet the transport.
 
 ## The membership test is checkable, and the obvious check does not work
 
@@ -94,13 +104,20 @@ What does distinguish them is coupling to the packages that are about Docker:
 (cd space && go list -deps ./... | grep -E 'internal/(dockercli|daemons|supervise|elevate)')
 ```
 
-On the client side the original check will work, because docker/cli is a real
-import there. Two different checks for two modules is not elegant, and saying so
-is better than shipping one that passes without proving anything.
+On the host side the original check does work, because docker/cli is a real
+import there, and it is the sharpest number in this record:
+
+```bash
+(cd host   && go list -deps ./... | grep -v lhns/remote-docker | grep -ci docker)  # 0
+(cd client && go list -deps ./... | grep -v lhns/remote-docker | grep -ci docker)  # 191
+```
+
+Two different checks for two modules is not elegant, and saying so is better
+than shipping one that passes without proving anything.
 
 ## What it costs
 
-- **Four modules, soon five, and `./...` stops at every boundary.** The
+- **Five modules, and `./...` stops at every boundary.** The
   build/test loop and CI grow an entry each time. This was already the project's
   documented trap.
 - **A change spanning core and binary needs two steps.** `go.work` hides that

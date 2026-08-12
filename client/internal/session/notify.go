@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/client/internal/fswatch"
-	"github.com/lhns/remote-docker/client/internal/nfsserve"
 	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/host/fswatch"
+	"github.com/lhns/remote-docker/host/nfsserve"
 	"github.com/lhns/remote-docker/pkg/tunnel"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )

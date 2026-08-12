@@ -11,13 +11,10 @@ require (
 	github.com/docker/buildx v0.36.1
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/compose/v5 v5.4.0
-	github.com/fsnotify/fsnotify v1.10.1
-	github.com/go-git/go-billy/v5 v5.9.1
 	github.com/google/go-containerregistry v0.21.7
 	github.com/lhns/remote-docker v0.0.0
+	github.com/lhns/remote-docker/host v0.0.0
 	github.com/spf13/cobra v1.10.2
-	github.com/willscott/go-nfs v0.0.4
-	github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 )
@@ -85,7 +82,9 @@ require (
 	github.com/eiannone/keyboard v0.0.0-20220611211555-0d226195f203 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsevents v0.2.0 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fvbommel/sortorder v1.1.0 // indirect
+	github.com/go-git/go-billy/v5 v5.9.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -218,6 +217,8 @@ require (
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/valyala/fastjson v1.6.7 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.32 // indirect
+	github.com/willscott/go-nfs v0.0.4 // indirect
+	github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
@@ -267,6 +268,8 @@ require (
 // In-repo: the shared module is this repository's root, and a build here must
 // never need a published tag for a change made in the same commit.
 replace github.com/lhns/remote-docker => ../
+
+replace github.com/lhns/remote-docker/host => ../host
 
 // The pre-split genproto monolith still contains googleapis/api/annotations,
 // which the split module google.golang.org/genproto/googleapis/api also

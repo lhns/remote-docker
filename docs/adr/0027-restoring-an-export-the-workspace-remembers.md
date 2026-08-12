@@ -84,7 +84,7 @@ digest is an identity rather than a security boundary.
 ## Where
 
 `client/internal/session/shares.go` is the record; `Registry.Restore` in
-`client/internal/nfsserve/registry.go` is the hook, consulted only from
+`host/nfsserve/registry.go` is the hook, consulted only from
 `LookupOrRestore`, which only `mountHandler.Mount` calls. `Lookup` and `Shares`
 never resurrect anything, or "in use" would depend on who asked.
 

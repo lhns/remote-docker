@@ -41,13 +41,13 @@ jobs:
           fi
 
       # Per module, and every module named explicitly. `./...` stops at a
-      # module boundary, so a loop over the four is the only thing that
+      # module boundary, so a loop over the five is the only thing that
       # actually covers the repository after ADR 0021 -- and a `go test ./...`
       # at the root would pass while testing almost nothing.
       - name: go vet
         run: |
           set -eux
-          for mod in . ./agent ./space ./client; do
+          for mod in . ./agent ./space ./host ./client; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -56,7 +56,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in . agent space client; do
+          for mod in . agent space host client; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -77,10 +77,14 @@ jobs:
   # caught by tests that ran on one developer's machine and nowhere else, which
   # is the one place this project's own premise says not to depend on.
   #
-  # The client and the shared module only. The agent is Linux-only by design
-  # (it drives useradd, netns and inotify); the cross-compile matrix already
-  # keeps its `_other.go` stubs honest, and running its tests here would prove
-  # nothing about the machine it actually runs on.
+  # The client, host and the shared module. Not the agent or space: both are
+  # Linux-only by design (useradd, netns, inotify); the cross-compile matrix
+  # already keeps their `_other.go` stubs honest, and running their tests here
+  # would prove nothing about the machine they actually run on.
+  #
+  # host EARNS a place here rather than inheriting one. Its fswatch has a
+  # Windows backend of its own and its NFS server serves this machine's files,
+  # so this is the only job where either runs on the OS it was written for.
   #
   # No -race: it needs cgo, and a C toolchain on this runner is a dependency
   # for a check the Linux job already performs on the same code.
@@ -102,7 +106,7 @@ jobs:
         shell: bash
         run: |
           set -eux
-          for mod in . client; do
+          for mod in . host client; do
             (cd "$mod" && go test ./...)
           done
 
@@ -128,7 +132,7 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in . ./agent ./space ./client; do
+          for mod in . ./agent ./space ./host ./client; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
           # The agent and space both carry Linux-only files (netns, the unix
@@ -178,7 +182,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -eux
-          for mod in . ./agent ./space ./client; do
+          for mod in . ./agent ./space ./host ./client; do
             (cd "$mod" && go build ./...)
           done
 

@@ -9,7 +9,7 @@
 // implement, so the POSIX client was fast and the Windows client was not. One
 // ssh.Client carrying many channels makes that difference disappear rather
 // than working around it.
-package sshx
+package keys
 
 import (
 	"crypto/ed25519"

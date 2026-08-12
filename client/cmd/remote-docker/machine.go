@@ -20,7 +20,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/client/internal/proxy"
-	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/host/keys"
 )
 
 func newMachineCommand() *cobra.Command {
@@ -385,7 +385,7 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 // enrolledPublicKey is this machine's public half, generating the pair if this
 // is the first thing that has needed it.
 func enrolledPublicKey() (string, error) {
-	key, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
+	key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
 		return "", err
 	}
