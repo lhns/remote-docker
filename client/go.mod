@@ -11,7 +11,7 @@ require (
 	github.com/docker/buildx v0.36.1
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/compose/v5 v5.4.0
-	github.com/google/go-containerregistry v0.21.7
+	github.com/google/go-containerregistry v0.21.9
 	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
@@ -160,7 +160,7 @@ require (
 	github.com/moby/go-archive v0.3.2 // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/moby/api v1.55.0 // indirect
-	github.com/moby/moby/client v0.5.0 // indirect
+	github.com/moby/moby/client v0.5.1 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/policy-helpers v0.0.0-20260722051018-856be88baec4 // indirect
 	github.com/moby/swarmkit/v2 v2.1.2 // indirect
