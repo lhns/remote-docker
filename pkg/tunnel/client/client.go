@@ -1,10 +1,22 @@
-package sshx
+// Package client dials the workspace end of the tunnel.
+//
+// One ssh.Client carries every channel this project needs: the reverse forward
+// for the NFS export, a local forward per published container port, the Docker
+// API stream, and any interactive session. That multiplexing is inherent to SSH
+// and is why the ControlMaster split between the old shell clients disappears.
+//
+// It knows nothing about Docker and nothing about who may log in. Both are
+// deliberate. Docker is glue and lives in the binaries; auth is policy, so this
+// package is handed a signer and a host key callback and never decides which
+// key or which trust rule (ADR 0030). The caller building those two values is
+// the only place that can also say what to do when they are refused, which is
+// why the enrolment hint lives there rather than here.
+package client
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lhns/remote-docker/pkg/tunnel"
 	"io"
 	"net"
 	"strings"
@@ -12,6 +24,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/lhns/remote-docker/pkg/tunnel"
 )
 
 // Config describes how to reach a workspace.
@@ -20,8 +34,14 @@ type Config struct {
 	Port int
 	User string
 
-	Key        KeyPair
-	KnownHosts *KnownHosts
+	// Signer is this machine's identity. Where the key came from, and whether
+	// it was generated on first use, is the caller's business.
+	Signer ssh.Signer
+
+	// HostKey decides whether the far side is the workspace it claims to be.
+	// Required: there is no default, because every default is either a prompt
+	// nobody is there to answer or an acceptance of anything at all.
+	HostKey ssh.HostKeyCallback
 
 	// Ciphers, if set, replaces the negotiated cipher list.
 	//
@@ -56,31 +76,7 @@ func (c Config) Addr() string {
 	return net.JoinHostPort(c.Host, fmt.Sprint(c.Port))
 }
 
-// enrolmentHint is what to add to an authentication failure, and nothing at
-// all for any other kind.
-//
-// The workspace enrols a key by filename, out of band, so "unable to
-// authenticate" is nearly always a key that has not been put there yet or a
-// file that has just been written and not yet read. Neither the account nor the
-// file nor the key is in the error, and all three are needed to fix it.
-//
-// Matched on x/crypto's wording, which is not a promise it makes. A reworded
-// upstream costs the hint and leaves the error, which is the right way round.
-func enrolmentHint(err error, cfg Config) string {
-	if err == nil || cfg.Key.Signer == nil || !strings.Contains(err.Error(), "unable to authenticate") {
-		return ""
-	}
-	return fmt.Sprintf(
-		"\n  fix: enrol this key as authorized_keys.d/%s.pub; it is read within a minute\n  key: %s",
-		cfg.User, ssh.FingerprintSHA256(cfg.Key.Signer.PublicKey()))
-}
-
 // Client is a live connection to a workspace.
-//
-// One Client carries every channel this tool needs: the reverse forward for
-// the NFS export, a local forward per published container port, the Docker API
-// stream, and any interactive session. That multiplexing is inherent to SSH
-// and is why the ControlMaster split between the old clients disappears.
 type Client struct {
 	ssh  *ssh.Client
 	cfg  Config
@@ -90,8 +86,14 @@ type Client struct {
 
 // Dial connects and authenticates.
 func Dial(ctx context.Context, cfg Config) (*Client, error) {
-	if cfg.KnownHosts == nil {
-		return nil, errors.New("sshx: Config.KnownHosts is required")
+	// Refused here rather than left to x/crypto, because the shape of the
+	// mistake matters: a caller that forgot this has no host key policy at all,
+	// and the failure must name that rather than arrive as a handshake error.
+	if cfg.HostKey == nil {
+		return nil, errors.New("tunnel: Config.HostKey is required")
+	}
+	if cfg.Signer == nil {
+		return nil, errors.New("tunnel: Config.Signer is required")
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
@@ -105,8 +107,8 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(cfg.Key.Signer)},
-		HostKeyCallback: cfg.KnownHosts.Callback(),
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(cfg.Signer)},
+		HostKeyCallback: cfg.HostKey,
 		Timeout:         cfg.Timeout,
 	}
 	clientCfg.Ciphers = cfg.Ciphers
@@ -114,14 +116,13 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	dialer := &net.Dialer{Timeout: cfg.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", cfg.Addr())
 	if err != nil {
-		return nil, fmt.Errorf("sshx: dialling %s: %w", cfg.Addr(), err)
+		return nil, fmt.Errorf("tunnel: dialling %s: %w", cfg.Addr(), err)
 	}
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr(), clientCfg)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("sshx: connecting to %s@%s: %w%s",
-			cfg.User, cfg.Addr(), err, enrolmentHint(err, cfg))
+		return nil, fmt.Errorf("tunnel: connecting to %s@%s: %w", cfg.User, cfg.Addr(), err)
 	}
 
 	c := &Client{
@@ -227,7 +228,7 @@ func (c *Client) Close() error {
 func (c *Client) Listen(addr string) (net.Listener, error) {
 	l, err := c.ssh.Listen("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: requesting remote listener on %s: %w", addr, err)
+		return nil, fmt.Errorf("tunnel: requesting remote listener on %s: %w", addr, err)
 	}
 	return l, nil
 }
@@ -238,7 +239,7 @@ func (c *Client) Listen(addr string) (net.Listener, error) {
 func (c *Client) DialRemote(addr string) (net.Conn, error) {
 	conn, err := c.ssh.Dial("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: dialling %s from the workspace: %w", addr, err)
+		return nil, fmt.Errorf("tunnel: dialling %s from the workspace: %w", addr, err)
 	}
 	return conn, nil
 }
@@ -252,7 +253,7 @@ func (c *Client) DialRemote(addr string) (net.Conn, error) {
 func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 	sess, err := c.ssh.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("sshx: opening session: %w", err)
+		return nil, fmt.Errorf("tunnel: opening session: %w", err)
 	}
 	defer func() { _ = sess.Close() }()
 
@@ -276,9 +277,9 @@ func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 	case r := <-ch:
 		if r.err != nil {
 			if msg := strings.TrimSpace(stderr.String()); msg != "" {
-				return r.out, fmt.Errorf("sshx: %q: %w: %s", cmd, r.err, msg)
+				return r.out, fmt.Errorf("tunnel: %q: %w: %s", cmd, r.err, msg)
 			}
-			return r.out, fmt.Errorf("sshx: %q: %w", cmd, r.err)
+			return r.out, fmt.Errorf("tunnel: %q: %w", cmd, r.err)
 		}
 		return r.out, nil
 	}
@@ -290,21 +291,21 @@ func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 func (c *Client) OpenStream(cmd string) (io.ReadWriteCloser, error) {
 	sess, err := c.ssh.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("sshx: opening session: %w", err)
+		return nil, fmt.Errorf("tunnel: opening session: %w", err)
 	}
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		_ = sess.Close()
-		return nil, fmt.Errorf("sshx: stdin pipe: %w", err)
+		return nil, fmt.Errorf("tunnel: stdin pipe: %w", err)
 	}
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
 		_ = sess.Close()
-		return nil, fmt.Errorf("sshx: stdout pipe: %w", err)
+		return nil, fmt.Errorf("tunnel: stdout pipe: %w", err)
 	}
 	if err := sess.Start(cmd); err != nil {
 		_ = sess.Close()
-		return nil, fmt.Errorf("sshx: starting %q: %w", cmd, err)
+		return nil, fmt.Errorf("tunnel: starting %q: %w", cmd, err)
 	}
 	return &sessionStream{sess: sess, in: stdin, out: stdout}, nil
 }

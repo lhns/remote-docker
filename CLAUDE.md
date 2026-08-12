@@ -20,20 +20,25 @@ itself. Published ports become reachable locally as containers start.
 ## Layout
 
 ```
-go.mod                   THE SHARED MODULE (ADR 0021), depends on ~nothing
+go.mod                   THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
+                         gliderlabs/ssh for pkg/tunnel/client's test server
   pkg/workspace/         THE CONTRACT, imported by both binaries
+  pkg/tunnel/            THE TRANSPORT (ADR 0030): the one bidirectional copy
+                         and the one answer to what half-closing means, plus
+                         the names both ends speak. Imports no SSH library.
+    client/              dialling it: sessions, streams, both forwards. Given
+                         a signer and a host key rule; decides neither.
   internal/logx/         the one log handler, so both look the same
-  internal/iox/          the one bidirectional copy, and the one answer to
-                         what half-closing means (ADR 0021)
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
-client/go.mod            the client module: docker/cli, buildx, 786 go.sum lines
+client/go.mod            the client module: docker/cli, buildx, 857 go.sum lines
   cmd/remote-docker/     the client binary, whose root command IS the Docker
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
     fswatch/             watches shared dirs, streams changes to the agent
-    sshx/                ssh client, keys, known_hosts, forwards
+    sshx/                keys, known_hosts, and the enrolment hint: this
+                         client's identity, wired to pkg/tunnel/client
     nfsserve/            in-process NFSv3 server, virtual export namespace
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
@@ -124,11 +129,19 @@ premise of the project, and it applies to building it too. So:
 - **Half-close the upstream, never close it.** `docker run` without `-i`
   closes its stdin as soon as attach is established; closing the whole stream
   in response tears down the session carrying the container's output. This now
-  lives once, in `internal/iox`, because the two binaries are the two ends of
+  lives once, in `pkg/tunnel`, because the two binaries are the two ends of
   one stream and their copies had drifted to OPPOSITE fallbacks. `Splice`
   leaves a stream that cannot half-close alone; `SpliceAndClose` closes it, and
   that difference is deliberate -- a port forward carries no output stream and
   must not leak a blocked reader. A test pins both.
+- **The transport is handed its auth and decides none of it** (ADR 0030).
+  `pkg/tunnel/client` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
+  `client/internal/sshx` builds both and is the only place that knows enrolment
+  is a file in `authorized_keys.d`. There is no default host key rule, because
+  every default is either a prompt nobody is there to answer or an acceptance of
+  anybody -- so a nil callback is refused by name rather than mid-handshake.
+  The root `pkg/tunnel` imports NEITHER SSH library: Go links what is imported,
+  and that is the whole reason the agent's 24 go.sum lines did not move.
 - **Only `/containers/create` is ever decoded.** Everything else is copied
   through. The body is handled as generic JSON, never typed structs, so
   unknown fields survive.

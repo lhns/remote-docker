@@ -1,4 +1,4 @@
-package sshx
+package client
 
 import (
 	"fmt"
@@ -34,7 +34,7 @@ type Forward struct {
 func (c *Client) Forward(localAddr, remoteAddr string) (*Forward, error) {
 	l, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: binding %s: %w", localAddr, err)
+		return nil, fmt.Errorf("tunnel: binding %s: %w", localAddr, err)
 	}
 
 	f := &Forward{

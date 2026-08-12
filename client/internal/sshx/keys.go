@@ -1,6 +1,6 @@
-// Package sshx is the client's SSH transport: key management, host key
-// verification, and the forwards that carry the NFS export and published
-// container ports.
+// Package sshx is this client's identity to a workspace: the keypair it
+// authenticates with and the host keys it will accept, wired to the transport
+// in pkg/tunnel/client.
 //
 // It exists because the previous clients shelled out to ssh(1). That cost a
 // layer of quoting on every remote command, turned errors into exit codes and
