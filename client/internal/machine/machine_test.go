@@ -112,10 +112,11 @@ func TestFindWithoutABackend(t *testing.T) {
 
 // One address rule for both backends.
 //
-// The link-local guard used to be Hyper-V's alone, so a WSL machine whose DHCP
-// had not finished would hand back a 169.254 address for somebody to dial. Both
-// now wait instead, which is the right thing to do about a machine that is up
-// and not ready.
+// The link-local guard belongs to both, not to Hyper-V alone. A machine whose
+// DHCP has not finished reports a 169.254 address, and handing that back gives
+// somebody an address to dial that cannot work. Report nothing and let the
+// caller keep waiting, which is the truth about a machine that is up and not
+// ready.
 func TestFirstIPv4(t *testing.T) {
 	for _, tc := range []struct {
 		name, want string

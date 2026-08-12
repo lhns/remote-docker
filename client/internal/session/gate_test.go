@@ -267,8 +267,9 @@ func TestGateIsSafeUnderConcurrency(t *testing.T) {
 
 // A connection that died is replaced, not handed out again.
 //
-// Nothing used to clear held, so every request after a drop was given the same
-// dead connection and failed in a way that read as the workspace refusing.
+// Detecting the death is not enough: unless `held` is cleared, every request
+// after a drop is handed the same dead connection and fails in a way that
+// reads as the workspace refusing rather than as a tunnel that went away.
 func TestGateReplacesADeadConnection(t *testing.T) {
 	f := newGate(t, time.Minute)
 	ctx := context.Background()

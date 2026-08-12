@@ -3,11 +3,10 @@ package main
 // Writing docker contexts, which is now something workspaces do rather than
 // something you ask for.
 //
-// There used to be a `context` command alongside `workspace`, and between them
-// no way to tell which you wanted: `workspace add` already created a context,
-// and `context install` created it again. There is no case where somebody
-// wants a workspace configured and not reachable as `docker --context <name>`,
-// so it was never really a choice, only a second place to look.
+// Contexts are written as a side effect of the `workspace` commands and are
+// not exposed as commands of their own. Nobody wants a workspace configured
+// and NOT reachable as `docker --context <name>`, so offering the two
+// separately would only be a second place to look for the same thing.
 
 import (
 	"encoding/json"
@@ -21,13 +20,13 @@ import (
 
 // contextMarker identifies a docker context as one this client wrote.
 //
+// Written into every context this program creates, and read back to decide
+// whether one is ours to replace or remove.
+//
 // It is what makes replacing a context safe. Contexts are named after the
 // workspace so `docker --context dev ps` reads naturally, and a name like
 // "dev" could easily already mean something else to the user. Destroying that
-// would be a poor way to discover the collision, so a context is only replaced
-// when its description says we wrote it.
-// Written into every context this program creates, and read back to decide
-// whether a context is ours to replace or remove.
+// would be a poor way to discover the collision.
 //
 // The string is a STORED VALUE, not a label: changing it orphans every context
 // already written, which then cannot be updated or cleaned up and are silently
@@ -57,10 +56,10 @@ func dockerCmd(args ...string) *exec.Cmd {
 //
 // Separated from the exec so the fallback can be tested without one.
 //
-// The arguments are the same either way now: this binary's root IS the Docker
-// CLI (ADR 0024), so `context inspect x` means the same thing to us as to a
-// docker on PATH. It used to need a `docker` subcommand in front of it, and
-// forgetting the shift was the bug this function exists to have one answer to.
+// The arguments are the same either way: this binary's root IS the Docker CLI
+// (ADR 0024), so `context inspect x` means the same thing to us as to a docker
+// on PATH. One function answers "how do I invoke docker" so that no caller has
+// to remember whether its arguments need shifting.
 func dockerInvocation(
 	lookPath func(string) (string, error),
 	executable func() (string, error),

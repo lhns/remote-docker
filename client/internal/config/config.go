@@ -339,7 +339,8 @@ func Load(path string) (File, error) {
 //
 // Called twice: once for the file's flat fields, then once for the named entry
 // on top, so shared settings can sit at the top level and be specialised per
-// entry. It used to be two functions with the same seven clauses.
+// entry. One function applied twice rather than two with the same clauses --
+// two would let the levels disagree about what overrides what.
 func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Host != "" {
 		cfg.Host = ws.Host

@@ -2,9 +2,9 @@ package main
 
 // A word that is not a command must fail, and say so.
 //
-// It used to print the help and exit 0 at every level of the tree, which is
-// how a whole session of mistyped commands on a bad terminal looked like a
-// program that would not do anything.
+// Printing the help and exiting 0 instead -- which cobra will do at every
+// level of the tree if allowed -- makes a mistyped command indistinguishable
+// from a program that simply refuses to do anything.
 
 import (
 	"io"

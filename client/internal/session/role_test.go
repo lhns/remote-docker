@@ -65,9 +65,9 @@ func TestHostBindsTheEndpoint(t *testing.T) {
 
 // And two host sessions for one endpoint is a conflict, not a silent takeover.
 //
-// The Unix bind used to remove an existing socket first, so the second process
-// unlinked a RUNNING one's socket and took its place, and the first kept
-// accepting on an inode nobody could reach (ADR 0017).
+// A Unix bind that removes an existing socket first would let the second
+// process unlink a RUNNING one's socket and take its place, leaving the first
+// accepting on an inode nobody can reach (ADR 0017). Binding is not a lock.
 func TestASecondHostIsRefused(t *testing.T) {
 	endpoint := testEndpoint(t)
 	opts := Options{

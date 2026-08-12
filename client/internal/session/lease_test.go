@@ -25,10 +25,10 @@ func (h *halfCloser) CloseWrite() error { h.wroteClose = true; return nil }
 
 // A stream must hold its lease for as long as it is open.
 //
-// The lease used to be released the instant the stream opened, so a hijacked
-// connection (attach, exec -it, logs -f) held nothing. Those survived an
-// idle release only because their container happened to be running; a
-// `logs -f` on a stopped container would simply be cut.
+// Releasing it when the stream opens leaves a hijacked connection (attach,
+// exec -it, logs -f) holding nothing. Most survive an idle release anyway,
+// but only because their container happens to be running; a `logs -f` on a
+// stopped container is simply cut.
 func TestLeasedStreamHoldsUntilClosed(t *testing.T) {
 	released := 0
 	inner := &fakeStream{}
@@ -96,9 +96,10 @@ func TestLeasedStreamCloseWriteWithoutSupport(t *testing.T) {
 
 // The volume match must name only volumes this session created.
 //
-// It used to accept any "rd-" prefix, so on a shared daemon (ADR 0012) another
-// account's volume pinned this connection open forever: an idle release that
-// could never fire, for a dependency that was not ours.
+// Matching the "rd-" prefix alone also matches other accounts' volumes on a
+// shared daemon (ADR 0012), and one of those pins this connection open
+// forever: an idle release that can never fire, for a dependency that is not
+// ours.
 func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs())}
 	if _, err := s.registry.RegisterCWD(t.TempDir()); err != nil {

@@ -45,8 +45,9 @@ type Options struct {
 	// being released. Zero uses DefaultIdleTimeout; negative never releases.
 	IdleTimeout time.Duration
 
-	// Role says what this session is for. See the constants: everything below
-	// that used to be a separate switch is decided by it.
+	// Role says what this session is for, and decides every behaviour that
+	// differs between the two. See the constants: it replaces what would
+	// otherwise be several independent switches that must agree.
 	Role Role
 
 	// Watch replays this machine's filesystem changes into the workspace, so
@@ -64,7 +65,7 @@ type Options struct {
 }
 
 // Role is what a session is for. There are two, and the difference between
-// them is three separate refusals that always travelled together.
+// them is three refusals that always apply together.
 type Role int
 
 const (
@@ -98,9 +99,9 @@ const (
 	Host
 )
 
-// hosting is the single question the rest of this package asks. There is
-// deliberately no serves()/exports()/narrates() trio: that would be three names
-// for one bit, which is what this type replaced.
+// hosting is the single question the rest of this package asks. Deliberately
+// not a serves()/exports()/narrates() trio: those are three names for one bit,
+// and three names can be given three different answers.
 func (r Role) hosting() bool { return r == Host }
 
 func (r Role) String() string {
@@ -310,11 +311,11 @@ func (s *Session) DialDocker(ctx context.Context) (io.ReadWriteCloser, error) {
 	}
 	// The lease is held for the life of the STREAM, not just the dial.
 	//
-	// It used to be released the instant the stream opened, so a hijacked
-	// connection (`docker attach`, `exec -it`, `logs -f`) held nothing at
-	// all. Those survived an idle release only indirectly, because their
-	// container was running and hasLiveDependents noticed it. A `logs -f` on a
-	// STOPPED container had nothing pinning it and would simply be cut.
+	// Releasing it when the stream opens instead leaves a hijacked connection
+	// (`docker attach`, `exec -it`, `logs -f`) pinning nothing at all. Most
+	// survive anyway, but only indirectly, because their container is running
+	// and hasLiveDependents notices it. A `logs -f` on a STOPPED container has
+	// nothing holding the connection and is simply cut.
 	//
 	// This is also the reliable answer to "is anything using the connection".
 	// A stream holds its lease for exactly as long as it is open; an idle

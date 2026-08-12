@@ -128,10 +128,12 @@ func decideTarget(args []string, look lookups) target {
 
 // rootArgs is what a docker command line says before its subcommand.
 //
-// One walk answers both questions anyone asks of an unparsed argument list:
-// which subcommand it is, and what a root flag was set to. It used to be two
-// loops with the same skip rules, and one of them was wrong: a context named
-// `remote` read as our own namespace and the command ran with no session.
+// ONE walk answers both questions anyone asks of an unparsed argument list:
+// which subcommand it is, and what a root flag was set to. Never write a
+// second: the two need identical rules for which root flags take a value, and
+// a walk that treats every non-flag word as the subcommand reads
+// `docker --context remote ps` as our own namespace and runs the command with
+// no session.
 type rootArgs struct {
 	// verb is the subcommand, or "" when there is none.
 	verb string

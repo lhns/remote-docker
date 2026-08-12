@@ -46,17 +46,15 @@ func (s *Session) releaseIfIdle() {
 // running container of ours may have published ports whose forwards exist only
 // while we are connected.
 //
-// A third used to be listed here: an interactive shell using the ~/workspace
-// mount, and was counted separately on liveConn. It never reached this
-// function: Shell holds its gate lease for its whole life, and sweep bails on
-// users > 0 long before busy is consulted. Now that every stream holds its
-// lease the same way, the counter documented an intent the code no longer
-// needed, so it is gone.
+// Interactive sessions are deliberately NOT counted here. Every stream holds
+// its gate lease for its whole life, and the sweep stops at users > 0 long
+// before it asks this, so a separate counter would state an intent the gate
+// already enforces.
 //
-// The volume match is scoped to volumes WE created. It used to accept any
-// rd- prefix, so on a shared daemon (ADR 0012) another account's volume pinned
-// this connection open forever: an idle release that could never fire, for a
-// dependency that was not ours.
+// The volume match is scoped to volumes WE created, never to the `rd-` prefix
+// alone. On a shared daemon (ADR 0012) that prefix also matches other
+// accounts' volumes, and one of those pins this connection open forever: an
+// idle release that can never fire, waiting on a dependency that is not ours.
 func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
 	containers, err := live.api.ListContainers(ctx)
 	if err != nil {
@@ -307,9 +305,9 @@ func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	quiet := time.Since(last)
 
 	// currentLive, so a dead connection takes the "nothing depends on this"
-	// branch instead of being asked over a transport that cannot answer. That
-	// is also what stops `remote restart` refusing on a session whose
-	// connection dropped, which used to leave --force as the only way out.
+	// branch instead of being asked over a transport that cannot answer.
+	// Asking it anyway is what makes `remote restart` refuse on exactly the
+	// session that most needs restarting, leaving --force as the only way out.
 	live, connected := s.gate.currentLive()
 	if !connected {
 		return quiet, true

@@ -286,10 +286,9 @@ func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
 		return nil, fmt.Errorf("proxy: listing volumes: %s", apiError(resp))
 	}
 
-	// Decoded straight into the type the caller wants. There used to be a
-	// proxy.Volume declared here, identical to rewrite.Volume down to its doc
-	// comment, and a loop converting one to the other, a conversion that
-	// existed only because the same struct was written twice.
+	// Decoded straight into the type the caller wants. Declaring a proxy.Volume
+	// here would duplicate rewrite.Volume field for field and buy only a loop
+	// converting between two spellings of one struct.
 	var payload struct {
 		Volumes []rewrite.Volume
 	}

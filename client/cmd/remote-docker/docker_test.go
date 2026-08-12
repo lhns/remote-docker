@@ -6,9 +6,10 @@ import (
 )
 
 // The docker tree is built on EVERY invocation, because cobra assembles the
-// whole command tree before parsing anything. It used to probe the endpoint
-// and could open a file-serving session while building, so `remote gc` raced
-// its own session, and `--help` reached for the network.
+// whole command tree before parsing anything. So building it must not touch
+// the endpoint: a probe there opens a file-serving session for commands that
+// never wanted one, which makes `remote gc` race its own session and `--help`
+// reach for the network.
 func TestInvokingDocker(t *testing.T) {
 	tests := []struct {
 		args []string

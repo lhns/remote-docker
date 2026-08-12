@@ -13,11 +13,11 @@ import (
 //
 // A function rather than a constant, because on this platform the answer is
 // not known until it is asked: it comes from the user's runtime directory.
-// It used to be the empty string, resolved inside Listen, which was fine
-// for Listen and wrong for everybody else. A caller deriving a NAMED
-// workspace's endpoint appends to this, and appending to "" produced the
-// relative path "-dev": a socket in whatever directory the process happened
-// to be in, and a docker context pointing at unix://-dev.
+// It must be the real path, never the empty string resolved later inside
+// Listen. Callers derive a NAMED workspace's endpoint by appending to this,
+// and appending to "" gives the RELATIVE path "-dev": a socket in whatever
+// directory the process happens to be in, and a docker context pointing at
+// unix://-dev.
 func DefaultEndpoint() string { return defaultSocketPath() }
 
 // Deliberately NOT /var/run/docker.sock, the path the official CLI uses by
