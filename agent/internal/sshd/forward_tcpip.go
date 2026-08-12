@@ -18,7 +18,7 @@ import (
 
 	gssh "github.com/gliderlabs/ssh"
 
-	"github.com/lhns/remote-docker/agent/internal/netns"
+	"github.com/lhns/remote-docker/space/netns"
 )
 
 // reversePolicy implements tunnel server.Reverse.

@@ -21,9 +21,9 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
-	"github.com/lhns/remote-docker/agent/internal/notify"
 	"github.com/lhns/remote-docker/pkg/tunnel"
 	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/space/notify"
 )
 
 // Commands the agent answers itself rather than executing.

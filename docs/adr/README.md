@@ -41,6 +41,7 @@ survives that document being superseded.
 | [0028](0028-a-reservation-belongs-to-a-session.md) | A port reservation belongs to a session, not to an account | Accepted; corrects 0010 |
 | [0029](0029-one-account-many-machines.md) | One account, many machines | Accepted; amends 0003, 0007, 0019 |
 | [0030](0030-a-core-module-for-the-tunnel.md) | A core module for the tunnel | Accepted; extends 0021 |
+| [0031](0031-if-it-knows-about-docker-it-is-glue.md) | If it knows about Docker, it is glue | Accepted; extends 0021, 0030 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

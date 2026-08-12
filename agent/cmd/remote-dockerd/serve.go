@@ -18,13 +18,13 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/lhns/remote-docker/agent/internal/accounts"
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/elevate"
 	"github.com/lhns/remote-docker/agent/internal/sshd"
 	"github.com/lhns/remote-docker/agent/internal/supervise"
 	"github.com/lhns/remote-docker/internal/logx"
 	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/space/accounts"
 )
 
 // Environment variables the workspace image sets, kept compatible with the

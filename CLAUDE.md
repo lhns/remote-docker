@@ -47,21 +47,27 @@ client/go.mod            the client module: docker/cli, buildx, 857 go.sum lines
     ports/               published ports -> local forwards
     session/             wires the above into one live connection
 
-agent/go.mod             the agent module: 7 third-party modules, 24 go.sum lines
+space/go.mod             THE WORKSPACE SIDE, minus Docker. Reaches none of
+                         dockercli, daemons, supervise or elevate, and that
+                         is the whole membership test.
+  accounts/              one unix account per enrolled key, and the ports
+  notify/                replays the client's changes as real syscalls
+  netns/                 run a function inside another process's netns
+                         (an empty path means this one -- ADR 0020)
+
+agent/go.mod             the agent module: THE GLUE. 7 third-party modules,
+                         24 go.sum lines
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
-    accounts/            one unix account per enrolled key
     sshd/                the SSH server: auth, sessions, and the forwarding
                          POLICY pkg/tunnel/server asks. Its session handling
                          is docker all the way down and stays here.
     supervise/           starts and watches the workspace's own dockerd
     elevate/             relaunch privileged, for Swarm (ADR 0013)
-    notify/              replays the client's changes as real syscalls
     daemons/             a dockerd per account, and the one resolver both
                          modes answer through (ADR 0020)
-    netns/               run a function inside another process's netns
-                         (an empty path means this one -- ADR 0020)
-    dockercli/           the one way this side runs the docker binary
+    dockercli/           the one way this side runs the docker binary, and
+                         the volume lookup notify asks for
 
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose, swarm, and the systemd unit for a VM
@@ -72,16 +78,22 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# THREE MODULES (ADR 0021), and `./...` stops at a module boundary. A bare
-# `go build ./...` at the root covers the shared module and nothing else --
-# it will pass while compiling almost none of this repository.
-for m in . ./agent ./client; do (cd $m && go build ./... && go test ./...); done
+# FOUR MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary.
+# A bare `go build ./...` at the root covers the shared module and nothing
+# else -- it will pass while compiling almost none of this repository.
+for m in . ./agent ./space ./client; do (cd $m && go build ./... && go test ./...); done
 
-# lint, four passes: one per module, plus the agent under Linux. Its session
-# handling is Linux-only, so a lint on the development machine does not see the
-# file at all. CI does, and will fail on what you did not lint.
-for m in . ./agent ./client; do (cd $m && golangci-lint run ./...); done
-(cd agent && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...)
+# lint, six passes: one per module, plus the agent AND space under Linux. Both
+# carry Linux-only files -- session handling, netns, the unix provisioner, the
+# inotify poker -- which a lint on the development machine does not see at all.
+# CI does, and will fail on what you did not lint.
+for m in . ./agent ./space ./client; do (cd $m && golangci-lint run ./...); done
+for m in agent space; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
+
+# gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
+# after a scripted import rewrite: changing the text of an import without moving
+# it leaves the block unsorted, which compiles and tests clean.
+gofmt -l .   # must print nothing
 
 # the client
 (cd client && go build -o ../remote-docker ./cmd/remote-docker)
@@ -90,9 +102,11 @@ for m in . ./agent ./client; do (cd $m && golangci-lint run ./...); done
 bash test/integration.sh
 ```
 
-`go.work` ties the three together for editors and local commands. CI and the
+`go.work` ties the four together for editors and local commands. CI and the
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
+`image/Dockerfile` copies the module trees it needs by name, so a new module the
+agent imports must be added there or the image build fails on it alone.
 
 Lint is installed with the project's own toolchain
 (`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`),

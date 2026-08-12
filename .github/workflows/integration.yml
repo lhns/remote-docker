@@ -69,7 +69,7 @@ jobs:
           fi
           echo "changed files:"; echo "$changed" | sed 's/^/  /'
 
-          if echo "$changed" | grep -Eq '^(image/|test/|agent/|client/|internal/|pkg/|go\.(mod|sum|work)$|\.github/workflows/integration\.yml$)'; then
+          if echo "$changed" | grep -Eq '^(image/|test/|agent/|space/|client/|internal/|pkg/|go\.(mod|sum|work)$|\.github/workflows/integration\.yml$)'; then
             say true "touches code, the image or the suites."
           else
             say false "documentation or unrelated config only: skipping the suites."
