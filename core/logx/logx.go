@@ -64,6 +64,23 @@ func Logger(out io.Writer, indent string, prefix bool) *slog.Logger {
 // the check again, but it IS the one thing to remember when adding a field.
 func Discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
+// Or is that trade, made once.
+//
+// The check came back anyway. Thirteen types grew
+// `if x.Log == nil { return Discard() }`, in five packages across four modules,
+// two of them byte-identical down to the comment -- because a type whose Log is
+// an exported field set by a struct literal has no constructor to normalise it
+// in, so the guard has to live at the point of use.
+//
+// Where there IS a constructor, normalise there instead and skip this:
+// supervise.Daemon does it in defaults() and needs no accessor at all.
+func Or(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		return Discard()
+	}
+	return l
+}
+
 // Everything is logged. The levels carry intent for a future reader and a
 // future handler, not a filter: dropping a line the user needed in order to
 // diagnose something is a worse failure than printing one they did not.

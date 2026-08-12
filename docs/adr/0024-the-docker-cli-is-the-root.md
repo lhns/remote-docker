@@ -92,10 +92,14 @@ belongs.
   the marker file, the copy ladder, and the `os.Args[0]` dispatch. The
   invariants that guarded them go too, including "never `setx`" — correct while
   it lasted, and about code that no longer exists.
-- **`remote-docker docker ps` stops working.** No tag has ever been pushed, so
-  there are no released users; the 13 references in tests and docs were
+- **`remote-docker docker ps` stops working.** No tag had ever been pushed, so
+  there were no released users; the 13 references in tests and docs were
   updated, and a stray `docker` verb now gets the ordinary unknown-command
   error naming it.
+
+  *That licence has expired. `v0.1.0` was published on 2026-08-11, so a break
+  of this shape now costs somebody an upgrade. Do not reuse the argument
+  without re-checking it: `gh release list`.*
 - **We are in docker's namespace now, and it is not ours.** A future docker
   release adding a `remote` command would collide, and the answer would be to
   rename ours. That is the price of the shape and it is worth saying out loud

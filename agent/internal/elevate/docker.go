@@ -236,11 +236,7 @@ func (r *Runner) hostSocket() string {
 	return DefaultHostSocket
 }
 
-// log is the runner's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer.
+// log is the runner's logger, or silence. See logx.Or.
 func (r *Runner) log() *slog.Logger {
-	if r.Log == nil {
-		return logx.Discard()
-	}
-	return r.Log
+	return logx.Or(r.Log)
 }

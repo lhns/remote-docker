@@ -247,11 +247,7 @@ func (g *connGate[T]) close() {
 	g.shut(conn)
 }
 
-// logger is the gate's, or silence. A nil *slog.Logger panics on use rather
-// than doing nothing, and a gate built by a test has none.
+// logger is the gate's, or silence (logx.Or); a gate built by a test has none.
 func (g *connGate[T]) logger() *slog.Logger {
-	if g.log == nil {
-		return logx.Discard()
-	}
-	return g.log
+	return logx.Or(g.log)
 }

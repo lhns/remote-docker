@@ -261,11 +261,7 @@ func bridge(ch gossh.Channel, conn net.Conn) {
 	}()
 }
 
-// log is the server's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer.
+// log is the server's logger, or silence. See logx.Or.
 func (f *Forwards) log() *slog.Logger {
-	if f.Log == nil {
-		return logx.Discard()
-	}
-	return f.Log
+	return logx.Or(f.Log)
 }

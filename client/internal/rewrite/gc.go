@@ -174,10 +174,7 @@ func (c *Collector) ours(v Volume) bool {
 	return true
 }
 
-// log is the collector's logger, or silence. A nil *slog.Logger panics on use.
+// log is the collector's logger, or silence. See logx.Or.
 func (c *Collector) log() *slog.Logger {
-	if c.Log == nil {
-		return logx.Discard()
-	}
-	return c.Log
+	return logx.Or(c.Log)
 }

@@ -437,12 +437,9 @@ func writeError(w io.Writer, err error) {
 		"Connection: close\r\n\r\n%s", len(body), body)
 }
 
-// log is the proxy's logger, or silence. A nil *slog.Logger panics on use.
+// log is the proxy's logger, or silence. See logx.Or.
 func (p *Proxy) log() *slog.Logger {
-	if p.Log == nil {
-		return logx.Discard()
-	}
-	return p.Log
+	return logx.Or(p.Log)
 }
 
 // TraceEnv turns on per-request timing.

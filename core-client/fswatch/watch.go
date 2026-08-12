@@ -525,12 +525,9 @@ func (w *Watcher) countDropped(n uint64) {
 	w.mu.Unlock()
 }
 
-// log is the watcher's logger, or silence. A nil *slog.Logger panics on use.
+// log is the watcher's logger, or silence. See logx.Or.
 func (w *Watcher) log() *slog.Logger {
-	if w.opts.Log == nil {
-		return logx.Discard()
-	}
-	return w.opts.Log
+	return logx.Or(w.opts.Log)
 }
 
 // statNoFollow reports what a path is without following a final symlink. A

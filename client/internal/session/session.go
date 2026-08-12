@@ -397,12 +397,7 @@ func attrsFor(info workspace.Info) nfsserve.Attrs {
 	return a
 }
 
-// log is the session's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer, and one
-// accessor is a better place for it than a check at every call.
+// log is the session's logger, or silence. See logx.Or.
 func (s *Session) log() *slog.Logger {
-	if s.opts.Log == nil {
-		return logx.Discard()
-	}
-	return s.opts.Log
+	return logx.Or(s.opts.Log)
 }
