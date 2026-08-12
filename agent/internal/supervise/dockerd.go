@@ -40,8 +40,8 @@ type Dockerd struct {
 	// RestartDelay is how long to wait before restarting a daemon that died.
 	RestartDelay time.Duration
 
-	// Log receives progress. Never nil after defaults(): logx.Discard() is the
-	// silence a nil used to mean.
+	// Log receives progress. defaults() fills it with logx.Discard(), so it is
+	// never nil by the time anything logs; nil is not silence, that is.
 	Log *slog.Logger
 
 	mu      sync.Mutex

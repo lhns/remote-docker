@@ -10,16 +10,12 @@ import (
 
 // The operator's handle on the per-account daemons.
 //
-// It exists because there was no way to act on them at all. A per-account
-// daemon is created once and started forever after, so a setting changed in
-// the stack file reached only accounts that did not yet have one, and the
-// remedy was a pair of `docker exec ... docker rm` commands somebody had to be
-// told, with the container and volume names worked out by hand.
-//
-// The agent reconciles what it safely can on its own now (see
-// daemons.Manager.reconcile). This is for the one case it cannot: a change of
-// storage driver, where the graph cannot be migrated and the choice to discard
-// it belongs to a person.
+// A per-account daemon is created once and started forever after, so a setting
+// changed in the stack file reaches only accounts that do not yet have one. The
+// agent reconciles what it safely can by itself (see daemons.Manager.reconcile).
+// This is for the one case it cannot: a change of storage driver, where the
+// graph cannot be migrated, so discarding somebody's images is a decision that
+// belongs to a person.
 //
 // Run inside the workspace container, where the parent daemon is:
 //

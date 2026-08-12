@@ -5,11 +5,10 @@ import "context"
 // Target is where one account's Docker daemon is, in the four ways the agent
 // needs to address it.
 //
-// It exists because the agent used to ask that question at nine separate call
-// sites, each with its own `if manager == nil` for the shared-daemon mode. The
-// answer is one thing, and a wrong answer here does not fail: it succeeds,
-// against another account's containers. So it is resolved once, through
-// Targets, and every site takes what it is given.
+// Resolve it once, through Targets, and let every site take what it is given.
+// The alternative is each site asking for itself, with its own
+// `if manager == nil` for the shared-daemon mode -- and a wrong answer here
+// does not fail. It succeeds, against another account's containers.
 type Target struct {
 	// Socket is the unix socket a `docker system dial-stdio` session is
 	// spliced to. This is the Docker API as the client sees it.

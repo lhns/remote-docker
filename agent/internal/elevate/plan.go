@@ -93,12 +93,11 @@ type RunSpec struct {
 func (s RunSpec) Args() []string {
 	args := []string{"run", "-i"}
 
-	// Read from the field, which it did not used to be: `--rm` was appended
-	// unconditionally and `Remove` was set but never consulted. It happened to
-	// be harmless because the only caller wants --rm: elevate's child is a
-	// singleton whose state is worthless, but a spec with a flag it ignores
-	// is a trap for the next caller, and the next caller is a per-user daemon
-	// holding somebody's running work.
+	// From the field, never unconditionally. Today's only caller wants --rm,
+	// because elevate's child is a singleton whose state is worthless, so
+	// hardcoding it would look harmless. The next caller is a per-account
+	// daemon holding somebody's running containers, and for that one --rm
+	// discards their work.
 	if s.Remove {
 		args = append(args, "--rm")
 	}

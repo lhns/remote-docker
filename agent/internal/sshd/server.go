@@ -35,12 +35,12 @@ type Config struct {
 	// Daemons resolves an account to the daemon that serves it: its socket, its
 	// DOCKER_HOST, its network namespace and its filesystem root.
 	//
-	// One field, with the implementation chosen once by the caller --
+	// ONE field, with the implementation chosen once by the caller:
 	// daemons.Shared for ADR 0012's single daemon, a *daemons.Manager for ADR
-	// 0019's one per account. It used to be two fields and a nil check repeated
-	// at nine call sites, which is precisely the shape a routing mistake hides
-	// in: sending a session to the wrong daemon does not fail, it succeeds
-	// against somebody else's containers.
+	// 0019's one per account. Never reintroduce a nil check at the use sites --
+	// that is the shape a routing mistake hides in, because sending a session
+	// to the wrong daemon does not fail, it succeeds against somebody else's
+	// containers.
 	Daemons daemons.Targets
 
 	// Ports decides which port serves which of an account's machines, and

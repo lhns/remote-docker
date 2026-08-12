@@ -299,11 +299,10 @@ func (s Spec) Args() []string {
 // and the per-account daemon's storage is a volume ON that same filesystem, so
 // it needs the same answer.
 //
-// It was not inherited, and the failure was silent and expensive: dockerd falls
-// back to VFS, which has no copy-on-write and copies the entire image on every
-// container create. Everything kept working and `docker create debian` took 90
-// to 113 seconds while `docker ps` stayed instant. Nothing said why, because
-// nothing had failed.
+// Getting this wrong is silent and expensive: dockerd falls back to VFS, which
+// has no copy-on-write and copies the entire image on every container create.
+// Nothing fails, so nothing says why -- `docker ps` stays instant while
+// `docker create debian` takes 90 to 113 seconds.
 //
 // An explicit WORKSPACE_DIND_STORAGE_DRIVER still wins; this is only the
 // default, and the default should be "what the workspace itself decided".
