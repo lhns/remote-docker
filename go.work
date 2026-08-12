@@ -8,7 +8,7 @@ go 1.26.3
 use (
 	.
 	./agent
-	./space
-	./host
+	./core-agent
+	./core-client
 	./client
 )

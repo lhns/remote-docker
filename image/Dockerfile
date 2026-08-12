@@ -35,7 +35,7 @@ ARG VERSION=dev
 COPY go.mod go.sum ./
 COPY pkg/ ./pkg/
 COPY internal/ ./internal/
-COPY space/ ./space/
+COPY core-agent/ ./core-agent/
 COPY agent/ ./agent/
 # `go mod download` is deliberately absent. It was here to cache dependencies
 # in their own layer; `go build` fetches exactly what this binary needs, which

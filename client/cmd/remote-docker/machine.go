@@ -20,7 +20,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/client/internal/proxy"
-	"github.com/lhns/remote-docker/host/keys"
+	"github.com/lhns/remote-docker/core-client/keys"
 )
 
 func newMachineCommand() *cobra.Command {

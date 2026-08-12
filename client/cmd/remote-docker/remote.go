@@ -17,7 +17,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
-	"github.com/lhns/remote-docker/host/keys"
+	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/spf13/cobra"
 )
 

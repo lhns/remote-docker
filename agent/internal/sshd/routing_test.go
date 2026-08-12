@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
+	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/pkg/workspace"
-	"github.com/lhns/remote-docker/space/accounts"
 )
 
 // Routing an account to its daemon is the one thing here that fails by

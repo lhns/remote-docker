@@ -13,7 +13,7 @@ require (
 	github.com/docker/compose/v5 v5.4.0
 	github.com/google/go-containerregistry v0.21.7
 	github.com/lhns/remote-docker v0.0.0
-	github.com/lhns/remote-docker/host v0.0.0
+	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
@@ -269,7 +269,7 @@ require (
 // never need a published tag for a change made in the same commit.
 replace github.com/lhns/remote-docker => ../
 
-replace github.com/lhns/remote-docker/host => ../host
+replace github.com/lhns/remote-docker/core-client => ../core-client
 
 // The pre-split genproto monolith still contains googleapis/api/annotations,
 // which the split module google.golang.org/genproto/googleapis/api also

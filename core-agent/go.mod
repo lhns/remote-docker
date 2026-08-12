@@ -8,7 +8,7 @@
 //
 // Its own module rather than a directory in the agent so that the boundary is
 // enforced by the compiler rather than by whoever reviews the next import.
-module github.com/lhns/remote-docker/space
+module github.com/lhns/remote-docker/core-agent
 
 go 1.26.3
 
