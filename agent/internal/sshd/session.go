@@ -22,28 +22,21 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/notify"
-	"github.com/lhns/remote-docker/internal/iox"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
 // Commands the agent answers itself rather than executing.
+//
+// Named in pkg/tunnel, because every one of them is spoken by the client and
+// understood here: a second spelling on either side is a client asking for
+// something this switch does not recognise, which arrives as a shell trying to
+// run it and exiting 127.
 const (
-	// InfoCommand is what the client runs to learn its parameters. Answered
-	// from pkg/workspace, the same type the client parses with, so the two
-	// cannot disagree about the format.
-	InfoCommand = "workspace-info"
-
-	// DialStdioCommand carries the Docker API, spliced straight to the
-	// daemon's socket with no CLI in the path. It keeps the docker CLI's
-	// spelling because that is what stock sshd could offer, so the client
-	// needed no change when the agent replaced it.
-	DialStdioCommand = "docker system dial-stdio"
+	InfoCommand      = tunnel.InfoCommand
+	DialStdioCommand = tunnel.DialStdioCommand
+	NotifyCommand    = tunnel.NotifyCommand
 )
-
-// NotifyCommand carries the client's filesystem changes, which the agent
-// replays as real syscalls so watchers in containers see them (ADR 0016). The
-// name lives in pkg/workspace because both binaries must agree on it.
-const NotifyCommand = workspace.NotifyCommand
 
 // handleSession serves one session channel.
 func (s *Server) handleSession(session gssh.Session) {
@@ -143,7 +136,7 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 	}
 	defer func() { _ = conn.Close() }()
 
-	iox.Splice(session, conn)
+	tunnel.Splice(session, conn)
 	_ = session.Exit(0)
 }
 

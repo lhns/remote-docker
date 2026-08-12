@@ -1,4 +1,4 @@
-package sshx
+package client
 
 import (
 	"crypto/ed25519"
@@ -185,18 +185,22 @@ func (c *cutter) cut() {
 	c.conns = nil
 }
 
-// dialAddr builds a client against an address, with state under t.TempDir().
+// dialAddr builds a client against an address.
+//
+// The auth here is values rather than files, which is the point of the split:
+// this package is given a signer and a host key rule and has no opinion about
+// where either came from. Generating a key per test costs nothing and means
+// nothing on disk decides whether the transport works.
 func (ts *testServer) dialAddr(t *testing.T, addr net.Addr, keepAlive time.Duration) *Client {
 	t.Helper()
 
-	dir := t.TempDir()
-	key, err := LoadOrCreateKey(dir+"/id_ed25519", "test")
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("LoadOrCreateKey: %v", err)
+		t.Fatalf("generating key: %v", err)
 	}
-	kh, err := NewKnownHosts(dir + "/known_hosts")
+	signer, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
-		t.Fatalf("NewKnownHosts: %v", err)
+		t.Fatalf("signer: %v", err)
 	}
 
 	host, portStr, _ := net.SplitHostPort(addr.String())
@@ -204,12 +208,12 @@ func (ts *testServer) dialAddr(t *testing.T, addr net.Addr, keepAlive time.Durat
 	fmt.Sscanf(portStr, "%d", &port)
 
 	c, err := Dial(t.Context(), Config{
-		Host:       host,
-		Port:       port,
-		User:       "tester",
-		Key:        key,
-		KnownHosts: kh,
-		KeepAlive:  keepAlive,
+		Host:      host,
+		Port:      port,
+		User:      "tester",
+		Signer:    signer,
+		HostKey:   ssh.FixedHostKey(ts.HostKey),
+		KeepAlive: keepAlive,
 	})
 	if err != nil {
 		t.Fatalf("Dial: %v", err)

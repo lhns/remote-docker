@@ -1,12 +1,35 @@
-package sshx
+package client
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
 )
+
+// A caller with no host key rule has no host key rule, and that must be said
+// rather than discovered.
+//
+// x/crypto refuses a nil callback too, but it does so mid-handshake, and the
+// error reads as a connection that went wrong rather than as a configuration
+// that accepts anybody. The other direction -- defaulting to accepting any host
+// -- is the failure that succeeds, so there is no default at all.
+func TestDialRefusesNoHostKeyPolicy(t *testing.T) {
+	ts := startTestServer(t)
+	host, portStr, _ := net.SplitHostPort(ts.Addr.String())
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+
+	_, err := Dial(t.Context(), Config{Host: host, Port: port, User: "tester"})
+	if err == nil {
+		t.Fatal("a config with no host key callback connected")
+	}
+	if !strings.Contains(err.Error(), "HostKey") {
+		t.Errorf("the error does not name what is missing: %v", err)
+	}
+}
 
 func TestRun(t *testing.T) {
 	c := startTestServer(t).dial(t)

@@ -1,11 +1,11 @@
-package sshx
+package client
 
 import (
 	"fmt"
 	"net"
 	"sync"
 
-	"github.com/lhns/remote-docker/internal/iox"
+	"github.com/lhns/remote-docker/pkg/tunnel"
 )
 
 // Forward is a local listener whose connections are carried to an address on
@@ -34,7 +34,7 @@ type Forward struct {
 func (c *Client) Forward(localAddr, remoteAddr string) (*Forward, error) {
 	l, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: binding %s: %w", localAddr, err)
+		return nil, fmt.Errorf("tunnel: binding %s: %w", localAddr, err)
 	}
 
 	f := &Forward{
@@ -71,7 +71,7 @@ func (f *Forward) accept(c *Client) {
 				return
 			}
 			defer remote.Close()
-			iox.SpliceAndClose(local, remote)
+			tunnel.SpliceAndClose(local, remote)
 		})
 	}
 }

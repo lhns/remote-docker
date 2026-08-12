@@ -19,11 +19,6 @@ import (
 // its own filesystem, where the changes actually happen, and tells the agent
 // which paths to touch.
 const (
-	// NotifyCommand is the long-lived channel carrying this client's
-	// filesystem changes to the agent. Dispatched on the exact string, like
-	// the other protocol commands.
-	NotifyCommand = "workspace-notify"
-
 	// NotifyVersion is the wire version. The agent announces it first: an
 	// agent too old to know this command would otherwise fall through to the
 	// generic exec path, run `sh -c "workspace-notify"` and exit 127, which

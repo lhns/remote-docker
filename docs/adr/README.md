@@ -40,6 +40,7 @@ survives that document being superseded.
 | [0027](0027-restoring-an-export-the-workspace-remembers.md) | Restoring an export the workspace remembers | Accepted; amends 0007 |
 | [0028](0028-a-reservation-belongs-to-a-session.md) | A port reservation belongs to a session, not to an account | Accepted; corrects 0010 |
 | [0029](0029-one-account-many-machines.md) | One account, many machines | Accepted; amends 0003, 0007, 0019 |
+| [0030](0030-a-core-module-for-the-tunnel.md) | A core module for the tunnel | Accepted; extends 0021 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next
