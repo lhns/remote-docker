@@ -160,7 +160,7 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	target := func() (daemons.Target, error) {
 		return s.cfg.Daemons.Ensure(session.Context(), name)
 	}
-	volumes := notify.DockerVolumes{
+	volumes := dockercli.Volumes{
 		Host: func() (string, error) { t, err := target(); return t.Host, err },
 		Root: func() (string, error) { t, err := target(); return t.Root, err },
 	}

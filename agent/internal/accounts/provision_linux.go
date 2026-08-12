@@ -50,18 +50,20 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, st
 
 	unix := unixName(prefix, name)
 
-	groups := p.Groups
-	if len(groups) == 0 {
-		groups = []string{"docker", "workspace"}
-	}
-
 	args := []string{
 		"--uid", strconv.Itoa(uid),
 		"--create-home",
 		"--shell", shell,
-		"--groups", strings.Join(groups, ","),
-		unix,
 	}
+	// No default. Which groups an account joins is a deployment decision --
+	// with a shared daemon it needs `docker` and with one per account it must
+	// NOT have it -- and the caller states it in both modes precisely so the
+	// two are visible together. A fallback here was a second copy of that
+	// decision, unreachable, and free to disagree with the real one.
+	if len(p.Groups) > 0 {
+		args = append(args, "--groups", strings.Join(p.Groups, ","))
+	}
+	args = append(args, unix)
 	if out, err := exec.Command("useradd", args...).CombinedOutput(); err != nil {
 		return "", "", fmt.Errorf("useradd %s: %w: %s", unix, err, out)
 	}
