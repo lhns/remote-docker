@@ -69,7 +69,7 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: workspace-rootfs
 
