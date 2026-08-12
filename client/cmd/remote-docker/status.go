@@ -2,14 +2,15 @@ package main
 
 // What `status` answers, and in what order.
 //
-// It used to print eleven rows in the order the code learned them, with no
-// line saying whether any of it was working. The facts were right and the
-// question was unanswered, so the command somebody runs when they are unsure
-// left them unsure.
+// The verdict first, then rows grouped by the question they answer: is it up
+// and how do tools reach it, what is on the other end, what versions are in
+// play.
 //
-// Now: the verdict first, then the rows grouped by the question they answer.
-// Is it up and how do tools reach it. What is on the other end. What versions
-// are in play.
+// The order is the point, not a preference. This is the command somebody runs
+// when they are unsure whether anything is working, so a list of correct facts
+// that never says yes or no leaves them exactly as unsure as they started.
+// Keep the verdict on the first line, and keep new rows inside the group whose
+// question they answer rather than appending them.
 
 import (
 	"context"
@@ -127,8 +128,8 @@ func reportStatus(out io.Writer, f facts) {
 // sessionLine is what the background session is doing, in one row's worth.
 //
 // Here rather than in daemon.go because `workspace inspect` asks the same
-// question and used to answer it with its own copy of the reachable/answering
-// dance.
+// question, and two copies of the reachable/answering rules would drift into
+// two different answers about one session.
 func (f facts) sessionLine() string {
 	switch {
 	case !f.serving:

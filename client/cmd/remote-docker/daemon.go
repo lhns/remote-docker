@@ -199,9 +199,9 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	// The workspace is passed explicitly rather than inherited from the
 	// environment, so the daemon serves the workspace that was asked for even
 	// if it is started from a shell whose variables say otherwise.
-	// Itself, in the foreground. `start` used to spawn `up`, which was a
-	// second command doing the same job; folding them left one code path and
-	// one thing to describe.
+	// Itself, in the foreground: one command serves a workspace, and the
+	// background case is that same command with something else holding it.
+	//
 	// Under `remote`, because that is where our commands are: the root is the
 	// Docker CLI, so a bare "start" reaches nothing.
 	args := []string{"remote", "start", "--foreground"}

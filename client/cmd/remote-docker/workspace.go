@@ -306,10 +306,10 @@ func reportContext(out io.Writer, cfg config.Config) {
 
 // useContext makes a workspace's context the one docker resolves by default.
 //
-// `workspace use` used to set only OUR default, which is what `remote-docker
-// docker ...` reads. Everything else on the machine reads docker's current
-// context, so compose and the rest kept talking to whatever was selected
-// before, usually the Docker Desktop pipe that is not there.
+// Setting only OUR default is not enough. That is what `remote-docker
+// docker ...` reads, but everything else on the machine reads docker's current
+// context, so compose and the rest would keep talking to whatever was selected
+// before -- usually a Docker Desktop pipe that is not there.
 //
 // Reported rather than fatal, for the same reason as reportContext: the
 // workspace default has already been saved and is the part that was asked for.

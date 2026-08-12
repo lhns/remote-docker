@@ -96,8 +96,8 @@ type Rewriter struct {
 	// Client identifies THIS MACHINE, as distinct from the account. Two of
 	// somebody's machines share an account and therefore a daemon, but the
 	// files behind a share are on one of them, so the volumes are named and
-	// labelled per client. Empty produces the old names, which is what a
-	// volume created before this looks like.
+	// labelled per client. Empty produces the unqualified names, which is what
+	// a volume created by a client that predates this carries.
 	Client string
 
 	// Guard is shared with the Collector, and is what stops one deleting the

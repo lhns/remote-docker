@@ -137,10 +137,11 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 // embedded CLI at it -- or does neither, when the invocation is aimed at a
 // daemon that is not ours.
 //
-// Called only when the invocation is actually a docker command, because the
-// tree is built for every command: `remote gc`, and even `--help`, used to
-// probe the endpoint and could open a whole file-serving session that then
-// raced the real command's own, inside one process.
+// Called only when the invocation is actually a docker command. The command
+// tree is built for EVERY invocation, so doing this at build time would let
+// `remote gc` -- or a bare `--help` -- probe the endpoint and open a whole
+// file-serving session, which then races the real command's own inside one
+// process.
 func arrangeSession() {
 	// What the invocation is aimed at, which may be nothing of ours. See
 	// target.go: a context we did not create is an instruction to talk to
@@ -200,7 +201,7 @@ func invokingDocker() bool {
 	// reverse tunnel in order to write a file on this machine.
 	//
 	// No subcommand at all (`docker`, `--help`, `--version`) is the same answer
-	// for the same reason. Printing help used to be enough to start a session.
+	// for the same reason: printing help is not worth a session either.
 	switch scanRootArgs(os.Args[1:]).verb {
 	case "", "remote", "context", "completion", "help":
 		return false
