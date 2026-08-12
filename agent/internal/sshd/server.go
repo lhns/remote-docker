@@ -62,7 +62,7 @@ type Server struct {
 	ssh     *gssh.Server
 
 	// tcpip is the forwarding protocol, in the shared module, answering to the
-	// policies below. See pkg/tunnel/server.
+	// policies below. See core-agent/tunnelserver.
 	tcpip tunnelserver.Forwards
 
 	mu     sync.Mutex
@@ -135,7 +135,7 @@ func New(cfg Config) (*Server, error) {
 		// predicate: it binds the port and arms the release. Called twice, the
 		// second call refuses its own reservation.
 
-		// The machinery is pkg/tunnel/server's rather than gliderlabs', because
+		// The machinery is core-agent/tunnelserver's rather than gliderlabs', because
 		// both of theirs hardcode the namespace they listen and dial in. The
 		// decisions it asks for are in forward_tcpip.go.
 		RequestHandlers: map[string]gssh.RequestHandler{

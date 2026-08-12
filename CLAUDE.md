@@ -52,16 +52,15 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    sshx/                where core-client/keys meets tunnelclient, and the
-                         enrolment hint, which knows this project's rule for
-                         who may log in
     machine/             provisioning a workspace on this machine (ADR 0026)
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
     ports/               published ports -> local forwards. Stays glue whole:
                          its manager is keyed on container ids throughout, and
                          the generic forward is already tunnelclient's
-    session/             wires the above into one live connection
+    session/             wires the above into one live connection, dials the
+                         tunnel, and holds the enrolment hint -- the one part
+                         of authentication that is this project's policy
 
 core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
                          dockercli, daemons, supervise or elevate, and that
@@ -175,8 +174,8 @@ premise of the project, and it applies to building it too. So:
   must not leak a blocked reader. A test pins both.
 - **The transport is handed its auth and decides none of it** (ADR 0030).
   `core-client/tunnelclient` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
-  `client/internal/sshx` builds both and is the only place that knows enrolment
-  is a file in `authorized_keys.d`. There is no default host key rule, because
+  `client/internal/session` builds both and is the only place that knows
+  enrolment is a file in `authorized_keys.d`. There is no default host key rule, because
   every default is either a prompt nobody is there to answer or an acceptance of
   anybody -- so a nil callback is refused by name rather than mid-handshake.
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,

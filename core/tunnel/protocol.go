@@ -16,7 +16,7 @@ package tunnel
 // InfoCommand asks the workspace for the parameters this client must agree
 // with: its account, its reverse-tunnel port, the daemon it will reach.
 //
-// Answered from pkg/workspace, in the same type the client parses with, so the
+// Answered from core/workspace, in the same type the client parses with, so the
 // two cannot disagree about the format either.
 const InfoCommand = "workspace-info"
 

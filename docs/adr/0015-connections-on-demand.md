@@ -113,7 +113,7 @@ connection.
 
 The rule is unchanged and still right for a connection that is alive. What
 changed is that a connection known to be dead is dropped rather than questioned:
-`sshx.Client` publishes `Dead`, the gate is given an `alive` check consulted
+`tunnelclient.Client` publishes `Dead`, the gate is given an `alive` check consulted
 before every acquire, and both `acquire` and `sweep` drop a dead connection
 first. `Status` and `IdleFor` ask `currentLive` rather than `current`, so a
 wedged session stops reporting itself ready.

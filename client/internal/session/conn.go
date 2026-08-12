@@ -21,9 +21,9 @@ import (
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
-	"github.com/lhns/remote-docker/client/internal/sshx"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
+	"github.com/lhns/remote-docker/core-client/tunnelclient"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -74,14 +74,19 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		}
 	}
 
-	client, err := sshx.Dial(ctx, sshx.Config{
-		Host:       host,
-		Port:       s.opts.Config.Port,
-		User:       s.opts.Config.User,
-		Key:        key,
-		KnownHosts: known,
+	client, err := tunnelclient.Dial(ctx, tunnelclient.Config{
+		Host:    host,
+		Port:    s.opts.Config.Port,
+		User:    s.opts.Config.User,
+		Signer:  key.Signer,
+		HostKey: known.Callback(),
 	})
 	if err != nil {
+		// The transport reports that it was refused; only this side knows how
+		// somebody is enrolled, so the remedy is attached here.
+		if hint := enrolmentHint(err, s.opts.Config.User, key.Signer); hint != "" {
+			return nil, fmt.Errorf("%w%s", err, hint)
+		}
 		return nil, err
 	}
 

@@ -26,19 +26,14 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Commands the agent answers itself rather than executing.
+// handleSession serves one session channel.
 //
-// Named in pkg/tunnel, because every one of them is spoken by the client and
+// The commands this answers itself rather than executing are named in
+// core/tunnel, because every one of them is spoken by the client and
 // understood here: a second spelling on either side is a client asking for
 // something this switch does not recognise, which arrives as a shell trying to
-// run it and exiting 127.
-const (
-	InfoCommand      = tunnel.InfoCommand
-	DialStdioCommand = tunnel.DialStdioCommand
-	NotifyCommand    = tunnel.NotifyCommand
-)
-
-// handleSession serves one session channel.
+// run it and exiting 127. Read from there directly, so there is no local
+// spelling that could become the second one.
 func (s *Server) handleSession(session gssh.Session) {
 	account, ok := accountFor(session.Context())
 	if !ok {
@@ -49,11 +44,11 @@ func (s *Server) handleSession(session gssh.Session) {
 	command := strings.Join(session.Command(), " ")
 
 	switch command {
-	case InfoCommand:
+	case tunnel.InfoCommand:
 		s.serveInfo(session, account)
-	case DialStdioCommand:
+	case tunnel.DialStdioCommand:
 		s.serveDockerSocket(session, account)
-	case NotifyCommand:
+	case tunnel.NotifyCommand:
 		s.serveNotify(session, account)
 	default:
 		s.serveExec(session, account, command)

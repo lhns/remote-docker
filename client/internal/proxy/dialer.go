@@ -5,7 +5,7 @@ import (
 	"github.com/lhns/remote-docker/core/tunnel"
 	"io"
 
-	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/core-client/tunnelclient"
 )
 
 // DialStdioCommand reaches the workspace daemon's socket through its own CLI.
@@ -22,7 +22,7 @@ const DialStdioCommand = tunnel.DialStdioCommand
 
 // SSHDialer opens Docker connections over an SSH client.
 type SSHDialer struct {
-	Client *sshx.Client
+	Client *tunnelclient.Client
 }
 
 // DialDocker opens one stream to the workspace daemon.

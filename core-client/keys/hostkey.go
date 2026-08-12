@@ -31,14 +31,14 @@ type KnownHosts struct {
 // not exist so the first connection has somewhere to record its trust.
 func NewKnownHosts(path string) (*KnownHosts, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("sshx: creating known_hosts directory: %w", err)
+		return nil, fmt.Errorf("keys: creating known_hosts directory: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: opening known_hosts: %w", err)
+		return nil, fmt.Errorf("keys: opening known_hosts: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("sshx: closing known_hosts: %w", err)
+		return nil, fmt.Errorf("keys: closing known_hosts: %w", err)
 	}
 	return &KnownHosts{Path: path}, nil
 }
@@ -55,7 +55,7 @@ func (k *KnownHosts) Callback() ssh.HostKeyCallback {
 		check, err := knownhosts.New(k.Path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("sshx: reading known_hosts: %w", err)
+				return fmt.Errorf("keys: reading known_hosts: %w", err)
 			}
 			check = func(string, net.Addr, ssh.PublicKey) error {
 				return &knownhosts.KeyError{}
@@ -77,7 +77,7 @@ func (k *KnownHosts) Callback() ssh.HostKeyCallback {
 		// key", which is the case that must never be papered over.
 		if len(keyErr.Want) > 0 {
 			return fmt.Errorf(
-				"sshx: host key for %s has CHANGED.\n"+
+				"keys: host key for %s has CHANGED.\n"+
 					"This is either a reinstalled workspace or an interception.\n"+
 					"If the workspace was genuinely rebuilt without its persisted host keys,\n"+
 					"remove the entry for %s from %s and reconnect.\n"+
@@ -100,12 +100,12 @@ func (k *KnownHosts) trust(hostname string, remote net.Addr, key ssh.PublicKey) 
 
 	f, err := os.OpenFile(k.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return fmt.Errorf("sshx: recording host key: %w", err)
+		return fmt.Errorf("keys: recording host key: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
 	if _, err := fmt.Fprintln(f, knownhosts.Line(addrs, key)); err != nil {
-		return fmt.Errorf("sshx: recording host key: %w", err)
+		return fmt.Errorf("keys: recording host key: %w", err)
 	}
 	return nil
 }

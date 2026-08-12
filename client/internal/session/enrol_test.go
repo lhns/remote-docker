@@ -1,4 +1,4 @@
-package sshx
+package session
 
 // The one thing an authentication failure has to say.
 //
@@ -17,20 +17,20 @@ import (
 	"github.com/lhns/remote-docker/core-client/keys"
 )
 
-func testConfig(t *testing.T) Config {
+func testSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	key, err := keys.LoadOrCreateKey(filepath.Join(t.TempDir(), "id_ed25519"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Config{Host: "workspace.example", Port: 2222, User: "alice", Key: key}
+	return key.Signer
 }
 
 func TestAnAuthFailureSaysHowToEnrol(t *testing.T) {
-	cfg := testConfig(t)
+	signer := testSigner(t)
 	hint := enrolmentHint(errors.New(
 		"ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain"),
-		cfg)
+		"alice", signer)
 
 	// The file, because the name of it is the whole instruction.
 	if !strings.Contains(hint, "authorized_keys.d/alice.pub") {
@@ -38,7 +38,7 @@ func TestAnAuthFailureSaysHowToEnrol(t *testing.T) {
 	}
 	// The key, because a machine may have more than one and only one of them
 	// was offered.
-	if !strings.Contains(hint, ssh.FingerprintSHA256(cfg.Key.Signer.PublicKey())) {
+	if !strings.Contains(hint, ssh.FingerprintSHA256(signer.PublicKey())) {
 		t.Errorf("the hint does not say which key was offered:\n%s", hint)
 	}
 	// The wait, which is the part that made somebody give up and change
@@ -52,22 +52,21 @@ func TestAnAuthFailureSaysHowToEnrol(t *testing.T) {
 // has nothing to do with enrolment, and pointing at it would send the reader
 // the wrong way.
 func TestOtherFailuresGetNoHint(t *testing.T) {
-	cfg := testConfig(t)
+	signer := testSigner(t)
 	for _, err := range []error{
 		nil,
 		errors.New("ssh: handshake failed: knownhosts: key mismatch"),
 		errors.New("dial tcp 10.0.0.1:2222: connect: connection refused"),
 	} {
-		if hint := enrolmentHint(err, cfg); hint != "" {
+		if hint := enrolmentHint(err, "alice", signer); hint != "" {
 			t.Errorf("%v was given an enrolment hint:\n%s", err, hint)
 		}
 	}
 }
 
-// A config with no key at all must not panic on the way to reporting a
-// failure.
+// No key at all must not panic on the way to reporting a failure.
 func TestNoKeyMeansNoHint(t *testing.T) {
-	if hint := enrolmentHint(errors.New("ssh: unable to authenticate"), Config{User: "alice"}); hint != "" {
+	if hint := enrolmentHint(errors.New("ssh: unable to authenticate"), "alice", nil); hint != "" {
 		t.Errorf("a keyless config produced a hint:\n%s", hint)
 	}
 }

@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/client/internal/sshx"
 	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
+	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -33,7 +33,7 @@ type notifySink struct {
 // so an agent too old for this one runs `sh -c "workspace-notify"` and exits
 // 127, indistinguishable from a working channel that has nothing to say.
 // Reading a greeting first is the only thing that tells them apart.
-func openNotify(client *sshx.Client) (*notifySink, error) {
+func openNotify(client *tunnelclient.Client) (*notifySink, error) {
 	stream, err := client.OpenStream(tunnel.NotifyCommand)
 	if err != nil {
 		return nil, err
