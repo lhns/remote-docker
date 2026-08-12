@@ -16,7 +16,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // sweepIdle releases the connection when nothing needs it.

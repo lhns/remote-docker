@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // Forwarder opens a local listener carrying connections to an address inside

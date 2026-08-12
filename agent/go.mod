@@ -11,7 +11,7 @@ go 1.26.3
 require (
 	github.com/creack/pty v1.1.24
 	github.com/gliderlabs/ssh v0.3.8
-	github.com/lhns/remote-docker v0.0.0
+	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-agent v0.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.55.0
@@ -25,6 +25,6 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 )
 
-replace github.com/lhns/remote-docker => ../
+replace github.com/lhns/remote-docker/core => ../core
 
 replace github.com/lhns/remote-docker/core-agent => ../core-agent

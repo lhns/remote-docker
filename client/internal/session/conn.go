@@ -25,7 +25,7 @@ import (
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // connect brings up everything that needs the workspace. The order matters:

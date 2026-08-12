@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // shareRecord is one directory this workspace asked to export.

@@ -665,8 +665,8 @@ client's dependency tree.
 
 ```
 go.mod                 shared: what both binaries must agree on
-  pkg/workspace/       the contract itself: paths, uid→port, volume names
-  internal/logx/       one log handler, so both look the same
+  core/workspace/       the contract itself: paths, uid→port, volume names
+  core/logx/       one log handler, so both look the same
   internal/iox/        one bidirectional copy, one answer to half-closing
   test/                the integration suites and their probes
 

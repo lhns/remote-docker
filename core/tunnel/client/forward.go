@@ -5,7 +5,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/lhns/remote-docker/pkg/tunnel"
+	"github.com/lhns/remote-docker/core/tunnel"
 )
 
 // Forward is a local listener whose connections are carried to an address on

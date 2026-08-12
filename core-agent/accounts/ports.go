@@ -24,7 +24,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Ports remembers which port each of an account's machines was given.

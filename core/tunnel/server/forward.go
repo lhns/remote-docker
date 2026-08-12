@@ -25,7 +25,7 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 const forwardedTCPChannelType = "forwarded-tcpip"

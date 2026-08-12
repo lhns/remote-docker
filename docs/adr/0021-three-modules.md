@@ -45,14 +45,22 @@ client/go.mod   github.com/lhns/remote-docker/client    cmd/remote-docker, inter
 agent/go.mod    github.com/lhns/remote-docker/agent     cmd/remote-dockerd, internal/…
 ```
 
+**Amended (2026-08-12, ADR 0031).** There are five modules now, and the shared
+one is no longer at the root: it is `core/`, at
+`github.com/lhns/remote-docker/core`, and the repository root is not a module at
+all. The reasoning below is unchanged and the trap named in the consequences is
+now structurally impossible rather than merely documented -- see the note on it
+there. `internal/logx` became `core/logx`, public, because Go's internal rule
+would otherwise have let only `core/...` reach a handler every module uses.
+
 Both binaries `require` the root module with a relative `replace`, so an
 in-repo build never needs a published tag for a change made in the same commit.
 **The agent must never require the client module**, which would pull the graph
 straight back in.
 
 The root is the shared module rather than a fourth one because of what that
-placement makes possible: `pkg/workspace` stays *exported*, for the third-party
-client ADR 0011 wants to allow, while `internal/logx` stays *internal* and is
+placement makes possible: `core/workspace` stays *exported*, for the third-party
+client ADR 0011 wants to allow, while `core/logx` stays *internal* and is
 still importable by both binaries — Go's internal rule is path-based, and both
 module paths sit under `github.com/lhns/remote-docker/`. No package has to
 choose between being internal and being shared.
@@ -69,9 +77,9 @@ The same discipline ADR 0011 wrote for the contract, one step wider:
 > It goes in the shared module if both binaries must behave the **same way**,
 > not merely if both do something similar.
 
-- **`pkg/workspace`** — the contract. Unchanged rule: it goes here if the two
+- **`core/workspace`** — the contract. Unchanged rule: it goes here if the two
   sides must *agree* on it.
-- **`internal/logx`** — one person reads both programs' output.
+- **`core/logx`** — one person reads both programs' output.
 - **The bidirectional copy with half-close** (not yet moved) — the two sides
   are the two ends of one stream. They currently have two `closeWrite` helpers
   with *opposite* fallbacks: the agent's does nothing when `CloseWrite` is
@@ -89,16 +97,21 @@ daemon output and the client's lookalike is unrelated.
 - **A client dependency can no longer break the agent's build.** That is the
   whole purchase.
 - **`./...` stops at a module boundary**, and this is the trap. `go test ./...`
-  at the root now covers the shared module and nothing else — it would pass
-  while testing almost none of the repository. Every CI job loops over the
-  three modules explicitly, and CLAUDE.md's build commands do too.
+  at the root covered the shared module and nothing else — it passed while
+  testing almost none of the repository. Every CI job loops over the modules
+  explicitly, and CLAUDE.md's build commands do too.
+
+  *Amended:* with the shared module moved to `core/` there is no module at the
+  root, so that command now FAILS rather than passing. The loop is still what
+  provides coverage; what changed is that forgetting it is loud.
 - **`golangci-lint` runs four times**: once per module, plus `GOOS=linux` for
-  the agent, whose session handling is invisible to a host-only lint.
+  the agent, whose session handling is invisible to a host-only lint. *(Seven
+  times now: five modules, plus `GOOS=linux` for the agent and core-agent.)*
 - **Dependabot needs one entry per module.** It does not discover nested
   modules; a directory missing from `dependabot.yml` is a module whose
   dependencies silently stop being updated.
 - **Publishing gains an ordering constraint.** An outside consumer of a
-  contract change needs a `pkg/workspace` tag on the root module before it can
+  contract change needs a `workspace` tag on the `core` module before it can
   take it. In-repo the `replace` makes this invisible, which is exactly how it
   will be forgotten — hence this paragraph.
 - **`go.work` must not be copied into the image build.** It would resolve the

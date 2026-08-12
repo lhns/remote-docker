@@ -18,7 +18,7 @@ See "What is left", at the end.
 ## The measurement
 
 A container watching a directory on the share, two ways at once, while a file
-is created on the client (`test/watchprobe`, run by `test/integration.sh`):
+is created on the client (`core/probes/watchprobe`, run by `test/integration.sh`):
 
 ```
 RESULT inotify_events=0 poll_entries=1 inotify=[] poll=[created-after-watch.txt]

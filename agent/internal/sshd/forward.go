@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Account is what the forward policy needs to know about a session.

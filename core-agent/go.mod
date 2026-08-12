@@ -14,7 +14,7 @@ go 1.26.3
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/lhns/remote-docker v0.0.0
+	github.com/lhns/remote-docker/core v0.0.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 )
@@ -23,4 +23,4 @@ require (
 // agent and client modules use, and deliberately not go.work: CI and the image
 // build ignore the workspace and build one module at a time, so a missing
 // require fails where it is wrong.
-replace github.com/lhns/remote-docker => ../
+replace github.com/lhns/remote-docker/core => ../core

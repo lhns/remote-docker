@@ -181,7 +181,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: core/go.mod
           cache: true
 
       # What the embedded Compose reports as its version. Read from the module

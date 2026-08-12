@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // store builds a record over a temporary file, with one real directory to

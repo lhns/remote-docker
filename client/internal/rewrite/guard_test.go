@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // The bug this guards against costs a container its filesystem and says

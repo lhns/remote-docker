@@ -6,7 +6,7 @@ before:
   hooks:
     # Per module: the client is where the binary comes from, and a tidy at
     # the repository root would only touch the shared module (ADR 0021).
-    - go mod tidy
+    - sh -c "cd core && go mod tidy"
     - sh -c "cd client && go mod tidy"
 
 # The embedded Compose reports this as `docker compose version`. Upstream sets

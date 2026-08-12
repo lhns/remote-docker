@@ -13,7 +13,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
 	"github.com/lhns/remote-docker/core-client/fswatch"
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // runSession holds a session open until something ends it.

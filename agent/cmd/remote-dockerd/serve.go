@@ -23,8 +23,8 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/sshd"
 	"github.com/lhns/remote-docker/agent/internal/supervise"
 	"github.com/lhns/remote-docker/core-agent/accounts"
-	"github.com/lhns/remote-docker/internal/logx"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Environment variables the workspace image sets, kept compatible with the

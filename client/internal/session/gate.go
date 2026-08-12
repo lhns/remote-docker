@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // connGate holds a connection open only while it is needed.

@@ -363,7 +363,7 @@ mkdir -p "$WATCHDIR"
 # alpine. That keeps this test about file watching rather than about whether
 # `docker build` works through the proxy, and avoids shipping $WORK -- which
 # holds the private key and a live socket -- as a build context.
-if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
+if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./probes/watchprobe); then
     # The error is NOT swallowed. The first run of this test produced an
     # empty log and no explanation, which cost a CI round trip to diagnose:
     # the binary was on the share with a synthesised mode 0644 and could not
@@ -432,8 +432,8 @@ echo "== 11d. which syscall makes a container's watcher fire? (ADR 0014 spike) =
 POKEDIR="$WORK/poked"
 mkdir -p "$POKEDIR"
 
-if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe &&
-        CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/pokeprobe" ./test/pokeprobe); then
+if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./probes/watchprobe &&
+        CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/pokeprobe" ./probes/pokeprobe); then
 
     # The files each primitive acts on. Pre-created on the client where the
     # primitive needs an existing file; 'create' and 'unlink' are handled
@@ -1118,7 +1118,7 @@ REPLAYDIR="$WORK/replayed"
 mkdir -p "$REPLAYDIR"
 echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
-if (cd "$REPO" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./test/watchprobe); then
+if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./probes/watchprobe); then
     REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 

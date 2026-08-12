@@ -6,7 +6,7 @@
 go 1.26.3
 
 use (
-	.
+	./core
 	./agent
 	./core-agent
 	./core-client

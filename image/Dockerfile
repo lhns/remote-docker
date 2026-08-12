@@ -32,9 +32,7 @@ ARG VERSION=dev
 # go.work is deliberately NOT copied. It would make this build resolve through
 # the workspace instead of through agent/go.mod's own replace, so a missing
 # require here would still succeed and only fail somewhere without it.
-COPY go.mod go.sum ./
-COPY pkg/ ./pkg/
-COPY internal/ ./internal/
+COPY core/ ./core/
 COPY core-agent/ ./core-agent/
 COPY agent/ ./agent/
 # `go mod download` is deliberately absent. It was here to cache dependencies

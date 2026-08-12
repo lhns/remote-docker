@@ -12,8 +12,8 @@ import (
 	"github.com/lhns/remote-docker/client/internal/sshx"
 	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
-	"github.com/lhns/remote-docker/pkg/tunnel"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/tunnel"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // notifySink writes change frames to the agent over the workspace-notify

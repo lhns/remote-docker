@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/internal/logx"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Volumes resolves a managed volume to the directory dockerd has it mounted

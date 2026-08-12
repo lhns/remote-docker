@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // These tests drive the server over a real NFSv3 conversation, using a real

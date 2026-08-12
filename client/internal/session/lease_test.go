@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/core-client/nfsserve"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // fakeStream stands in for the SSH stream a dial returns.

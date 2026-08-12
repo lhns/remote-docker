@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // Volume is a volume as the daemon reports it.
