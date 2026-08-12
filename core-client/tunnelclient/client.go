@@ -2,8 +2,10 @@
 //
 // One ssh.Client carries every channel this project needs: the reverse forward
 // for the NFS export, a local forward per published container port, the Docker
-// API stream, and any interactive session. That multiplexing is inherent to SSH
-// and is why the ControlMaster split between the old shell clients disappears.
+// API stream, and any interactive session. Multiplexing is inherent to the SSH
+// protocol, so there is no connection to share between commands and no
+// per-command handshake to pay for -- which shelling out to ssh(1) would need
+// OpenSSH's ControlMaster to avoid, and Win32-OpenSSH does not implement it.
 //
 // It knows nothing about Docker and nothing about who may log in. Both are
 // deliberate. Docker is glue and lives in the binaries; auth is policy, so this

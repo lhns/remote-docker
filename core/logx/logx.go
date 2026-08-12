@@ -58,22 +58,17 @@ func Logger(out io.Writer, indent string, prefix bool) *slog.Logger {
 
 // Discard is a logger that writes nothing.
 //
-// This is what replaced eleven `if x.Log != nil` guards. A nil *slog.Logger
-// panics rather than staying quiet, so every zero value that used to mean
-// silence has to name this instead, which is a fair trade for never writing
-// the check again, but it IS the one thing to remember when adding a field.
+// A nil *slog.Logger panics on use rather than staying quiet, so a field that
+// means "say nothing" has to hold this. That is the one thing to remember when
+// adding a logger field: nil is not silence, this is. See Or.
 func Discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-// Or is that trade, made once.
+// Or returns l, or a logger that writes nothing when l is nil.
 //
-// The check came back anyway. Thirteen types grew
-// `if x.Log == nil { return Discard() }`, in five packages across four modules,
-// two of them byte-identical down to the comment -- because a type whose Log is
-// an exported field set by a struct literal has no constructor to normalise it
-// in, so the guard has to live at the point of use.
-//
-// Where there IS a constructor, normalise there instead and skip this:
-// supervise.Daemon does it in defaults() and needs no accessor at all.
+// For a type whose Log is an exported field set by a struct literal, there is
+// no constructor to fill in, so the check has to happen where the logger is
+// used. Where there IS a constructor, set Discard() there instead and skip
+// this: supervise.Daemon does that in defaults() and needs no accessor.
 func Or(l *slog.Logger) *slog.Logger {
 	if l == nil {
 		return Discard()

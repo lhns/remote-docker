@@ -8,12 +8,12 @@
 // package must import neither SSH library, so that the client never links a
 // server it does not run.
 //
-// This file is the first agreement, and the reason the package exists. The
-// bidirectional copy and the meaning of half-closing lived in both binaries,
-// and the copies had OPPOSITE fallbacks for a connection that cannot
-// half-close: one did nothing, the other closed the whole connection, which the
-// project's own invariant forbids. It failed as `docker run` exiting 0 having
-// printed nothing.
+// This file holds the first of those agreements, and the reason the package
+// exists: the bidirectional copy, and what half-closing means. Both ends must
+// answer that question identically. Two implementations of it can look correct
+// side by side and still disagree about the one case that matters -- a
+// connection that cannot half-close -- and the symptom is `docker run` exiting
+// 0 having printed nothing.
 package tunnel
 
 import (
@@ -77,9 +77,9 @@ func SpliceAndClose(a, b net.Conn) {
 }
 
 // There are exactly TWO answers to a stream that cannot half-close, and which
-// is right depends on what the stream carries. Both are exported, because
-// writing either out by hand is how they drifted apart the first time: they
-// ended up opposite, and each looked obviously correct where it stood.
+// is right depends on what the stream carries. Both are exported so that
+// neither gets written out by hand: hand-written copies of this decision have
+// drifted to opposite behaviours before, each looking correct where it stood.
 //
 // Choose by asking whether this connection still owes anybody anything:
 //

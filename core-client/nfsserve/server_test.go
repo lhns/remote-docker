@@ -315,11 +315,10 @@ func TestServePreservesRealExecutableBits(t *testing.T) {
 // A mount for an export this session never registered, answered from the
 // record, over the real protocol.
 //
-// This is the failure the record exists for, in the shape it actually took:
-// dockerd mounts a volume created in an earlier session, the MOUNT names an
-// export nothing has registered, and the answer used to be MNT3ERR_NOENT --
-// "no such file or directory" against a project directory that was right
-// there.
+// This is the failure the record exists for: dockerd mounts a volume created
+// in an earlier session, so the MOUNT names an export nothing has registered.
+// Without the record the answer is MNT3ERR_NOENT -- "no such file or
+// directory" against a project directory that is right there.
 func TestServeRestoresAnUnregisteredExport(t *testing.T) {
 	dir := t.TempDir()
 	const content = "the project, mounted by a container started later\n"
