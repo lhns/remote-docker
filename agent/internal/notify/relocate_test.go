@@ -10,7 +10,7 @@ import (
 // cannot open by that path. The root is how it reaches it, and this is the
 // whole of what changes for the replayer (ADR 0019).
 func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
-	got, err := relocate("/var/lib/docker/volumes/rd-cwd/_data",
+	got, err := Relocate("/var/lib/docker/volumes/rd-cwd/_data",
 		func() (string, error) { return "/proc/42/root", nil })
 	if err != nil {
 		t.Fatalf("relocate: %v", err)
@@ -37,7 +37,7 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 		func() (string, error) { return "", nil },
 		func() (string, error) { return "/", nil },
 	} {
-		if got, err := relocate(mp, root); err != nil || got != mp {
+		if got, err := Relocate(mp, root); err != nil || got != mp {
 			t.Errorf("relocate = %q, %v; want it unchanged", got, err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 func TestRelocateFailsRatherThanFallingBack(t *testing.T) {
 	boom := errors.New("no such daemon")
 
-	got, err := relocate("/var/lib/docker/volumes/rd-cwd/_data",
+	got, err := Relocate("/var/lib/docker/volumes/rd-cwd/_data",
 		func() (string, error) { return "", boom })
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want it to carry the cause", err)
@@ -80,12 +80,12 @@ func TestRelocateRefusesAPathThatLeavesTheRoot(t *testing.T) {
 		"/..",
 		"/../../../",
 	} {
-		got, err := relocate(mp, func() (string, error) { return "/proc/42/root", nil })
+		got, err := Relocate(mp, func() (string, error) { return "/proc/42/root", nil })
 		if err == nil {
-			t.Errorf("relocate(%q) = %q with no error; it escaped the daemon's root", mp, got)
+			t.Errorf("Relocate(%q) = %q with no error; it escaped the daemon's root", mp, got)
 		}
 		if got != "" {
-			t.Errorf("relocate(%q) returned %q alongside its error", mp, got)
+			t.Errorf("Relocate(%q) returned %q alongside its error", mp, got)
 		}
 	}
 }
@@ -93,7 +93,7 @@ func TestRelocateRefusesAPathThatLeavesTheRoot(t *testing.T) {
 // And a path that merely SHARES A PREFIX with the root is not inside it.
 // "/proc/42/rootkit" starts with "/proc/42/root" and is a different directory.
 func TestRelocateDoesNotAcceptASiblingOfTheRoot(t *testing.T) {
-	got, err := relocate("kit/x", func() (string, error) { return "/proc/42/root", nil })
+	got, err := Relocate("kit/x", func() (string, error) { return "/proc/42/root", nil })
 	if err != nil {
 		t.Fatalf("relocate: %v", err)
 	}
