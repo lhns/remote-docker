@@ -28,6 +28,8 @@ go.mod                   THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
                          the names both ends speak. Imports no SSH library.
     client/              dialling it: sessions, streams, both forwards. Given
                          a signer and a host key rule; decides neither.
+    server/              answering it: the forwarding protocol, given who may
+                         bind what and which namespace it goes in.
   internal/logx/         the one log handler, so both look the same
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
@@ -49,7 +51,9 @@ agent/go.mod             the agent module: 7 third-party modules, 24 go.sum line
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     accounts/            one unix account per enrolled key
-    sshd/                the SSH server: auth, sessions, forwards
+    sshd/                the SSH server: auth, sessions, and the forwarding
+                         POLICY pkg/tunnel/server asks. Its session handling
+                         is docker all the way down and stays here.
     supervise/           starts and watches the workspace's own dockerd
     elevate/             relaunch privileged, for Swarm (ADR 0013)
     notify/              replays the client's changes as real syscalls

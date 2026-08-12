@@ -20,6 +20,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/accounts"
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/internal/logx"
+	tunnelserver "github.com/lhns/remote-docker/pkg/tunnel/server"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 
@@ -60,7 +61,9 @@ type Server struct {
 	forward *ForwardPolicy
 	ssh     *gssh.Server
 
-	tcpip forwardedTCP
+	// tcpip is the forwarding protocol, in the shared module, answering to the
+	// policies below. See pkg/tunnel/server.
+	tcpip tunnelserver.Forwards
 
 	mu     sync.Mutex
 	closed bool
@@ -112,6 +115,11 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}
 	s.forward.Ports = cfg.Ports
+	s.tcpip = tunnelserver.Forwards{
+		Reverse: reversePolicy{s},
+		Local:   localPolicy{s},
+		Log:     cfg.Log,
+	}
 
 	s.ssh = &gssh.Server{
 		Addr:             cfg.Addr,
@@ -123,19 +131,20 @@ func New(cfg Config) (*Server, error) {
 		//
 		// The callbacks are deliberately NOT set. gliderlabs invokes them from
 		// the handlers we replaced, so setting them here would leave the
-		// permission check in two places, and allowReverseForward is not a
+		// permission check in two places, and reversePolicy.Allow is not a
 		// predicate: it binds the port and arms the release. Called twice, the
 		// second call refuses its own reservation.
 
-		// Ours rather than gliderlabs', because both of theirs hardcode the
-		// namespace they listen and dial in. See forward_tcpip.go.
+		// The machinery is pkg/tunnel/server's rather than gliderlabs', because
+		// both of theirs hardcode the namespace they listen and dial in. The
+		// decisions it asks for are in forward_tcpip.go.
 		RequestHandlers: map[string]gssh.RequestHandler{
-			"tcpip-forward":        s.handleForwardRequest,
-			"cancel-tcpip-forward": s.handleForwardRequest,
+			"tcpip-forward":        s.tcpip.HandleRequest,
+			"cancel-tcpip-forward": s.tcpip.HandleRequest,
 		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
-			"direct-tcpip": s.directTCPIP,
+			"direct-tcpip": s.tcpip.HandleChannel,
 		},
 
 		Handler: s.handleSession,
@@ -184,60 +193,6 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 func accountFor(ctx gssh.Context) (sessionAccount, bool) {
 	account, ok := ctx.Value(contextKey{}).(sessionAccount)
 	return account, ok
-}
-
-// allowReverseForward gates `ssh -R`, which is how the client's NFS export
-// reaches the workspace. This is where ADR 0010's claim is enforced.
-// It returns the token that releases the reservation again, which the caller
-// must carry: a reservation belongs to this session and nothing else may give
-// it up.
-func (s *Server) allowReverseForward(ctx gssh.Context, host string, port uint32) (uint64, bool) {
-	account, ok := accountFor(ctx)
-	if !ok {
-		return 0, false
-	}
-
-	allowed, why := s.forward.Allow(account, host, port)
-	if !allowed {
-		s.log().Warn("refused a reverse forward", "host", host, "port", port, "account", account.Name(), "why", why)
-		return 0, false
-	}
-	token, ok := s.forward.Bind(account, host, port)
-	if !ok {
-		holder, _ := s.forward.Holder(host, port)
-		s.log().Warn("refused a reverse forward: the port is already held",
-			"host", host, "port", port, "account", account.Name(), "holder", holder)
-		return 0, false
-	}
-
-	// Released when the connection ends, so a dropped client does not keep its
-	// port reserved forever. By token, so a connection ending late cannot
-	// release the reservation whoever came after it now holds.
-	go func() {
-		<-ctx.Done()
-		s.forward.Release(token, host, port)
-	}()
-
-	s.log().Info("forwarding", "account", account.Name(), "host", host, "port", port)
-	return token, true
-}
-
-// allowLocalForward gates `ssh -L`, which the client uses to reach published
-// container ports.
-//
-// The rules are ForwardPolicy.AllowDial, beside the ones for binding, because
-// they are the same question asked in the other direction.
-func (s *Server) allowLocalForward(ctx gssh.Context, host string, port uint32) bool {
-	account, ok := accountFor(ctx)
-	if !ok {
-		return false
-	}
-	if ok, why := s.forward.AllowDial(account, host, port); !ok {
-		s.log().Warn("refused a local forward: "+why,
-			"host", host, "port", port, "account", account.Name())
-		return false
-	}
-	return true
 }
 
 // Serve accepts connections until the server is closed.
