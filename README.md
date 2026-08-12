@@ -17,7 +17,11 @@ docker compose up -d                                  # ports land on YOUR local
 
 ## Quick start
 
-You need a workspace to connect to. If nobody has set one up yet, see
+Take the archive for your platform from
+[the latest release](https://github.com/lhns/remote-docker/releases/latest) and
+unpack the single binary out of it. There is nothing else in it.
+
+You also need a workspace to connect to. If nobody has set one up yet, see
 [Running a workspace](#running-a-workspace).
 
 ```bash
@@ -290,8 +294,10 @@ ghcr.io/lhns/remote-docker-workspace:latest      # on a v<version> tag
 ghcr.io/lhns/remote-docker-workspace:sha-<short> # every commit to main
 ```
 
-`latest` only exists once a `v*` tag has been pushed. Before that, pin a
-`sha-` tag. Or build it yourself, with the repository root as the context:
+`latest` follows the most recent `v*` tag and exists from `v0.1.0` onwards.
+*(Checked 2026-08-12 with `docker manifest inspect
+ghcr.io/lhns/remote-docker-workspace:latest`.)* Pin `sha-<short>` to track main
+between releases, or build it yourself, with the repository root as the context:
 
 ```bash
 docker build -f image/Dockerfile -t remote-docker-workspace:latest .
@@ -659,38 +665,51 @@ echoing back as a change of its own
 
 ## Project layout
 
-Three Go modules in one repository ([ADR 0021](docs/adr/0021-three-modules.md)).
-The shared one depends on almost nothing, so the agent does not inherit the
-client's dependency tree.
+Five Go modules in one repository ([ADR 0021](docs/adr/0021-three-modules.md),
+[ADR 0031](docs/adr/0031-if-it-knows-about-docker-it-is-glue.md)). Three of them
+are the core and know nothing about Docker; the two binaries are the glue that
+does.
 
 ```
-go.mod                 shared: what both binaries must agree on
-  core/workspace/       the contract itself: paths, uid→port, volume names
-  core/logx/       one log handler, so both look the same
-  internal/iox/        one bidirectional copy, one answer to half-closing
-  test/                the integration suites and their probes
+core/                  what both ends must agree on
+  workspace/           the contract: paths, uid→port, volume names
+  tunnel/              one bidirectional copy, one answer to half-closing
+  logx/                one log handler, so both look the same
+  probes/              helpers the integration suites run in containers
 
-client/                the client module (docker/cli, buildx)
-  cmd/remote-docker/   the binary, which also answers to `docker`
-  internal/            ssh, nfs server, api proxy, bind rewriting, ports,
-                       file watching, session wiring
+core-client/           this machine, minus Docker
+  tunnelclient/        dialling the tunnel
+  nfsserve/            the in-process NFSv3 server
+  fswatch/             watching directories, on three platforms
+  keys/                this machine's identity to a workspace
 
-agent/                 the agent module (seven third-party dependencies)
+core-agent/            the workspace, minus Docker
+  tunnelserver/        answering the tunnel
+  accounts/            one unix account per enrolled key
+  notify/              replaying changes as real syscalls
+  netns/               running inside another process's netns
+
+client/                the client binary (docker/cli, buildx)
+  cmd/remote-docker/   also answers to `docker`
+  internal/            api proxy, bind rewriting, ports, machines, session
+
+agent/                 the agent binary (four direct dependencies)
   cmd/remote-dockerd/  the workspace binary
-  internal/            accounts, sshd, per-account daemons, change replay
+  internal/            per-account daemons, dockerd supervision, elevate
 
 image/  deploy/        the workspace container and its deployments
+test/                  the integration suites
 docs/adr/              why everything is the way it is
 ```
 
 ## Development
 
-`./...` stops at a module boundary, so a bare `go test ./...` at the root
-covers the shared module and nothing else.
+The repository root is not a module, and `./...` stops at a module boundary, so
+every command loops over the five.
 
 ```bash
-for m in . ./agent ./client; do (cd $m && go build ./... && go test ./...); done
-for m in . ./agent ./client; do (cd $m && golangci-lint run ./...); done
+for m in ./core ./core-client ./core-agent ./agent ./client; do (cd $m && go build ./... && go test ./...); done
+for m in ./core ./core-client ./core-agent ./agent ./client; do (cd $m && golangci-lint run ./...); done
 bash test/integration.sh      # needs docker and NFS client support
 ```
 
