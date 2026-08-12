@@ -47,7 +47,7 @@ jobs:
       - name: go vet
         run: |
           set -eux
-          for mod in . ./agent ./space ./host ./client; do
+          for mod in . ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -56,7 +56,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in . agent space host client; do
+          for mod in . agent core-agent core-client client; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -77,12 +77,12 @@ jobs:
   # caught by tests that ran on one developer's machine and nowhere else, which
   # is the one place this project's own premise says not to depend on.
   #
-  # The client, host and the shared module. Not the agent or space: both are
-  # Linux-only by design (useradd, netns, inotify); the cross-compile matrix
-  # already keeps their `_other.go` stubs honest, and running their tests here
-  # would prove nothing about the machine they actually run on.
+  # The client, core-client and the shared module. Not the agent or core-agent:
+  # both are Linux-only by design (useradd, netns, inotify); the cross-compile
+  # matrix already keeps their `_other.go` stubs honest, and running their tests
+  # here would prove nothing about the machine they actually run on.
   #
-  # host EARNS a place here rather than inheriting one. Its fswatch has a
+  # core-client EARNS a place here rather than inheriting one. Its fswatch has a
   # Windows backend of its own and its NFS server serves this machine's files,
   # so this is the only job where either runs on the OS it was written for.
   #
@@ -106,7 +106,7 @@ jobs:
         shell: bash
         run: |
           set -eux
-          for mod in . host client; do
+          for mod in . core-client client; do
             (cd "$mod" && go test ./...)
           done
 
@@ -132,14 +132,14 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in . ./agent ./space ./host ./client; do
+          for mod in . ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
-          # The agent and space both carry Linux-only files (netns, the unix
+          # The agent and core-agent both carry Linux-only files (netns, the unix
           # provisioner, the inotify poker), which a lint on the runner's own
           # GOOS does not see at all.
           (cd agent && GOOS=linux golangci-lint run --timeout 5m ./...)
-          (cd space && GOOS=linux golangci-lint run --timeout 5m ./...)
+          (cd core-agent && GOOS=linux golangci-lint run --timeout 5m ./...)
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -182,7 +182,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -eux
-          for mod in . ./agent ./space ./host ./client; do
+          for mod in . ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && go build ./...)
           done
 

@@ -14,7 +14,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/sshx"
-	"github.com/lhns/remote-docker/host/nfsserve"
+	"github.com/lhns/remote-docker/core-client/nfsserve"
 )
 
 // shareRegistrar adapts the NFS registry to the rewriter's Sharer.

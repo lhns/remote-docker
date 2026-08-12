@@ -22,8 +22,8 @@ import (
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/client/internal/sshx"
-	"github.com/lhns/remote-docker/host/keys"
-	"github.com/lhns/remote-docker/host/nfsserve"
+	"github.com/lhns/remote-docker/core-client/keys"
+	"github.com/lhns/remote-docker/core-client/nfsserve"
 
 	"github.com/lhns/remote-docker/pkg/workspace"
 )

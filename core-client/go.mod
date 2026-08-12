@@ -8,7 +8,7 @@
 // Named for the place rather than a role, because the roles invert: for the
 // Docker API this machine is the client, and for NFS it is the SERVER while the
 // workspace is the client.
-module github.com/lhns/remote-docker/host
+module github.com/lhns/remote-docker/core-client
 
 go 1.26.3
 

@@ -4,7 +4,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/lhns/remote-docker/host/nfsserve"
+	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
 

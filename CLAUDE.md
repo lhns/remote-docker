@@ -33,7 +33,7 @@ go.mod                   THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
   internal/logx/         the one log handler, so both look the same
   test/                  lib.sh, integration.sh, per-user-dind.sh, probes
 
-host/go.mod              YOUR OWN MACHINE, minus Docker. 0 docker packages in
+core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
                          claim this whole split was for, and it is measured.
   nfsserve/              in-process NFSv3 server, virtual export namespace
@@ -46,7 +46,7 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    sshx/                where host/keys meets pkg/tunnel/client, and the
+    sshx/                where core-client/keys meets pkg/tunnel/client, and the
                          enrolment hint, which knows this project's rule for
                          who may log in
     machine/             provisioning a workspace on this machine (ADR 0026)
@@ -57,7 +57,7 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          the generic forward is already pkg/tunnel/client's
     session/             wires the above into one live connection
 
-space/go.mod             THE WORKSPACE SIDE, minus Docker. Reaches none of
+core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
                          dockercli, daemons, supervise or elevate, and that
                          is the whole membership test.
   accounts/              one unix account per enrolled key, and the ports
@@ -91,14 +91,14 @@ docs/adr/                architecture decision records
 # FIVE MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary.
 # A bare `go build ./...` at the root covers the shared module and nothing
 # else -- it will pass while compiling almost none of this repository.
-for m in . ./agent ./space ./host ./client; do (cd $m && go build ./... && go test ./...); done
+for m in . ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
 
-# lint, seven passes: one per module, plus the agent AND space under Linux. Both
+# lint, seven passes: one per module, plus the agent AND core-agent under Linux. Both
 # carry Linux-only files -- session handling, netns, the unix provisioner, the
 # inotify poker -- which a lint on the development machine does not see at all.
 # CI does, and will fail on what you did not lint.
-for m in . ./agent ./space ./host ./client; do (cd $m && golangci-lint run ./...); done
-for m in agent space; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
+for m in . ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
+for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
 # after a scripted import rewrite: changing the text of an import without moving
@@ -347,7 +347,7 @@ premise of the project, and it applies to building it too. So:
   machine from a host in another country. And `rm` REFUSES when it cannot
   destroy the machine, because the config entry is the only record that one was
   ever built.
-- **A machine is located and held, every time, and `host` in its config is a
+- **A machine is located and held, every time, and `core-client` in its config is a
   placeholder.** Both halves were measured on a Windows runner
   (`.github/workflows/machine.yml`, 2026-08-11) and both fail as a refused
   connection that names nothing:

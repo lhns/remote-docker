@@ -128,7 +128,7 @@ for changes made on another host of a shared filesystem.
 **E — uid collisions (3).** The uid decides the port, so two accounts sharing
 a uid would share a tunnel. `accounts.Sync` sorts the key files so allocation
 is deterministic; ranging a map here once made it differ run to run.
-*Covered by* `space/accounts` tests.
+*Covered by* `core-agent/accounts` tests.
 
 **R.** Sessions, forwards and refusals are logged with the account name. There
 is no audit of what happened *inside* a container, and none is claimed.
@@ -178,7 +178,7 @@ named pipe (`listen_windows.go`), and never a TCP port. *Covered by*
 `proxy` lock and listen tests.
 
 **I — the export is unauthenticated (9, 10).** The NFS server answers
-`AuthFlavorNull` (`host/nfsserve/server.go`): anything that can
+`AuthFlavorNull` (`core-client/nfsserve/server.go`): anything that can
 reach the port can read and write every registered share. There is no second
 control on the NFS layer, which is why the loopback rule in flow 3 and the
 holder rule in flow 4 carry the whole weight.
@@ -359,13 +359,13 @@ sequenceDiagram
 ```
 
 **T/E — a root process told which path to touch (2–7).** Two independent
-checks. `workspace.FSEvent.Validate` (`pkg/workspace/notify.go`) whitelists the
+checks. `workspace.FSEvent.Validate` (`pkg/workcore-agent/notify.go`) whitelists the
 export and the path spelling, deliberately without `path.Clean`, because
 cleaning *repairs* a traversal into something plausible instead of refusing it.
 Then `relocate` re-checks containment after joining onto the daemon's root,
 because `path.Join` cleans: `/proc/42/root` joined to `/../../etc/shadow` is
 `/proc/etc/shadow`, outside the root and looking correct. *Covered by*
-`space/notify/relocate_test.go`.
+`core-agent/notify/relocate_test.go`.
 
 **T — replay mutating the user's data (7).** Replay may never create, truncate
 or change content: the file may have been deleted between the client observing

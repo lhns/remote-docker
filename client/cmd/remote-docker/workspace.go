@@ -9,7 +9,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
-	"github.com/lhns/remote-docker/host/keys"
+	"github.com/lhns/remote-docker/core-client/keys"
 )
 
 // The workspaces in ~/.remote-docker.json, which until now could only be

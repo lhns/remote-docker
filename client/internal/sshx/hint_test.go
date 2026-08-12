@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/lhns/remote-docker/host/keys"
+	"github.com/lhns/remote-docker/core-client/keys"
 )
 
 func testConfig(t *testing.T) Config {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lhns/remote-docker/space/notify"
+	"github.com/lhns/remote-docker/core-agent/notify"
 )
 
 // Volumes resolves a managed volume to its mountpoint through the docker CLI,

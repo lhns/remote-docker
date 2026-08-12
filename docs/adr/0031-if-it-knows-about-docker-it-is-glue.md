@@ -39,20 +39,20 @@ Four in one restructuring is the argument that the rule is worth its cost.
 
 ```
 github.com/lhns/remote-docker          SHARED: what both ends must agree on
-github.com/lhns/remote-docker/host     THE USER'S MACHINE, minus Docker
-github.com/lhns/remote-docker/space    THE WORKSPACE, minus Docker
+github.com/lhns/remote-docker/core-client     THE USER'S MACHINE, minus Docker
+github.com/lhns/remote-docker/core-agent    THE WORKSPACE, minus Docker
 github.com/lhns/remote-docker/agent    the agent binary: glue
 github.com/lhns/remote-docker/client   the client binary: glue
 ```
 
-`host` holds `nfsserve`, `fswatch` and `keys`; `space` holds `accounts`,
+`core-client` holds `nfsserve`, `fswatch` and `keys`; `core-agent` holds `accounts`,
 `notify` and `netns`.
 
 **The names are places, not roles.** `client` and `server` invert depending on
 the mechanism: for the Docker API the user's machine is the client, and for NFS
 it is the SERVER while the workspace is the client. Naming the modules for the
 two ends of the connection avoids a word that means the opposite thing one
-paragraph later. `space` rather than `workspace` because `pkg/workspace` already
+paragraph later. `core-agent` rather than `workspace` because `pkg/workspace` already
 means the contract, and two import paths ending in the same word read as the
 same thing.
 
@@ -82,7 +82,7 @@ would have invented an abstraction with exactly one user.
 The same rule kept `keys` and the enrolment hint apart. A keypair and a
 known_hosts file are this machine's identity and know nothing about what they
 authenticate to; the hint names a file in the workspace's `authorized_keys.d`,
-which is this project's rule for who may log in. So `host/keys` produces the two
+which is this project's rule for who may log in. So `core-client/keys` produces the two
 values and `client/internal/sshx` is where they meet the transport.
 
 ## The membership test is checkable, and the obvious check does not work
@@ -101,14 +101,14 @@ What does distinguish them is coupling to the packages that are about Docker:
 
 ```bash
 # must print nothing, and does
-(cd space && go list -deps ./... | grep -E 'internal/(dockercli|daemons|supervise|elevate)')
+(cd core-agent && go list -deps ./... | grep -E 'internal/(dockercli|daemons|supervise|elevate)')
 ```
 
 On the host side the original check does work, because docker/cli is a real
 import there, and it is the sharpest number in this record:
 
 ```bash
-(cd host   && go list -deps ./... | grep -v lhns/remote-docker | grep -ci docker)  # 0
+(cd core-client   && go list -deps ./... | grep -v lhns/remote-docker | grep -ci docker)  # 0
 (cd client && go list -deps ./... | grep -v lhns/remote-docker | grep -ci docker)  # 191
 ```
 
