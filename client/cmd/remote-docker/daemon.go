@@ -289,20 +289,26 @@ func control(endpoint, method, path string, out any) error {
 // ensureDaemon makes a usable session available, restarting one built from a
 // different commit when that costs nothing.
 //
-// A running daemon serves the endpoint, so a freshly updated client talks to
-// the OLD build and appears not to have changed. That is not hypothetical: it
-// cost real debugging time during development, once presenting as `stop`
-// failing with Docker's own "page not found" because the request was being
-// forwarded by a daemon that predated the control channel.
+// A running daemon serves the endpoint, so without the restart a freshly
+// updated client talks to the OLD build and appears not to have changed, which
+// presents as commands the new build added answering Docker's own "page not
+// found" -- forwarded by a daemon that predates them.
 //
-// Reports whether anything is usable, never fails: if this cannot sort it out,
-// the command below says what went wrong with more context than a guess here.
-func ensureDaemon(cfg config.Config, endpoint string) {
+// The error is what stopped a session existing, and returning it is the whole
+// point. The command below cannot say anything better: it reaches an endpoint
+// nobody is serving and reports a missing daemon, which is true and explains
+// nothing. Something already serving is NOT an error, however old or foreign
+// it is, because the command about to run will work.
+func ensureDaemon(cfg config.Config, endpoint string) error {
 	if !proxy.Reachable(endpoint) {
-		if cfg.Host != "" {
-			_ = startDaemon(cfg, endpoint)
+		// Nothing is serving, so whatever goes wrong from here is the reason
+		// the next docker command will fail. Report it: without it the CLI
+		// reaches an endpoint nobody is on and blames a missing daemon, which
+		// is true and useless -- the daemon is missing because of this.
+		if err := cfg.RequireHost(); err != nil {
+			return err
 		}
-		return
+		return startDaemon(cfg, endpoint)
 	}
 
 	var st proxy.Status
@@ -311,14 +317,14 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 		// a daemon too old to have a control channel, or not ours at all.
 		// Left alone either way, because taking over something we cannot identify
 		// is worse than the mismatch.
-		return
+		return nil
 	}
 
 	warnSlowStorage(os.Stderr, st)
 	warnTraceGoesNowhere(os.Stderr, st)
 
 	if st.Version == version {
-		return
+		return nil
 	}
 
 	// Versions differ. Whether that is worth doing anything about depends on
@@ -327,12 +333,16 @@ func ensureDaemon(cfg config.Config, endpoint string) {
 	var idle proxy.Idle
 	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil || !idle.Safe {
 		warnVersionMismatch(st)
-		return
+		return nil
 	}
 
+	// A restart that fails is a WARNING, not this function's error: the
+	// session that is already serving still works, and the only cost is
+	// running a different build than this one.
 	if err := restartDaemon(cfg, endpoint); err != nil {
 		warnVersionMismatch(st)
 	}
+	return nil
 }
 
 // warnVersionMismatch reports a difference without claiming an order.
