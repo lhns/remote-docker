@@ -36,8 +36,17 @@ already has to tell apart from a working channel.
 
 ## The decision
 
-`core/tunnel` holds what the two ends must agree on, and `core/tunnel/client` and
-`core/tunnel/server` hold the two implementations of it.
+`core/tunnel` holds what the two ends must agree on, and the two implementations
+of it live with the ends that run them: `core-client/tunnelclient` dials,
+`core-agent/tunnelserver` answers.
+
+*(Amended 2026-08-12, ADR 0031. They were sub-packages of `core/tunnel` when
+this was written, which was right at the time -- there was nowhere else that
+both binaries could reach. Once the two side modules existed there was, and the
+constraint below turned out to state the reason for moving them: a package that
+cannot be expressed without an SSH library is an implementation, and
+implementations belong to a side. The shared module is dependency-free again as
+a result.)*
 
 **The root package imports neither SSH library.** That is the load-bearing part.
 A single package importing both would link a server into the client binary,
@@ -76,9 +85,14 @@ infrastructure:
 
 ## What it costs
 
-The shared module gains `x/crypto/ssh` and `gliderlabs/ssh`, in sub-packages, so
-neither binary links the one it does not use. The agent's own dependency count is
-unchanged, because it already had both.
+The shared module gained `x/crypto/ssh` and `gliderlabs/ssh`, in sub-packages, so
+that neither binary linked the one it did not use.
+
+*(No longer true, and better: with the implementations moved to the side modules
+the shared module's library packages -- the contract, the stream, the protocol
+names, the log handler -- have NO third-party dependency at all. The one entry
+left in `core/go.mod` is `x/sys`, for the two test probes that read raw inotify.
+ADR 0021's "depends on ~nothing" is now literal.)*
 
 It also concentrates risk: this is the transport, so a mistake here is a mistake
 in every suite at once. That is why the move is sequenced one step at a time,

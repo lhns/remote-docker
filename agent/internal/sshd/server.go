@@ -19,8 +19,8 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/core-agent/accounts"
+	"github.com/lhns/remote-docker/core-agent/tunnelserver"
 	"github.com/lhns/remote-docker/core/logx"
-	tunnelserver "github.com/lhns/remote-docker/core/tunnel/server"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 

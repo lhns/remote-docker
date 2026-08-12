@@ -51,6 +51,15 @@ CONTRACT, what both ends agree the format is, and a contract is not transport.
 `core` covers both, and it makes the family legible -- the three core modules
 together are the core, and the two binaries are glue.
 
+**Each side owns its half of the transport.** `core-client/tunnelclient` dials
+and `core-agent/tunnelserver` answers; `core/tunnel` keeps only what the two
+must agree on -- the stream semantics and the names they speak. ADR 0030 put
+both implementations in the shared module because at the time there was nowhere
+else both binaries could reach. Once the side modules existed there was, and the
+payoff is measured: the shared module's library packages now have NO third-party
+dependency at all, which is ADR 0021's "depends on ~nothing" made literal. The
+single `x/sys` in `core/go.mod` is the two test probes reading raw inotify.
+
 **The repository root is not a module.** The shared module lives in `core/`,
 which removes a trap ADR 0021 could only document: `go build ./...` at the root
 used to pass while compiling almost none of the repository, and now fails
@@ -75,7 +84,7 @@ The plan for this assumed `agent/internal/sshd` was Docker-free, on the grounds
 that the daemon resolver is already an interface (ADR 0020). It is not:
 `session.go` names Docker thirty-four times — the socket, `DOCKER_HOST`, the
 CLI, volume mountpoints. So the split fell *through* the package rather than
-around it. The forwarding protocol went to `core/tunnel/server` and the decisions
+around it. The forwarding protocol went to `core-agent/tunnelserver` and the decisions
 it asks for stayed behind.
 
 `notify` split along a seam that already existed, because `Volumes` was an
@@ -88,7 +97,7 @@ mountpoint it checks is reported by a daemon the account is root inside, and
 `ports` was expected to split down the middle, with a generic forwarder moving
 out and the container discovery staying. It stays whole instead, for two reasons
 found by looking: the generic part -- a local listener whose connections are
-carried to an address on the workspace -- is ALREADY `core/tunnel/client.Forward`,
+carried to an address on the workspace -- is ALREADY `tunnelclient.Forward`,
 and what remains is keyed on container ids from end to end. Splitting further
 would have invented an abstraction with exactly one user.
 

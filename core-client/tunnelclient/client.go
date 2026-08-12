@@ -1,4 +1,4 @@
-// Package client dials the workspace end of the tunnel.
+// Package tunnelclient dials the workspace end of the tunnel.
 //
 // One ssh.Client carries every channel this project needs: the reverse forward
 // for the NFS export, a local forward per published container port, the Docker
@@ -11,7 +11,7 @@
 // key or which trust rule (ADR 0030). The caller building those two values is
 // the only place that can also say what to do when they are refused, which is
 // why the enrolment hint lives there rather than here.
-package client
+package tunnelclient
 
 import (
 	"context"

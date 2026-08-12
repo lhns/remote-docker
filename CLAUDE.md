@@ -23,16 +23,15 @@ itself. Published ports become reachable locally as containers start.
 THE REPO ROOT IS NOT A MODULE. `go build ./...` here fails, and that is
 deliberate: it used to pass while compiling almost none of this repository.
 
-core/go.mod              THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
-                         gliderlabs/ssh for core/tunnel/client's test server
+core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
+                         NO third-party dependency at all; the one x/sys in
+                         go.mod is the probes reading raw inotify.
   workspace/             THE CONTRACT, imported by both binaries
-  tunnel/                THE TRANSPORT (ADR 0030): the one bidirectional copy
+  tunnel/                THE AGREEMENT (ADR 0030): the one bidirectional copy
                          and the one answer to what half-closing means, plus
-                         the names both ends speak. Imports no SSH library.
-    client/              dialling it: sessions, streams, both forwards. Given
-                         a signer and a host key rule; decides neither.
-    server/              answering it: the forwarding protocol, given who may
-                         bind what and which namespace it goes in.
+                         the names both ends speak. Imports no SSH library --
+                         the two implementations live with the ends that run
+                         them, in core-client/ and core-agent/.
   logx/                  the one log handler, so both look the same. PUBLIC,
                          not internal/: every module imports it, and under
                          core/internal/ Go would let only core/ reach it.
@@ -41,6 +40,8 @@ core/go.mod              THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
                          claim this whole split was for, and it is measured.
+  tunnelclient/          dialling the tunnel: sessions, streams, both forwards.
+                         Given a signer and a host key rule; decides neither.
   nfsserve/              in-process NFSv3 server, virtual export namespace
   fswatch/               watches shared dirs on three platforms, budget,
                          excludes, overflow
@@ -51,7 +52,7 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    sshx/                where core-client/keys meets core/tunnel/client, and the
+    sshx/                where core-client/keys meets tunnelclient, and the
                          enrolment hint, which knows this project's rule for
                          who may log in
     machine/             provisioning a workspace on this machine (ADR 0026)
@@ -59,12 +60,14 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
     ports/               published ports -> local forwards. Stays glue whole:
                          its manager is keyed on container ids throughout, and
-                         the generic forward is already core/tunnel/client's
+                         the generic forward is already tunnelclient's
     session/             wires the above into one live connection
 
 core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
                          dockercli, daemons, supervise or elevate, and that
                          is the whole membership test.
+  tunnelserver/          answering the tunnel: the forwarding protocol, given
+                         who may bind what and which namespace it goes in.
   accounts/              one unix account per enrolled key, and the ports
   notify/                replays the client's changes as real syscalls
   netns/                 run a function inside another process's netns
@@ -75,7 +78,7 @@ agent/go.mod             the agent module: THE GLUE. 7 third-party modules,
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     sshd/                the SSH server: auth, sessions, and the forwarding
-                         POLICY core/tunnel/server asks. Its session handling
+                         POLICY core-agent/tunnelserver asks. Its session handling
                          is docker all the way down and stays here.
     supervise/           starts and watches the workspace's own dockerd
     elevate/             relaunch privileged, for Swarm (ADR 0013)
@@ -171,7 +174,7 @@ premise of the project, and it applies to building it too. So:
   that difference is deliberate -- a port forward carries no output stream and
   must not leak a blocked reader. A test pins both.
 - **The transport is handed its auth and decides none of it** (ADR 0030).
-  `core/tunnel/client` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
+  `core-client/tunnelclient` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
   `client/internal/sshx` builds both and is the only place that knows enrolment
   is a file in `authorized_keys.d`. There is no default host key rule, because
   every default is either a prompt nobody is there to answer or an acceptance of

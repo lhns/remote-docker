@@ -20,7 +20,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/core-client/keys"
-	tunnelclient "github.com/lhns/remote-docker/core/tunnel/client"
+	"github.com/lhns/remote-docker/core-client/tunnelclient"
 )
 
 // Client and Forward are the transport's, named here because this package is
