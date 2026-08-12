@@ -90,6 +90,11 @@ for m in . ./agent ./space ./client; do (cd $m && go build ./... && go test ./..
 for m in . ./agent ./space ./client; do (cd $m && golangci-lint run ./...); done
 for m in agent space; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
+# gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
+# after a scripted import rewrite: changing the text of an import without moving
+# it leaves the block unsorted, which compiles and tests clean.
+gofmt -l .   # must print nothing
+
 # the client
 (cd client && go build -o ../remote-docker ./cmd/remote-docker)
 
