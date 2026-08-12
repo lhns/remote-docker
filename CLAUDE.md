@@ -20,8 +20,9 @@ itself. Published ports become reachable locally as containers start.
 ## Layout
 
 ```
-THE REPO ROOT IS NOT A MODULE. `go build ./...` here fails, and that is
-deliberate: it used to pass while compiling almost none of this repository.
+THE REPO ROOT IS NOT A MODULE, deliberately. `go build ./...` here fails
+outright, where a module at the root would instead let it pass while compiling
+almost none of the repository.
 
 core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
                          NO third-party dependency at all; the one x/sys in
@@ -72,13 +73,13 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0020)
 
-agent/go.mod             the agent module: THE GLUE. 7 third-party modules,
-                         24 go.sum lines
+agent/go.mod             the agent module: THE GLUE. 4 direct third-party
+                         requires, 24 go.sum lines
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     sshd/                the SSH server: auth, sessions, and the forwarding
-                         POLICY core-agent/tunnelserver asks. Its session handling
-                         is docker all the way down and stays here.
+                         POLICY core-agent/tunnelserver asks. Its session
+                         handling is docker all the way down and stays here.
     supervise/           starts and watches the workspace's own dockerd
     elevate/             relaunch privileged, for Swarm (ADR 0013)
     daemons/             a dockerd per account, and the one resolver both
@@ -96,15 +97,14 @@ docs/adr/                architecture decision records
 
 ```bash
 # FIVE MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary,
-# so the loop is the only thing that covers the repository. The root is NOT a
-# module: `go build ./...` there fails outright, which is the point -- it used
-# to pass while compiling almost none of this.
+# so the loop is the only thing that covers the repository. Running it at the
+# root fails outright, which is the point: there is no module there to build.
 for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
 
-# lint, seven passes: one per module, plus the agent AND core-agent under Linux. Both
-# carry Linux-only files -- session handling, netns, the unix provisioner, the
-# inotify poker -- which a lint on the development machine does not see at all.
-# CI does, and will fail on what you did not lint.
+# lint, seven passes: one per module, plus the agent AND core-agent under
+# Linux. Both carry Linux-only files -- session handling, netns, the unix
+# provisioner, the inotify poker -- which a lint on the development machine
+# does not see at all. CI does, and will fail on what you did not lint.
 for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
 for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
