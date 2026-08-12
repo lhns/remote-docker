@@ -205,12 +205,11 @@ func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
 
 // root is the directory in the workspace holding this export.
 //
-// Singular, and it was not always: the agent used to make a SECOND mount of
-// the same export for the interactive shell, and separate mounts of one export
-// do not share an inode the way dockerd's bind mount does, so each had to be
-// poked separately. That mount went with ADR 0018 and only dockerd's volume
-// remains. Worth keeping even though the code it justified is gone: if a
-// second mount ever returns, one poke will silently not reach it.
+// Singular, and that is an assumption worth knowing about: two separate mounts
+// of one export do not share an inode the way dockerd's bind mount does, so a
+// poke reaches only the mount it names. Today there is exactly one, dockerd's
+// volume (ADR 0018). Adding a second mount without poking both would make
+// changes appear under one and not the other, with nothing failing.
 func (r *Replayer) root(ctx context.Context, export string) (string, bool) {
 	mp, err := r.mountpoint(ctx, export)
 	if err != nil || mp == "" {

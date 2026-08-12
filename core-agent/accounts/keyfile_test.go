@@ -155,9 +155,10 @@ func TestAMidWriteFileKeepsItsName(t *testing.T) {
 	}
 }
 
-// Several keys per file is the format, and one bad line should cost that line.
-// It used to cost every key under it, so a typo on the first line revoked an
-// account nobody had touched.
+// Several keys per file is the format, and one bad line costs that line only.
+// Reading the file as a single stream instead stops at the first line it cannot
+// parse, silently dropping every key below it: a typo or a BOM on line one then
+// revokes an account nobody touched.
 func TestOneBadLineCostsOneKey(t *testing.T) {
 	s := newStore(t)
 	first, a := keyLine(t)

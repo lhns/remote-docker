@@ -70,9 +70,10 @@ func (d *daemonSide) CloseWrite() error           { d.closedWrite = true; return
 // `docker run` took a minute and a half to return from a container that had
 // finished in one second.
 //
-// It passed CI throughout, because the signal is only load-bearing when the
-// client cannot half-close by itself. A unix socket can, so the Linux client
-// unwound it every time.
+// Running the suites is not enough to catch this. The signal only matters when
+// the client cannot half-close by itself: a unix socket can, so the Linux
+// client unwinds it either way, and a Windows named pipe cannot. This test is
+// the guard, on the platform CI does not take a session on.
 func TestSpliceSignalsEndOfInputWhenTheDaemonFinishes(t *testing.T) {
 	client := newClientSide()
 	daemon := &daemonSide{}

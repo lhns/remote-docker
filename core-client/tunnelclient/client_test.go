@@ -223,9 +223,9 @@ func TestCloseIsIdempotent(t *testing.T) {
 
 // A connection that goes away is known to have gone.
 //
-// Detection existed before this and went nowhere: the keepalive closed the
-// client and told nobody, so whatever held the connection kept handing it out.
-// Dead is how the session learns it must open another.
+// Noticing is not enough on its own: the keepalive can close the client and
+// tell nobody, and whatever holds the connection then keeps handing out the
+// corpse. Dead is how the holder learns it must open another.
 func TestDeadClosesWhenTheTransportGoesAway(t *testing.T) {
 	ts := startTestServer(t)
 	cut := startCutter(t, ts.Addr)

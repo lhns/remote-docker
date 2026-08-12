@@ -7,11 +7,10 @@ package tunnel
 // is that side's business and does not come here.
 //
 // They are constants rather than an interface because SSH already decided the
-// shape. A session is opened and a command is named; what the command MEANS is
-// this project's invention, and inventing it twice is how the two ends stop
-// agreeing. `DialStdioCommand` was in fact written out twice -- once in the
-// client's proxy and once in the agent's session handler -- and nothing but
-// luck kept the strings equal.
+// shape: a session is opened and a command is named. What the command MEANS is
+// this project's invention, so spell each one here and nowhere else. A second
+// spelling on either side does not fail to compile -- the agent falls through
+// to running it as a shell command, which exits 127.
 
 // InfoCommand asks the workspace for the parameters this client must agree
 // with: its account, its reverse-tunnel port, the daemon it will reach.
