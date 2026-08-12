@@ -17,7 +17,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
-	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/host/keys"
 	"github.com/spf13/cobra"
 )
 
@@ -110,7 +110,7 @@ account there.`,
 			// to know whose machine it came from. LoadOrCreateKey only sets a
 			// comment when it GENERATES, and enroll is what usually generates,
 			// so this is the spelling that ends up on almost every key.
-			key, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
+			key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 			if err != nil {
 				return err
 			}

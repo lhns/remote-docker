@@ -3,8 +3,8 @@ package sshx
 // The adapter between this project's auth and the transport that carries it.
 //
 // pkg/tunnel/client takes a signer and a host key callback and decides nothing
-// about either (ADR 0030). This is where those two values are built: a key
-// generated on first use, and trust-on-first-use against a known_hosts file.
+// about either (ADR 0030), and host/keys produces both without knowing what
+// they will authenticate to. This is where the two meet.
 //
 // It is also the only place that can attach the enrolment hint, and that is the
 // reason the boundary falls here rather than one function further in. The hint
@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lhns/remote-docker/host/keys"
 	tunnelclient "github.com/lhns/remote-docker/pkg/tunnel/client"
 )
 
@@ -36,8 +37,8 @@ type Config struct {
 	Port int
 	User string
 
-	Key        KeyPair
-	KnownHosts *KnownHosts
+	Key        keys.KeyPair
+	KnownHosts *keys.KnownHosts
 }
 
 // Dial connects and authenticates, and says what to do about a refusal.

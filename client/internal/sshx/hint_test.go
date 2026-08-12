@@ -13,11 +13,13 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/lhns/remote-docker/host/keys"
 )
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	key, err := LoadOrCreateKey(filepath.Join(t.TempDir(), "id_ed25519"), "test")
+	key, err := keys.LoadOrCreateKey(filepath.Join(t.TempDir(), "id_ed25519"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}

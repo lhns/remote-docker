@@ -178,7 +178,7 @@ named pipe (`listen_windows.go`), and never a TCP port. *Covered by*
 `proxy` lock and listen tests.
 
 **I — the export is unauthenticated (9, 10).** The NFS server answers
-`AuthFlavorNull` (`client/internal/nfsserve/server.go`): anything that can
+`AuthFlavorNull` (`host/nfsserve/server.go`): anything that can
 reach the port can read and write every registered share. There is no second
 control on the NFS layer, which is why the loopback rule in flow 3 and the
 holder rule in flow 4 carry the whole weight.

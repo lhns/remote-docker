@@ -18,11 +18,12 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
-	"github.com/lhns/remote-docker/client/internal/nfsserve"
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/host/keys"
+	"github.com/lhns/remote-docker/host/nfsserve"
 
 	"github.com/lhns/remote-docker/pkg/workspace"
 )
@@ -31,7 +32,7 @@ import (
 // the NFS export has to be reachable before any container can mount a volume
 // backed by it.
 func (s *Session) connect(ctx context.Context) (*liveConn, error) {
-	key, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
+	key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +44,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// another when both use one account.
 	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
 
-	known, err := sshx.NewKnownHosts(config.KnownHostsPath())
+	known, err := keys.NewKnownHosts(config.KnownHostsPath())
 	if err != nil {
 		return nil, err
 	}

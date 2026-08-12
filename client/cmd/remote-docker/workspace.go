@@ -9,7 +9,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
-	"github.com/lhns/remote-docker/client/internal/sshx"
+	"github.com/lhns/remote-docker/host/keys"
 )
 
 // The workspaces in ~/.remote-docker.json, which until now could only be
@@ -351,7 +351,7 @@ func removeContextFor(out io.Writer, cfg config.Config) {
 // enrolledKey returns this machine's public key line, or a hint if it cannot
 // be read. Never fatal: it is printed as advice.
 func enrolledKey() string {
-	kp, err := sshx.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
+	kp, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
 		return "(run `" + ourCommand("enroll") + "` to generate one)"
 	}

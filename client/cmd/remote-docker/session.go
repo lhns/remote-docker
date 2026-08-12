@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/client/internal/fswatch"
 	"github.com/lhns/remote-docker/client/internal/session"
+	"github.com/lhns/remote-docker/host/fswatch"
 	"github.com/lhns/remote-docker/internal/logx"
 )
 

@@ -1,4 +1,4 @@
-package sshx
+package keys
 
 import (
 	"crypto/ed25519"
