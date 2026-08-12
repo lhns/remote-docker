@@ -300,13 +300,9 @@ func cleanShare(p string) string {
 	return path.Clean("/" + strings.TrimPrefix(p, "/"))
 }
 
-// log is the replayer's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer.
+// log is the replayer's logger, or silence. See logx.Or.
 func (r *Replayer) log() *slog.Logger {
-	if r.Log == nil {
-		return logx.Discard()
-	}
-	return r.Log
+	return logx.Or(r.Log)
 }
 
 // debug is for the ordinary, expected failures: a path that has changed

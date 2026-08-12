@@ -263,11 +263,7 @@ func (t *tree) watching(dir string) bool {
 	return ok
 }
 
-// logger is the tree's, or silence. A nil *slog.Logger panics on use rather
-// than doing nothing, and a tree built by a test has none.
+// logger is the tree's, or silence (logx.Or); a tree built by a test has none.
 func (t *tree) logger() *slog.Logger {
-	if t.log == nil {
-		return logx.Discard()
-	}
-	return t.log
+	return logx.Or(t.log)
 }

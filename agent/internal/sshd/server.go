@@ -233,11 +233,7 @@ func isClosed(err error) bool {
 	return err == gssh.ErrServerClosed || err == net.ErrClosed
 }
 
-// log is the server's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer.
+// log is the server's logger, or silence. See logx.Or.
 func (s *Server) log() *slog.Logger {
-	if s.cfg.Log == nil {
-		return logx.Discard()
-	}
-	return s.cfg.Log
+	return logx.Or(s.cfg.Log)
 }

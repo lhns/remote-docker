@@ -529,13 +529,9 @@ func (m *Manager) ids(account string) (int, int, error) {
 	return lookupIDs(account)
 }
 
-// log is the manager's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer.
+// log is the manager's logger, or silence. See logx.Or.
 func (m *Manager) log() *slog.Logger {
-	if m.Log == nil {
-		return logx.Discard()
-	}
-	return m.Log
+	return logx.Or(m.Log)
 }
 
 // Lookup returns an account's daemon only if it is already running.

@@ -560,11 +560,12 @@ function was.
   the integration suite needs a Linux kernel's NFS client, so no Windows
   machine has taken a session end to end in CI. Say "unit tested on Windows",
   never "the Windows client is tested".
-- **The release pipeline.** No tag has been pushed, so NOTHING is published:
-  not the client, not the agent. Per-commit binaries exist as CI artifacts
-  (`remote-docker-<os>-<arch>` and `remote-dockerd-linux-<arch>`); the tagged
-  archives are built by `goreleaser release --snapshot` and have never been
-  installed on a machine.
+- **Installing a release.** The pipeline itself now HAS run: `v0.1.0` is tagged
+  and published with ten archives, client and agent, for every target the
+  matrix builds. What has never happened is somebody downloading one and
+  running it — no archive has been unpacked on a machine that did not build it,
+  so the thing unproven is the artifact, not the workflow that makes it.
+  *(Checked 2026-08-12. Re-check with `gh release view v0.1.0`.)*
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.

@@ -244,11 +244,9 @@ func publishedTCP(c Container) []Published {
 	return out
 }
 
-// log is the manager's logger, or silence. A nil *slog.Logger panics on use,
-// and nil is how a command that must not narrate asks for quiet.
+// log is the manager's logger, or silence (logx.Or). Nil is not an oversight
+// here: it is how a command that must not narrate asks for quiet, which is why
+// portsLogger hands one over deliberately.
 func (m *Manager) log() *slog.Logger {
-	if m.Log == nil {
-		return logx.Discard()
-	}
-	return m.Log
+	return logx.Or(m.Log)
 }

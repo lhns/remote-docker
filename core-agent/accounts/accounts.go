@@ -423,12 +423,7 @@ func parseKeys(path string) (keys []ssh.PublicKey, skipped int, err error) {
 	return keys, skipped, nil
 }
 
-// log is the store's logger, or silence. A nil *slog.Logger panics on use
-// rather than doing nothing, so the zero value needs an answer, and one
-// accessor is a better place for it than a check at every call.
+// log is the store's logger, or silence. See logx.Or.
 func (s *Store) log() *slog.Logger {
-	if s.Log == nil {
-		return logx.Discard()
-	}
-	return s.Log
+	return logx.Or(s.Log)
 }
