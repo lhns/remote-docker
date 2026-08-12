@@ -132,11 +132,11 @@ func (p localPolicy) AllowDial(ctx gssh.Context, host string, port uint32) bool 
 
 // Dial connects to dest from wherever this account's containers publish.
 //
-// The meaning of "loopback" strengthens for free here. It used to mean the
-// agent's own loopback, which carries the agent's own services, including the
-// SSH port, and now means the account's dind's loopback, where nothing of ours
-// listens. Two accounts publishing 8080 also stop colliding, because those are
-// two different namespaces.
+// "loopback" here is the account's own dind's loopback, not the agent's. That
+// is what a local forward should be able to reach and it is where nothing of
+// ours listens, whereas the agent's carries the agent's own services including
+// the SSH port. It also means two accounts can publish 8080 at once without
+// colliding, because those are two namespaces.
 func (p localPolicy) Dial(ctx gssh.Context, dest string) (net.Conn, error) {
 	account, ok := accountFor(ctx)
 	if !ok {

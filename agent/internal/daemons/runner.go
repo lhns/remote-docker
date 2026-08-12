@@ -112,10 +112,10 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 
 		// The common case by far, and it must cost nothing. EVERY Docker API
 		// request from the client opens its own dial-stdio session and lands
-		// here (`docker compose up` is hundreds) so a `docker inspect`
-		// per call would add a subprocess to every request. Worse, the check
-		// used to run while the manager's lock was HELD, which serialised
-		// every account's requests behind one exec.
+		// here (`docker compose up` is hundreds), so a `docker inspect` per
+		// call would add a subprocess to every request. Never check while the
+		// manager's lock is held either: that serialises every account's
+		// requests behind one exec.
 		if fresh {
 			return d, nil
 		}
@@ -339,10 +339,10 @@ func (m *Manager) lastWords(ctx context.Context, name string) string {
 // away underneath us (an OOM kill, an operator, a crash) and handing back a
 // dead socket produces a connection error that names nothing.
 //
-// THE PID IS PART OF "usable", and leaving it out was a real bug. A daemon that
-// restarts, which it does on its own, since it carries a restart policy --
-// comes back as the same container, with the same name, the same socket path
-// and the same "running" status, and a DIFFERENT pid. Everything here that
+// THE PID IS PART OF "usable". A daemon that restarts, which it does on its
+// own because it carries a restart policy, comes back as the same container
+// with the same name, the same socket path and the same "running" status, and
+// a DIFFERENT pid. Everything here that
 // crosses into it goes through /proc/<pid>: the reverse tunnel carrying the
 // client's NFS export (netns), and the volume mountpoints replay writes into
 // (root). Against a stale pid those name a namespace that no longer exists, so

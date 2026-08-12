@@ -105,16 +105,14 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 // This is what the workspace exists to provide, and it is where an account is
 // bound to A daemon, which of the two depends on the mode.
 //
-// This used to say there was no per-account restriction here "because there is
-// none to make": one daemon, and reaching it at all is root on it, which was
-// the trade ADR 0012 recorded. With a daemon per account that is no longer
-// true. The account is resolved to ITS OWN daemon here, and this resolution is
-// the only thing between one user's session and another user's containers.
-// Getting it wrong does not fail. It succeeds, against the wrong daemon.
+// Which daemon is decided here, and with a daemon per account (ADR 0019) that
+// decision is the only thing between one user's session and another user's
+// containers. It does not fail when it is wrong. It succeeds, against somebody
+// else's daemon, with nothing logged.
 //
-// Which is why the resolver is asked rather than a mode being branched on: in
-// shared mode it answers with the one socket, and there is no second path here
-// that could disagree with the first.
+// So ask the resolver rather than branching on the mode: in shared mode it
+// answers with the one socket (ADR 0012), which leaves one code path that
+// cannot disagree with itself.
 func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount) {
 	target, err := s.cfg.Daemons.Ensure(session.Context(), account.Name())
 	if err != nil {
@@ -148,9 +146,9 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	// be redirected, and both are resolved per call rather than captured: the
 	// daemon restarts, and a stale root would silently name a path in nothing.
 	//
-	// In shared mode the resolver answers with an empty host and "/", which is
-	// the same zero value this used to be configured with, so one expression
-	// now serves both arrangements instead of a branch choosing between them.
+	// One expression serves both arrangements: in shared mode the resolver
+	// answers with an empty host and "/", which mean "no redirection", so
+	// there is no mode to branch on here.
 	name := account.Name()
 	target := func() (daemons.Target, error) {
 		return s.cfg.Daemons.Ensure(session.Context(), name)
