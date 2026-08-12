@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 
@@ -82,8 +83,11 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	// list of sixty commands where docker's own groups them.
 	opts, _ := cli.SetupRootCommand(cmd)
 
+	// Held rather than raised: nothing may fail while the tree is being built.
+	// See the PersistentPreRunE below.
+	var session error
 	if invokingDocker() {
-		arrangeSession()
+		session = arrangeSession()
 	}
 
 	// After SetupRootCommand, which sets its own. Both would render
@@ -127,8 +131,12 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	// replaces it and is the one place this will not fire, which is Swarm and
 	// untested anyway (ADR 0009). Help is unaffected, because cobra answers
 	// --help before it runs hooks.
-	if credentials != nil {
-		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return credentials }
+	//
+	// The session error comes FIRST when both are present: a broken credential
+	// helper is a warning about how images are pulled, and no session at all
+	// is why the command cannot run.
+	if deferred := cmp.Or(session, credentials); deferred != nil {
+		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return deferred }
 	}
 	return cmd
 }
@@ -142,23 +150,24 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 // `remote gc` -- or a bare `--help` -- probe the endpoint and open a whole
 // file-serving session, which then races the real command's own inside one
 // process.
-func arrangeSession() {
+//
+// The error is REPORTED, not swallowed. Whatever stops a session existing is
+// the reason the command about to run will fail, and without it the embedded
+// CLI reaches an endpoint nobody is serving and reports a missing daemon --
+// true, and useless, because the daemon is missing because of this.
+func arrangeSession() error {
 	// What the invocation is aimed at, which may be nothing of ours. See
 	// target.go: a context we did not create is an instruction to talk to
-	// somebody else, and honouring it means doing nothing at all here.
+	// somebody else, and honouring it means doing nothing at all here,
+	// including saying nothing.
 	aim := decideTarget(os.Args[1:], realLookups())
 	if !aim.ensure {
-		return
+		return nil
 	}
 
 	cfg, err := config.Resolve(config.Overrides{Workspace: aim.workspace}, "")
 	if err != nil {
-		// No workspace resolved, so there is nothing to aim at beyond the
-		// default endpoint.
-		if os.Getenv("DOCKER_HOST") == "" {
-			_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(""))
-		}
-		return
+		return err
 	}
 
 	// Start one if nothing is serving, and replace one built from a different
@@ -166,7 +175,9 @@ func arrangeSession() {
 	// embedded CLI, which exists so that nothing has to be installed, a setup
 	// step of its own.
 	endpoint := endpointOf(cfg)
-	ensureDaemon(cfg, endpoint)
+	if err := ensureDaemon(cfg, endpoint); err != nil {
+		return err
+	}
 
 	// Only where a context is not already pointing at it. DOCKER_HOST outranks
 	// --context in docker's own resolution, so setting it here would override
@@ -174,6 +185,7 @@ func arrangeSession() {
 	if aim.setHost {
 		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}
+	return nil
 }
 
 // NoSessionEnv tells a docker command not to make a session available.
