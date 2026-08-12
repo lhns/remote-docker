@@ -13,8 +13,8 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
-	"github.com/lhns/remote-docker/client/internal/sshx"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
+	"github.com/lhns/remote-docker/core-client/tunnelclient"
 )
 
 // shareRegistrar adapts the NFS registry to the rewriter's Sharer.
@@ -44,7 +44,7 @@ func (s shareRegistrar) Share(localPath string) (string, error) {
 }
 
 // sshForwarder adapts the SSH client to the port manager's Forwarder.
-type sshForwarder struct{ client *sshx.Client }
+type sshForwarder struct{ client *tunnelclient.Client }
 
 func (f sshForwarder) Forward(local, remote string) (ports.Forward, error) {
 	fwd, err := f.client.Forward(local, remote)
@@ -54,7 +54,7 @@ func (f sshForwarder) Forward(local, remote string) (ports.Forward, error) {
 	return forwardAdapter{fwd}, nil
 }
 
-type forwardAdapter struct{ fwd *sshx.Forward }
+type forwardAdapter struct{ fwd *tunnelclient.Forward }
 
 func (f forwardAdapter) Close() error        { return f.fwd.Close() }
 func (f forwardAdapter) LocalAddr() net.Addr { return f.fwd.Local }

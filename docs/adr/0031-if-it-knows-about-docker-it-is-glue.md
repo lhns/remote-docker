@@ -105,7 +105,7 @@ The same rule kept `keys` and the enrolment hint apart. A keypair and a
 known_hosts file are this machine's identity and know nothing about what they
 authenticate to; the hint names a file in the workspace's `authorized_keys.d`,
 which is this project's rule for who may log in. So `core-client/keys` produces the two
-values and `client/internal/sshx` is where they meet the transport.
+values and `client/internal/session` is where they meet the transport.
 
 ## The membership test is checkable, and the obvious check does not work
 

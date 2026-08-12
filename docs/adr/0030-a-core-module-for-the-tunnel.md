@@ -60,8 +60,13 @@ an SSH library is an implementation, not an agreement.
 does not decide who may log in. This is not only a design preference: the
 client's `KeyPair` and `KnownHosts` live under `client/internal/`, which the
 shared module cannot import at all, so the interface boundary is the only shape
-that compiles. `client/internal/sshx` keeps `keys.go` and `hostkey.go` and
-becomes the adapter that builds those two values.
+that compiles. `core-client/keys` produces those two values and
+`client/internal/session` is where they meet the transport.
+
+*(Amended 2026-08-12. The adapter was `client/internal/sshx`, which once held
+the transport too. Once the transport left, what remained was a wrapper
+forwarding to it, so the wrapper went and only the enrolment hint stayed --
+that being the one part that is this project's policy rather than plumbing.)*
 
 ## What stays where it is, and why that is not arbitrary
 

@@ -117,7 +117,7 @@ locked password, because some sshd builds refuse keys for locked accounts.
 **S — impersonating the workspace (2–4).** The host key is compared against
 `known_hosts`; a *changed* key is refused rather than prompted for, because
 there is no interactive user on the far side of an automated tunnel
-(`client/internal/sshx/hostkey.go`). First use records the key.
+(`core-client/keys/hostkey.go`). First use records the key.
 
 **T — forging enrolment (1).** Writing `authorized_keys.d` is the operator's
 privilege and is outside the boundary: whoever can put a file there could

@@ -1,6 +1,6 @@
-// Package sshx is this client's identity to a workspace: the keypair it
+// Package keys is this client's identity to a workspace: the keypair it
 // authenticates with and the host keys it will accept, wired to the transport
-// in pkg/tunnel/client.
+// in core-client/tunnelclient.
 //
 // It exists because the previous clients shelled out to ssh(1). That cost a
 // layer of quoting on every remote command, turned errors into exit codes and
@@ -62,17 +62,17 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return KeyPair{}, fmt.Errorf("sshx: creating key directory: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: creating key directory: %w", err)
 	}
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return KeyPair{}, fmt.Errorf("sshx: generating key: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: generating key: %w", err)
 	}
 
 	block, err := ssh.MarshalPrivateKey(priv, comment)
 	if err != nil {
-		return KeyPair{}, fmt.Errorf("sshx: marshalling private key: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: marshalling private key: %w", err)
 	}
 
 	// O_EXCL so a key created by a concurrent invocation is never clobbered:
@@ -87,7 +87,7 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 			}
 			return KeyPair{Signer: signer, Path: path}, nil
 		}
-		return KeyPair{}, fmt.Errorf("sshx: creating key file: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: creating key file: %w", err)
 	}
 	if err := pem.Encode(f, block); err != nil {
 		_ = f.Close()
@@ -96,12 +96,12 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(path)
-		return KeyPair{}, fmt.Errorf("sshx: writing key file: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: writing key file: %w", err)
 	}
 
 	signer, err = ssh.NewSignerFromKey(priv)
 	if err != nil {
-		return KeyPair{}, fmt.Errorf("sshx: building signer: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: building signer: %w", err)
 	}
 
 	pub := ssh.MarshalAuthorizedKey(signer.PublicKey())
@@ -109,7 +109,7 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 		pub = append(pub[:len(pub)-1], []byte(" "+comment+"\n")...)
 	}
 	if err := os.WriteFile(path+".pub", pub, 0o644); err != nil {
-		return KeyPair{}, fmt.Errorf("sshx: writing public key: %w", err)
+		return KeyPair{}, fmt.Errorf("keys: writing public key: %w", err)
 	}
 
 	return KeyPair{Signer: signer, Path: path}, nil
@@ -122,7 +122,7 @@ func loadKey(path string) (ssh.Signer, error) {
 	}
 	signer, err := ssh.ParsePrivateKey(pemBytes)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: parsing %s: %w", path, err)
+		return nil, fmt.Errorf("keys: parsing %s: %w", path, err)
 	}
 	return signer, nil
 }

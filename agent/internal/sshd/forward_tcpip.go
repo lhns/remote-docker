@@ -2,7 +2,7 @@ package sshd
 
 // This workspace's answers to the forwarding machinery's questions.
 //
-// The protocol is in pkg/tunnel/server; what is here is everything it
+// The protocol is in core-agent/tunnelserver; what is here is everything it
 // deliberately does not know: which account a connection belongs to, whether
 // that account owns the port, and which network namespace the forward has to
 // live in for the right containers to reach it and no others.

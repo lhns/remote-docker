@@ -23,9 +23,9 @@ import (
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
-	"github.com/lhns/remote-docker/client/internal/sshx"
 	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
+	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -159,7 +159,7 @@ type Session struct {
 
 // liveConn is everything that exists only while connected.
 type liveConn struct {
-	ssh       *sshx.Client
+	ssh       *tunnelclient.Client
 	info      workspace.Info
 	api       *proxy.APIClient
 	rewriter  *rewrite.Rewriter
@@ -372,7 +372,7 @@ func (s *Session) acquire(ctx context.Context) (*liveConn, func(), error) {
 	return s.gate.acquire(ctx)
 }
 
-func readInfo(ctx context.Context, client *sshx.Client) (workspace.Info, error) {
+func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info, error) {
 	out, err := client.Run(ctx, tunnel.InfoCommand)
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("reading workspace info: %w", err)
