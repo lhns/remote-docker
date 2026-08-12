@@ -23,7 +23,8 @@ ENV GOTOOLCHAIN=auto
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
 ARG VERSION=dev
-# Only the agent's module and the shared one it requires. The client's tree --
+# Only the agent's module and the two it requires: the shared one, and space,
+# which is the workspace side with no Docker in it. The client's tree --
 # docker/cli, buildx, 215 packages -- is not copied and cannot be resolved from
 # here, which is the point of ADR 0021: this build could break because of a
 # dependency the binary never imported, and now it cannot.
@@ -34,6 +35,7 @@ ARG VERSION=dev
 COPY go.mod go.sum ./
 COPY pkg/ ./pkg/
 COPY internal/ ./internal/
+COPY space/ ./space/
 COPY agent/ ./agent/
 # `go mod download` is deliberately absent. It was here to cache dependencies
 # in their own layer; `go build` fetches exactly what this binary needs, which

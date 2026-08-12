@@ -41,13 +41,13 @@ jobs:
           fi
 
       # Per module, and every module named explicitly. `./...` stops at a
-      # module boundary, so a loop over the three is the only thing that
+      # module boundary, so a loop over the four is the only thing that
       # actually covers the repository after ADR 0021 -- and a `go test ./...`
       # at the root would pass while testing almost nothing.
       - name: go vet
         run: |
           set -eux
-          for mod in . ./agent ./client; do
+          for mod in . ./agent ./space ./client; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -56,7 +56,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in . agent client; do
+          for mod in . agent space client; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -128,10 +128,14 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in . ./agent ./client; do
+          for mod in . ./agent ./space ./client; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
+          # The agent and space both carry Linux-only files (netns, the unix
+          # provisioner, the inotify poker), which a lint on the runner's own
+          # GOOS does not see at all.
           (cd agent && GOOS=linux golangci-lint run --timeout 5m ./...)
+          (cd space && GOOS=linux golangci-lint run --timeout 5m ./...)
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -174,7 +178,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -eux
-          for mod in . ./agent ./client; do
+          for mod in . ./agent ./space ./client; do
             (cd "$mod" && go build ./...)
           done
 

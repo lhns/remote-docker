@@ -70,7 +70,7 @@ module goes on depending on nothing (ADR 0021).
 
 The uid decides an account's **first** port, exactly as ADR 0003 says, so a
 workspace anybody reaches from one computer is on the port it always was and
-allocates nothing. `agent/internal/accounts.Ports` hands out the rest, records
+allocates nothing. `space/accounts.Ports` hands out the rest, records
 them in `clientports` beside `uidmap`, and answers `Owns`, which the forward
 policy now asks instead of recomputing `PortForUID`. A rule that recomputed
 would refuse a port the agent had itself just handed out.

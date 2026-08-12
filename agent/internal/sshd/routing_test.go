@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/lhns/remote-docker/agent/internal/accounts"
+	"github.com/lhns/remote-docker/space/accounts"
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/pkg/workspace"
 )

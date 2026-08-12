@@ -17,7 +17,7 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/lhns/remote-docker/agent/internal/accounts"
+	"github.com/lhns/remote-docker/space/accounts"
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/internal/logx"
 	tunnelserver "github.com/lhns/remote-docker/pkg/tunnel/server"

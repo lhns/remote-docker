@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
-	"github.com/lhns/remote-docker/agent/internal/netns"
+	"github.com/lhns/remote-docker/space/netns"
 	"github.com/lhns/remote-docker/internal/logx"
 )
 
