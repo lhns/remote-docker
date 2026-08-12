@@ -157,12 +157,12 @@ func TestTheTwoSplicesDifferOnAConnectionThatCannotHalfClose(t *testing.T) {
 	default:
 	}
 
-	// closeWriteOrClose must.
-	closeWriteOrClose(wrapped)
+	// CloseWriteOrClose must.
+	CloseWriteOrClose(wrapped)
 	select {
 	case <-wrapped.closed:
 	default:
-		t.Fatal("closeWriteOrClose left a connection open that cannot half-close; " +
+		t.Fatal("CloseWriteOrClose left a connection open that cannot half-close; " +
 			"a forward would hold the goroutine and both connections forever")
 	}
 }

@@ -2,9 +2,11 @@
 // connection carrying Docker API streams, an NFS export, port forwards and
 // change notifications.
 //
-// It holds the agreements and nothing platform-specific. `tunnel/client` dials
-// and `tunnel/server` serves; this package must import neither SSH library, so
-// that the client never links a server it does not run.
+// It holds the agreements and nothing platform-specific. The two
+// implementations live with the ends that run them --
+// core-client/tunnelclient dials, core-agent/tunnelserver serves -- and this
+// package must import neither SSH library, so that the client never links a
+// server it does not run.
 //
 // This file is the first agreement, and the reason the package exists. The
 // bidirectional copy and the meaning of half-closing lived in both binaries,
@@ -65,32 +67,47 @@ func SpliceAndClose(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		_, _ = io.Copy(b, a)
-		closeWriteOrClose(b)
+		CloseWriteOrClose(b)
 	})
 	wg.Go(func() {
 		_, _ = io.Copy(a, b)
-		closeWriteOrClose(a)
+		CloseWriteOrClose(a)
 	})
 	wg.Wait()
 }
 
-func closeWriteOrClose(c net.Conn) {
+// There are exactly TWO answers to a stream that cannot half-close, and which
+// is right depends on what the stream carries. Both are exported, because
+// writing either out by hand is how they drifted apart the first time: they
+// ended up opposite, and each looked obviously correct where it stood.
+//
+// Choose by asking whether this connection still owes anybody anything:
+//
+//   - CloseWrite, while the other direction may still deliver. Nothing is
+//     closed. The peer may wait out its own timeout, which is bounded; output
+//     already produced and then discarded is not (ADR 0005). This is the
+//     upstream half of a Docker API stream, and it is the safe default.
+//   - CloseWriteOrClose, once the exchange is finished: a port forward whose
+//     peer would otherwise sit in Read forever holding both connections, or a
+//     response fully delivered to a client that cannot half-close and must
+//     still be told there is no more.
+//
+// If it is not obvious which applies, it is the first.
+
+// CloseWrite signals end-of-input without ending the connection, and leaves a
+// stream that cannot do so alone. See the note above.
+func CloseWrite(v any) {
+	if cw, ok := v.(WriteCloser); ok {
+		_ = cw.CloseWrite()
+	}
+}
+
+// CloseWriteOrClose signals end-of-input, and closes a connection that cannot.
+// Only for streams carrying no output back. See the note above.
+func CloseWriteOrClose(c net.Conn) {
 	if cw, ok := c.(WriteCloser); ok {
 		_ = cw.CloseWrite()
 		return
 	}
 	_ = c.Close()
-}
-
-// CloseWrite signals end-of-input without ending the connection.
-//
-// A stream that cannot half-close is left alone. Closing it instead is the
-// obvious-looking alternative and it is the failure ADR 0005 records: the
-// stream closed is the one carrying the container's output back. A peer that
-// never learns this side is finished waits for its own timeout, which is
-// bounded; output already produced and then lost is not recoverable.
-func CloseWrite(v any) {
-	if cw, ok := v.(WriteCloser); ok {
-		_ = cw.CloseWrite()
-	}
 }

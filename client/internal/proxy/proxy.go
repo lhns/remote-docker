@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/tunnel"
 )
 
 // Dialer opens a fresh connection to the workspace's Docker socket.
@@ -308,17 +309,6 @@ func (p *Proxy) rewriteBody(ctx context.Context, req *http.Request) error {
 	return nil
 }
 
-// closeWriteOrNothing signals end-of-input on a stream that supports it.
-//
-// Deliberately does nothing when the stream cannot half-close: ending the
-// whole stream is not a safe fallback here, because the other direction is
-// still carrying the response we are waiting for.
-func closeWriteOrNothing(s io.ReadWriteCloser) {
-	if cw, ok := s.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
-}
-
 // writeHead writes a response's status line and headers, and nothing else.
 //
 // resp.Status rather than deriving the text from the code: the daemon's
@@ -416,7 +406,7 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 		// upstream in response would tear down the session carrying the
 		// container's output, and the command would exit 0 having printed
 		// nothing. Only signal end-of-input.
-		closeWriteOrNothing(upstream)
+		tunnel.CloseWrite(upstream)
 	})
 
 	wg.Go(func() {
@@ -427,11 +417,11 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 			}
 		}
 		_, _ = io.Copy(client, upstreamReader)
-		if cw, ok := client.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		} else {
-			client.Close()
-		}
+
+		// The other fallback, and deliberately: upstream has finished, so
+		// there is nothing further to deliver here, and a client that cannot
+		// half-close must still be told the exchange is over.
+		tunnel.CloseWriteOrClose(client)
 	})
 
 	wg.Wait()
