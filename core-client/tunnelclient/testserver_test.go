@@ -1,4 +1,4 @@
-package client
+package tunnelclient
 
 import (
 	"crypto/ed25519"

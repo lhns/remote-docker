@@ -1,4 +1,4 @@
-// Package server is the workspace end of the tunnel: the SSH forwarding
+// Package tunnelserver is the workspace end of the tunnel: the SSH forwarding
 // machinery, with every decision it depends on injected.
 //
 // gliderlabs ships handlers for both forward directions and they are nearly
@@ -13,7 +13,7 @@
 // this project invented and none of them is SSH (ADR 0030). What is left is the
 // protocol: the payload shapes, the listener bookkeeping, opening a channel per
 // accepted connection, and taking the listener down with the connection.
-package server
+package tunnelserver
 
 import (
 	"io"
