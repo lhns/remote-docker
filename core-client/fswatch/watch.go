@@ -21,8 +21,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/lhns/remote-docker/internal/logx"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Mode is how much of what we observe is worth sending.

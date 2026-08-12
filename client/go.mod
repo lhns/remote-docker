@@ -12,7 +12,7 @@ require (
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/compose/v5 v5.4.0
 	github.com/google/go-containerregistry v0.21.7
-	github.com/lhns/remote-docker v0.0.0
+	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.55.0
@@ -267,7 +267,7 @@ require (
 
 // In-repo: the shared module is this repository's root, and a build here must
 // never need a published tag for a change made in the same commit.
-replace github.com/lhns/remote-docker => ../
+replace github.com/lhns/remote-docker/core => ../core
 
 replace github.com/lhns/remote-docker/core-client => ../core-client
 

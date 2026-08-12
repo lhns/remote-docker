@@ -25,7 +25,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/lhns/remote-docker/pkg/tunnel"
+	"github.com/lhns/remote-docker/core/tunnel"
 )
 
 // Config describes how to reach a workspace.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // fakeSharer records what was exported and hands back deterministic paths.

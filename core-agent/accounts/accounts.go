@@ -27,8 +27,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/lhns/remote-docker/internal/logx"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Account is one enrolled workspace user.

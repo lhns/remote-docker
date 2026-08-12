@@ -15,7 +15,7 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/core-agent/netns"
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // Daemon is one account's running dockerd.

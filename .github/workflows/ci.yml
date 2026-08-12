@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: core/go.mod
           cache: true
 
       - name: gofmt
@@ -47,7 +47,7 @@ jobs:
       - name: go vet
         run: |
           set -eux
-          for mod in . ./agent ./core-agent ./core-client ./client; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -56,7 +56,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in . agent core-agent core-client client; do
+          for mod in core agent core-agent core-client client; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -99,14 +99,14 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: core/go.mod
           cache: true
 
       - name: go test
         shell: bash
         run: |
           set -eux
-          for mod in . core-client client; do
+          for mod in core core-client client; do
             (cd "$mod" && go test ./...)
           done
 
@@ -117,7 +117,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: core/go.mod
           cache: true
       # Built from source with this project's own toolchain rather than taken
       # from the action, whose pinned binary is compiled against an older Go
@@ -132,7 +132,7 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in . ./agent ./core-agent ./core-client ./client; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
           # The agent and core-agent both carry Linux-only files (netns, the unix
@@ -163,7 +163,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: core/go.mod
           cache: true
 
       # Every package of every module, not just the binary: a dependency that
@@ -182,7 +182,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -eux
-          for mod in . ./agent ./core-agent ./core-client ./client; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && go build ./...)
           done
 

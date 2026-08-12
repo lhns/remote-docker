@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Defaults for coalescing. A single editor save produces three to five raw

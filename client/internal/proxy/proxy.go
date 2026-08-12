@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // Dialer opens a fresh connection to the workspace's Docker socket.

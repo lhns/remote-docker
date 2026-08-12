@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Guard keeps garbage collection off the volume a bind rewrite is in the

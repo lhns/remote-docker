@@ -8,7 +8,7 @@ import (
 
 	nfs "github.com/willscott/go-nfs"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // capture reads back what was actually rendered, rather than what was passed

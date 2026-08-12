@@ -7,13 +7,15 @@
 # vendoring it). A PR runs both modes end to end before anybody believes it.
 version: 2
 updates:
-  # Three modules, three entries (ADR 0021). Dependabot does not discover
-  # nested modules, so a directory missing here is a module whose dependencies
-  # silently stop being updated -- which is the failure this file exists to
-  # prevent.
+  # Five modules, five entries (ADR 0021, ADR 0031). Dependabot does not
+  # discover nested modules, so a directory missing here is a module whose
+  # dependencies silently stop being updated -- which is the failure this file
+  # exists to prevent, and which it failed to prevent once: core-client and
+  # core-agent existed in the repository for two commits before they were added
+  # here, and nothing said so.
   #
-  # The client is where the weight is: 786 lines of go.sum against the agent's
-  # 24 and the shared module's 2.
+  # The client is where the weight is: 857 lines of go.sum against the agent's
+  # 24 and the shared module's 10.
   - package-ecosystem: gomod
     directory: /client
     schedule:
@@ -37,11 +39,28 @@ updates:
     schedule:
       interval: weekly
 
-  # The shared module: pkg/workspace and the log handler. It depends on almost
-  # nothing, which is the property worth keeping -- a PR here that adds weight
-  # is worth reading closely.
+  # The two core modules: the mechanisms with no Docker in them (ADR 0031).
+  # core-client carries the NFS server and the watchers, so of the two it is the
+  # one with real third-party weight.
   - package-ecosystem: gomod
-    directory: /
+    directory: /core-client
+    schedule:
+      interval: weekly
+    groups:
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  - package-ecosystem: gomod
+    directory: /core-agent
+    schedule:
+      interval: weekly
+
+  # The shared module: the contract, the tunnel and the log handler. It depends
+  # on almost nothing, which is the property worth keeping -- a PR here that
+  # adds weight is worth reading closely.
+  - package-ecosystem: gomod
+    directory: /core
     schedule:
       interval: weekly
 

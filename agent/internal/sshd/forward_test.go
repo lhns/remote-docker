@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type account struct {

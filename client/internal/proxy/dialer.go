@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"context"
-	"github.com/lhns/remote-docker/pkg/tunnel"
+	"github.com/lhns/remote-docker/core/tunnel"
 	"io"
 
 	"github.com/lhns/remote-docker/client/internal/sshx"

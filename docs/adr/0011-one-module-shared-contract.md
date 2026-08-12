@@ -2,7 +2,7 @@
 
 - Status: Accepted; the single-module decision is superseded by
   [ADR 0021](0021-three-modules.md). The contract rule below is unchanged and
-  still governs what may live in `pkg/workspace`.
+  still governs what may live in `core/workspace`.
 - Date: 2026-08-07
 
 ## Context
@@ -25,10 +25,10 @@ documented.
 ## Decision
 
 One Go module containing both binaries, with everything the two sides must
-agree on in `pkg/workspace`, imported by both.
+agree on in `core/workspace`, imported by both.
 
 `internal/client/…` and `internal/server/…` hold what belongs to one side only.
-A type used by one binary does not go in `pkg/workspace`.
+A type used by one binary does not go in `core/workspace`.
 
 ## Consequences
 
@@ -37,7 +37,7 @@ A type used by one binary does not go in `pkg/workspace`.
   The invariant is enforced rather than described.
 - The wire format is a tested round trip rather than a shell `echo` and a
   regular expression.
-- `pkg/workspace` is exported, not internal, because the contract is worth
+- `core/workspace` is exported, not internal, because the contract is worth
   depending on from outside — a third-party client is a legitimate thing to
   build against it.
 - Two binaries share a release cadence. In practice they already did: a client
@@ -46,7 +46,7 @@ A type used by one binary does not go in `pkg/workspace`.
 - The temptation this creates is to put convenience helpers in the shared
   package because both sides happen to want them today. That is how a contract
   package turns into a utility dump and stops meaning anything. The rule is
-  narrow: it goes in `pkg/workspace` only if the two sides must *agree* on it,
+  narrow: it goes in `core/workspace` only if the two sides must *agree* on it,
   not merely if both use it.
 
 ## Superseded in part (ADR 0021)
@@ -58,6 +58,6 @@ directive past the workspace image's pinned builder and the agent -- which
 imports no buildx -- stopped compiling.
 
 The repository now has three modules. **The rule above is unchanged**: what may
-live in `pkg/workspace` is still only what both sides must agree on, and making
+live in `core/workspace` is still only what both sides must agree on, and making
 it a separate module is what finally makes the "a third-party client can build
 against the contract" claim true rather than aspirational.

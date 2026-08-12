@@ -38,12 +38,25 @@ Four in one restructuring is the argument that the rule is worth its cost.
 ## The layout
 
 ```
-github.com/lhns/remote-docker          SHARED: what both ends must agree on
-github.com/lhns/remote-docker/core-client     THE USER'S MACHINE, minus Docker
+github.com/lhns/remote-docker/core          SHARED: what both ends must agree on
+github.com/lhns/remote-docker/core-client   THE USER'S MACHINE, minus Docker
 github.com/lhns/remote-docker/core-agent    THE WORKSPACE, minus Docker
-github.com/lhns/remote-docker/agent    the agent binary: glue
-github.com/lhns/remote-docker/client   the client binary: glue
+github.com/lhns/remote-docker/client        the client binary: glue
+github.com/lhns/remote-docker/agent         the agent binary: glue
 ```
+
+**The names are `core`, not `transport`.** `transport` was the first proposal
+and it demotes half of what the shared module is: `core/workspace` is the
+CONTRACT, what both ends agree the format is, and a contract is not transport.
+`core` covers both, and it makes the family legible -- the three core modules
+together are the core, and the two binaries are glue.
+
+**The repository root is not a module.** The shared module lives in `core/`,
+which removes a trap ADR 0021 could only document: `go build ./...` at the root
+used to pass while compiling almost none of the repository, and now fails
+outright. `internal/logx` had to become `core/logx` in the same move, because
+Go's internal rule would otherwise have restricted a log handler that every
+module imports to `core/...` alone.
 
 `core-client` holds `nfsserve`, `fswatch` and `keys`; `core-agent` holds `accounts`,
 `notify` and `netns`.
@@ -52,7 +65,7 @@ github.com/lhns/remote-docker/client   the client binary: glue
 the mechanism: for the Docker API the user's machine is the client, and for NFS
 it is the SERVER while the workspace is the client. Naming the modules for the
 two ends of the connection avoids a word that means the opposite thing one
-paragraph later. `core-agent` rather than `workspace` because `pkg/workspace` already
+paragraph later. `core-agent` rather than `workspace` because `core/workspace` already
 means the contract, and two import paths ending in the same word read as the
 same thing.
 
@@ -62,7 +75,7 @@ The plan for this assumed `agent/internal/sshd` was Docker-free, on the grounds
 that the daemon resolver is already an interface (ADR 0020). It is not:
 `session.go` names Docker thirty-four times — the socket, `DOCKER_HOST`, the
 CLI, volume mountpoints. So the split fell *through* the package rather than
-around it. The forwarding protocol went to `pkg/tunnel/server` and the decisions
+around it. The forwarding protocol went to `core/tunnel/server` and the decisions
 it asks for stayed behind.
 
 `notify` split along a seam that already existed, because `Volumes` was an
@@ -75,7 +88,7 @@ mountpoint it checks is reported by a daemon the account is root inside, and
 `ports` was expected to split down the middle, with a generic forwarder moving
 out and the container discovery staying. It stays whole instead, for two reasons
 found by looking: the generic part -- a local listener whose connections are
-carried to an address on the workspace -- is ALREADY `pkg/tunnel/client.Forward`,
+carried to an address on the workspace -- is ALREADY `core/tunnel/client.Forward`,
 and what remains is keyed on container ids from end to end. Splitting further
 would have invented an abstraction with exactly one user.
 

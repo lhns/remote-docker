@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // Dockerd runs the workspace's Docker daemon and restarts it if it dies.

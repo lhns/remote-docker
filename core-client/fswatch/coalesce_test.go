@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // base is an arbitrary fixed instant. The coalescer takes the time from its

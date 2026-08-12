@@ -20,18 +20,23 @@ itself. Published ports become reachable locally as containers start.
 ## Layout
 
 ```
-go.mod                   THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
-                         gliderlabs/ssh for pkg/tunnel/client's test server
-  pkg/workspace/         THE CONTRACT, imported by both binaries
-  pkg/tunnel/            THE TRANSPORT (ADR 0030): the one bidirectional copy
+THE REPO ROOT IS NOT A MODULE. `go build ./...` here fails, and that is
+deliberate: it used to pass while compiling almost none of this repository.
+
+core/go.mod              THE SHARED MODULE (ADR 0021): x/sys, x/crypto, and
+                         gliderlabs/ssh for core/tunnel/client's test server
+  workspace/             THE CONTRACT, imported by both binaries
+  tunnel/                THE TRANSPORT (ADR 0030): the one bidirectional copy
                          and the one answer to what half-closing means, plus
                          the names both ends speak. Imports no SSH library.
     client/              dialling it: sessions, streams, both forwards. Given
                          a signer and a host key rule; decides neither.
     server/              answering it: the forwarding protocol, given who may
                          bind what and which namespace it goes in.
-  internal/logx/         the one log handler, so both look the same
-  test/                  lib.sh, integration.sh, per-user-dind.sh, probes
+  logx/                  the one log handler, so both look the same. PUBLIC,
+                         not internal/: every module imports it, and under
+                         core/internal/ Go would let only core/ reach it.
+  probes/                watchprobe, pokeprobe -- Go, so they need a module
 
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
@@ -46,7 +51,7 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    sshx/                where core-client/keys meets pkg/tunnel/client, and the
+    sshx/                where core-client/keys meets core/tunnel/client, and the
                          enrolment hint, which knows this project's rule for
                          who may log in
     machine/             provisioning a workspace on this machine (ADR 0026)
@@ -54,7 +59,7 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
     ports/               published ports -> local forwards. Stays glue whole:
                          its manager is keyed on container ids throughout, and
-                         the generic forward is already pkg/tunnel/client's
+                         the generic forward is already core/tunnel/client's
     session/             wires the above into one live connection
 
 core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
@@ -70,7 +75,7 @@ agent/go.mod             the agent module: THE GLUE. 7 third-party modules,
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     sshd/                the SSH server: auth, sessions, and the forwarding
-                         POLICY pkg/tunnel/server asks. Its session handling
+                         POLICY core/tunnel/server asks. Its session handling
                          is docker all the way down and stays here.
     supervise/           starts and watches the workspace's own dockerd
     elevate/             relaunch privileged, for Swarm (ADR 0013)
@@ -88,16 +93,17 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# FIVE MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary.
-# A bare `go build ./...` at the root covers the shared module and nothing
-# else -- it will pass while compiling almost none of this repository.
-for m in . ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
+# FIVE MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary,
+# so the loop is the only thing that covers the repository. The root is NOT a
+# module: `go build ./...` there fails outright, which is the point -- it used
+# to pass while compiling almost none of this.
+for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
 
 # lint, seven passes: one per module, plus the agent AND core-agent under Linux. Both
 # carry Linux-only files -- session handling, netns, the unix provisioner, the
 # inotify poker -- which a lint on the development machine does not see at all.
 # CI does, and will fail on what you did not lint.
-for m in . ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
+for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
 for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
@@ -116,7 +122,9 @@ bash test/integration.sh
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
-agent imports must be added there or the image build fails on it alone.
+agent imports must be added there or the image build fails on it alone. CI reads
+its Go version from `core/go.mod`, and `.goreleaser.yaml` tidies in `core/`:
+both used to name a root `go.mod` that no longer exists.
 
 Lint is installed with the project's own toolchain
 (`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`),
@@ -138,7 +146,7 @@ premise of the project, and it applies to building it too. So:
 
 ## Invariants — break these and things fail quietly
 
-- **`pkg/workspace` is the contract, and only the contract.** A type goes in
+- **`core/workspace` is the contract, and only the contract.** A type goes in
   it if both binaries must *agree* on it, not merely if both use it. The
   shared module around it (ADR 0021) is one step wider and no wider: something
   goes there if both binaries must behave the *same way*, which is true of the
@@ -157,18 +165,18 @@ premise of the project, and it applies to building it too. So:
 - **Half-close the upstream, never close it.** `docker run` without `-i`
   closes its stdin as soon as attach is established; closing the whole stream
   in response tears down the session carrying the container's output. This now
-  lives once, in `pkg/tunnel`, because the two binaries are the two ends of
+  lives once, in `core/tunnel`, because the two binaries are the two ends of
   one stream and their copies had drifted to OPPOSITE fallbacks. `Splice`
   leaves a stream that cannot half-close alone; `SpliceAndClose` closes it, and
   that difference is deliberate -- a port forward carries no output stream and
   must not leak a blocked reader. A test pins both.
 - **The transport is handed its auth and decides none of it** (ADR 0030).
-  `pkg/tunnel/client` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
+  `core/tunnel/client` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
   `client/internal/sshx` builds both and is the only place that knows enrolment
   is a file in `authorized_keys.d`. There is no default host key rule, because
   every default is either a prompt nobody is there to answer or an acceptance of
   anybody -- so a nil callback is refused by name rather than mid-handshake.
-  The root `pkg/tunnel` imports NEITHER SSH library: Go links what is imported,
+  The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
   and that is the whole reason the agent's 24 go.sum lines did not move.
 - **Only `/containers/create` is ever decoded.** Everything else is copied
   through. The body is handled as generic JSON, never typed structs, so
@@ -436,7 +444,7 @@ premise of the project, and it applies to building it too. So:
   changes on every redeploy, so adopting by it orphans every account's daemon
   on the first `compose up -d` -- still running, unadoptable, holding their
   users' work, while the agent starts a second set under names already taken.
-- **`test/watchprobe` reads raw inotify, not fsnotify.** fsnotify's mask omits
+- **`core/probes/watchprobe` reads raw inotify, not fsnotify.** fsnotify's mask omits
   `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
   primitive under test and would report "nothing happened" convincingly.
 

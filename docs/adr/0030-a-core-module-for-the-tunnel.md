@@ -2,7 +2,7 @@
 
 The client and the agent are the two ends of one SSH connection carrying Docker
 API streams, an NFS export, port forwards and change notifications. What that
-connection IS now lives in `pkg/tunnel`, in the module both binaries already
+connection IS now lives in `core/tunnel`, in the module both binaries already
 depend on, so the two ends cannot disagree about it.
 
 ## What forced it
@@ -16,7 +16,7 @@ times the failure was silent:
   invariant forbids. It presented as `docker run` exiting 0 having printed
   nothing. That created the shared module (ADR 0021) and `internal/iox`.
 - **The uid→port formula.** It lived in two shell scripts, drifted, and
-  presented as a network fault. It now lives once, in `pkg/workspace`.
+  presented as a network fault. It now lives once, in `core/workspace`.
 
 Extracting the names before moving any code found three more of the same shape,
 which is the evidence that this was not a tidiness exercise:
@@ -25,7 +25,7 @@ which is the evidence that this was not a tidiness exercise:
   in the agent's session handler.
 - `workspace-info` was a constant in the agent and a bare literal at the
   client's call site.
-- `workspace-notify` was in `pkg/workspace`, which is the contract for the
+- `workspace-notify` was in `core/workspace`, which is the contract for the
   FORMAT of a change frame. The frame's shape belongs there; the name of the
   command carrying it belongs with the other commands.
 
@@ -36,8 +36,8 @@ already has to tell apart from a working channel.
 
 ## The decision
 
-`pkg/tunnel` holds what the two ends must agree on, and `pkg/tunnel/client` and
-`pkg/tunnel/server` hold the two implementations of it.
+`core/tunnel` holds what the two ends must agree on, and `core/tunnel/client` and
+`core/tunnel/server` hold the two implementations of it.
 
 **The root package imports neither SSH library.** That is the load-bearing part.
 A single package importing both would link a server into the client binary,
@@ -65,7 +65,7 @@ infrastructure:
   dependencies and 24 `go.sum` lines — in exchange for no agreement.
 - Ports are the same shape: the client makes local forwards, the agent makes
   remote ones. What is shared is the uid→port formula, and that was already in
-  `pkg/workspace` for exactly this reason.
+  `core/workspace` for exactly this reason.
 - **Watching is two ends of one promise, not two copies of one implementation.**
   The agreement — the change frame's format and the mode names — is already
   shared (ADR 0016). `fswatch` is three platform backends the agent will never
@@ -88,8 +88,8 @@ sufficient — `test/integration.sh`, `test/per-user-dind.sh`,
 
 ## The rule, for whatever comes next
 
-Something belongs in `pkg/tunnel` if both binaries must AGREE about it. It
-belongs in `pkg/workspace` if both must agree about a FORMAT. It belongs in
+Something belongs in `core/tunnel` if both binaries must AGREE about it. It
+belongs in `core/workspace` if both must agree about a FORMAT. It belongs in
 neither if only one side ever reads it, however much like infrastructure it
 looks. ADR 0021 stated the first tier of this rule; this is the second, and the
 question it answers is the same one: which failures can happen silently.

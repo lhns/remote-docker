@@ -14,7 +14,7 @@ import (
 	"syscall"
 
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
-	"github.com/lhns/remote-docker/internal/logx"
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // SelfEnv names the environment variable holding our own container id or name.

@@ -89,7 +89,7 @@ than a rewrite.
 Written after building it, because the estimate above was a guess.
 
 **The client did not change at all.** Not one line. The agent speaks the same
-SSH, answers `workspace-info` from the same `pkg/workspace` type the client
+SSH, answers `workspace-info` from the same `core/workspace` type the client
 parses with, and keeps the `docker system dial-stdio` command name even though
 there is no CLI behind it any more — the name is now a protocol constant rather
 than a command, and keeping it is what made the substitution free.

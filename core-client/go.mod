@@ -15,7 +15,7 @@ go 1.26.3
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-billy/v5 v5.9.1
-	github.com/lhns/remote-docker v0.0.0
+	github.com/lhns/remote-docker/core v0.0.0
 	github.com/willscott/go-nfs v0.0.4
 	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00
 	golang.org/x/crypto v0.55.0
@@ -33,4 +33,4 @@ require (
 // other modules use, and deliberately not go.work: CI and the image build
 // ignore the workspace and build one module at a time, so a missing require
 // fails where it is wrong.
-replace github.com/lhns/remote-docker => ../
+replace github.com/lhns/remote-docker/core => ../core

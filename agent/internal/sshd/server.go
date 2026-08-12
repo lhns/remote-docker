@@ -19,9 +19,9 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/core-agent/accounts"
-	"github.com/lhns/remote-docker/internal/logx"
-	tunnelserver "github.com/lhns/remote-docker/pkg/tunnel/server"
-	"github.com/lhns/remote-docker/pkg/workspace"
+	"github.com/lhns/remote-docker/core/logx"
+	tunnelserver "github.com/lhns/remote-docker/core/tunnel/server"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Config configures the server.
