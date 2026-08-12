@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/core-client/nfsserve"
+	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -71,7 +72,7 @@ func TestLeasedStreamForwardsCloseWrite(t *testing.T) {
 	inner := &halfCloser{}
 	var s io.ReadWriteCloser = &leasedStream{ReadWriteCloser: inner, release: func() {}}
 
-	cw, ok := s.(interface{ CloseWrite() error })
+	cw, ok := s.(tunnel.WriteCloser)
 	if !ok {
 		t.Fatal("the wrapper hides CloseWrite; the proxy's half-close would silently do nothing")
 	}

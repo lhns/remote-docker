@@ -341,7 +341,7 @@ func (s *leasedStream) Close() error {
 // container's output: the failure ADR 0005 records and the proxy's tests
 // pin down.
 func (s *leasedStream) CloseWrite() error {
-	if cw, ok := s.ReadWriteCloser.(interface{ CloseWrite() error }); ok {
+	if cw, ok := s.ReadWriteCloser.(tunnel.WriteCloser); ok {
 		return cw.CloseWrite()
 	}
 	return nil
