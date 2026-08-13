@@ -22,7 +22,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core-client/keys"
-	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 
 	"github.com/lhns/remote-docker/core/workspace"
@@ -114,7 +113,6 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Guard:   live.guard,
 	}
 	if s.opts.Role.hosting() {
-		live.nfs = nfsserve.New(s.registry)
 		if err := s.startNFS(live); err != nil {
 			_ = client.Close()
 			return nil, err
@@ -208,8 +206,12 @@ func (s *Session) startNFS(live *liveConn) error {
 	}
 	live.nfsTunnel = l
 
+	// The SESSION's server, not one built here. Serve returns when this
+	// connection's listener closes and the same server takes the next one, so
+	// the handle cache spans reconnects and a container that was already
+	// running keeps reading. See Session.nfs.
 	live.wg.Go(func() {
-		if err := live.nfs.Serve(l); err != nil && !errors.Is(err, net.ErrClosed) {
+		if err := s.nfs.Serve(l); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.logQuiet(s.ctx, "the nfs server stopped", "err", err)
 		}
 	})

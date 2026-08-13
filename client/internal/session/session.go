@@ -129,6 +129,15 @@ type Session struct {
 	// rather than orphaning a set per connection.
 	registry *nfsserve.Registry
 
+	// nfs outlives a connection for a harder reason than the registry does.
+	// NFSv3 handles are opaque, the kernel keeps presenting the ones it was
+	// given, and they live in this server's handle cache -- so a server built
+	// per connection hands out a fresh set on every reconnect and every
+	// container that was already running reads "Stale file handle" forever.
+	// Nothing announces it: the mount is there, the port answers, the files
+	// are gone. Measured in test/nfs-resilience.sh, section 10.
+	nfs *nfsserve.Server
+
 	// clientID names this MACHINE, derived from its key on the first connect.
 	// Empty before then, which nothing that uses it can observe: everything
 	// asking is downstream of a connection.
@@ -165,7 +174,6 @@ type liveConn struct {
 	api       *proxy.APIClient
 	rewriter  *rewrite.Rewriter
 	guard     *rewrite.Guard
-	nfs       *nfsserve.Server
 	nfsTunnel net.Listener
 	ports     *ports.Manager
 
@@ -214,6 +222,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
+		s.nfs = nfsserve.New(s.registry)
 	}
 
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
