@@ -1,6 +1,6 @@
 # 0033 — The root handle is derived, the rest are not
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-13
 
 > A share's ROOT handle is a function of its export path. Everything below it
@@ -109,11 +109,11 @@ is willing to ask for again.
 
 - **The change is a few lines**, in `core-client/nfsserve`, with no new state
   anywhere.
-- **It rests on the kernel re-looking-up after `ESTALE`.** That is the one thing
-  this record assumes rather than proves, and E3 is the proof: if a client
-  restart still strands containers with a valid root, the assumption is wrong
-  and per-file stability comes back — with the walk already ruled out, that
-  would mean the persisted map.
+- **It rested on the kernel re-looking-up after `ESTALE`**, which was the one
+  thing this record assumed rather than proved. E3 now proves it: with a root
+  handle that resolves, a container that was running before a client restart
+  goes on reading through the mount it already had. Per-file stability, and the
+  persisted map behind it, are not needed.
 - **An open file descriptor still breaks.** A container holding a file open
   across a client restart gets `ESTALE` on that fd, because there is no path
   lookup left to retry. Correct and unavoidable; the container gets a clear
