@@ -19,6 +19,43 @@ ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
 bad()  { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
 info() { echo "  ....  $*"; }
 
+# outputs runs a command and reports whether its combined output matches an
+# extended regex. The output is left in LAST_OUTPUT for the failure message.
+#
+#   outputs <regex> <cmd...>
+#
+# Never `cmd | grep -q`, which is what this replaces everywhere. grep -q exits
+# the instant it matches, so whatever the command still had to write gets
+# EPIPE, and Go's runtime turns EPIPE on fd 1 or 2 into a fatal SIGPIPE: exit
+# 141. Under `set -o pipefail` the pipeline reports that 141 even though the
+# match succeeded, so the assertion fails precisely when it should pass,
+# depending only on whether grep was scheduled before the command finished
+# writing. A matching line with nothing after it is safe; one with a trailing
+# summary line, another row or a log tail is not.
+#
+# Section 17 has lost two assertions to this, each costing a re-run and naming
+# no cause. The earlier one was "fixed" by capturing ls into a variable for the
+# error message, which removed the pipeline and, with it, the failure.
+#
+# The mechanism is Linux-only and so is the evidence: Windows has no SIGPIPE,
+# the failed write is silently ignored, and the command still exits 0. It
+# cannot be reproduced on a development machine, only in CI.
+#
+# The command substitution reads to EOF, so there is no reader to close early
+# and no pipeline for pipefail to inspect.
+# Empty rather than unset, because the suites run under `set -u` and a failure
+# message may name it on a path where outputs never ran.
+#
+# shellcheck disable=SC2034  # read by the suites that source this, not here.
+LAST_OUTPUT=""
+
+outputs() {
+    local re=$1
+    shift
+    LAST_OUTPUT=$("$@" 2>&1)
+    grep -qE "$re" <<<"$LAST_OUTPUT"
+}
+
 # The workspace container lives on the RUNNER's daemon. Once DOCKER_HOST points
 # at the workspace, plain `docker` talks to the workspace's daemon instead, so
 # anything about the container -- exec, logs, inspect -- has to say which

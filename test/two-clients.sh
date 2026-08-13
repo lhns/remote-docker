@@ -200,7 +200,7 @@ fi
 echo
 echo "== 7. one daemon, so both see the same containers =="
 dpc run -d --name shared-by-both alpine:3 sleep 300 >/dev/null 2>&1
-if dphone ps --format '{{.Names}}' 2>/dev/null | grep -qx shared-by-both; then
+if outputs '^shared-by-both$' dphone ps --format '{{.Names}}'; then
     ok "the phone sees a container the pc started"
 else
     bad "the phone cannot see the pc's container"

@@ -180,7 +180,7 @@ else
     bad "alice could not start a container"
 fi
 
-if db ps --all --format '{{.Names}}' 2>/dev/null | grep -qx alice-secret; then
+if outputs '^alice-secret$' db ps --all --format '{{.Names}}'; then
     bad "bob can see alice's container -- the accounts are not separated"
 else
     ok "bob cannot see alice's container"
@@ -194,7 +194,7 @@ else
     ok "bob cannot stop alice's container"
 fi
 
-if da ps --format '{{.Names}}' 2>/dev/null | grep -qx alice-secret; then
+if outputs '^alice-secret$' da ps --format '{{.Names}}'; then
     ok "alice still sees her own"
 else
     bad "alice lost sight of her own container"
@@ -387,7 +387,7 @@ else
     bad "alice's images did not survive: [$images_before] -> [$images_after]"
 fi
 
-if da ps --all --format '{{.Names}}' 2>/dev/null | grep -qx alice-secret; then
+if outputs '^alice-secret$' da ps --all --format '{{.Names}}'; then
     ok "and so did her containers"
 else
     bad "alice's containers did not survive her daemon being recreated"
