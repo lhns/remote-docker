@@ -72,9 +72,8 @@ func TestTheDerivedPartOfARootHandleIsTheSameInEveryServer(t *testing.T) {
 	first := rootHandleOf(t, New(r), "/cwd")
 	second := rootHandleOf(t, New(registryFor(t, dir)), "/cwd")
 
-	const derived = 1 + exportKeySize
-	if string(first[:derived]) != string(second[:derived]) {
-		t.Errorf("derived keys differ: %x vs %x", first[:derived], second[:derived])
+	if string(first[:exportKeySize]) != string(second[:exportKeySize]) {
+		t.Errorf("derived keys differ: %x vs %x", first[:exportKeySize], second[:exportKeySize])
 	}
 	if string(first) == string(second) {
 		t.Error("the whole handle matched, so the cache's answer is not in it")
@@ -160,13 +159,34 @@ func TestALiveServerResolvesItsOwnRootThroughTheCache(t *testing.T) {
 	}
 }
 
-// An unknown tag is stale rather than a panic or a wrong file: a handle from
-// an older build has to degrade to "look it up again".
+// An unrecognised handle is stale rather than a panic or a wrong file: one
+// from an older build has to degrade to "look it up again".
 func TestAnUnknownHandleIsStale(t *testing.T) {
 	s := New(registryFor(t, t.TempDir()))
-	for _, h := range [][]byte{nil, {}, {0xff, 1, 2, 3}, {tagRoot}, {tagRoot, 1, 2}} {
+	for _, h := range [][]byte{nil, {}, {0xff, 1, 2, 3}, make([]byte, rootHandleSize)} {
 		if _, _, err := s.handler.FromHandle(h); err == nil {
 			t.Errorf("FromHandle(%x) succeeded, want an error", h)
 		}
+	}
+}
+
+// A root handle must keep the length this code recognises it by, and an
+// ordinary handle must keep the bytes go-nfs gave it. Both are pinned because
+// changing either broke every suite once already.
+func TestHandleSizes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := registryFor(t, dir)
+	s := New(r)
+
+	if got := len(rootHandleOf(t, s, "/cwd")); got != rootHandleSize {
+		t.Errorf("root handle is %d bytes, want %d", got, rootHandleSize)
+	}
+
+	share, _, _ := r.Lookup("/cwd")
+	if got := len(s.handler.ToHandle(share.fs, []string{"marker"})); got != cachedHandleSize {
+		t.Errorf("an ordinary handle is %d bytes, want the %d go-nfs mints", got, cachedHandleSize)
 	}
 }

@@ -42,14 +42,28 @@ everything under it by asking again.
 **Derive the root handle from the export path; leave the rest to the cache.**
 
 ```
-a share root:  [0x01][ sha256(export path)[:8] ]      9 bytes
-anything else: [0x02][ the caching handler's uuid ]   17 bytes
+a share root:  [ sha256(export path)[:8] ][ the caching handler's uuid ]   24 bytes
+anything else: [ the caching handler's uuid ]                             16 bytes
 ```
 
-A leading tag rather than a length or a padding convention: the two kinds would
-otherwise be told apart by how many bytes go-nfs's uuid happens to occupy, which
-is not ours to depend on. An unrecognised tag is stale, so a handle minted by an
-older build degrades to "look it up again" rather than to a wrong file.
+Two things about that shape were learned the hard way, and both are the reason
+it is written down rather than tidied:
+
+- **The cache answers first.** A root handle carries the cache's own handle as
+  well as the derived key, and resolution asks the cache before the key. So a
+  running client resolves a root exactly as it did before any of this existed,
+  and the key is consulted only when the cache cannot answer -- a client that
+  has restarted, which is the entire point of the feature.
+- **Ordinary handles keep the bytes and the length they had.** The first attempt
+  put a one-byte tag in front of every handle, which is the tidy way to tell two
+  formats apart. Every suite then failed identically: every mount succeeded and
+  every read returned "permission denied", with the daemon unable to open the
+  volume's own directory. Nothing in go-nfs or in this package explains that
+  yet. What is established is only the measurement, so a share root is
+  recognised by LENGTH and everything else is passed through untouched.
+
+Recognising by length means depending on go-nfs's handles being a fixed 16
+bytes, which a unit test pins rather than assumes.
 
 A share root therefore resolves in a process that never issued it, and the
 export it names is checked against what is registered NOW, which is ADR 0027's
