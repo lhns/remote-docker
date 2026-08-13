@@ -240,3 +240,28 @@ jobs:
       - name: workspace logs on failure
         if: failure()
         run: docker logs remote-docker-twoclients 2>&1 | tail -100 || true
+
+  nfs-resilience:
+    name: what a mount does when the session drops
+    runs-on: ubuntu-latest
+    needs: nfs-capability
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      # Reports what it measured whether it passes or fails: the point of this
+      # suite is the numbers, and a green tick hides them.
+      - name: run the suite
+        run: bash test/nfs-resilience.sh
+
+      - name: workspace logs on failure
+        if: failure()
+        run: docker logs remote-docker-nfsres 2>&1 | tail -100 || true

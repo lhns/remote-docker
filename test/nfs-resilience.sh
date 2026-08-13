@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+# What a mount does when the thing behind it goes away.
+#
+# A bind mount becomes an NFS volume the workspace daemon mounts for itself,
+# and there are TWO layers under it that can fail independently:
+#
+#   the kernel NFS client  ->  127.0.0.1:<port> in the workspace
+#                          ->  a listener the SSH session created
+#                          ->  SSH channels to this machine
+#                          ->  the client's in-process NFS server
+#
+# Neither layer is ours to configure once a container is running. Docker's
+# local driver calls mount(2) with the options we chose and never speaks to the
+# volume again; everything after that is the kernel's behaviour and our mount
+# options. So what a container SEES when a session drops, and whether it comes
+# back, is not something to reason about. It is something to measure.
+#
+# This suite is the measurement. Every section states the expectation first and
+# reports what actually happened, so a wrong expectation is a finding rather
+# than a red line -- several of these expectations are predictions nobody has
+# checked, and the header is updated when one of them is wrong.
+#
+# THE EXPECTATIONS, as of writing (unproven; that is the point):
+#
+#   E1  An idle release closes the listener, so the address a running
+#       container's mount points at stops existing while nothing is wrong with
+#       the container.
+#   E2  A container reading across that window fails rather than waiting: the
+#       mount is soft, so the kernel gives up and reports EIO.
+#   E3  A reconnect does NOT heal an established mount. Handles come from
+#       go-nfs's in-memory caching handler, so a new client PROCESS mints new
+#       ones and everything the kernel still holds is stale.
+#   E4  A blocked port (a black hole, not a refusal) costs the mount
+#       timeo*retrans before it reports anything, and recovers by itself when
+#       the block is lifted, because NFSv3 has nothing to renegotiate.
+#   E5  Starting an existing container with no session gets "connection
+#       refused" against the port, which is the failure a user reported after
+#       `docker compose up` on a container that already existed.
+#   E6  Starting one THROUGH a session that had to reconnect first does not
+#       race: the listener is rebound before the request reaches the daemon.
+#
+# Requires: docker, and a kernel with NFS client support. Runs the shared
+# daemon (ADR 0012); the per-account mode binds its listener inside the
+# daemon's netns and deserves its own run once this one says something.
+set -uo pipefail
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+WORK=$(mktemp -d)
+IMAGE=remote-docker-workspace:test
+CONTAINER=remote-docker-nfsres
+SSH_PORT=22224
+ACCOUNT=nfsres
+
+DOCKER_TIMEOUT=120
+dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
+
+# shellcheck source=test/lib.sh
+. "$REPO/test/lib.sh"
+
+# WATCH_SH reads its mount once a second and says what happened, with the time,
+# to its own stdout. Read afterwards with `docker logs`.
+#
+# Never `docker exec` to observe this: every docker command reaches the daemon
+# THROUGH the client, which reopens the connection and rebinds the listener. An
+# observation would repair what it was there to observe.
+WATCH_SH='while true; do
+    if out=$(cat /w/marker 2>&1); then
+        echo "$(date +%s) OK $out"
+    else
+        echo "$(date +%s) ERR $out"
+    fi
+    sleep 1
+done'
+
+cleanup() {
+    echo
+    echo "== cleanup =="
+    if [ -n "${CLIENT_PID:-}" ]; then
+        kill "$CLIENT_PID" 2>/dev/null
+        wait "$CLIENT_PID" 2>/dev/null
+    fi
+    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+echo "== 1. build =="
+if build_image; then ok "workspace image built"; else bad "image build failed"; exit 1; fi
+if build_client; then ok "client built"; else bad "client build failed"; exit 1; fi
+
+export REMOTE_DOCKER_STATE_DIR="$WORK/state"
+export REMOTE_DOCKER_HOST=127.0.0.1
+export REMOTE_DOCKER_PORT=$SSH_PORT
+export REMOTE_DOCKER_USER=$ACCOUNT
+export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
+# Short, because two sections here are ABOUT the idle release and the default
+# minute would be spent waiting rather than testing.
+export REMOTE_DOCKER_IDLE_TIMEOUT=8s
+
+mkdir -p "$WORK/keys" "$WORK/wsstate"
+if enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
+    ok "enrolled"
+else
+    bad "enroll produced no public key"; exit 1
+fi
+
+if start_workspace false; then
+    ok "workspace started"
+else
+    bad "workspace failed to start"; exit 1
+fi
+if wait_provisioned "$ACCOUNT"; then ok "account provisioned"; else bad "never provisioned"; exit 1; fi
+if wait_parent_dockerd; then ok "the workspace daemon is up"; fi
+
+PROJECT="$WORK/project"
+mkdir -p "$PROJECT"
+echo "the file the container reads" >"$PROJECT/marker"
+cd "$PROJECT" || exit 1
+
+echo
+echo "== 2. a session, and the port it binds =="
+"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
+CLIENT_PID=$!
+if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+    ok "the endpoint answers"
+else
+    bad "the endpoint never came up"
+    sed 's/^/        /' "$WORK/up.log"
+    exit 1
+fi
+export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
+
+# The port is per machine and allocated, so it is READ rather than assumed. A
+# hardcoded 30000 would pass here by luck and mislead on the day it moved.
+if outputs "tunnel port [0-9]+" "$WORK/remote-docker" remote status; then
+    PORT=$(echo "$LAST_OUTPUT" | sed -n 's/.*tunnel port \([0-9]*\).*/\1/p' | head -1)
+    ok "the session bound a reverse-tunnel port: $PORT"
+else
+    bad "status did not report a tunnel port"
+    exit 1
+fi
+
+# Whether the port is open is asked INSIDE the workspace, which is where both
+# ends of it live in shared-daemon mode.
+#
+# Read from /proc/net/tcp rather than netstat or ss, neither of which the image
+# promises. State 0A is LISTEN; the port is the hex after the colon.
+HEXPORT=$(printf '%04X' "$PORT")
+listening() {
+    hostdocker exec "$CONTAINER" sh -c \
+        "awk '\$4 == \"0A\" && \$2 ~ /:$HEXPORT\$/ {found=1} END {print (found ? \"yes\" : \"no\")}' /proc/net/tcp" \
+        2>/dev/null
+}
+
+if [ "$(listening)" = yes ]; then
+    ok "the port is open while the session is connected"
+else
+    bad "the port is not open even with a session connected; nothing below means anything"
+    exit 1
+fi
+
+dockert pull -q alpine:3 >/dev/null 2>&1
+
+echo
+echo "== 3. a container holding a mount =="
+if dockert run -d --name nfsres-watch -v "$PROJECT:/w" alpine:3 sh -c "$WATCH_SH" >/dev/null 2>&1; then
+    ok "the watching container started"
+else
+    bad "could not start the watching container"; exit 1
+fi
+sleep 3
+if dockert logs nfsres-watch 2>&1 | grep -q "OK the file the container reads"; then
+    ok "it can read its mount"
+else
+    bad "it could not read its mount at all"
+    dockert logs nfsres-watch 2>&1 | tail -5 | sed 's/^/        /'
+    exit 1
+fi
+
+echo
+echo "== 4. E1/E2: what an idle release does to a running container =="
+# Nothing is asked of docker during this window, deliberately. The gate
+# releases the connection after REMOTE_DOCKER_IDLE_TIMEOUT of no leases, and
+# any docker command here would take a lease and prevent the thing under test.
+info "waiting out the idle timeout with no docker commands"
+mark=$(date +%s)
+sleep 25
+
+if [ "$(listening)" = no ]; then
+    ok "E1 holds: an idle release closed the port a running mount points at"
+else
+    info "E1 does not hold: the port is still open after an idle release"
+    ok "E1 was wrong, which is the better outcome"
+fi
+
+# What the container saw during the window, from ITS log, which needed no
+# docker command at the time.
+window=$(dockert logs nfsres-watch 2>&1 | awk -v t="$mark" '$1 >= t')
+errs=$(echo "$window" | grep -c "ERR")
+info "during the idle window the container logged $(echo "$window" | grep -c .) lines, $errs of them errors"
+if [ "$errs" -gt 0 ]; then
+    ok "E2 holds: reads across an idle release fail"
+    echo "$window" | grep "ERR" | head -3 | sed 's/^/        /'
+else
+    ok "E2 does not hold: the mount survived an idle release untouched"
+    info "which would mean the established connection outlives the listener"
+fi
+
+echo
+echo "== 5. does a docker command heal it =="
+# The first command after a release reopens the connection and rebinds the
+# listener. Whether the CONTAINER's mount recovers is a different question,
+# and it is E3.
+dockert ps >/dev/null 2>&1
+sleep 5
+if [ "$(listening)" = yes ]; then
+    ok "a docker command reopened the connection and rebound the port"
+else
+    bad "the port did not come back after a docker command"
+fi
+
+after=$(dockert logs nfsres-watch 2>&1 | tail -5)
+if echo "$after" | grep -q "OK the file"; then
+    ok "the container's mount recovered once the port was back"
+else
+    info "the container is still failing after the port returned:"
+    echo "$after" | sed 's/^/        /'
+    ok "recorded: a reconnect on the same port does not heal a running mount"
+fi
+
+echo
+echo "== 6. E3: a NEW client process, and the handles it mints =="
+# Handles come from go-nfs's in-memory caching handler, so a restarted client
+# cannot reproduce the ones the kernel is holding. If the mount survives this,
+# the handles are reproducible after all and that is worth knowing.
+kill "$CLIENT_PID" 2>/dev/null
+wait "$CLIENT_PID" 2>/dev/null
+sleep 2
+"$WORK/remote-docker" remote start --foreground >"$WORK/up2.log" 2>&1 &
+CLIENT_PID=$!
+if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+    ok "a second client process is serving"
+else
+    bad "the second client never came up"
+    sed 's/^/        /' "$WORK/up2.log"
+    exit 1
+fi
+
+mark=$(date +%s)
+dockert ps >/dev/null 2>&1
+sleep 15
+window=$(dockert logs nfsres-watch 2>&1 | awk -v t="$mark" '$1 >= t')
+if echo "$window" | grep -q "OK the file"; then
+    info "E3 does not hold: the mount works against a new server process"
+    ok "recorded: handles survived a client restart"
+else
+    ok "E3 holds: a new client process leaves the running container's mount broken"
+    echo "$window" | tail -3 | sed 's/^/        /'
+fi
+info "what the container reports now: $(echo "$window" | tail -1)"
+
+echo
+echo "== 7. E4: a black hole rather than a refusal =="
+# DROP, not REJECT: a refused connection answers immediately and a dropped one
+# does not answer at all, and those are different failures with different
+# costs. This is the one that costs timeo*retrans.
+if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP 2>/dev/null; then
+    ok "blocked the port inside the workspace"
+
+    dockert rm -f nfsres-black >/dev/null 2>&1
+    start=$(date +%s)
+    out=$(timeout 180 docker run --rm --name nfsres-black -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1)
+    rc=$?
+    elapsed=$(( $(date +%s) - start ))
+    info "a mount into a black hole took ${elapsed}s and said: $(echo "$out" | tail -1)"
+    if [ "$rc" -ne 0 ]; then
+        ok "E4 holds in part: it fails rather than hanging forever (${elapsed}s)"
+    else
+        bad "a mount through a blocked port SUCCEEDED, which nothing explains"
+    fi
+
+    hostdocker exec "$CONTAINER" iptables -D INPUT -p tcp --dport "$PORT" -j DROP 2>/dev/null
+    sleep 3
+    if timeout 120 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >/dev/null 2>&1; then
+        ok "E4 holds: mounting works again once the block is lifted"
+    else
+        bad "mounting did not recover after the block was lifted"
+    fi
+else
+    info "iptables is not available in the workspace image; E4 not measured"
+fi
+
+echo
+echo "== 8. E5: starting a container with no session at all =="
+# The reported failure: `docker compose up` on a container that already exists.
+# Creating one goes through /containers/create, which reopens the connection;
+# starting one that exists does not create anything.
+dockert rm -f nfsres-existing >/dev/null 2>&1
+if dockert create --name nfsres-existing -v "$PROJECT:/w" alpine:3 cat /w/marker >/dev/null 2>&1; then
+    ok "an existing container to start later"
+else
+    bad "could not create the container"
+fi
+
+kill "$CLIENT_PID" 2>/dev/null
+wait "$CLIENT_PID" 2>/dev/null
+CLIENT_PID=""
+sleep 2
+
+# Asked of the workspace's own daemon, so no client is involved and nothing
+# reopens anything. This is the daemon doing exactly what it did for the user.
+out=$(hostdocker exec "$CONTAINER" docker start -a nfsres-existing 2>&1)
+rc=$?
+info "starting it with no session: rc=$rc, said: $(echo "$out" | tail -1 | cut -c1-200)"
+if echo "$out" | grep -q "connection refused"; then
+    ok "E5 holds: the reported failure, reproduced -- connection refused on $PORT"
+elif [ "$rc" -eq 0 ]; then
+    ok "E5 does not hold: it started with no session, so the mount outlived it"
+else
+    ok "E5 partly: it failed, but not with connection refused"
+fi
+
+echo
+echo "== 9. E6: and through a client that has to reconnect first =="
+"$WORK/remote-docker" remote start --foreground >"$WORK/up3.log" 2>&1 &
+CLIENT_PID=$!
+if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+    if out=$(timeout 120 docker start -a nfsres-existing 2>&1); then
+        ok "E6 holds: starting it through the client works, so the listener is rebound first"
+    else
+        bad "E6 does not hold: $(echo "$out" | tail -1 | cut -c1-200)"
+    fi
+else
+    bad "the client did not come back for section 9"
+fi
+
+echo
+echo "== client log =="
+tail -25 "$WORK/up.log" 2>/dev/null | sed 's/^/        /'
+
+summary
