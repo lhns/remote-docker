@@ -118,7 +118,7 @@ func (c *APIClient) replaceIfStale(ctx context.Context, name string, want map[st
 		// Not there, or not answerable. Create will say what is wrong.
 		return nil
 	}
-	if existing.Labels[rewrite.ManagedLabel] != "share" {
+	if existing.Labels[rewrite.ManagedLabel] != rewrite.ManagedShare {
 		return nil
 	}
 	if maps.Equal(existing.Options, want) {

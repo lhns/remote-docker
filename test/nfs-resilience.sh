@@ -15,83 +15,47 @@
 # options. So what a container SEES when a session drops, and whether it comes
 # back, is not something to reason about. It is something to measure.
 #
-# This suite is the measurement. Every section states the expectation first and
-# reports what actually happened, so a wrong expectation is a finding rather
-# than a red line -- several of these expectations are predictions nobody has
-# checked, and the header is updated when one of them is wrong.
+# This suite is the measurement, and each section states what it expects before
+# it looks, so a wrong expectation is a finding rather than a red line.
 #
-# THE EXPECTATIONS, as of writing (unproven; that is the point):
+# WHAT IS KNOWN, all of it measured here rather than reasoned about:
 #
-#   E1  An idle release closes the listener, so the address a running
-#       container's mount points at stops existing while nothing is wrong with
-#       the container.
-#         MEASURED 2026-08-13: no release happened at all. A mounted container
-#         talks to its server about once a second and that traffic keeps the
-#         connection leased, so an idle timeout does not fire under a live
-#         mount. The section now asks whether a release occurred BEFORE asking
-#         what it did, because "everything worked" and "nothing happened" look
-#         identical.
-#   E2  A container reading across that window fails rather than waiting: the
-#       mount is soft, so the kernel gives up and reports EIO.
-#         MEASURED: not exercised, for the reason above.
-#   E3  A reconnect does NOT heal an established mount. Handles come from
-#       go-nfs's in-memory caching handler, so a new client PROCESS mints new
-#       ones and everything the kernel still holds is stale.
-#         MEASURED: HELD, and then FIXED. "cat: can't open '/w/marker': Stale
-#         file handle" after every client restart. The handle that mattered was
-#         the SHARE ROOT, which MOUNT returns once and the kernel can never ask
-#         for again; ADR 0033 derives it from the export path. This section now
-#         asserts the mount survives instead of recording that it does not.
-#   E4  A blocked port (a black hole, not a refusal) costs the mount
-#       timeo*retrans before it reports anything, and recovers by itself when
-#       the block is lifted, because NFSv3 has nothing to renegotiate.
-#         MEASURED: recovery HOLDS. The cost does not: it took ~180s, not the
-#         ~60s timeo*retrans suggests, because those govern RPCs after a mount
-#         and the mount call has retries of its own. `docker run` sits there
-#         for three minutes before saying anything.
-#   E5  Starting an existing container with no session gets "connection
-#       refused" against the port, which is the failure a user reported after
-#       `docker compose up` on a container that already existed.
-#         MEASURED: HOLDS, word for word. The address exists only while a
-#         session is connected, so anything that starts a container without
-#         this client fails exactly the way the report described.
-#   E6  Starting one THROUGH a session that had to reconnect first does not
-#       race: the listener is rebound before the request reaches the daemon.
-#         MEASURED: HOLDS.
-#   E7  A dropped TRANSPORT is not a dropped process. Black-holing the ssh port
-#       breaks the connection while the client and its handle cache live on, so
-#       the mount should recover when the transport does.
-#         MEASURED: the workspace held the dead session's port reservation and
-#         refused the client its reverse forward on every reconnect -- "another
-#         session for this account may still be open" -- so nothing worked for
-#         the eight minutes the suite would wait. That is the failure this
-#         whole investigation started from, and it is now fixed on the agent
-#         side; recovery took 16s.
-#         E7 then HELD, once the section stopped asking the wrong question
-#         (one version demanded a reconnect that never had to happen, and two
-#         read the log of a client killed two sections earlier): the client
-#         redialled, got its forward, and the container went back to reading
-#         through the mount it already had. Before the server moved to the
-#         Session that redial would have minted new handles and left it stale,
-#         which is E3's failure with a different trigger.
+#   The share ROOT handle is the one that must survive a client restart. MOUNT
+#   issues it once and the kernel never mounts again, so a root that stops
+#   resolving leaves every lookup starting from something dead. Below the root,
+#   Linux re-looks-up after ESTALE and needs nothing stable (ADR 0033).
 #
-# AND WHAT THIS SUITE PROVED ABOUT THE HARNESS, by falling for it:
+#   Docker's local driver REFCOUNTS a mount. A volume already mounted is handed
+#   to the next container as it is, stale included, so nothing recovers while
+#   any container still holds it. That is why `compose down && up` cures a
+#   broken mount where restarting the session does not: down drops the count to
+#   zero and unmounts.
 #
-#   `cmd | grep -q` fails the assertion it just matched, when the producer is
-#   still writing. Section 3 reported "it could not read its mount at all"
-#   while printing four lines of the match underneath. `docker logs` on a busy
-#   container is the producer that shows it; `remote ls` finishes writing too
-#   fast and survived 5,067 runs. So: `outputs`, never a pipeline.
+#   The mount address exists only while a session is connected. Anything that
+#   starts a container without this client -- a restart policy, the daemon
+#   coming back -- gets "connection refused" against the port (section 8).
 #
-# AND THE ONE NOBODY PREDICTED, which invalidated the first run's sections 7
-# to 9 and is the most useful thing here:
+#   An idle release does not fire under a live mount: the container's own
+#   traffic keeps the connection leased (section 4).
 #
-#   Docker's local driver REFCOUNTS a mount. A volume already mounted by one
-#   container is handed to the next as it is -- including when it has gone
-#   stale -- so no new container can recover while any container still holds
-#   it. That is why `compose down && compose up` cures a broken mount and
-#   restarting the session does not: down drops the refcount to zero and
-#   unmounts, and up mounts fresh.
+#   A blocked port costs a mount about 180 SECONDS, not the ~60 that
+#   timeo=30,retrans=2 suggests. Those govern RPCs after a mount; the mount
+#   call retries on its own clock (section 7).
+#
+#   A container holding a file OPEN across a client restart still gets ESTALE
+#   on that descriptor. There is no path lookup left to retry, and that is
+#   correct rather than fixable.
+#
+# TWO RULES FOR EDITING THIS FILE, both of which cost a day when broken:
+#
+#   Never `cmd | grep -q`. grep exits at the first match, the producer's next
+#   write gets EPIPE, and Go turns that into a fatal SIGPIPE -- so under
+#   pipefail the assertion fails BECAUSE it matched. Use `outputs`.
+#
+#   Never observe a mount with `docker exec` or any other docker command. Every
+#   one reaches the daemon through the client, which reopens the connection and
+#   rebinds the listener, so the observation repairs what it came to observe.
+#   The watching containers log to their own stdout, read afterwards.
 #
 # Requires: docker, and a kernel with NFS client support. Runs the shared
 # daemon (ADR 0012); the per-account mode binds its listener inside the
@@ -341,13 +305,13 @@ info "what the container reports now: $(echo "$window" | tail -1)"
 echo
 echo "== 6b. the stale mount is SHARED, and that is why down/up cures things =="
 # Docker's local driver refcounts: a volume already mounted is reused rather
-# than mounted again. So the stale mount the watcher is holding is handed to
-# every later container using the same directory, and no fresh container can
-# recover while it lives.
+# than mounted again. So the stale mount the watcher holds is handed to every
+# later container using the same directory, and no fresh container can recover
+# while it lives.
 #
-# The first run of this suite learned that by accident -- sections 7, 8 and 9
-# all measured this instead of what they meant to -- which is why everything
-# below gets its own directory, and why the watcher is removed here.
+# Which is why everything below this point gets a directory of its own, and why
+# the watcher is removed here: a section sharing a mount with an earlier one
+# measures that mount's state rather than its own subject.
 if out=$(timeout 60 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
     ok "a NEW container reading the same stale volume works"
 else
@@ -381,8 +345,7 @@ if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP
     rc=$?
     elapsed=$(( $(date +%s) - start ))
     # The daemon's line, not the tail: the tail is docker's "Run --help"
-    # footer, which is what the first run of this suite recorded instead of
-    # the error.
+    # footer, so a bare `tail -1` records advice instead of the failure.
     said=$(echo "$out" | grep -m1 -iE "error|refused|timed out" | cut -c1-200)
     info "a mount into a black hole took ${elapsed}s and said: ${said:-$(echo "$out" | head -1)}"
     # rc 124 is OUR timeout, not the mount's verdict, and the two must never be
@@ -494,10 +457,10 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         mark=$(date +%s)
 
         # A reconnect has to be PROVEN before anything is concluded from the
-        # mount, because "the handles died" and "it never reconnected" produce
-        # the identical symptom. The client logs a line per connect, so the
-        # count is the evidence; the first version of this section assumed the
-        # reconnect and would have blamed the handle cache either way.
+        # mount: "the handles died" and "it never reconnected" produce the
+        # identical symptom, so assuming the reconnect blames the handle cache
+        # either way. The client logs a line per connect, and that is the
+        # evidence.
         # How LONG, not whether. The first version waited 20s, found nothing
         # working and called it "did not recover on its own" -- but a
         # black-holed socket stays writable until the kernel stops
