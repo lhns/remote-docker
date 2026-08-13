@@ -61,12 +61,34 @@ var DefaultAttrs = Attrs{
 type attrFS struct {
 	billy.Filesystem
 	attrs Attrs
+
+	// export is which share this filesystem serves, so a handle can name it
+	// (ADR 0033). Carried here because go-nfs hands the handler a filesystem
+	// and nothing else, and because the POINTER cannot be the identity:
+	// SetAttrs rebuilds every share's filesystem on each connect.
+	export string
+
+	// isRoot distinguishes the share itself from a Chroot into a subdirectory
+	// of it. Both carry the same export, and only the first may be given the
+	// derived root handle -- handing it to a subdirectory mount would resolve
+	// every later lookup against the share root instead, which is a mount
+	// silently serving the wrong directory.
+	isRoot bool
 }
 
 // withAttrs wraps fs so every FileInfo it returns carries the given ownership
-// and permissions.
-func withAttrs(inner billy.Filesystem, attrs Attrs) billy.Filesystem {
-	return &attrFS{Filesystem: inner, attrs: attrs}
+// and permissions, and so it can say which share it is.
+func withAttrs(inner billy.Filesystem, attrs Attrs, export string) billy.Filesystem {
+	return &attrFS{Filesystem: inner, attrs: attrs, export: export, isRoot: true}
+}
+
+// exportRootOf reports the share a filesystem is the ROOT of, and "" for a
+// subdirectory of one or for anything this package did not wrap.
+func exportRootOf(fs billy.Filesystem) string {
+	if a, ok := fs.(*attrFS); ok && a.isRoot {
+		return a.export
+	}
+	return ""
 }
 
 func (a *attrFS) Stat(name string) (os.FileInfo, error) {
@@ -104,7 +126,9 @@ func (a *attrFS) Chroot(p string) (billy.Filesystem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return withAttrs(inner, a.attrs), nil
+	// The same share and the same attributes, but NOT the share's root: this
+	// is a directory inside it, and a mount of it resolves against itself.
+	return &attrFS{Filesystem: inner, attrs: a.attrs, export: a.export}, nil
 }
 
 func (a *attrFS) wrap(fi os.FileInfo, fullPath string) os.FileInfo {

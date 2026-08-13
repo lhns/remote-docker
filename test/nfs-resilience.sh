@@ -37,8 +37,11 @@
 #   E3  A reconnect does NOT heal an established mount. Handles come from
 #       go-nfs's in-memory caching handler, so a new client PROCESS mints new
 #       ones and everything the kernel still holds is stale.
-#         MEASURED: HOLDS. "cat: can't open '/w/marker': Stale file handle".
-#         A client restart silently breaks every running container's mount.
+#         MEASURED: HELD, and then FIXED. "cat: can't open '/w/marker': Stale
+#         file handle" after every client restart. The handle that mattered was
+#         the SHARE ROOT, which MOUNT returns once and the kernel can never ask
+#         for again; ADR 0033 derives it from the export path. This section now
+#         asserts the mount survives instead of recording that it does not.
 #   E4  A blocked port (a black hole, not a refusal) costs the mount
 #       timeo*retrans before it reports anything, and recovers by itself when
 #       the block is lifted, because NFSv3 has nothing to renegotiate.
@@ -298,10 +301,15 @@ else
 fi
 
 echo
-echo "== 6. E3: a NEW client process, and the handles it mints =="
-# Handles come from go-nfs's in-memory caching handler, so a restarted client
-# cannot reproduce the ones the kernel is holding. If the mount survives this,
-# the handles are reproducible after all and that is worth knowing.
+echo "== 6. E3: a NEW client process, and the mount it inherits =="
+# The kernel keeps the handles it was given, including the SHARE ROOT handle
+# that MOUNT returned, and it never mounts again. So a restarted client that
+# cannot resolve that one leaves every lookup starting from something dead.
+#
+# ADR 0033 derives the root handle from the export path for exactly this, and
+# leaves everything below it a cache: given a root that answers, the kernel
+# re-looks-up the rest after ESTALE. This section is the only place that claim
+# meets a real kernel.
 kill "$CLIENT_PID" 2>/dev/null
 wait "$CLIENT_PID" 2>/dev/null
 sleep 2
@@ -321,10 +329,11 @@ dockert ps >/dev/null 2>&1
 sleep 15
 window=$(dockert logs nfsres-watch 2>&1 | awk -v t="$mark" '$1 >= t')
 if echo "$window" | grep -q "OK the file"; then
-    info "E3 does not hold: the mount works against a new server process"
-    ok "recorded: handles survived a client restart"
+    ok "a running container keeps reading across a client restart"
 else
-    ok "E3 holds: a new client process leaves the running container's mount broken"
+    bad "a client restart still strands the running container"
+    info "if this is a stale handle, the derived ROOT handle is not enough on its"
+    info "own and per-file stability is back on the table (ADR 0033 says so)"
     echo "$window" | tail -3 | sed 's/^/        /'
 fi
 info "what the container reports now: $(echo "$window" | tail -1)"
