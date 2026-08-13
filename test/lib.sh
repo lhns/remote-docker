@@ -33,13 +33,17 @@ info() { echo "  ....  $*"; }
 # writing. A matching line with nothing after it is safe; one with a trailing
 # summary line, another row or a log tail is not.
 #
-# Section 17 has lost two assertions to this, each costing a re-run and naming
-# no cause. The earlier one was "fixed" by capturing ls into a variable for the
-# error message, which removed the pipeline and, with it, the failure.
+# The mechanism is Linux-only and measured: a producer that is still writing
+# when grep exits dies with 141 every time, and on Windows the failed write is
+# silently ignored and the producer exits 0. What is NOT established is that it
+# has ever fired here. `remote ls` writes its whole table faster than grep can
+# match and exit, and the real binary run this way survived 5,067 runs under
+# CPU contention without one failure, so section 17's intermittent failures are
+# NOT explained by this. They remain unexplained; the assertions print what
+# they saw so the next occurrence says something.
 #
-# The mechanism is Linux-only and so is the evidence: Windows has no SIGPIPE,
-# the failed write is silently ignored, and the command still exits 0. It
-# cannot be reproduced on a development machine, only in CI.
+# This is hardening on a hazard that is real, cheap to remove and impossible to
+# see when it strikes, not a fix for a known bug.
 #
 # The command substitution reads to EOF, so there is no reader to close early
 # and no pipeline for pipefail to inspect.
