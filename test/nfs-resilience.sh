@@ -25,11 +25,20 @@
 #   E1  An idle release closes the listener, so the address a running
 #       container's mount points at stops existing while nothing is wrong with
 #       the container.
+#         MEASURED 2026-08-13: no release happened at all. A mounted container
+#         talks to its server about once a second and that traffic keeps the
+#         connection leased, so an idle timeout does not fire under a live
+#         mount. The section now asks whether a release occurred BEFORE asking
+#         what it did, because "everything worked" and "nothing happened" look
+#         identical.
 #   E2  A container reading across that window fails rather than waiting: the
 #       mount is soft, so the kernel gives up and reports EIO.
+#         MEASURED: not exercised, for the reason above.
 #   E3  A reconnect does NOT heal an established mount. Handles come from
 #       go-nfs's in-memory caching handler, so a new client PROCESS mints new
 #       ones and everything the kernel still holds is stale.
+#         MEASURED: HOLDS. "cat: can't open '/w/marker': Stale file handle".
+#         A client restart silently breaks every running container's mount.
 #   E4  A blocked port (a black hole, not a refusal) costs the mount
 #       timeo*retrans before it reports anything, and recovers by itself when
 #       the block is lifted, because NFSv3 has nothing to renegotiate.
@@ -38,6 +47,16 @@
 #       `docker compose up` on a container that already existed.
 #   E6  Starting one THROUGH a session that had to reconnect first does not
 #       race: the listener is rebound before the request reaches the daemon.
+#
+# AND THE ONE NOBODY PREDICTED, which invalidated the first run's sections 7
+# to 9 and is the most useful thing here:
+#
+#   Docker's local driver REFCOUNTS a mount. A volume already mounted by one
+#   container is handed to the next as it is -- including when it has gone
+#   stale -- so no new container can recover while any container still holds
+#   it. That is why `compose down && compose up` cures a broken mount and
+#   restarting the session does not: down drops the refcount to zero and
+#   unmounts, and up mounts fresh.
 #
 # Requires: docker, and a kernel with NFS client support. Runs the shared
 # daemon (ADR 0012); the per-account mode binds its listener inside the
@@ -186,7 +205,20 @@ info "waiting out the idle timeout with no docker commands"
 mark=$(date +%s)
 sleep 25
 
-if [ "$(listening)" = no ]; then
+# Whether a release HAPPENED is asked before what it did, because the first run
+# of this section proved nothing: the port was still open and every read
+# succeeded, which reads like good news and is equally consistent with the
+# release never having occurred. A mounted container talks to its server about
+# once a second, and that traffic may be exactly what keeps the connection
+# leased.
+released=no
+grep -q "released the idle connection" "$WORK/up.log" 2>/dev/null && released=yes
+info "did the client release its connection during the window: $released"
+
+if [ "$released" = no ]; then
+    ok "a mounted container keeps the connection alive; no release to observe"
+    info "which is a finding in itself: an idle timeout does not fire under a live mount"
+elif [ "$(listening)" = no ]; then
     ok "E1 holds: an idle release closed the port a running mount points at"
 else
     info "E1 does not hold: the port is still open after an idle release"
@@ -260,6 +292,35 @@ fi
 info "what the container reports now: $(echo "$window" | tail -1)"
 
 echo
+echo "== 6b. the stale mount is SHARED, and that is why down/up cures things =="
+# Docker's local driver refcounts: a volume already mounted is reused rather
+# than mounted again. So the stale mount the watcher is holding is handed to
+# every later container using the same directory, and no fresh container can
+# recover while it lives.
+#
+# The first run of this suite learned that by accident -- sections 7, 8 and 9
+# all measured this instead of what they meant to -- which is why everything
+# below gets its own directory, and why the watcher is removed here.
+if out=$(timeout 60 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
+    ok "a NEW container reading the same stale volume works"
+else
+    ok "a new container inherits the stale mount: $(echo "$out" | tail -1 | cut -c1-120)"
+    info "the refcount is the reason, and dropping it to zero is what down/up does"
+fi
+
+dockert rm -f nfsres-watch >/dev/null 2>&1
+sleep 5
+if out=$(timeout 60 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
+    ok "and once the last container is gone, the volume mounts fresh and works"
+else
+    bad "even with nothing holding it, the volume did not recover: $(echo "$out" | tail -1 | cut -c1-160)"
+fi
+
+# Everything below wants a mount of its own, for the reason just measured.
+BLACK="$WORK/black"; mkdir -p "$BLACK"; echo "black hole marker" >"$BLACK/marker"
+EXIST="$WORK/existing"; mkdir -p "$EXIST"; echo "existing marker" >"$EXIST/marker"
+
+echo
 echo "== 7. E4: a black hole rather than a refusal =="
 # DROP, not REJECT: a refused connection answers immediately and a dropped one
 # does not answer at all, and those are different failures with different
@@ -269,10 +330,14 @@ if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP
 
     dockert rm -f nfsres-black >/dev/null 2>&1
     start=$(date +%s)
-    out=$(timeout 180 docker run --rm --name nfsres-black -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1)
+    out=$(timeout 180 docker run --rm --name nfsres-black -v "$BLACK:/w" alpine:3 cat /w/marker 2>&1)
     rc=$?
     elapsed=$(( $(date +%s) - start ))
-    info "a mount into a black hole took ${elapsed}s and said: $(echo "$out" | tail -1)"
+    # The daemon's line, not the tail: the tail is docker's "Run --help"
+    # footer, which is what the first run of this suite recorded instead of
+    # the error.
+    said=$(echo "$out" | grep -m1 -iE "error|refused|timed out" | cut -c1-200)
+    info "a mount into a black hole took ${elapsed}s and said: ${said:-$(echo "$out" | head -1)}"
     if [ "$rc" -ne 0 ]; then
         ok "E4 holds in part: it fails rather than hanging forever (${elapsed}s)"
     else
@@ -281,10 +346,10 @@ if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP
 
     hostdocker exec "$CONTAINER" iptables -D INPUT -p tcp --dport "$PORT" -j DROP 2>/dev/null
     sleep 3
-    if timeout 120 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >/dev/null 2>&1; then
+    if out=$(timeout 120 docker run --rm -v "$BLACK:/w" alpine:3 cat /w/marker 2>&1); then
         ok "E4 holds: mounting works again once the block is lifted"
     else
-        bad "mounting did not recover after the block was lifted"
+        bad "mounting did not recover after the block was lifted: $(echo "$out" | grep -m1 -iE 'error|refused' | cut -c1-160)"
     fi
 else
     info "iptables is not available in the workspace image; E4 not measured"
@@ -296,7 +361,7 @@ echo "== 8. E5: starting a container with no session at all =="
 # Creating one goes through /containers/create, which reopens the connection;
 # starting one that exists does not create anything.
 dockert rm -f nfsres-existing >/dev/null 2>&1
-if dockert create --name nfsres-existing -v "$PROJECT:/w" alpine:3 cat /w/marker >/dev/null 2>&1; then
+if dockert create --name nfsres-existing -v "$EXIST:/w" alpine:3 cat /w/marker >/dev/null 2>&1; then
     ok "an existing container to start later"
 else
     bad "could not create the container"
@@ -311,7 +376,7 @@ sleep 2
 # reopens anything. This is the daemon doing exactly what it did for the user.
 out=$(hostdocker exec "$CONTAINER" docker start -a nfsres-existing 2>&1)
 rc=$?
-info "starting it with no session: rc=$rc, said: $(echo "$out" | tail -1 | cut -c1-200)"
+info "starting it with no session: rc=$rc, said: $(echo "$out" | grep -m1 -iE 'error|refused' | cut -c1-200)"
 if echo "$out" | grep -q "connection refused"; then
     ok "E5 holds: the reported failure, reproduced -- connection refused on $PORT"
 elif [ "$rc" -eq 0 ]; then
