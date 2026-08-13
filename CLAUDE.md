@@ -591,6 +591,13 @@ function was.
   the first half open while the second runs underneath it.
 - bash in `test/`. There is no shell left in the image: `image/` is a
   Dockerfile and nothing else.
+- **An assertion matches captured output, never `cmd | grep -q`.** `outputs
+  <regex> <cmd...>` in `test/lib.sh` is the one way. grep -q exits on the first
+  match, the producer's next write gets EPIPE, and Go turns EPIPE on fd 1 or 2
+  into a fatal SIGPIPE: `set -o pipefail` then fails the assertion BECAUSE it
+  matched, depending only on scheduling. Section 17 lost two assertions to this
+  and each cost a re-run. It cannot be reproduced off CI, since Windows has no
+  SIGPIPE and the write is simply ignored.
 - CLI output is one line of diagnosis, and where there is a remedy, one
   indented `fix:` line under it. Never a wrapped paragraph: the terminal's
   width is not ours to guess, so the answer is a message short enough not to
