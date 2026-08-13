@@ -40,6 +40,20 @@ type Ports struct {
 	// check, which is right for a test and wrong for a workspace.
 	Reserved func(uid int) bool
 
+	// Preferred reports the port a machine's existing state already expects,
+	// and 0 when there is none or it cannot be asked.
+	//
+	// This file is a CACHE. The durable record of a port is the volumes that
+	// were built for it, because a volume keeps the port it was created with
+	// forever and cannot be re-pointed. So a machine this file has forgotten
+	// can still be given the port its volumes need, instead of a new one that
+	// makes every one of them unmountable.
+	//
+	// A func because finding that out means asking Docker, and nothing in this
+	// module may know Docker exists (ADR 0031). Nil skips the question, which
+	// is what a workspace with no daemon of its own wants.
+	Preferred func(account, client string) int
+
 	mu       sync.Mutex
 	loaded   bool
 	assigned map[assignment]int
@@ -92,10 +106,20 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 		taken[v] = true
 	}
 
-	port := base
-	if taken[base] {
-		if port = p.allocate(taken); port == 0 {
-			return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", account)
+	// What this machine's volumes already expect, before anything is chosen for
+	// it. Only reached when the record does not know this machine: an entry
+	// that exists was persisted deliberately and is the answer.
+	port := 0
+	if want := p.preferred(account, client); want != 0 && !taken[want] && p.free(want) {
+		port = want
+	}
+
+	if port == 0 {
+		port = base
+		if taken[base] {
+			if port = p.allocate(taken); port == 0 {
+				return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", account)
+			}
 		}
 	}
 
@@ -106,6 +130,35 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// costs it its volumes rather than its connection.
 	_ = p.save()
 	return port, nil
+}
+
+// preferred asks what this machine's existing state expects, and answers 0
+// when nothing does.
+//
+// Never fatal and never retried. A daemon that is slow, absent or broken means
+// only that the machine gets a port chosen the way it always was, which is a
+// working session with volumes to rebuild rather than no session at all.
+func (p *Ports) preferred(account, client string) int {
+	if p.Preferred == nil {
+		return 0
+	}
+	return p.Preferred(account, client)
+}
+
+// free reports whether a port may be handed to somebody who does not derive it.
+//
+// The same rule allocate applies: in range, and not derived by an account that
+// EXISTS, because that account is entitled to its own port whether or not it
+// has ever connected.
+func (p *Ports) free(port int) bool {
+	if port < p.Mapping.PortBase || port > workspace.MaxPort {
+		return false
+	}
+	if p.Reserved == nil {
+		return true
+	}
+	uid, err := p.Mapping.UIDForPort(port)
+	return err != nil || !p.Reserved(uid)
 }
 
 // allocate picks a free port, counting DOWN from the top of the range.

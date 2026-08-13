@@ -27,6 +27,12 @@ runs the rewrite, which registers the share.
 Nothing could recover it unaided: `ShareID` is `sha256(path)[:16]` and cannot be
 inverted, so given only an export path there is no way back to a directory.
 
+See also [ADR 0032](0032-the-workspace-is-the-record.md), which is the same
+problem -- state outliving a session -- resolved the other way round. What
+outlives a session here is a capability the workspace may NAME, so the client
+remembers it; what outlives one there is an address the workspace BINDS, so the
+workspace does.
+
 ## Decision
 
 Record `export path -> local directory` per workspace, and restore a share

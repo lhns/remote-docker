@@ -24,6 +24,22 @@ even if the bind had:
 - the port is written into every managed volume's driver options, and
   `EnsureVolume` treats create as idempotent, so a volume keeps the port it was
   made with;
+
+  **Amended 2026-08-13.** This was named and only half answered.
+  `proxy.replaceIfStale` repairs such a volume, but it is reachable only from
+  `EnsureVolume` <- the rewriter <- `/containers/create`, and `compose up` on a
+  container that ALREADY EXISTS never creates one. So the repair is skipped by
+  the commonest way of meeting the problem, and the mount fails with
+  `connection refused` against a port nothing on screen explains. `compose down`
+  then `up` works, which is a confusing thing to discover.
+
+  The resolution reverses which record is authoritative: a volume keeps its port
+  forever and cannot be re-pointed, so **the volumes are the durable statement
+  of what port a machine needs** and `clientports` is a cache of something
+  already written down. The agent now reads the port back off a machine's own
+  volumes (`workspace.ClientLabel` is what makes them attributable) before
+  choosing a port for a machine its record has forgotten. A lost `clientports`
+  therefore costs nothing, where it used to cost every volume that machine had.
 - volume names were per account, so both machines derive `rd-cwd` for their own
   working directory and the second create silently returns the first's volume;
 - the collector deletes any `rd-` volume carrying this account's owner label

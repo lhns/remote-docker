@@ -42,6 +42,7 @@ survives that document being superseded.
 | [0029](0029-one-account-many-machines.md) | One account, many machines | Accepted; amends 0003, 0007, 0019 |
 | [0030](0030-a-core-module-for-the-tunnel.md) | A core module for the tunnel | Accepted; extends 0021 |
 | [0031](0031-if-it-knows-about-docker-it-is-glue.md) | If it knows about Docker, it is glue | Accepted; extends 0021, 0030 |
+| [0032](0032-the-workspace-is-the-record.md) | An address is stable container-side, and the workspace is the record | Accepted; extends 0003, 0029 |
 | [0033](0033-handles-derived-from-the-path.md) | The root handle is derived, the rest are not | Accepted |
 
 An **Open** record is not a decision. It states a problem that is measured,

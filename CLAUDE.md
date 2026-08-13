@@ -262,6 +262,21 @@ premise of the project, and it applies to building it too. So:
 - **`git` line endings are forced to LF** by `.gitattributes`. A CRLF
   `#!/bin/sh\r` in the image fails as "not found", naming the interpreter
   rather than the carriage return.
+- **A volume names the port it was built for, forever, and the workspace is the
+  record of what that port was.** Docker volume driver options are immutable, so
+  a managed volume that outlives its reverse-tunnel port can never mount again:
+  the failure is `connection refused` against a port nothing on screen explains,
+  on a container that worked yesterday. `replaceIfStale` repairs it, but only
+  from `/containers/create`, and `compose up` on a container that ALREADY EXISTS
+  never creates one -- which is why `compose down && compose up` fixes it and a
+  plain restart does not. So the agent reads the port back off a machine's own
+  volumes before choosing one for a machine it has forgotten (ADR 0032), and
+  `clientports` is a cache rather than the record. The general rule behind it:
+  an address only has to be stable between the CONTAINER and the agent, because
+  between agent and client there is no address at all, so never write a
+  client-chosen address into durable workspace state unless the agent can
+  reconstruct it.
+
 - **A recorded export is a capability the workspace may name, never a path it
   may supply.** The registry is per process and a volume outlives one, so
   `compose up -d` on containers that already exist starts them without creating
