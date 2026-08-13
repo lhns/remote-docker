@@ -36,7 +36,7 @@ const (
 )
 
 // exportKeySize is how much of the export path's digest a root handle carries.
-// A handle may be 64 bytes (RFC 1813) and this spends 9 of them.
+// A handle may be 64 bytes (RFC 1813); a root spends 9 plus the cache's own.
 const exportKeySize = 8
 
 // rootHandler answers for share roots and delegates everything else.
@@ -52,14 +52,24 @@ type rootHandler struct {
 var errStaleExport = errors.New("nfsserve: no such export")
 
 func (h *rootHandler) ToHandle(f billy.Filesystem, path []string) []byte {
+	cached := h.Handler.ToHandle(f, path)
+
 	// Only the share's own root, never a Chroot into a subdirectory of it:
 	// that mount resolves against the subdirectory, and giving it the share's
 	// handle would serve the wrong directory to a client that asked correctly.
 	export := exportRootOf(f)
 	if len(path) != 0 || export == "" {
-		return append([]byte{tagCached}, h.Handler.ToHandle(f, path)...)
+		return append([]byte{tagCached}, cached...)
 	}
-	return append([]byte{tagRoot}, exportKey(export)...)
+
+	// The cache's answer FIRST and the derived key behind it. While this
+	// process lives, every root operation is resolved exactly as it was before
+	// any of this existed; the key is what answers once the cache is gone,
+	// which is the only case this feature is for. Making the derived key the
+	// primary answer changed behaviour in the live process too, and the suite
+	// found it: every mount worked and every read said "permission denied".
+	out := append([]byte{tagRoot}, exportKey(export)...)
+	return append(out, cached...)
 }
 
 func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, error) {
@@ -68,7 +78,21 @@ func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, err
 	}
 	switch handle[0] {
 	case tagRoot:
-		share, ok := h.shareForKey(handle[1:])
+		if len(handle) < 1+exportKeySize {
+			return nil, nil, errStaleExport
+		}
+		key, cached := handle[1:1+exportKeySize], handle[1+exportKeySize:]
+
+		// The cache, exactly as before, for as long as this process holds it.
+		if len(cached) > 0 {
+			if fs, path, err := h.Handler.FromHandle(cached); err == nil {
+				return fs, path, nil
+			}
+		}
+
+		// And the derived key when it cannot answer, which is what a client
+		// that has restarted is asking with.
+		share, ok := h.shareForKey(key)
 		if !ok {
 			return nil, nil, errStaleExport
 		}

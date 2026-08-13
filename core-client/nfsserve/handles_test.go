@@ -61,16 +61,23 @@ func TestRootHandleResolvesInAServerThatNeverIssuedIt(t *testing.T) {
 	}
 }
 
-// Two servers must agree, or the handle depends on which process minted it,
-// which is the bug.
-func TestRootHandleIsTheSameInEveryServer(t *testing.T) {
+// The DERIVED part must agree between processes. The whole handle does not and
+// must not: it carries the cache's own answer in front of nothing, so that a
+// live process resolves a root exactly as it did before any of this existed,
+// and the derived key answers only once that cache is gone.
+func TestTheDerivedPartOfARootHandleIsTheSameInEveryServer(t *testing.T) {
 	dir := t.TempDir()
 	r := registryFor(t, dir)
 
-	first := string(rootHandleOf(t, New(r), "/cwd"))
-	second := string(rootHandleOf(t, New(registryFor(t, dir)), "/cwd"))
-	if first != second {
-		t.Errorf("root handles differ between servers: %x vs %x", first, second)
+	first := rootHandleOf(t, New(r), "/cwd")
+	second := rootHandleOf(t, New(registryFor(t, dir)), "/cwd")
+
+	const derived = 1 + exportKeySize
+	if string(first[:derived]) != string(second[:derived]) {
+		t.Errorf("derived keys differ: %x vs %x", first[:derived], second[:derived])
+	}
+	if string(first) == string(second) {
+		t.Error("the whole handle matched, so the cache's answer is not in it")
 	}
 }
 
@@ -129,6 +136,27 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 	subHandle := s.handler.ToHandle(sub, []string{})
 	if string(subHandle) == string(root) {
 		t.Error("a subdirectory mount was given the share's root handle")
+	}
+}
+
+// A live process must answer a root from its cache, because that is the path
+// every mount uses for as long as the client runs. Making the derived key
+// primary instead was measured in CI as every read failing with "permission
+// denied" while every mount succeeded.
+func TestALiveServerResolvesItsOwnRootThroughTheCache(t *testing.T) {
+	dir := t.TempDir()
+	s := New(registryFor(t, dir))
+	handle := rootHandleOf(t, s, "/cwd")
+
+	fs, path, err := s.handler.FromHandle(handle)
+	if err != nil {
+		t.Fatalf("FromHandle: %v", err)
+	}
+	if len(path) != 0 {
+		t.Errorf("path = %v, want the share root", path)
+	}
+	if _, err := fs.Stat("."); err != nil {
+		t.Errorf("the resolved filesystem is not usable: %v", err)
 	}
 }
 
