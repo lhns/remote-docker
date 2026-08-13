@@ -293,11 +293,10 @@ premise of the project, and it applies to building it too. So:
   -- which is a client restart breaking every running container with `Stale file
   handle` against a mount that still looks fine. It is derived from the export
   path (ADR 0033); below it, Linux re-looks-up after `ESTALE`, so go-nfs's
-  in-memory handles are fine. **An ordinary handle must also keep the exact
-  bytes and length go-nfs gave it.** A tag byte in front of every handle -- the
-  tidy way to carry two formats -- makes every mount succeed and every read fail
-  with "permission denied". Nothing explains that yet; the measurement is enough
-  to forbid it, and a root is recognised by LENGTH instead.
+  in-memory handles are fine. The handle FORMAT has a constraint of its own that
+  nobody has explained, but it fails loudly in CI rather than quietly here, so it
+  lives beside the code in `core-client/nfsserve/handles.go` with a test pinning
+  it.
 
 - **A port reservation ends when the workspace NOTICES the connection end, not
   when it ends.** A client whose network black-holes leaves a socket that is
