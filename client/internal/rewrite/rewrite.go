@@ -75,10 +75,13 @@ type VolumeEnsurer interface {
 	EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error
 }
 
-// ManagedLabel marks a volume as one this client created, and is what makes
-// garbage collection safe: the rd- prefix alone proves nothing, since a user
-// is entitled to name a volume "rd-backups".
-const ManagedLabel = "com.github.lhns.remote-docker"
+// The labels this package stamps. Defined in the contract, because the agent
+// reads them back (workspace.ClientLabel), so both ends must agree.
+const (
+	ManagedLabel = workspace.ManagedLabel
+	OwnerLabel   = workspace.OwnerLabel
+	ClientLabel  = workspace.ClientLabel
+)
 
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
 type Rewriter struct {
@@ -168,23 +171,6 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	}
 	return out, nil
 }
-
-// OwnerLabel marks every container this client creates.
-//
-// The workspace daemon is shared between accounts (ADR 0012), so its event
-// stream carries other people's containers. Without a mark of our own, port
-// forwarding would open listeners on this machine because somebody else ran
-// docker compose up.
-const OwnerLabel = "com.github.lhns.remote-docker.owner"
-
-// ClientLabel marks which of an account's MACHINES created something.
-//
-// The owner label is not enough once one account is used from two machines:
-// both label their volumes and containers with the same account, so each
-// machine's collector would delete the other's volumes and each machine would
-// think the other's containers depended on its connection. The name carries the
-// client too, but a label is what a filter can ask about.
-const ClientLabel = "com.github.lhns.remote-docker.client"
 
 // label stamps OwnerLabel and ClientLabel onto the container's labels,
 // preserving any the caller set.

@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
+	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/elevate"
 	"github.com/lhns/remote-docker/agent/internal/sshd"
 	"github.com/lhns/remote-docker/agent/internal/supervise"
@@ -39,6 +40,14 @@ const (
 	envDockerd    = "WORKSPACE_DOCKERD_ARGS"
 	envEnableDind = "WORKSPACE_ENABLE_DIND"
 	envPollSecs   = "WORKSPACE_KEY_POLL_INTERVAL"
+)
+
+// preferredPortTimeout bounds asking a machine's volumes which port they
+// were built for. Generous, because it may include a cold daemon's boot, and
+// paid only by a machine this workspace has no record of.
+const preferredPortTimeout = 90 * time.Second
+
+const (
 
 	// envAccountPrefix goes in front of the unix user name, so an enrolled
 	// `alice` does not take the name `alice` in the machine's own passwd file
@@ -254,6 +263,10 @@ func serve(addr string) error {
 	// One port per MACHINE rather than per account (ADR 0029). The uid still
 	// decides the first, so a workspace reached from one computer is on the
 	// port it always was and allocates nothing.
+	//
+	// preferredPortTimeout bounds asking a machine's volumes which port they
+	// need. Generous, because it may include a cold daemon's boot, and paid
+	// only by a machine this workspace has no record of.
 	ports := &accounts.Ports{
 		Dir:     stateDir,
 		Mapping: mapping,
@@ -268,6 +281,27 @@ func serve(addr string) error {
 				}
 			}
 			return false
+		},
+		// The port a machine's volumes were built for, which outlives the
+		// record above: a volume keeps its port forever and cannot be
+		// re-pointed, so a machine given a different one loses all of them.
+		//
+		// Ensure, where the other info queries deliberately use Lookup. Those
+		// fill in fields that are displayed, so an unavailable daemon costs a
+		// dash on a table; this one is ACTED UPON and a wrong answer costs
+		// somebody their volumes. It is reached only for a machine the record
+		// has forgotten, so the wait is paid once by that machine and never on
+		// an ordinary connect.
+		Preferred: func(account, client string) int {
+			ctx, cancel := context.WithTimeout(context.Background(), preferredPortTimeout)
+			defer cancel()
+
+			return dockercli.ClientPorts{
+				Host: func(account string) (string, error) {
+					target, err := targets.Ensure(ctx, account)
+					return target.Host, err
+				},
+			}.For(ctx, account, client)
 		},
 	}
 

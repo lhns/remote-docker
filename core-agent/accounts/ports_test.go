@@ -159,3 +159,112 @@ func TestTheRecordIsReadable(t *testing.T) {
 		t.Errorf("the record does not start with the lowest entry:\n%s", got)
 	}
 }
+
+// A machine the record has forgotten is given the port its volumes need.
+//
+// This is the whole point of Preferred. Losing the record and handing out a
+// fresh port leaves every volume that machine created unmountable, and the
+// failure is "connection refused" against a port nothing explains.
+func TestForPrefersThePortTheVolumesNeed(t *testing.T) {
+	p := &Ports{
+		Dir:     t.TempDir(),
+		Mapping: workspace.Mapping{UIDBase: 10000, PortBase: 30000},
+		// Nothing recorded: the record was lost, which is the case.
+		Preferred: func(account, client string) int {
+			if account == "alice" && client == "laptop" {
+				return 39998
+			}
+			return 0
+		},
+	}
+
+	got, err := p.For("alice", 10005, "laptop")
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if got != 39998 {
+		t.Errorf("For = %d, want the port alice's laptop volumes name, 39998", got)
+	}
+
+	// And it is remembered, so the question is asked once.
+	again, err := p.For("alice", 10005, "laptop")
+	if err != nil || again != 39998 {
+		t.Errorf("For = %d, %v on the second ask, want 39998", again, err)
+	}
+}
+
+// A port another machine already holds is not taken, however much this one
+// wants it: one listener holds a port, and moving it would only relocate the
+// failure.
+func TestForWillNotTakeAnotherMachinesPort(t *testing.T) {
+	p := &Ports{
+		Dir:       t.TempDir(),
+		Mapping:   workspace.Mapping{UIDBase: 10000, PortBase: 30000},
+		Preferred: func(string, string) int { return 39998 },
+	}
+
+	// The first machine is given 39998 by asking for it.
+	first, err := p.For("alice", 10005, "laptop")
+	if err != nil || first != 39998 {
+		t.Fatalf("setting up: got %d, %v", first, err)
+	}
+
+	second, err := p.For("alice", 10005, "desktop")
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if second == 39998 {
+		t.Error("two machines of one account were given the same port")
+	}
+}
+
+// A port an account that EXISTS derives is not taken either. That account is
+// entitled to it whether or not it has ever connected, so handing it out works
+// until they connect and then takes a working tunnel away.
+func TestForWillNotTakeAPortAnAccountDerives(t *testing.T) {
+	mapping := workspace.Mapping{UIDBase: 10000, PortBase: 30000}
+	bobs, err := mapping.PortForUID(10007)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Ports{
+		Dir:       t.TempDir(),
+		Mapping:   mapping,
+		Reserved:  func(uid int) bool { return uid == 10007 },
+		Preferred: func(string, string) int { return bobs },
+	}
+
+	got, err := p.For("alice", 10005, "laptop")
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if got == bobs {
+		t.Errorf("alice was given %d, which bob's uid derives", got)
+	}
+}
+
+// Nothing to prefer, or nobody to ask, leaves the answer exactly as it was.
+// That is what makes a broken or absent daemon cost a rebuild rather than a
+// session.
+func TestForWithoutPreferredIsUnchanged(t *testing.T) {
+	mapping := workspace.Mapping{UIDBase: 10000, PortBase: 30000}
+	want, err := mapping.PortForUID(10005)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, prefer := range map[string]func(string, string) int{
+		"no hook":     nil,
+		"hook says 0": func(string, string) int { return 0 },
+	} {
+		p := &Ports{Dir: t.TempDir(), Mapping: mapping, Preferred: prefer}
+		got, err := p.For("alice", 10005, "laptop")
+		if err != nil {
+			t.Fatalf("%s: For: %v", name, err)
+		}
+		if got != want {
+			t.Errorf("%s: For = %d, want the derived port %d", name, got, want)
+		}
+	}
+}
