@@ -42,11 +42,23 @@
 #   E4  A blocked port (a black hole, not a refusal) costs the mount
 #       timeo*retrans before it reports anything, and recovers by itself when
 #       the block is lifted, because NFSv3 has nothing to renegotiate.
+#         MEASURED: recovery HOLDS. The cost does not: it took ~180s, not the
+#         ~60s timeo*retrans suggests, because those govern RPCs after a mount
+#         and the mount call has retries of its own. `docker run` sits there
+#         for three minutes before saying anything.
 #   E5  Starting an existing container with no session gets "connection
 #       refused" against the port, which is the failure a user reported after
 #       `docker compose up` on a container that already existed.
+#         MEASURED: HOLDS, word for word. The address exists only while a
+#         session is connected, so anything that starts a container without
+#         this client fails exactly the way the report described.
 #   E6  Starting one THROUGH a session that had to reconnect first does not
 #       race: the listener is rebound before the request reaches the daemon.
+#         MEASURED: HOLDS.
+#   E7  A dropped TRANSPORT is not a dropped process. Black-holing the ssh port
+#       breaks the connection while the client and its handle cache live on, so
+#       the mount should recover when the transport does -- and if it does, the
+#       handles are what strand a container, not the address.
 #
 # AND THE ONE NOBODY PREDICTED, which invalidated the first run's sections 7
 # to 9 and is the most useful thing here:
@@ -304,7 +316,7 @@ echo "== 6b. the stale mount is SHARED, and that is why down/up cures things =="
 if out=$(timeout 60 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
     ok "a NEW container reading the same stale volume works"
 else
-    ok "a new container inherits the stale mount: $(echo "$out" | tail -1 | cut -c1-120)"
+    ok "a new container inherits the stale mount: $(echo "$out" | grep -m1 -iE 'error|stale|refused' | cut -c1-160)"
     info "the refcount is the reason, and dropping it to zero is what down/up does"
 fi
 
@@ -330,7 +342,7 @@ if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP
 
     dockert rm -f nfsres-black >/dev/null 2>&1
     start=$(date +%s)
-    out=$(timeout 180 docker run --rm --name nfsres-black -v "$BLACK:/w" alpine:3 cat /w/marker 2>&1)
+    out=$(timeout 300 docker run --rm --name nfsres-black -v "$BLACK:/w" alpine:3 cat /w/marker 2>&1)
     rc=$?
     elapsed=$(( $(date +%s) - start ))
     # The daemon's line, not the tail: the tail is docker's "Run --help"
@@ -338,8 +350,13 @@ if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP
     # the error.
     said=$(echo "$out" | grep -m1 -iE "error|refused|timed out" | cut -c1-200)
     info "a mount into a black hole took ${elapsed}s and said: ${said:-$(echo "$out" | head -1)}"
-    if [ "$rc" -ne 0 ]; then
-        ok "E4 holds in part: it fails rather than hanging forever (${elapsed}s)"
+    # rc 124 is OUR timeout, not the mount's verdict, and the two must never be
+    # reported as the same thing: the first run said "fails rather than hanging"
+    # about a number that was within seconds of the limit it was given.
+    if [ "$rc" -eq 124 ]; then
+        bad "the mount was still hanging when the suite gave up at ${elapsed}s"
+    elif [ "$rc" -ne 0 ]; then
+        ok "E4 holds in part: the mount itself gave up after ${elapsed}s (rc=$rc)"
     else
         bad "a mount through a blocked port SUCCEEDED, which nothing explains"
     fi
@@ -400,7 +417,67 @@ else
 fi
 
 echo
+echo "== 10. E7: the SSH layer black-holed, with the SAME client process =="
+# The other half of what this suite is for. Section 6 restarted the client,
+# which changes two things at once: the connection AND the process holding the
+# handle cache. This changes only the connection.
+#
+# If the mount recovers here but not in section 6, then handles are what
+# matters and an address that survives is not enough on its own -- which is the
+# whole question behind moving the listener to the agent.
+SSHBH="$WORK/sshblack"; mkdir -p "$SSHBH"; echo "ssh black hole marker" >"$SSHBH/marker"
+dockert rm -f nfsres-ssh >/dev/null 2>&1
+if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/dev/null 2>&1; then
+    sleep 3
+    if dockert logs nfsres-ssh 2>&1 | grep -q "OK ssh black hole marker"; then
+        ok "a second watcher is reading its mount"
+    else
+        bad "the second watcher could not read its mount"
+    fi
+
+    # The sshd port, not the tunnel port: this breaks the transport UNDER the
+    # NFS traffic rather than the NFS traffic itself.
+    if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport 2222 -j DROP 2>/dev/null; then
+        mark=$(date +%s)
+        # Keepalive is 15s with a 30s wait, so detection is inside 45s.
+        info "black-holing the ssh port for 70s"
+        sleep 70
+
+        if grep -qiE "keepalive|connection.*(lost|closed)|reconnect" "$WORK/up2.log" 2>/dev/null; then
+            ok "the client noticed the dead transport and said so"
+        else
+            info "the client's log says nothing about the transport being gone"
+        fi
+
+        window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
+        errs=$(echo "$window" | grep -c "ERR")
+        info "during the black hole the container logged $(echo "$window" | grep -c .) lines, $errs errors"
+        [ "$errs" -gt 0 ] && info "first: $(echo "$window" | grep -m1 ERR)"
+
+        hostdocker exec "$CONTAINER" iptables -D INPUT -p tcp --dport 2222 -j DROP 2>/dev/null
+        mark=$(date +%s)
+        dockert ps >/dev/null 2>&1
+        sleep 20
+        window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
+        if echo "$window" | grep -q "OK ssh black hole marker"; then
+            ok "E7: the SAME process reconnecting heals the mount, where a new one did not"
+            info "so it is the handle cache that strands a container, not the address"
+        else
+            ok "E7: even the same process reconnecting leaves it broken"
+            info "last: $(echo "$window" | tail -1)"
+        fi
+    else
+        info "iptables unavailable; E7 not measured"
+    fi
+    dockert rm -f nfsres-ssh >/dev/null 2>&1
+else
+    bad "could not start the second watcher"
+fi
+
+echo
 echo "== client log =="
 tail -25 "$WORK/up.log" 2>/dev/null | sed 's/^/        /'
+echo "== the second client's log =="
+tail -25 "$WORK/up2.log" 2>/dev/null | sed 's/^/        /'
 
 summary
