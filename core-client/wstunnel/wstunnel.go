@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -57,6 +58,11 @@ func Dialer(opts Options) (func(ctx context.Context) (net.Conn, error), error) {
 		return nil, err
 	}
 
+	endpoint, err := endpointAddr(opts.URL)
+	if err != nil {
+		return nil, err
+	}
+
 	// One client, and therefore one connection pool, for every dial to this
 	// workspace.
 	client := &http.Client{
@@ -87,8 +93,49 @@ func Dialer(opts Options) (func(ctx context.Context) (net.Conn, error), error) {
 		// oversized, which reads as the tunnel breaking under load.
 		c.SetReadLimit(-1)
 
-		return websocket.NetConn(context.Background(), c, websocket.MessageBinary), nil
+		// The address matters as well as the bytes. known_hosts looks a host
+		// key up by the connection's RemoteAddr, and the library reports a
+		// placeholder ("websocket/unknown-addr") that has no port in it, so
+		// every host-key check fails before it can compare anything. Reporting
+		// the endpoint this dialled is both true and what the SSH layer above
+		// expects to see.
+		return &addrConn{
+			Conn:   websocket.NetConn(context.Background(), c, websocket.MessageBinary),
+			remote: endpoint,
+		}, nil
 	}, nil
+}
+
+// addrConn reports a real host:port for a connection that has none of its own.
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c *addrConn) RemoteAddr() net.Addr { return c.remote }
+
+// wsAddr is the endpoint a WebSocket was dialled at, in the form anything
+// parsing an address expects.
+type wsAddr string
+
+func (a wsAddr) Network() string { return "tcp" }
+func (a wsAddr) String() string  { return string(a) }
+
+// endpointAddr is the host and port a URL names, with the scheme's default
+// filled in, so the connection can report where it went.
+func endpointAddr(raw string) (net.Addr, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("wstunnel: %s: %w", raw, err)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "wss" {
+			port = "443"
+		}
+	}
+	return wsAddr(net.JoinHostPort(u.Hostname(), port)), nil
 }
 
 // hint turns the two failures worth naming into something actionable. A proxy
