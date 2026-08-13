@@ -39,9 +39,14 @@ func New(registry *Registry) *Server {
 	h := &mountHandler{registry: registry}
 	return &Server{
 		registry: registry,
-		// The caching handler supplies ToHandle/FromHandle and the directory
-		// verifiers; implementing those correctly is not our business.
-		handler: helpers.NewCachingHandler(h, handleCacheSize),
+		// The caching handler supplies the directory verifiers and every handle
+		// but a share root; implementing those correctly is not our business.
+		// rootHandler takes the root, which is the one the kernel cannot ask
+		// for twice. See ADR 0033.
+		handler: &rootHandler{
+			Handler:  helpers.NewCachingHandler(h, handleCacheSize),
+			registry: registry,
+		},
 	}
 }
 
