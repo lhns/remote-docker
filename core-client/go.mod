@@ -13,6 +13,7 @@ module github.com/lhns/remote-docker/core-client
 go 1.26.3
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.9.1

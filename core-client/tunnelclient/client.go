@@ -45,6 +45,16 @@ type Config struct {
 	// nobody is there to answer or an acceptance of anything at all.
 	HostKey ssh.HostKeyCallback
 
+	// Dial, if set, opens the connection SSH will run over. Nil dials TCP to
+	// Addr, which is what a workspace reached directly wants.
+	//
+	// Here for the same reason Signer and HostKey are (ADR 0030): this package
+	// carries out a transport decision and makes none. A WebSocket to a reverse
+	// proxy, a unix socket, anything that is a net.Conn -- the choice belongs to
+	// whoever knows the deployment, and the SSH handshake above is identical
+	// either way.
+	Dial func(ctx context.Context) (net.Conn, error)
+
 	// Ciphers, if set, replaces the negotiated cipher list.
 	//
 	// aes128-gcm is the default for a reason worth keeping: AES-NI makes it
@@ -59,6 +69,27 @@ type Config struct {
 	KeepAlive time.Duration
 
 	Timeout time.Duration
+}
+
+// dial opens the connection SSH runs over: the caller's, or TCP to Addr.
+func (c Config) dial(ctx context.Context) (net.Conn, error) {
+	if c.Dial != nil {
+		conn, err := c.Dial(ctx)
+		if err != nil {
+			// Not wrapped with an address: the caller's dialler knows where it
+			// went, and this one does not. Addr is the SSH endpoint, which for
+			// a proxied transport is not where the connection was made.
+			return nil, err
+		}
+		return conn, nil
+	}
+
+	dialer := &net.Dialer{Timeout: c.Timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", c.Addr())
+	if err != nil {
+		return nil, fmt.Errorf("tunnel: dialling %s: %w", c.Addr(), err)
+	}
+	return conn, nil
 }
 
 // DefaultCiphers preferred, fastest first. See Config.Ciphers.
@@ -115,10 +146,9 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	clientCfg.Ciphers = cfg.Ciphers
 
-	dialer := &net.Dialer{Timeout: cfg.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", cfg.Addr())
+	conn, err := cfg.dial(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tunnel: dialling %s: %w", cfg.Addr(), err)
+		return nil, err
 	}
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr(), clientCfg)

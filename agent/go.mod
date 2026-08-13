@@ -9,6 +9,7 @@ module github.com/lhns/remote-docker/agent
 go 1.26.3
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/lhns/remote-docker/core v0.0.0
