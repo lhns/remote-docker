@@ -63,11 +63,14 @@
 #         session for this account may still be open" -- so nothing worked for
 #         the eight minutes the suite would wait. That is the failure this
 #         whole investigation started from, and it is now fixed on the agent
-#         side; recovery took 16s. E7 itself has still never been measured,
-#         because two earlier versions of this section asked the wrong
-#         question: one demanded a reconnect that never had to happen, and
-#         both read a log file belonging to a client killed two sections
-#         earlier.
+#         side; recovery took 16s.
+#         E7 then HELD, once the section stopped asking the wrong question
+#         (one version demanded a reconnect that never had to happen, and two
+#         read the log of a client killed two sections earlier): the client
+#         redialled, got its forward, and the container went back to reading
+#         through the mount it already had. Before the server moved to the
+#         Session that redial would have minted new handles and left it stale,
+#         which is E3's failure with a different trigger.
 #
 # AND WHAT THIS SUITE PROVED ABOUT THE HARNESS, by falling for it:
 #
