@@ -591,6 +591,16 @@ function was.
   the first half open while the second runs underneath it.
 - bash in `test/`. There is no shell left in the image: `image/` is a
   Dockerfile and nothing else.
+- **An assertion matches captured output, never `cmd | grep -q`.** `outputs
+  <regex> <cmd...>` in `test/lib.sh` is the one way. grep -q exits on the first
+  match, the producer's next write gets EPIPE, and Go turns EPIPE on fd 1 or 2
+  into a fatal SIGPIPE: `set -o pipefail` then fails the assertion BECAUSE it
+  matched, depending only on scheduling. Measured both ways on 2026-08-13: a
+  producer still writing when grep exits gives 141 every time, and the real
+  `remote ls` gives 0 failures in 5,067 runs under contention, because it
+  finishes writing first. So this is a hazard removed, not a bug fixed, and it
+  does NOT explain section 17's intermittent failures, which are still
+  unexplained. Windows cannot show it at all: no SIGPIPE, the write is ignored.
 - CLI output is one line of diagnosis, and where there is a remedy, one
   indented `fix:` line under it. Never a wrapped paragraph: the terminal's
   width is not ours to guess, so the answer is a message short enough not to

@@ -63,3 +63,44 @@ func TestForwardsUseTheAskingAccountsNamespace(t *testing.T) {
 		t.Fatalf("the resolver was asked for %v, want [alice bob]", got)
 	}
 }
+
+// Dead-peer detection must be armed on a real TCP connection and must not
+// panic on anything else.
+//
+// What it CANNOT test here is the behaviour: whether a black-holed peer is
+// actually dropped is a kernel question, and the proof is
+// test/nfs-resilience.sh section 10. This pins only that the call is safe on
+// both kinds of connection, since it runs for every connection the workspace
+// accepts and a panic there would take the agent down.
+func TestArmDeadPeerDetection(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		armDeadPeerDetection(c)
+		c.Close()
+	}()
+
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	armDeadPeerDetection(c)
+	c.Close()
+	<-done
+
+	// A pipe is not a TCP connection, which is what the type check is for.
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	armDeadPeerDetection(a)
+}

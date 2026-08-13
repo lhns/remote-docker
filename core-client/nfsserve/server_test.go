@@ -353,3 +353,55 @@ func TestServeRestoresAnUnregisteredExport(t *testing.T) {
 		t.Errorf("read %q, want %q", got, content)
 	}
 }
+
+// One server, two listeners in turn: the handle cache belongs to the SERVER,
+// so it must be able to outlive the connection that was serving it.
+//
+// This is the capability the client's reconnect depends on. A server built per
+// connection mints a fresh set of handles on every reconnect, and every
+// container that was already mounted then reads "Stale file handle" against a
+// mount that still looks fine. The behaviour that proves is section 10 of
+// test/nfs-resilience.sh, which needs a kernel; what is provable here is that
+// serving a second listener from the same server works at all.
+func TestOneServerServesListenersInTurn(t *testing.T) {
+	dir := t.TempDir()
+	const content = "still here after the connection went away\n"
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry(DefaultAttrs)
+	if _, err := r.RegisterCWD(dir); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(r)
+
+	read := func(t *testing.T, addr string) {
+		t.Helper()
+		target := mustMount(t, addr, "/cwd")
+		f, err := target.Open("hello.txt")
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer f.Close()
+		got, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if string(got) != content {
+			t.Errorf("read %q, want %q", got, content)
+		}
+	}
+
+	for _, round := range []string{"first connection", "after it closed"} {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("%s: listen: %v", round, err)
+		}
+		go func() { _ = srv.Serve(l) }()
+		read(t, l.Addr().String())
+		// Closing is what a dropped connection does to the tunnel's listener,
+		// and Serve must return rather than take the server down with it.
+		l.Close()
+	}
+}

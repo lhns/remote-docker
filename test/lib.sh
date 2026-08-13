@@ -19,6 +19,47 @@ ok()   { PASS=$((PASS + 1)); echo "  PASS  $*"; }
 bad()  { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
 info() { echo "  ....  $*"; }
 
+# outputs runs a command and reports whether its combined output matches an
+# extended regex. The output is left in LAST_OUTPUT for the failure message.
+#
+#   outputs <regex> <cmd...>
+#
+# Never `cmd | grep -q`, which is what this replaces everywhere. grep -q exits
+# the instant it matches, so whatever the command still had to write gets
+# EPIPE, and Go's runtime turns EPIPE on fd 1 or 2 into a fatal SIGPIPE: exit
+# 141. Under `set -o pipefail` the pipeline reports that 141 even though the
+# match succeeded, so the assertion fails precisely when it should pass,
+# depending only on whether grep was scheduled before the command finished
+# writing. A matching line with nothing after it is safe; one with a trailing
+# summary line, another row or a log tail is not.
+#
+# The mechanism is Linux-only and measured: a producer that is still writing
+# when grep exits dies with 141 every time, and on Windows the failed write is
+# silently ignored and the producer exits 0. What is NOT established is that it
+# has ever fired here. `remote ls` writes its whole table faster than grep can
+# match and exit, and the real binary run this way survived 5,067 runs under
+# CPU contention without one failure, so section 17's intermittent failures are
+# NOT explained by this. They remain unexplained; the assertions print what
+# they saw so the next occurrence says something.
+#
+# This is hardening on a hazard that is real, cheap to remove and impossible to
+# see when it strikes, not a fix for a known bug.
+#
+# The command substitution reads to EOF, so there is no reader to close early
+# and no pipeline for pipefail to inspect.
+# Empty rather than unset, because the suites run under `set -u` and a failure
+# message may name it on a path where outputs never ran.
+#
+# shellcheck disable=SC2034  # read by the suites that source this, not here.
+LAST_OUTPUT=""
+
+outputs() {
+    local re=$1
+    shift
+    LAST_OUTPUT=$("$@" 2>&1)
+    grep -qE "$re" <<<"$LAST_OUTPUT"
+}
+
 # The workspace container lives on the RUNNER's daemon. Once DOCKER_HOST points
 # at the workspace, plain `docker` talks to the workspace's daemon instead, so
 # anything about the container -- exec, logs, inspect -- has to say which

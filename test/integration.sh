@@ -379,7 +379,7 @@ if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe
         # The two probe sections below already do this; this one slept five
         # seconds and hoped, which is a flake on a loaded runner.
         for _ in $(seq 1 30); do
-            docker logs itest-watch 2>&1 | grep -q '^READY' && break
+            outputs '^READY' docker logs itest-watch && break
             sleep 1
         done
 
@@ -456,7 +456,7 @@ if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe
         # negative and believe it.
         watching=false
         for _ in $(seq 1 30); do
-            if docker logs itest-poke 2>&1 | grep -q '^READY'; then
+            if outputs '^READY' docker logs itest-poke; then
                 watching=true
                 break
             fi
@@ -859,7 +859,7 @@ fi
 
 echo
 echo "== 13. our volumes are labelled and identifiable =="
-if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^rd-'; then
+if outputs '^rd-' docker volume ls --format '{{.Name}}'; then
     ok "shares became rd-* volumes on the workspace daemon"
 else
     bad "no managed volumes were created"
@@ -1142,7 +1142,7 @@ if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe
         ok "the watching client is serving"
 
         for _ in $(seq 1 30); do
-            docker logs itest-replay 2>&1 | grep -q '^READY' && break
+            outputs '^READY' docker logs itest-replay && break
             sleep 1
         done
 
@@ -1210,10 +1210,10 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
 
         # And the verdict, which is the whole point of `status`. A session is
         # demonstrably up: the command above went through it.
-        if "$WORK/remote-docker" remote status 2>&1 | grep -q "^status  *ready"; then
+        if outputs "^status  *ready" "$WORK/remote-docker" remote status; then
             ok "status says ready while a session is serving"
         else
-            bad "status did not say ready: $("$WORK/remote-docker" remote status 2>&1 | head -1)"
+            bad "status did not say ready: $(echo "$LAST_OUTPUT" | head -1)"
         fi
     else
         bad "unexpected output through the daemon: $out"
@@ -1223,10 +1223,10 @@ else
 fi
 
 # Idempotent: a second start must not fight the first for the endpoint.
-if "$WORK/remote-docker" remote start 2>&1 | grep -q "already running"; then
+if outputs "already running" "$WORK/remote-docker" remote start; then
     ok "a second start reports the running one rather than racing it"
 else
-    bad "a second start did not recognise the running session"
+    bad "a second start did not recognise the running session; it said: $LAST_OUTPUT"
 fi
 
 # The endpoint has exactly one owner, and it must refuse rather than steal --
@@ -1258,15 +1258,15 @@ else
     bad "could not start the detached container"
 fi
 
-if "$WORK/remote-docker" remote stop 2>&1 | grep -q "stopped"; then
+if outputs "stopped" "$WORK/remote-docker" remote stop; then
     ok "stop ends the background session"
 else
-    bad "stop did not end the background session"
+    bad "stop did not end the background session; it said: $LAST_OUTPUT"
 fi
-if "$WORK/remote-docker" remote stop 2>&1 | grep -q "not running"; then
+if outputs "not running" "$WORK/remote-docker" remote stop; then
     ok "stopping an already-stopped session says so"
 else
-    bad "stopping twice did not report it was not running"
+    bad "stopping twice did not report it was not running; it said: $LAST_OUTPUT"
 fi
 
 # The sequence a person actually types, with nothing between the commands.
@@ -1318,7 +1318,7 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ot
 
     # (a) nothing depends on it -> replaced silently.
     "$WORK/remote-docker" ps >/dev/null 2>&1
-    if "$WORK/remote-docker" remote status 2>/dev/null | grep -q "DIFFERENT"; then
+    if outputs "DIFFERENT" "$WORK/remote-docker" remote status; then
         bad "an unused session from another build was not replaced"
     else
         ok "an unused session from another commit is replaced silently"
@@ -1369,7 +1369,7 @@ if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" remote start >/dev/null 2>
     reclaimed=false
     for _ in $(seq 1 6); do
         sleep 5
-        if ! "$WORK/remote-docker" remote start 2>&1 | grep -q "already running"; then
+        if ! outputs "already running" "$WORK/remote-docker" remote start; then
             reclaimed=true
             "$WORK/remote-docker" remote stop >/dev/null 2>&1
             break
@@ -1416,7 +1416,7 @@ else
     bad "workspace create failed: $(echo "$out" | tail -2)"
 fi
 
-if hostdocker context ls --format '{{.Name}}' 2>/dev/null | grep -qx "itest-ws"; then
+if outputs '^itest-ws$' hostdocker context ls --format '{{.Name}}'; then
     ok "creating a workspace created its docker context"
 else
     bad "no docker context appeared for the workspace"
@@ -1445,11 +1445,13 @@ else
 ' ' ')"
 fi
 
-if "$WORK/remote-docker" remote use itest-ws >/dev/null 2>&1 &&
-   "$WORK/remote-docker" remote ls 2>&1 | grep -q "\*itest-ws"; then
+if used=$("$WORK/remote-docker" remote use itest-ws 2>&1) &&
+   outputs '\*itest-ws' "$WORK/remote-docker" remote ls; then
     ok "workspace use makes it the default"
 else
     bad "workspace use did not set the default"
+    info "use said: $(echo "$used" | tr '\n' ' ')"
+    info "ls said: $(echo "$LAST_OUTPUT" | tr '\n' ' ')"
 fi
 
 # And docker's own current context, which is the half that was missing. Our
@@ -1494,7 +1496,7 @@ fi
 
 # The old verbs are aliases, not history: something out there is scripted
 # against them.
-if "$WORK/remote-docker" remote list 2>&1 | grep -q "itest-ws"; then
+if outputs "itest-ws" "$WORK/remote-docker" remote list; then
     ok "the old verb 'list' still works"
 else
     bad "the list alias stopped working"
@@ -1513,7 +1515,7 @@ fi
 info "workspace rm said: $(echo "$out" | tr '
 ' '; ')"
 
-if hostdocker context ls --format '{{.Name}}' 2>/dev/null | grep -qx "itest-ws"; then
+if outputs '^itest-ws$' hostdocker context ls --format '{{.Name}}'; then
     bad "the docker context outlived the workspace"
     info "context metadata: $(hostdocker context inspect itest-ws --format '{{.Metadata.Description}}' 2>&1 | tr '
 ' ' ')"
@@ -1524,7 +1526,7 @@ fi
 # `remote` has to be FINDABLE. It is the only way in to everything this program
 # does that docker does not, and the root's help is sixty commands long, so a
 # command that is present but unlisted is a command nobody will type.
-if "$WORK/remote-docker" --help 2>&1 | grep -qE '^  remote '; then
+if outputs '^  remote ' "$WORK/remote-docker" --help; then
     ok "remote is listed in the help"
 else
     bad "remote is missing from the help, so nothing points at it"
@@ -1570,13 +1572,13 @@ fi
 #
 # Asserted through `stop`, which says "not running" when there is nothing to
 # stop and "stopped" when there was.
-if "$WORK/remote-docker" remote stop 2>&1 | grep -q "stopped"; then
+if outputs "stopped" "$WORK/remote-docker" remote stop; then
     ok "the session the alias started was there to stop"
 else
     bad "no session was running after docker run under the alias"
 fi
 env -u DOCKER_HOST PATH="$ALIASDIR:$PATH" timeout 60 docker context ls >/dev/null 2>&1
-if "$WORK/remote-docker" remote stop 2>&1 | grep -q "not running"; then
+if outputs "not running" "$WORK/remote-docker" remote stop; then
     ok "docker context ls started no session"
 else
     bad "a command that reaches no daemon opened a session anyway"
