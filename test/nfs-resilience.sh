@@ -60,6 +60,14 @@
 #       the mount should recover when the transport does -- and if it does, the
 #       handles are what strand a container, not the address.
 #
+# AND WHAT THIS SUITE PROVED ABOUT THE HARNESS, by falling for it:
+#
+#   `cmd | grep -q` fails the assertion it just matched, when the producer is
+#   still writing. Section 3 reported "it could not read its mount at all"
+#   while printing four lines of the match underneath. `docker logs` on a busy
+#   container is the producer that shows it; `remote ls` finishes writing too
+#   fast and survived 5,067 runs. So: `outputs`, never a pipeline.
+#
 # AND THE ONE NOBODY PREDICTED, which invalidated the first run's sections 7
 # to 9 and is the most useful thing here:
 #
@@ -111,7 +119,10 @@ cleanup() {
         wait "$CLIENT_PID" 2>/dev/null
     fi
     hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    rm -rf "$WORK"
+    # The agent runs as root and its host keys are owned by root, so a plain
+    # rm leaves "Permission denied" as the last thing in the log of an
+    # otherwise clean run.
+    rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -200,7 +211,7 @@ else
     bad "could not start the watching container"; exit 1
 fi
 sleep 3
-if dockert logs nfsres-watch 2>&1 | grep -q "OK the file the container reads"; then
+if outputs "OK the file the container reads" dockert logs nfsres-watch; then
     ok "it can read its mount"
 else
     bad "it could not read its mount at all"
@@ -429,7 +440,7 @@ SSHBH="$WORK/sshblack"; mkdir -p "$SSHBH"; echo "ssh black hole marker" >"$SSHBH
 dockert rm -f nfsres-ssh >/dev/null 2>&1
 if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/dev/null 2>&1; then
     sleep 3
-    if dockert logs nfsres-ssh 2>&1 | grep -q "OK ssh black hole marker"; then
+    if outputs "OK ssh black hole marker" dockert logs nfsres-ssh; then
         ok "a second watcher is reading its mount"
     else
         bad "the second watcher could not read its mount"
