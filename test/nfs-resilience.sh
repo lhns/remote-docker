@@ -474,10 +474,25 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         # the identical symptom. The client logs a line per connect, so the
         # count is the evidence; the first version of this section assumed the
         # reconnect and would have blamed the handle cache either way.
-        if ! timeout 120 docker ps >/dev/null 2>&1; then
-            bad "no docker command works after the block was lifted"
+        # How LONG, not whether. The first version waited 20s, found nothing
+        # working and called it "did not recover on its own" -- but a
+        # black-holed socket stays writable until the kernel stops
+        # retransmitting, which is minutes, and tearing the old connection down
+        # waits on the goroutines riding it. "Not yet" and "never" needed
+        # telling apart, and only a clock does that.
+        recovered=0
+        for _ in $(seq 1 32); do
+            if timeout 15 docker ps >/dev/null 2>&1; then
+                recovered=$(( $(date +%s) - mark ))
+                break
+            fi
+        done
+        if [ "$recovered" -gt 0 ]; then
+            ok "a docker command works again ${recovered}s after the block was lifted"
+        else
+            bad "no docker command worked within 8 minutes of the block being lifted"
         fi
-        sleep 20
+
         connects=$(grep -c "connected to" "$WORK/up2.log" 2>/dev/null || echo 0)
         info "the client has connected $connects time(s) in this process"
 
