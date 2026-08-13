@@ -110,7 +110,7 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	share := &Share{
 		ExportPath: exportPath,
 		LocalPath:  localPath,
-		fs:         withAttrs(inner, r.attrs),
+		fs:         withAttrs(inner, r.attrs, exportPath),
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -212,6 +212,6 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 
 	r.attrs = attrs
 	for _, share := range r.shares {
-		share.fs = withAttrs(osfs.New(share.LocalPath, osfs.WithBoundOS()), attrs)
+		share.fs = withAttrs(osfs.New(share.LocalPath, osfs.WithBoundOS()), attrs, share.ExportPath)
 	}
 }
