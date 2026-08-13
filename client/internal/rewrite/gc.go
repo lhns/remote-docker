@@ -150,7 +150,7 @@ func (c *Collector) ours(v Volume) bool {
 	if !workspace.IsManagedVolume(v.Name) {
 		return false
 	}
-	if v.Labels[ManagedLabel] != "share" {
+	if v.Labels[ManagedLabel] != ManagedShare {
 		return false
 	}
 	// On a shared daemon, another account's share volumes are not ours to

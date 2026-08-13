@@ -30,8 +30,15 @@ even if the bind had:
   `EnsureVolume` <- the rewriter <- `/containers/create`, and `compose up` on a
   container that ALREADY EXISTS never creates one. So the repair is skipped by
   the commonest way of meeting the problem, and the mount fails with
-  `connection refused` against a port nothing on screen explains. `compose down`
-  then `up` works, which is a confusing thing to discover.
+  `connection refused` against a port nothing on screen explains.
+
+  **Do not read a `connection refused` as evidence of this.** The report that
+  prompted the amendment turned out to be a different fault: the volume named
+  the port the account still held, so nothing had drifted, and the port was held
+  by a session the workspace had never noticed dying. `compose down && up`
+  cures a broken mount for a reason that has nothing to do with ports either --
+  docker's local driver refcounts mounts, so `down` is what unmounts a bad one.
+  See ADR 0032, which carries the correction in full.
 
   The resolution reverses which record is authoritative: a volume keeps its port
   forever and cannot be re-pointed, so **the volumes are the durable statement

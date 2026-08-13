@@ -268,14 +268,46 @@ premise of the project, and it applies to building it too. So:
   the failure is `connection refused` against a port nothing on screen explains,
   on a container that worked yesterday. `replaceIfStale` repairs it, but only
   from `/containers/create`, and `compose up` on a container that ALREADY EXISTS
-  never creates one -- which is why `compose down && compose up` fixes it and a
-  plain restart does not. So the agent reads the port back off a machine's own
+  never creates one. So the agent reads the port back off a machine's own
   volumes before choosing one for a machine it has forgotten (ADR 0032), and
-  `clientports` is a cache rather than the record. The general rule behind it:
+  `clientports` is a cache rather than the record. NARROWER than it looks:
+  losing the record gives the first machine back the port its uid derives, so a
+  single-machine account loses nothing, and only a volume carrying the client
+  label can be attributed to a machine at all. The general rule behind it:
   an address only has to be stable between the CONTAINER and the agent, because
   between agent and client there is no address at all, so never write a
   client-chosen address into durable workspace state unless the agent can
   reconstruct it.
+
+- **A mount that has gone wrong stays wrong until the last container lets go
+  of it.** Docker's local driver REFCOUNTS a mount: a volume already mounted is
+  handed to the next container as it stands, stale included. That is the whole
+  reason `compose down && compose up` cures a broken mount where restarting the
+  session does not -- down drops the count to zero and unmounts, up mounts
+  fresh. Anything claiming to repair a mount has to reckon with that or it will
+  look like it did nothing.
+
+- **The share ROOT handle must survive this process; nothing below it needs
+  to.** MOUNT issues the root handle once and the kernel never mounts again, so
+  a root that stops resolving leaves every lookup starting from something dead
+  -- which is a client restart breaking every running container with `Stale file
+  handle` against a mount that still looks fine. It is derived from the export
+  path (ADR 0033); below it, Linux re-looks-up after `ESTALE`, so go-nfs's
+  in-memory handles are fine. **An ordinary handle must also keep the exact
+  bytes and length go-nfs gave it.** A tag byte in front of every handle -- the
+  tidy way to carry two formats -- makes every mount succeed and every read fail
+  with "permission denied". Nothing explains that yet; the measurement is enough
+  to forbid it, and a root is recognised by LENGTH instead.
+
+- **A port reservation ends when the workspace NOTICES the connection end, not
+  when it ends.** A client whose network black-holes leaves a socket that is
+  dead and looks alive for the ~15 minutes Linux retransmits, and the agent
+  probed for nothing, so the reconnect was refused its own reverse forward:
+  a session with no export behind it and containers mounting against a corpse.
+  `sshd.armDeadPeerDetection` bounds it with keepalives and
+  `TCP_USER_TIMEOUT`. Never remove that and rely on the promise in
+  `reversePolicy.Allow`, which is what the comment there already says and what
+  nothing enforced.
 
 - **A recorded export is a capability the workspace may name, never a path it
   may supply.** The registry is per process and a volume outlives one, so
@@ -523,6 +555,15 @@ tunnel was bound inside that account's netns), that both publish the same port
 at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
 is in the `docker` group, and that restarting the agent adopts the running
 daemons with their containers intact.
+
+`test/nfs-resilience.sh` asks what a mount DOES when the thing behind it goes
+away, on both layers and both ways a connection can end: a session released, a
+client process restarted, and the ssh port or the tunnel port black-holed with
+iptables. It is where the refcount behaviour, the ~180s cost of a blocked
+mount, the "connection refused" with no session, and the root-handle fix are
+measured. Two rules for editing it are in its header, and both cost a day when
+broken: no `cmd | grep -q`, and never observe a mount with a docker command,
+because every one of them reopens the connection it was meant to catch broken.
 
 A suite of its own, `test/two-clients.sh`, runs ONE account from TWO client
 machines at the same time (ADR 0029): two state directories with a key each,

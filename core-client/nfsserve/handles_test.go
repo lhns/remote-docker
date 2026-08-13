@@ -138,10 +138,9 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 	}
 }
 
-// A live process must answer a root from its cache, because that is the path
-// every mount uses for as long as the client runs. Making the derived key
-// primary instead was measured in CI as every read failing with "permission
-// denied" while every mount succeeded.
+// A live process answers a root from its cache, because that is the path every
+// mount uses for as long as the client runs. The derived key is the fallback
+// behind it, not a replacement for it.
 func TestALiveServerResolvesItsOwnRootThroughTheCache(t *testing.T) {
 	dir := t.TempDir()
 	s := New(registryFor(t, dir))
@@ -171,8 +170,9 @@ func TestAnUnknownHandleIsStale(t *testing.T) {
 }
 
 // A root handle must keep the length this code recognises it by, and an
-// ordinary handle must keep the bytes go-nfs gave it. Both are pinned because
-// changing either broke every suite once already.
+// ordinary handle must keep the bytes go-nfs gave it. Both are pinned here
+// because a mount succeeds either way: the damage shows up only as reads
+// failing against a real kernel, which no unit test sees.
 func TestHandleSizes(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644); err != nil {

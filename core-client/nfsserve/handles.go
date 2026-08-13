@@ -27,16 +27,19 @@ import (
 	nfs "github.com/willscott/go-nfs"
 )
 
-// A root handle is the export key followed by the cache's own handle, and
-// every other handle is the cache's alone, UNCHANGED. Told apart by length,
-// which is not the tidy way round: a leading tag byte was tried first and made
-// every read in every suite fail with "permission denied" while every mount
-// succeeded. Nothing in the code explains that yet, so what is written down is
-// the measurement: ordinary handles must keep the size and bytes they had.
+// A root handle is the export key followed by the cache's own handle; every
+// other handle is the cache's alone, byte for byte.
 //
-// The cost is that this depends on go-nfs's handles being a fixed 16 bytes. A
-// build where they are not makes rootHandleSize ambiguous, so it is asserted
-// rather than assumed.
+// Told apart by LENGTH, which is not the tidy way round. Prefixing every handle
+// with a tag byte instead -- the obvious way to carry two formats -- makes
+// every mount succeed and every read fail with "permission denied", with the
+// workspace daemon unable to open the volume's own directory. Nothing in go-nfs
+// or here explains why an ordinary handle must keep the size it was given;
+// what is established is the measurement, and it is enough to rule the tidier
+// version out.
+//
+// Recognising by length means depending on those handles being a fixed 16
+// bytes, so a test pins it rather than trusting it.
 const (
 	exportKeySize = 8
 

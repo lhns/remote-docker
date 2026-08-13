@@ -3,25 +3,23 @@ package sshd
 // Deciding that a client is gone when it never said so.
 //
 // A reverse forward's port reservation is released when the connection ends
-// (see reversePolicy.Allow), and that promise is only as good as the workspace's
-// ability to notice an ending. Nothing here ever did. A client whose network
-// black-holes -- a laptop suspended, a VPN dropped, a route withdrawn -- leaves
-// a connection that is dead and looks alive: with unacknowledged data on it,
-// Linux retransmits for something like fifteen minutes before the socket fails,
-// and until it does the port stays reserved.
+// (reversePolicy.Allow), which is only as good as this side's ability to notice
+// an ending. A client whose network black-holes -- a laptop suspended, a VPN
+// dropped -- leaves a connection that is dead and looks alive: with
+// unacknowledged data on it, Linux retransmits for about fifteen minutes before
+// the socket fails, and the port stays reserved for all of it.
 //
-// The client is then refused the only port its volumes can use, on every
-// reconnect, with "tcpip-forward request denied by peer (another session for
-// this account may still be open)" -- and the session it does get has no NFS
-// export behind it, so containers mount nothing and read "connection refused"
-// against a port that is bound to a corpse.
+// What that costs is worse than the lost connection. The client reconnects, is
+// authenticated, and is refused the one port its volumes can mount from:
+// "tcpip-forward request denied by peer". It then holds a session with no NFS
+// export behind it, so containers get "connection refused" against a port bound
+// to a corpse -- a failure that names a port and nothing that explains it.
 //
-// The client already probes this way round (tunnelclient.keepAlive); this is
-// the same judgement made by the kernel on the workspace's side, because the
-// agent has no request/reply clock of its own to hang one on.
+// The client probes the other direction itself (tunnelclient.keepAlive). This
+// is the same judgement left to the kernel, because the agent has no
+// request/reply clock of its own to hang one on.
 //
-// Measured in test/nfs-resilience.sh section 10: before this, no docker command
-// worked for the eight minutes the suite was willing to wait.
+// Covered by test/nfs-resilience.sh section 10.
 
 import (
 	"net"

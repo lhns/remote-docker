@@ -79,6 +79,7 @@ type VolumeEnsurer interface {
 // reads them back (workspace.ClientLabel), so both ends must agree.
 const (
 	ManagedLabel = workspace.ManagedLabel
+	ManagedShare = workspace.ManagedShare
 	OwnerLabel   = workspace.OwnerLabel
 	ClientLabel  = workspace.ClientLabel
 )
@@ -342,7 +343,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, err
 	}
 
 	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath)
-	labels := map[string]string{ManagedLabel: "share"}
+	labels := map[string]string{ManagedLabel: ManagedShare}
 	if r.Owner != "" {
 		labels[OwnerLabel] = r.Owner
 	}
