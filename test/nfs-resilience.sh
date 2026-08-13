@@ -256,31 +256,32 @@ info "during the idle window the container logged $(echo "$window" | grep -c .) 
 if [ "$errs" -gt 0 ]; then
     ok "E2 holds: reads across an idle release fail"
     echo "$window" | grep "ERR" | head -3 | sed 's/^/        /'
+elif [ "$released" = yes ]; then
+    ok "E2 does not hold: the mount survived a real idle release untouched"
 else
-    ok "E2 does not hold: the mount survived an idle release untouched"
-    info "which would mean the established connection outlives the listener"
+    ok "E2 not exercised: no release happened, so there was nothing to survive"
 fi
 
 echo
-echo "== 5. does a docker command heal it =="
-# The first command after a release reopens the connection and rebinds the
-# listener. Whether the CONTAINER's mount recovers is a different question,
-# and it is E3.
+echo "== 5. the port after a docker command =="
+# This section used to claim a docker command "healed" the mount. It could
+# not: section 4 established that no release happens under a live mount, so
+# there was never a drop to recover from and the assertion passed on a
+# connection that had never gone anywhere. What is left is the honest half.
 dockert ps >/dev/null 2>&1
 sleep 5
 if [ "$(listening)" = yes ]; then
-    ok "a docker command reopened the connection and rebound the port"
+    ok "the port is open after a docker command"
 else
-    bad "the port did not come back after a docker command"
+    bad "the port is not open after a docker command"
 fi
 
 after=$(dockert logs nfsres-watch 2>&1 | tail -5)
 if echo "$after" | grep -q "OK the file"; then
-    ok "the container's mount recovered once the port was back"
+    ok "and the container is still reading, having never been interrupted"
 else
-    info "the container is still failing after the port returned:"
+    bad "the container stopped reading without anything having dropped"
     echo "$after" | sed 's/^/        /'
-    ok "recorded: a reconnect on the same port does not heal a running mount"
 fi
 
 echo
@@ -467,16 +468,31 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
 
         hostdocker exec "$CONTAINER" iptables -D INPUT -p tcp --dport 2222 -j DROP 2>/dev/null
         mark=$(date +%s)
-        dockert ps >/dev/null 2>&1
-        sleep 20
-        window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
-        if echo "$window" | grep -q "OK ssh black hole marker"; then
-            ok "E7: the SAME process reconnecting heals the mount, where a new one did not"
-            info "so it is the handle cache that strands a container, not the address"
-        else
-            ok "E7: even the same process reconnecting leaves it broken"
-            info "last: $(echo "$window" | tail -1)"
+
+        # A reconnect has to be PROVEN before anything is concluded from the
+        # mount, because "the handles died" and "it never reconnected" produce
+        # the identical symptom. The client logs a line per connect, so the
+        # count is the evidence; the first version of this section assumed the
+        # reconnect and would have blamed the handle cache either way.
+        if ! timeout 120 docker ps >/dev/null 2>&1; then
+            bad "no docker command works after the block was lifted"
         fi
+        sleep 20
+        connects=$(grep -c "connected to" "$WORK/up2.log" 2>/dev/null || echo 0)
+        info "the client has connected $connects time(s) in this process"
+
+        window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
+        if [ "$connects" -lt 2 ]; then
+            bad "E7 not measured: the client never reconnected, so the mount proves nothing"
+            info "which is a finding of its own: a black-holed transport did not recover on its own"
+        elif echo "$window" | grep -q "OK ssh black hole marker"; then
+            ok "E7: a reconnect in the SAME process heals the mount"
+            info "so what strands a container is the process dying, not the connection"
+        else
+            ok "E7: even a reconnect in the same process leaves it broken"
+            info "so the handle cache dies with the CONNECTION, not with the process"
+        fi
+        info "last line from the watcher: $(echo "$window" | tail -1)"
     else
         info "iptables unavailable; E7 not measured"
     fi
