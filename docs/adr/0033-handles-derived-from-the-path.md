@@ -42,10 +42,14 @@ everything under it by asking again.
 **Derive the root handle from the export path; leave the rest to the cache.**
 
 ```
-handle = exportKey(8) || rest(16)
-exportKey = sha256(export path)[:8]      # /cwd and /m/<id> alike
-rest      = zeros for a share root, the caching handler's uuid otherwise
+a share root:  [0x01][ sha256(export path)[:8] ]      9 bytes
+anything else: [0x02][ the caching handler's uuid ]   17 bytes
 ```
+
+A leading tag rather than a length or a padding convention: the two kinds would
+otherwise be told apart by how many bytes go-nfs's uuid happens to occupy, which
+is not ours to depend on. An unrecognised tag is stale, so a handle minted by an
+older build degrades to "look it up again" rather than to a wrong file.
 
 A share root therefore resolves in a process that never issued it, and the
 export it names is checked against what is registered NOW, which is ADR 0027's
