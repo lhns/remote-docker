@@ -55,6 +55,19 @@ var settingSources = map[string]struct {
 		env: EnvPort, override: true, sample: "2299",
 		want: func(c Config) string { return itoa(c.Port) },
 	},
+	"CAFile": {
+		env: EnvCAFile, override: true, sample: "/etc/ca.pem",
+		want: func(c Config) string { return c.CAFile },
+	},
+	"Insecure": {
+		env: EnvInsecure, override: true, sample: "true",
+		want: func(c Config) string {
+			if c.Insecure {
+				return "true"
+			}
+			return ""
+		},
+	},
 	"User": {
 		env: EnvUser, override: true, sample: "alice",
 		want: func(c Config) string { return c.User },
@@ -300,6 +313,10 @@ func typed(field, sample string) any {
 	switch f.Type.Kind() {
 	case reflect.Int:
 		return atoi(sample)
+	case reflect.Bool:
+		// The file says true, not "true": a switch that only works when it is
+		// spelled as a string would be a bug this test exists to catch.
+		return sample == "true"
 	case reflect.Slice:
 		return []string{sample}
 	default:

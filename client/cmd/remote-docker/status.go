@@ -101,7 +101,7 @@ func (f facts) verdict() string {
 // reportStatus prints the verdict and the detail behind it.
 func reportStatus(out io.Writer, f facts) {
 	row(out, "status", f.verdict())
-	rowf(out, "workspace", "%s (%s@%s:%d)", contextHint(f.cfg), f.cfg.User, f.cfg.Host, f.cfg.Port)
+	rowf(out, "workspace", "%s (%s)", contextHint(f.cfg), where(f.cfg))
 
 	// Is it up, and how does anything else reach it.
 	_, _ = fmt.Fprintln(out)

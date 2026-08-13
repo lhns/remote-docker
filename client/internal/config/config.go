@@ -28,8 +28,18 @@ type Config struct {
 	// is nothing to connect to.
 	Host string
 
-	// Port is the workspace's SSH port.
+	// Port is the workspace's SSH port. Optional: a host carrying a scheme and
+	// a port says it there instead, and Transport refuses the two disagreeing.
 	Port int
+
+	// CAFile verifies a ws:// endpoint's proxy against a private CA instead of
+	// the system roots. Ignored for ssh, which has its own known_hosts.
+	CAFile string
+
+	// Insecure accepts any certificate from a ws:// endpoint's proxy. It gives
+	// up knowing WHICH proxy answered and nothing else: SSH inside the tunnel
+	// still authenticates both ends. Per workspace, never global.
+	Insecure bool
 
 	// Machine is the local machine this workspace runs on, or nil for a
 	// workspace somewhere else.
@@ -124,6 +134,8 @@ type File struct {
 type Workspace struct {
 	Host         string   `json:"host,omitempty"`
 	Port         int      `json:"port,omitempty"`
+	CAFile       string   `json:"caFile,omitempty"`
+	Insecure     bool     `json:"insecure,omitempty"`
 	User         string   `json:"user,omitempty"`
 	Endpoint     string   `json:"endpoint,omitempty"`
 	Watch        string   `json:"watch,omitempty"`
@@ -232,6 +244,8 @@ type Overrides struct {
 	User      string
 	Endpoint  string
 	Watch     string
+	CAFile    string
+	Insecure  bool
 }
 
 // Environment variable names.
@@ -241,6 +255,9 @@ const (
 	EnvUser      = "REMOTE_DOCKER_USER"
 	EnvEndpoint  = "REMOTE_DOCKER_ENDPOINT"
 	EnvWorkspace = "REMOTE_DOCKER_WORKSPACE"
+
+	EnvCAFile   = "REMOTE_DOCKER_CA_FILE"
+	EnvInsecure = "REMOTE_DOCKER_INSECURE"
 
 	EnvWatch        = "REMOTE_DOCKER_WATCH"
 	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
@@ -255,7 +272,7 @@ const (
 // The file is optional and a missing one is not an error: `enroll` has to work
 // before anything is configured, since that is how a key gets issued.
 func Resolve(o Overrides, path string) (Config, error) {
-	cfg := Config{Port: DefaultSSHPort, User: DefaultUser()}
+	cfg := Config{User: DefaultUser()}
 
 	file, err := Load(path)
 	if err != nil {
@@ -277,7 +294,15 @@ func Resolve(o Overrides, path string) (Config, error) {
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
 
-	if cfg.Port < 1 || cfg.Port > 65535 {
+	// The SSH port is defaulted only once the host is known, and only when the
+	// host is not a WebSocket. Defaulting it up front would make 2222
+	// indistinguishable from a port somebody asked for, and every wss://
+	// workspace would then inherit the SSH port instead of 443.
+	if cfg.Port == 0 && !isWebSocketHost(cfg.Host) {
+		cfg.Port = DefaultSSHPort
+	}
+	// Zero is "not set", which Transport resolves from the scheme.
+	if cfg.Port != 0 && (cfg.Port < 0 || cfg.Port > 65535) {
 		return Config{}, fmt.Errorf("config: port %d is not valid", cfg.Port)
 	}
 	return cfg, nil
@@ -357,6 +382,12 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Endpoint != "" {
 		cfg.Endpoint = ws.Endpoint
 	}
+	if ws.CAFile != "" {
+		cfg.CAFile = ws.CAFile
+	}
+	if ws.Insecure {
+		cfg.Insecure = true
+	}
 	if ws.Watch != "" {
 		cfg.Watch = ws.Watch
 	}
@@ -409,6 +440,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv(EnvEndpoint); v != "" {
 		cfg.Endpoint = v
 	}
+	if v := os.Getenv(EnvCAFile); v != "" {
+		cfg.CAFile = v
+	}
+	if v := os.Getenv(EnvInsecure); v != "" {
+		// Anything but an explicit falsehood turns it on: this is a switch, and
+		// somebody who set it to "yes" meant yes.
+		cfg.Insecure = v != "0" && !strings.EqualFold(v, "false")
+	}
 	if v := os.Getenv(EnvWatch); v != "" {
 		cfg.Watch = v
 	}
@@ -460,6 +499,12 @@ func applyOverrides(cfg *Config, o Overrides) {
 	}
 	if o.Endpoint != "" {
 		cfg.Endpoint = o.Endpoint
+	}
+	if o.CAFile != "" {
+		cfg.CAFile = o.CAFile
+	}
+	if o.Insecure {
+		cfg.Insecure = true
 	}
 	if o.Watch != "" {
 		cfg.Watch = o.Watch
