@@ -105,6 +105,19 @@ each green on its own, and why unit tests are treated as necessary and not
 sufficient — `test/integration.sh`, `test/per-user-dind.sh`,
 `test/two-clients.sh`, `test/vm.sh` and the WSL machine job are the real check.
 
+## Amended 2026-08-14: it is handed its connection as well
+
+The rule above is about authentication, and it applies unchanged to what carries
+the bytes. `tunnelclient.Config` now takes a `Dial` function; nil dials TCP as
+before, and the client passes one that opens a WebSocket when the workspace sits
+behind a reverse proxy (ADR 0034).
+
+The reason is the reason the signer and the host-key rule are passed in: only
+the caller knows the deployment. What this package does with the connection --
+the handshake, the forwards, half-closing -- is identical either way, and a
+transport that chose its own would have to learn about proxies, certificates and
+a config file to do it.
+
 ## The rule, for whatever comes next
 
 Something belongs in `core/tunnel` if both binaries must AGREE about it. It

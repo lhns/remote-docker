@@ -24,6 +24,10 @@ services:
 
     ports:
       - "2222:2222"
+      # SSH over a WebSocket, for a reverse proxy to front (ADR 0034). Publish
+      # it only if the proxy is elsewhere: on the same docker network it needs
+      # no published port at all.
+      # - "2280:2280"
 
     environment:
       TZ: ${TZ:-UTC}

@@ -22,7 +22,12 @@ Wants=network-online.target docker.service
 [Service]
 Type=simple
 EnvironmentFile=/etc/remote-docker/env
-ExecStart=/usr/local/bin/remote-dockerd serve
+# --ws-addr is stated rather than left to the default, in both directions. On a
+# VM the agent binds the machine's real interfaces, so an extra listener is a
+# port somebody did not ask for; in a container it would be unreachable until
+# published. Set it to :2280 to serve SSH over a WebSocket behind a reverse
+# proxy (ADR 0034).
+ExecStart=/usr/local/bin/remote-dockerd serve --ws-addr ""
 
 # Root, and not negotiable: the agent creates unix accounts, enters other
 # processes' network namespaces, and drops privilege per session itself.

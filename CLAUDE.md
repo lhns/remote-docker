@@ -44,6 +44,7 @@ core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
   tunnelclient/          dialling the tunnel: sessions, streams, both forwards.
                          Given a signer and a host key rule; decides neither.
   nfsserve/              in-process NFSv3 server, virtual export namespace
+  wstunnel/              dialling a workspace through a reverse proxy (ADR 0034)
   fswatch/               watches shared dirs on three platforms, budget,
                          excludes, overflow
   keys/                  the keypair and known_hosts: this machine's identity
@@ -77,6 +78,8 @@ agent/go.mod             the agent module: THE GLUE. 4 direct third-party
                          requires, 24 go.sum lines
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
+    wslisten/            the same SSH server, reached over a WebSocket. Serves
+                         ws and NEVER TLS: the proxy terminates that
     sshd/                the SSH server: auth, sessions, and the forwarding
                          POLICY core-agent/tunnelserver asks. Its session
                          handling is docker all the way down and stays here.
@@ -297,6 +300,15 @@ premise of the project, and it applies to building it too. So:
   nobody has explained, but it fails loudly in CI rather than quietly here, so it
   lives beside the code in `core-client/nfsserve/handles.go` with a test pinning
   it.
+
+- **A WebSocket connection carries its own liveness.**
+  `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection
+  arriving through a reverse proxy is a WebSocket wrapping one, so none of it
+  applies. `wslisten` pings on the same 60s budget instead. Take that away and
+  a client that vanishes keeps its reverse-tunnel port reserved: the symptom is
+  not a lost connection but a REFUSED FORWARD on some later reconnect, with
+  containers mounting against a port bound to nothing. It also keeps the tunnel
+  alive through a proxy's idle timeout.
 
 - **A port reservation ends when the workspace NOTICES the connection end, not
   when it ends.** A client whose network black-holes leaves a socket that is
