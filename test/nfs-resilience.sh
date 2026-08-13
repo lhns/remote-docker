@@ -57,8 +57,17 @@
 #         MEASURED: HOLDS.
 #   E7  A dropped TRANSPORT is not a dropped process. Black-holing the ssh port
 #       breaks the connection while the client and its handle cache live on, so
-#       the mount should recover when the transport does -- and if it does, the
-#       handles are what strand a container, not the address.
+#       the mount should recover when the transport does.
+#         MEASURED: the workspace held the dead session's port reservation and
+#         refused the client its reverse forward on every reconnect -- "another
+#         session for this account may still be open" -- so nothing worked for
+#         the eight minutes the suite would wait. That is the failure this
+#         whole investigation started from, and it is now fixed on the agent
+#         side; recovery took 16s. E7 itself has still never been measured,
+#         because two earlier versions of this section asked the wrong
+#         question: one demanded a reconnect that never had to happen, and
+#         both read a log file belonging to a client killed two sections
+#         earlier.
 #
 # AND WHAT THIS SUITE PROVED ABOUT THE HARNESS, by falling for it:
 #
@@ -161,13 +170,14 @@ cd "$PROJECT" || exit 1
 
 echo
 echo "== 2. a session, and the port it binds =="
-"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
+CLIENT_LOG="$WORK/up.log"
+"$WORK/remote-docker" remote start --foreground >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
 if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     ok "the endpoint answers"
 else
     bad "the endpoint never came up"
-    sed 's/^/        /' "$WORK/up.log"
+    sed 's/^/        /' "$CLIENT_LOG"
     exit 1
 fi
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
@@ -235,7 +245,7 @@ sleep 25
 # once a second, and that traffic may be exactly what keeps the connection
 # leased.
 released=no
-grep -q "released the idle connection" "$WORK/up.log" 2>/dev/null && released=yes
+grep -q "released the idle connection" "$CLIENT_LOG" 2>/dev/null && released=yes
 info "did the client release its connection during the window: $released"
 
 if [ "$released" = no ]; then
@@ -292,13 +302,14 @@ echo "== 6. E3: a NEW client process, and the handles it mints =="
 kill "$CLIENT_PID" 2>/dev/null
 wait "$CLIENT_PID" 2>/dev/null
 sleep 2
-"$WORK/remote-docker" remote start --foreground >"$WORK/up2.log" 2>&1 &
+CLIENT_LOG="$WORK/up2.log"
+"$WORK/remote-docker" remote start --foreground >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
 if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     ok "a second client process is serving"
 else
     bad "the second client never came up"
-    sed 's/^/        /' "$WORK/up2.log"
+    sed 's/^/        /' "$CLIENT_LOG"
     exit 1
 fi
 
@@ -416,7 +427,8 @@ fi
 
 echo
 echo "== 9. E6: and through a client that has to reconnect first =="
-"$WORK/remote-docker" remote start --foreground >"$WORK/up3.log" 2>&1 &
+CLIENT_LOG="$WORK/up3.log"
+"$WORK/remote-docker" remote start --foreground >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
 if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     if out=$(timeout 120 docker start -a nfsres-existing 2>&1); then
@@ -455,7 +467,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         info "black-holing the ssh port for 70s"
         sleep 70
 
-        if grep -qiE "keepalive|connection.*(lost|closed)|reconnect" "$WORK/up2.log" 2>/dev/null; then
+        if grep -qiE "keepalive|connection.*(lost|closed)|reconnect" "$CLIENT_LOG" 2>/dev/null; then
             ok "the client noticed the dead transport and said so"
         else
             info "the client's log says nothing about the transport being gone"
@@ -493,19 +505,26 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
             bad "no docker command worked within 8 minutes of the block being lifted"
         fi
 
-        connects=$(grep -c "connected to" "$WORK/up2.log" 2>/dev/null || echo 0)
-        info "the client has connected $connects time(s) in this process"
-
-        window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
-        if [ "$connects" -lt 2 ]; then
-            bad "E7 not measured: the client never reconnected, so the mount proves nothing"
-            info "which is a finding of its own: a black-holed transport did not recover on its own"
-        elif echo "$window" | grep -q "OK ssh black hole marker"; then
-            ok "E7: a reconnect in the SAME process heals the mount"
-            info "so what strands a container is the process dying, not the connection"
+        connects=$(grep -c "connected to" "$CLIENT_LOG" 2>/dev/null || echo 0)
+        if [ "$connects" -ge 2 ]; then
+            info "the client opened a new connection ($connects in this process)"
         else
-            ok "E7: even a reconnect in the same process leaves it broken"
-            info "so the handle cache dies with the CONNECTION, not with the process"
+            info "the client's original connection resumed; it never had to redial"
+        fi
+
+        # Only now look at the mount. The command working says the transport is
+        # back; the container reads on its own clock and had none of that time
+        # to try again.
+        mark=$(date +%s)
+        sleep 20
+        window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
+        if [ "$recovered" -eq 0 ]; then
+            bad "E7 not measured: the transport never came back, so the mount proves nothing"
+        elif echo "$window" | grep -q "OK ssh black hole marker"; then
+            ok "E7: the mount survives an interrupted transport and reads again"
+        else
+            bad "E7: the transport came back and the mount did not"
+            info "the connection is not what strands a container, so look at the handles"
         fi
         info "last line from the watcher: $(echo "$window" | tail -1)"
     else
@@ -519,7 +538,7 @@ fi
 echo
 echo "== client log =="
 tail -25 "$WORK/up.log" 2>/dev/null | sed 's/^/        /'
-echo "== the second client's log =="
-tail -25 "$WORK/up2.log" 2>/dev/null | sed 's/^/        /'
+echo "== the client under test =="
+tail -25 "$CLIENT_LOG" 2>/dev/null | sed 's/^/        /'
 
 summary
