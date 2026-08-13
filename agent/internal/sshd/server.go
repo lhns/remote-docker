@@ -125,6 +125,14 @@ func New(cfg Config) (*Server, error) {
 		Addr:             cfg.Addr,
 		PublicKeyHandler: s.authenticate,
 
+		// A client that vanishes without saying so must still end its
+		// connection here, because that is what releases its reverse-tunnel
+		// port. See armDeadPeerDetection.
+		ConnCallback: func(_ gssh.Context, conn net.Conn) net.Conn {
+			armDeadPeerDetection(conn)
+			return conn
+		},
+
 		// Reverse forwarding carries the client's NFS export in; local
 		// forwarding lets the client reach published container ports. Both are
 		// needed, and both are constrained. See ForwardPolicy.
