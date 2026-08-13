@@ -27,17 +27,25 @@ import (
 	nfs "github.com/willscott/go-nfs"
 )
 
-// Handle tags. A byte rather than a length check: both kinds would otherwise
-// be distinguished by how many bytes go-nfs's uuid happens to occupy, which is
-// nothing this package controls.
+// A root handle is the export key followed by the cache's own handle, and
+// every other handle is the cache's alone, UNCHANGED. Told apart by length,
+// which is not the tidy way round: a leading tag byte was tried first and made
+// every read in every suite fail with "permission denied" while every mount
+// succeeded. Nothing in the code explains that yet, so what is written down is
+// the measurement: ordinary handles must keep the size and bytes they had.
+//
+// The cost is that this depends on go-nfs's handles being a fixed 16 bytes. A
+// build where they are not makes rootHandleSize ambiguous, so it is asserted
+// rather than assumed.
 const (
-	tagRoot   = 0x01
-	tagCached = 0x02
-)
+	exportKeySize = 8
 
-// exportKeySize is how much of the export path's digest a root handle carries.
-// A handle may be 64 bytes (RFC 1813); a root spends 9 plus the cache's own.
-const exportKeySize = 8
+	// cachedHandleSize is what go-nfs's caching handler produces: a uuid.
+	cachedHandleSize = 16
+
+	// rootHandleSize is how a share root is recognised on the way back in.
+	rootHandleSize = exportKeySize + cachedHandleSize
+)
 
 // rootHandler answers for share roots and delegates everything else.
 type rootHandler struct {
@@ -58,61 +66,44 @@ func (h *rootHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 	// that mount resolves against the subdirectory, and giving it the share's
 	// handle would serve the wrong directory to a client that asked correctly.
 	export := exportRootOf(f)
-	if len(path) != 0 || export == "" {
-		return append([]byte{tagCached}, cached...)
+	if len(path) != 0 || export == "" || len(cached) != cachedHandleSize {
+		return cached
 	}
 
 	// The cache's answer FIRST and the derived key behind it. While this
-	// process lives, every root operation is resolved exactly as it was before
-	// any of this existed; the key is what answers once the cache is gone,
-	// which is the only case this feature is for. Making the derived key the
-	// primary answer changed behaviour in the live process too, and the suite
-	// found it: every mount worked and every read said "permission denied".
-	out := append([]byte{tagRoot}, exportKey(export)...)
-	return append(out, cached...)
+	// process lives, every root operation resolves exactly as it did before any
+	// of this existed; the key answers once the cache is gone, which is the
+	// only case this feature is for.
+	return append(exportKey(export), cached...)
 }
 
 func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, error) {
-	if len(handle) == 0 {
+	if len(handle) != rootHandleSize {
+		return h.Handler.FromHandle(handle)
+	}
+	key, cached := handle[:exportKeySize], handle[exportKeySize:]
+
+	// The cache, exactly as before, for as long as this process holds it.
+	if fs, path, err := h.Handler.FromHandle(cached); err == nil {
+		return fs, path, nil
+	}
+
+	// And the derived key when it cannot answer, which is what a client that
+	// has restarted is asking with.
+	share, ok := h.shareForKey(key)
+	if !ok {
 		return nil, nil, errStaleExport
 	}
-	switch handle[0] {
-	case tagRoot:
-		if len(handle) < 1+exportKeySize {
-			return nil, nil, errStaleExport
-		}
-		key, cached := handle[1:1+exportKeySize], handle[1+exportKeySize:]
-
-		// The cache, exactly as before, for as long as this process holds it.
-		if len(cached) > 0 {
-			if fs, path, err := h.Handler.FromHandle(cached); err == nil {
-				return fs, path, nil
-			}
-		}
-
-		// And the derived key when it cannot answer, which is what a client
-		// that has restarted is asking with.
-		share, ok := h.shareForKey(key)
-		if !ok {
-			return nil, nil, errStaleExport
-		}
-		return share.fs, []string{}, nil
-	case tagCached:
-		return h.Handler.FromHandle(handle[1:])
-	default:
-		// A handle from a build that tagged nothing. Stale is the honest
-		// answer and the kernel recovers by looking up again.
-		return nil, nil, errStaleExport
-	}
+	return share.fs, []string{}, nil
 }
 
 func (h *rootHandler) InvalidateHandle(f billy.Filesystem, handle []byte) error {
-	// A root handle is derived rather than stored, so there is nothing to
-	// forget; invalidating it would only make the mount unusable.
-	if len(handle) > 0 && handle[0] == tagCached {
-		return h.Handler.InvalidateHandle(f, handle[1:])
+	// The derived half is not stored and cannot be forgotten; the cache's half
+	// is passed on so it can forget what it knows.
+	if len(handle) == rootHandleSize {
+		return h.Handler.InvalidateHandle(f, handle[exportKeySize:])
 	}
-	return nil
+	return h.Handler.InvalidateHandle(f, handle)
 }
 
 // shareForKey finds the share whose export path matches a root handle.
