@@ -76,7 +76,7 @@ const (
 )
 
 func newServeCommand() *cobra.Command {
-	var addr, wsAddr, wsPath string
+	var addr, wsAddr string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -86,7 +86,7 @@ provisions an account per enrolled public key, and serves SSH.
 
 Replaces sshd, the key watcher, the mount helpers and sudo.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return serve(addr, wsAddr, wsPath)
+			return serve(addr, wsAddr)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", ":2222", "address to serve SSH on")
@@ -97,12 +97,10 @@ Replaces sshd, the key watcher, the mount helpers and sudo.`,
 	// is not a weaker door, because the same SSH handshake runs inside it.
 	cmd.Flags().StringVar(&wsAddr, "ws-addr", ":2280",
 		"address to serve SSH over a WebSocket on; empty disables it")
-	cmd.Flags().StringVar(&wsPath, "ws-path", "/tunnel",
-		"path the WebSocket endpoint answers on")
 	return cmd
 }
 
-func serve(addr, wsAddr, wsPath string) error {
+func serve(addr, wsAddr string) error {
 	log := logger("workspace")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -335,7 +333,7 @@ func serve(addr, wsAddr, wsPath string) error {
 	// A second listener for the same SSH server, so a reverse proxy can front
 	// the workspace (ADR 0034). Disabled by setting --ws-addr to "".
 	if wsAddr != "" {
-		ws, err := wslisten.New(wsAddr, wsPath, logger("wslisten"))
+		ws, err := wslisten.New(wsAddr, logger("wslisten"))
 		if err != nil {
 			stop()
 			wg.Wait()
@@ -343,7 +341,7 @@ func serve(addr, wsAddr, wsPath string) error {
 		}
 		defer func() { _ = ws.Close() }()
 
-		log.Info("websocket listening on " + ws.Addr() + wsPath)
+		log.Info("websocket listening on " + ws.Addr() + " (any path)")
 		wg.Go(func() {
 			if err := server.ServeListener(ws.Listener); err != nil {
 				log.Warn("the websocket listener stopped", "err", err)

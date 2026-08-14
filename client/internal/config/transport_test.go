@@ -48,11 +48,14 @@ func TestTransport(t *testing.T) {
 			URL: "ws://inside:8080/tunnel",
 		},
 	}, {
-		name: "a WebSocket with no path gets the agent's default",
+		// The agent accepts an upgrade on any path, so a host with none needs
+		// nothing invented for it. Inventing one would also have to match a
+		// default on the other side of the connection.
+		name: "a WebSocket with no path keeps having none",
 		cfg:  Config{Host: "wss://ws.example"},
 		want: Transport{
 			Kind: TransportWSS, Host: "ws.example", Port: 443,
-			URL: "wss://ws.example" + DefaultWSPath,
+			URL: "wss://ws.example",
 		},
 	}, {
 		// Two ports, one workspace: a mistake, and resolving it silently is how

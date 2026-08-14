@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,15 @@ func (l *Listener) pingEvery() time.Duration {
 // proxy is configured to send the tunnel.
 func (l *Listener) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Anything that is not an upgrade is answered rather than left to
+		// hang: somebody who opens the address in a browser, or a proxy health
+		// check, should be told what this is.
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "remote-docker: this is an ssh tunnel endpoint; connect with ws:// or wss://",
+				http.StatusUpgradeRequired)
+			return
+		}
+
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// The client is not a browser and there is no origin to check;
 			// authentication is the SSH handshake that follows, not this.
@@ -165,11 +175,16 @@ type Server struct {
 	tcp  net.Listener
 }
 
-// New starts listening on addr and serves the upgrade endpoint at path.
+// New starts listening on addr and accepts WebSocket upgrades on any path.
+//
+// Any path, because this server serves nothing else, so there is no path to
+// reserve one from. It also removes the need for the proxy's route and the
+// agent to agree on a path: a proxy that strips its prefix and one that does
+// not both work, where a fixed path makes one of them a 404.
 //
 // The listener is returned rather than served here, so the caller can hand it
 // to the SSH server that already accepts TCP connections.
-func New(addr, path string, log *slog.Logger) (*Server, error) {
+func New(addr string, log *slog.Logger) (*Server, error) {
 	log = logx.Or(log)
 
 	tcp, err := net.Listen("tcp", addr)
@@ -184,19 +199,11 @@ func New(addr, path string, log *slog.Logger) (*Server, error) {
 		closed: make(chan struct{}),
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle(path, l.Handler())
-	// Anything else is a proxy misconfiguration, and answering 404 says so more
-	// clearly than a hanging request.
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not the tunnel endpoint", http.StatusNotFound)
-	})
-
 	s := &Server{
 		Listener: l,
 		tcp:      tcp,
 		http: &http.Server{
-			Handler: mux,
+			Handler: l.Handler(),
 			// No write or read timeout: a tunnel is one request that lasts as
 			// long as the session. ReadHeaderTimeout still bounds the part
 			// before the upgrade, which is the part an idle attacker holds.

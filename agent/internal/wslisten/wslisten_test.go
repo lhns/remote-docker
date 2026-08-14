@@ -50,12 +50,7 @@ func newListener(t *testing.T, ping time.Duration) *Listener {
 func serveWS(t *testing.T, l *Listener) string {
 	t.Helper()
 
-	mux := http.NewServeMux()
-	mux.Handle("/tunnel", l.Handler())
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not the tunnel endpoint", http.StatusNotFound)
-	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(l.Handler())
 	t.Cleanup(srv.Close)
 
 	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/tunnel"
@@ -232,9 +227,31 @@ func TestAPeerThatStopsAnsweringIsDropped(t *testing.T) {
 	}
 }
 
-// A request to the wrong path is answered rather than left hanging: a proxy
-// pointed at the wrong route is a common mistake and should say so.
-func TestTheWrongPathIsAnswered(t *testing.T) {
+// Any path reaches the tunnel, so a proxy that strips its prefix and one that
+// does not both work without the agent being told which.
+func TestAnyPathReachesTheTunnel(t *testing.T) {
+	l := newListener(t, 0)
+	url := serveWS(t, l)
+	base := strings.TrimSuffix(url, "/tunnel")
+
+	for _, path := range []string{"", "/tunnel", "/rd/tunnel", "/anything/at/all"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		wc, _, err := websocket.Dial(ctx, base+path, nil)
+		cancel()
+		if err != nil {
+			t.Errorf("dialling %q: %v", path, err)
+			continue
+		}
+		if _, err := l.Accept(); err != nil {
+			t.Errorf("accepting %q: %v", path, err)
+		}
+		wc.CloseNow()
+	}
+}
+
+// A request that is not an upgrade is answered rather than left hanging: a
+// browser or a health check should be told what this endpoint is.
+func TestANonUpgradeRequestIsAnswered(t *testing.T) {
 	url := serveWS(t, newListener(t, 0))
 	base := strings.TrimSuffix("http"+strings.TrimPrefix(url, "ws"), "/tunnel")
 
@@ -243,8 +260,8 @@ func TestTheWrongPathIsAnswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d for the wrong path, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Errorf("status %d for a plain GET, want %d", resp.StatusCode, http.StatusUpgradeRequired)
 	}
 }
 

@@ -104,19 +104,12 @@ func (c Config) Transport() (Transport, error) {
 		if err != nil {
 			return Transport{}, err
 		}
-		if u.Path == "" {
-			u.Path = DefaultWSPath
-		}
 		return Transport{Kind: scheme, Host: u.Hostname(), Port: port, URL: u.String()}, nil
 	}
 
 	return Transport{}, fmt.Errorf(
 		"config: host %q names %q, which is not a way to reach a workspace (ssh, ws or wss)", c.Host, scheme)
 }
-
-// DefaultWSPath matches the agent's --ws-path, so an endpoint that names only a
-// host still reaches the tunnel.
-const DefaultWSPath = "/tunnel"
 
 // isWebSocketHost reports whether a host names a WebSocket endpoint, which is
 // what decides whether the SSH port default applies to it.

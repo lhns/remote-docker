@@ -54,9 +54,15 @@ runs inside, so this door has the same lock as the TCP one.** The proxy is there
 for reachability and to share 443, not to protect a weak endpoint. Closing the
 SSH port afterwards is the operator's choice and not ours to make.
 
-**The scheme lives on the client's `host`** — `wss://ws.example/tunnel` — so
-there is one setting for where a workspace is rather than two that can disagree.
-A bare host still means SSH on 2222, so nothing already configured changes.
+**The scheme lives on the client's `host`** — `wss://ws.example` — so there is
+one setting for where a workspace is rather than two that can disagree. A bare
+host still means SSH on 2222, so nothing already configured changes.
+
+**The agent accepts an upgrade on any path.** Its HTTP server serves nothing
+else, so there is no path to reserve one from, and a fixed path would have to
+agree with whatever the proxy's route leaves in the request — a proxy that
+strips its prefix and one that does not cannot both match it. It also removes a
+default the client had to keep in step with the agent's.
 
 **Certificates verify against the system roots**, with a CA file for a private
 one and `--insecure` per workspace for a self-signed proxy. `--insecure` gives
