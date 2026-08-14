@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      chart_version: ${{ steps.v.outputs.chart_version }}
       tags: ${{ steps.v.outputs.image_tags }}
       image: ${{ steps.v.outputs.image }}
     steps:
@@ -60,10 +61,16 @@ jobs:
             V="${GITHUB_REF_NAME#v}"
             echo "image_tags=${IMG}:${V},${IMG}:latest" >> "$GITHUB_OUTPUT"
             echo "version=${V}" >> "$GITHUB_OUTPUT"
+            echo "chart_version=${V}" >> "$GITHUB_OUTPUT"
           else
-            SHA="sha-$(git rev-parse --short HEAD)"
-            echo "image_tags=${IMG}:${SHA}" >> "$GITHUB_OUTPUT"
-            echo "version=${SHA}" >> "$GITHUB_OUTPUT"
+            SHORT="$(git rev-parse --short HEAD)"
+            echo "image_tags=${IMG}:sha-${SHORT}" >> "$GITHUB_OUTPUT"
+            echo "version=sha-${SHORT}" >> "$GITHUB_OUTPUT"
+            # A chart version has to be SemVer, which an image tag does not:
+            # `helm package --version sha-735a07c` fails outright. So a commit
+            # build gets a prerelease version, which also sorts below every
+            # release, so `helm install` without --version never picks one up.
+            echo "chart_version=0.0.0-dev.${SHORT}" >> "$GITHUB_OUTPUT"
           fi
 
   # One job per architecture, each on a runner of that architecture.
@@ -197,6 +204,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # cosign pushes the signature to ghcr itself, and reads the docker
+      # credential store to do it. `helm registry login` below writes helm's
+      # own file, so without this the chart pushes and then fails to sign with
+      # UNAUTHORIZED on a registry it had just written to.
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: azure/setup-helm@v5
         with:
           version: v3.16.3
@@ -210,16 +226,19 @@ jobs:
       - name: Package and push
         id: push
         env:
+          # The app version is the image tag this chart installs by default,
+          # so the two travel together and a dev chart installs its own commit.
           VERSION: ${{ needs.meta.outputs.version }}
+          CHART_VERSION: ${{ needs.meta.outputs.chart_version }}
         run: |
           set -eux
-          # A chart version is SemVer without the leading v, and the app
-          # version is the image tag this chart installs by default.
-          CHART_VERSION="${VERSION#v}"
-          helm package charts/remote-docker-workspace             --version "$CHART_VERSION" --app-version "$VERSION" --destination .
+          helm package charts/remote-docker-workspace \
+            --version "$CHART_VERSION" --app-version "$VERSION" --destination .
 
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io             --username "${{ github.actor }}" --password-stdin
-          helm push "remote-docker-workspace-${CHART_VERSION}.tgz"             oci://ghcr.io/lhns/charts 2>&1 | tee push.log
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
+          helm push "remote-docker-workspace-${CHART_VERSION}.tgz" \
+            oci://ghcr.io/lhns/charts 2>&1 | tee push.log
 
           echo "digest=$(grep -E '^Digest: ' push.log | awk '{print $2}')" >> "$GITHUB_OUTPUT"
           echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
@@ -231,7 +250,11 @@ jobs:
           set -eux
           REF="ghcr.io/lhns/charts/remote-docker-workspace@${{ steps.push.outputs.digest }}"
           cosign sign "$REF"
-          syft "remote-docker-workspace-${{ steps.push.outputs.chart_version }}.tgz"             -o spdx-json=workspace-chart.sbom.spdx.json
+          # syft cannot read a Helm chart in a registry (it does not know the
+          # layer media type), so it reads the tarball helm packaged, which is
+          # byte for byte what was pushed.
+          syft "remote-docker-workspace-${{ steps.push.outputs.chart_version }}.tgz" \
+            -o spdx-json=workspace-chart.sbom.spdx.json
           cosign attest --predicate workspace-chart.sbom.spdx.json --type spdx "$REF"
 
       - name: Attach the chart to the release
