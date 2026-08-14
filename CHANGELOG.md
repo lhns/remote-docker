@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.2.0 — 2026-08-14
 
 ### Run a workspace on Kubernetes
 
@@ -182,6 +182,23 @@ presented as an unexplained refused connection (ADR 0026):
 - A machine with nobody in it shuts down, and neither an open TCP connection nor
   a command that runs and exits counts as somebody. A session holds its machine
   open for as long as it is connected.
+
+### The Swarm stack file does less
+
+Four settings that only restated Docker's own defaults are gone: one replica,
+restarting on failure, and a placement constraint that is not needed on a
+single-node swarm and never scheduled anything without a label somebody had to
+know to add.
+
+The SSH port is published through the routing mesh rather than `mode: host`.
+The privileged child joins the task's network namespace, so the mesh delivers
+where it is listening; host mode is still worth setting if you want the
+client's own address to survive, and the file says so.
+
+**If you run a swarm of more than one node, pin the service yourself.** The
+binds are directories on one node, so a task rescheduled elsewhere gets new
+host keys and new uids, which moves each account's tunnel port. That was the
+constraint's job and it is now yours.
 
 ### Under the hood, with nothing to notice
 
