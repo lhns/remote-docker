@@ -21,10 +21,8 @@ services:
     privileged: true
 
     ports:
-      - "2222:2222"
-      # SSH over a WebSocket, for a reverse proxy to front (ADR 0034). Only
-      # needed if the proxy is not on this docker network.
-      # - "2280:2280"
+      - "2222:2222"     # ssh
+      # - "2280:2280"   # ssh over a websocket, for a reverse proxy (ADR 0034)
 
     environment:
       TZ: ${TZ:-UTC}
@@ -34,7 +32,6 @@ services:
       WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
-      # Keep the graph driver on real local disk if you possibly can.
       - workspace-docker:/var/lib/docker
       # Host keys and the uid map: lose these and clients report REMOTE HOST
       # IDENTIFICATION HAS CHANGED and tunnel ports move.

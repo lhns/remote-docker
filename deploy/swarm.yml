@@ -3,11 +3,10 @@
 #   ssh <node> "mkdir -p /var/lib/remote-docker/{state,authorized_keys.d}"
 #   docker stack deploy -c swarm.yml workspace
 #
-# Make those directories first: a missing bind source becomes an empty
-# root-owned one rather than an error.
+# Make those directories first, or they arrive empty and root-owned. The binds
+# below are one node's filesystem.
 #
-# Set WORKSPACE_DATA for where state lives on the node, WORKSPACE_IMAGE for
-# which image to run.
+# WORKSPACE_DATA is where state lives, WORKSPACE_IMAGE is which image to run.
 
 # Required: `docker stack deploy` still reads the file with the legacy loader.
 version: "3.8"
@@ -30,41 +29,17 @@ services:
 
     volumes:
       # Not mounted at /var/run/docker.sock: dind runs its own daemon there.
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/host-docker.sock
-
+      - /var/run/docker.sock:/var/run/host-docker.sock
       # Per slot: two replicas sharing a graph directory corrupt it.
-      - type: bind
-        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/{{.Task.Slot}}/docker
-        target: /var/lib/docker
-
-      # Shared across slots. Host keys and the uid map: lose these and clients
+      - ${WORKSPACE_DATA:-/var/lib/remote-docker}/{{.Task.Slot}}/docker:/var/lib/docker
+      # Host keys and the uid map, shared across slots. Lose these and clients
       # report REMOTE HOST IDENTIFICATION HAS CHANGED and tunnel ports move.
-      - type: bind
-        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/state
-        target: /etc/workspace
-
+      - ${WORKSPACE_DATA:-/var/lib/remote-docker}/state:/etc/workspace
       # Drop one <name>.pub per user in here.
-      - type: bind
-        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d
-        target: /etc/workspace/authorized_keys.d
-        read_only: true
+      - ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     ports:
-      # The mesh delivers into the task's namespace, which the privileged child
-      # joins (ADR 0013). Add `mode: host` to keep the client's own address.
-      - "2222:2222"
-
-    # More than one node? Pin it: the binds above are directories on one node,
-    # and a task rescheduled elsewhere finds none of them.
-    #
-    #   docker node update --label-add workspace=true <node>
-    #
-    # deploy:
-    #   placement:
-    #     constraints:
-    #       - node.labels.workspace == true
+      - "2222:2222"   # ssh
 
     healthcheck:
       # Checks the privileged child, whose namespace this task shares.
