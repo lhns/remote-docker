@@ -200,9 +200,17 @@ jobs:
           # evidence is that a socket closed.
           echo "== client log =="
           cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -80 || echo "(none)"
-          echo "== volumes and mounts in the pod =="
+          echo "== inside the pod =="
           kubectl exec -n rd ws-remote-docker-workspace-0 -- docker volume ls 2>&1 | tail -10 || true
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- docker ps -a 2>&1 | tail -10 || true
           kubectl exec -n rd ws-remote-docker-workspace-0 -- sh -c 'mount | grep nfs' 2>&1 | tail -5 || true
+          # The per-account daemon runs as a container of its own, so its
+          # failures are in its log and nowhere else.
+          for c in $(kubectl exec -n rd ws-remote-docker-workspace-0 --                        docker ps -aq --filter name=rd-dind 2>/dev/null); do
+            echo "-- rd-dind container $c"
+            kubectl exec -n rd ws-remote-docker-workspace-0 -- docker logs --tail 40 "$c" 2>&1 | tail -40 || true
+          done
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- sh -c 'ls -l /dev/fuse' 2>&1 || true
           echo "== cluster =="
           kubectl get all -n rd || true
           kubectl describe pod -n rd -l app.kubernetes.io/name=remote-docker-workspace || true
