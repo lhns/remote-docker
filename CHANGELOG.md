@@ -69,6 +69,50 @@ Measured while proving those, and worth knowing:
 The workspace also reads a machine's tunnel port back off that machine's own
 volumes when its record of it has been lost, so volumes made for it still mount.
 
+### One account, used from more than one computer
+
+An account can be enrolled for several machines at once, and each keeps its own
+view of its own files. The daemon is shared, so containers and images are the
+same from either machine, which is the point of using one account from both.
+What is not shared is anything derived from a machine's filesystem: the NFS
+export, the tunnel port behind it and the volumes that name it are per machine.
+The machine is identified by the digest of the key the workspace already
+authenticated, so it cannot be claimed by sending a different one.
+
+Three defects were fixed with it, each reachable by opening the client on a
+second computer:
+
+- **A second machine's failed bind deleted the first machine's live port
+  reservation**, after which any other account on a shared daemon could reach an
+  NFS export that authenticates nobody. A reservation now belongs to the session
+  that took it and is released with a token, not by name.
+- **A dropped tunnel was detected and then handed out anyway.** The keepalive
+  closed the connection and told nothing, so every later request got the dead
+  one and failed as though the workspace had refused. `remote restart` was the
+  only way out, and it refused too. A dead connection is now dropped rather than
+  asked whether anything still depends on it.
+- **A probe waited on the transport's clock**, so a link that stopped carrying
+  traffic without breaking — a laptop suspended, a NAT idling the flow out —
+  took minutes to notice rather than seconds.
+
+Proven by `test/two-clients.sh` on every change: two client machines, one
+account, each reading its own file through its own bind mount, both seeing a
+container the other started, and a collection on one leaving the other's volumes
+alone.
+
+### Commands fail in a way you can act on
+
+- **`docker run` with nothing configured says so.** It used to report the stock
+  Docker CLI's "cannot find the file specified" against a named pipe, while
+  `remote status` in the same terminal gave the real reason. Both failure paths
+  were being discarded.
+- **A container's exit code is yours again.** This binary is the Docker CLI, so
+  `docker run ...; echo $?` has to answer what the container answered; it was
+  collapsing every status to 1, and printing a bare `remote-docker:` line when a
+  container exited non-zero. One part of docker's contract still cannot be
+  matched, and the code says so: Ctrl-C exits 1 rather than 130, because the
+  error docker uses for it is unexported.
+
 ### A workspace can now be a machine on your own computer
 
 `remote machine create <name>` provisions a Linux system here and registers it
@@ -114,6 +158,24 @@ presented as an unexplained refused connection (ADR 0026):
 - A machine with nobody in it shuts down, and neither an open TCP connection nor
   a command that runs and exits counts as somebody. A session holds its machine
   open for as long as it is connected.
+
+### Under the hood, with nothing to notice
+
+The repository is five Go modules rather than one, so the client and the agent
+each build without the other's dependencies, and the shared code between them
+has no third-party dependency at all. The transport, the tunnel protocol and
+half-closing a stream moved into modules both ends share, which found four
+latent bugs where the two copies had drifted — including opposite answers to
+what half-closing means. Nothing about this is visible from outside; it is here
+because a release compared against the last one otherwise looks like it changed
+a great deal.
+
+The README and the architecture records were checked against what the code and
+the outside world actually do, rather than trusted. Two claims had expired
+without anyone noticing: that embedding Compose would pin the Docker CLI back a
+major version, which stopped being true when Compose v5 shipped, and that
+Windows had no standalone Docker CLI, which `winget install Docker.DockerCLI`
+disproves. Both had been quoted as current fact in the README and in `--help`.
 
 ## 0.1.0 — 2026-08-11
 
