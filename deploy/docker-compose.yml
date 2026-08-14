@@ -21,8 +21,8 @@ services:
     privileged: true
 
     ports:
-      - "2222:2222"     # ssh
-      # - "2280:2280"   # ssh over a websocket, for a reverse proxy (ADR 0034)
+      - "2222:2222"  # ssh
+      # - "2280:2280"  # ssh over a websocket, for a reverse proxy (ADR 0034)
 
     environment:
       TZ: ${TZ:-UTC}

@@ -39,7 +39,8 @@ services:
       - ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     ports:
-      - "2222:2222"   # ssh
+      - "2222:2222"  # ssh
+      # - "2280:2280"  # ssh over a websocket, for a reverse proxy (ADR 0034)
 
     healthcheck:
       # Checks the privileged child, whose namespace this task shares.
