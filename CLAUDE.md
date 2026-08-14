@@ -617,8 +617,11 @@ as "the docker run mechanism under it is tested" when only the pure planning
 function was.
 
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
-  wiring -- templated `{{.Task.Name}}`, `mode: host` publishing, placement --
-  needs a real cluster. CI cannot cover it.
+  wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
+  through the routing mesh -- needs a real cluster. CI cannot cover it. The
+  stack file leans on one thing the code does prove: the privileged child joins
+  the TASK's network namespace, so the mesh delivers where the child listens
+  and `mode: host` is not required.
 - **Hyper-V, entirely.** Implemented and NEVER EXECUTED. GitHub's runners do
   not offer it and nobody working on this has it, so it has no automated
   coverage and cannot get any: `docs/testing-machines.md` is its whole
