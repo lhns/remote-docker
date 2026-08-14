@@ -53,6 +53,19 @@ perUserDind: true
 # right choice when the storage allows it.
 dockerdArgs: "--storage-driver=fuse-overlayfs"
 
+# The image each account's own daemon runs, when perUserDind is on.
+#
+# Empty means this chart's own image, which is the right answer and not an
+# obvious one. A per-account daemon inherits the workspace's storage driver,
+# and stock docker:dind does not carry fuse-overlayfs, so it dies in a restart
+# loop with
+#
+#     exec: "fuse-overlayfs": executable file not found in $PATH
+#
+# The compose and Swarm deployments find this image by inspecting the container
+# they are running in. Nothing can do that here, so the chart passes it.
+dindImage: ""
+
 # Extra environment for the agent, e.g. TZ or WORKSPACE_UID_BASE.
 env: {}
 

@@ -67,6 +67,14 @@ spec:
               value: {{ .Values.perUserDind | quote }}
             - name: WORKSPACE_DOCKERD_ARGS
               value: {{ .Values.dockerdArgs | quote }}
+            {{- if .Values.perUserDind }}
+            {{- /* The image an account's own daemon runs. Elsewhere the agent
+                  finds it by inspecting the container it is in; in a pod
+                  nothing can, and the stock docker:dind lacks the storage
+                  driver this workspace inherits to it. */}}
+            - name: WORKSPACE_DIND_IMAGE
+              value: {{ default (include "remote-docker-workspace.image" .) .Values.dindImage | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
