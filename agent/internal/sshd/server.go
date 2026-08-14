@@ -222,6 +222,22 @@ func (s *Server) Serve(ctx context.Context) error {
 	return nil
 }
 
+// ServeListener accepts connections from somewhere other than the TCP port.
+//
+// The same server, the same authentication and the same forwarding policy: only
+// what carries the bytes differs, and nothing above the transport is told which
+// it got. Used for the WebSocket listener, which exists so a workspace can be
+// reached through a reverse proxy.
+//
+// Runs until the listener or the server closes, so callers start it in a
+// goroutine of its own alongside Serve.
+func (s *Server) ServeListener(l net.Listener) error {
+	if err := s.ssh.Serve(l); err != nil && !isClosed(err) {
+		return fmt.Errorf("sshd: serving %s: %w", l.Addr(), err)
+	}
+	return nil
+}
+
 // Close stops the server.
 func (s *Server) Close() error {
 	s.mu.Lock()

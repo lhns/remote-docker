@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
+	"github.com/lhns/remote-docker/core-client/wstunnel"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -56,7 +58,15 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// it is here rather than in the commands because every path to a session
 	// comes through this function -- a check at `machine create` would be right
 	// for the first connection and wrong for every one after a reboot.
-	host := s.opts.Config.Host
+	// Whether this workspace is reached over SSH directly or through a reverse
+	// proxy (ADR 0034). Worked out here because tunnelclient is handed its
+	// connection rather than choosing one (ADR 0030).
+	transport, err := s.opts.Config.Transport()
+	if err != nil {
+		return nil, err
+	}
+
+	host := transport.Host
 	var hold io.Closer
 	if m := s.opts.Config.Machine; m != nil {
 		// Held first, for as long as this connection lives. A machine with
@@ -66,19 +76,28 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
 			return nil, err
 		}
-		host, err = machine.Locate(ctx, m.Backend, m.Name, s.opts.Config.Port)
+		host, err = machine.Locate(ctx, m.Backend, m.Name, transport.Port)
 		if err != nil {
 			_ = hold.Close()
 			return nil, err
 		}
 	}
 
+	dial, err := dialerFor(transport, s.opts.Config)
+	if err != nil {
+		if hold != nil {
+			_ = hold.Close()
+		}
+		return nil, err
+	}
+
 	client, err := tunnelclient.Dial(ctx, tunnelclient.Config{
 		Host:    host,
-		Port:    s.opts.Config.Port,
+		Port:    transport.Port,
 		User:    s.opts.Config.User,
 		Signer:  key.Signer,
 		HostKey: known.Callback(),
+		Dial:    dial,
 	})
 	if err != nil {
 		// The transport reports that it was refused; only this side knows how
@@ -149,6 +168,22 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 	s.progressf("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	return live, nil
+}
+
+// dialerFor returns the function that opens the connection, or nil to dial TCP.
+//
+// Only the transport differs: the SSH handshake, the host-key check and the
+// client key are the same for both.
+func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (net.Conn, error), error) {
+	if !t.WebSocket() {
+		return nil, nil
+	}
+	return wstunnel.Dialer(wstunnel.Options{
+		URL:      t.URL,
+		Addr:     net.JoinHostPort(t.Host, strconv.Itoa(t.Port)),
+		CAFile:   cfg.CAFile,
+		Insecure: cfg.Insecure,
+	})
 }
 
 // shareReconcileInterval matches the port manager's: the same reasoning

@@ -45,6 +45,14 @@ type Config struct {
 	// nobody is there to answer or an acceptance of anything at all.
 	HostKey ssh.HostKeyCallback
 
+	// Dial, if set, opens the connection SSH runs over. Nil dials TCP to Addr.
+	//
+	// Passed in rather than chosen here, like Signer and HostKey, because only
+	// the caller knows the deployment (ADR 0030). The client uses it to open a
+	// WebSocket when the workspace is behind a reverse proxy; the SSH handshake
+	// that follows is the same either way.
+	Dial func(ctx context.Context) (net.Conn, error)
+
 	// Ciphers, if set, replaces the negotiated cipher list.
 	//
 	// aes128-gcm is the default for a reason worth keeping: AES-NI makes it
@@ -59,6 +67,23 @@ type Config struct {
 	KeepAlive time.Duration
 
 	Timeout time.Duration
+}
+
+// dial opens the connection SSH runs over: the caller's, or TCP to Addr.
+func (c Config) dial(ctx context.Context) (net.Conn, error) {
+	if c.Dial != nil {
+		// Returned unwrapped: Addr is the SSH endpoint, which is not where a
+		// proxied connection was made, so adding it to the error would name the
+		// wrong place. The caller's dialler reports its own address.
+		return c.Dial(ctx)
+	}
+
+	dialer := &net.Dialer{Timeout: c.Timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", c.Addr())
+	if err != nil {
+		return nil, fmt.Errorf("tunnel: dialling %s: %w", c.Addr(), err)
+	}
+	return conn, nil
 }
 
 // DefaultCiphers preferred, fastest first. See Config.Ciphers.
@@ -115,10 +140,9 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	clientCfg.Ciphers = cfg.Ciphers
 
-	dialer := &net.Dialer{Timeout: cfg.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", cfg.Addr())
+	conn, err := cfg.dial(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tunnel: dialling %s: %w", cfg.Addr(), err)
+		return nil, err
 	}
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr(), clientCfg)

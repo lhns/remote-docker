@@ -198,8 +198,10 @@ default.**
 
 | environment | file key | flag | default |
 |---|---|---|---|
-| `REMOTE_DOCKER_HOST` | `host` | `--host` | none; required |
-| `REMOTE_DOCKER_PORT` | `port` | `--port` | `2222` |
+| `REMOTE_DOCKER_HOST` | `host` | `--host` | none; required. A host, or `ssh://`, `ws://`, `wss://` with one |
+| `REMOTE_DOCKER_PORT` | `port` | `--port` | `2222`, or the scheme's (443 for `wss`, 80 for `ws`). Optional |
+| `REMOTE_DOCKER_CA_FILE` | `caFile` | `remote create --ca-file` | system roots |
+| `REMOTE_DOCKER_INSECURE` | `insecure` | `remote create --insecure` | off |
 | `REMOTE_DOCKER_USER` | `user` | `--user` | your local username |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
@@ -283,6 +285,34 @@ What is in this release, and what is still unproven:
 The workspace runs one binary, `remote-dockerd`. It supervises dockerd,
 provisions an account per enrolled key, and serves SSH itself. There is no
 sshd, no sudo and no shell scripts in the image.
+
+### Behind a reverse proxy
+
+An open SSH port is often the thing that makes a workspace hard to reach. The
+agent also serves SSH over a WebSocket, so any HTTP reverse proxy can front it:
+
+```
+--ws-addr :2280      the WebSocket listener; empty disables it
+--ws-path /tunnel    the path it answers on
+```
+
+Both listeners run by default. Point the proxy at `:2280`, make sure it passes
+WebSocket upgrades, and give the client the URL:
+
+```
+remote-docker remote create dev --host wss://dev.example.com/tunnel --user alice
+```
+
+**The agent never terminates TLS.** It has no certificate options at all, so
+there is nothing to renew and nothing to expire; the proxy does that. Serving
+plaintext between the proxy and the agent is not the weakness it looks like,
+because the same SSH handshake runs inside it: the host key still proves this is
+the workspace and your key still proves which machine is calling.
+
+For a proxy with a self-signed certificate, either point the client at your CA
+with `--ca-file`, or use `--insecure` for that workspace. `--insecure` gives up
+knowing which front door answered and nothing more — SSH inside still
+authenticates both ends, which is why the flag exists here at all.
 
 ### The image
 

@@ -44,6 +44,7 @@ survives that document being superseded.
 | [0031](0031-if-it-knows-about-docker-it-is-glue.md) | If it knows about Docker, it is glue | Accepted; extends 0021, 0030 |
 | [0032](0032-the-workspace-is-the-record.md) | An address is stable container-side, and the workspace is the record | Accepted; extends 0003, 0029 |
 | [0033](0033-handles-derived-from-the-path.md) | The root handle is derived, the rest are not | Accepted |
+| [0034](0034-ssh-inside-a-websocket.md) | SSH inside a WebSocket | Accepted; extends 0030 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

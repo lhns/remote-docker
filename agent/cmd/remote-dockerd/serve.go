@@ -23,6 +23,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/elevate"
 	"github.com/lhns/remote-docker/agent/internal/sshd"
 	"github.com/lhns/remote-docker/agent/internal/supervise"
+	"github.com/lhns/remote-docker/agent/internal/wslisten"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -75,7 +76,7 @@ const (
 )
 
 func newServeCommand() *cobra.Command {
-	var addr string
+	var addr, wsAddr, wsPath string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -85,14 +86,23 @@ provisions an account per enrolled public key, and serves SSH.
 
 Replaces sshd, the key watcher, the mount helpers and sudo.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return serve(addr)
+			return serve(addr, wsAddr, wsPath)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", ":2222", "address to serve SSH on")
+
+	// On by default, and empty turns it off. Off by default would mean every
+	// existing workspace needs a redeploy before a client can reach it through
+	// a proxy, which is most of the difficulty this exists to remove -- and it
+	// is not a weaker door, because the same SSH handshake runs inside it.
+	cmd.Flags().StringVar(&wsAddr, "ws-addr", ":2280",
+		"address to serve SSH over a WebSocket on; empty disables it")
+	cmd.Flags().StringVar(&wsPath, "ws-path", "/tunnel",
+		"path the WebSocket endpoint answers on")
 	return cmd
 }
 
-func serve(addr string) error {
+func serve(addr, wsAddr, wsPath string) error {
 	log := logger("workspace")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -321,6 +331,25 @@ func serve(addr string) error {
 
 	serveErr := make(chan error, 1)
 	wg.Go(func() { serveErr <- server.Serve(ctx) })
+
+	// A second listener for the same SSH server, so a reverse proxy can front
+	// the workspace (ADR 0034). Disabled by setting --ws-addr to "".
+	if wsAddr != "" {
+		ws, err := wslisten.New(wsAddr, wsPath, logger("wslisten"))
+		if err != nil {
+			stop()
+			wg.Wait()
+			return fmt.Errorf("serving the websocket on %s: %w", wsAddr, err)
+		}
+		defer func() { _ = ws.Close() }()
+
+		log.Info("websocket listening on " + ws.Addr() + wsPath)
+		wg.Go(func() {
+			if err := server.ServeListener(ws.Listener); err != nil {
+				log.Warn("the websocket listener stopped", "err", err)
+			}
+		})
+	}
 
 	select {
 	case <-ctx.Done():

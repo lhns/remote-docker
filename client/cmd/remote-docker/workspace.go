@@ -31,9 +31,9 @@ import (
 // disagreed with all of them would trade one confusion for another. The old
 // verbs remain as aliases.
 func newWorkspaceCreateCommand() *cobra.Command {
-	var host, user, endpoint, watch string
+	var host, user, endpoint, watch, caFile string
 	var port int
-	var makeDefault, noContext bool
+	var makeDefault, noContext, insecure bool
 
 	cmd := &cobra.Command{
 		Use:     "create <name>",
@@ -45,7 +45,10 @@ func newWorkspaceCreateCommand() *cobra.Command {
 			if host == "" {
 				return fmt.Errorf("--host is required: there is nothing to connect to without it")
 			}
-			if port == 0 {
+			// Only for a bare host. A host carrying a scheme says its own port,
+			// or takes the default its scheme implies, and writing 2222 beside
+			// a wss:// URL would be the contradiction Transport refuses.
+			if port == 0 && !strings.Contains(host, "://") {
 				port = config.DefaultSSHPort
 			}
 
@@ -55,7 +58,10 @@ func newWorkspaceCreateCommand() *cobra.Command {
 			}
 			_, existed := file.Workspaces[name]
 
-			ws := config.Workspace{Host: host, Port: port, User: user, Endpoint: endpoint, Watch: watch}
+			ws := config.Workspace{
+				Host: host, Port: port, User: user, Endpoint: endpoint, Watch: watch,
+				CAFile: caFile, Insecure: insecure,
+			}
 			if err := file.Set(name, ws); err != nil {
 				return err
 			}
@@ -75,7 +81,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(out, "%s workspace %q: %s@%s:%d\n", verb, name, cfg.User, cfg.Host, cfg.Port)
+			_, _ = fmt.Fprintf(out, "%s workspace %q: %s\n", verb, name, where(cfg))
 
 			if !noContext {
 				reportContext(out, cfg)
@@ -91,7 +97,12 @@ func newWorkspaceCreateCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&host, "host", "", "workspace address (required)")
+	cmd.Flags().StringVar(&host, "host", "",
+		"workspace address (required): a host, or ssh://, ws:// or wss:// with one")
+	cmd.Flags().StringVar(&caFile, "ca-file", "",
+		"verify a ws:// endpoint against this CA instead of the system roots")
+	cmd.Flags().BoolVar(&insecure, "insecure", false,
+		"accept any certificate from a ws:// endpoint; ssh still authenticates both ends")
 	cmd.Flags().IntVar(&port, "port", 0, "ssh port")
 	cmd.Flags().StringVar(&user, "user", "", "workspace account; defaults to your local username")
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "override where the local Docker API is served")
@@ -249,8 +260,8 @@ func newWorkspaceListCommand() *cobra.Command {
 			names := file.Names()
 			if len(names) == 0 {
 				if file.Host != "" {
-					_, _ = fmt.Fprintf(out, "one unnamed workspace: %s@%s:%d\n",
-						file.User, file.Host, file.Port)
+					_, _ = fmt.Fprintf(out, "one unnamed workspace: %s\n",
+						where(config.Config{User: file.User, Host: file.Host, Port: file.Port}))
 					return nil
 				}
 				// Previously this printed the JSON to write by hand. There is
@@ -272,7 +283,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				if name == file.Default {
 					marker = "*"
 				}
-				where := fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
+				where := where(cfg)
 				if m := file.Workspaces[name].Machine; m != nil {
 					// Which backend, because `rm` will destroy it and the
 					// person reading this table is usually deciding whether
@@ -286,6 +297,18 @@ func newWorkspaceListCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// where names a workspace the way it is reached, so a wss:// host does not
+// print as though it had an SSH port on the end of it.
+func where(cfg config.Config) string {
+	transport, err := cfg.Transport()
+	if err != nil {
+		// Whatever is wrong with it, the raw setting is what the user typed and
+		// what they will recognise; Transport's own error says the rest.
+		return fmt.Sprintf("%s@%s", cfg.User, cfg.Host)
+	}
+	return fmt.Sprintf("%s@%s", cfg.User, transport)
 }
 
 // reportContext creates the docker context for a workspace, reporting rather
@@ -386,7 +409,22 @@ func newWorkspaceInspectCommand() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			row(out, "name", cfg.Name)
-			rowf(out, "workspace", "%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
+
+			// The transport rather than the raw host: a setting that decides
+			// how a workspace is reached should not have to be worked out from
+			// a string, and one that weakens something should not be
+			// discoverable only by reading the JSON.
+			transport, err := cfg.Transport()
+			if err != nil {
+				rowf(out, "workspace", "%s@%s (%v)", cfg.User, cfg.Host, err)
+			} else {
+				rowf(out, "workspace", "%s@%s", cfg.User, transport)
+			}
+			if cfg.Insecure {
+				row(out, "tls", "NOT verified (--insecure); ssh still authenticates both ends")
+			} else if cfg.CAFile != "" {
+				row(out, "tls", "verified against "+cfg.CAFile)
+			}
 			row(out, "endpoint", dockerHostOf(cfg))
 			row(out, "docker context", cfg.ContextName())
 			row(out, "watch", cfg.Watch)

@@ -16,6 +16,7 @@ WORK=$(mktemp -d)
 IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-itest
 SSH_PORT=22222
+WS_PORT=22280
 ACCOUNT=itest
 
 # Every docker command that crosses the proxy is wrapped in a timeout. A
@@ -126,7 +127,10 @@ echo "== 4. start the workspace =="
 # test of per-user mode: several assertions below reach the client's containers
 # with `docker exec <workspace> docker ps`, which only finds them on the daemon
 # the agent itself runs.
-if start_workspace false; then
+# The WebSocket listener is published as well, so section 19 can put a real
+# reverse proxy in front of it. The agent serves it by default; nothing else in
+# this suite touches it.
+if start_workspace false -p "$WS_PORT:2280"; then
     ok "workspace container started"
 else
     bad "workspace container failed to start"
@@ -1607,6 +1611,110 @@ else
 fi
 
 "$WORK/remote-docker" remote stop >/dev/null 2>&1 || true
+
+echo
+echo "== 19. through a real reverse proxy, over wss =="
+# The claim is that a workspace can be reached through an ordinary HTTP reverse
+# proxy on 443, with no SSH port involved. Only a real proxy tests that: the
+# upgrade, the TLS the agent deliberately does not do, and a long-lived
+# connection through something that normally serves web pages.
+#
+# nginx on the host network, so it reaches the published WebSocket port and the
+# client reaches it back, with a certificate generated here and given to the
+# client. The agent serves plain ws and knows nothing about any of this.
+if command -v openssl >/dev/null 2>&1; then
+    mkdir -p "$WORK/proxy"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1         -keyout "$WORK/proxy/key.pem" -out "$WORK/proxy/cert.pem"         -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"         >/dev/null 2>&1
+    chmod 644 "$WORK/proxy/key.pem" "$WORK/proxy/cert.pem"
+
+    cat >"$WORK/proxy/nginx.conf" <<'NGINX'
+events {}
+http {
+    server {
+        listen 8443 ssl;
+        ssl_certificate     /etc/proxy/cert.pem;
+        ssl_certificate_key /etc/proxy/key.pem;
+
+        location / {
+            proxy_pass http://127.0.0.1:22280;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            # A tunnel is one request that lasts as long as the session, and a
+            # proxy that times it out looks exactly like the workspace dying.
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+    }
+}
+NGINX
+
+    hostdocker rm -f itest-proxy >/dev/null 2>&1
+    if hostdocker run -d --name itest-proxy --network host         -v "$WORK/proxy:/etc/proxy:ro"         -v "$WORK/proxy/nginx.conf:/etc/nginx/nginx.conf:ro"         nginx:alpine >/dev/null 2>&1; then
+        ok "a reverse proxy is in front of the workspace"
+    else
+        bad "could not start the reverse proxy"
+    fi
+
+    for _ in $(seq 1 30); do
+        curl -sk https://127.0.0.1:8443/ >/dev/null 2>&1 && break
+        sleep 1
+    done
+
+    # A session of its own: the reverse-tunnel port belongs to one session at a
+    # time (ADR 0029), so this cannot run beside the one above.
+    wsenv() {
+        env REMOTE_DOCKER_HOST="wss://localhost:8443/tunnel"             REMOTE_DOCKER_PORT=             REMOTE_DOCKER_CA_FILE="$WORK/proxy/cert.pem"             REMOTE_DOCKER_ENDPOINT="$WORK/ws.sock"             "$@"
+    }
+
+    if outputs "tunnel port" wsenv timeout 90 "$WORK/remote-docker" remote status; then
+        ok "the workspace answers over wss, through the proxy"
+    else
+        bad "no answer over wss: $(echo "$LAST_OUTPUT" | tail -2 | tr '
+' ' ')"
+    fi
+
+    # The reverse forward is the half a proxy is most likely to break: it is the
+    # direction the workspace opens, carrying NFS back to this machine.
+    wsenv "$WORK/remote-docker" remote start --foreground >"$WORK/ws-up.log" 2>&1 &
+    WS_PID=$!
+    if wait_endpoint "$WORK/ws.sock" "$WS_PID"; then
+        ok "the endpoint came up over wss"
+        if out=$(timeout 120 docker -H "unix://$WORK/ws.sock" run --rm             -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
+            if [ "$out" = "from the project directory" ]; then
+                ok "a bind mount resolves through the proxy, so the reverse forward works"
+            else
+                bad "the container read [$out] through the proxy"
+            fi
+        else
+            bad "the container failed through the proxy: $(echo "$out" | tail -1)"
+        fi
+    else
+        bad "the endpoint never came up over wss"
+        sed 's/^/        /' "$WORK/ws-up.log"
+    fi
+
+    # A proxy that stops passing traffic without closing anything is the case
+    # TCP keepalives cannot see, and the reason wslisten pings. Pausing the
+    # container black-holes it exactly that way.
+    hostdocker pause itest-proxy >/dev/null 2>&1
+    info "the proxy is paused; waiting for the agent to notice"
+    sleep 75
+    if hostdocker logs "$CONTAINER" 2>&1 | grep -q "stopped answering"; then
+        ok "the agent dropped the silent websocket, so its port is free again"
+    else
+        bad "the agent did not notice a websocket that stopped answering"
+        info "without this a vanished client keeps its reverse-tunnel port"
+    fi
+    hostdocker unpause itest-proxy >/dev/null 2>&1
+
+    kill "$WS_PID" 2>/dev/null
+    wait "$WS_PID" 2>/dev/null
+    hostdocker rm -f itest-proxy >/dev/null 2>&1
+else
+    info "no openssl on this runner; the proxy section did not run"
+fi
 
 
 if [ "$FAIL" -ne 0 ]; then

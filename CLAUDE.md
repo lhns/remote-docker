@@ -44,6 +44,7 @@ core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
   tunnelclient/          dialling the tunnel: sessions, streams, both forwards.
                          Given a signer and a host key rule; decides neither.
   nfsserve/              in-process NFSv3 server, virtual export namespace
+  wstunnel/              dialling a workspace through a reverse proxy (ADR 0034)
   fswatch/               watches shared dirs on three platforms, budget,
                          excludes, overflow
   keys/                  the keypair and known_hosts: this machine's identity
@@ -77,6 +78,8 @@ agent/go.mod             the agent module: THE GLUE. 4 direct third-party
                          requires, 24 go.sum lines
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
+    wslisten/            the same SSH server, reached over a WebSocket. Serves
+                         ws and NEVER TLS: the proxy terminates that
     sshd/                the SSH server: auth, sessions, and the forwarding
                          POLICY core-agent/tunnelserver asks. Its session
                          handling is docker all the way down and stays here.
@@ -297,6 +300,15 @@ premise of the project, and it applies to building it too. So:
   nobody has explained, but it fails loudly in CI rather than quietly here, so it
   lives beside the code in `core-client/nfsserve/handles.go` with a test pinning
   it.
+
+- **A WebSocket connection carries its own liveness.**
+  `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection
+  arriving through a reverse proxy is a WebSocket wrapping one, so none of it
+  applies. `wslisten` pings on the same 60s budget instead. Take that away and
+  a client that vanishes keeps its reverse-tunnel port reserved: the symptom is
+  not a lost connection but a REFUSED FORWARD on some later reconnect, with
+  containers mounting against a port bound to nothing. It also keeps the tunnel
+  alive through a proxy's idle timeout.
 
 - **A port reservation ends when the workspace NOTICES the connection end, not
   when it ends.** A client whose network black-holes leaves a socket that is
@@ -634,13 +646,39 @@ function was.
 
 ## Conventions
 
-- Comments explain *why*, not *what*, and are written for somebody reading the
-  code to understand it rather than for whoever debugged it. Keep the finding
-  and the way it fails silently; drop the transcript, the re-derivation and
-  what was tried first. Several findings here cost real debugging (the hijack
-  rules, the half-close, the genproto exclusion, the go-nfs refusal panic,
-  mount propagation) and must survive the edit that shortens them. The long
-  version belongs in an ADR, which the comment then links to.
+- Comments say **what the code does**, when that is not plain from reading it,
+  and **why it is that way**. The older version of this rule said "why, not
+  what", and it produced comments that restate the design in a phrase and help
+  nobody. This one sat above the block that starts the WebSocket listener:
+
+      // The same SSH server, reached another way. A proxy in front terminates
+      // TLS; nothing here does (ADR 0034).
+
+  A reader is there to find out what that block starts and when it is skipped.
+  Tell them that first, then why. It now reads:
+
+      // A second listener for the same SSH server, so a reverse proxy can
+      // front the workspace (ADR 0034). Disabled by setting --ws-addr to "".
+
+- **Do not write comments in the register of the invariant list above.** That
+  list is terse and mnemonic on purpose, because it is a list of rules to
+  remember. A code comment is prose for somebody with the code in front of them,
+  and the same phrasing there turns into sloganeering: "X is not the weakness it
+  looks like", "which is the point", "and nothing more", "the whole point is".
+  Drop the flourish and say the thing.
+
+- Comments are written for somebody reading the code, not for whoever debugged
+  it. Keep the finding and the way it fails silently; drop the transcript, the
+  re-derivation and what was tried first. Several findings here cost real
+  debugging (the hijack rules, the half-close, the genproto exclusion, the
+  go-nfs refusal panic, mount propagation) and must survive the edit that
+  shortens them. The long version belongs in an ADR, which the comment links to.
+
+- **Commit and pull request titles name the change, plainly.** "Add ws/wss
+  transport for the SSH tunnel", not "Reach the workspace over a WebSocket".
+  A title is an index entry somebody scans in a log of two hundred; the body is
+  where the reasoning goes. The same applies to ADR titles, which name the
+  decision rather than argue it.
 - No `--` interjections, and few em-dashes. A dash almost always carries a
   clause that wanted its own sentence, and reading around one means holding
   the first half open while the second runs underneath it.
