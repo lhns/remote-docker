@@ -145,6 +145,17 @@ jobs:
           kubectl get pods -n rd -o wide
           kubectl exec -n rd ws-remote-docker-workspace-0 -- remote-dockerd healthcheck
 
+      # `kind load` puts an image in the NODE's containerd. The workspace runs
+      # its own dockerd with its own graph on a PVC, which knows nothing about
+      # that, so a per-account daemon started from this image would be pulled
+      # from a registry that has never heard of it. A real deployment pulls
+      # ghcr.io/lhns/remote-docker-workspace and never meets this; here the
+      # image is handed over directly.
+      - name: give the workspace's own daemon the image
+        run: |
+          docker save remote-docker-workspace:kind             | kubectl exec -i -n rd ws-remote-docker-workspace-0 -- docker load
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- docker images
+
       - name: reach it through the ingress, over ws
         run: |
           set -eux
