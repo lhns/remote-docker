@@ -8,12 +8,29 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## 0.2.1 — 2026-08-14
+
+### The published Helm chart is signed
+
+Nothing in the binaries or the image changed. The 0.2.0 chart was pushed
+unsigned, because the signing step authenticated to the registry the way helm
+does and cosign reads the docker credential store, so `cosign verify` on
+`ghcr.io/lhns/charts/remote-docker-workspace:0.2.0` fails. It works from 0.2.1
+on.
+
+Charts built from a commit rather than a tag are published too, as
+`0.0.0-dev.<short-sha>`, so a specific commit can be installed with
+`--version 0.0.0-dev.abc1234`. They sort below every release, so an install
+that names no version never picks one up.
+
 ## 0.2.0 — 2026-08-14
 
 ### Run a workspace on Kubernetes
 
 ```bash
-helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace   --set ingress.host=ws.example.com   --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
+helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace \
+  --set ingress.host=ws.example.com \
+  --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
 ```
 
 One privileged pod, its image store and its host keys on volumes of their own,

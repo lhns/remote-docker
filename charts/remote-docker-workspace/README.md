@@ -9,7 +9,7 @@ tunnel, so nothing is copied or synced.
 
 ```bash
 helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace \
-  --version 0.1.0 \
+  --version 0.2.1 \
   --namespace remote-docker --create-namespace \
   --set ingress.host=ws.example.com \
   --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
@@ -34,11 +34,11 @@ docker run --rm -v ${PWD}:/w alpine:3 ls /w      # /w is this machine's director
 ## Verify the chart and image (cosign keyless)
 
 ```bash
-cosign verify ghcr.io/lhns/remote-docker-workspace:v0.1.0 \
+cosign verify ghcr.io/lhns/remote-docker-workspace:0.2.1 \
   --certificate-identity-regexp '^https://github.com/lhns/remote-docker/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
-cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.1.0 \
+cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
   --certificate-identity-regexp '^https://github.com/lhns/remote-docker/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
