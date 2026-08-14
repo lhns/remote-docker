@@ -73,9 +73,8 @@ func (l *Listener) pingEvery() time.Duration {
 // proxy is configured to send the tunnel.
 func (l *Listener) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Anything that is not an upgrade is answered rather than left to
-		// hang: somebody who opens the address in a browser, or a proxy health
-		// check, should be told what this is.
+		// A plain request -- a browser, a health check -- is answered rather
+		// than left to hang.
 		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			http.Error(w, "remote-docker: this is an ssh tunnel endpoint; connect with ws:// or wss://",
 				http.StatusUpgradeRequired)
@@ -177,10 +176,8 @@ type Server struct {
 
 // New starts listening on addr and accepts WebSocket upgrades on any path.
 //
-// Any path, because this server serves nothing else, so there is no path to
-// reserve one from. It also removes the need for the proxy's route and the
-// agent to agree on a path: a proxy that strips its prefix and one that does
-// not both work, where a fixed path makes one of them a 404.
+// Any path, so the proxy's route and the agent need not agree on one: a proxy
+// that strips its prefix before forwarding and one that does not both work.
 //
 // The listener is returned rather than served here, so the caller can hand it
 // to the SSH server that already accepts TCP connections.
