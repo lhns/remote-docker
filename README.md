@@ -696,9 +696,10 @@ push. **macOS has never been executed at all**, in CI or anywhere else.
 **Windows is unit tested**, including the named-pipe endpoint, but no Windows
 machine has taken a session end to end, because the suite needs a Linux
 kernel's NFS client. Swarm itself needs a real cluster and CI cannot cover it.
-**Android is built and inspected, never run**: CI checks that the binary is
-loadable on a phone and links the system libc, which is what makes DNS work
-there, and nothing executes it.
+**Android is built and inspected, and CI runs nothing on it**: it checks that
+the binary is loadable on a phone and links the system libc, which is what makes
+DNS work there. A session and a container were confirmed by hand from Termux on
+2026-08-14, on one arm64 device. `android_amd64` has never been executed.
 
 ## Prior art
 

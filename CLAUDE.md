@@ -673,8 +673,9 @@ function was.
 - **Android, beyond what the file says.** `test/elf.sh` asserts on every push
   that the binary is loadable there and links bionic, and nothing runs it: no
   CI job, no integration test, no emulator. Both architectures ship and only
-  arm64 has ever been on a device, by hand. Say what was actually done, which
-  is that a phone reached a workspace and ran containers.
+  arm64 has ever been on a device. Say what was actually done, which is that a
+  phone reached a workspace over wss and ran a container, by hand, on
+  2026-08-14. `android_amd64` has never been executed by anyone.
 - **Windows, beyond the unit tests.** `test (windows)` runs the client and
   shared modules' tests on every pull request, which covers the named-pipe
   endpoint and `processAlive`. What has never run there is the client itself:

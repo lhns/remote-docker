@@ -8,7 +8,21 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.2.2 — 2026-08-14
+
+### Security: the Kubernetes pod no longer mounts a ServiceAccount token
+
+**Upgrade if you run the Helm chart.** A projected token is mounted at mode
+0644, and an enrolled account gets a shell in that container as its own uid, so
+any account able to run containers could also read the pod's cluster identity
+and act as it against the API server. The agent never calls the Kubernetes API,
+so the chart sets `automountServiceAccountToken: false` and there is no token in
+the pod. There was no Role or ClusterRole before and there is none now, so what
+an attacker gained depended on what your namespace's default ServiceAccount can
+do.
+
+`helm upgrade` is the whole fix. Nothing else in an install changes, and no
+client or workspace setting is affected.
 
 ### The Android build can resolve a hostname
 
@@ -24,6 +38,11 @@ resolver, and reaching it means linking the system libc, so that target is now
 built with the NDK. Nothing else changes, and no other platform is built any
 differently.
 
+Confirmed on a phone on 2026-08-14: a session over `wss://` and a container,
+from Termux. CI still runs nothing on Android, so what it checks is the file —
+that the binary is loadable there and links the system libc, which is what makes
+DNS work.
+
 **There is an `android_amd64` archive again**, for emulators and Chromebooks.
 It was left out because it would have required exactly this.
 
@@ -31,14 +50,9 @@ It was left out because it would have required exactly this.
 
 [`docs/threat-model.md`](docs/threat-model.md) had not been revisited since a
 workspace could be reached through a reverse proxy or run in a cluster. It now
-models both, says who each control defends against, and records what the
-project's artifacts are signed with.
-
-**One change to the chart came out of it.** The pod mounted a ServiceAccount
-token at mode 0644, and an enrolled account gets a shell in that container as
-its own uid, so it could read the pod's cluster identity. The agent never calls
-the Kubernetes API, so the chart now sets `automountServiceAccountToken: false`.
-Nothing else in an install changes.
+models both, says who each control defends against, what is deliberately not
+modelled, and what the project's artifacts are signed with. The ServiceAccount
+token above is what writing it turned up.
 
 **One limit is written down rather than fixed.** With one daemon for everybody
 (`WORKSPACE_PER_USER_DIND=false`), the NFS exports are bound in the namespace
