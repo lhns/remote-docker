@@ -302,10 +302,16 @@ WebSocket upgrades, and give the client the URL:
 remote-docker remote create dev --host wss://dev.example.com --user alice
 ```
 
-The agent accepts an upgrade on **any path**, so the route can be whatever suits
-the proxy, and it does not matter whether the proxy strips its prefix before
-forwarding. A request that is not an upgrade gets a short reply saying what the
-endpoint is, which is what a browser or a health check will see.
+The tunnel is served on the root by default, and the agent accepts an upgrade on
+**any path**, so it does not matter whether the proxy strips its prefix before
+forwarding. Put it under a path if the proxy routes on one:
+
+```
+remote-docker remote create dev --host wss://example.com/rd --user alice
+```
+
+A request that is not an upgrade gets a short reply saying what the endpoint is,
+which is what a browser or a health check will see.
 
 **The agent never terminates TLS.** It has no certificate options at all, so
 there is nothing to renew and nothing to expire; the proxy does that. Serving

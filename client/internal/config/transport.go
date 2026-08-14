@@ -104,6 +104,13 @@ func (c Config) Transport() (Transport, error) {
 		if err != nil {
 			return Transport{}, err
 		}
+		// The root by default. A request has a path whether or not the setting
+		// does, so this only makes visible what would be sent anyway. The agent
+		// ignores it; a path is here for a proxy that routes on one, and is
+		// then whatever that proxy expects.
+		if u.Path == "" {
+			u.Path = "/"
+		}
 		return Transport{Kind: scheme, Host: u.Hostname(), Port: port, URL: u.String()}, nil
 	}
 

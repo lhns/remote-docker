@@ -58,11 +58,12 @@ SSH port afterwards is the operator's choice and not ours to make.
 one setting for where a workspace is rather than two that can disagree. A bare
 host still means SSH on 2222, so nothing already configured changes.
 
-**The agent accepts an upgrade on any path.** Its HTTP server serves nothing
-else, so there is no path to reserve one from, and a fixed path would have to
-agree with whatever the proxy's route leaves in the request — a proxy that
-strips its prefix and one that does not cannot both match it. It also removes a
-default the client had to keep in step with the agent's.
+**The tunnel is on the root, and the agent accepts an upgrade on any path.** Its
+HTTP server serves nothing else, so there is no path to reserve one from, and a
+fixed path would have to agree with whatever the proxy's route leaves in the
+request — a proxy that strips its prefix and one that does not cannot both match
+it. A path is still useful on the client's URL when the proxy routes on one, and
+it is then the proxy's business alone.
 
 **Certificates verify against the system roots**, with a CA file for a private
 one and `--insecure` per workspace for a self-signed proxy. `--insecure` gives
