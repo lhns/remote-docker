@@ -125,18 +125,21 @@ type Spec struct {
 	// volumes; `--rm` on it would delete all of that the moment it stopped.
 	Remove bool
 
-	// Restart is the policy the PARENT daemon applies to this one.
+	// There is deliberately no restart policy, and this is where somebody will
+	// look for one.
 	//
-	// Set, and it earns it: when the workspace is restarted, the parent
-	// dockerd restarts only containers that asked to be. Without a policy
-	// every account's daemon stays down until that account next connects --
-	// so a detached container survives its author's disconnect, as intended,
-	// but not the workspace being restarted, which is the moment it most
-	// needs to.
+	// A daemon used to carry `unless-stopped`, so the parent dockerd brought it
+	// back after a workspace restart. That made the parent a second supervisor
+	// alongside the agent, with no backoff, nothing in this project's log, and
+	// nobody watching at all in shared mode, where the agent does not manage
+	// these daemons. A daemon that would not start crash-looped forever, and
+	// reconcile could not replace it because a container that never stops
+	// failing never answers what it is running. The agent starts a daemon when
+	// an account connects (Ensure) and that is the whole lifecycle.
 	//
-	// `unless-stopped` rather than `always`: an operator who deliberately
-	// stops somebody's daemon should find it still stopped afterwards.
-	Restart string
+	// What is given up: an account's detached containers no longer come back on
+	// their own after the workspace restarts, only when that account next
+	// connects. See docs/adr/0036.
 
 	Labels []string
 	Mounts []elevate.Mount
@@ -235,7 +238,6 @@ func Plan(account string, opts Options) (Spec, error) {
 		Entrypoint: Entrypoint,
 		Privileged: true,
 		Remove:     false,
-		Restart:    "unless-stopped",
 		Labels:     labels,
 		Mounts: []elevate.Mount{
 			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
@@ -266,9 +268,6 @@ func (s Spec) Args() []string {
 	}
 	if s.Privileged {
 		args = append(args, "--privileged")
-	}
-	if s.Restart != "" {
-		args = append(args, "--restart", s.Restart)
 	}
 	if s.Entrypoint != "" {
 		args = append(args, "--entrypoint", s.Entrypoint)

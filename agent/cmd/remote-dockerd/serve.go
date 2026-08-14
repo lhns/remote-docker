@@ -266,6 +266,27 @@ func serve(addr, wsAddr string) error {
 		} else if n > 0 {
 			log.Info("adopted running daemons from a previous run", "count", n)
 		}
+	} else {
+		// A workspace that has been in the other mode may still have daemons
+		// running, and in this mode nothing routes to them: every account is
+		// served by the daemon above. See StopStrays, which stops and never
+		// removes them.
+		//
+		// Read, never created: a workspace with no id has never run a
+		// per-account daemon, so there is nothing to find and no reason to
+		// write state for it. It also keeps this from ever running unfiltered,
+		// where it would stop another workspace's daemons on a shared parent.
+		if id, ok := daemons.KnownWorkspaceID(stateDir); ok {
+			strays := &daemons.Manager{
+				Options: daemons.Options{Workspace: id},
+				Log:     logger("daemons"),
+			}
+			if n, err := strays.StopStrays(ctx); err != nil {
+				log.Warn("could not check for per-account daemons left running", "err", err)
+			} else if n > 0 {
+				log.Info("stopped per-account daemons this mode does not use", "count", n)
+			}
+		}
 	}
 
 	// One port per MACHINE rather than per account (ADR 0029). The uid still

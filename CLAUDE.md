@@ -534,6 +534,20 @@ premise of the project, and it applies to building it too. So:
   tell which volumes must never be pruned. Anonymous storage here would make an
   ordinary `docker system prune -a --volumes` on the workspace's own daemon
   destroy every account's work with nothing on screen naming it.
+- **"Cannot tell" means busy only for a daemon that is RUNNING.** `reconcile`
+  refuses to rebuild a daemon until nothing is running inside it, and it asks
+  the daemon, which a crash-looping one never answers. So a broken daemon
+  counted as busy forever, was never rebuilt, and the log said "has containers
+  running" about a container restarting every nineteen seconds. `idle` asks the
+  PARENT for the container's state first: exited, restarting, created or dead
+  cannot be running anything. The old rule stands for a daemon that is up and
+  slow to answer, where the cost of being wrong is somebody's containers.
+- **A per-account daemon carries no restart policy** (ADR 0036). It used to,
+  which made the parent dockerd a second supervisor with no backoff, nothing in
+  our log, and nobody watching at all in shared mode. `Ensure` starts a daemon
+  when its account connects and that is the whole lifecycle. What this gives up
+  is stated where it will be missed: an account's detached containers come back
+  when that account reconnects, not when the workspace restarts.
 - **Never `--rm` a per-account daemon**, and never copy `elevate`'s
   `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
   state is worthless; this one holds somebody's containers, images and volumes.

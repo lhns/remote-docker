@@ -230,3 +230,9 @@ the code differs; the blast radius does.)*
   silently returned the first account's volume with the *first* account's NFS
   port), and "loopback" in a local forward now means the account's own dind's
   loopback rather than the agent's, where the SSH port lives.
+- **Amended by [ADR 0036](0036-the-agent-supervises-its-daemons.md).** A daemon
+  was created with a restart policy, so the parent dockerd supervised it beside
+  the agent. One that would not start crash-looped with nothing of ours watching,
+  and could not be rebuilt because a container that never stops failing never
+  answers what it is running. The agent is now the only thing that starts a
+  daemon, and one that is not running no longer counts as busy.
