@@ -394,6 +394,41 @@ else
 fi
 
 echo
+echo "== 12. the NFS export is not reachable from a shell =="
+# The reverse forward binds 127.0.0.1 inside the account's own dind namespace
+# (agent/internal/sshd/forward_tcpip.go). A shell runs in the workspace
+# container's namespace, so it cannot reach the export, not even its own
+# account's. Opening a socket asks no forwarding policy, so the namespace is
+# the only thing deciding here.
+#
+# With one daemon for everybody (ADR 0012) the export binds in the namespace
+# the shells run in and this does not hold; test/integration.sh measures it.
+alice_port=$(cd "$WORK/project-$A" && REMOTE_DOCKER_STATE_DIR="$WORK/state-$A" \
+    REMOTE_DOCKER_HOST=127.0.0.1 REMOTE_DOCKER_PORT="$SSH_PORT" \
+    REMOTE_DOCKER_USER="$A" REMOTE_DOCKER_ENDPOINT="$A_SOCK" \
+    timeout 60 "$WORK/remote-docker" remote status 2>/dev/null |
+    awk '/^account/ {print $NF}')
+
+if [ -z "$alice_port" ]; then
+    bad "could not read $A's tunnel port, so nothing was probed"
+else
+    for who in "$A" "$B"; do
+        # bash is in the image, so the probe needs nothing installed: /dev/tcp
+        # opens a connection or fails, and that is the whole question.
+        reach=$(timeout 60 ssh -i "$WORK/state-$who/id_ed25519" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" \
+            "exec 3<>/dev/tcp/127.0.0.1/$alice_port && echo CONNECTED || echo REFUSED" \
+            2>/dev/null </dev/null | tr -d '\015')
+        case "$reach" in
+        *CONNECTED*) bad "SECURITY: $who's shell reached the NFS export on $alice_port" ;;
+        *REFUSED*)   ok "$who's shell cannot reach the export on $alice_port" ;;
+        *)           bad "the probe from $who's shell said nothing: [$reach]" ;;
+        esac
+    done
+fi
+
+echo
 if [ "$FAIL" -ne 0 ]; then
     dump_workspace_log
 fi

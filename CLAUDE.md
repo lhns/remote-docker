@@ -371,6 +371,17 @@ premise of the project, and it applies to building it too. So:
   0012), any other account could reach an NFS export that authenticates nobody.
   An ordinary action reached it: opening the client on a second machine.
 
+- **The reverse forward is bound where the daemon is, and shells are not
+  there.** With a daemon per account the export listens inside that account's
+  dind namespace, so no shell reaches it, its own account's included. What keeps
+  them out is the namespace and not `ForwardPolicy`: `AllowDial` gates ssh
+  channels, and a shell opening a socket asks no policy at all. Binding in the
+  agent's namespace as well would put an unauthenticated NFS export in the
+  namespace every shell runs in, which is exactly what a shared daemon (ADR
+  0012) must do and why that mode rests on its trust assumption.
+  `per-user-dind.sh` section 12 asserts the absence, `integration.sh` section 11
+  measures the shared mode, and the threat model's flow 5 is where it is
+  reasoned about.
 - **Never range a map to assign something durable.** Account uids are handed
   out in `accounts.reconcile`, which used to range the `found` map -- so which
   account got which uid, and therefore which reverse-tunnel port, differed
@@ -578,8 +589,9 @@ different daemons, that neither can list or stop the other's containers, that
 each account's bind mount resolves (which is the only real proof the reverse
 tunnel was bound inside that account's netns), that both publish the same port
 at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
-is in the `docker` group, and that restarting the agent adopts the running
-daemons with their containers intact.
+is in the `docker` group, that NO account's shell can reach the NFS export at
+all, and that restarting the agent adopts the running daemons with their
+containers intact.
 
 `test/nfs-resilience.sh` asks what a mount DOES when the thing behind it goes
 away, on both layers and both ways a connection can end: a session released, a
@@ -662,27 +674,6 @@ function was.
   never been executed at all.
 
 ## Conventions
-
-- Comments say **what the code does**, when that is not plain from reading it,
-  and **why it is that way**. The older version of this rule said "why, not
-  what", and it produced comments that restate the design in a phrase and help
-  nobody. This one sat above the block that starts the WebSocket listener:
-
-      // The same SSH server, reached another way. A proxy in front terminates
-      // TLS; nothing here does (ADR 0034).
-
-  A reader is there to find out what that block starts and when it is skipped.
-  Tell them that first, then why. It now reads:
-
-      // A second listener for the same SSH server, so a reverse proxy can
-      // front the workspace (ADR 0034). Disabled by setting --ws-addr to "".
-
-- **Do not write comments in the register of the invariant list above.** That
-  list is terse and mnemonic on purpose, because it is a list of rules to
-  remember. A code comment is prose for somebody with the code in front of them,
-  and the same phrasing there turns into sloganeering: "X is not the weakness it
-  looks like", "which is the point", "and nothing more", "the whole point is".
-  Drop the flourish and say the thing.
 
 - Comments are written for somebody reading the code, not for whoever debugged
   it. Keep the finding and the way it fails silently; drop the transcript, the

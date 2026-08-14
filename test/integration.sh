@@ -685,6 +685,29 @@ else
             bad "SECURITY: $OTHER reached $ACCOUNT's NFS port $first_port"
             sed 's/^/        /' "$WORK/reach.log"
         fi
+
+        # The dial refusal above covers ssh -L. It does not cover a shell:
+        # with one daemon for everybody the export binds in the agent's own
+        # network namespace, which is where every account's shell runs, so a
+        # socket opened there passes through no forwarding policy. A daemon per
+        # account (ADR 0019, the default) binds inside that account's namespace
+        # instead, and test/per-user-dind.sh asserts a shell cannot reach it.
+        #
+        # Reported rather than asserted, because it follows from this mode
+        # rather than from a defect in it. The threat model records it.
+        shell_reach=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o BatchMode=yes -p "$SSH_PORT" "$OTHER@127.0.0.1" \
+            "exec 3<>/dev/tcp/127.0.0.1/$first_port && echo CONNECTED || echo REFUSED" \
+            2>/dev/null </dev/null | tr -d '\015')
+        case "$shell_reach" in
+        *CONNECTED*)
+            info "shared daemon: $OTHER's shell reaches $ACCOUNT's export on $first_port (ADR 0012)" ;;
+        *REFUSED*)
+            info "shared daemon: $OTHER's shell cannot reach $first_port" ;;
+        *)
+            info "shared daemon: the shell probe said nothing: [$shell_reach]" ;;
+        esac
     fi
 fi
 

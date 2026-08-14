@@ -6,7 +6,9 @@ The model is the diagrams. Each flow below is drawn, and the STRIDE analysis
 hangs off the arrows in that drawing: every point names the interaction it
 applies to, the control, the file that enforces it, and the test that covers
 it. Anything that cannot be pointed at an arrow is not analysis, and is either
-missing from a diagram or belongs in [Accepted risks](#accepted-risks).
+missing from a diagram or belongs in [Accepted risks](#accepted-risks). Every
+point also has to name somebody from [Who this defends
+against](#who-this-defends-against) who could actually arrive that way.
 
 STRIDE letters are used where they apply and left out where they do not.
 **S**poofing, **T**ampering, **R**epudiation, **I**nformation disclosure,
@@ -20,9 +22,28 @@ STRIDE letters are used where they apply and left out where they do not.
 2. **The user's SSH private key**, `~/.config/remote-docker/id_ed25519`, which
    is the only credential in the system.
 3. **The registry credentials in `~/.docker/config.json`** or the keychain a
-   credential helper fronts. They do not stay here: see flow 2.
+   credential helper fronts. They do not stay here: see flow 3.
 4. **Each account's images, containers and volumes** on the workspace.
 5. **The node's Docker socket**, where Swarm deployments run.
+
+## Who this defends against
+
+| adversary | how they arrive | what they get |
+|---|---|---|
+| a process running as the user | an npm postinstall, an editor extension, anything the user runs | the local endpoint, which is total authority over the workspace. The control is that it is owner-only and never TCP |
+| another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation |
+| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, and every container's contents |
+| somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates |
+| the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
+| an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3 |
+| a pod in the same cluster | the pod network | the workspace's ports. The export is loopback inside a namespace of its own, so it is not among them |
+| whoever holds a copy of the config directory | a synced folder, a backup, a stolen laptop | the private key at 0600, and a share record that is refused wholesale when another machine or account wrote it |
+
+**Not modelled**, said once so the rest reads as deliberate: defects in
+`x/crypto/ssh`, `coder/websocket`, the kernel's NFS client or `dockerd`; an
+operator who is already root on the node; physical access to an unlocked
+machine; and side channels. Each is either somebody else's boundary or a thing
+no control here could hold.
 
 ## Trust boundaries
 
@@ -40,10 +61,12 @@ flowchart LR
     end
 
     subgraph net["NETWORK (untrusted)"]
+        proxy["reverse proxy, optional<br/>terminates TLS, forwards ws"]
         ssh{{"one SSH connection<br/>host key pinned in known_hosts"}}
+        proxy -.- ssh
     end
 
-    subgraph ws["WORKSPACE CONTAINER (privileged, semi-trusted)"]
+    subgraph ws["WORKSPACE (privileged, semi-trusted)"]
         agent["remote-dockerd<br/>runs as root"]
         accounts[("one unix account<br/>per enrolled key")]
         subgraph dind["per-account daemon (privileged)"]
@@ -65,6 +88,11 @@ flowchart LR
     classDef boundary stroke-dasharray: 5 5
     class user,net,ws,node boundary
 ```
+
+The workspace is a container under compose or Swarm, a machine on the user's
+own hardware (ADR 0026), a VM (ADR 0025) or a pod (ADR 0035). The picture is
+the same in all four: what moves is who owns the hardware the semi-trusted box
+runs on, which changes the accepted risks and none of the controls.
 
 Three properties of that picture decide everything below.
 
@@ -105,7 +133,7 @@ sequenceDiagram
     Client->>Agent: publickey auth
     Agent->>Keys: is this key enrolled, and for whom?
     Agent-->>Client: accepted as alice
-    Note over Agent: the account is fixed to the connection here,<br/>every later decision reads it from there
+    Note over Agent: the account is fixed to the connection here,<br/>and so is the machine: ClientID is the digest<br/>of the key just authenticated
 ```
 
 **S — impersonating an account (5, 8).** Public-key only:
@@ -114,10 +142,19 @@ sequenceDiagram
 enrolled against and no other. Accounts get `usermod -p '*'` rather than a
 locked password, because some sshd builds refuse keys for locked accounts.
 
+**S — claiming to be another machine (8).** One account may be used from
+several machines, and each gets its own export, port and volumes (ADR 0029).
+The machine is `workspace.ClientID`, the digest of the key the agent has just
+authenticated (`core/workspace/client.go`), so it cannot be claimed by asking:
+an identifier the client sent would let one machine adopt another's volumes.
+*Covered by* `core/workspace/export_test.go`.
+
 **S — impersonating the workspace (2–4).** The host key is compared against
 `known_hosts`; a *changed* key is refused rather than prompted for, because
 there is no interactive user on the far side of an automated tunnel
-(`core-client/keys/hostkey.go`). First use records the key.
+(`core-client/keys/hostkey.go`). First use records the key. There is no default
+host key rule anywhere in the transport: `core-client/tunnelclient` refuses a
+nil callback by name rather than accepting anybody (ADR 0030).
 
 **T — forging enrolment (1).** Writing `authorized_keys.d` is the operator's
 privilege and is outside the boundary: whoever can put a file there could
@@ -130,12 +167,85 @@ a uid would share a tunnel. `accounts.Sync` sorts the key files so allocation
 is deterministic; ranging a map here once made it differ run to run.
 *Covered by* `core-agent/accounts` tests.
 
+**E — adopting a uid this workspace did not create (3).** `Ensure` keys on the
+uid, because that is what the port and the file ownership come from. A uid held
+by a user the workspace did not provision is refused rather than adopted:
+adopting it would hand an enrolled key another user's files, which is a failure
+that succeeds.
+
 **R.** Sessions, forwards and refusals are logged with the account name. There
 is no audit of what happened *inside* a container, and none is claimed.
 
 ---
 
-## Flow 2: a bind mount becomes an NFS volume
+## Flow 2: reaching the workspace through a proxy
+
+The tunnel can be an HTTP upgrade rather than a TCP connection to an SSH port
+(ADR 0034), which is how a workspace is reached through an ingress or a
+corporate proxy. It adds a participant that sees the connection and cannot see
+into it.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as remote-docker
+    participant P as reverse proxy
+    participant W as wslisten
+    participant A as sshd (agent)
+
+    C->>P: GET /, Upgrade: websocket, over TLS
+    Note over C,P: the certificate is checked against the system<br/>roots, a named CA file, or not at all (insecure)
+    P->>W: the same request, TLS terminated at the proxy
+    W->>W: Upgrade header present? any path, no origin check
+    W-->>C: 101, and the connection is a net.Conn
+    C->>A: SSH handshake, inside the WebSocket
+    A-->>C: host key, compared against known_hosts
+    C->>A: publickey auth
+    Note over W: pings on a 20s budget, and a peer that<br/>stops answering is dropped, releasing its port
+```
+
+**S — which end TLS authenticates (1, 2).** TLS authenticates the *proxy*. The
+workspace is authenticated by its SSH host key, inside the tunnel, and the
+machine by its client key. So `insecure` and a plain `ws://` URL give up knowing
+which proxy answered and give up nothing about whether the session itself is
+authenticated and encrypted. `core-client/wstunnel` states this at the top of
+the package; `client/internal/config/transport.go` is where a scheme becomes a
+dialler.
+
+**I — the agent holds no certificate (3).** It serves `ws` and never `wss`
+(`agent/internal/wslisten`). TLS is the proxy's job, so the workspace has no
+private key to protect, rotate or leak, and a deployment that wants TLS end to
+end runs the proxy on the same host.
+
+**T/S — no origin check, any path (4).** The upgrade is accepted regardless of
+path and with `InsecureSkipVerify` on the WebSocket accept options, which turns
+off the Origin comparison. That is safe here for a reason worth stating rather
+than assuming: this endpoint has no ambient credential for a browser to ride.
+There is no cookie and no session, and everything past the upgrade is an SSH
+handshake that a page in a browser cannot perform. A non-upgrade request is
+answered 426 rather than left hanging.
+
+**D — what is exposed before authentication (1–7).** With an ingress this is
+usually reachable from the internet, where an SSH port on a private network
+was not. What is exposed is the WebSocket accept path and the SSH handshake:
+`coder/websocket`, `gliderlabs/ssh` and `x/crypto/ssh`. There is no rate limit,
+no connection cap and no fail2ban, so the honest statement is that unauthenticated
+traffic reaches those libraries and stops at `PublicKeyHandler`. Keeping the
+port private is worth more than anything here, which is why the SSH listener is
+not published by the Kubernetes chart and the WebSocket is.
+
+**D — a client that vanishes (8).** `sshd.armDeadPeerDetection` bounds a dead
+TCP peer with keepalives and `TCP_USER_TIMEOUT`, and none of it applies to a
+WebSocket, which is a wrapped connection rather than a `*net.TCPConn`. So
+`wslisten` pings on the same budget. Without it a client that disappears keeps
+its reverse-tunnel port reserved: the symptom is not a lost connection but a
+later reconnect refused its own forward, with containers mounting against a port
+bound to nothing. *Covered by* `wslisten` tests and `integration.sh` section 19,
+which pauses a real proxy and waits for the agent to notice.
+
+---
+
+## Flow 3: a bind mount becomes an NFS volume
 
 The flow the whole project exists for, and the one that puts the user's files
 on the wire.
@@ -180,8 +290,26 @@ named pipe (`listen_windows.go`), and never a TCP port. *Covered by*
 **I — the export is unauthenticated (9, 10).** The NFS server answers
 `AuthFlavorNull` (`core-client/nfsserve/server.go`): anything that can
 reach the port can read and write every registered share. There is no second
-control on the NFS layer, which is why the loopback rule in flow 3 and the
-holder rule in flow 4 carry the whole weight.
+control on the NFS layer, which is why the loopback rule in flow 4 and the
+holder rule in flow 5 carry the whole weight.
+
+**I — the share root handle is derived, not random (10).** A handle has to
+survive a client restart or every running container reads `Stale file handle`
+against a mount that still looks fine, so the root handle is derived from the
+export path (ADR 0033, `core-client/nfsserve/handles.go`). It is therefore
+predictable, and that costs nothing: MOUNT hands the same handle to anything
+that reaches the port, so guessing it is not a way in that the port is not
+already. *Covered by* `handles_test.go`.
+
+**I — a container with host networking reaches the whole export (11, 12).** An
+ordinary container has a network namespace of its own and reaches the export
+only through what was mounted into it. A container the account runs with
+`--network host` joins the daemon's namespace, where `127.0.0.1:<port>` is the
+export answering `AUTH_NULL`: every directory that machine has shared in this
+session, not only the ones mounted into that container. No boundary is crossed,
+since it is the account's own export, and it does widen what an untrusted image
+can read. The answer is the ordinary one: do not give an image you do not trust
+host networking.
 
 **I — your registry credentials leave this machine (2-5).** The daemon does the
 pulling but has no logins of its own: the CLI resolves yours locally
@@ -198,6 +326,17 @@ daemon is somebody else's.
 only `/cwd` and `/m/<16 hex>` resolve, and lookups that climb out of a share
 return nothing. *Covered by* `nfsserve/registry_test.go`.
 
+**T — the workspace naming an export this session never registered (10).** A
+volume outlives a client process, so `compose up -d` on containers that already
+exist mounts a volume nothing has registered (ADR 0027). The record that answers
+it is a capability list, not a lookup table: the workspace names an id and the
+client chooses among directories it wrote down itself, never a path the far side
+supplied. `client/internal/session/shares.go` recomputes the id from the path
+before believing an entry, refuses the whole file when another machine or
+account wrote it, never restores `/cwd`, drops records unused for 30 days, and
+restores only from a MOUNT that missed rather than from a lookup. *Covered by*
+`shares_test.go` and `role_test.go`.
+
 **T — a volume that is not ours (4).** Volumes are only ever created, never
 rewritten onto a name the user chose; garbage collection requires both the
 `rd-` prefix and the managed label, since somebody may legitimately name a
@@ -212,7 +351,7 @@ one and the container starts with an empty directory. *Covered by*
 
 ---
 
-## Flow 3: binding the reverse tunnel, and the refusal
+## Flow 4: binding the reverse tunnel, and the refusal
 
 ```mermaid
 sequenceDiagram
@@ -224,45 +363,59 @@ sequenceDiagram
 
     A->>P: tcpip-forward 127.0.0.1:30001
     P->>P: loopback? yes
-    P->>P: 30001 == PortForUID(10001)? yes
+    P->>P: 30001 allocated to alice? yes
     P->>P: held by anyone else? no
-    P-->>A: allowed, port reserved
+    P-->>A: allowed, reserved, token minted
     P->>NS: listen inside alice's namespace
 
     B->>P: tcpip-forward 127.0.0.1:30001
-    P->>P: 30001 != PortForUID(10002)
+    P->>P: not bob's port
     P-->>B: refused
     Note over B: without this, bob serves alice<br/>a filesystem of his choosing
 ```
 
-**S/E — serving another account's mounts (6–8).** `ForwardPolicy.Allow`
+**S/E — serving another account's mounts (6–9).** `ForwardPolicy.Allow`
 (`agent/internal/sshd/forward.go`) enforces three rules in order: loopback
-only, this account's own port and no other, one holder at a time. The middle
-rule is the one that stops bob binding alice's port before she connects.
+only, a port this account was allocated and no other, one holder at a time. The
+middle rule is the one that stops bob binding alice's port before she connects.
 *Covered by* `forward_test.go` and `integration.sh` section 11.
+
+**S — a port the client chose (2).** An account's first port is still derived
+from its uid, and the rest are allocated by `accounts.Ports`, so `Allow` asks
+the allocator rather than recomputing `PortForUID`, which would refuse a port
+the agent had just handed out. The workspace also reads a port back off its own
+volumes before choosing one for a machine it has forgotten (ADR 0032), so a
+client-supplied address is never written into durable state.
 
 **I — publishing the export beyond the container (2).** A non-loopback bind is
 refused outright, because the export is unauthenticated and anything that
 reaches it reads the client's files.
 
-**D — losing a reservation on a failed bind (4, 5).** `Allow` is not a
+**D — losing a reservation on a failed bind (5, 6).** `Allow` is not a
 predicate: it binds the port and arms the release. A listen that failed after
 it once left the account's only port reserved by a forward that did not exist,
 and every retry was refused while blaming a second session.
 
-**E — releasing somebody else's reservation (4, 5).** The fix for D released by
-ACCOUNT NAME, which is not who holds a port. Opening the client on a second
-machine was enough to reach it: the second session's bind fails, its failure
-path releases, and the first machine's live reservation is deleted. `AllowDial`
-below then finds the port unheld and permits any other account to dial it, so
-control 4 of flow 4 stops holding while the export it protects is still
-serving. A reservation now carries a token minted when it was taken, and only
-that token releases it. `TestAFailedBindDoesNotReleaseTheLiveHolder` walks the
-whole sequence, ending at the dial being refused.
+**E — releasing somebody else's reservation (5, 6).** The fix for D released by
+ACCOUNT NAME, which is not who holds a port (ADR 0028). Opening the client on a
+second machine was enough to reach it: the second session's bind fails, its
+failure path releases, and the first machine's live reservation is deleted.
+`AllowDial` below then finds the port unheld and permits any other account to
+dial it, so control 4 of flow 5 stops holding while the export it protects is
+still serving. A reservation now carries a token minted when it was taken, and
+only that token releases it. `TestAFailedBindDoesNotReleaseTheLiveHolder` walks
+the whole sequence, ending at the dial being refused.
+
+**D — a reservation held by a client that is gone (5).** A client whose network
+black-holes leaves a socket that is dead and looks alive for the fifteen minutes
+Linux retransmits, so the reconnect is refused its own forward. Keepalives and
+`TCP_USER_TIMEOUT` bound it (`sshd/deadpeer.go`), and a WebSocket bounds it with
+pings instead (flow 2). *Covered by* `nfs-resilience.sh` and `integration.sh`
+section 19.
 
 ---
 
-## Flow 4: reaching a published port, and the gap this model found
+## Flow 5: reaching a published port, and the gap this model found
 
 ```mermaid
 sequenceDiagram
@@ -302,38 +455,56 @@ forwarding this feature exists for. *Covered by* `dial_test.go` and
 requesting it, since ssh opens the local listener before asking for the
 channel.
 
-**Why the default mode never had this.** A daemon per account (ADR 0019) binds
-each tunnel inside that account's own namespace, where the address reaches
-nothing of anyone else's:
+**And what that control cannot reach, in the same mode.** `AllowDial` gates SSH
+channels. An enrolled account also gets a shell in the workspace container
+(`agent/internal/sshd/session.go`), as its own uid, in the namespace the exports
+are bound in when there is one daemon for everybody. A socket opened there is an
+ordinary connect: no channel is requested and no policy is asked. So in
+shared-daemon mode an account can still speak NFS to another account's export
+while that session is live, and no rule in `ForwardPolicy` can prevent it,
+because the rules are about forwarding and this is not forwarding.
+
+Two things follow, and neither is a patch to `AllowDial`:
+
+- **The default mode does not have it.** A daemon per account (ADR 0019) binds
+  each tunnel inside that account's own namespace, where no shell runs, so the
+  export answers the daemon that must mount it and nothing else, including its
+  own account's shell. `per-user-dind.sh` section 12 asserts exactly that, from
+  both accounts' shells.
+- **Shared mode rests on its stated assumption**, which ADR 0012 has always
+  made: everyone enrolled in a workspace is mutually trusted. `integration.sh`
+  section 11 measures the reachability in that mode and reports it rather than
+  failing, because it follows from the mode.
 
 ```mermaid
 flowchart TB
     subgraph shared["WORKSPACE_PER_USER_DIND=false (ADR 0012)"]
         direction LR
-        ns1["one network namespace"]
+        ns1["one network namespace:<br/>tunnels, shells, the shared daemon"]
         a1["alice's tunnel :30001"] --- ns1
-        b1["bob's tunnel :30002"] --- ns1
-        b1x["bob dials :30001"] -.->|"reachable"| a1
+        b1["bob's shell"] -.->|"reachable, no policy asked"| a1
     end
 
     subgraph peruser["WORKSPACE_PER_USER_DIND=true (default, ADR 0019)"]
         direction LR
-        subgraph nsa["alice's namespace"]
+        subgraph agentns["agent namespace: every shell"]
+            b2x["bob's shell"]
+        end
+        subgraph nsa["alice's dind namespace"]
             a2["alice's tunnel :30001"]
         end
-        subgraph nsb["bob's namespace"]
-            b2["bob's tunnel :30001"]
-        end
-        b2x["bob dials :30001"] -->|"his own"| b2
+        b2x -.->|"no route"| a2
     end
 ```
 
 **D — the workspace as a network relay (2).** Non-loopback destinations are
-refused, so the workspace cannot be used to reach the network it sits on.
+refused, so the workspace cannot be used to reach the network it sits on
+through the tunnel. Containers an account runs are not bound by that, and reach
+whatever the workspace's network reaches.
 
 ---
 
-## Flow 5: replaying a change as a real syscall
+## Flow 6: replaying a change as a real syscall
 
 The agent performs syscalls on the user's own files, as root, on instruction
 from the client. ADR 0016 is why it exists; this is what keeps it safe.
@@ -359,7 +530,7 @@ sequenceDiagram
 ```
 
 **T/E — a root process told which path to touch (2–7).** Two independent
-checks. `workspace.FSEvent.Validate` (`pkg/workcore-agent/notify.go`) whitelists the
+checks. `workspace.FSEvent.Validate` (`core/workspace/notify.go`) whitelists the
 export and the path spelling, deliberately without `path.Clean`, because
 cleaning *repairs* a traversal into something plausible instead of refusing it.
 Then `relocate` re-checks containment after joining onto the daemon's root,
@@ -385,7 +556,7 @@ this a sync, which ADR 0014 explicitly is not.
 
 ---
 
-## Flow 6: Swarm elevation
+## Flow 7: Swarm elevation
 
 ```mermaid
 sequenceDiagram
@@ -415,6 +586,87 @@ from elevating again and forking containers until the node dies.
 
 ---
 
+## Flow 8: the workspace on Kubernetes
+
+The same agent in a pod (ADR 0035). Only the way in and the surrounding
+platform differ, so this flow is short and names only what is new.
+
+```mermaid
+flowchart LR
+    world["the internet"] --> ing["Ingress :443<br/>TLS terminated here"]
+    ing --> svc["Service :2280 (ClusterIP)<br/>2222 not published"]
+    svc --> agent
+
+    subgraph pod["one privileged pod"]
+        agent["remote-dockerd"]
+        keys[["Secret: authorized_keys.d<br/>public keys, read-only"]]
+        statevol[("PVC: host keys, uid map")]
+        graphvol[("PVC: /var/lib/docker")]
+        agent --- keys
+        agent --- statevol
+        agent --- graphvol
+    end
+```
+
+**S/D — the way in is usually public (1, 2).** An ingress on 443 is normally
+reachable from the internet, so the pre-authentication surface in flow 2 is
+exposed to everybody rather than to a network somebody controls. The SSH port
+stays a ClusterIP and is reached with `kubectl port-forward` when it is wanted
+at all.
+
+**I — the Secret holds public keys (5).** `authorized_keys.d` is public keys
+and nothing else, mounted read-only. Losing it costs an attacker nothing and
+costs the operator their enrolment list.
+
+**I — losing the state volume is not losing a cache (6).** It holds the SSH host
+keys and the uid map. Restore the pod without it and every client that has
+connected before refuses the new host key, and each account's uid moves, which
+moves its tunnel port, which strands the volumes named after the old one.
+
+**E — privileged is root on the node (4).** dockerd sets up its own bridge and
+iptables rules and mounts NFS in its own namespace, so there is no unprivileged
+mode. This is the same bargain as ADR 0013 on Swarm: whoever installs the chart
+could already run privileged pods.
+
+**E — a token an account could read (4).** Found while updating this document.
+A projected ServiceAccount token is mounted at mode 0644, and an enrolled
+account gets a shell in that container as its own uid, so it could read the
+pod's cluster identity. The agent never calls the Kubernetes API, so the chart
+now sets `automountServiceAccountToken: false` and there is no token to read.
+There is still no Role and no ClusterRole.
+
+**D/E — no NetworkPolicy (3, 4).** The chart ships none, so an account's
+containers reach whatever the pod network reaches, which on most clusters is
+every other service in it. A policy restricting egress is the operator's to
+add, and worth adding on a shared cluster.
+
+---
+
+## The software you run
+
+Not an arrow in any flow, and it decides whether the arrows are the ones drawn
+here.
+
+**The image and the chart are signed.** The release workflow signs both by
+digest with cosign keyless and attaches an SPDX SBOM as an attestation. The
+identity in the certificate is the workflow at the tag that built it, so a
+verification pins the artifact to this repository's release pipeline; the
+commands are in `charts/remote-docker-workspace/README.md`. What a signature
+does not say is that the code is correct, only that nobody replaced the artifact
+after it was built.
+
+**The client archives are not signed.** A GitHub release carries
+`checksums.txt` and the archives, and the checksums are only as good as the
+release they sit in: whoever could replace an archive could replace the file
+listing its hash. Verify the checksum against a second source, or build from
+source, if that matters to you.
+
+**Chart `0.2.0` is unsigned**, because the signing step could not authenticate
+to the registry it had just pushed to. Fixed for `0.2.1` and after; the tag
+itself cannot be signed retrospectively without republishing it.
+
+---
+
 ## Accepted risks
 
 Stated here rather than buried, because each is a deliberate trade.
@@ -424,30 +676,52 @@ Stated here rather than buried, because each is a deliberate trade.
   can read. The endpoint is owner-only and never TCP; there is no second
   factor, and a compromised user account is a compromised workspace account.
 - **The NFS export is unauthenticated.** `AUTH_NULL`, by design: the transport
-  is a loopback-only reverse tunnel inside a container, and the controls are
-  the two forward rules. If a deployment ever publishes that port, everything
-  in flow 2 is exposed.
+  is a loopback-only reverse tunnel inside a namespace, and the controls are
+  the forward rules and the namespace. If a deployment ever publishes that
+  port, everything in flow 3 is exposed.
+- **A public ingress means the SSH handshake is the whole gate.** No rate limit
+  and no allow-list ship with the chart. An enrolled public key is the only way
+  through, and a cluster that can restrict the ingress by source address should.
+- **`insecure` gives up knowing which proxy answered.** It is per workspace and
+  it does not weaken the SSH session inside, but a proxy you cannot identify is
+  a proxy that can stop working for you and start working for somebody else.
 - **A daemon per account is separation, not isolation.** Each per-account
   daemon runs privileged, which is root on whatever hosts it, so a determined
   account can still break out and reach another's. What it buys is that nobody
   sees anyone else's work *by accident* (ADR 0019). Genuine isolation is one
   workspace container per account.
-- **Containers you run can write anything you shared with them.** That is the
-  feature. A malicious image with `-v $HOME:/h` has your home directory.
-- **A private pull gives the workspace a registry token of yours.** Flow 2 has
+- **In shared-daemon mode an account can reach another account's export.**
+  Flow 5 has the mechanism. It is not fixable inside `ForwardPolicy`, and the
+  answers are ADR 0012's stated assumption or the default mode.
+- **Containers you run can write anything you shared with them**, and with host
+  networking, anything you shared at all. That is the feature. A malicious image
+  with `-v $HOME:/h` has your home directory.
+- **A private pull gives the workspace a registry token of yours.** Flow 3 has
   the mechanism. There is no way around it while the remote daemon does the
   pulling, so treat a workspace as trusted with every registry you log into
   from it, and prefer tokens scoped to what that workspace needs.
-- **Whoever deploys the stack is already root on the node** (ADR 0013).
+- **A machine workspace is as trusted as the machine it runs on** (ADR 0026).
+  The workspace is a VM on the user's own hardware, so the semi-trusted box and
+  the trusted one share a computer, and anybody with administrator rights there
+  is inside both.
+- **Whoever deploys the stack is already root on the node** (ADR 0013), and
+  whoever installs the chart is already able to run privileged pods.
 - **No audit trail inside containers.** Sessions, forwards and refusals are
   logged; what a container did with a mounted directory is not.
 - **Windows and macOS clients are less exercised.** The endpoint code and the
-  file-watching backends are where they diverge, and only Linux takes a session
-  end to end in CI. See the README's caveats.
+  file-watching backends are where they diverge. Windows takes a session end to
+  end only in the machine workflow; macOS has never run a test of any kind.
 
 ## What changed because of this document
 
-`ForwardPolicy.AllowDial`: in shared-daemon mode one account could dial
-another's reverse-tunnel port and speak NFS to their client. Flow 4 has the
-detail, ADR 0012 records it as a property of that mode, and both a unit test
-and the shared-mode integration suite now cover it.
+- **`ForwardPolicy.AllowDial`**: in shared-daemon mode one account could dial
+  another's reverse-tunnel port and speak NFS to their client. Flow 5 has the
+  detail, ADR 0012 records it as a property of that mode, and both a unit test
+  and the shared-mode integration suite now cover it.
+- **`automountServiceAccountToken: false` in the chart**: an enrolled account
+  has a shell in the pod and could read its ServiceAccount token. Flow 8 has the
+  detail and ADR 0035 records the decision.
+- **The limit of `AllowDial`, written down and tested.** A shell reaches what a
+  forwarding rule cannot gate. The default mode's namespace is what actually
+  prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export
+  and `integration.sh` reports the shared mode as it is.
