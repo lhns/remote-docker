@@ -12,7 +12,7 @@ name: kubernetes
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
     types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
@@ -25,52 +25,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The cluster job is the expensive one, so it is decided the way the
-  # integration suites are: always on a push to a branch, on a pull request
-  # only when something that could break it changed, and on request with a
-  # label. The chart job below is eight seconds and always runs.
-  gate:
-    name: does the cluster test apply
-    runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.decide.outputs.run }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - id: decide
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'kubernetes') }}
-        run: |
-          set -u
-          say() { echo "run=$1" >>"$GITHUB_OUTPUT"; echo "$2"; }
-
-          if [ "${{ github.event_name }}" != pull_request ]; then
-            say true "not a pull request: the cluster test always runs."
-            exit 0
-          fi
-          if [ "$LABELLED" = true ]; then
-            say true "labelled 'kubernetes': running on request."
-            exit 0
-          fi
-          if ! changed=$(git diff --name-only "$BASE" "$HEAD" 2>&1); then
-            say true "could not read the diff ($changed): running to be safe."
-            exit 0
-          fi
-          echo "changed files:"; echo "$changed" | sed 's/^/  /'
-
-          # What can break a workspace running on a cluster: the chart, the
-          # image, the agent inside it, the client that connects, and this
-          # workflow.
-          if echo "$changed" | grep -Eq '^(charts/|image/|agent/|core/|core-agent/|core-client/|client/|test/kind\.yaml$|\.github/workflows/kubernetes\.yml$)'; then
-            say true "touches the chart, the image or the code it runs."
-          else
-            say false "documentation or unrelated config only: skipping the cluster test."
-          fi
-
   chart:
     name: the chart renders and is valid
     runs-on: ubuntu-latest
@@ -118,10 +72,12 @@ jobs:
           helm template ws charts/remote-docker-workspace --kube-version 1.29.0 2>&1 \
             | grep -q "ingress.host is required"
 
+  # Not gated by which paths changed. It runs beside the integration suites,
+  # whose longest job is ten minutes against this one's four, so it costs
+  # nothing anyone waits for -- and a gate would mean an agent change reaching
+  # main without ever having run on a cluster.
   end-to-end:
     name: a session through the ingress
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
