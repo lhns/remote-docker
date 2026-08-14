@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "remote-docker-workspace.fullname" . }}
+  labels:
+    {{- include "remote-docker-workspace.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "remote-docker-workspace.selectorLabels" . | nindent 4 }}
+  ports:
+    {{- /* SSH is here so `kubectl port-forward` and anything inside the
+          cluster can reach it. Nothing publishes it: the ingress is the way
+          in from outside. */}}
+    - name: ssh
+      port: {{ .Values.service.sshPort }}
+      targetPort: ssh
+      protocol: TCP
+    - name: ws
+      port: {{ .Values.service.wsPort }}
+      targetPort: ws
+      protocol: TCP

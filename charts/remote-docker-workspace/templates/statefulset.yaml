@@ -1,0 +1,165 @@
+{{/*
+A StatefulSet of one rather than a Deployment.
+
+Two pods must never hold the same graph directory, and a rolling Deployment
+starts the replacement before the old pod is gone. A StatefulSet terminates
+first, and its volume claim templates give each volume a name that outlives the
+pod it was created for.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "remote-docker-workspace.fullname" . }}
+  labels:
+    {{- include "remote-docker-workspace.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  serviceName: {{ include "remote-docker-workspace.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "remote-docker-workspace.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "remote-docker-workspace.labels" . | nindent 8 }}
+      annotations:
+        {{- /* Roll the pod when the enrolled keys change. Without this a
+              helm upgrade that adds an account waits for the agent's own
+              directory poll, which is up to a minute. */}}
+        {{- if not .Values.existingSecret }}
+        checksum/keys: {{ toYaml .Values.authorizedKeys | sha256sum }}
+        {{- end }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "remote-docker-workspace.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- /* dockerd stops when it is told to, but the containers it is running
+            are somebody's work: give them time to be stopped rather than
+            killed with the node's default 30s. */}}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: workspace
+          image: {{ include "remote-docker-workspace.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: ssh
+              containerPort: 2222
+            - name: ws
+              containerPort: 2280
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+            - name: WORKSPACE_PER_USER_DIND
+              value: {{ .Values.perUserDind | quote }}
+            - name: WORKSPACE_DOCKERD_ARGS
+              value: {{ .Values.dockerdArgs | quote }}
+            {{- if .Values.perUserDind }}
+            {{- /* The image an account's own daemon runs. Elsewhere the agent
+                  finds it by inspecting the container it is in; in a pod
+                  nothing can, and the stock docker:dind lacks the storage
+                  driver this workspace inherits to it. */}}
+            - name: WORKSPACE_DIND_IMAGE
+              value: {{ default (include "remote-docker-workspace.image" .) .Values.dindImage | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- /* The agent's own healthcheck, which asks the daemon for its
+                version as well: `docker info` in a shell returned 0 for a
+                daemon that was answering and unusable. */}}
+          startupProbe:
+            exec:
+              command: ["remote-dockerd", "healthcheck"]
+            periodSeconds: 10
+            failureThreshold: {{ div .Values.probes.startupSeconds 10 }}
+          livenessProbe:
+            exec:
+              command: ["remote-dockerd", "healthcheck"]
+            periodSeconds: {{ .Values.probes.periodSeconds }}
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["remote-dockerd", "healthcheck"]
+            periodSeconds: {{ .Values.probes.periodSeconds }}
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /etc/workspace
+            - name: graph
+              mountPath: /var/lib/docker
+            {{- /* Over a subdirectory of the state volume, which is where the
+                  agent looks. Read-only: the workspace never writes an
+                  enrolment, it only reads what it was given. */}}
+            - name: keys
+              mountPath: /etc/workspace/authorized_keys.d
+              readOnly: true
+      volumes:
+        - name: keys
+          secret:
+            secretName: {{ include "remote-docker-workspace.keysSecretName" . }}
+            optional: true
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+        labels:
+          {{- include "remote-docker-workspace.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.state.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.state.size }}
+        {{- if .Values.persistence.state.storageClass }}
+        {{- if (eq "-" .Values.persistence.state.storageClass) }}
+        storageClassName: ""
+        {{- else }}
+        storageClassName: {{ .Values.persistence.state.storageClass }}
+        {{- end }}
+        {{- end }}
+    - metadata:
+        name: graph
+        labels:
+          {{- include "remote-docker-workspace.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.graph.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.graph.size }}
+        {{- if .Values.persistence.graph.storageClass }}
+        {{- if (eq "-" .Values.persistence.graph.storageClass) }}
+        storageClassName: ""
+        {{- else }}
+        storageClassName: {{ .Values.persistence.graph.storageClass }}
+        {{- end }}
+        {{- end }}

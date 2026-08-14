@@ -47,6 +47,13 @@ client's 786.
 **No tini.** The image needs it because the agent is PID 1 there and has to reap
 the processes it forks per session. Under systemd those reparent to init.
 
+## Amended 2026-08-14: a third deployment, still with no mode
+
+Kubernetes joins the container and the VM. The agent is unchanged there too: a
+privileged pod with its two directories on volumes, reached through an Ingress
+(ADR 0035). What this record says about the VM holds for it -- the operator
+decides what the agent is a guest of, and the agent has no `if onKubernetes`.
+
 ## Consequences
 
 - **Enrolled accounts are real users on a real machine.** In a container they

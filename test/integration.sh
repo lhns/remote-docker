@@ -1698,6 +1698,15 @@ NGINX
     # A proxy that stops passing traffic without closing anything is the case
     # TCP keepalives cannot see, and the reason wslisten pings. Pausing the
     # container black-holes it exactly that way.
+    #
+    # A container holding a mount first, because the connection has to still be
+    # OPEN when the proxy stops carrying it. Without one the client releases it
+    # as idle after REMOTE_DOCKER_IDLE_TIMEOUT, and a connection closed cleanly
+    # is one the agent has nothing to notice about: the assertion then fails
+    # for the opposite of the reason it is testing. A mounted container keeps
+    # the connection leased, measured in test/nfs-resilience.sh section 4.
+    timeout 60 docker -H "unix://$WORK/ws.sock" run -d --name itest-ws-hold         -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1
+
     hostdocker pause itest-proxy >/dev/null 2>&1
     info "the proxy is paused; waiting for the agent to notice"
     sleep 75
@@ -1708,6 +1717,7 @@ NGINX
         info "without this a vanished client keeps its reverse-tunnel port"
     fi
     hostdocker unpause itest-proxy >/dev/null 2>&1
+    timeout 60 docker -H "unix://$WORK/ws.sock" rm -f itest-ws-hold >/dev/null 2>&1
 
     kill "$WS_PID" 2>/dev/null
     wait "$WS_PID" 2>/dev/null

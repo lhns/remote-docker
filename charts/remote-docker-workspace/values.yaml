@@ -1,0 +1,172 @@
+# Default values for remote-docker-workspace.
+
+# Override the generated resource names. nameOverride replaces the chart name
+# in `<release>-<name>`; fullnameOverride replaces the whole base name.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/lhns/remote-docker-workspace
+  # tag overrides Chart.appVersion when set.
+  tag: ""
+  pullPolicy: IfNotPresent
+  # pullSecrets is a list of references to secrets in the release namespace.
+  pullSecrets: []
+
+# Public keys of the machines allowed in, one entry per account. The KEY of
+# each entry is the unix account name, and its value is one or more SSH public
+# keys, one per line:
+#
+#   authorizedKeys:
+#     alice: |
+#       ssh-ed25519 AAAA... alice@laptop
+#       ssh-ed25519 AAAA... alice@desktop
+#     bob: |
+#       ssh-ed25519 AAAA... bob@laptop
+#
+# The workspace re-reads the directory within a minute, so a new account is not
+# enrolled the instant you upgrade. Emptying an entry revokes that account and
+# keeps its home directory.
+authorizedKeys: {}
+
+# Use a Secret you manage instead -- sealed-secrets, an external secrets
+# operator, or one you created by hand. Its keys are filenames and must be
+# account names. Set this and `authorizedKeys` is ignored.
+existingSecret: ""
+
+# A dockerd per account (the default), or one shared between them.
+#
+#   true   each account gets its own daemon, so nobody sees anybody else's
+#          containers or images by accident (ADR 0019)
+#   false  one daemon for everybody (ADR 0012)
+#
+# Per-account is separation, not isolation: each daemon is privileged, so a
+# determined account can still break out and reach another's.
+perUserDind: true
+
+# Arguments passed to the workspace's own dockerd.
+#
+# fuse-overlayfs by default because overlay2 REFUSES TO START on Ceph- and
+# NFS-backed volumes, which is what most default StorageClasses hand out, and
+# the failure is a daemon that never comes up rather than a warning. Set this
+# to "" on a cluster with local volumes: overlay2 is faster, and it is the
+# right choice when the storage allows it.
+dockerdArgs: "--storage-driver=fuse-overlayfs"
+
+# The image each account's own daemon runs, when perUserDind is on. Empty means
+# this chart's own image.
+#
+# It has to be one that carries the storage driver above, and stock docker:dind
+# does not carry fuse-overlayfs: a daemon started from it dies in a restart
+# loop. Compose and Swarm find the right image by inspecting the container they
+# run in; nothing in a pod can, so the chart passes it.
+dindImage: ""
+
+# Extra environment for the agent, e.g. TZ or WORKSPACE_UID_BASE.
+env: {}
+
+persistence:
+  # The workspace's own image store: images somebody pulled, and the containers
+  # they run.
+  #
+  # ReadWriteOnce is a CORRECTNESS requirement here, not a default worth
+  # relaxing. Two dockerds must never share a graph directory; doing it
+  # corrupts the store rather than racing politely. Even on storage that offers
+  # ReadWriteMany, this stays RWO.
+  graph:
+    size: 50Gi
+    # "" uses the cluster's default StorageClass; "-" disables dynamic
+    # provisioning.
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  # Host keys, the uid map and the per-machine port record.
+  #
+  # Losing this is not losing a cache. The SSH host keys change, so every
+  # client that has connected before gets REMOTE HOST IDENTIFICATION HAS
+  # CHANGED; and every account's uid moves, which moves its reverse-tunnel
+  # port, which strands the volumes named after the old one.
+  #
+  # RWO because the agent is the only writer. ReadWriteMany is safe here if
+  # your storage prefers it -- it makes rescheduling onto another node quicker,
+  # since the volume need not detach first -- but it buys nothing while there
+  # is one replica.
+  state:
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+service:
+  type: ClusterIP
+  # SSH. Reachable inside the cluster and through `kubectl port-forward`;
+  # nothing publishes it. The ingress below is the way in from outside.
+  sshPort: 2222
+  # The WebSocket the ingress fronts.
+  wsPort: 2280
+  annotations: {}
+
+# The way in from outside the cluster.
+#
+# On by default, because a workspace nobody can reach is not a deployment. It
+# needs a host: an ingress with none matches every request that arrives at the
+# controller, so the chart refuses to render rather than install that.
+ingress:
+  enabled: true
+
+  # Required when enabled. Clients then use:
+  #   remote-docker remote create dev --host wss://<host> --user <account>
+  host: ""
+
+  className: ""
+
+  # A tunnel is ONE request that lasts as long as the session, so a controller's
+  # ordinary read timeout will cut it. These are ingress-nginx's; the equivalent
+  # elsewhere:
+  #
+  #   Traefik   a ServersTransport with forwardingTimeouts.readIdleTimeout,
+  #             or the default, which does not time out idle streams
+  #   HAProxy   haproxy.org/timeout-server
+  #
+  # Only ingress-nginx is tested by CI. The others are suggestions.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+
+  tls:
+    enabled: true
+    # The Secret holding the certificate. cert-manager fills this in when the
+    # annotation above names an issuer.
+    secretName: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# The pod is privileged: dockerd sets up its own bridge and iptables rules and
+# mounts NFS in its own namespace, none of which an unprivileged container can
+# do. On a cluster with Pod Security admission the namespace must allow it:
+#
+#   kubectl label namespace <ns> pod-security.kubernetes.io/enforce=privileged
+#
+# There is no unprivileged mode to fall back to.
+securityContext:
+  privileged: true
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+# All three probes run `remote-dockerd healthcheck`, which asks the agent and
+# the daemon behind it.
+probes:
+  # Generous: the first start builds a graph directory and starts a daemon.
+  startupSeconds: 300
+  periodSeconds: 30
+
+commonLabels: {}
+commonAnnotations: {}

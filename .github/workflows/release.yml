@@ -19,6 +19,9 @@ on:
 permissions:
   contents: write
   packages: write
+  # cosign signs keyless, with a short-lived certificate bound to this
+  # workflow's identity, so there is no key to hold or rotate.
+  id-token: write
 
 # Deliberately not cancel-in-progress: a superseded publish should still
 # finish, because the tag it was pushing is the only thing that will ever
@@ -161,6 +164,83 @@ jobs:
 
       - name: Show what was published
         run: docker buildx imagetools inspect "$(echo '${{ needs.meta.outputs.tags }}' | cut -d, -f1)"
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+      - uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.14.0
+
+      # The manifest list, by digest. Signing a tag would sign a name that can
+      # be moved; signing the per-platform digests would leave what `docker
+      # pull` actually resolves unsigned.
+      - name: Sign the image and attest its contents
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -eux
+          TAG=$(echo '${{ needs.meta.outputs.tags }}' | cut -d, -f1)
+          DIGEST=$(docker buildx imagetools inspect "$TAG" --format '{{.Manifest.Digest}}')
+          REF="${{ needs.meta.outputs.image }}@${DIGEST}"
+
+          cosign sign "$REF"
+          syft "$REF" -o spdx-json=workspace-image.sbom.spdx.json
+          cosign attest --predicate workspace-image.sbom.spdx.json --type spdx "$REF"
+
+  # The chart is published to the same registry as the image and signed the same
+  # way, so `helm install oci://...` and `cosign verify` are one habit rather
+  # than two.
+  chart:
+    name: helm chart
+    needs: [ci, meta]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+      - uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.14.0
+
+      - name: Package and push
+        id: push
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -eux
+          # A chart version is SemVer without the leading v, and the app
+          # version is the image tag this chart installs by default.
+          CHART_VERSION="${VERSION#v}"
+          helm package charts/remote-docker-workspace             --version "$CHART_VERSION" --app-version "$VERSION" --destination .
+
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io             --username "${{ github.actor }}" --password-stdin
+          helm push "remote-docker-workspace-${CHART_VERSION}.tgz"             oci://ghcr.io/lhns/charts 2>&1 | tee push.log
+
+          echo "digest=$(grep -E '^Digest: ' push.log | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+          echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the chart and attest its contents
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -eux
+          REF="ghcr.io/lhns/charts/remote-docker-workspace@${{ steps.push.outputs.digest }}"
+          cosign sign "$REF"
+          syft "remote-docker-workspace-${{ steps.push.outputs.chart_version }}.tgz"             -o spdx-json=workspace-chart.sbom.spdx.json
+          cosign attest --predicate workspace-chart.sbom.spdx.json --type spdx "$REF"
+
+      - name: Attach the chart to the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            remote-docker-workspace-*.tgz
+            workspace-chart.sbom.spdx.json
 
   # Skipped on ordinary commits, and that is deliberate: this job publishes a
   # GitHub Release, which per-commit would be noise, and `goreleaser release`

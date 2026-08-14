@@ -1,0 +1,22 @@
+# A kind cluster whose node publishes 80 and 443 to the host, so an ingress
+# controller is reachable from the runner and the client can be pointed at it.
+#
+# Used by .github/workflows/kubernetes.yml. The label is what ingress-nginx's
+# kind deployment selects on.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
