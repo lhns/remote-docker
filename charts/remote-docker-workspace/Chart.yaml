@@ -1,0 +1,29 @@
+apiVersion: v2
+name: remote-docker-workspace
+description: |
+  A remote Docker workspace: one privileged pod running dockerd and an SSH
+  agent, reached from a laptop over a WebSocket through an ordinary Ingress.
+  Bind mounts are served from the client machine over NFS through the tunnel,
+  so directories on a developer's own computer are mounted into containers
+  running here.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords:
+  - docker
+  - remote-development
+  - dind
+  - developer-workspace
+  - ssh
+home: https://github.com/lhns/remote-docker
+sources:
+  - https://github.com/lhns/remote-docker
+maintainers:
+  - name: Pierre Kisters
+    url: https://github.com/lhns
+icon: ""
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/prerelease: "false"

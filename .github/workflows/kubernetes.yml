@@ -1,14 +1,14 @@
 name: kubernetes
 
-# Does the workspace run on Kubernetes at all?
+# The chart, installed on a real cluster, reached the way a person would reach
+# it: through an ingress, over wss, with the client binary.
 #
 # The pod runs dockerd inside a kind node, which is itself a container, so this
-# is docker inside docker inside docker. Nothing else in this repository proves
-# it works, and a chart that only renders is not a chart that runs -- so this
-# job exists before the chart is finished rather than after.
+# is docker inside docker inside docker. That it works at all was measured
+# before the chart was written (2026-08-14) rather than assumed.
 #
-# The suites in integration.yml need a kernel and a real NFS mount. This one
-# needs a cluster, which is why it is its own workflow.
+# The suites in integration.yml need a kernel and a real NFS mount and get one
+# on the runner directly. This one needs a cluster, which is why it is separate.
 
 on:
   push:
@@ -25,12 +25,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dind-in-kind:
-    name: a privileged workspace pod in kind
+  chart:
+    name: the chart renders and is valid
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+
+      - name: helm lint
+        run: helm lint charts/remote-docker-workspace
+
+      - name: install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      # Every combination somebody can install, checked against real API
+      # schemas. A template that renders is not the same as one the API server
+      # will accept.
+      - name: helm template, each way it can be configured
+        run: |
+          set -eux
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 "$@" \
+              | kubeconform -strict -kubernetes-version 1.29.0 -summary -
+          }
+          render --set ingress.host=ws.example.com
+          render --set ingress.enabled=false
+          render --set ingress.host=ws.example.com --set existingSecret=my-keys
+          render --set ingress.host=ws.example.com --set perUserDind=false --set dockerdArgs=""
+          render --set ingress.host=ws.example.com \
+                 --set authorizedKeys.alice="ssh-ed25519 AAAAtest alice@laptop"
+
+      # The failure this is worth pinning: an ingress with no host matches every
+      # request that reaches the controller, so the chart refuses to render one.
+      - name: an ingress with no host is refused
+        run: |
+          if helm template ws charts/remote-docker-workspace --kube-version 1.29.0 >/dev/null 2>&1; then
+            echo "an ingress with no host rendered; it should have been refused"
+            exit 1
+          fi
+          helm template ws charts/remote-docker-workspace --kube-version 1.29.0 2>&1 \
+            | grep -q "ingress.host is required"
+
+  end-to-end:
+    name: a session through the ingress
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: true
 
       - name: load the nfs client module
         run: sudo modprobe nfs
@@ -38,76 +90,102 @@ jobs:
       - name: build the workspace image
         run: docker build -t remote-docker-workspace:kind -f image/Dockerfile .
 
-      - name: create a cluster
+      - name: build the client
+        run: (cd client && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/remote-docker" ./cmd/remote-docker)
+
+      # Port 80 of the kind node is published to the runner, so the ingress
+      # controller is reachable at 127.0.0.1 and the client can be pointed at
+      # it with a Host header via /etc/hosts.
+      - name: create a cluster with an ingress-ready node
         uses: helm/kind-action@v1
         with:
           cluster_name: rd
           wait: 120s
+          config: test/kind.yaml
 
       - name: load the image into the cluster
         run: kind load docker-image remote-docker-workspace:kind --name rd
 
-      # The question this workflow exists to answer, asked with as little
-      # around it as possible: a privileged pod, the agent's own healthcheck,
-      # and nothing else. The healthcheck asks the agent, which asks its
-      # daemon, so passing it means dockerd came up inside the pod.
-      - name: run the workspace as a privileged pod
+      - name: install ingress-nginx
         run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/kind/deploy.yaml
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=300s
+
+      - name: install the chart
+        run: |
+          set -eux
           kubectl create namespace rd
           kubectl label namespace rd pod-security.kubernetes.io/enforce=privileged
-          kubectl apply -n rd -f - <<'YAML'
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: workspace
-          spec:
-            containers:
-              - name: workspace
-                image: remote-docker-workspace:kind
-                imagePullPolicy: Never
-                securityContext:
-                  privileged: true
-                env:
-                  - name: DOCKER_TLS_CERTDIR
-                    value: ""
-                  # Ceph and NFS-backed volumes refuse overlay2, and a kind
-                  # node's filesystem is an overlay already, so the driver that
-                  # works everywhere is the one under test.
-                  - name: WORKSPACE_DOCKERD_ARGS
-                    value: "--storage-driver=fuse-overlayfs"
-                volumeMounts:
-                  - name: state
-                    mountPath: /etc/workspace
-                  - name: graph
-                    mountPath: /var/lib/docker
-            volumes:
-              - name: state
-                emptyDir: {}
-              - name: graph
-                emptyDir: {}
-          YAML
 
-      - name: wait for the agent to answer
+          # The client's own key, enrolled as the account it will log in as.
+          REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state" "$RUNNER_TEMP/remote-docker" remote enroll >/dev/null
+
+          helm install ws charts/remote-docker-workspace \
+            --namespace rd \
+            --set image.repository=remote-docker-workspace \
+            --set image.tag=kind \
+            --set image.pullPolicy=Never \
+            --set ingress.host=ws.rd.test \
+            --set ingress.className=nginx \
+            --set ingress.tls.enabled=false \
+            --set persistence.graph.size=8Gi \
+            --set persistence.state.size=1Gi \
+            --set-file authorizedKeys.ci="$RUNNER_TEMP/state/id_ed25519.pub" \
+            --wait --timeout 10m
+
+      - name: the workspace is up
         run: |
-          set -o pipefail
-          for i in $(seq 1 60); do
-            if kubectl exec -n rd workspace -- remote-dockerd healthcheck 2>/dev/null; then
-              echo "the agent and its daemon answered after ${i}0s"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "the agent never answered"
-          kubectl describe pod -n rd workspace | tail -30
-          kubectl logs -n rd workspace | tail -60
-          exit 1
+          kubectl get pods -n rd -o wide
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- remote-dockerd healthcheck
 
-      # Whether a container can actually run in there, which is the part dind
-      # inside kind is most likely to fail at.
-      - name: run a container inside the workspace
+      - name: reach it through the ingress, over ws
         run: |
-          kubectl exec -n rd workspace -- docker run --rm alpine:3 echo through-the-pod
+          set -eux
+          echo "127.0.0.1 ws.rd.test" | sudo tee -a /etc/hosts
 
-      - name: logs on failure
+          export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state"
+          export REMOTE_DOCKER_ENDPOINT="$RUNNER_TEMP/docker.sock"
+
+          # ws rather than wss: the ingress controller in kind serves plain
+          # HTTP on 80, and TLS is the cluster's business rather than this
+          # test's. The transport under it is the same either way.
+          "$RUNNER_TEMP/remote-docker" remote create k8s \
+            --host ws://ws.rd.test --user ci --no-context
+          "$RUNNER_TEMP/remote-docker" --workspace k8s remote status
+
+      # The single command that proves the whole chain: the tunnel, the NFS
+      # export, the bind rewriting and the daemon in the pod. The file is
+      # written on the runner and read inside a container in the cluster.
+      - name: a bind mount from the runner into a container in the cluster
+        run: |
+          set -eux
+          export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state"
+          export REMOTE_DOCKER_ENDPOINT="$RUNNER_TEMP/docker.sock"
+
+          mkdir -p "$RUNNER_TEMP/project"
+          echo "from the runner" > "$RUNNER_TEMP/project/marker"
+          cd "$RUNNER_TEMP/project"
+
+          out=$("$RUNNER_TEMP/remote-docker" --workspace k8s run --rm \
+                  -v "$RUNNER_TEMP/project:/w" alpine:3 cat /w/marker)
+          test "$out" = "from the runner"
+
+      - name: helm upgrade keeps it running
+        run: |
+          set -eux
+          helm upgrade ws charts/remote-docker-workspace \
+            --namespace rd --reuse-values \
+            --set resources.requests.memory=256Mi \
+            --wait --timeout 10m
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- remote-dockerd healthcheck
+
+      - name: what went wrong
         if: failure()
-        run: kubectl logs -n rd workspace | tail -100 || true
+        run: |
+          kubectl get all -n rd || true
+          kubectl describe pod -n rd -l app.kubernetes.io/name=remote-docker-workspace || true
+          kubectl logs -n rd -l app.kubernetes.io/name=remote-docker-workspace --tail=200 || true
+          kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller --tail=80 || true
