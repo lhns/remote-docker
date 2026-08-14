@@ -474,8 +474,9 @@ Two things follow, and neither is a patch to `AllowDial`:
   both accounts' shells.
 - **Shared mode rests on its stated assumption**, which ADR 0012 has always
   made: everyone enrolled in a workspace is mutually trusted. `integration.sh`
-  section 11 measures the reachability in that mode and reports it rather than
-  failing, because it follows from the mode.
+  section 11 probes it from a second account's shell and reports what it finds
+  rather than failing, because it follows from the mode. It connects, which is
+  how this stopped being an argument about namespaces and became a measurement.
 
 ```mermaid
 flowchart TB
