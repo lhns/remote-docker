@@ -1,24 +1,14 @@
 # Docker Swarm deployment.
 #
-#   docker node update --label-add workspace=true <node>
 #   ssh <node> "mkdir -p /var/lib/remote-docker/{state,authorized_keys.d}"
 #   docker stack deploy -c swarm.yml workspace
 #
-# Both of those first two steps are required and neither fails loudly: without
-# the label the service never schedules, and a missing bind source becomes an
-# empty root-owned directory.
+# Make those directories first, or they arrive empty and root-owned. The binds
+# below are one node's filesystem.
 #
-# Yours to set:
-#   WORKSPACE_DATA    where state lives on the node (default below)
-#   WORKSPACE_IMAGE   which image to run
-#
-# Swarm cannot run privileged tasks, so this starts unprivileged and relaunches
-# itself through the node's Docker socket (ADR 0013).
-#
-# `version` is required here and only here: `docker stack deploy` uses the
-# legacy Compose loader, which without it reads the file as format v1, which
-# has no `services:` key. Plain `docker compose` warns about the same field,
-# which is why docker-compose.yml has none.
+# WORKSPACE_DATA is where state lives, WORKSPACE_IMAGE is which image to run.
+
+# Required: `docker stack deploy` still reads the file with the legacy loader.
 version: "3.8"
 
 services:
@@ -27,64 +17,33 @@ services:
     command: ["elevate"]
 
     environment:
-      # Swarm expands service templates in environment values, so the
-      # privileged child can find this task exactly rather than by guessing.
+      # Swarm expands this, so the privileged child finds the task exactly.
       WORKSPACE_SELF: "{{.Task.Name}}"
 
       TZ: ${TZ:-UTC}
       DOCKER_TLS_CERTDIR: ""
 
-      # Empty means overlay2. On Ceph- or NFS-backed WORKSPACE_DATA you MUST
-      # set --storage-driver=fuse-overlayfs: overlay2 refuses such a filesystem
-      # and the fallback, vfs, copies every layer on every container create.
+      # Empty means overlay2. On Ceph- or NFS-backed WORKSPACE_DATA set
+      # --storage-driver=fuse-overlayfs; overlay2 refuses those filesystems.
       WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
-      # The trust boundary. Whoever can deploy this stack can already start
-      # privileged containers on the node. Not /var/run/docker.sock inside,
-      # because dind runs its own daemon on that path, and keeping this socket
-      # out of the privileged child is deliberate.
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/host-docker.sock
-
-      # Per slot: two replicas sharing a graph directory would corrupt it.
-      - type: bind
-        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/{{.Task.Slot}}/docker
-        target: /var/lib/docker
-
-      # Shared across slots on purpose. Host keys and the uid map: persisting
-      # them stops "REMOTE HOST IDENTIFICATION HAS CHANGED" after a redeploy
-      # and keeps each account's uid, and so its tunnel port, stable.
-      - type: bind
-        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/state
-        target: /etc/workspace
-
+      # Not mounted at /var/run/docker.sock: dind runs its own daemon there.
+      - /var/run/docker.sock:/var/run/host-docker.sock
+      # Per slot: two replicas sharing a graph directory corrupt it.
+      - ${WORKSPACE_DATA:-/var/lib/remote-docker}/{{.Task.Slot}}/docker:/var/lib/docker
+      # Host keys and the uid map, shared across slots. Lose these and clients
+      # report REMOTE HOST IDENTIFICATION HAS CHANGED and tunnel ports move.
+      - ${WORKSPACE_DATA:-/var/lib/remote-docker}/state:/etc/workspace
       # Drop one <name>.pub per user in here.
-      - type: bind
-        source: ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d
-        target: /etc/workspace/authorized_keys.d
-        read_only: true
+      - ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     ports:
-      # mode: host so the port lands on the node running the task. The routing
-      # mesh would send it to nodes where the privileged container is not.
-      - target: 2222
-        published: 2222
-        protocol: tcp
-        mode: host
-
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.workspace == true
-      restart_policy:
-        condition: any
-        delay: 10s
+      - "2222:2222"  # ssh
+      # - "2280:2280"  # ssh over a websocket, for a reverse proxy (ADR 0034)
 
     healthcheck:
-      # Checks the privileged child, whose network namespace this task shares.
+      # Checks the privileged child, whose namespace this task shares.
       test: ["CMD", "remote-dockerd", "healthcheck"]
       interval: 30s
       timeout: 10s
