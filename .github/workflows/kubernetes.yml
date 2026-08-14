@@ -1,0 +1,113 @@
+name: kubernetes
+
+# Does the workspace run on Kubernetes at all?
+#
+# The pod runs dockerd inside a kind node, which is itself a container, so this
+# is docker inside docker inside docker. Nothing else in this repository proves
+# it works, and a chart that only renders is not a chart that runs -- so this
+# job exists before the chart is finished rather than after.
+#
+# The suites in integration.yml need a kernel and a real NFS mount. This one
+# needs a cluster, which is why it is its own workflow.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kubernetes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dind-in-kind:
+    name: a privileged workspace pod in kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      - name: build the workspace image
+        run: docker build -t remote-docker-workspace:kind -f image/Dockerfile .
+
+      - name: create a cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: rd
+          wait: 120s
+
+      - name: load the image into the cluster
+        run: kind load docker-image remote-docker-workspace:kind --name rd
+
+      # The question this workflow exists to answer, asked with as little
+      # around it as possible: a privileged pod, the agent's own healthcheck,
+      # and nothing else. The healthcheck asks the agent, which asks its
+      # daemon, so passing it means dockerd came up inside the pod.
+      - name: run the workspace as a privileged pod
+        run: |
+          kubectl create namespace rd
+          kubectl label namespace rd pod-security.kubernetes.io/enforce=privileged
+          kubectl apply -n rd -f - <<'YAML'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: workspace
+          spec:
+            containers:
+              - name: workspace
+                image: remote-docker-workspace:kind
+                imagePullPolicy: Never
+                securityContext:
+                  privileged: true
+                env:
+                  - name: DOCKER_TLS_CERTDIR
+                    value: ""
+                  # Ceph and NFS-backed volumes refuse overlay2, and a kind
+                  # node's filesystem is an overlay already, so the driver that
+                  # works everywhere is the one under test.
+                  - name: WORKSPACE_DOCKERD_ARGS
+                    value: "--storage-driver=fuse-overlayfs"
+                volumeMounts:
+                  - name: state
+                    mountPath: /etc/workspace
+                  - name: graph
+                    mountPath: /var/lib/docker
+            volumes:
+              - name: state
+                emptyDir: {}
+              - name: graph
+                emptyDir: {}
+          YAML
+
+      - name: wait for the agent to answer
+        run: |
+          set -o pipefail
+          for i in $(seq 1 60); do
+            if kubectl exec -n rd workspace -- remote-dockerd healthcheck 2>/dev/null; then
+              echo "the agent and its daemon answered after ${i}0s"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "the agent never answered"
+          kubectl describe pod -n rd workspace | tail -30
+          kubectl logs -n rd workspace | tail -60
+          exit 1
+
+      # Whether a container can actually run in there, which is the part dind
+      # inside kind is most likely to fail at.
+      - name: run a container inside the workspace
+        run: |
+          kubectl exec -n rd workspace -- docker run --rm alpine:3 echo through-the-pod
+
+      - name: logs on failure
+        if: failure()
+        run: kubectl logs -n rd workspace | tail -100 || true
