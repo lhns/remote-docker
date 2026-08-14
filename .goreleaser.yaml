@@ -56,13 +56,21 @@ builds:
   # its interpreter is /system/bin/linker64, which is the one the device has.
   # No -buildmode needed: that is already the default there.
   #
-  #   go run ./path/to/an/elf/reader   is the check; the three facts to read off
+  #   test/elf.sh android <binary>   is the check; the three facts to read off
   #   a binary are its ELF type, its PT_TLS alignment and its PT_INTERP.
   #
-  # arm64 only, and not by preference: android/amd64 refuses to build without
-  # cgo, so it would make the NDK a build dependency here and at release time.
-  # arm64 links internally and needs nothing. x86 Android is emulators and
-  # Chromebooks, which is not worth carrying an NDK for until somebody asks.
+  # BUILT WITH CGO, which the other targets are not. Android has no
+  # /etc/resolv.conf, so Go's pure resolver finds no configuration and falls
+  # back to 127.0.0.1:53, where nothing is listening: every hostname fails to
+  # resolve. DNS on Android belongs to netd, and bionic's getaddrinfo is the
+  # only way to it, so the binary has to link against libc. See ADR 0023.
+  #
+  # The compiler is the NDK's, which ubuntu runners ship at ANDROID_NDK_HOME.
+  # An unset variable fails the build here rather than producing a binary that
+  # cannot look anything up. API 24 is Termux's own floor, Android 7.
+  #
+  # Both architectures, now that the NDK is a build dependency either way.
+  # x86_64 is emulators and Chromebooks.
   #
   # Loadable is all this claims. Nothing has been run on Android.
   - id: remote-docker-android
@@ -70,12 +78,18 @@ builds:
     dir: client
     binary: remote-docker
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      # Spelled out per architecture rather than built from a template
+      # variable: goreleaser expands $name as an environment variable before
+      # the template runs, so `{{ $ndk := ... }}` arrives as `{{ := ... }}`.
+      - >-
+        {{- if eq .Arch "arm64" }}CC={{ .Env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang{{- end }}
+        {{- if eq .Arch "amd64" }}CC={{ .Env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang{{- end }}
     flags:
       - -trimpath
     ldflags: *ldflags
     goos: [android]
-    goarch: [arm64]
+    goarch: [arm64, amd64]
 
   # The agent, for a workspace that is a VM rather than a container.
   #

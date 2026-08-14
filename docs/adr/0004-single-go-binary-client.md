@@ -40,6 +40,11 @@ NFS server as libraries.
 
 - One artifact to deliver, cross-compiled for `windows|linux|darwin ×
   amd64|arm64` with `CGO_ENABLED=0`. Nothing is downloaded at runtime.
+  *(2026-08-14: Android is the one exception and is built with cgo, because it
+  has no other way to resolve a hostname (ADR 0023). The promise here is per
+  target and unchanged for these six: `test/elf.sh linux` asserts the Linux
+  binary still names no interpreter and links nothing, which is what makes it
+  run on musl.)*
 - **Multiplexing becomes inherent.** One `ssh.Client` carries many channels on
   every platform, so the `ControlMaster` split disappears rather than being
   worked around.
