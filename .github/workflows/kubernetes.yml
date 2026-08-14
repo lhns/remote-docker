@@ -1,7 +1,7 @@
 name: kubernetes
 
-# The chart, installed on a real cluster, reached the way a person would reach
-# it: through an ingress, over wss, with the client binary.
+# The chart, installed on a real cluster and reached the way a person would
+# reach it: through an ingress, with the client binary.
 #
 # The pod runs dockerd inside a kind node, which is itself a container, so this
 # is docker inside docker inside docker. That it works at all was measured
@@ -80,6 +80,9 @@ jobs:
     name: a session through the ingress
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      # StatefulSet of one, so the name is the release plus an ordinal.
+      POD: ws-remote-docker-workspace-0
     steps:
       - uses: actions/checkout@v7
 
@@ -143,7 +146,7 @@ jobs:
       - name: the workspace is up
         run: |
           kubectl get pods -n rd -o wide
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- remote-dockerd healthcheck
+          kubectl exec -n rd "$POD" -- remote-dockerd healthcheck
 
       # `kind load` puts an image in the NODE's containerd. The workspace runs
       # its own dockerd with its own graph on a PVC, which knows nothing about
@@ -153,8 +156,7 @@ jobs:
       # image is handed over directly.
       - name: give the workspace's own daemon the image
         run: |
-          docker save remote-docker-workspace:kind             | kubectl exec -i -n rd ws-remote-docker-workspace-0 -- docker load
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- docker images
+          docker save remote-docker-workspace:kind | kubectl exec -i -n rd "$POD" -- docker load
 
       - name: reach it through the ingress, over ws
         run: |
@@ -201,29 +203,28 @@ jobs:
             --namespace rd --reuse-values \
             --set resources.requests.memory=256Mi \
             --wait --timeout 10m
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- remote-dockerd healthcheck
+          kubectl exec -n rd "$POD" -- remote-dockerd healthcheck
 
       - name: what went wrong
         if: failure()
         run: |
-          # The client's own log first. A failure here is as likely to be on
-          # this side of the tunnel as in the cluster, and without it the only
-          # evidence is that a socket closed.
-          echo "== client log =="
-          cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -80 || echo "(none)"
-          echo "== inside the pod =="
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- docker volume ls 2>&1 | tail -10 || true
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- docker ps -a 2>&1 | tail -10 || true
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- sh -c 'mount | grep nfs' 2>&1 | tail -5 || true
-          # The per-account daemon runs as a container of its own, so its
-          # failures are in its log and nowhere else.
-          for c in $(kubectl exec -n rd ws-remote-docker-workspace-0 --                        docker ps -aq --filter name=rd-dind 2>/dev/null); do
-            echo "-- rd-dind container $c"
-            kubectl exec -n rd ws-remote-docker-workspace-0 -- docker logs --tail 40 "$c" 2>&1 | tail -40 || true
+          # The client's own log first: a failure here is as likely to be on
+          # this side of the tunnel as in the cluster.
+          echo "== client =="
+          cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -60 || echo "(none)"
+
+          echo "== workspace =="
+          kubectl describe pod -n rd "$POD" | tail -30 || true
+          kubectl logs -n rd "$POD" --tail=100 || true
+
+          # A per-account daemon is a container of its own, so the reason it
+          # will not start is in its log and nowhere else. This is what found
+          # the storage-driver and the image-pull failures.
+          echo "== per-account daemons =="
+          kubectl exec -n rd "$POD" -- docker ps -a 2>&1 | tail -5 || true
+          for c in $(kubectl exec -n rd "$POD" -- docker ps -aq --filter name=rd-dind 2>/dev/null); do
+            kubectl exec -n rd "$POD" -- docker logs --tail 30 "$c" 2>&1 | tail -30 || true
           done
-          kubectl exec -n rd ws-remote-docker-workspace-0 -- sh -c 'ls -l /dev/fuse' 2>&1 || true
-          echo "== cluster =="
-          kubectl get all -n rd || true
-          kubectl describe pod -n rd -l app.kubernetes.io/name=remote-docker-workspace || true
-          kubectl logs -n rd -l app.kubernetes.io/name=remote-docker-workspace --tail=200 || true
-          kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller --tail=80 || true
+
+          echo "== ingress =="
+          kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller --tail=40 || true

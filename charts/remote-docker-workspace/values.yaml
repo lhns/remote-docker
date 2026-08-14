@@ -53,17 +53,13 @@ perUserDind: true
 # right choice when the storage allows it.
 dockerdArgs: "--storage-driver=fuse-overlayfs"
 
-# The image each account's own daemon runs, when perUserDind is on.
+# The image each account's own daemon runs, when perUserDind is on. Empty means
+# this chart's own image.
 #
-# Empty means this chart's own image, which is the right answer and not an
-# obvious one. A per-account daemon inherits the workspace's storage driver,
-# and stock docker:dind does not carry fuse-overlayfs, so it dies in a restart
-# loop with
-#
-#     exec: "fuse-overlayfs": executable file not found in $PATH
-#
-# The compose and Swarm deployments find this image by inspecting the container
-# they are running in. Nothing can do that here, so the chart passes it.
+# It has to be one that carries the storage driver above, and stock docker:dind
+# does not carry fuse-overlayfs: a daemon started from it dies in a restart
+# loop. Compose and Swarm find the right image by inspecting the container they
+# run in; nothing in a pod can, so the chart passes it.
 dindImage: ""
 
 # Extra environment for the agent, e.g. TZ or WORKSPACE_UID_BASE.
@@ -165,12 +161,10 @@ tolerations: []
 affinity: {}
 priorityClassName: ""
 
-# The agent's own healthcheck, which asks the daemon for its version as well.
-# `docker info` in a shell returned 0 for a daemon that was answering and
-# unusable, which is why the binary has a subcommand for this.
+# All three probes run `remote-dockerd healthcheck`, which asks the agent and
+# the daemon behind it.
 probes:
-  # Generous, because the first start pulls nothing but does build a graph
-  # directory and start a daemon.
+  # Generous: the first start builds a graph directory and starts a daemon.
   startupSeconds: 300
   periodSeconds: 30
 
