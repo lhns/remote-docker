@@ -179,7 +179,7 @@ jobs:
           echo "from the runner" > "$RUNNER_TEMP/project/marker"
           cd "$RUNNER_TEMP/project"
 
-          out=$("$RUNNER_TEMP/remote-docker" run --rm \
+          out=$(timeout 240 "$RUNNER_TEMP/remote-docker" run --rm \
                   -v "$RUNNER_TEMP/project:/w" alpine:3 cat /w/marker)
           test "$out" = "from the runner"
 
@@ -195,6 +195,15 @@ jobs:
       - name: what went wrong
         if: failure()
         run: |
+          # The client's own log first. A failure here is as likely to be on
+          # this side of the tunnel as in the cluster, and without it the only
+          # evidence is that a socket closed.
+          echo "== client log =="
+          cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -80 || echo "(none)"
+          echo "== volumes and mounts in the pod =="
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- docker volume ls 2>&1 | tail -10 || true
+          kubectl exec -n rd ws-remote-docker-workspace-0 -- sh -c 'mount | grep nfs' 2>&1 | tail -5 || true
+          echo "== cluster =="
           kubectl get all -n rd || true
           kubectl describe pod -n rd -l app.kubernetes.io/name=remote-docker-workspace || true
           kubectl logs -n rd -l app.kubernetes.io/name=remote-docker-workspace --tail=200 || true
