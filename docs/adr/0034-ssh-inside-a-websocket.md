@@ -1,4 +1,4 @@
-# 0034 — SSH inside a WebSocket, so a reverse proxy can front a workspace
+# 0034 — SSH inside a WebSocket
 
 - Status: Accepted; extends [ADR 0030](0030-a-core-module-for-the-tunnel.md)
 - Date: 2026-08-14
