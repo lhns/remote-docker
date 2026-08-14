@@ -293,15 +293,24 @@ agent also serves SSH over a WebSocket, so any HTTP reverse proxy can front it:
 
 ```
 --ws-addr :2280      the WebSocket listener; empty disables it
---ws-path /tunnel    the path it answers on
 ```
 
 Both listeners run by default. Point the proxy at `:2280`, make sure it passes
 WebSocket upgrades, and give the client the URL:
 
 ```
-remote-docker remote create dev --host wss://dev.example.com/tunnel --user alice
+remote-docker remote create dev --host wss://dev.example.com --user alice
 ```
+
+The tunnel is on the root, and the agent accepts an upgrade on **any path**, so
+it does not matter whether the proxy strips its prefix. Put it under a path if
+the proxy routes on one:
+
+```
+remote-docker remote create dev --host wss://example.com/rd --user alice
+```
+
+Opening the endpoint in a browser gets a short reply rather than a hang.
 
 **The agent never terminates TLS.** It has no certificate options at all, so
 there is nothing to renew and nothing to expire; the proxy does that. Serving

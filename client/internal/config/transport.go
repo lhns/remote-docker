@@ -104,8 +104,10 @@ func (c Config) Transport() (Transport, error) {
 		if err != nil {
 			return Transport{}, err
 		}
+		// Explicit rather than implied: the request goes to / either way. The
+		// agent ignores the path; it is there for a proxy that routes on one.
 		if u.Path == "" {
-			u.Path = DefaultWSPath
+			u.Path = "/"
 		}
 		return Transport{Kind: scheme, Host: u.Hostname(), Port: port, URL: u.String()}, nil
 	}
@@ -113,10 +115,6 @@ func (c Config) Transport() (Transport, error) {
 	return Transport{}, fmt.Errorf(
 		"config: host %q names %q, which is not a way to reach a workspace (ssh, ws or wss)", c.Host, scheme)
 }
-
-// DefaultWSPath matches the agent's --ws-path, so an endpoint that names only a
-// host still reaches the tunnel.
-const DefaultWSPath = "/tunnel"
 
 // isWebSocketHost reports whether a host names a WebSocket endpoint, which is
 // what decides whether the SSH port default applies to it.
