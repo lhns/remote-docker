@@ -47,9 +47,13 @@ own bridge and iptables rules and mounts NFS in its own namespace. A chart
 cannot label a namespace it does not own, so `NOTES.txt` prints the Pod Security
 label rather than letting the pod be rejected with no explanation.
 
-**No Role and no ClusterRole.** The agent never talks to the Kubernetes API. It
-runs a daemon, provisions unix accounts and serves SSH, and a ServiceAccount
-with nothing bound to it is the whole of what it needs.
+**No Role, no ClusterRole, and no token in the pod.** The agent never talks to
+the Kubernetes API. It runs a daemon, provisions unix accounts and serves SSH,
+and a ServiceAccount with nothing bound to it is the whole of what it needs.
+`automountServiceAccountToken: false` goes with that, because an enrolled
+account gets a shell in this container as its own uid and a projected token is
+mounted at mode 0644: without it, a key enrolled to run containers also holds
+whatever the namespace's default ServiceAccount can do.
 
 **The chart names the image for the per-account daemons.** Those daemons inherit
 the workspace's storage driver, and stock `docker:dind` does not carry

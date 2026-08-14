@@ -57,6 +57,15 @@ no dind image supplying one.)*
   dialling it was not. `ForwardPolicy.AllowDial` now refuses a port another
   account holds, and the shared-mode suite covers it. ADR 0019's mode never had
   this, because each tunnel binds inside its own namespace.
+- **`AllowDial` is not the whole of that, and cannot be.** It gates SSH
+  channels. An account also has a shell in the workspace container, in the
+  namespace the exports are bound in, and a socket opened there asks no
+  forwarding policy at all. So in this mode an enrolled account can speak NFS
+  to another account's export while a session is live, and the only answers are
+  the trust assumption in the Decision above and running ADR 0019's mode, where
+  the export is not in the namespace shells run in. `test/integration.sh`
+  measures the reachability and `test/per-user-dind.sh` asserts its absence in
+  the default mode.
 - Revisit when the user set stops being small and mutually trusted. That is the
   trigger; there is no other reason this decision needs to change. The tunnel
   reachability above is a second, smaller one: it is fixed, but it is the kind

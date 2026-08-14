@@ -38,6 +38,11 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "remote-docker-workspace.serviceAccountName" . }}
+      {{- /* The agent never calls the Kubernetes API. An enrolled account gets
+            a shell in this container as its own uid, and a projected token is
+            mounted at mode 0644, so without this it can read the pod's
+            ServiceAccount token. */}}
+      automountServiceAccountToken: false
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

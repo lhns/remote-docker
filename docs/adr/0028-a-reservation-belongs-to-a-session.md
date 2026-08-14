@@ -11,7 +11,7 @@ local forward *to* a port. The second is the one that matters, because on a
 shared daemon (ADR 0012) every account's forwards live in one network
 namespace, so another account's reverse-tunnel port is dialable from there and
 what answers is an NFS export with `AuthFlavorNull`: read and write over
-somebody's files. `docs/threat-model.md` flow 4 names that map as the control.
+somebody's files. `docs/threat-model.md` flow 5 names that map as the control.
 
 The map was keyed `port -> account name`, and release was "delete if the entry
 names me". That reads as ownership and is not: an account is a person, and a

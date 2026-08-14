@@ -8,6 +8,28 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### The threat model covers the WebSocket transport and Kubernetes
+
+[`docs/threat-model.md`](docs/threat-model.md) had not been revisited since a
+workspace could be reached through a reverse proxy or run in a cluster. It now
+models both, says who each control defends against, and records what the
+project's artifacts are signed with.
+
+**One change to the chart came out of it.** The pod mounted a ServiceAccount
+token at mode 0644, and an enrolled account gets a shell in that container as
+its own uid, so it could read the pod's cluster identity. The agent never calls
+the Kubernetes API, so the chart now sets `automountServiceAccountToken: false`.
+Nothing else in an install changes.
+
+**One limit is written down rather than fixed.** With one daemon for everybody
+(`WORKSPACE_PER_USER_DIND=false`), the NFS exports are bound in the namespace
+account shells run in, so an account can reach another's export with an ordinary
+socket. No forwarding rule can prevent that, because no forwarding is involved.
+The default mode binds each export inside its own account's namespace and the
+test suite now asserts that no shell can reach it there.
+
 ## 0.2.1 — 2026-08-14
 
 ### The published Helm chart is signed
