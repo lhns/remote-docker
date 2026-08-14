@@ -698,7 +698,7 @@ else
         shell_reach=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes -p "$SSH_PORT" "$OTHER@127.0.0.1" \
-            "exec 3<>/dev/tcp/127.0.0.1/$first_port && echo CONNECTED || echo REFUSED" \
+            "nc -w 2 127.0.0.1 $first_port </dev/null && echo CONNECTED || echo REFUSED" \
             2>/dev/null </dev/null | tr -d '\015')
         case "$shell_reach" in
         *CONNECTED*)

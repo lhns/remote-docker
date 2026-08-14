@@ -412,13 +412,30 @@ alice_port=$(cd "$WORK/project-$A" && REMOTE_DOCKER_STATE_DIR="$WORK/state-$A" \
 if [ -z "$alice_port" ]; then
     bad "could not read $A's tunnel port, so nothing was probed"
 else
+    # One probe, run in both namespaces, so the two answers are comparable. nc
+    # is busybox's, present in the workspace image and in alpine.
+    probe="nc -w 2 127.0.0.1 $alice_port </dev/null && echo CONNECTED || echo REFUSED"
+
+    # A container holding a bind mount keeps the export in use, so the forward
+    # stays bound while the probes run. Without it an idle release unbinds the
+    # port and every probe below is refused for the wrong reason, which is a
+    # test that cannot fail.
+    da run -d --name alice-hold -v "$WORK/project-$A:/w" alpine:3 sleep 300 >/dev/null 2>&1
+
+    # The positive control, and the claim the threat model's flow 3 makes about
+    # host networking: a container that joins the daemon's namespace lands
+    # where the export is bound, and reaches every share, not only its own
+    # mounts.
+    inside=$(da run --rm --network host alpine:3 sh -c "$probe" 2>/dev/null | tr -d '\015')
+    case "$inside" in
+    *CONNECTED*) ok "the export answers inside $A's daemon namespace, so the port is live" ;;
+    *) bad "the export did not answer inside $A's own namespace: [$inside]. The probes below prove nothing" ;;
+    esac
+
     for who in "$A" "$B"; do
-        # bash is in the image, so the probe needs nothing installed: /dev/tcp
-        # opens a connection or fails, and that is the whole question.
         reach=$(timeout 60 ssh -i "$WORK/state-$who/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" \
-            "exec 3<>/dev/tcp/127.0.0.1/$alice_port && echo CONNECTED || echo REFUSED" \
+            -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" "$probe" \
             2>/dev/null </dev/null | tr -d '\015')
         case "$reach" in
         *CONNECTED*) bad "SECURITY: $who's shell reached the NFS export on $alice_port" ;;
@@ -426,6 +443,8 @@ else
         *)           bad "the probe from $who's shell said nothing: [$reach]" ;;
         esac
     done
+
+    da rm -f alice-hold >/dev/null 2>&1
 fi
 
 echo

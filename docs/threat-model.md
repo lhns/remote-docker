@@ -309,7 +309,8 @@ export answering `AUTH_NULL`: every directory that machine has shared in this
 session, not only the ones mounted into that container. No boundary is crossed,
 since it is the account's own export, and it does widen what an untrusted image
 can read. The answer is the ordinary one: do not give an image you do not trust
-host networking.
+host networking. *Covered by* `per-user-dind.sh` section 12, where the same
+probe is run from a host-networked container and from a shell.
 
 **I — your registry credentials leave this machine (2-5).** The daemon does the
 pulling but has no logins of its own: the CLI resolves yours locally
