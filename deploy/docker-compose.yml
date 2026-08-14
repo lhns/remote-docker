@@ -4,9 +4,8 @@
 #   cp ~/alice.pub authorized_keys.d/alice.pub     # filename == unix account
 #   docker compose up -d --build
 #
-# One file per account, holding one or more keys, one per line. The directory
-# is re-read within a minute, so a new file is not enrolled the instant you
-# save it. Emptying or removing a file revokes that account, keeping its home.
+# One file per account, one key per line, re-read within a minute. Emptying a
+# file revokes that account and keeps its home.
 #
 services:
   workspace:
@@ -18,39 +17,33 @@ services:
     container_name: remote-docker-workspace
     restart: unless-stopped
 
-    # dind runs its own dockerd, sets up its own bridge and iptables rules, and
-    # mounts NFS in its own namespace.
+    # dind runs its own dockerd, its own bridge and iptables, and mounts NFS.
     privileged: true
 
     ports:
       - "2222:2222"
-      # SSH over a WebSocket, for a reverse proxy to front (ADR 0034). Publish
-      # it only if the proxy is elsewhere: on the same docker network it needs
-      # no published port at all.
+      # SSH over a WebSocket, for a reverse proxy to front (ADR 0034). Only
+      # needed if the proxy is not on this docker network.
       # - "2280:2280"
 
     environment:
       TZ: ${TZ:-UTC}
       DOCKER_TLS_CERTDIR: ""
-      # Empty means overlay2, which is right for the named volume below. Set
-      # --storage-driver=fuse-overlayfs only if you replace that volume with a
-      # bind onto Ceph- or NFS-backed storage, where overlay2 refuses to run.
+      # Empty means overlay2. Use --storage-driver=fuse-overlayfs only if you
+      # replace the volume below with Ceph- or NFS-backed storage.
       WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
 
     volumes:
       # Keep the graph driver on real local disk if you possibly can.
       - workspace-docker:/var/lib/docker
-      # Host keys and the uid map. Persisting this stops clients getting
-      # "REMOTE HOST IDENTIFICATION HAS CHANGED" after a redeploy and keeps
-      # each account's uid, and so its tunnel port, stable.
+      # Host keys and the uid map: lose these and clients report REMOTE HOST
+      # IDENTIFICATION HAS CHANGED and tunnel ports move.
       - ./state:/etc/workspace
       # Drop one <name>.pub per user in here.
       - ./authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     healthcheck:
-      # Asks the agent, which also asks the daemon for its version. `docker
-      # info` in a shell returned 0 for a daemon that was answering but
-      # unusable.
+      # Asks the agent, which asks the daemon for its version.
       test: ["CMD", "remote-dockerd", "healthcheck"]
       interval: 30s
       timeout: 10s
