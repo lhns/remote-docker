@@ -1,15 +1,14 @@
-// Package wstunnel dials the workspace through an HTTP reverse proxy.
+// Package wstunnel opens a WebSocket to a workspace and returns it as a
+// net.Conn, for tunnelclient to run SSH over.
 //
-// The SSH session is unchanged: this only decides what carries it. A workspace
-// behind a reverse proxy is reachable on 443 like anything else that proxy
-// fronts, which is the whole point -- an open SSH port is the thing that makes a
-// workspace hard to get to from a network that allows little else.
+// It is used when the workspace is behind an HTTP reverse proxy, which is how a
+// workspace is reached without an SSH port open to it.
 //
-// TLS here proves which FRONT DOOR was reached, and nothing more. The SSH host
-// key still proves this is the workspace and the client key still proves which
-// machine is calling, both inside the tunnel, so a proxy in the path sees
-// ciphertext it can neither read nor forge. That is why Insecure exists and why
-// ws:// is offered at all: neither makes the session unauthenticated.
+// TLS on this connection authenticates the proxy. It does not authenticate the
+// workspace: the SSH host key does that, inside the tunnel, and the client key
+// identifies the machine. This is why Insecure and ws:// are offered -- both
+// give up checking which proxy answered, and neither affects whether the SSH
+// session itself is authenticated and encrypted. See ADR 0034.
 package wstunnel
 
 import (
@@ -19,7 +18,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"time"
 
@@ -41,6 +39,15 @@ type Options struct {
 	// give up authentication, which SSH does inside.
 	Insecure bool
 
+	// Addr is the host:port the connection reports as its remote address.
+	//
+	// Required, and not derived from URL, because the caller already worked it
+	// out: deriving it here would put "wss means 443" in a second place, free
+	// to disagree with the first. It matters because known_hosts looks a host
+	// key up by this address, and the WebSocket library reports a placeholder
+	// with no port in it.
+	Addr string
+
 	// Timeout bounds the HTTP handshake, not the session that follows.
 	Timeout time.Duration
 }
@@ -58,9 +65,8 @@ func Dialer(opts Options) (func(ctx context.Context) (net.Conn, error), error) {
 		return nil, err
 	}
 
-	endpoint, err := endpointAddr(opts.URL)
-	if err != nil {
-		return nil, err
+	if opts.Addr == "" {
+		return nil, fmt.Errorf("wstunnel: Options.Addr is required, or no host key can be checked")
 	}
 
 	// One client, and therefore one connection pool, for every dial to this
@@ -94,14 +100,12 @@ func Dialer(opts Options) (func(ctx context.Context) (net.Conn, error), error) {
 		c.SetReadLimit(-1)
 
 		// The address matters as well as the bytes. known_hosts looks a host
-		// key up by the connection's RemoteAddr, and the library reports a
-		// placeholder ("websocket/unknown-addr") that has no port in it, so
-		// every host-key check fails before it can compare anything. Reporting
-		// the endpoint this dialled is both true and what the SSH layer above
-		// expects to see.
+		// key up by the connection's RemoteAddr, and the library reports
+		// "websocket/unknown-addr", which has no port in it, so every host-key
+		// check fails before it can compare anything.
 		return &addrConn{
 			Conn:   websocket.NetConn(context.Background(), c, websocket.MessageBinary),
-			remote: endpoint,
+			remote: wsAddr(opts.Addr),
 		}, nil
 	}, nil
 }
@@ -120,23 +124,6 @@ type wsAddr string
 
 func (a wsAddr) Network() string { return "tcp" }
 func (a wsAddr) String() string  { return string(a) }
-
-// endpointAddr is the host and port a URL names, with the scheme's default
-// filled in, so the connection can report where it went.
-func endpointAddr(raw string) (net.Addr, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("wstunnel: %s: %w", raw, err)
-	}
-	port := u.Port()
-	if port == "" {
-		port = "80"
-		if u.Scheme == "wss" {
-			port = "443"
-		}
-	}
-	return wsAddr(net.JoinHostPort(u.Hostname(), port)), nil
-}
 
 // hint turns the two failures worth naming into something actionable. A proxy
 // that routed the request somewhere else answers with an ordinary status, and

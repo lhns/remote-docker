@@ -332,8 +332,8 @@ func serve(addr, wsAddr, wsPath string) error {
 	serveErr := make(chan error, 1)
 	wg.Go(func() { serveErr <- server.Serve(ctx) })
 
-	// The same SSH server, reached another way. A proxy in front terminates
-	// TLS; nothing here does (ADR 0034).
+	// A second listener for the same SSH server, so a reverse proxy can front
+	// the workspace (ADR 0034). Disabled by setting --ws-addr to "".
 	if wsAddr != "" {
 		ws, err := wslisten.New(wsAddr, wsPath, logger("wslisten"))
 		if err != nil {

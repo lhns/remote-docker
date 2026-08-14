@@ -1,16 +1,14 @@
-// Package wslisten serves SSH over a WebSocket, so a workspace can be reached
-// through an ordinary HTTP reverse proxy.
+// Package wslisten accepts WebSocket connections and presents them as a
+// net.Listener, so the SSH server can accept from a reverse proxy as well as
+// from a TCP port.
 //
-// It is a net.Listener and nothing more: connections that arrive as WebSocket
-// upgrades are handed to whatever accepts them, which is the same SSH server
-// that accepts TCP. Everything above the transport -- authentication, the
-// forwards, sessions -- neither knows nor cares which one it got.
+// Connections are handed to whatever calls Accept, which is the same SSH server
+// that accepts TCP. Nothing above the transport is told which kind it got.
 //
-// NO TLS HERE, deliberately. The proxy terminates it. An agent that owned a
-// certificate would eventually present an expired one, and that presents as a
-// workspace being unreachable for a reason nothing on screen names. Serving
-// plaintext is not the weakness it looks like: the same SSH handshake runs
-// inside, so this door has the same lock as the TCP one.
+// This package does not do TLS, and the agent has no certificate options at
+// all. The proxy in front terminates TLS. The traffic between the proxy and the
+// agent is an ordinary SSH handshake, so it is authenticated and encrypted by
+// SSH even though the WebSocket carrying it is not. See ADR 0034.
 package wslisten
 
 import (
@@ -27,22 +25,25 @@ import (
 	"github.com/lhns/remote-docker/core/logx"
 )
 
-// PeerTimeout is how long a connection may fail to answer before it is dropped.
+// peerTimeout is how long a connection may fail to answer a ping before it is
+// dropped.
 //
-// This is the WebSocket's own liveness, and it is not optional. The TCP-level
-// detection the agent applies elsewhere (sshd.armDeadPeerDetection) works on a
-// *net.TCPConn, and what arrives here is a WebSocket wrapping one, so none of it
-// applies. Without this, a client that vanishes keeps its reverse-tunnel port
-// reserved -- and the symptom is not a lost connection but a REFUSED FORWARD on
-// some later reconnect, with containers mounting against a port bound to
-// nothing.
+// The agent's other dead-peer detection (sshd.armDeadPeerDetection) sets TCP
+// options on a *net.TCPConn. A connection arriving here is a WebSocket wrapping
+// one, so those options are never set and this ping is the only thing that
+// notices a client that stopped responding.
 //
-// It doubles as what keeps the tunnel alive through a proxy's idle timeout,
-// which is why the interval is well under any default worth caring about.
-const PeerTimeout = 60 * time.Second
+// It matters because a connection that is never dropped keeps its
+// reverse-tunnel port reserved. The next session from that machine is then
+// refused its forward, and containers mount against a port with nothing behind
+// it, which does not look like a transport problem at all.
+//
+// The ping also keeps the connection from being closed by a proxy's idle
+// timeout.
+const peerTimeout = 60 * time.Second
 
-// pingInterval leaves room for two missed answers inside PeerTimeout.
-const pingInterval = PeerTimeout / 3
+// pingInterval leaves room for two missed answers inside peerTimeout.
+const pingInterval = peerTimeout / 3
 
 // Listener accepts WebSocket connections as if they were ordinary ones.
 type Listener struct {
@@ -105,7 +106,7 @@ func (l *Listener) Handler() http.Handler {
 	})
 }
 
-// keepAlive drops a connection that stops answering. See PeerTimeout.
+// keepAlive drops a connection that stops answering. See peerTimeout.
 func (l *Listener) keepAlive(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn) {
 	every := l.pingEvery()
 	t := time.NewTicker(every)
@@ -166,8 +167,8 @@ type Server struct {
 
 // New starts listening on addr and serves the upgrade endpoint at path.
 //
-// The listener is returned rather than served here, so the caller decides what
-// accepts from it -- which is the same SSH server that accepts TCP.
+// The listener is returned rather than served here, so the caller can hand it
+// to the SSH server that already accepts TCP connections.
 func New(addr, path string, log *slog.Logger) (*Server, error) {
 	log = logx.Or(log)
 

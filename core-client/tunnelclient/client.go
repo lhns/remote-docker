@@ -45,14 +45,12 @@ type Config struct {
 	// nobody is there to answer or an acceptance of anything at all.
 	HostKey ssh.HostKeyCallback
 
-	// Dial, if set, opens the connection SSH will run over. Nil dials TCP to
-	// Addr, which is what a workspace reached directly wants.
+	// Dial, if set, opens the connection SSH runs over. Nil dials TCP to Addr.
 	//
-	// Here for the same reason Signer and HostKey are (ADR 0030): this package
-	// carries out a transport decision and makes none. A WebSocket to a reverse
-	// proxy, a unix socket, anything that is a net.Conn -- the choice belongs to
-	// whoever knows the deployment, and the SSH handshake above is identical
-	// either way.
+	// Passed in rather than chosen here, like Signer and HostKey, because only
+	// the caller knows the deployment (ADR 0030). The client uses it to open a
+	// WebSocket when the workspace is behind a reverse proxy; the SSH handshake
+	// that follows is the same either way.
 	Dial func(ctx context.Context) (net.Conn, error)
 
 	// Ciphers, if set, replaces the negotiated cipher list.
@@ -74,14 +72,10 @@ type Config struct {
 // dial opens the connection SSH runs over: the caller's, or TCP to Addr.
 func (c Config) dial(ctx context.Context) (net.Conn, error) {
 	if c.Dial != nil {
-		conn, err := c.Dial(ctx)
-		if err != nil {
-			// Not wrapped with an address: the caller's dialler knows where it
-			// went, and this one does not. Addr is the SSH endpoint, which for
-			// a proxied transport is not where the connection was made.
-			return nil, err
-		}
-		return conn, nil
+		// Returned unwrapped: Addr is the SSH endpoint, which is not where a
+		// proxied connection was made, so adding it to the error would name the
+		// wrong place. The caller's dialler reports its own address.
+		return c.Dial(ctx)
 	}
 
 	dialer := &net.Dialer{Timeout: c.Timeout}

@@ -54,11 +54,17 @@ func wsURL(srv *httptest.Server) string {
 	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/tunnel"
 }
 
+// addrOf is what the caller passes as Options.Addr: the host and port it
+// already worked out when it decided where to connect.
+func addrOf(srv *httptest.Server) string {
+	return strings.TrimPrefix(strings.TrimPrefix(srv.URL, "https://"), "http://")
+}
+
 // The connection has to name where it went, because known_hosts asks it.
 func TestTheConnectionReportsAnAddressWithAPort(t *testing.T) {
 	srv := echoWS(t, false)
 
-	dial, err := Dialer(Options{URL: wsURL(srv)})
+	dial, err := Dialer(Options{URL: wsURL(srv), Addr: addrOf(srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,28 +84,19 @@ func TestTheConnectionReportsAnAddressWithAPort(t *testing.T) {
 	}
 }
 
-// The scheme's default port is what a URL means when it names none.
-func TestTheAddressFillsInTheSchemeDefault(t *testing.T) {
-	for _, tc := range []struct{ url, want string }{
-		{"wss://ws.example/tunnel", "ws.example:443"},
-		{"ws://ws.example/tunnel", "ws.example:80"},
-		{"wss://ws.example:8443/tunnel", "ws.example:8443"},
-	} {
-		got, err := endpointAddr(tc.url)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.url, err)
-		}
-		if got.String() != tc.want {
-			t.Errorf("%s -> %s, want %s", tc.url, got, tc.want)
-		}
+// Addr is required: without it nothing can look up a host key, and failing at
+// construction says so where a handshake error would not.
+func TestAddrIsRequired(t *testing.T) {
+	if _, err := Dialer(Options{URL: "wss://ws.example/tunnel"}); err == nil {
+		t.Error("a dialler with no Addr was accepted")
 	}
 }
 
-// Bytes both ways, which is the least it has to do.
+// Bytes in both directions.
 func TestItCarriesAStream(t *testing.T) {
 	srv := echoWS(t, false)
 
-	dial, err := Dialer(Options{URL: wsURL(srv)})
+	dial, err := Dialer(Options{URL: wsURL(srv), Addr: addrOf(srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +125,7 @@ func TestCertificateVerification(t *testing.T) {
 	srv := echoWS(t, true)
 	url := wsURL(srv)
 
-	dial, err := Dialer(Options{URL: url})
+	dial, err := Dialer(Options{URL: url, Addr: addrOf(srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +134,7 @@ func TestCertificateVerification(t *testing.T) {
 		t.Error("an untrusted certificate was accepted")
 	}
 
-	dial, err = Dialer(Options{URL: url, Insecure: true})
+	dial, err = Dialer(Options{URL: url, Addr: addrOf(srv), Insecure: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +151,7 @@ func TestACAFileVerifies(t *testing.T) {
 	srv := echoWS(t, true)
 
 	pem := certPEM(t, srv)
-	dial, err := Dialer(Options{URL: wsURL(srv), CAFile: pem})
+	dial, err := Dialer(Options{URL: wsURL(srv), Addr: addrOf(srv), CAFile: pem})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,10 +172,10 @@ func TestABadCAFileIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Dialer(Options{URL: "wss://ws.example/tunnel", CAFile: empty}); err == nil {
+	if _, err := Dialer(Options{URL: "wss://ws.example/tunnel", Addr: "ws.example:443", CAFile: empty}); err == nil {
 		t.Error("a file holding no certificate was accepted as a CA")
 	}
-	if _, err := Dialer(Options{URL: "wss://ws.example/tunnel", CAFile: filepath.Join(dir, "missing")}); err == nil {
+	if _, err := Dialer(Options{URL: "wss://ws.example/tunnel", Addr: "ws.example:443", CAFile: filepath.Join(dir, "missing")}); err == nil {
 		t.Error("a missing CA file was accepted")
 	}
 }

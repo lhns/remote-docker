@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -57,10 +58,9 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// it is here rather than in the commands because every path to a session
 	// comes through this function -- a check at `machine create` would be right
 	// for the first connection and wrong for every one after a reboot.
-	// How this workspace is reached: an SSH endpoint, or a WebSocket through a
-	// reverse proxy (ADR 0034). Decided here because it is policy -- the
-	// transport is handed the connection and chooses nothing, the way it is
-	// handed its signer and host-key rule (ADR 0030).
+	// Whether this workspace is reached over SSH directly or through a reverse
+	// proxy (ADR 0034). Worked out here because tunnelclient is handed its
+	// connection rather than choosing one (ADR 0030).
 	transport, err := s.opts.Config.Transport()
 	if err != nil {
 		return nil, err
@@ -170,19 +170,17 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	return live, nil
 }
 
-// dialerFor returns what opens the connection, or nil for plain SSH.
+// dialerFor returns the function that opens the connection, or nil to dial TCP.
 //
-// The WebSocket is a wrapper and not a second protocol: the SSH handshake above
-// it is identical, the host key still decides whether this is the workspace,
-// and the client key still says which machine is calling. What TLS adds is
-// knowing which proxy answered, which is why Insecure costs less here than the
-// name suggests.
+// Only the transport differs: the SSH handshake, the host-key check and the
+// client key are the same for both.
 func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (net.Conn, error), error) {
 	if !t.WebSocket() {
 		return nil, nil
 	}
 	return wstunnel.Dialer(wstunnel.Options{
 		URL:      t.URL,
+		Addr:     net.JoinHostPort(t.Host, strconv.Itoa(t.Port)),
 		CAFile:   cfg.CAFile,
 		Insecure: cfg.Insecure,
 	})

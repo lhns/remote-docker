@@ -2,18 +2,18 @@ package config
 
 // How a workspace is reached, worked out from what `host` says.
 //
-// The scheme lives on the host so there is one setting for where a workspace
-// is, rather than two that can disagree. A bare host keeps meaning exactly what
-// it always meant, so no existing configuration changes:
+// The scheme is part of the host setting rather than a setting of its own, so
+// there is one place that says where a workspace is. A bare host means what it
+// meant before schemes were accepted, so existing configuration is unaffected:
 //
 //	dev.example              ssh, port from `port` (2222)
 //	ssh://dev.example:2222   the same, said explicitly
 //	wss://ws.example/tunnel  through a reverse proxy
 //	ws://inside:8080/tunnel  a WebSocket with no TLS, inside a trusted network
 //
-// ws and wss are not weaker ways in. The SSH handshake runs inside either one
-// and does the same authentication and encryption; what TLS adds is knowing
-// which front door answered. See ADR 0034.
+// The SSH handshake runs inside a WebSocket as it does over TCP, so ws and wss
+// are authenticated and encrypted by SSH in the same way. TLS on a wss
+// connection authenticates the proxy in front. See ADR 0034.
 
 import (
 	"fmt"

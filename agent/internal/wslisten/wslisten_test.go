@@ -30,8 +30,9 @@ import (
 
 func testLogger() *slog.Logger { return logx.Discard() }
 
-// serveWS starts the listener behind an httptest server and returns its ws URL.
-func serveWS(t *testing.T) (*Listener, string) {
+// newListener builds one the way New does, with an optional ping interval: the
+// real one is measured in tens of seconds and the tests cannot wait for it.
+func newListener(t *testing.T, ping time.Duration) *Listener {
 	t.Helper()
 
 	l := &Listener{
@@ -39,17 +40,25 @@ func serveWS(t *testing.T) (*Listener, string) {
 		log:    testLogger(),
 		conns:  make(chan net.Conn),
 		closed: make(chan struct{}),
+		ping:   ping,
 	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l
+}
+
+// serveWS puts a listener behind an httptest server and returns its ws URL.
+func serveWS(t *testing.T, l *Listener) string {
+	t.Helper()
 
 	mux := http.NewServeMux()
 	mux.Handle("/tunnel", l.Handler())
-	srv := httptest.NewServer(mux)
-	t.Cleanup(func() {
-		srv.Close()
-		_ = l.Close()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not the tunnel endpoint", http.StatusNotFound)
 	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
 
-	return l, "ws" + strings.TrimPrefix(srv.URL, "http") + "/tunnel"
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/tunnel"
 }
 
 // sshOver serves one SSH connection on the listener and echoes what an exec
@@ -112,7 +121,8 @@ func sshOver(t *testing.T, l net.Listener) ssh.PublicKey {
 
 // The whole point: a real SSH session over a WebSocket.
 func TestSSHSessionOverAWebSocket(t *testing.T) {
-	l, url := serveWS(t)
+	l := newListener(t, 0)
+	url := serveWS(t, l)
 	hostKey := sshOver(t, l)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -154,7 +164,8 @@ func TestSSHSessionOverAWebSocket(t *testing.T) {
 // The host key still decides, inside the tunnel. Whatever the transport proved
 // about the front door, this is what proves the workspace.
 func TestTheHostKeyStillDecides(t *testing.T) {
-	l, url := serveWS(t)
+	l := newListener(t, 0)
+	url := serveWS(t, l)
 	sshOver(t, l)
 
 	_, other, err := ed25519.GenerateKey(rand.Reader)
@@ -192,23 +203,12 @@ func TestTheHostKeyStillDecides(t *testing.T) {
 // loop, so the pings go unanswered exactly as they would from a machine that
 // went away.
 func TestAPeerThatStopsAnsweringIsDropped(t *testing.T) {
-	l := &Listener{
-		addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)},
-		log:    testLogger(),
-		conns:  make(chan net.Conn),
-		closed: make(chan struct{}),
-		ping:   50 * time.Millisecond,
-	}
-	t.Cleanup(func() { _ = l.Close() })
-
-	mux := http.NewServeMux()
-	mux.Handle("/tunnel", l.Handler())
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	l := newListener(t, 50*time.Millisecond)
+	url := serveWS(t, l)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	wc, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/tunnel", nil)
+	wc, _, err := websocket.Dial(ctx, url, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -219,9 +219,8 @@ func TestAPeerThatStopsAnsweringIsDropped(t *testing.T) {
 		t.Fatalf("accept: %v", err)
 	}
 
-	// The assertion: the accepted connection fails, because the listener closed
-	// it. Without the ping this read blocks until the deadline and the test
-	// fails, which is the point -- a silent WebSocket must not look healthy.
+	// Read fails because keepAlive closed the connection. Without the ping the
+	// read blocks until the deadline instead, and the test fails.
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	buf := make([]byte, 1)
 	start := time.Now()
@@ -236,23 +235,10 @@ func TestAPeerThatStopsAnsweringIsDropped(t *testing.T) {
 // A request to the wrong path is answered rather than left hanging: a proxy
 // pointed at the wrong route is a common mistake and should say so.
 func TestTheWrongPathIsAnswered(t *testing.T) {
-	l := &Listener{
-		addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)},
-		log:    testLogger(),
-		conns:  make(chan net.Conn),
-		closed: make(chan struct{}),
-	}
-	defer l.Close()
+	url := serveWS(t, newListener(t, 0))
+	base := strings.TrimSuffix("http"+strings.TrimPrefix(url, "ws"), "/tunnel")
 
-	mux := http.NewServeMux()
-	mux.Handle("/tunnel", l.Handler())
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not the tunnel endpoint", http.StatusNotFound)
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/elsewhere")
+	resp, err := http.Get(base + "/elsewhere")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,12 +251,7 @@ func TestTheWrongPathIsAnswered(t *testing.T) {
 // Accept returns rather than blocking forever once the listener is closed, or
 // the SSH server's accept loop never ends.
 func TestAcceptEndsWhenClosed(t *testing.T) {
-	l := &Listener{
-		addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)},
-		conns:  make(chan net.Conn),
-		closed: make(chan struct{}),
-		log:    testLogger(),
-	}
+	l := newListener(t, 0)
 
 	done := make(chan error, 1)
 	go func() {
