@@ -45,6 +45,7 @@ survives that document being superseded.
 | [0032](0032-the-workspace-is-the-record.md) | An address is stable container-side, and the workspace is the record | Accepted; extends 0003, 0029 |
 | [0033](0033-handles-derived-from-the-path.md) | The root handle is derived, the rest are not | Accepted |
 | [0034](0034-ssh-inside-a-websocket.md) | SSH inside a WebSocket | Accepted; extends 0030 |
+| [0035](0035-the-workspace-on-kubernetes.md) | The workspace on Kubernetes | Accepted; extends 0025, 0034 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

@@ -10,6 +10,30 @@ software.
 
 ## Unreleased
 
+### Run a workspace on Kubernetes
+
+```bash
+helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace   --set ingress.host=ws.example.com   --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
+```
+
+One privileged pod, its image store and its host keys on volumes of their own,
+reached through an ordinary Ingress. No load balancer and no node port: the
+tunnel is an HTTP upgrade, so a cluster that gives a namespace nothing but an
+ingress is enough.
+
+- **Installed on a real cluster by CI on every change** — kind, ingress-nginx,
+  and the client reading a file from the runner inside a container in the
+  cluster.
+- **Only ingress-nginx and kind's local-path storage are proven.** The chart's
+  annotations for other controllers are suggestions, and its default storage
+  driver is a guess about your volumes: `fuse-overlayfs`, because overlay2
+  refuses to start on Ceph- and NFS-backed storage, which is a daemon that never
+  comes up rather than a warning. On local or block volumes, `dockerdArgs: ""`
+  is faster.
+
+The chart and the workspace image are now signed with cosign, keyless, and carry
+SBOM attestations. Nothing published by this project was signed before.
+
 ### Reach a workspace through a reverse proxy
 
 The agent serves SSH over a WebSocket as well as over TCP, so a workspace can be

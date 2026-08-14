@@ -93,6 +93,9 @@ agent/go.mod             the agent module: THE GLUE. 4 direct third-party
 image/                   the workspace container (Dockerfile only)
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
+charts/                  the Helm chart, for the same agent on Kubernetes
+                         (ADR 0035). One privileged pod, two volumes, an
+                         ingress in front of the WebSocket port
 docs/adr/                architecture decision records
 ```
 
@@ -121,6 +124,10 @@ gofmt -l .   # must print nothing
 
 # end to end -- needs docker and a kernel with NFS client support
 bash test/integration.sh
+
+# the chart, in eight seconds and without a cluster
+helm lint charts/remote-docker-workspace
+helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
 `go.work` ties the five together for editors and local commands. CI and the
@@ -550,6 +557,13 @@ it, `remote` being findable in the root's help, `--context <ours>` reaching
 that workspace rather than the default, and **a docker context we did not
 create being left completely alone** -- which is a promise to other software on
 the user's machine and the only one of these that fails silently.
+
+`.github/workflows/kubernetes.yml` installs the chart on a kind cluster behind
+ingress-nginx on every pull request and takes a session through it: a file
+written on the runner, read inside a container in the cluster through a bind
+mount. It also runs `helm lint` and five renders through `kubeconform`, which is
+eight seconds and always worth it. What is NOT covered: any ingress controller
+but nginx, and any storage but kind's local-path.
 
 A third suite, `test/vm.sh`, runs the agent ON THE RUNNER with no container
 around it (ADR 0025), which is the VM deployment: `WORKSPACE_ENABLE_DIND=false`,

@@ -90,6 +90,10 @@ is either a prompt nobody is there to answer or an acceptance of anybody.
   `agent/`, checked 2026-08-14), and takes the agent from 6 direct requires to 7.
 - **Two ways in means two things to secure.** The SSH port stays open unless the
   operator closes it, so this adds a surface rather than moving one.
+- **It is what makes a Kubernetes deployment ordinary**, which was not the
+  reason for building it. An Ingress carries an HTTP upgrade and nothing else is
+  needed: no TCP load balancer, no node port, no address handed out per
+  workspace. See ADR 0035, which the chart rests on.
 - **A machine workspace cannot use it.** A machine is told its address at boot
   and reached over ssh (ADR 0026), so a WebSocket host for one is refused rather
   than half-honoured.

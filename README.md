@@ -323,6 +323,24 @@ with `--ca-file`, or use `--insecure` for that workspace. `--insecure` gives up
 knowing which front door answered and nothing more — SSH inside still
 authenticates both ends, which is why the flag exists here at all.
 
+### On Kubernetes
+
+```bash
+helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace   --namespace remote-docker --create-namespace   --set ingress.host=ws.example.com   --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
+
+kubectl label namespace remote-docker pod-security.kubernetes.io/enforce=privileged
+```
+
+One privileged pod with its image store and its host keys on volumes, reached
+through an ordinary Ingress — no load balancer and no node port, because the
+tunnel is an HTTP upgrade. Then `remote create dev --host wss://ws.example.com`
+and a laptop with no Docker installed is working against it.
+
+`charts/remote-docker-workspace/README.md` has the values and the two things
+worth knowing first: which storage driver your volumes need, and why both
+volumes are ReadWriteOnce. The chart is installed on a real cluster by CI on
+every change (ADR 0035).
+
 ### The image
 
 Published to GHCR for `linux/amd64` and `linux/arm64`:
