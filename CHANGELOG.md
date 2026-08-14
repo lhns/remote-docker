@@ -10,6 +10,65 @@ software.
 
 ## Unreleased
 
+### Reach a workspace through a reverse proxy
+
+The agent serves SSH over a WebSocket as well as over TCP, so a workspace can be
+reached on 443 through any HTTP reverse proxy instead of needing an SSH port
+open to it:
+
+```
+remote-docker remote create dev --host wss://dev.example.com --user alice
+```
+
+`host` now takes a scheme — `ssh://`, `ws://` or `wss://` — and a bare host still
+means SSH on 2222, so nothing already configured changes. `--ca-file` verifies a
+proxy holding a private certificate; `--insecure` accepts any certificate, for
+one workspace. Neither changes whether the session is authenticated: the
+workspace's host key and your own key do that inside the tunnel, as they do over
+TCP.
+
+The agent never terminates TLS and has no certificate settings, so there is
+nothing to renew and nothing to expire. It listens on `:2280` alongside SSH on
+`:2222`, and `--ws-addr ""` turns it off. Upgrades are accepted on any path, so
+the proxy may route on one or not.
+
+- **Proven in CI on every change**, with a real nginx in front: a session
+  through it, a bind mount resolving (which is the reverse tunnel working
+  through the proxy), and the agent dropping a connection whose peer stopped
+  answering.
+- **Only nginx has been tested.** Any proxy that forwards WebSocket upgrades
+  should work; none other has been run.
+
+### Sessions and mounts survive drops that used to strand them
+
+Three faults, each of which presented as something other than what it was:
+
+- **A workspace kept the tunnel port of a client that had vanished.** A client
+  whose network dropped without closing anything left a connection that was dead
+  and looked alive, so its reconnect was refused the only port its volumes can
+  mount from. It presented as `docker compose up` failing with `connection
+  refused` against a port nothing on screen explained. The workspace now bounds
+  how long a connection may go unanswered.
+- **Reconnecting minted new NFS file handles**, because the file server was
+  built per connection rather than per session.
+- **Restarting the client stranded every running container** with `Stale file
+  handle` against a mount that still looked fine. The handle for a share's root
+  is now derived from the export path, so a new process can answer for it.
+
+Measured while proving those, and worth knowing:
+
+- **Docker refcounts a volume's mount.** A mount that has gone wrong stays wrong
+  until the last container using it is gone, which is why `compose down && up`
+  cured it where restarting the session did not.
+- **A container holding a file open across a client restart still gets
+  `ESTALE`** on that descriptor. There is no path lookup left to retry, and that
+  is correct rather than fixable.
+- **A mount into a port that accepts nothing costs about 180 seconds** before it
+  fails, not the 60 the mount options imply.
+
+The workspace also reads a machine's tunnel port back off that machine's own
+volumes when its record of it has been lost, so volumes made for it still mount.
+
 ### A workspace can now be a machine on your own computer
 
 `remote machine create <name>` provisions a Linux system here and registers it
