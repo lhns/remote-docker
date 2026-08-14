@@ -10,6 +10,23 @@ software.
 
 ## Unreleased
 
+### The Android build can resolve a hostname
+
+It could not, and the error named an address nobody had configured:
+
+```
+lookup docker.lhns.de on [::1]:53: ... connection refused
+```
+
+Android has no `/etc/resolv.conf`, so Go's own resolver had nothing to read and
+fell back to loopback, where nothing answers. DNS there belongs to the system
+resolver, and reaching it means linking the system libc, so that target is now
+built with the NDK. Nothing else changes, and no other platform is built any
+differently.
+
+**There is an `android_amd64` archive again**, for emulators and Chromebooks.
+It was left out because it would have required exactly this.
+
 ### The threat model covers the WebSocket transport and Kubernetes
 
 [`docs/threat-model.md`](docs/threat-model.md) had not been revisited since a

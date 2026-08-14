@@ -41,9 +41,13 @@ proves nothing, twice over — they are all C.
 
 **Android is its own build target, and the Linux build is not bent towards it.**
 `GOOS=android` is ET_DYN, emits no `PT_TLS`, and names `/system/bin/linker64`
-as its interpreter, which is the one the device has. `arm64` only:
+as its interpreter, which is the one the device has. ~~`arm64` only:
 `android/amd64` requires cgo, so it would make the NDK a dependency of CI and
-of every release, for emulators and Chromebooks.
+of every release, for emulators and Chromebooks.~~
+
+*(2026-08-14: the second half no longer holds. Android is now built WITH cgo,
+for a reason that has nothing to do with loading, so the NDK is a dependency
+either way and `android/amd64` costs one more build. See the amendment below.)*
 
 The first attempt was `-buildmode=pie` on the Linux build, and it was wrong for
 a reason that has nothing to do with phones: it makes the binary **dynamic**,
@@ -76,6 +80,44 @@ fire by accident — an argument has to *be* this executable and at position one
 — and a rule that runs only on the platform nobody develops on is a rule that
 rots unnoticed. Other exec wrappers do the same thing.
 
+## Amendment, 2026-08-14: Android is built with cgo
+
+The binary loaded and ran, and could not resolve a hostname:
+
+```
+lookup docker.lhns.de on [::1]:53: read udp [::1]:49190->[::1]:53:
+read: connection refused
+```
+
+`CGO_ENABLED=0` gives Go its own resolver, which reads `/etc/resolv.conf`.
+Android does not have one: DNS belongs to `netd` (`com.android.resolv` since
+Android 10), which apps reach through `/dev/socket/dnsproxyd`, and bionic's
+`getaddrinfo` is what talks to it. With no file to read, Go falls back to
+`127.0.0.1:53` and `[::1]:53`, where nothing is listening. The address in the
+error is not a misconfiguration; it is Go's default when it has no
+configuration at all.
+
+**So this target links against bionic.** `CGO_ENABLED=1` with the NDK's
+`aarch64-linux-android24-clang`, taken from `ANDROID_NDK_HOME`, which ubuntu
+runners already have, so nothing is downloaded. API 24 is Termux's own floor.
+
+Two alternatives were rejected. `mtibben/androiddnsfix`, the only public
+package for this, hardcodes `1.1.1.1` and `8.8.8.8` and reaches into `net`'s
+internals with `go:linkname`, so it sends every lookup to a resolver the user
+did not choose. Speaking netd's socket protocol from Go needs no NDK and does
+use the device's resolver, but it is a private interface with no compatibility
+promise, and nothing here could test a line of it.
+
+What it costs, stated because the original decision was about avoiding exactly
+this: the NDK is now required to build this target at all, the binary links
+`libc.so` rather than nothing, and `android/amd64` stops being excluded, since
+the reason it was excluded was that it would have required this.
+
+The three facts this record names are now asserted rather than read by hand.
+`test/elf.sh` runs on every push, and the Android side of it fails if the
+binary stops linking `libc.so`, which is the way this fix would silently come
+undone.
+
 ## Consequences
 
 - **`os.Executable` appears once in the client**, inside `selfPath`. Six call
@@ -95,7 +137,8 @@ rots unnoticed. Other exec wrappers do the same thing.
   `status`, `start`, `stop` and `docker run` all work. Nothing in CI runs on
   Android, no integration test does, and the release pipeline cross-compiles
   the target without executing it. Say "runs on Android" only about the things
-  in the previous sentence.
+  in the previous sentence. *(2026-08-14: what CI does assert now is the file
+  itself, through `test/elf.sh`. That is not the same as running it.)*
 - **The size cost is nothing and the surface cost is one target.** The Android
   artifact is built by the same goreleaser config and the same CI matrix leg as
   the rest.

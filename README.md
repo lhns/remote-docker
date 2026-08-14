@@ -40,6 +40,12 @@ remote-docker run --rm -v .:/w alpine ls /w
 
 `start` prints the endpoint and returns. No terminal has to stay open.
 
+**On Android, in Termux**, take the `android_arm64` archive, or `android_amd64`
+on an emulator or a Chromebook. It is a normal Termux program from there: run it
+from a directory you can execute, and everything above works the same. Do not
+use the `linux_arm64` archive, which will not load on a phone at all
+([ADR 0023](docs/adr/0023-running-where-the-loader-is-not-us.md)).
+
 **If you already have a docker CLI**, point it at the workspace:
 
 ```bash
@@ -690,6 +696,9 @@ push. **macOS has never been executed at all**, in CI or anywhere else.
 **Windows is unit tested**, including the named-pipe endpoint, but no Windows
 machine has taken a session end to end, because the suite needs a Linux
 kernel's NFS client. Swarm itself needs a real cluster and CI cannot cover it.
+**Android is built and inspected, never run**: CI checks that the binary is
+loadable on a phone and links the system libc, which is what makes DNS work
+there, and nothing executes it.
 
 ## Prior art
 

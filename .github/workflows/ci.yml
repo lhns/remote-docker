@@ -149,11 +149,22 @@ jobs:
       matrix:
         goos: [windows, linux, darwin]
         goarch: [amd64, arm64]
-        # Android added as legs rather than as a row of the grid, so that the
+        # Android added as legs rather than as rows of the grid, so that the
         # windows/darwin/linux cross product stays what it is.
+        #
+        # These are the only targets built with cgo: Android resolves hostnames
+        # through bionic or not at all (ADR 0023), so they need the NDK's
+        # compiler. cc is the wrapper's name, and the steps below put the NDK
+        # path in front of it.
         include:
           - goos: android
             goarch: arm64
+            cgo: 1
+            cc: aarch64-linux-android24-clang
+          - goos: android
+            goarch: amd64
+            cgo: 1
+            cc: x86_64-linux-android24-clang
     steps:
       - uses: actions/checkout@v7
         with:
@@ -177,11 +188,18 @@ jobs:
       # project is developed on.
       - name: go build
         env:
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.cgo || 0 }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          NDK_CC: ${{ matrix.cc }}
         run: |
           set -eux
+          # ANDROID_NDK_HOME is set on the runner image, so nothing is
+          # downloaded. Unset it and this fails naming the compiler, which is
+          # better than a binary that builds and cannot resolve a hostname.
+          if [ -n "${NDK_CC:-}" ]; then
+            export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$NDK_CC"
+          fi
           for mod in ./core ./agent ./core-agent ./core-client ./client; do
             (cd "$mod" && go build ./...)
           done
@@ -199,14 +217,23 @@ jobs:
       # again. This used to be a separate job building all six targets while
       # the matrix compiled all six as well: the same work twice, and the
       # slowest job in the workflow by a factor of two.
+      # CC is not set here: .goreleaser.yaml builds it from ANDROID_NDK_HOME
+      # itself, so a release and this build cannot disagree about the compiler.
       - uses: goreleaser/goreleaser-action@v7
         env:
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.cgo || 0 }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         with:
           version: "~> v2"
           args: build --single-target --snapshot --clean
+
+      # The only assertion these binaries get: nothing in CI can run them, and
+      # the facts that decide whether they are loadable at all are in the file.
+      # See test/elf.sh and ADR 0023.
+      - name: what the binary is
+        if: matrix.goos == 'android' || matrix.goos == 'linux'
+        run: bash test/elf.sh "${{ matrix.goos }}" "$(find dist -type f -name remote-docker | head -1)"
 
       # One artifact per platform rather than one holding all six. GitHub zips
       # an artifact whole, so a combined one meant downloading every platform

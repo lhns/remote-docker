@@ -122,6 +122,17 @@ gofmt -l .   # must print nothing
 # the client
 (cd client && go build -o ../remote-docker ./cmd/remote-docker)
 
+# what a built binary has to BE, which is all CI can assert about the two
+# targets it cannot run. Android must link bionic or it resolves nothing;
+# Linux must link nothing or it stops working on musl (ADR 0023, ADR 0004).
+bash test/elf.sh android dist/remote-docker-android_android_arm64/remote-docker
+bash test/elf.sh linux   dist/remote-docker_linux_arm64/remote-docker
+
+# Building the android target AT ALL now needs an NDK, since it is the one
+# target with cgo. CI has one already; a machine without one fails naming CC.
+ANDROID_NDK_HOME=/path/to/ndk GOOS=android GOARCH=arm64 goreleaser build \
+  --single-target --snapshot --clean --id remote-docker-android
+
 # end to end -- needs docker and a kernel with NFS client support
 bash test/integration.sh
 
@@ -234,6 +245,15 @@ premise of the project, and it applies to building it too. So:
   No linker path is written down -- `os.Executable` names the loader already
   running us, and hardcoding one would be a guess about a platform nothing
   tests.
+- **Android is the one target built WITH cgo, and it has to be.** It has no
+  `/etc/resolv.conf`, so Go's own resolver has nothing to read and falls back
+  to `127.0.0.1:53`, where nothing answers: every hostname fails. DNS there
+  belongs to netd and bionic's `getaddrinfo` is the way to it, so the binary
+  links `libc.so` and the NDK's compiler builds it (ADR 0023). This breaks
+  silently in the direction of doing nothing: drop the cgo and it still builds,
+  still loads, and resolves nothing. `test/elf.sh` asserts the `NEEDED libc.so`
+  for that reason, and asserts the opposite for Linux, which must stay static
+  for musl.
 - **A docker command this program runs itself carries
   `REMOTE_DOCKER_NO_SESSION=1`.** `exec.LookPath("docker")` may find *us*, so
   without it `remote create` writing a context opens an SSH connection, an NFS
@@ -650,6 +670,11 @@ function was.
   of any kind has run on it. The endpoint code and the fswatch backend are
   where it genuinely diverges, and the kqueue backend (one fd per *file*) is
   the larger risk of the two.
+- **Android, beyond what the file says.** `test/elf.sh` asserts on every push
+  that the binary is loadable there and links bionic, and nothing runs it: no
+  CI job, no integration test, no emulator. Both architectures ship and only
+  arm64 has ever been on a device, by hand. Say what was actually done, which
+  is that a phone reached a workspace and ran containers.
 - **Windows, beyond the unit tests.** `test (windows)` runs the client and
   shared modules' tests on every pull request, which covers the named-pipe
   endpoint and `processAlive`. What has never run there is the client itself:
