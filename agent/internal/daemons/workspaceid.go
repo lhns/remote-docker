@@ -26,6 +26,22 @@ const WorkspaceIDFile = "workspace-id"
 //
 // The state directory is a volume that outlives the container, which is what
 // makes the id stable across exactly the events that change a container id.
+// KnownWorkspaceID reads the id without creating one, and reports whether there
+// was one to read.
+//
+// For a caller that wants to recognise this workspace's daemons rather than to
+// own any: a workspace that has never run a per-account daemon has no id and no
+// daemons, and writing one so that it can find nothing is state created for
+// nothing.
+func KnownWorkspaceID(stateDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(stateDir, WorkspaceIDFile))
+	if err != nil {
+		return "", false
+	}
+	id := strings.TrimSpace(string(data))
+	return id, id != ""
+}
+
 func WorkspaceID(stateDir string) (string, error) {
 	path := filepath.Join(stateDir, WorkspaceIDFile)
 

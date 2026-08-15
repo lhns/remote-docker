@@ -188,28 +188,21 @@ func TestLabelValue(t *testing.T) {
 	}
 }
 
-// The workspace being restarted is the moment a daemon most needs to come
-// back, and the parent dockerd restarts only containers that asked to.
+// A daemon carries no restart policy, so the agent is its only supervisor.
 //
-// Found in CI rather than by reasoning: after a workspace restart every
-// account's daemon stayed down until that account next connected, so adoption
-// found nothing to adopt and a detached container, which survives its
-// author's disconnect by design, did not survive the restart.
-func TestADaemonAsksToBeRestarted(t *testing.T) {
+// It used to carry `unless-stopped`, which made the parent dockerd restart it
+// forever with nothing of ours watching: a daemon that would not start
+// crash-looped, and reconcile could not replace it because a container that
+// never stops failing never answers what it is running. See docs/adr/0036.
+//
+// What that costs is real and is the reason this test explains itself: an
+// account's detached containers come back when that account next connects,
+// not when the workspace restarts.
+func TestADaemonCarriesNoRestartPolicy(t *testing.T) {
 	spec := plan(t, "alice", Options{})
 
-	if spec.Restart != "unless-stopped" {
-		t.Errorf("Restart = %q, want unless-stopped", spec.Restart)
-	}
-	// Not "always": an operator who deliberately stopped somebody's daemon
-	// should find it still stopped.
-	if slices.Contains(spec.Args(), "always") {
-		t.Errorf("the restart policy is always: %v", spec.Args())
-	}
-
-	args := strings.Join(spec.Args(), " ")
-	if !strings.Contains(args, "--restart unless-stopped") {
-		t.Errorf("the policy never reached the args: %s", args)
+	if slices.Contains(spec.Args(), "--restart") {
+		t.Errorf("the plan asks the parent daemon to restart it: %v", spec.Args())
 	}
 }
 

@@ -8,6 +8,30 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### A broken per-account daemon repairs itself instead of looping forever
+
+A workspace refused every session for minutes, saying another session might
+still hold the port. None did: the account's own Docker daemon was crash-looping
+and the reverse tunnel is bound inside it, so nothing could connect while it was
+down. It stayed that way, because the agent would only rebuild a daemon once it
+had proved nothing was running inside, and it asked the daemon that was down.
+
+Two things change. A daemon that is not running no longer counts as busy, so it
+gets rebuilt, keeping its images and containers. And a daemon no longer carries
+a restart policy: the agent starts it when its account connects, and is the only
+thing that starts it.
+
+**One behaviour is deliberately given up.** After the workspace restarts, an
+account's detached containers come back when that account next connects rather
+than immediately. Anything using a bind mount could not run without its client
+session anyway, since the files come from that machine.
+
+Switching a workspace to one shared daemon now also stops the per-account
+daemons it leaves behind. Stopped, never removed: they come back with everything
+in them if the workspace is switched back.
+
 ## 0.2.2 — 2026-08-14
 
 ### Security: the Kubernetes pod no longer mounts a ServiceAccount token

@@ -266,6 +266,23 @@ func serve(addr, wsAddr string) error {
 		} else if n > 0 {
 			log.Info("adopted running daemons from a previous run", "count", n)
 		}
+	} else {
+		// A workspace that has run with WORKSPACE_PER_USER_DIND=true still has
+		// those daemons, and nothing here routes to them. See StopStrays.
+		//
+		// The id is read and never created: without one this workspace has
+		// never run a per-account daemon, so there is nothing to find.
+		if id, ok := daemons.KnownWorkspaceID(stateDir); ok {
+			strays := &daemons.Manager{
+				Options: daemons.Options{Workspace: id},
+				Log:     logger("daemons"),
+			}
+			if n, err := strays.StopStrays(ctx); err != nil {
+				log.Warn("could not check for per-account daemons left running", "err", err)
+			} else if n > 0 {
+				log.Info("stopped per-account daemons this mode does not use", "count", n)
+			}
+		}
 	}
 
 	// One port per MACHINE rather than per account (ADR 0029). The uid still

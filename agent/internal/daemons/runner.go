@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -75,9 +76,49 @@ type Manager struct {
 	// the tests and an unprefixed workspace need.
 	IDs func(account string) (uid, gid int, err error)
 
+	// docker builds the client for a daemon: the workspace's own when the host
+	// is empty, an account's when it is not. Nil is the real docker command.
+	//
+	// Injected so this file can be tested at all. Every path through it built a
+	// dockercli.CLI where it stood, so none of them had a test.
+	docker func(host string) docker
+
 	mu      sync.Mutex
 	byName  map[string]*Daemon
 	pending map[string]chan struct{}
+}
+
+// docker is the part of the docker command this package uses.
+type docker interface {
+	Line(ctx context.Context, args ...string) (string, error)
+	Run(ctx context.Context, what string, args ...string) error
+
+	// Output is stdout and stderr together, for reading a container's log,
+	// where the interesting half is usually stderr.
+	Output(ctx context.Context, args ...string) ([]byte, error)
+}
+
+// realDocker is the docker command itself.
+type realDocker struct{ cli dockercli.CLI }
+
+func (r realDocker) Line(ctx context.Context, args ...string) (string, error) {
+	return r.cli.Line(ctx, args...)
+}
+
+func (r realDocker) Run(ctx context.Context, what string, args ...string) error {
+	return r.cli.Run(ctx, what, args...)
+}
+
+func (r realDocker) Output(ctx context.Context, args ...string) ([]byte, error) {
+	return r.cli.Cmd(ctx, args...).CombinedOutput()
+}
+
+// client is the docker command for one daemon. An empty host is the parent.
+func (m *Manager) client(host string) docker {
+	if m.docker != nil {
+		return m.docker(host)
+	}
+	return realDocker{dockercli.CLI{Host: host}}
 }
 
 // aliveTTL is how long a confirmed-running daemon is believed without asking
@@ -93,7 +134,12 @@ const aliveTTL = 2 * time.Second
 // Generous because the first start of a dind on fuse-overlayfs is slow, and
 // because the cost of being early is a session that fails for a reason the
 // user cannot act on.
-const DefaultReadyTimeout = 90 * time.Second
+//
+// Raised from 90s with ADR 0036. The parent daemon used to start every
+// account's dind when the workspace came up, so they booted in parallel with
+// nobody waiting; now the first account to ask pays for its own boot, whenever
+// it asks. CI measured one missing 90 seconds after a workspace restart.
+const DefaultReadyTimeout = 180 * time.Second
 
 // ensure returns the account's daemon, starting or restarting it if needed.
 // Callers outside this package reach it through Ensure, which answers in the
@@ -302,10 +348,32 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, m.gaveUp(ctx, name)
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// lastWordsTimeout bounds reading a failed daemon's log. Short: whatever it
+// said, it said before it stopped.
+const lastWordsTimeout = 5 * time.Second
+
+// gaveUp names the daemon and carries its own last words, for when the
+// CALLER's patience ran out rather than this loop's.
+//
+// Both budgets are the same duration, so the caller's context expires first and
+// this is the path almost always taken. It used to return ctx.Err() alone:
+// "context deadline exceeded", naming no daemon and no reason, while an
+// account's daemon crash-looped. The deadline branch above had the log tail
+// all along.
+func (m *Manager) gaveUp(ctx context.Context, name string) error {
+	// A fresh context, because the caller's is spent and `docker logs` on a
+	// cancelled one returns nothing at all.
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastWordsTimeout)
+	defer cancel()
+
+	return fmt.Errorf("daemons: %s did not start before the caller gave up: %w.%s",
+		name, ctx.Err(), m.lastWords(logCtx, name))
 }
 
 // answers reports whether the daemon actually responds on its socket.
@@ -313,7 +381,7 @@ func (m *Manager) answers(ctx context.Context, d *Daemon) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := dockercli.CLI{Host: d.Host()}.Line(ctx, "version", "--format", "{{.Server.Version}}")
+	_, err := m.client(d.Host()).Line(ctx, "version", "--format", "{{.Server.Version}}")
 	return err == nil
 }
 
@@ -326,7 +394,7 @@ func (m *Manager) answers(ctx context.Context, d *Daemon) bool {
 // "did not answer" and "several valid graphdrivers: vfs, fuse-overlayfs;
 // please cleanup".
 func (m *Manager) lastWords(ctx context.Context, name string) string {
-	out, err := m.parent().Cmd(ctx, "logs", "--tail", "8", name).CombinedOutput()
+	out, err := m.parent().Output(ctx, "logs", "--tail", "8", name)
 	if err != nil || len(bytes.TrimSpace(out)) == 0 {
 		return ""
 	}
@@ -407,7 +475,7 @@ func (m *Manager) inspect(ctx context.Context, name, format string) (string, err
 }
 
 // parent is the workspace's own daemon, which hosts every per-account one.
-func (m *Manager) parent() dockercli.CLI { return dockercli.CLI{} }
+func (m *Manager) parent() docker { return m.client("") }
 
 // Adopt takes ownership of daemons left running by a previous agent.
 //
@@ -419,32 +487,13 @@ func (m *Manager) parent() dockercli.CLI { return dockercli.CLI{} }
 // singleton whose state is worthless and catastrophic for a daemon holding a
 // user's containers.
 func (m *Manager) Adopt(ctx context.Context) (int, error) {
-	args := []string{"ps", "--all", "--no-trunc",
-		"--filter", "label=" + ManagedLabel,
-		"--format", "{{json .}}"}
-	if m.Options.Workspace != "" {
-		// Only ours. Another workspace's daemons on the same parent daemon are
-		// not ours to restart, stop or reason about.
-		args = append(args, "--filter", "label="+WorkspaceLabel+"="+m.Options.Workspace)
-	}
-
-	out, err := m.parent().Line(ctx, args...)
+	rows, err := m.managed(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("daemons: listing daemons to adopt: %w", err)
 	}
 
 	adopted := 0
-	for _, line := range strings.Split(out, "\n") {
-		if line == "" {
-			continue
-		}
-		var row struct {
-			Names  string `json:"Names"`
-			Labels string `json:"Labels"`
-		}
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			continue
-		}
+	for _, row := range rows {
 		account := labelValue(row.Labels, AccountLabel)
 		if account == "" {
 			continue
@@ -570,7 +619,7 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	driver, err := dockercli.CLI{Host: d.Host()}.Line(ctx, "info", "--format", "{{.Driver}}")
+	driver, err := m.client(d.Host()).Line(ctx, "info", "--format", "{{.Driver}}")
 	if err != nil || driver != "vfs" {
 		return
 	}
@@ -618,9 +667,7 @@ func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
 		return
 	}
 
-	if n := m.runningInside(ctx, account); n != 0 {
-		m.log().Info("a daemon is out of date but has containers running; leaving it alone until it is idle",
-			"account", account, "running", n)
+	if !m.idle(ctx, account, spec.Name) {
 		return
 	}
 
@@ -641,13 +688,130 @@ func (m *Manager) storageChanged(ctx context.Context, name string) bool {
 	return was != m.Options.StorageDriver
 }
 
+// idle reports whether a daemon may be replaced without taking somebody's work
+// with it.
+//
+// Two questions, and the order matters. A daemon that cannot say what it is
+// running counts as busy, because the cost of being wrong is an account's
+// containers. But one that is not RUNNING cannot be running anything, and
+// asking it was how a crash-looping daemon counted as busy forever and was
+// never replaced, under a log line that said "has containers running".
+//
+// So the parent is asked first: it can see the container from outside, which is
+// what the account's own daemon cannot do for itself.
+func (m *Manager) idle(ctx context.Context, account, name string) bool {
+	// An empty state is no such container, which is nothing to protect either.
+	if state := m.state(ctx, name); state != "running" {
+		if state != "" {
+			m.log().Info("a daemon is out of date and is not running; recreating it",
+				"account", account, "state", state)
+		}
+		return true
+	}
+
+	if n := m.runningInside(ctx, account); n != 0 {
+		m.log().Info("a daemon is out of date but has containers running; leaving it alone until it is idle",
+			"account", account, "running", n)
+		return false
+	}
+	return true
+}
+
+// managedRow is one of this workspace's daemon containers, as the parent daemon
+// describes it.
+type managedRow struct {
+	Labels string `json:"Labels"`
+	State  string `json:"State"`
+}
+
+// managed lists the daemon containers belonging to this workspace.
+func (m *Manager) managed(ctx context.Context) ([]managedRow, error) {
+	args := []string{"ps", "--all", "--no-trunc",
+		"--filter", "label=" + ManagedLabel,
+		"--format", "{{json .}}"}
+	if m.Options.Workspace != "" {
+		// Only ours. Another workspace's daemons on the same parent daemon are
+		// not ours to restart, stop or reason about.
+		args = append(args, "--filter", "label="+WorkspaceLabel+"="+m.Options.Workspace)
+	}
+
+	out, err := m.parent().Line(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []managedRow
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		var row managedRow
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+// StopStrays stops per-account daemons that nothing is routing to.
+//
+// Called when the workspace serves one daemon for everybody (ADR 0012): every
+// account is sent to the shared socket, so a daemon left from per-account mode
+// answers nobody, and a broken one restarts forever with nothing supervising it.
+//
+// Only reachable on a VM (ADR 0025), where the agent restarts while the
+// machine's dockerd keeps running. Compose and Swarm change the mode by
+// recreating the workspace container, which restarts the parent dockerd, and a
+// daemon with no restart policy stays down by itself.
+//
+// STOPPED, never removed: the volume behind the container holds that account's
+// images and containers, and both come back if the mode changes back.
+func (m *Manager) StopStrays(ctx context.Context) (int, error) {
+	// Unfiltered, this would stop another workspace's daemons on a parent the
+	// two share. Refused by name rather than left to the caller.
+	if m.Options.Workspace == "" {
+		return 0, errors.New("daemons: refusing to stop daemons without a workspace id to recognise our own")
+	}
+
+	rows, err := m.managed(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("daemons: listing daemons to stop: %w", err)
+	}
+
+	stopped := 0
+	for _, row := range rows {
+		// "running" and "restarting" both, and restarting is the one that
+		// matters: a daemon crash-looping in a mode that does not use it is
+		// the case this exists for.
+		if row.State != "running" && row.State != "restarting" {
+			continue
+		}
+		account := labelValue(row.Labels, AccountLabel)
+		if account == "" {
+			continue
+		}
+		name := ContainerName(account)
+		if err := m.parent().Run(ctx, "daemons: stopping "+name, "stop", name); err != nil {
+			m.log().Warn("could not stop a daemon this mode does not use",
+				"account", account, "container", name, "err", err)
+			continue
+		}
+		m.log().Info("stopped a per-account daemon: this workspace serves one daemon for everybody, "+
+			"so nothing routes to it. Its images and containers are kept.",
+			"account", account, "container", name)
+		stopped++
+	}
+	return stopped, nil
+}
+
 // runningInside counts the containers an account is running on its own daemon.
 //
 // Asked of the account's daemon rather than the parent, because these are its
 // containers and only it can see them. A daemon that cannot be asked counts as
 // busy: the cost of being wrong is somebody's work.
 func (m *Manager) runningInside(ctx context.Context, account string) int {
-	out, err := dockercli.CLI{Host: HostFor(account)}.Line(ctx, "ps", "--quiet")
+	out, err := m.client(HostFor(account)).Line(ctx, "ps", "--quiet")
 	if err != nil {
 		return -1
 	}

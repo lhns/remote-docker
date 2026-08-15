@@ -288,15 +288,16 @@ else
 fi
 
 echo
-echo "== 10. the workspace restarts and the daemons come back =="
+echo "== 10. the workspace restarts and a daemon comes back when its account connects =="
 # The case that would otherwise lose everybody's work: the agent comes back,
 # finds every daemon's name taken, and `docker run --name` conflicts rather
 # than replacing.
 #
 # What survives is deliberately stated as CONTAINERS EXISTING, not running.
-# A restarted dockerd starts only containers with a restart policy, and the
-# account's own containers do not have one -- that is the account's business.
-# The daemon itself does, so it comes back and its graph comes back with it.
+# A restarted dockerd starts only containers with a restart policy, and neither
+# the account's containers nor the daemon itself has one: the agent is the only
+# supervisor (ADR 0036), so the daemon starts when its account next connects and
+# brings its graph with it.
 before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
 ' ' ')
 dind_before=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
@@ -305,13 +306,21 @@ kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID
 kill "$CLIENT_B_PID" 2>/dev/null; wait "$CLIENT_B_PID" 2>/dev/null; CLIENT_B_PID=""
 
 hostdocker restart "$CONTAINER" >/dev/null 2>&1
-info "waiting for the agent and the daemons to come back"
+info "waiting for the workspace's own daemon to come back"
 for _ in $(seq 1 120); do
-    if hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A"             --format '{{.State.Status}}' 2>/dev/null | grep -qx running; then
+    if hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1; then
         break
     fi
     sleep 1
 done
+
+# Asserted rather than assumed, because it is what ADR 0036 trades away: no
+# restart policy, no session yet, so nothing has started it.
+if outputs '^(exited|created)$' hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.State.Status}}'; then
+    ok "$A's daemon stayed down until $A connects"
+else
+    bad "something restarted $A's daemon: [$LAST_OUTPUT]"
+fi
 
 # Asserted as "exactly one", not by grepping a log line.
 #
@@ -432,8 +441,21 @@ else
     *) bad "the export did not answer inside $A's own namespace: [$inside]. The probes below prove nothing" ;;
     esac
 
+    # A shell waits for its account's daemon (the session sets DOCKER_HOST from
+    # Ensure), and $B has not reconnected since section 10 restarted the
+    # workspace. Without this the probe pays for a cold dind boot and times out
+    # reporting nothing, which looks nothing like what it tests.
+    info "starting $B's daemon, so the shell probe does not pay for its boot"
+    hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
+    for _ in $(seq 1 90); do
+        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker version >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+    done
+
     for who in "$A" "$B"; do
-        reach=$(timeout 60 ssh -i "$WORK/state-$who/id_ed25519" \
+        reach=$(timeout 120 ssh -i "$WORK/state-$who/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" "$probe" \
             2>/dev/null </dev/null | tr -d '\015')
