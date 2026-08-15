@@ -345,10 +345,32 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, m.gaveUp(ctx, name)
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// lastWordsTimeout bounds reading a failed daemon's log. Short: whatever it
+// said, it said before it stopped.
+const lastWordsTimeout = 5 * time.Second
+
+// gaveUp names the daemon and carries its own last words, for the case where
+// the CALLER's patience ran out rather than this loop's.
+//
+// The two budgets are the same duration, so the caller's context usually
+// expires first and this path is the one taken. It used to return ctx.Err()
+// alone: "context deadline exceeded", naming no daemon and carrying no reason,
+// logged while an account's dind restarted every nineteen seconds and nothing
+// recorded why. The deadline branch above had the log tail all along.
+func (m *Manager) gaveUp(ctx context.Context, name string) error {
+	// A fresh context, because the caller's is spent and `docker logs` on a
+	// cancelled one returns nothing at all.
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastWordsTimeout)
+	defer cancel()
+
+	return fmt.Errorf("daemons: %s did not start before the caller gave up: %w.%s",
+		name, ctx.Err(), m.lastWords(logCtx, name))
 }
 
 // answers reports whether the daemon actually responds on its socket.
