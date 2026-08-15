@@ -274,12 +274,11 @@ func TestForWithoutPreferredIsUnchanged(t *testing.T) {
 // A machine whose daemon could not be asked is refused, rather than quietly
 // given the port its uid derives.
 //
-// Measured on a real workspace: the same account was forwarded 65534 in one
-// session and asked for 30000 in another while its per-account daemon was
-// crash-looping. 30000 is the derived port, and it is the one another machine
-// is most likely to hold, so the session was refused its forward with a message
-// about a session that did not exist. The volumes that machine had built for
-// 65534 would not have mounted either.
+// Measured on a real workspace: while an account's daemon crash-looped, its
+// machine was forwarded 65534 in one session and asked for 30000 in the next.
+// 30000 is the derived port, which another machine is likeliest to hold, so
+// the forward was refused; the volumes built for 65534 would not have mounted
+// either.
 func TestForRefusesWhenTheDaemonCannotBeAsked(t *testing.T) {
 	p := &Ports{
 		Dir:     t.TempDir(),

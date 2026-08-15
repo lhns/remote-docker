@@ -238,16 +238,13 @@ const refusalReasonTimeout = 10 * time.Second
 // refusalReason is why the workspace refused the reverse forward, asked of the
 // workspace rather than guessed at.
 //
-// ssh's tcpip-forward failure carries no reason at all (RFC 4254 request
-// failure has no payload), so this used to name the likeliest cause -- another
-// session still holding the port -- whatever had really happened. It was wrong
-// in the case that produced it: the account's daemon would not start, the
-// forward is bound inside that daemon's network namespace, and the message sent
-// somebody hunting a session that did not exist.
+// ssh's tcpip-forward failure carries no reason (RFC 4254 request failure has
+// no payload), so this named the likeliest cause whatever had happened, and was
+// wrong in the case that produced it: the account's daemon would not start, and
+// the forward is bound inside that daemon's namespace.
 //
-// The connection is still open, so the workspace is asked again rather than
-// believing what it said when the session began: a daemon that was still
-// booting then may have failed since.
+// Asked again rather than read from live.info, which was true when the session
+// began: a daemon still booting then may have failed since.
 func (s *Session) refusalReason(live *liveConn) string {
 	ctx, cancel := context.WithTimeout(s.ctx, refusalReasonTimeout)
 	defer cancel()
