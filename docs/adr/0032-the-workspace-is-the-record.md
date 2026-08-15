@@ -118,3 +118,24 @@ Three properties this has to keep, and each is a way of being wrong:
   workspace may name. Here it is remembered by the WORKSPACE, because what
   outlives it is an address the workspace binds. The question to ask of the next
   one is which side owns the thing, not which side is convenient.
+
+## Amendment, 2026-08-15: a record that cannot be read is refused, not guessed
+
+Asking the workspace which port a machine's volumes need means asking that
+account's daemon, and a daemon that will not start cannot be asked. That
+answered 0, exactly as "this machine has no volumes" does, so the two were the
+same value and a workspace whose daemon was down handed the machine the port its
+uid derives.
+
+That port is the one another machine is most likely to hold, and it is not the
+port this machine's volumes were built for, so it produced either a refused
+forward or a set of volumes that would never mount again. Both a long way from
+the daemon that was the actual problem: it was measured as one account being
+forwarded 65534 in one session and asking for 30000 in the next, while its
+daemon restarted every nineteen seconds.
+
+`Preferred` now returns an error when the question could not be put, and `For`
+refuses rather than choosing. Nothing is lost by refusing in per-account mode:
+the reverse forward is bound inside the very daemon that could not be asked, so
+the session was going to fail anyway, three steps later and named after the
+wrong thing.

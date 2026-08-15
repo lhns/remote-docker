@@ -4,8 +4,10 @@ package accounts
 // no network.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lhns/remote-docker/core/workspace"
@@ -170,11 +172,11 @@ func TestForPrefersThePortTheVolumesNeed(t *testing.T) {
 		Dir:     t.TempDir(),
 		Mapping: workspace.Mapping{UIDBase: 10000, PortBase: 30000},
 		// Nothing recorded: the record was lost, which is the case.
-		Preferred: func(account, client string) int {
+		Preferred: func(account, client string) (int, error) {
 			if account == "alice" && client == "laptop" {
-				return 39998
+				return 39998, nil
 			}
-			return 0
+			return 0, nil
 		},
 	}
 
@@ -200,7 +202,7 @@ func TestForWillNotTakeAnotherMachinesPort(t *testing.T) {
 	p := &Ports{
 		Dir:       t.TempDir(),
 		Mapping:   workspace.Mapping{UIDBase: 10000, PortBase: 30000},
-		Preferred: func(string, string) int { return 39998 },
+		Preferred: func(string, string) (int, error) { return 39998, nil },
 	}
 
 	// The first machine is given 39998 by asking for it.
@@ -232,7 +234,7 @@ func TestForWillNotTakeAPortAnAccountDerives(t *testing.T) {
 		Dir:       t.TempDir(),
 		Mapping:   mapping,
 		Reserved:  func(uid int) bool { return uid == 10007 },
-		Preferred: func(string, string) int { return bobs },
+		Preferred: func(string, string) (int, error) { return bobs, nil },
 	}
 
 	got, err := p.For("alice", 10005, "laptop")
@@ -254,9 +256,9 @@ func TestForWithoutPreferredIsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for name, prefer := range map[string]func(string, string) int{
+	for name, prefer := range map[string]func(string, string) (int, error){
 		"no hook":     nil,
-		"hook says 0": func(string, string) int { return 0 },
+		"hook says 0": func(string, string) (int, error) { return 0, nil },
 	} {
 		p := &Ports{Dir: t.TempDir(), Mapping: mapping, Preferred: prefer}
 		got, err := p.For("alice", 10005, "laptop")
@@ -266,5 +268,57 @@ func TestForWithoutPreferredIsUnchanged(t *testing.T) {
 		if got != want {
 			t.Errorf("%s: For = %d, want the derived port %d", name, got, want)
 		}
+	}
+}
+
+// A machine whose daemon could not be asked is refused, rather than quietly
+// given the port its uid derives.
+//
+// Measured on a real workspace: the same account was forwarded 65534 in one
+// session and asked for 30000 in another while its per-account daemon was
+// crash-looping. 30000 is the derived port, and it is the one another machine
+// is most likely to hold, so the session was refused its forward with a message
+// about a session that did not exist. The volumes that machine had built for
+// 65534 would not have mounted either.
+func TestForRefusesWhenTheDaemonCannotBeAsked(t *testing.T) {
+	p := &Ports{
+		Dir:     t.TempDir(),
+		Mapping: workspace.Mapping{UIDBase: 10000, PortBase: 30000},
+		Preferred: func(string, string) (int, error) {
+			return 0, errors.New("dind: container exited with code 1")
+		},
+	}
+
+	got, err := p.For("alice", 10000, "laptop")
+	if err == nil {
+		t.Fatalf("For = %d with no error; a port was chosen while its daemon was down", got)
+	}
+	if !strings.Contains(err.Error(), "alice") {
+		t.Errorf("the error does not name the account: %v", err)
+	}
+}
+
+// The other zero, which must keep working: a machine that HAS no volumes is an
+// ordinary new machine and gets a port allocated as one. Both answers were the
+// same value before, which is the defect above.
+func TestForAllocatesForAMachineWithNoVolumes(t *testing.T) {
+	mapping := workspace.Mapping{UIDBase: 10000, PortBase: 30000}
+	want, err := mapping.PortForUID(10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Ports{
+		Dir:       t.TempDir(),
+		Mapping:   mapping,
+		Preferred: func(string, string) (int, error) { return 0, nil },
+	}
+
+	got, err := p.For("alice", 10000, "laptop")
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if got != want {
+		t.Errorf("For = %d, want the derived port %d", got, want)
 	}
 }

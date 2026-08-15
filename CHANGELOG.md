@@ -10,6 +10,20 @@ software.
 
 ## Unreleased
 
+### A refused connection says what was actually wrong
+
+When the workspace refused to reserve the tunnel port, the client always said
+the same thing: another session for this account may still be open. It has no
+way to know — SSH's forwarding refusal carries no reason at all — and in the
+case that prompted this it was wrong, sending somebody hunting a session that
+did not exist while their daemon was down.
+
+The client now asks the workspace after a refusal and prints what it says, with
+the one thing worth trying under it. Two other messages were wrong in the same
+way: a 404 from a reverse proxy told you to check a `--ws-path` setting that
+does not exist, and a workspace that could not read which port a machine's
+volumes need would hand out a different one instead of saying so.
+
 ### A broken per-account daemon repairs itself instead of looping forever
 
 A workspace refused every session for minutes, saying another session might

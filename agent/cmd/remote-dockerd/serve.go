@@ -317,7 +317,7 @@ func serve(addr, wsAddr string) error {
 		// somebody their volumes. It is reached only for a machine the record
 		// has forgotten, so the wait is paid once by that machine and never on
 		// an ordinary connect.
-		Preferred: func(account, client string) int {
+		Preferred: func(account, client string) (int, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), preferredPortTimeout)
 			defer cancel()
 

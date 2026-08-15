@@ -40,8 +40,9 @@ type Ports struct {
 	// check, which is right for a test and wrong for a workspace.
 	Reserved func(uid int) bool
 
-	// Preferred reports the port a machine's existing state already expects,
-	// and 0 when there is none or it cannot be asked.
+	// Preferred reports the port a machine's existing state already expects:
+	// 0 when the machine has none, and an error when the question could not be
+	// put at all.
 	//
 	// This file is a CACHE. The durable record of a port is the volumes that
 	// were built for it, because a volume keeps the port it was created with
@@ -49,10 +50,16 @@ type Ports struct {
 	// can still be given the port its volumes need, instead of a new one that
 	// makes every one of them unmountable.
 	//
+	// The error is the difference between a machine that has no volumes and a
+	// machine whose volumes cannot be looked at. Both used to answer 0, so a
+	// workspace whose daemon would not start silently moved a machine onto the
+	// port its uid derives, which another machine may be holding and which its
+	// own volumes were not built for.
+	//
 	// A func because finding that out means asking Docker, and nothing in this
 	// module may know Docker exists (ADR 0031). Nil skips the question, which
 	// is what a workspace with no daemon of its own wants.
-	Preferred func(account, client string) int
+	Preferred func(account, client string) (int, error)
 
 	mu       sync.Mutex
 	loaded   bool
@@ -109,8 +116,22 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// What this machine's volumes already expect, before anything is chosen for
 	// it. Only reached when the record does not know this machine: an entry
 	// that exists was persisted deliberately and is the answer.
+	//
+	// A question that could not be put at all is refused rather than answered
+	// with the derived port. That port may be held by another machine, and this
+	// machine's volumes were built for a port nobody can now read, so handing
+	// it out produces either a refused forward or a set of volumes that will
+	// never mount again -- both a long way from the daemon that is the actual
+	// problem. In per-account mode nothing about the session would have worked
+	// anyway: the forward is bound inside the very daemon that could not be
+	// asked.
+	want, err := p.preferred(account, client)
+	if err != nil {
+		return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
+	}
+
 	port := 0
-	if want := p.preferred(account, client); want != 0 && !taken[want] && p.free(want) {
+	if want != 0 && !taken[want] && p.free(want) {
 		port = want
 	}
 
@@ -132,15 +153,14 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	return port, nil
 }
 
-// preferred asks what this machine's existing state expects, and answers 0
-// when nothing does.
+// preferred asks what this machine's existing state expects.
 //
-// Never fatal and never retried. A daemon that is slow, absent or broken means
-// only that the machine gets a port chosen the way it always was, which is a
-// working session with volumes to rebuild rather than no session at all.
-func (p *Ports) preferred(account, client string) int {
+// Zero and no error means the machine has nothing to expect, which is an
+// ordinary new machine and is allocated a port as one. An error means the
+// question could not be put, and that is fatal to this call: see For.
+func (p *Ports) preferred(account, client string) (int, error) {
 	if p.Preferred == nil {
-		return 0
+		return 0, nil
 	}
 	return p.Preferred(account, client)
 }
