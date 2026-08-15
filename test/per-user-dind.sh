@@ -442,12 +442,22 @@ else
     *) bad "the export did not answer inside $A's own namespace: [$inside]. The probes below prove nothing" ;;
     esac
 
+    # Opening a shell waits for the account's daemon, because a session sets
+    # DOCKER_HOST from Ensure, and since ADR 0036 a daemon is stopped after a
+    # workspace restart until its account connects. $B never reconnected after
+    # section 10, so without this the probe below pays for a cold dind boot and
+    # times out reporting nothing at all, which is what this section looks like
+    # when it fails for a reason that has nothing to do with namespaces.
+    info "starting $B's daemon, so the shell probe does not pay for its boot"
+    hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
+    for _ in $(seq 1 90); do
+        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker version >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+    done
+
     for who in "$A" "$B"; do
-        # Longer than a cold daemon's boot budget, because opening a shell
-        # waits for one: a session sets DOCKER_HOST from Ensure, and since
-        # ADR 0036 an account's daemon is stopped after a workspace restart
-        # until that account connects. At 60s this timed out for the account
-        # that had not reconnected, and the probe reported nothing at all.
         reach=$(timeout 120 ssh -i "$WORK/state-$who/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" "$probe" \

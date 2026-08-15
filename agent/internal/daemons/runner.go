@@ -136,7 +136,15 @@ const aliveTTL = 2 * time.Second
 // Generous because the first start of a dind on fuse-overlayfs is slow, and
 // because the cost of being early is a session that fails for a reason the
 // user cannot act on.
-const DefaultReadyTimeout = 90 * time.Second
+//
+// Raised from 90s when the restart policy went (ADR 0036). The parent daemon
+// used to start every account's dind at once when the workspace came up, so
+// they booted in parallel with nobody waiting; now the first account to ask
+// pays for its own boot, at whatever moment it asks, on a workspace that may
+// be busy doing something else. CI measured a second account's daemon missing
+// 90 seconds after a workspace restart, and the session failed rather than
+// waited.
+const DefaultReadyTimeout = 180 * time.Second
 
 // ensure returns the account's daemon, starting or restarting it if needed.
 // Callers outside this package reach it through Ensure, which answers in the
