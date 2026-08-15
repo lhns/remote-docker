@@ -443,7 +443,12 @@ else
     esac
 
     for who in "$A" "$B"; do
-        reach=$(timeout 60 ssh -i "$WORK/state-$who/id_ed25519" \
+        # Longer than a cold daemon's boot budget, because opening a shell
+        # waits for one: a session sets DOCKER_HOST from Ensure, and since
+        # ADR 0036 an account's daemon is stopped after a workspace restart
+        # until that account connects. At 60s this timed out for the account
+        # that had not reconnected, and the probe reported nothing at all.
+        reach=$(timeout 120 ssh -i "$WORK/state-$who/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" "$probe" \
             2>/dev/null </dev/null | tr -d '\015')

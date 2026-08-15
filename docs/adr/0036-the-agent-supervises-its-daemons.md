@@ -65,6 +65,12 @@ there is no id to filter by.
   and it is deliberately given up. It is smaller than it sounds: anything using
   a bind mount cannot run without its client session anyway, since the files are
   served from that machine.
+- **The first thing an account does after a workspace restart pays the boot.**
+  A shell sets `DOCKER_HOST` from `Ensure`, so `ssh workspace` waits for a cold
+  dind rather than finding one the parent had already restarted. Bounded by
+  `DefaultReadyTimeout`, which is 90 seconds on fuse-overlayfs. Found by CI:
+  `per-user-dind.sh` probed a shell for the account that had not reconnected and
+  timed out at 60 seconds waiting for a prompt.
 - **A broken daemon is repairable now, and was not.** Whatever made it fail, the
   next reconcile replaces the container and keeps the graph volume, which is
   where the account's images and containers live.
