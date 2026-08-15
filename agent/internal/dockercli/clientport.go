@@ -34,12 +34,8 @@ type ClientPorts struct {
 // is a working session whose volumes need rebuilding rather than no session at
 // all.
 //
-// One reason is different and is returned as an error: the daemon could not be
-// reached to be asked. A machine with no volumes and a machine whose volumes
-// cannot be looked at answered the same 0, so a workspace whose per-account
-// daemon would not start silently moved that machine onto the port its uid
-// derives -- which another machine may hold, and which its own volumes were not
-// built for.
+// The daemon being unreachable is the one reason returned as an error, because
+// it is the one where any port chosen is a guess (ADR 0032).
 func (c ClientPorts) For(ctx context.Context, account, client string) (int, error) {
 	if client == "" || c.Host == nil {
 		return 0, nil
@@ -57,10 +53,9 @@ func (c ClientPorts) For(ctx context.Context, account, client string) (int, erro
 		"--filter", "label="+workspace.ManagedLabel+"="+workspace.ManagedShare,
 		"--filter", "label="+workspace.ClientLabel+"="+client)
 	if err != nil || strings.TrimSpace(names) == "" {
-		// A daemon that answered and listed nothing is a machine with no
-		// volumes. One that errored here is answering, since Host resolved,
-		// and the volumes are what could not be read: neither is worth
-		// refusing a session over.
+		// A daemon that listed nothing is a machine with no volumes, and one
+		// that errored here is answering, since Host resolved. Neither is
+		// worth refusing a session over.
 		return 0, nil
 	}
 
