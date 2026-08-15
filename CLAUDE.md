@@ -309,6 +309,14 @@ premise of the project, and it applies to building it too. So:
   client-chosen address into durable workspace state unless the agent can
   reconstruct it.
 
+- **A message must not name a cause nobody checked.** SSH's `tcpip-forward`
+  refusal carries no reason (RFC 4254), so the client named the likeliest one
+  and was wrong in the case that produced it: the account's daemon would not
+  start, the forward binds inside that daemon's namespace, and the message sent
+  somebody hunting a session that did not exist. The connection is still open
+  after a refusal, so the workspace is ASKED. Two other messages were guesses in
+  the same shape: a 404 hint naming a `--ws-path` flag nothing has, and a port
+  handed out when the record could not be read at all.
 - **A mount that has gone wrong stays wrong until the last container lets go
   of it.** Docker's local driver REFCOUNTS a mount: a volume already mounted is
   handed to the next container as it stands, stale included. That is the whole

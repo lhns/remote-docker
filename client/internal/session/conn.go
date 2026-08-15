@@ -231,13 +231,39 @@ func (s *Session) logQuiet(ctx context.Context, msg string, args ...any) {
 	s.log().Warn(msg, args...)
 }
 
+// refusalReasonTimeout bounds the one question asked after a refusal. Short:
+// the command has already failed and this only decides what to call it.
+const refusalReasonTimeout = 10 * time.Second
+
+// refusalReason is why the workspace refused the reverse forward, asked of the
+// workspace rather than guessed at.
+//
+// ssh's tcpip-forward failure carries no reason (RFC 4254 request failure has
+// no payload), so this named the likeliest cause whatever had happened, and was
+// wrong in the case that produced it: the account's daemon would not start, and
+// the forward is bound inside that daemon's namespace.
+//
+// Asked again rather than read from live.info, which was true when the session
+// began: a daemon still booting then may have failed since.
+func (s *Session) refusalReason(live *liveConn) string {
+	ctx, cancel := context.WithTimeout(s.ctx, refusalReasonTimeout)
+	defer cancel()
+
+	if info, err := readInfo(ctx, live.ssh); err == nil && info.Docker == workspace.DockerUnavailable {
+		return "\n\tyour docker daemon on the workspace is not running, and the tunnel is bound inside it" +
+			"\n\tfix: try again in a moment; if it persists, the workspace operator can see why with " +
+			"`remote-dockerd daemons ls`"
+	}
+	return "\n\tanother session for this account may still hold that port" +
+		"\n\tfix: close it, or wait about a minute for the workspace to notice it is gone"
+}
+
 func (s *Session) startNFS(live *liveConn) error {
 	addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(live.info.NFSPort))
 
 	l, err := live.ssh.Listen(addr)
 	if err != nil {
-		return fmt.Errorf("reserving %s on the workspace: %w "+
-			"(another session for this account may still be open)", addr, err)
+		return fmt.Errorf("reserving %s on the workspace: %w%s", addr, err, s.refusalReason(live))
 	}
 	live.nfsTunnel = l
 

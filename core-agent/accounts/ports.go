@@ -40,8 +40,8 @@ type Ports struct {
 	// check, which is right for a test and wrong for a workspace.
 	Reserved func(uid int) bool
 
-	// Preferred reports the port a machine's existing state already expects,
-	// and 0 when there is none or it cannot be asked.
+	// Preferred reports the port a machine's existing state already expects:
+	// 0 when it has none, and an error when the question could not be put.
 	//
 	// This file is a CACHE. The durable record of a port is the volumes that
 	// were built for it, because a volume keeps the port it was created with
@@ -52,7 +52,7 @@ type Ports struct {
 	// A func because finding that out means asking Docker, and nothing in this
 	// module may know Docker exists (ADR 0031). Nil skips the question, which
 	// is what a workspace with no daemon of its own wants.
-	Preferred func(account, client string) int
+	Preferred func(account, client string) (int, error)
 
 	mu       sync.Mutex
 	loaded   bool
@@ -109,8 +109,18 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// What this machine's volumes already expect, before anything is chosen for
 	// it. Only reached when the record does not know this machine: an entry
 	// that exists was persisted deliberately and is the answer.
+	//
+	// A question that could not be put is refused rather than answered with the
+	// derived port, which another machine may hold and which this machine's
+	// volumes were not built for. ADR 0032 has why that is better than a
+	// session that half works.
+	want, err := p.preferred(account, client)
+	if err != nil {
+		return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
+	}
+
 	port := 0
-	if want := p.preferred(account, client); want != 0 && !taken[want] && p.free(want) {
+	if want != 0 && !taken[want] && p.free(want) {
 		port = want
 	}
 
@@ -132,15 +142,11 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	return port, nil
 }
 
-// preferred asks what this machine's existing state expects, and answers 0
-// when nothing does.
-//
-// Never fatal and never retried. A daemon that is slow, absent or broken means
-// only that the machine gets a port chosen the way it always was, which is a
-// working session with volumes to rebuild rather than no session at all.
-func (p *Ports) preferred(account, client string) int {
+// preferred asks what this machine's existing state expects. Zero with no error
+// is an ordinary new machine; an error is fatal to For.
+func (p *Ports) preferred(account, client string) (int, error) {
 	if p.Preferred == nil {
-		return 0
+		return 0, nil
 	}
 	return p.Preferred(account, client)
 }

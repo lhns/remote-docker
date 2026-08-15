@@ -29,17 +29,20 @@ type ClientPorts struct {
 
 // For returns the port this machine's volumes were built for, or 0.
 //
-// Zero for every reason: no volumes, no daemon, a daemon that will not answer,
-// options that do not parse. The caller treats all of them the same way and
-// chooses a port as it always did, which is a working session whose volumes
-// need rebuilding rather than no session at all.
-func (c ClientPorts) For(ctx context.Context, account, client string) int {
+// Zero for most reasons: no volumes, no client, options that do not parse. The
+// caller treats those the same way and chooses a port as it always did, which
+// is a working session whose volumes need rebuilding rather than no session at
+// all.
+//
+// The daemon being unreachable is the one reason returned as an error, because
+// it is the one where any port chosen is a guess (ADR 0032).
+func (c ClientPorts) For(ctx context.Context, account, client string) (int, error) {
 	if client == "" || c.Host == nil {
-		return 0
+		return 0, nil
 	}
 	host, err := c.Host(account)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	cli := CLI{Host: host}
 
@@ -50,16 +53,19 @@ func (c ClientPorts) For(ctx context.Context, account, client string) int {
 		"--filter", "label="+workspace.ManagedLabel+"="+workspace.ManagedShare,
 		"--filter", "label="+workspace.ClientLabel+"="+client)
 	if err != nil || strings.TrimSpace(names) == "" {
-		return 0
+		// A daemon that listed nothing is a machine with no volumes, and one
+		// that errored here is answering, since Host resolved. Neither is
+		// worth refusing a session over.
+		return 0, nil
 	}
 
 	args := append([]string{"volume", "inspect", "--format", `{{index .Options "o"}}`},
 		strings.Fields(names)...)
 	out, err := cli.Line(ctx, args...)
 	if err != nil {
-		return 0
+		return 0, nil
 	}
-	return firstPort(strings.Split(out, "\n"))
+	return firstPort(strings.Split(out, "\n")), nil
 }
 
 // firstPort reads the port out of the driver options, and reports the one the
