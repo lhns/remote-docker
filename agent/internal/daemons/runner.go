@@ -79,10 +79,8 @@ type Manager struct {
 	// docker builds the client for a daemon: the workspace's own when the host
 	// is empty, an account's when it is not. Nil is the real docker command.
 	//
-	// Here so that this file can be tested. Every path through it used to build
-	// a dockercli.CLI where it stood, which needed a real daemon to exercise,
-	// so none of them had a test at all -- including the rule that decides
-	// whether a daemon may be recreated.
+	// Injected so this file can be tested at all. Every path through it built a
+	// dockercli.CLI where it stood, so none of them had a test.
 	docker func(host string) docker
 
 	mu      sync.Mutex
@@ -137,13 +135,10 @@ const aliveTTL = 2 * time.Second
 // because the cost of being early is a session that fails for a reason the
 // user cannot act on.
 //
-// Raised from 90s when the restart policy went (ADR 0036). The parent daemon
-// used to start every account's dind at once when the workspace came up, so
-// they booted in parallel with nobody waiting; now the first account to ask
-// pays for its own boot, at whatever moment it asks, on a workspace that may
-// be busy doing something else. CI measured a second account's daemon missing
-// 90 seconds after a workspace restart, and the session failed rather than
-// waited.
+// Raised from 90s with ADR 0036. The parent daemon used to start every
+// account's dind when the workspace came up, so they booted in parallel with
+// nobody waiting; now the first account to ask pays for its own boot, whenever
+// it asks. CI measured one missing 90 seconds after a workspace restart.
 const DefaultReadyTimeout = 180 * time.Second
 
 // ensure returns the account's daemon, starting or restarting it if needed.
@@ -363,14 +358,14 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 // said, it said before it stopped.
 const lastWordsTimeout = 5 * time.Second
 
-// gaveUp names the daemon and carries its own last words, for the case where
-// the CALLER's patience ran out rather than this loop's.
+// gaveUp names the daemon and carries its own last words, for when the
+// CALLER's patience ran out rather than this loop's.
 //
-// The two budgets are the same duration, so the caller's context usually
-// expires first and this path is the one taken. It used to return ctx.Err()
-// alone: "context deadline exceeded", naming no daemon and carrying no reason,
-// logged while an account's dind restarted every nineteen seconds and nothing
-// recorded why. The deadline branch above had the log tail all along.
+// Both budgets are the same duration, so the caller's context expires first and
+// this is the path almost always taken. It used to return ctx.Err() alone:
+// "context deadline exceeded", naming no daemon and no reason, while an
+// account's daemon crash-looped. The deadline branch above had the log tail
+// all along.
 func (m *Manager) gaveUp(ctx context.Context, name string) error {
 	// A fresh context, because the caller's is spent and `docker logs` on a
 	// cancelled one returns nothing at all.
@@ -696,27 +691,21 @@ func (m *Manager) storageChanged(ctx context.Context, name string) bool {
 // idle reports whether a daemon may be replaced without taking somebody's work
 // with it.
 //
-// Two questions, and the order matters. The daemon is asked what it is running,
-// and a daemon that cannot answer counts as busy, because the cost of being
-// wrong is an account's containers. But a daemon that is not RUNNING cannot be
-// running anything, and that is the case the first question answers wrongly: a
-// container that is exited or restarting never answers, so it counted as busy
-// forever and was never replaced. The one daemon that most needs rebuilding was
-// the one this rule protected, and it said "has containers running" about a
-// container that was crash-looping.
+// Two questions, and the order matters. A daemon that cannot say what it is
+// running counts as busy, because the cost of being wrong is an account's
+// containers. But one that is not RUNNING cannot be running anything, and
+// asking it was how a crash-looping daemon counted as busy forever and was
+// never replaced, under a log line that said "has containers running".
 //
-// The parent daemon is asked first because it can see the container from
-// outside, which is exactly what the account's own daemon cannot do for itself.
+// So the parent is asked first: it can see the container from outside, which is
+// what the account's own daemon cannot do for itself.
 func (m *Manager) idle(ctx context.Context, account, name string) bool {
-	switch state := m.state(ctx, name); state {
-	case "running":
-		// Ask it what it holds. Below.
-	case "":
-		// No such container: nothing to protect and nothing to replace.
-		return true
-	default:
-		m.log().Info("a daemon is out of date and is not running; recreating it",
-			"account", account, "state", state)
+	// An empty state is no such container, which is nothing to protect either.
+	if state := m.state(ctx, name); state != "running" {
+		if state != "" {
+			m.log().Info("a daemon is out of date and is not running; recreating it",
+				"account", account, "state", state)
+		}
 		return true
 	}
 
@@ -731,7 +720,6 @@ func (m *Manager) idle(ctx context.Context, account, name string) bool {
 // managedRow is one of this workspace's daemon containers, as the parent daemon
 // describes it.
 type managedRow struct {
-	Names  string `json:"Names"`
 	Labels string `json:"Labels"`
 	State  string `json:"State"`
 }
@@ -768,21 +756,17 @@ func (m *Manager) managed(ctx context.Context) ([]managedRow, error) {
 
 // StopStrays stops per-account daemons that nothing is routing to.
 //
-// Called when the workspace serves one daemon for everybody (ADR 0012), where
-// these daemons hold no session and answer nobody: every account is sent to the
-// shared socket instead. Left running they consume a workspace's memory for
-// nothing, and a broken one restarts forever with nothing supervising it.
+// Called when the workspace serves one daemon for everybody (ADR 0012): every
+// account is sent to the shared socket, so a daemon left from per-account mode
+// answers nobody, and a broken one restarts forever with nothing supervising it.
 //
-// Mostly unnecessary on compose or Swarm, and deliberately kept anyway: those
-// deployments change the mode by recreating the workspace container, which
-// restarts the parent dockerd, and a daemon carrying no restart policy stays
-// down by itself. On a VM (ADR 0025) the agent restarts while the machine's own
-// dockerd keeps running, so daemons from a previous per-account run survive
-// into this mode and nothing else would ever stop them.
+// Only reachable on a VM (ADR 0025), where the agent restarts while the
+// machine's dockerd keeps running. Compose and Swarm change the mode by
+// recreating the workspace container, which restarts the parent dockerd, and a
+// daemon with no restart policy stays down by itself.
 //
-// STOPPED, never removed. The container is the account's daemon and the volume
-// behind it is their images and containers; both come back untouched when the
-// workspace is put back into per-account mode.
+// STOPPED, never removed: the volume behind the container holds that account's
+// images and containers, and both come back if the mode changes back.
 func (m *Manager) StopStrays(ctx context.Context) (int, error) {
 	// Unfiltered, this would stop another workspace's daemons on a parent the
 	// two share. Refused by name rather than left to the caller.

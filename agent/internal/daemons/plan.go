@@ -125,21 +125,11 @@ type Spec struct {
 	// volumes; `--rm` on it would delete all of that the moment it stopped.
 	Remove bool
 
-	// There is deliberately no restart policy, and this is where somebody will
-	// look for one.
-	//
-	// A daemon used to carry `unless-stopped`, so the parent dockerd brought it
-	// back after a workspace restart. That made the parent a second supervisor
-	// alongside the agent, with no backoff, nothing in this project's log, and
-	// nobody watching at all in shared mode, where the agent does not manage
-	// these daemons. A daemon that would not start crash-looped forever, and
-	// reconcile could not replace it because a container that never stops
-	// failing never answers what it is running. The agent starts a daemon when
-	// an account connects (Ensure) and that is the whole lifecycle.
-	//
-	// What is given up: an account's detached containers no longer come back on
-	// their own after the workspace restarts, only when that account next
-	// connects. See docs/adr/0036.
+	// No restart policy, and this is where somebody will look for one. It
+	// carried `unless-stopped` until ADR 0036, which made the parent dockerd a
+	// second supervisor beside the agent: a daemon that would not start
+	// crash-looped with nothing of ours watching. Ensure starts one when its
+	// account connects, and that is the whole lifecycle.
 
 	Labels []string
 	Mounts []elevate.Mount

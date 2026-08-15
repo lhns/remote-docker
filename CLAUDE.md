@@ -535,19 +535,17 @@ premise of the project, and it applies to building it too. So:
   ordinary `docker system prune -a --volumes` on the workspace's own daemon
   destroy every account's work with nothing on screen naming it.
 - **"Cannot tell" means busy only for a daemon that is RUNNING.** `reconcile`
-  refuses to rebuild a daemon until nothing is running inside it, and it asks
-  the daemon, which a crash-looping one never answers. So a broken daemon
-  counted as busy forever, was never rebuilt, and the log said "has containers
-  running" about a container restarting every nineteen seconds. `idle` asks the
-  PARENT for the container's state first: exited, restarting, created or dead
-  cannot be running anything. The old rule stands for a daemon that is up and
-  slow to answer, where the cost of being wrong is somebody's containers.
+  will not rebuild a daemon until nothing is running inside it, and it asks the
+  daemon, which a crash-looping one never answers. So a broken daemon counted as
+  busy forever under a log line reading "has containers running". `idle` asks
+  the PARENT for the container's state first: exited, restarting, created or
+  dead cannot be running anything. The old rule stands for a daemon that is up
+  and slow to answer, where being wrong costs somebody's containers.
 - **A per-account daemon carries no restart policy** (ADR 0036). It used to,
-  which made the parent dockerd a second supervisor with no backoff, nothing in
-  our log, and nobody watching at all in shared mode. `Ensure` starts a daemon
-  when its account connects and that is the whole lifecycle. What this gives up
-  is stated where it will be missed: an account's detached containers come back
-  when that account reconnects, not when the workspace restarts.
+  which made the parent dockerd a second supervisor with no backoff and nothing
+  in our log. `Ensure` starts one when its account connects and that is the
+  whole lifecycle. The cost: an account's detached containers come back when
+  that account reconnects, not when the workspace restarts.
 - **Never `--rm` a per-account daemon**, and never copy `elevate`'s
   `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
   state is worthless; this one holds somebody's containers, images and volumes.
@@ -715,6 +713,16 @@ function was.
 
 ## Conventions
 
+- **A change is not finished until it has had a cleanup pass, and that pass is
+  part of the work rather than something to be asked for.** Read the whole diff
+  once more and cut: logic that now exists twice, complexity that arrived while
+  trying things and stayed, and comments that repeat the code, repeat each
+  other, or restate what an ADR already says. The reasoning lives in ONE place,
+  usually a record, with a line pointing at it from the code.
+- **A comment is read by somebody with no context, and must still land.** "The
+  other mode", "the old behaviour", "as discussed" name nothing to a reader who
+  was not there; name the mode, the flag, the file or the record. The test is
+  whether a developer seeing this file for the first time can act on it.
 - Comments are written for somebody reading the code, not for whoever debugged
   it. Keep the finding and the way it fails silently; drop the transcript, the
   re-derivation and what was tried first. Several findings here cost real

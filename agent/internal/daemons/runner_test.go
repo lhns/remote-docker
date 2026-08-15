@@ -55,11 +55,20 @@ func (f *fakeDocker) Run(_ context.Context, _ string, args ...string) error {
 
 func (f *fakeDocker) Output(_ context.Context, _ ...string) ([]byte, error) { return nil, nil }
 
-// managerWith builds a manager whose docker command is the fake above.
-func managerWith(state, running string, unreachable bool) *Manager {
-	return &Manager{docker: func(host string) docker {
-		return &fakeDocker{host: host, state: state, running: running, unreachable: unreachable}
-	}}
+// manager wires a fake docker command into a Manager.
+//
+// The workspace id is always set, because StopStrays refuses without one, and
+// each client gets its own copy of the fake so the host of one cannot leak into
+// another.
+func manager(f fakeDocker) *Manager {
+	return &Manager{
+		Options: Options{Workspace: "ws1"},
+		docker: func(host string) docker {
+			c := f
+			c.host = host
+			return &c
+		},
+	}
 }
 
 // A daemon that is not running cannot be running anything, whatever it says
@@ -75,7 +84,7 @@ func managerWith(state, running string, unreachable bool) *Manager {
 func TestABrokenDaemonIsNotBusy(t *testing.T) {
 	for _, state := range []string{"restarting", "exited", "created", "dead"} {
 		t.Run(state, func(t *testing.T) {
-			m := managerWith(state, "", true)
+			m := manager(fakeDocker{state: state, unreachable: true})
 			if !m.idle(context.Background(), "alice", "rd-dind-alice") {
 				t.Errorf("a %s daemon counts as busy, so it can never be recreated", state)
 			}
@@ -87,21 +96,21 @@ func TestABrokenDaemonIsNotBusy(t *testing.T) {
 // running and cannot be asked is left alone, because the cost of being wrong
 // is somebody's containers.
 func TestARunningDaemonThatCannotBeAskedIsBusy(t *testing.T) {
-	m := managerWith("running", "", true)
+	m := manager(fakeDocker{state: "running", unreachable: true})
 	if m.idle(context.Background(), "alice", "rd-dind-alice") {
 		t.Error("a running daemon that cannot be asked was treated as idle")
 	}
 }
 
 func TestARunningDaemonWithContainersIsBusy(t *testing.T) {
-	m := managerWith("running", "abc123\ndef456", false)
+	m := manager(fakeDocker{state: "running", running: "abc123\ndef456"})
 	if m.idle(context.Background(), "alice", "rd-dind-alice") {
 		t.Error("a daemon with two containers running was treated as idle")
 	}
 }
 
 func TestARunningDaemonWithNothingInsideIsIdle(t *testing.T) {
-	m := managerWith("running", "", false)
+	m := manager(fakeDocker{state: "running"})
 	if !m.idle(context.Background(), "alice", "rd-dind-alice") {
 		t.Error("an empty daemon was treated as busy, so a setting would never apply")
 	}
@@ -109,7 +118,7 @@ func TestARunningDaemonWithNothingInsideIsIdle(t *testing.T) {
 
 // No container at all: nothing to protect, and Ensure is about to create one.
 func TestAMissingDaemonIsIdle(t *testing.T) {
-	m := managerWith("", "", true)
+	m := manager(fakeDocker{unreachable: true})
 	if !m.idle(context.Background(), "alice", "rd-dind-alice") {
 		t.Error("a daemon that does not exist was treated as busy")
 	}
@@ -121,14 +130,12 @@ func TestAMissingDaemonIsIdle(t *testing.T) {
 func TestStopStraysStopsRunningDaemonsAndRemovesNothing(t *testing.T) {
 	var ran []string
 	rows := strings.Join([]string{
-		`{"Names":"rd-dind-alice","Labels":"remote-docker.account=alice","State":"running"}`,
-		`{"Names":"rd-dind-bob","Labels":"remote-docker.account=bob","State":"restarting"}`,
-		`{"Names":"rd-dind-carol","Labels":"remote-docker.account=carol","State":"exited"}`,
+		`{"Labels":"remote-docker.account=alice","State":"running"}`,
+		`{"Labels":"remote-docker.account=bob","State":"restarting"}`,
+		`{"Labels":"remote-docker.account=carol","State":"exited"}`,
 	}, "\n")
 
-	m := &Manager{Options: Options{Workspace: "ws1"}, docker: func(host string) docker {
-		return &fakeDocker{host: host, listing: rows, ran: &ran}
-	}}
+	m := manager(fakeDocker{listing: rows, ran: &ran})
 
 	n, err := m.StopStrays(context.Background())
 	if err != nil {
@@ -152,13 +159,10 @@ func TestStopStraysStopsRunningDaemonsAndRemovesNothing(t *testing.T) {
 // mode that never sends it a session, and nothing else would stop it.
 func TestStopStraysStopsACrashLoopingDaemon(t *testing.T) {
 	var ran []string
-	m := &Manager{Options: Options{Workspace: "ws1"}, docker: func(host string) docker {
-		return &fakeDocker{
-			host:    host,
-			listing: `{"Names":"rd-dind-alice","Labels":"remote-docker.account=alice","State":"restarting"}`,
-			ran:     &ran,
-		}
-	}}
+	m := manager(fakeDocker{
+		listing: `{"Labels":"remote-docker.account=alice","State":"restarting"}`,
+		ran:     &ran,
+	})
 
 	if n, err := m.StopStrays(context.Background()); err != nil || n != 1 {
 		t.Fatalf("StopStrays = %d, %v; want 1, nil", n, err)
@@ -170,13 +174,11 @@ func TestStopStraysStopsACrashLoopingDaemon(t *testing.T) {
 // Refused by name rather than left to whoever calls it.
 func TestStopStraysRefusesWithoutAWorkspaceID(t *testing.T) {
 	var ran []string
-	m := &Manager{docker: func(host string) docker {
-		return &fakeDocker{
-			host:    host,
-			listing: `{"Names":"rd-dind-alice","Labels":"remote-docker.account=alice","State":"running"}`,
-			ran:     &ran,
-		}
-	}}
+	m := manager(fakeDocker{
+		listing: `{"Labels":"remote-docker.account=alice","State":"running"}`,
+		ran:     &ran,
+	})
+	m.Options.Workspace = ""
 
 	if _, err := m.StopStrays(context.Background()); err == nil {
 		t.Error("StopStrays ran unfiltered")

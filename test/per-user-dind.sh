@@ -314,9 +314,8 @@ for _ in $(seq 1 120); do
     sleep 1
 done
 
-# Nothing has started it, and nothing should have: no restart policy, and no
-# session yet. This is the behaviour ADR 0036 trades for a lifecycle the agent
-# owns, so it is asserted rather than assumed.
+# Asserted rather than assumed, because it is what ADR 0036 trades away: no
+# restart policy, no session yet, so nothing has started it.
 if outputs '^(exited|created)$' hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.State.Status}}'; then
     ok "$A's daemon stayed down until $A connects"
 else
@@ -442,12 +441,10 @@ else
     *) bad "the export did not answer inside $A's own namespace: [$inside]. The probes below prove nothing" ;;
     esac
 
-    # Opening a shell waits for the account's daemon, because a session sets
-    # DOCKER_HOST from Ensure, and since ADR 0036 a daemon is stopped after a
-    # workspace restart until its account connects. $B never reconnected after
-    # section 10, so without this the probe below pays for a cold dind boot and
-    # times out reporting nothing at all, which is what this section looks like
-    # when it fails for a reason that has nothing to do with namespaces.
+    # A shell waits for its account's daemon (the session sets DOCKER_HOST from
+    # Ensure), and $B has not reconnected since section 10 restarted the
+    # workspace. Without this the probe pays for a cold dind boot and times out
+    # reporting nothing, which looks nothing like what it tests.
     info "starting $B's daemon, so the shell probe does not pay for its boot"
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
     for _ in $(seq 1 90); do
