@@ -63,6 +63,9 @@ func TestParseMountsRefusesWhatItCannotRead(t *testing.T) {
 		"/only-one-path",
 		"/a:/b:ro:extra",
 		"/a:/b:readonly",
+		// The separator is a comma. A space is the natural first guess, and it
+		// has to fail rather than mount "/b /c" somewhere nobody meant.
+		"/a:/b /c:/d",
 	} {
 		if _, err := ParseMounts(spec); err == nil {
 			t.Errorf("%q was accepted", spec)
