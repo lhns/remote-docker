@@ -148,6 +148,18 @@ type Options struct {
 	// daemons after a restart and to ignore anybody else's.
 	Workspace string
 
+	// Mounts are added to every account's daemon, on top of the two it always
+	// has.
+	//
+	// For configuration the daemon reads from disk, which is the only way to
+	// give it some things at all: /etc/docker/daemon.json for an insecure or
+	// mirrored registry, /etc/docker/certs.d for a registry with a private CA.
+	// A workspace mounts those into its own daemon and each account's needs the
+	// same, or a pull that works on the workspace fails inside every account.
+	//
+	// Parsed from WORKSPACE_DIND_MOUNTS by ParseMounts.
+	Mounts []elevate.Mount
+
 	// StorageDriver is passed to the per-user dockerd. A deployment whose
 	// graph volume is Ceph-backed sets fuse-overlayfs, and that has to reach
 	// each account's daemon explicitly, because it is not inherited.
@@ -229,10 +241,10 @@ func Plan(account string, opts Options) (Spec, error) {
 		Privileged: true,
 		Remove:     false,
 		Labels:     labels,
-		Mounts: []elevate.Mount{
+		Mounts: append([]elevate.Mount{
 			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
 			{Type: "volume", Name: VolumeName(account), Destination: "/var/lib/docker"},
-		},
+		}, opts.Mounts...),
 		// TLS off: the only thing that can reach this daemon is the agent,
 		// over a unix socket in a directory only the agent and the account can
 		// enter. Certificates would secure a network path that does not exist.
@@ -326,4 +338,57 @@ func Fingerprint(spec Spec) string {
 		_, _ = h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// ParseMounts reads WORKSPACE_DIND_MOUNTS: a comma-separated list of
+// source:destination or source:destination:ro.
+//
+//	/etc/docker/daemon.json:/etc/docker/daemon.json:ro,/etc/docker/certs.d:/etc/docker/certs.d:ro
+//
+// Both paths must be absolute. A relative source is not a path to docker, it is
+// a VOLUME NAME, so `-v etc/docker:/etc/docker` silently creates an empty
+// volume called "etc/docker" and the daemon reads no configuration at all.
+//
+// A destination the daemon already uses is refused rather than ordered after
+// ours: docker rejects two mounts at one path, so the daemon would not start
+// and the message would name the path rather than the setting that produced it.
+func ParseMounts(spec string) ([]elevate.Mount, error) {
+	var mounts []elevate.Mount
+
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		parts := strings.Split(entry, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			return nil, fmt.Errorf("daemons: %q is not source:destination[:ro]", entry)
+		}
+		source, destination := parts[0], parts[1]
+
+		readOnly := false
+		if len(parts) == 3 {
+			if parts[2] != "ro" && parts[2] != "rw" {
+				return nil, fmt.Errorf("daemons: %q has option %q, want ro or rw", entry, parts[2])
+			}
+			readOnly = parts[2] == "ro"
+		}
+
+		if !strings.HasPrefix(source, "/") || !strings.HasPrefix(destination, "/") {
+			return nil, fmt.Errorf("daemons: %q needs absolute paths on both sides", entry)
+		}
+		if destination == SocketMount || destination == "/var/lib/docker" {
+			return nil, fmt.Errorf("daemons: %q mounts over %s, which every daemon needs for itself",
+				entry, destination)
+		}
+
+		mounts = append(mounts, elevate.Mount{
+			Type:        "bind",
+			Source:      source,
+			Destination: destination,
+			ReadOnly:    readOnly,
+		})
+	}
+	return mounts, nil
 }

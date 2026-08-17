@@ -62,7 +62,16 @@ echo
 echo "== 3. start the workspace with a daemon per account =="
 # true, written here rather than defaulted in the library: this suite exists to
 # test that mode, and it says so in its own file.
-if start_workspace true; then
+#
+# The extra mount stands in for the real case: a workspace with a private
+# registry mounts /etc/docker/daemon.json into its own daemon, and each
+# account's daemon needs the same file or a pull that works on the workspace
+# fails inside every account. A marker is used instead of a real daemon.json,
+# which would have to name a registry this suite does not have.
+mkdir -p "$WORK/dindconf"
+echo "reached the inner daemon" >"$WORK/dindconf/marker"
+
+if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
     bad "workspace container failed to start"
@@ -170,6 +179,18 @@ if [ -n "$ida" ] && [ "$ida" != "$idb" ]; then
 else
     bad "both accounts reached the same daemon ($ida)"
 fi
+
+# WORKSPACE_DIND_MOUNTS, asserted in the daemon rather than in the plan: what
+# an operator needs is the file readable by the dockerd doing the pulling, and
+# only a running container can say whether it is.
+for who in "$A" "$B"; do
+    if outputs '^reached the inner daemon$' \
+        hostdocker exec "$CONTAINER" docker exec "rd-dind-$who" cat /etc/rd-test/marker; then
+        ok "$who's daemon can read the file the workspace was told to give it"
+    else
+        bad "$who's daemon cannot read it: [$LAST_OUTPUT]"
+    fi
+done
 
 echo
 echo "== 6. one account cannot see the other's containers =="

@@ -466,12 +466,49 @@ node. The socket is deliberately not passed to the privileged child.
 | `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
 | `WORKSPACE_DIND_IMAGE` | the workspace's own image | image a per-account daemon runs |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
+| `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon; see below |
 | `WORKSPACE_SHELL` | `/bin/bash` | shell an SSH session lands in |
 | `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
 | `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; uid decides the rest |
 | `WORKSPACE_IMAGE` | | the service's own image, for Swarm elevation |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
+
+### A private or insecure registry
+
+A workspace pulls images with its own daemon, and with a daemon per account
+(the default) each account's daemon does its own pulling. Configuration you
+give the workspace's daemon does not reach them, so a registry that works on
+the workspace fails inside every account with `http: server gave HTTP response
+to HTTPS client` or an unknown certificate authority.
+
+Give them the same files:
+
+```yaml
+services:
+  workspace:
+    volumes:
+      - /etc/docker/daemon.json:/etc/docker/daemon.json:ro
+      - /etc/docker/certs.d:/etc/docker/certs.d:ro
+    environment:
+      WORKSPACE_DIND_MOUNTS: >-
+        /etc/docker/daemon.json:/etc/docker/daemon.json:ro,
+        /etc/docker/certs.d:/etc/docker/certs.d:ro
+```
+
+The first two lines are the workspace's own daemon, which you already needed.
+`WORKSPACE_DIND_MOUNTS` passes the same paths on to each account's daemon, as
+`source:destination` or `source:destination:ro`, comma-separated. Both paths
+must be absolute: docker reads a relative source as a volume NAME, so it would
+quietly mount an empty volume and the daemon would read no configuration at all.
+
+Two things to know before you use it. A `daemon.json` that sets `storage-driver`
+or `hosts` collides with the flags the agent passes, and dockerd refuses to
+start saying so; keep those out of the file and use
+`WORKSPACE_DIND_STORAGE_DRIVER` instead. And changing this setting applies to a
+daemon that already exists only when that account has nothing running, because
+applying it means recreating the container (its images and containers are on a
+volume and are kept).
 
 Operator commands, on the workspace:
 
