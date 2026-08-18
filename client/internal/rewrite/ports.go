@@ -47,7 +47,7 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 			// TCP only, because only TCP gets a local listener. Refusing a
 			// container on the strength of a TCP listener holding the number
 			// would be refusing it for something unrelated.
-			if isTCP(containerPort) && r.LocalPortFree != nil {
+			if workspace.IsTCP(workspace.ProtoOf(containerPort)) && r.LocalPortFree != nil {
 				if err := r.LocalPortFree(port); err != nil {
 					return nil, fmt.Errorf("bind for 127.0.0.1:%d failed: port is already allocated: %w", port, err)
 				}
@@ -70,13 +70,6 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 	}
 	hostConfig["PortBindings"] = encoded
 	return requested, nil
-}
-
-// isTCP reports whether a container port is TCP, which the daemon spells
-// "80/tcp" and, when the protocol is left out, means.
-func isTCP(containerPort string) bool {
-	_, proto, found := strings.Cut(containerPort, "/")
-	return !found || strings.EqualFold(proto, "tcp")
 }
 
 // remappable reports the port one binding asks for, and whether it may be

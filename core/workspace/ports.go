@@ -24,6 +24,23 @@ func ContainerPort(port int, proto string) string {
 	return strconv.Itoa(port) + "/" + strings.ToLower(proto)
 }
 
+// IsTCP reports whether a protocol is TCP, and an ABSENT one is: both the
+// Docker API and the CLI treat `-p 8080:80` as tcp.
+//
+// Here rather than beside each caller because three of them decide it: what may
+// be moved to another port, what gets a local listener, and what a container
+// port is called. A fourth would guess.
+func IsTCP(proto string) bool {
+	return proto == "" || strings.EqualFold(proto, "tcp")
+}
+
+// ProtoOf is the protocol half of a container port as the daemon spells it,
+// "80/tcp", and empty when it carries none.
+func ProtoOf(containerPort string) string {
+	_, proto, _ := strings.Cut(containerPort, "/")
+	return proto
+}
+
 // Add records another port asked for on one container port.
 func (r RequestedPorts) Add(containerPort string, port int) {
 	r[containerPort] = append(r[containerPort], port)

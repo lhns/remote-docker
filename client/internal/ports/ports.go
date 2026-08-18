@@ -14,10 +14,10 @@ import (
 	"net"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Forwarder opens a local listener carrying connections to an address inside
@@ -264,7 +264,7 @@ func publishedTCP(c Container) []Published {
 		if p.PublicPort == 0 {
 			continue
 		}
-		if p.Type != "" && !strings.EqualFold(p.Type, "tcp") {
+		if !workspace.IsTCP(p.Type) {
 			continue
 		}
 		if seen[p.PublicPort] {

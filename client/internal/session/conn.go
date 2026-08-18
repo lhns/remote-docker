@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"net"
 	"slices"
-	"sort"
 	"strconv"
 	"time"
 
@@ -405,7 +404,7 @@ func localPortFor(c ports.Container, p ports.Published, clientID string) int {
 			siblings = append(siblings, other.PublicPort)
 		}
 	}
-	sort.Ints(siblings)
+	slices.Sort(siblings)
 
 	index := slices.Index(siblings, p.PublicPort)
 	if index < 0 {
