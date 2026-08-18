@@ -76,3 +76,23 @@ func TestAnUnlabelledContainerKeepsThePublishedPort(t *testing.T) {
 		t.Errorf("localPortFor = %d, want the published port", got)
 	}
 }
+
+// The daemon reports one entry per address family, so each published port
+// appears twice. Counting over the raw list therefore shifted every
+// publication after the first onto an index nobody asked for.
+func TestDuplicateAddressFamiliesDoNotShiftTheCount(t *testing.T) {
+	c := container("me", "80/tcp=8080;9090",
+		tcp(32768, 80), tcp(32768, 80), // IPv4 and IPv6 of the first
+		tcp(32769, 80), tcp(32769, 80), // and of the second
+	)
+
+	first := localPortFor(c, tcp(32768, 80), "me")
+	second := localPortFor(c, tcp(32769, 80), "me")
+
+	if first != 8080 {
+		t.Errorf("the first publication got %d, want 8080", first)
+	}
+	if second != 9090 {
+		t.Errorf("the second publication got %d, want 9090", second)
+	}
+}

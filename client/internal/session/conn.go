@@ -398,9 +398,16 @@ func localPortFor(c ports.Container, p ports.Published, clientID string) int {
 
 	key := workspace.ContainerPort(p.PrivatePort, p.Type)
 
+	// Deduplicated, because the daemon reports one entry per ADDRESS FAMILY:
+	// a port published on IPv4 and IPv6 appears twice, and counting those
+	// would put every publication after the first on an index nobody asked
+	// for. ports.publishedTCP drops the same duplicates for the same reason.
 	var siblings []int
 	for _, other := range c.Ports {
-		if workspace.ContainerPort(other.PrivatePort, other.Type) == key {
+		if workspace.ContainerPort(other.PrivatePort, other.Type) != key {
+			continue
+		}
+		if !slices.Contains(siblings, other.PublicPort) {
 			siblings = append(siblings, other.PublicPort)
 		}
 	}

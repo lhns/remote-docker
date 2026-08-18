@@ -367,7 +367,9 @@ docker rm -f itest-web >/dev/null 2>&1
 # One container port published twice, which is the case that cannot be paired
 # back and does not need to be: both assigned ports front port 80, so both
 # numbers work whichever way round they were matched.
-dockert run -d --name itest-twice -p 18082:80 -p 18083:80     -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
+if ! twice=$(dockert run -d --name itest-twice -p 18082:80 -p 18083:80     -v "$PROJECT:/usr/share/nginx/html" nginx:alpine 2>&1); then
+    bad "a container publishing one port twice was refused: $(echo "$twice" | tail -1)"
+fi
 
 for port in 18082 18083; do
     reachable=false
@@ -382,6 +384,12 @@ for port in 18082 18083; do
         ok "one container port published twice is reachable at $port"
     else
         bad "$port never became reachable"
+        # What the daemon published and what this machine opened, which is the
+        # pair that has to line up. Printed because the failure is otherwise
+        # one line with nothing to act on.
+        dockert port itest-twice 2>&1 | sed 's/^/        published: /'
+        dockert ps --all --filter name=itest-twice --format '{{.Status}}' 2>&1 | sed 's/^/        state: /'
+        sed 's/^/        /' "$WORK/up.log" | tail -8
     fi
 done
 docker rm -f itest-twice >/dev/null 2>&1
