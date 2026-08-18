@@ -117,10 +117,10 @@ client opens every requested number in front of that one publication. On the
 workspace `docker ps` therefore shows one publication where the user wrote two,
 which is the same trade this record already makes about the number itself.
 
-**UDP is remapped too**, so it stops colliding on the workspace, and is still
-not forwarded, because the tunnel has no way to carry it.
-[ADR 0038](0038-udp-does-not-cross-the-tunnel.md) records that as a gap with a
-shape rather than a decision that UDP does not matter.
+**UDP is remapped too**, so it stops colliding on the workspace. When this was
+written the tunnel could not carry it and the remapping was all there was;
+[ADR 0038](0038-udp-crosses-the-tunnel.md) carries it now, through a channel of
+its own that asks this record's label the same question a TCP forward does.
 
 What is left where it was asked for is one case: a binding whose `HostPort` is
 already empty, which is the user asking for any port.

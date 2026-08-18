@@ -113,7 +113,7 @@ Hyper-V and are willing to be the first.
   rather than the one you typed
   ([ADR 0037](docs/adr/0037-the-published-port-belongs-to-the-client.md)).
   **UDP works too**, through the same connection
-  ([ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md)). One thing to
+  ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)). One thing to
   know before relying on it: datagrams travel inside the SSH stream, so a
   delayed one delays those behind it. Fine for DNS, syslog and metrics; not the
   same service as a real UDP path if you are measuring latency.

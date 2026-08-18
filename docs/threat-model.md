@@ -422,9 +422,14 @@ section 19.
 sequenceDiagram
     autonumber
     participant B as bob's session
+    participant D as the daemon
     participant P as ForwardPolicy
     participant NS as netns (shared mode)
     participant ANFS as alice's NFS export
+
+    B->>D: list containers
+    D-->>B: labels: owner, machine, ports asked for
+    Note over B: the labels decide which LOCAL ports to open (ADR 0037)
 
     B->>P: direct-tcpip 127.0.0.1:32768 (a published port)
     P->>P: loopback? yes
@@ -441,7 +446,7 @@ sequenceDiagram
     end
 ```
 
-**I/E — reading another account's machine (6–8).** Found while writing this
+**I/E — reading another account's machine (8–10).** Found while writing this
 document. With one daemon for everybody (ADR 0012) every account shares the
 agent's network namespace, so `127.0.0.1:<alice's port>` is genuinely reachable
 from bob's session, and what answers is her NFS export with `AuthFlavorNull`:
@@ -499,10 +504,44 @@ flowchart TB
     end
 ```
 
-**D — the workspace as a network relay (2).** Non-loopback destinations are
+**D — the workspace as a network relay (4).** Non-loopback destinations are
 refused, so the workspace cannot be used to reach the network it sits on
 through the tunnel. Containers an account runs are not bound by that, and reach
 whatever the workspace's network reaches.
+
+**Datagrams ask the same question (3–6, ADR 0038).** UDP crosses the tunnel in
+a channel of its own, and `AllowDial` answers for it unchanged: loopback only,
+never a port another account holds. There is no second rule to keep in step, and
+a datagram channel reaches nothing a `direct-tcpip` one could not. Two smaller
+properties hold it up. The workspace's socket is *connected* to the container's
+port, so the kernel drops anything from elsewhere and a reply can only reach the
+sender whose flow it belongs to; and `ReadDatagram` reads the length off the
+wire but never allocates from it, so a peer claiming 65535 bytes gets an error
+rather than a buffer (`core/tunnel/datagram.go`).
+
+**D — a datagram flow is reclaimed only when the forward ends (3–6).** One flow
+per source address, and its lifetime is the forward's, which is the rule TCP
+already follows (ADR 0038). A local sender that changes source port per datagram
+therefore opens an SSH channel and a workspace socket per datagram, and nothing
+releases them until the container stops. Forwards bind `127.0.0.1`, so this
+needs a process on the user's own machine -- but a loopback port is reachable by
+every local user, not only the owner, which the endpoint's file permissions are
+what protect it from. Nothing bounds it today. The trigger for adding an idle
+timeout is somebody watching the channel count climb, which is the same trigger
+ADR 0038 already records.
+
+**T/S — the client trusts labels any account can write (1–2).** Which containers
+a client forwards, and since ADR 0037 which LOCAL port it opens for them, are
+read from labels on the container: the owner, the machine, and the ports asked
+for. On a shared daemon any account can create a container carrying somebody
+else's labels, so a hostile one can make another user's client open listeners on
+their machine at numbers of the attacker's choosing, carrying the attacker's
+service -- a plausible use of it is answering DNS or syslog on the loopback
+address something else on that machine trusts. The numbers are range-checked and
+their count is not, so a label naming thousands asks for thousands of listeners.
+This sits inside ADR 0012's stated assumption rather than outside it, and it is
+one more thing the default mode does not have: with a daemon per account, the
+labels a client reads were written by that account alone.
 
 ---
 
@@ -695,6 +734,20 @@ Stated here rather than buried, because each is a deliberate trade.
 - **In shared-daemon mode an account can reach another account's export.**
   Flow 5 has the mechanism. It is not fixable inside `ForwardPolicy`, and the
   answers are ADR 0012's stated assumption or the default mode.
+- **Whatever an operator mounts into per-account daemons, those accounts get.**
+  `WORKSPACE_DIND_MOUNTS` exists so every account's daemon gets the same
+  `daemon.json` or registry configuration, and an account is root inside its own
+  daemon: anything with a credential in it is handed to everyone enrolled, so
+  mount a pull secret there only if every account may pull with it. `ro` is opt
+  in, and without it a shared file on the workspace is writable from inside
+  every account's daemon -- `/etc/docker/daemon.json:/etc/docker/daemon.json:ro`
+  rather than the same line without the suffix.
+- **Two machines of one account collide on compose project names** (ADR 0029).
+  Same account, same project name, same daemon: the second `compose up` adopts
+  the first machine's containers rather than starting its own, and the mounts
+  they carry point at the other machine's export. It is a correctness problem
+  rather than a boundary one, since both machines are the same person, and the
+  remedy is a distinct `COMPOSE_PROJECT_NAME` per machine.
 - **Containers you run can write anything you shared with them**, and with host
   networking, anything you shared at all. That is the feature. A malicious image
   with `-v $HOME:/h` has your home directory.
@@ -723,6 +776,14 @@ Stated here rather than buried, because each is a deliberate trade.
 - **`automountServiceAccountToken: false` in the chart**: an enrolled account
   has a shell in the pod and could read its ServiceAccount token. Flow 8 has the
   detail and ADR 0035 records the decision.
+- **Nothing, from the pass that added ADR 0037 and ADR 0038 to this document.**
+  Two things were found and neither is a defect: a client opens local listeners
+  at numbers taken from container labels, which on a shared daemon any account
+  can write; and a datagram flow is held until its forward ends, so a sender
+  that changes source port per datagram accumulates them. Both are in flow 5,
+  both are bounded by ADR 0012's assumption or by ADR 0038's recorded
+  limitation, and both would be worth a bound if a workspace ever ran accounts
+  that did not trust each other.
 - **The limit of `AllowDial`, written down and tested.** A shell reaches what a
   forwarding rule cannot gate. The default mode's namespace is what actually
   prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export

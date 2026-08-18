@@ -28,7 +28,7 @@ same error as before, from the client instead of the daemon.
 They never did in any earlier version, because SSH forwards TCP and nothing
 carried datagrams back. They now travel through the same connection as
 everything else, with no port, setting or flag to turn on
-([ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md)).
+([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)).
 
 Datagrams ride inside the SSH stream, so a delayed one delays those behind it:
 unremarkable for DNS, syslog or metrics, and not the same as a real UDP path if
