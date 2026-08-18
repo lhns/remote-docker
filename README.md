@@ -106,7 +106,11 @@ Hyper-V and are willing to be the first.
 - **Bind mounts from anywhere on your machine.** Another drive, above the
   working directory, unrelated to it. Not only a synced project folder.
 - **Published ports reach your localhost.** `-p 8080:80` means
-  `localhost:8080` here, opened automatically as containers start.
+  `localhost:8080` here, opened automatically as containers start. The number
+  is yours alone: the workspace publishes on a port of its own choosing, so two
+  people sharing a workspace can both ask for 8080. On the workspace itself,
+  `docker ps` shows the port it picked rather than the one you typed
+  ([ADR 0037](docs/adr/0037-the-published-port-belongs-to-the-client.md)).
 - **The real tooling, unmodified.** `docker`, `docker compose`,
   Testcontainers, IDE plugins, anything that speaks the Docker API. The
   translation happens at the API, not in a command wrapper. The Docker CLI,
@@ -153,6 +157,38 @@ Nothing here needs administrator rights.
 The reasoning behind each decision is in [`docs/adr/`](docs/adr/), and what
 this trusts, what it does not, and where the checks are is in
 [`docs/threat-model.md`](docs/threat-model.md).
+
+## One account from two machines
+
+An account is the identity and a machine is a client, so a laptop and a desktop
+enrolled with a key each share a workspace: the same daemon, the same images,
+the same containers. Files are not shared, because they are on one machine or
+the other, and neither are published ports: each machine opens the number its
+own containers asked for, and sees the other machine's containers at whatever
+the workspace published them on.
+
+**One thing does collide, and it is worth knowing before it bites: compose
+projects.** Compose names a project after the directory it runs in, so the same
+compose file on both machines is one project on the daemon they share, with one
+set of container names and one network. What happens next depends on where the
+project lives:
+
+- if the paths differ, each machine sees the other's containers as out of date
+  and recreates them, so an `up` on one stops the service the other is running;
+- if the paths match, the second machine reports everything up to date and
+  leaves the first machine's containers running, **serving the first machine's
+  files**.
+
+Give each machine its own project name and neither happens:
+
+```bash
+export COMPOSE_PROJECT_NAME=demo-laptop     # demo-desktop on the other
+docker compose up -d
+```
+
+This is a limitation rather than a design.
+[ADR 0029](docs/adr/0029-one-account-many-machines.md) records it, along with
+the two fixes considered and why neither is built yet.
 
 ## Commands
 

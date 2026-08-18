@@ -47,6 +47,7 @@ survives that document being superseded.
 | [0034](0034-ssh-inside-a-websocket.md) | SSH inside a WebSocket | Accepted; extends 0030 |
 | [0035](0035-the-workspace-on-kubernetes.md) | The workspace on Kubernetes | Accepted; extends 0025, 0034 |
 | [0036](0036-the-agent-supervises-its-daemons.md) | The agent supervises the per-account daemons | Accepted; extends 0019 |
+| [0037](0037-the-published-port-belongs-to-the-client.md) | The published port belongs to the client | Accepted; extends 0008 |
 
 An **Open** record is not a decision. It states a problem that is measured,
 unsolved, and worth not rediscovering, and it lists the candidates so the next

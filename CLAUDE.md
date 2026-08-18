@@ -214,6 +214,26 @@ premise of the project, and it applies to building it too. So:
   deletion, because the daemon rejects it on a volume mount. Unit tests pin
   both, and `test/integration.sh` section 9b pins the end of it: the container
   is refused AND the directory on this machine is unchanged.
+- **A published port is the CLIENT's number, not the workspace's** (ADR 0037).
+  The rewriter empties `HostPort` so the daemon picks, and records what was
+  asked for in `PortsLabel`; the ports manager opens that number locally in
+  front of whatever came back. The label is the only record, because forwards
+  are rebuilt from the daemon's container list on every reconnect, so dropping
+  it silently forwards ports nobody asked for. `remappable` lists what is left
+  alone and why. The number is honoured only on the machine that asked for it:
+  an account's machines each forward the whole account's containers (ADR 0029),
+  so on any other machine the container keeps the port the daemon published,
+  and two machines can both ask for 8080 without contending for one listener. The refusal moves to the client along with the port, since it
+  is the only thing that knows what this machine already has open.
+- **An account's machines share one compose project namespace, and nothing
+  separates them** (ADR 0029, accepted 2026-08-18). Volumes carry the client in
+  their NAME so two machines cannot share a bind mount; container names, compose
+  project names and networks have no such thing. The same compose file from two
+  machines is one project: either each recreates the other's containers, or,
+  when the paths match, one silently serves the other's files. The remedy is a
+  `COMPOSE_PROJECT_NAME` per machine, which nothing enforces. Do not add a
+  second mechanism that assumes containers are per machine without reading that
+  record first.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.

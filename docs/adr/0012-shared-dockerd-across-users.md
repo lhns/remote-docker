@@ -66,6 +66,22 @@ no dind image supplying one.)*
   the export is not in the namespace shells run in. `test/integration.sh`
   measures the reachability and `test/per-user-dind.sh` asserts its absence in
   the default mode.
+- **Published ports no longer collide** (ADR 0037, 2026-08-18). Two accounts
+  running `-p 8080:80` used to be first come, first served, since a published
+  port is bound in this container. The daemon is now asked for any free port and
+  each client opens the number its user typed, so both work. TCP only: a UDP
+  port is still bound where it was asked for, because the tunnel cannot carry
+  it. This is convenience, not isolation, and the trust assumption below is
+  unaffected.
+- **Compose projects collide too, and that one is not solved** (2026-08-18).
+  Two accounts running the same compose file from a directory of the same name
+  produce one project on this daemon: one set of container names, one network,
+  one set of project labels. Either they recreate each other's containers, or, if
+  their paths match, one silently serves the other's files. ADR 0019 mode removes
+  it, because there is nothing shared to collide in.
+  [ADR 0029](0029-one-account-many-machines.md) states the requirement, since
+  the same thing happens between one account's TWO MACHINES and cannot be answered
+  by changing modes.
 - Revisit when the user set stops being small and mutually trusted. That is the
   trigger; there is no other reason this decision needs to change. The tunnel
   reachability above is a second, smaller one: it is fixed, but it is the kind

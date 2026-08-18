@@ -47,3 +47,13 @@ When the container stops, the listeners close.
 - With a shared daemon (ADR 0012) the event stream carries other users'
   containers. Only containers this client created should be forwarded, or one
   user's `docker compose up` opens listeners on another user's machine.
+
+## Amended by ADR 0037, 2026-08-18
+
+The local listener and the published port were the same number, which is what
+made the workspace side a shared resource: two accounts on one daemon (ADR 0012)
+could not both publish 8080. They may now differ. The daemon is asked for any
+free port and the client opens the number the user typed in front of it, so
+nothing here changes about how a forward is opened or torn down, only what it
+is opened at. See [ADR 0037](0037-the-published-port-belongs-to-the-client.md).
+

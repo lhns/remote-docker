@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -77,6 +78,14 @@ type Manager struct {
 	// because somebody else ran docker compose up.
 	Owned func(Container) bool
 
+	// LocalPort is the port to open on this machine for a published one.
+	//
+	// They differ because the workspace daemon chooses what to publish, so
+	// nobody collides on a shared daemon, and the client puts the number the
+	// user actually typed in front of it (ADR 0037). Nil, and a container
+	// whose ports were not remapped, both mean the published port itself.
+	LocalPort func(Container, Published) int
+
 	mu     sync.Mutex
 	active map[string]*containerForwards
 }
@@ -139,8 +148,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 
-	// Open forwards for anything newly published.
-	for id, container := range wanted {
+	// Open forwards for anything newly published, in a stable order.
+	//
+	// Ranging the map left the outcome to Go randomising it, which only shows
+	// when two containers want one local port: whichever was reached first got
+	// it, and a reconcile a moment later could hand it to the other. Rare, and
+	// the kind of rare that is reported as "sometimes it forwards the wrong
+	// one".
+	ids := make([]string, 0, len(wanted))
+	for id := range wanted {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		container := wanted[id]
 		existing, ok := m.active[id]
 		if !ok {
 			existing = &containerForwards{name: container.Name, forwards: map[int]Forward{}}
@@ -164,7 +186,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // container's ports from being forwarded.
 func (m *Manager) openLocked(entry *containerForwards, container Container, p Published) {
 	bind := bindAddr
-	local := net.JoinHostPort(bind, fmt.Sprint(p.PublicPort))
+	local := net.JoinHostPort(bind, fmt.Sprint(m.localPort(container, p)))
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(p.PublicPort))
 
 	fwd, err := m.Forwarder.Forward(local, remote)
@@ -177,6 +199,19 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 	}
 	entry.forwards[p.PublicPort] = fwd
 	m.log().Info("forwarding", "from", fwd.LocalAddr(), "container", container.Name, "port", p.PrivatePort)
+}
+
+// localPort is the port to open here for a published one. Keyed on the
+// published port everywhere else: it is what reconcile compares against the
+// daemon, and the only one that survives a container being recreated.
+func (m *Manager) localPort(c Container, p Published) int {
+	if m.LocalPort == nil {
+		return p.PublicPort
+	}
+	if local := m.LocalPort(c, p); local > 0 {
+		return local
+	}
+	return p.PublicPort
 }
 
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
@@ -249,4 +284,32 @@ func publishedTCP(c Container) []Published {
 // portsLogger hands one over deliberately.
 func (m *Manager) log() *slog.Logger {
 	return logx.Or(m.Log)
+}
+
+// Forwarding reports whether this manager already holds a local listener on a
+// port.
+//
+// Asked before a container is created: the workspace daemon chooses the
+// published port now, so the number the user typed is claimed on this machine
+// instead, and a second container asking for it has to be refused somewhere.
+// This is the only place that knows what is already open.
+//
+// Scanned rather than indexed, because the forwards are keyed on the published
+// port and there are a handful of them.
+func (m *Manager) Forwarding(local int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, entry := range m.active {
+		for _, fwd := range entry.forwards {
+			_, port, err := net.SplitHostPort(fwd.LocalAddr().String())
+			if err != nil {
+				continue
+			}
+			if n, err := strconv.Atoi(port); err == nil && n == local {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -143,6 +143,52 @@ older session of the other machine may still be using it.
 configuration directory, and it collides exactly as two sessions on one machine
 would. The remedy is a key each, which is also what enrolment means.
 
+**REQUIRED, and not yet built: an account's machines must not share a compose
+project.** Compose names a project after the directory it runs in, so the same
+compose file on two machines produces one set of container names, one network
+and one set of project labels on the daemon they share. Nothing here notices,
+because a container carries the client that made it and no code reads that
+before acting on somebody else's.
+
+Both outcomes are bad, and the second is worse for being quiet:
+
+- **Different absolute paths on the two machines**, which is the ordinary case.
+  The bind source is part of compose's config hash, so each machine sees the
+  other's containers as out of date and recreates them, killing a running
+  service and re-pointing it at its own volumes. The other machine then does the
+  same. `compose down` on either takes the whole project with it.
+- **The same absolute path on both**, which happens whenever two machines share
+  a layout. The hash matches, so the second machine reports everything up to
+  date and leaves the first machine's containers running, serving the FIRST
+  machine's files through the first machine's tunnel. Nobody typed anything
+  wrong and nobody is told.
+
+This is the failure `VolumeNameForID` already prevents for volumes, one level
+up: the volume carries the client in its NAME precisely because the daemon is
+shared while the files are not. Container and project names must be separated
+the same way.
+
+**Preliminary decision, 2026-08-18: neither is built, and the limitation is
+accepted.** Two answers were considered and both rejected for now.
+
+*Namespacing* the names, by mangling them per client on the way in and
+unmangling them on the way out, is the general fix and is a virtualisation of
+the daemon's namespace: it touches responses as well as requests, and leaves
+`only /containers/create is ever decoded` behind, which is the property that
+makes this proxy easy to trust.
+
+*Detection* is weaker than it sounds. The signal exists, since every container
+carries its client, but the quiet case never reaches a create at all: compose
+lists a project, decides everything is up to date, and stops. So a check would
+have to sit on the list, where it is compose-shaped rather than general, and its
+warning would land in the background session's log rather than in the terminal
+somebody just typed in. A warning nobody reads is not detection.
+
+The remedy is therefore a convention: `COMPOSE_PROJECT_NAME`, or `compose -p`,
+set differently on each machine, which the README explains. It is written down
+in both places so that somebody meeting this has a name for it, and so the next
+person to open this record does not rediscover it from scratch.
+
 **Rejected: a second account for the phone.** It works today with no code, and
 it splits the daemon too: two image caches, two sets of containers, and the
 phone cannot see what the PC started, which is most of the value.

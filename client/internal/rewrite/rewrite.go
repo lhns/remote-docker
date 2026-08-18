@@ -82,6 +82,7 @@ const (
 	ManagedShare = workspace.ManagedShare
 	OwnerLabel   = workspace.OwnerLabel
 	ClientLabel  = workspace.ClientLabel
+	PortsLabel   = workspace.PortsLabel
 )
 
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
@@ -107,6 +108,13 @@ type Rewriter struct {
 	// Guard is shared with the Collector, and is what stops one deleting the
 	// volume the other has just created.
 	Guard *Guard
+
+	// LocalPortFree reports whether this machine can open a port, and is asked
+	// before a published port is handed to the daemon to choose. See
+	// rewritePorts, which explains why the question moved here.
+	//
+	// Nil skips it, which is what a rewriter with no session behind it wants.
+	LocalPortFree func(port int) error
 }
 
 // ContainerCreate rewrites the body of POST /containers/create.
@@ -123,37 +131,34 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		return nil, fmt.Errorf("rewrite: decoding container create: %w", err)
 	}
 
-	changed := false
-	if err := r.label(payload, &changed); err != nil {
-		return nil, err
-	}
-
-	hostConfigRaw, ok := payload["HostConfig"]
-	if !ok {
-		// No HostConfig means no binds, but the label above may still have
-		// changed the payload.
-		if !changed {
-			return body, nil
-		}
-		out, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("rewrite: encoding container create: %w", err)
-		}
-		return out, nil
-	}
-
+	changed, hostChanged := false, false
 	var hostConfig map[string]json.RawMessage
-	if err := json.Unmarshal(hostConfigRaw, &hostConfig); err != nil {
-		return nil, fmt.Errorf("rewrite: decoding HostConfig: %w", err)
+	var requested workspace.RequestedPorts
+
+	// No HostConfig means no binds and no ports, and the labels below may
+	// still change the payload.
+	if hostConfigRaw, ok := payload["HostConfig"]; ok {
+		if err := json.Unmarshal(hostConfigRaw, &hostConfig); err != nil {
+			return nil, fmt.Errorf("rewrite: decoding HostConfig: %w", err)
+		}
+		if err := r.rewriteBinds(ctx, hostConfig, &hostChanged); err != nil {
+			return nil, err
+		}
+		if err := r.rewriteMounts(ctx, hostConfig, &hostChanged); err != nil {
+			return nil, err
+		}
+
+		var err error
+		if requested, err = r.rewritePorts(hostConfig, &hostChanged); err != nil {
+			return nil, err
+		}
 	}
 
-	hostChanged := false
-	if err := r.rewriteBinds(ctx, hostConfig, &hostChanged); err != nil {
+	// After the ports pass, which decides what the ports label says.
+	if err := r.label(payload, requested, &changed); err != nil {
 		return nil, err
 	}
-	if err := r.rewriteMounts(ctx, hostConfig, &hostChanged); err != nil {
-		return nil, err
-	}
+
 	if !hostChanged && !changed {
 		return body, nil
 	}
@@ -180,8 +185,8 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 // which of that account's machines started it. Only the second can tell one
 // machine's containers from the other's, which is what decides whether a
 // connection may be released.
-func (r *Rewriter) label(payload map[string]json.RawMessage, changed *bool) error {
-	if r.Owner == "" {
+func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace.RequestedPorts, changed *bool) error {
+	if r.Owner == "" && len(requested) == 0 {
 		return nil
 	}
 
@@ -193,12 +198,22 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, changed *bool) erro
 			return nil
 		}
 	}
-	if labels[OwnerLabel] == r.Owner && (r.Client == "" || labels[ClientLabel] == r.Client) {
+
+	ports := requested.String()
+	if labels[OwnerLabel] == r.Owner && labels[PortsLabel] == ports &&
+		(r.Client == "" || labels[ClientLabel] == r.Client) {
 		return nil
 	}
-	labels[OwnerLabel] = r.Owner
-	if r.Client != "" {
-		labels[ClientLabel] = r.Client
+	if r.Owner != "" {
+		labels[OwnerLabel] = r.Owner
+		if r.Client != "" {
+			labels[ClientLabel] = r.Client
+		}
+	}
+	// Without it the ports are forwarded to whatever the daemon assigned,
+	// which is not what anybody typed.
+	if ports != "" {
+		labels[PortsLabel] = ports
 	}
 
 	encoded, err := json.Marshal(labels)
