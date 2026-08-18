@@ -130,6 +130,11 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Owner:   info.User,
 		Client:  s.clientID,
 		Guard:   live.guard,
+
+		// The published port moves to whatever the daemon picks, so the number
+		// the user typed is claimed on THIS machine and a clash has to be
+		// reported here (ADR 0037).
+		LocalPortFree: func(port int) error { return localPortFree(live, port) },
 	}
 	if s.opts.Role.hosting() {
 		if err := s.startNFS(live); err != nil {
@@ -287,6 +292,14 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 		Owned: func(c ports.Container) bool {
 			return c.Labels[rewrite.OwnerLabel] == live.info.User
 		},
+
+		// What the user asked for, read back from the label the rewriter
+		// wrote. A container without one was created before this, or by
+		// something that is not us, and its published port is its local port
+		// as it always was.
+		LocalPort: func(c ports.Container, p ports.Published) int {
+			return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
+		},
 	}
 	live.wg.Go(func() { s.watchPorts(ctx, live) })
 }
@@ -343,4 +356,27 @@ func (s *Session) watchPorts(ctx context.Context, live *liveConn) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// localPortFree reports whether this machine can open a port for a container
+// about to be created.
+//
+// Two answers, because both kinds of clash are real: a forward this session
+// already holds, and anything else on the machine listening there. The second
+// is a bind that is opened and closed at once, which is the only way to ask
+// about a program this process knows nothing about.
+//
+// A race with whatever binds it next is unavoidable and Docker has the same
+// one. When the forward fails later, the ports manager reports it and carries
+// on with the container other ports.
+func localPortFree(live *liveConn, port int) error {
+	if live.ports != nil && live.ports.Forwarding(port) {
+		return fmt.Errorf("this session already forwards it")
+	}
+
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return fmt.Errorf("something on this machine is listening there")
+	}
+	return l.Close()
 }

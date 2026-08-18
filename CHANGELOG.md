@@ -10,6 +10,24 @@ software.
 
 ## Unreleased
 
+### Two people can publish the same port
+
+On a workspace where everybody shares one Docker daemon, `-p 8080:80` was first
+come, first served: the second person got `Bind for 0.0.0.0:8080 failed: port is
+already allocated` and had to pick another number.
+
+The workspace now publishes on a port of its own choosing and your machine still
+gets the one you asked for, so both of you can run `-p 8080:80` and neither
+notices the other. Nothing changes in how you use it.
+
+Two things to know. On the workspace, `docker ps` and `docker port` report the
+port it picked, so anything reaching a service directly at `workspace-host:8080`
+rather than through the tunnel has to look that up. And the clash moves to your
+own machine: two of your own containers asking for 8080 now get the same error
+from the client, which is the same answer as before from a different place.
+
+UDP ports are unchanged and still collide, because the tunnel carries TCP.
+
 ### Per-account daemons can be given a registry configuration
 
 A workspace with a private or insecure registry mounts `daemon.json`, or a CA

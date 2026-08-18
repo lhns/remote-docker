@@ -30,19 +30,28 @@ type fakeForwarder struct {
 	opened   []string
 	forwards map[string]*fakeForward
 	refuse   map[string]bool
+
+	// remotes records what each local listener was pointed at, which is the
+	// half that differs once a published port is chosen by the daemon.
+	remotes map[string]string
 }
 
 func newForwarder() *fakeForwarder {
-	return &fakeForwarder{forwards: map[string]*fakeForward{}, refuse: map[string]bool{}}
+	return &fakeForwarder{
+		forwards: map[string]*fakeForward{},
+		refuse:   map[string]bool{},
+		remotes:  map[string]string{},
+	}
 }
 
-func (f *fakeForwarder) Forward(local, _ string) (Forward, error) {
+func (f *fakeForwarder) Forward(local, remote string) (Forward, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refuse[local] {
 		return nil, fmt.Errorf("bind %s: address already in use", local)
 	}
 	f.opened = append(f.opened, local)
+	f.remotes[local] = remote
 	fwd := &fakeForward{local: addr(local)}
 	f.forwards[local] = fwd
 	return fwd, nil

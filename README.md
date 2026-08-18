@@ -106,7 +106,11 @@ Hyper-V and are willing to be the first.
 - **Bind mounts from anywhere on your machine.** Another drive, above the
   working directory, unrelated to it. Not only a synced project folder.
 - **Published ports reach your localhost.** `-p 8080:80` means
-  `localhost:8080` here, opened automatically as containers start.
+  `localhost:8080` here, opened automatically as containers start. The number
+  is yours alone: the workspace publishes on a port of its own choosing, so two
+  people sharing a workspace can both ask for 8080. On the workspace itself,
+  `docker ps` shows the port it picked rather than the one you typed
+  ([ADR 0037](docs/adr/0037-the-published-port-belongs-to-the-client.md)).
 - **The real tooling, unmodified.** `docker`, `docker compose`,
   Testcontainers, IDE plugins, anything that speaks the Docker API. The
   translation happens at the API, not in a command wrapper. The Docker CLI,

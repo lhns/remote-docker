@@ -37,3 +37,20 @@ const OwnerLabel = "com.github.lhns.remote-docker.owner"
 // created before this label existed carries no client and is attributed to
 // nobody, which is the safe answer rather than a guess.
 const ClientLabel = "com.github.lhns.remote-docker.client"
+
+// PortsLabel records which port the user asked for, per container port:
+//
+//	80/tcp=8080,443/tcp=8443
+//
+// The workspace daemon assigns the published port itself, so two accounts
+// asking for 8080 never collide, and this is how the client knows which local
+// port to open in front of whatever it was given (ADR 0037).
+//
+// A LABEL, not memory, because the ports manager rebuilds its forwards from
+// the daemon's container list: after a client restart, or a reconnect, nothing
+// else remembers what the user typed.
+//
+// Keyed by CONTAINER port, which is the half that does not change. The
+// published port is chosen by the daemon and is exactly what has to be looked
+// up, and the daemon reports the container port beside it.
+const PortsLabel = "com.github.lhns.remote-docker.ports"

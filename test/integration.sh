@@ -331,6 +331,37 @@ else
     bad "the published port never became reachable"
     sed 's/^/        /' "$WORK/up.log" | tail -20
 fi
+
+# And the workspace published somewhere else entirely, which is what stops two
+# accounts on one daemon colliding over 18080 (ADR 0037). The number above is
+# this machine's; this one is the daemon's own choice.
+published=$(dockert port itest-web 80/tcp 2>/dev/null | head -1)
+case "$published" in
+*:18080)
+    bad "the workspace bound 18080 itself, so a second account asking for it still collides" ;;
+*:[0-9]*)
+    ok "the workspace published ${published##*:}, not the 18080 that was asked for" ;;
+*)
+    bad "could not read the workspace-side port: [$published]" ;;
+esac
+
+# The clash moved here: the daemon no longer refuses anything, so the client
+# has to, in the wording the daemon itself uses, because that is what it replaces.
+#
+# Two accounts colliding cannot be shown from one client, because this refusal
+# comes first. What is proven above is that no requested number is ever bound
+# on the workspace, which is what makes that collision impossible.
+if out=$(dockert run -d --name itest-web2 -p 18080:80 nginx:alpine 2>&1); then
+    bad "a second container took a local port this session already forwards"
+    docker rm -f itest-web2 >/dev/null 2>&1
+else
+    case "$out" in
+    *"port is already allocated"*)
+        ok "a second container asking for 18080 is refused, as the daemon would" ;;
+    *)
+        bad "it was refused for the wrong reason: $(echo "$out" | tail -1)" ;;
+    esac
+fi
 docker rm -f itest-web >/dev/null 2>&1
 
 echo
