@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +66,19 @@ func TestParseRequestedPortsSkipsWhatItCannotRead(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("unreadable entries produced %+v", got)
+	}
+}
+
+// A label asking for more listeners than the bound gets the bound.
+func TestParseRequestedPortsIsBounded(t *testing.T) {
+	numbers := make([]string, 0, MaxRequestedPorts+100)
+	for i := range MaxRequestedPorts + 100 {
+		numbers = append(numbers, strconv.Itoa(1+i))
+	}
+	label := "80/tcp=" + strings.Join(numbers, ";")
+
+	got := ParseRequestedPorts(label)
+	if len(got["80/tcp"]) != MaxRequestedPorts {
+		t.Errorf("a label asking for %d ports produced %d", len(numbers), len(got["80/tcp"]))
 	}
 }
