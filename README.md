@@ -780,4 +780,6 @@ for m in ./core ./core-client ./core-agent ./agent ./client; do (cd $m && golang
 bash test/integration.sh      # needs docker and NFS client support
 ```
 
+## License
+
 Licensed under Apache 2.0.
