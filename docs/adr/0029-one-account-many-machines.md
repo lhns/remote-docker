@@ -143,6 +143,42 @@ older session of the other machine may still be using it.
 configuration directory, and it collides exactly as two sessions on one machine
 would. The remedy is a key each, which is also what enrolment means.
 
+**REQUIRED, and not yet built: an account's machines must not share a compose
+project.** Compose names a project after the directory it runs in, so the same
+compose file on two machines produces one set of container names, one network
+and one set of project labels on the daemon they share. Nothing here notices,
+because a container carries the client that made it and no code reads that
+before acting on somebody else's.
+
+Both outcomes are bad, and the second is worse for being quiet:
+
+- **Different absolute paths on the two machines**, which is the ordinary case.
+  The bind source is part of compose's config hash, so each machine sees the
+  other's containers as out of date and recreates them, killing a running
+  service and re-pointing it at its own volumes. The other machine then does the
+  same. `compose down` on either takes the whole project with it.
+- **The same absolute path on both**, which happens whenever two machines share
+  a layout. The hash matches, so the second machine reports everything up to
+  date and leaves the first machine's containers running, serving the FIRST
+  machine's files through the first machine's tunnel. Nobody typed anything
+  wrong and nobody is told.
+
+This is the failure `VolumeNameForID` already prevents for volumes, one level
+up: the volume carries the client in its NAME precisely because the daemon is
+shared while the files are not. Container and project names must be separated
+the same way, and until they are, this record is incomplete rather than merely
+undocumented. What would satisfy it: a project namespace per machine by default,
+and a refusal, or at minimum a warning that names the other machine, when a
+create would adopt a project another client owns.
+
+Until it is built the remedy is `COMPOSE_PROJECT_NAME`, or `compose -p`, set
+differently on each machine. That is a convention nothing enforces, which is
+what makes it a requirement rather than an answer.
+
+*(2026-08-18: knowingly accepted for now. It is written down here and in the
+README so that somebody meeting it has a name for it, and so the next person to
+open this record does not have to rediscover it.)*
+
 **Rejected: a second account for the phone.** It works today with no code, and
 it splits the daemon too: two image caches, two sets of containers, and the
 phone cannot see what the PC started, which is most of the value.

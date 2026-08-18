@@ -158,6 +158,38 @@ The reasoning behind each decision is in [`docs/adr/`](docs/adr/), and what
 this trusts, what it does not, and where the checks are is in
 [`docs/threat-model.md`](docs/threat-model.md).
 
+## One account from two machines
+
+An account is the identity and a machine is a client, so a laptop and a desktop
+enrolled with a key each share a workspace: the same daemon, the same images,
+the same containers. Files are not shared, because they are on one machine or
+the other, and neither are published ports: each machine opens the number its
+own containers asked for, and sees the other machine's containers at whatever
+the workspace published them on.
+
+**One thing does collide, and it is worth knowing before it bites: compose
+projects.** Compose names a project after the directory it runs in, so the same
+compose file on both machines is one project on the daemon they share, with one
+set of container names and one network. What happens next depends on where the
+project lives:
+
+- if the paths differ, each machine sees the other's containers as out of date
+  and recreates them, so an `up` on one stops the service the other is running;
+- if the paths match, the second machine reports everything up to date and
+  leaves the first machine's containers running, **serving the first machine's
+  files**.
+
+Give each machine its own project name and neither happens:
+
+```bash
+export COMPOSE_PROJECT_NAME=demo-laptop     # demo-desktop on the other
+docker compose up -d
+```
+
+This is a limitation rather than a design: the requirement is recorded in
+[ADR 0029](docs/adr/0029-one-account-many-machines.md) and nothing enforces it
+yet.
+
 ## Commands
 
 **This binary is the Docker CLI.** `remote-docker run`, `remote-docker ps`,

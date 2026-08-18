@@ -73,6 +73,15 @@ no dind image supplying one.)*
   port is still bound where it was asked for, because the tunnel cannot carry
   it. This is convenience, not isolation, and the trust assumption below is
   unaffected.
+- **Compose projects collide too, and that one is not solved** (2026-08-18).
+  Two accounts running the same compose file from a directory of the same name
+  produce one project on this daemon: one set of container names, one network,
+  one set of project labels. Either they recreate each other's containers, or, if
+  their paths match, one silently serves the other's files. ADR 0019 mode removes
+  it, because there is nothing shared to collide in.
+  [ADR 0029](0029-one-account-many-machines.md) states the requirement, since
+  the same thing happens between one account's TWO MACHINES and cannot be answered
+  by changing modes.
 - Revisit when the user set stops being small and mutually trusted. That is the
   trigger; there is no other reason this decision needs to change. The tunnel
   reachability above is a second, smaller one: it is fixed, but it is the kind

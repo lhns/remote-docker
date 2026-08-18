@@ -29,7 +29,9 @@ from the client, which is the same answer as before from a different place.
 If you use one account from two machines, both can now publish 8080 as well:
 each opens the number its own container asked for, and sees the other machine's container at whatever the workspace published it on.
 
-UDP ports are unchanged and still collide, because the tunnel carries TCP.
+UDP ports are unchanged and still collide, because the tunnel carries TCP. So
+do compose projects: the same compose file from two machines is one project on
+the daemon they share, which the README now explains and gives the remedy for.
 
 ### Per-account daemons can be given a registry configuration
 

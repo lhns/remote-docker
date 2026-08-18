@@ -89,3 +89,10 @@ explanation of a port number would have to start by asking which mode this is.
 - **Nothing about the trust assumption in ADR 0012 changes.** This removes an
   everyday collision between people who already trust each other; it is not
   isolation and does not pretend to be.
+- **The port was one collision of several, and the others remain.** Container
+  names, compose project names and networks are still one namespace per daemon,
+  so the same compose file from two machines of one account still collides in
+  every way except the port.
+  [ADR 0029](0029-one-account-many-machines.md) records that as a requirement
+  rather than a quirk; nothing here addresses it.
+
