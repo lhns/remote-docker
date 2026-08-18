@@ -368,7 +368,11 @@ docker rm -f itest-web >/dev/null 2>&1
 # back and does not need to be: both assigned ports front port 80, so both
 # numbers work whichever way round they were matched.
 if ! twice=$(dockert run -d --name itest-twice -p 18082:80 -p 18083:80     -v "$PROJECT:/usr/share/nginx/html" nginx:alpine 2>&1); then
-    bad "a container publishing one port twice was refused: $(echo "$twice" | tail -1)"
+    # head, not tail: docker ends a failure with "Run 'docker run --help' for
+    # more information", so the last line is boilerplate and the first is what
+    # went wrong. Taking the last one cost a CI round trip.
+    bad "a container publishing one port twice was refused: $(echo "$twice" | head -2 | tr '
+' ' ')"
 fi
 
 for port in 18082 18083; do
