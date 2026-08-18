@@ -128,18 +128,24 @@ func TestUDPIsNotRefusedForATakenLocalPort(t *testing.T) {
 	}
 }
 
-// One container port published twice is remapped twice. Which requested number
-// ends up in front of which assigned port does not matter, because all of them
-// front the same container port, so there is nothing to pair back.
-func TestSeveralBindingsForOnePortAreAllRemapped(t *testing.T) {
+// One container port published twice becomes ONE publication, and both numbers
+// are recorded for the client to open in front of it.
+//
+// Two bindings both asking for any port are identical, and the daemon then
+// allocates one port for them and fails to bind it twice:
+//
+//	failed to bind host port 0.0.0.0:32778/tcp: address already in use
+//
+// Measured in CI, which is the only place a real daemon says so.
+func TestOnePortPublishedTwiceIsPublishedOnce(t *testing.T) {
 	r, _, _ := newRewriter()
 
 	hostConfig, labels := create(t, r,
 		`{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"8080"},{"HostPort":"9090"}]}}}`)
 
 	got := hostPorts(t, hostConfig, "80/tcp")
-	if len(got) != 2 || got[0] != "" || got[1] != "" {
-		t.Errorf("HostPort = %+v, want both left to the daemon", got)
+	if len(got) != 1 || got[0] != "" {
+		t.Errorf("HostPort = %+v, want one binding left to the daemon", got)
 	}
 	if labels[PortsLabel] != "80/tcp=8080;9090" {
 		t.Errorf("the label is %q, want both numbers", labels[PortsLabel])

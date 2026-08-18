@@ -14,7 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"slices"
 	"strconv"
 	"time"
 
@@ -294,8 +293,8 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 			return c.Labels[rewrite.OwnerLabel] == live.info.User
 		},
 
-		LocalPort: func(c ports.Container, p ports.Published) int {
-			return localPortFor(c, p, s.clientID)
+		LocalPorts: func(c ports.Container, p ports.Published) []int {
+			return localPortsFor(c, p, s.clientID)
 		},
 	}
 	live.wg.Go(func() { s.watchPorts(ctx, live) })
@@ -378,44 +377,20 @@ func localPortFree(live *liveConn, port int) error {
 	return l.Close()
 }
 
-// localPortFor is the port to open here for one published port, or zero to use
-// the published port itself.
+// localPortsFor is every port to open here for one published port, or nothing
+// to use the published port itself.
 //
 // Only on the machine that asked. Every client forwards the whole account's
 // containers (ADR 0029), so another machine's are forwarded where the daemon
-// published them, and two machines can both ask for 8080 without contending
-// for one listener (ADR 0037).
+// published them, and two machines can both ask for 8080 without contending for
+// one listener (ADR 0037).
 //
-// A container port published more than once (`-p 8080:80 -p 9090:80`) is
-// matched by COUNTING: the daemon assigned one port per binding and reports
-// them in no defined order, so both sides sort and take the nth. Which
-// requested number ends up in front of which assigned port does not matter,
-// because all of them front the same container port.
-func localPortFor(c ports.Container, p ports.Published, clientID string) int {
+// More than one when a container port was published more than once
+// (`-p 8080:80 -p 9090:80`): the workspace publishes it once and both numbers
+// are opened in front of that, because both front the same container port.
+func localPortsFor(c ports.Container, p ports.Published, clientID string) []int {
 	if c.Labels[rewrite.ClientLabel] != clientID {
-		return 0
+		return nil
 	}
-
-	key := workspace.ContainerPort(p.PrivatePort, p.Type)
-
-	// Deduplicated, because the daemon reports one entry per ADDRESS FAMILY:
-	// a port published on IPv4 and IPv6 appears twice, and counting those
-	// would put every publication after the first on an index nobody asked
-	// for. ports.publishedTCP drops the same duplicates for the same reason.
-	var siblings []int
-	for _, other := range c.Ports {
-		if workspace.ContainerPort(other.PrivatePort, other.Type) != key {
-			continue
-		}
-		if !slices.Contains(siblings, other.PublicPort) {
-			siblings = append(siblings, other.PublicPort)
-		}
-	}
-	slices.Sort(siblings)
-
-	index := slices.Index(siblings, p.PublicPort)
-	if index < 0 {
-		return 0
-	}
-	return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel]).At(key, index)
+	return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
 }

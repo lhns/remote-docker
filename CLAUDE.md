@@ -220,10 +220,10 @@ premise of the project, and it applies to building it too. So:
   front of whatever came back. The label is the only record, because forwards
   are rebuilt from the daemon's container list on every reconnect, so dropping
   it silently forwards ports nobody asked for. One container port published
-  twice is matched by COUNTING, not by pairing: the daemon reports the ports it
-  assigned in no order, and any pairing is correct because they all front the
-  same container port. UDP is remapped and NOT forwarded, which is a gap with a
-  shape (ADR 0038) rather than a decision. The number is honoured only on the machine that asked for it:
+  twice is published ONCE with both numbers in front of it: two bindings asking
+  for any port are identical, and the daemon allocates one port for them and
+  fails to bind it twice, so the container never starts. UDP is remapped and NOT
+  forwarded, which is a gap with a shape (ADR 0038) rather than a decision. The number is honoured only on the machine that asked for it:
   an account's machines each forward the whole account's containers (ADR 0029),
   so on any other machine the container keeps the port the daemon published,
   and two machines can both ask for 8080 without contending for one listener. The refusal moves to the client along with the port, since it

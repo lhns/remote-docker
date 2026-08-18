@@ -1,13 +1,14 @@
 package session
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 )
 
-// container is one the daemon reports, labelled as this machine created it.
+// container is one the daemon reports, labelled as a machine created it.
 func container(client, label string, published ...ports.Published) ports.Container {
 	return ports.Container{
 		ID:     "c1",
@@ -21,40 +22,21 @@ func tcp(public, private int) ports.Published {
 	return ports.Published{PublicPort: public, PrivatePort: private, Type: "tcp"}
 }
 
-func TestLocalPortIsTheOneThisMachineAskedFor(t *testing.T) {
+func TestTheLocalPortIsTheOneThisMachineAskedFor(t *testing.T) {
 	c := container("me", "80/tcp=8080", tcp(32768, 80))
 
-	if got := localPortFor(c, tcp(32768, 80), "me"); got != 8080 {
-		t.Errorf("localPortFor = %d, want 8080", got)
+	if got := localPortsFor(c, tcp(32768, 80), "me"); !slices.Equal(got, []int{8080}) {
+		t.Errorf("localPortsFor = %v, want [8080]", got)
 	}
 }
 
-// One container port published twice: two assigned ports, two requested
-// numbers, matched by counting. Any pairing is correct, so what is asserted is
-// that both numbers are used and neither is used twice.
-func TestBothPublicationsOfOnePortGetTheirNumber(t *testing.T) {
-	c := container("me", "80/tcp=8080;9090", tcp(32769, 80), tcp(32768, 80))
+// One container port published twice is published ONCE on the workspace, so
+// both numbers go in front of that one publication.
+func TestBothNumbersFrontOnePublication(t *testing.T) {
+	c := container("me", "80/tcp=8080;9090", tcp(32768, 80))
 
-	first := localPortFor(c, tcp(32768, 80), "me")
-	second := localPortFor(c, tcp(32769, 80), "me")
-
-	if first == second {
-		t.Fatalf("both publications got %d, so one of them has no listener", first)
-	}
-	for _, got := range []int{first, second} {
-		if got != 8080 && got != 9090 {
-			t.Errorf("a publication got %d, which nobody asked for", got)
-		}
-	}
-}
-
-// Published more often than it was asked for, which is `-p 8080:80 -p 80`. The
-// extra keeps whatever the daemon gave it.
-func TestAnExtraPublicationKeepsThePublishedPort(t *testing.T) {
-	c := container("me", "80/tcp=8080", tcp(32768, 80), tcp(32769, 80))
-
-	if got := localPortFor(c, tcp(32769, 80), "me"); got != 0 {
-		t.Errorf("localPortFor = %d, want the published port", got)
+	if got := localPortsFor(c, tcp(32768, 80), "me"); !slices.Equal(got, []int{8080, 9090}) {
+		t.Errorf("localPortsFor = %v, want both numbers", got)
 	}
 }
 
@@ -63,8 +45,8 @@ func TestAnExtraPublicationKeepsThePublishedPort(t *testing.T) {
 func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 	c := container("them", "80/tcp=8080", tcp(32768, 80))
 
-	if got := localPortFor(c, tcp(32768, 80), "me"); got != 0 {
-		t.Errorf("localPortFor = %d, want the published port", got)
+	if got := localPortsFor(c, tcp(32768, 80), "me"); len(got) != 0 {
+		t.Errorf("localPortsFor = %v, want nothing, so the published port is used", got)
 	}
 }
 
@@ -72,27 +54,17 @@ func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 func TestAnUnlabelledContainerKeepsThePublishedPort(t *testing.T) {
 	c := ports.Container{ID: "c1", Ports: []ports.Published{tcp(8080, 80)}}
 
-	if got := localPortFor(c, tcp(8080, 80), "me"); got != 0 {
-		t.Errorf("localPortFor = %d, want the published port", got)
+	if got := localPortsFor(c, tcp(8080, 80), "me"); len(got) != 0 {
+		t.Errorf("localPortsFor = %v, want nothing", got)
 	}
 }
 
-// The daemon reports one entry per address family, so each published port
-// appears twice. Counting over the raw list therefore shifted every
-// publication after the first onto an index nobody asked for.
-func TestDuplicateAddressFamiliesDoNotShiftTheCount(t *testing.T) {
-	c := container("me", "80/tcp=8080;9090",
-		tcp(32768, 80), tcp(32768, 80), // IPv4 and IPv6 of the first
-		tcp(32769, 80), tcp(32769, 80), // and of the second
-	)
+// A container port nobody asked about keeps whatever the daemon gave it, which
+// is what a mix of asked-for and any-port publications produces.
+func TestAPortNobodyAskedForKeepsThePublishedPort(t *testing.T) {
+	c := container("me", "80/tcp=8080", tcp(32768, 80), tcp(32769, 443))
 
-	first := localPortFor(c, tcp(32768, 80), "me")
-	second := localPortFor(c, tcp(32769, 80), "me")
-
-	if first != 8080 {
-		t.Errorf("the first publication got %d, want 8080", first)
-	}
-	if second != 9090 {
-		t.Errorf("the second publication got %d, want 9090", second)
+	if got := localPortsFor(c, tcp(32769, 443), "me"); len(got) != 0 {
+		t.Errorf("localPortsFor = %v, want nothing", got)
 	}
 }

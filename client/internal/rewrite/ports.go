@@ -38,27 +38,42 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 
 	requested := workspace.RequestedPorts{}
 	for containerPort, list := range bindings {
-		for i := range list {
-			port, ok := remappable(list[i])
-			if !ok {
-				continue
-			}
+		fixed, keep := fixedPorts(list)
+		if len(fixed) == 0 {
+			continue
+		}
 
-			// TCP only, because only TCP gets a local listener. Refusing a
-			// container on the strength of a TCP listener holding the number
-			// would be refusing it for something unrelated.
-			if workspace.IsTCP(workspace.ProtoOf(containerPort)) && r.LocalPortFree != nil {
+		// TCP only, because only TCP gets a local listener. Refusing a
+		// container on the strength of a TCP listener holding the number would
+		// be refusing it for something unrelated.
+		if workspace.IsTCP(workspace.ProtoOf(containerPort)) && r.LocalPortFree != nil {
+			for _, port := range fixed {
 				if err := r.LocalPortFree(port); err != nil {
 					return nil, fmt.Errorf("bind for 127.0.0.1:%d failed: port is already allocated: %w", port, err)
 				}
 			}
-
-			// Empty is how the API says "any free port", which is the whole
-			// mechanism: the daemon picks, so nobody can be holding it.
-			list[i]["HostPort"] = json.RawMessage(`""`)
-			requested.Add(containerPort, port)
-			*changed = true
 		}
+
+		// ONE binding, whatever was asked for, with an empty HostPort: that is
+		// how the API says "any free port", and the daemon picks, so nobody can
+		// be holding it.
+		//
+		// One rather than one per number, because two bindings asking for any
+		// port are identical and the daemon allocates a single port for them
+		// and then fails to bind it twice:
+		//
+		//	failed to bind host port 0.0.0.0:32778/tcp: address already in use
+		//
+		// Publishing once costs nothing here: every number the user asked for
+		// fronts the same container port, so the client opens all of them in
+		// front of the one publication.
+		keep["HostPort"] = json.RawMessage(`""`)
+		bindings[containerPort] = []binding{keep}
+
+		for _, port := range fixed {
+			requested.Add(containerPort, port)
+		}
+		*changed = true
 	}
 
 	if len(requested) == 0 {
@@ -70,6 +85,29 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 	}
 	hostConfig["PortBindings"] = encoded
 	return requested, nil
+}
+
+// fixedPorts is every port asked for by name under one container port, and the
+// binding to keep for them.
+//
+// The kept one is the first that named a port, so its HostIp survives: that is
+// the interface of the workspace the user chose to publish on, and it is not
+// ours to change.
+func fixedPorts(list []binding) ([]int, binding) {
+	var ports []int
+	var keep binding
+
+	for _, b := range list {
+		port, ok := remappable(b)
+		if !ok {
+			continue
+		}
+		if keep == nil {
+			keep = b
+		}
+		ports = append(ports, port)
+	}
+	return ports, keep
 }
 
 // remappable reports the port one binding asks for, and whether it may be
