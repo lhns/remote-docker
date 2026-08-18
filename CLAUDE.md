@@ -758,6 +758,13 @@ function was.
   contradicted unit tests that passed: address families duplicating a reported
   port, and a daemon allocating one port for two identical bindings and failing
   to bind it twice.
+- **A version is cut as a GitHub RELEASE, never a bare tag, and its body is the
+  changelog.** The order is: date the `## Unreleased` heading, commit it to main,
+  wait for CI, then `gh release create vX.Y.Z --notes-file` with that section
+  extracted from `CHANGELOG.md`. The release page is what somebody arrives at,
+  and a tag is not a page: `.goreleaser.yaml` attaches the archives and the chart
+  to whatever release the tag has, so the release existing with the right body is
+  the part a person has to get right.
 - **An assertion prints what it saw.** A one-line failure with nothing to act
   on costs a round trip of ten minutes, and `tail -1` on a docker error prints
   "Run 'docker run --help' for more information" while throwing away the reason,
