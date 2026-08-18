@@ -35,6 +35,13 @@ unremarkable for DNS, syslog or metrics, and not the same as a real UDP path if
 you are measuring latency. A workspace running an older agent carries none, as
 before, rather than failing.
 
+### A container label can no longer ask for unlimited local ports
+
+Which local ports a client opens comes from a label on the container, and with
+one daemon for everybody any account can write one. A label is now capped at
+1024 ports, which no real publication reaches. `docs/threat-model.md` flow 5 has
+the reasoning.
+
 ### Per-account daemons can be given a registry configuration
 
 A workspace with a private or insecure registry mounts `daemon.json`, or a CA

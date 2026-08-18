@@ -88,14 +88,26 @@ func (r RequestedPorts) String() string {
 	return strings.Join(parts, ",")
 }
 
+// MaxRequestedPorts bounds how many local listeners one label can ask for.
+//
+// The label is read off a CONTAINER, and with one daemon for everybody
+// (ADR 0012) any account can create a container carrying any label, so this is
+// the number of sockets somebody else can ask this machine to open. Well above
+// anything real: a published range is the largest legitimate case, and a
+// container publishing more than a thousand ports to one machine is not a case
+// this exists to serve.
+const MaxRequestedPorts = 1024
+
 // ParseRequestedPorts reads the label back.
 //
 // Anything unreadable is SKIPPED rather than failing the whole label: this is
 // read while deciding which local port to open, and one malformed entry must
 // not cost a container every forward it has. A label written by a newer client
-// with a form this one does not know reads as the entries it does know.
+// with a form this one does not know reads as the entries it does know. Ports
+// past MaxRequestedPorts are dropped the same way.
 func ParseRequestedPorts(label string) RequestedPorts {
 	out := RequestedPorts{}
+	count := 0
 	for _, entry := range strings.Split(label, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -108,11 +120,15 @@ func ParseRequestedPorts(label string) RequestedPorts {
 		key = strings.TrimSpace(key)
 
 		for _, number := range strings.Split(value, ";") {
+			if count >= MaxRequestedPorts {
+				break
+			}
 			port, err := strconv.Atoi(strings.TrimSpace(number))
 			if err != nil || port < 1 || port > MaxPort {
 				continue
 			}
 			out.Add(key, port)
+			count++
 		}
 	}
 	if len(out) == 0 {

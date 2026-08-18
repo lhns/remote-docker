@@ -537,8 +537,11 @@ for. On a shared daemon any account can create a container carrying somebody
 else's labels, so a hostile one can make another user's client open listeners on
 their machine at numbers of the attacker's choosing, carrying the attacker's
 service -- a plausible use of it is answering DNS or syslog on the loopback
-address something else on that machine trusts. The numbers are range-checked and
-their count is not, so a label naming thousands asks for thousands of listeners.
+address something else on that machine trusts. How MANY it can ask for is
+bounded: `workspace.MaxRequestedPorts` caps one label at 1024 ports, which is
+past any published range and far short of a label that asks a machine to open
+every socket it has. WHICH numbers those are is not bounded and cannot be, since
+any of them may be the one the user asked for.
 This sits inside ADR 0012's stated assumption rather than outside it, and it is
 one more thing the default mode does not have: with a daemon per account, the
 labels a client reads were written by that account alone.
@@ -776,14 +779,15 @@ Stated here rather than buried, because each is a deliberate trade.
 - **`automountServiceAccountToken: false` in the chart**: an enrolled account
   has a shell in the pod and could read its ServiceAccount token. Flow 8 has the
   detail and ADR 0035 records the decision.
-- **Nothing, from the pass that added ADR 0037 and ADR 0038 to this document.**
-  Two things were found and neither is a defect: a client opens local listeners
-  at numbers taken from container labels, which on a shared daemon any account
-  can write; and a datagram flow is held until its forward ends, so a sender
-  that changes source port per datagram accumulates them. Both are in flow 5,
-  both are bounded by ADR 0012's assumption or by ADR 0038's recorded
-  limitation, and both would be worth a bound if a workspace ever ran accounts
-  that did not trust each other.
+- **`workspace.MaxRequestedPorts`**: a client opens local listeners at numbers
+  taken from a container label, and on a shared daemon any account can write
+  one. The numbers were range-checked and their count was not, so one label
+  could ask a machine for as many sockets as it has. Capped at 1024, dropped
+  the way the parser drops anything else it will not use. Flow 5 has the detail.
+- **A datagram flow held until its forward ends** was found in the same pass and
+  deliberately not changed: its lifetime is the forward's because TCP's is, and
+  a second lifetime rule is a second thing to get wrong. ADR 0038 records the
+  cost and the trigger that would change it.
 - **The limit of `AllowDial`, written down and tested.** A shell reaches what a
   forwarding rule cannot gate. The default mode's namespace is what actually
   prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export
