@@ -88,14 +88,10 @@ func (r RequestedPorts) String() string {
 	return strings.Join(parts, ",")
 }
 
-// MaxRequestedPorts bounds how many local listeners one label can ask for.
-//
-// The label is read off a CONTAINER, and with one daemon for everybody
-// (ADR 0012) any account can create a container carrying any label, so this is
-// the number of sockets somebody else can ask this machine to open. Well above
-// anything real: a published range is the largest legitimate case, and a
-// container publishing more than a thousand ports to one machine is not a case
-// this exists to serve.
+// MaxRequestedPorts bounds how many local listeners one label can ask for. The
+// label is read off a container and with one daemon for everybody anybody
+// enrolled can write one, so it is somebody else's number of sockets. Past any
+// published range; see flow 5 of docs/threat-model.md.
 const MaxRequestedPorts = 1024
 
 // ParseRequestedPorts reads the label back.

@@ -69,13 +69,11 @@ func TestParseRequestedPortsSkipsWhatItCannotRead(t *testing.T) {
 	}
 }
 
-// A label decides how many local sockets this machine opens, and on a shared
-// daemon (ADR 0012) anybody enrolled can write one. The bound is what stops a
-// container asking for thousands.
+// A label asking for more listeners than the bound gets the bound.
 func TestParseRequestedPortsIsBounded(t *testing.T) {
 	numbers := make([]string, 0, MaxRequestedPorts+100)
 	for i := range MaxRequestedPorts + 100 {
-		numbers = append(numbers, strconv.Itoa(1+i%MaxPort))
+		numbers = append(numbers, strconv.Itoa(1+i))
 	}
 	label := "80/tcp=" + strings.Join(numbers, ";")
 
