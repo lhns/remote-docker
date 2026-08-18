@@ -251,15 +251,48 @@ else
 fi
 
 echo
-echo "== 8. both accounts publish the same port =="
-# Impossible on a shared daemon: the second bind collides. Two namespaces make
-# it ordinary.
-if da run -d --name alice-web -p 18090:80 nginx:alpine >/dev/null 2>&1 &&
-   db run -d --name bob-web   -p 18090:80 nginx:alpine >/dev/null 2>&1; then
-    ok "both accounts published 8080 without colliding"
+echo "== 8. two accounts publish, and the limit is this machine =="
+# Where the collision lives after ADR 0037. The workspace no longer binds the
+# number anybody asked for, so neither daemon can refuse the other. What can
+# refuse is the CLIENT, because the requested number is opened here, and both
+# accounts in this suite are driven from one runner: two people on two machines
+# would both get 18090.
+if da run -d --name alice-web -p 18090:80 nginx:alpine >/dev/null 2>&1; then
+    ok "$A published 18090"
 else
-    bad "publishing the same port from both accounts failed"
+    bad "$A could not publish 18090"
     da logs alice-web 2>&1 | tail -5
+fi
+
+# The forward has to be OPEN before the refusal can be about anything: the
+# ports manager reconciles on container events, so asking a second too early
+# probes a port nobody is listening on yet and the create succeeds.
+info "waiting for $A's forward to open on 18090"
+for _ in $(seq 1 60); do
+    if timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/18090" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+
+if out=$(db run -d --name bob-web -p 18090:80 nginx:alpine 2>&1); then
+    bad "two clients on one machine both opened 18090"
+    db rm -f bob-web >/dev/null 2>&1
+else
+    case "$out" in
+    *"port is already allocated"*)
+        ok "$B is refused 18090 on this machine, in the wording the daemon uses" ;;
+    *)
+        bad "$B was refused for the wrong reason: $(echo "$out" | tail -1)" ;;
+    esac
+fi
+
+# And nothing on the workspace was in the way: a different local number works
+# at once, on that account's own daemon.
+if db run -d --name bob-web -p 18091:80 nginx:alpine >/dev/null 2>&1; then
+    ok "$B published 18091 beside $A, on its own daemon"
+else
+    bad "$B could not publish at all"
     db logs bob-web 2>&1 | tail -5
 fi
 
