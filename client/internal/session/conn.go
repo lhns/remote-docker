@@ -14,6 +14,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
+	"sort"
 	"strconv"
 	"time"
 
@@ -293,16 +295,8 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 			return c.Labels[rewrite.OwnerLabel] == live.info.User
 		},
 
-		// What the user asked for, and only on the machine that asked. Every
-		// client forwards the whole account's containers (ADR 0029), so
-		// another machine's are forwarded where the daemon published them:
-		// zero here means the published port. Two machines can then both ask
-		// for 8080 without contending for one listener (ADR 0037).
 		LocalPort: func(c ports.Container, p ports.Published) int {
-			if c.Labels[rewrite.ClientLabel] != s.clientID {
-				return 0
-			}
-			return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
+			return localPortFor(c, p, s.clientID)
 		},
 	}
 	live.wg.Go(func() { s.watchPorts(ctx, live) })
@@ -383,4 +377,39 @@ func localPortFree(live *liveConn, port int) error {
 		return fmt.Errorf("something on this machine is listening there")
 	}
 	return l.Close()
+}
+
+// localPortFor is the port to open here for one published port, or zero to use
+// the published port itself.
+//
+// Only on the machine that asked. Every client forwards the whole account's
+// containers (ADR 0029), so another machine's are forwarded where the daemon
+// published them, and two machines can both ask for 8080 without contending
+// for one listener (ADR 0037).
+//
+// A container port published more than once (`-p 8080:80 -p 9090:80`) is
+// matched by COUNTING: the daemon assigned one port per binding and reports
+// them in no defined order, so both sides sort and take the nth. Which
+// requested number ends up in front of which assigned port does not matter,
+// because all of them front the same container port.
+func localPortFor(c ports.Container, p ports.Published, clientID string) int {
+	if c.Labels[rewrite.ClientLabel] != clientID {
+		return 0
+	}
+
+	key := workspace.ContainerPort(p.PrivatePort, p.Type)
+
+	var siblings []int
+	for _, other := range c.Ports {
+		if workspace.ContainerPort(other.PrivatePort, other.Type) == key {
+			siblings = append(siblings, other.PublicPort)
+		}
+	}
+	sort.Ints(siblings)
+
+	index := slices.Index(siblings, p.PublicPort)
+	if index < 0 {
+		return 0
+	}
+	return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel]).At(key, index)
 }

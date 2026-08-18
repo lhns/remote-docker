@@ -38,28 +38,27 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 
 	requested := workspace.RequestedPorts{}
 	for containerPort, list := range bindings {
-		port, ok := remappable(containerPort, list)
-		if !ok {
-			continue
-		}
-		// The clash moves here with the port: the number the user typed is
-		// bound on this machine now, so this is where it can be taken.
-		//
-		// "port is already allocated" verbatim, because that is the phrase the
-		// daemon uses for this and what anything matching on it expects.
-		// Lowercased at the front, which Go requires of an error and no
-		// matcher cares about.
-		if r.LocalPortFree != nil {
-			if err := r.LocalPortFree(port); err != nil {
-				return nil, fmt.Errorf("bind for 127.0.0.1:%d failed: port is already allocated: %w", port, err)
+		for i := range list {
+			port, ok := remappable(list[i])
+			if !ok {
+				continue
 			}
-		}
 
-		// Empty is how the API says "any free port", which is the whole
-		// mechanism: the daemon picks, so nobody can be holding it.
-		list[0]["HostPort"] = json.RawMessage(`""`)
-		requested[containerPort] = port
-		*changed = true
+			// TCP only, because only TCP gets a local listener. Refusing a
+			// container on the strength of a TCP listener holding the number
+			// would be refusing it for something unrelated.
+			if isTCP(containerPort) && r.LocalPortFree != nil {
+				if err := r.LocalPortFree(port); err != nil {
+					return nil, fmt.Errorf("bind for 127.0.0.1:%d failed: port is already allocated: %w", port, err)
+				}
+			}
+
+			// Empty is how the API says "any free port", which is the whole
+			// mechanism: the daemon picks, so nobody can be holding it.
+			list[i]["HostPort"] = json.RawMessage(`""`)
+			requested.Add(containerPort, port)
+			*changed = true
+		}
 	}
 
 	if len(requested) == 0 {
@@ -73,27 +72,26 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 	return requested, nil
 }
 
-// remappable reports the port a binding asks for, and whether it may be moved.
-//
-// Three are deliberately left where they are:
-//
-//   - an empty HostPort, where the user already asked for any port;
-//   - several bindings for one container port (-p 8080:80 -p 9090:80), because
-//     the daemon reports the assigned ports in no defined order and they cannot
-//     be paired back to what was asked for;
-//   - UDP, because the tunnel carries TCP, so a moved UDP port would be neither
-//     reachable nor predictable. Two accounts publishing one UDP port still
-//     collide, exactly as they do now.
-func remappable(containerPort string, list []binding) (int, bool) {
-	if len(list) != 1 {
-		return 0, false
-	}
-	if _, proto, found := strings.Cut(containerPort, "/"); found && !strings.EqualFold(proto, "tcp") {
-		return 0, false
-	}
+// isTCP reports whether a container port is TCP, which the daemon spells
+// "80/tcp" and, when the protocol is left out, means.
+func isTCP(containerPort string) bool {
+	_, proto, found := strings.Cut(containerPort, "/")
+	return !found || strings.EqualFold(proto, "tcp")
+}
 
+// remappable reports the port one binding asks for, and whether it may be
+// moved.
+//
+// The only binding left where it is asks for an empty HostPort, which is the
+// user asking for any port already.
+//
+// UDP is moved like TCP even though the tunnel cannot carry it: two accounts
+// publishing 53/udp collided on the workspace, and moving it costs nothing the
+// client could otherwise have had. It is unreachable from here either way
+// (ADR 0038).
+func remappable(b binding) (int, bool) {
 	var hostPort string
-	if err := json.Unmarshal(list[0]["HostPort"], &hostPort); err != nil {
+	if err := json.Unmarshal(b["HostPort"], &hostPort); err != nil {
 		return 0, false
 	}
 	if strings.TrimSpace(hostPort) == "" {

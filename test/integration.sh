@@ -364,6 +364,28 @@ else
 fi
 docker rm -f itest-web >/dev/null 2>&1
 
+# One container port published twice, which is the case that cannot be paired
+# back and does not need to be: both assigned ports front port 80, so both
+# numbers work whichever way round they were matched.
+dockert run -d --name itest-twice -p 18082:80 -p 18083:80     -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
+
+for port in 18082 18083; do
+    reachable=false
+    for _ in $(seq 1 45); do
+        if curl -fsS --max-time 3 "http://127.0.0.1:$port/" 2>/dev/null | grep -q "served from the client"; then
+            reachable=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$reachable" = true ]; then
+        ok "one container port published twice is reachable at $port"
+    else
+        bad "$port never became reachable"
+    fi
+done
+docker rm -f itest-twice >/dev/null 2>&1
+
 echo
 echo "== 11. named volumes are left alone =="
 docker volume create itest-named >/dev/null 2>&1

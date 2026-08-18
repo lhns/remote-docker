@@ -29,9 +29,19 @@ from the client, which is the same answer as before from a different place.
 If you use one account from two machines, both can now publish 8080 as well:
 each opens the number its own container asked for, and sees the other machine's container at whatever the workspace published it on.
 
-UDP ports are unchanged and still collide, because the tunnel carries TCP. So
-do compose projects: the same compose file from two machines is one project on
-the daemon they share, which the README now explains and gives the remedy for.
+This covers `-p 8080:80 -p 9090:80` as well, where one container port is
+published twice: both numbers are yours.
+
+**UDP ports stop colliding too, and still cannot be reached through the
+tunnel** — they never could, in any version, because the tunnel carries TCP.
+Making them work is written down as a gap in
+[ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md) rather than left to
+be rediscovered. One thing to know if you rely on a published UDP port from
+inside the workspace itself: its number is now the daemon's choice.
+
+Compose projects do still collide: the same compose file from two machines is
+one project on the daemon they share, which the README explains and gives the
+remedy for.
 
 ### Per-account daemons can be given a registry configuration
 

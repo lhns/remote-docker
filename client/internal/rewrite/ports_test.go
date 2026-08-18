@@ -84,57 +84,78 @@ func TestRemappingKeepsTheAddressTheUserAskedFor(t *testing.T) {
 	}
 }
 
-// Three cases are deliberately left alone. Each is listed here because a
-// silent skip and a bug look the same from outside.
-func TestWhatIsNotRemapped(t *testing.T) {
-	cases := map[string]struct {
-		body          string
-		containerPort string
-		want          string
-	}{
-		"the user already asked for any port": {
-			body:          `{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":""}]}}}`,
-			containerPort: "80/tcp",
-			want:          "",
-		},
-		"udp, which the tunnel cannot carry": {
-			body:          `{"HostConfig":{"PortBindings":{"53/udp":[{"HostPort":"5353"}]}}}`,
-			containerPort: "53/udp",
-			want:          "5353",
-		},
+// The one case left alone: the user already asked for any port, so there is
+// nothing to record and nothing to move.
+func TestAnAlreadyEmptyPortIsLeftAlone(t *testing.T) {
+	r, _, _ := newRewriter()
+
+	hostConfig, labels := create(t, r, `{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":""}]}}}`)
+
+	if got := hostPorts(t, hostConfig, "80/tcp"); len(got) != 1 || got[0] != "" {
+		t.Errorf("HostPort = %+v, want it untouched", got)
 	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			r, _, _ := newRewriter()
-			hostConfig, labels := create(t, r, tc.body)
-
-			if got := hostPorts(t, hostConfig, tc.containerPort); len(got) != 1 || got[0] != tc.want {
-				t.Errorf("HostPort = %+v, want %q untouched", got, tc.want)
-			}
-			if labels[PortsLabel] != "" {
-				t.Errorf("it was recorded as remapped: %q", labels[PortsLabel])
-			}
-		})
+	if labels[PortsLabel] != "" {
+		t.Errorf("it was recorded as remapped: %q", labels[PortsLabel])
 	}
 }
 
-// Several bindings for one container port cannot be paired back: the daemon
-// reports the assigned ports in no defined order, so which one was 8080 and
-// which was 9090 is unanswerable. Left where they are, and they collide as
-// they did before.
-func TestSeveralBindingsForOnePortAreLeftAlone(t *testing.T) {
+// UDP is moved like TCP, because two accounts publishing 53/udp collided on the
+// workspace and moving it costs nothing that was reachable anyway: the tunnel
+// carries TCP, so a published UDP port has never been reachable from here
+// (ADR 0038).
+func TestUDPIsRemappedThoughItIsNotForwarded(t *testing.T) {
+	r, _, _ := newRewriter()
+
+	hostConfig, labels := create(t, r, `{"HostConfig":{"PortBindings":{"53/udp":[{"HostPort":"5353"}]}}}`)
+
+	if got := hostPorts(t, hostConfig, "53/udp"); len(got) != 1 || got[0] != "" {
+		t.Errorf("HostPort = %+v, want it left to the daemon", got)
+	}
+	if labels[PortsLabel] != "53/udp=5353" {
+		t.Errorf("the label is %q, want the number recorded", labels[PortsLabel])
+	}
+}
+
+// The local refusal is about a listener this machine opens, and UDP never gets
+// one, so a TCP listener on that number must not refuse a UDP publication.
+func TestUDPIsNotRefusedForATakenLocalPort(t *testing.T) {
+	r, _, _ := newRewriter()
+	r.LocalPortFree = func(int) error { return errTaken }
+
+	if _, err := r.ContainerCreate(context.Background(),
+		[]byte(`{"HostConfig":{"PortBindings":{"53/udp":[{"HostPort":"5353"}]}}}`)); err != nil {
+		t.Errorf("a udp publication was refused for a local port nothing opens: %v", err)
+	}
+}
+
+// One container port published twice is remapped twice. Which requested number
+// ends up in front of which assigned port does not matter, because all of them
+// front the same container port, so there is nothing to pair back.
+func TestSeveralBindingsForOnePortAreAllRemapped(t *testing.T) {
 	r, _, _ := newRewriter()
 
 	hostConfig, labels := create(t, r,
 		`{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"8080"},{"HostPort":"9090"}]}}}`)
 
 	got := hostPorts(t, hostConfig, "80/tcp")
-	if len(got) != 2 || got[0] != "8080" || got[1] != "9090" {
-		t.Errorf("HostPort = %+v, want both untouched", got)
+	if len(got) != 2 || got[0] != "" || got[1] != "" {
+		t.Errorf("HostPort = %+v, want both left to the daemon", got)
 	}
-	if labels[PortsLabel] != "" {
-		t.Errorf("they were recorded as remapped: %q", labels[PortsLabel])
+	if labels[PortsLabel] != "80/tcp=8080;9090" {
+		t.Errorf("the label is %q, want both numbers", labels[PortsLabel])
+	}
+}
+
+// A binding that already asked for any port consumes no requested number, and
+// the fixed one beside it is still moved.
+func TestAMixOfFixedAndAnyIsRecordedOnce(t *testing.T) {
+	r, _, _ := newRewriter()
+
+	_, labels := create(t, r,
+		`{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":""},{"HostPort":"8080"}]}}}`)
+
+	if labels[PortsLabel] != "80/tcp=8080" {
+		t.Errorf("the label is %q, want only the number that was asked for", labels[PortsLabel])
 	}
 }
 
@@ -163,7 +184,8 @@ func TestTheLabelSurvivesTheRoundTrip(t *testing.T) {
 		`{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"8080"}],"443/tcp":[{"HostPort":"8443"}]}}}`)
 
 	got := workspace.ParseRequestedPorts(labels[PortsLabel])
-	if got[workspace.ContainerPort(80, "tcp")] != 8080 || got[workspace.ContainerPort(443, "tcp")] != 8443 {
+	if got.At(workspace.ContainerPort(80, "tcp"), 0) != 8080 ||
+		got.At(workspace.ContainerPort(443, "tcp"), 0) != 8443 {
 		t.Errorf("the label reads back as %+v", got)
 	}
 }
