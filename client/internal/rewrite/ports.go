@@ -43,11 +43,15 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 			continue
 		}
 		// The clash moves here with the port: the number the user typed is
-		// bound on this machine now, so this is where it can be taken. In the
-		// wording the daemon uses, because that is what it replaces.
+		// bound on this machine now, so this is where it can be taken.
+		//
+		// "port is already allocated" verbatim, because that is the phrase the
+		// daemon uses for this and what anything matching on it expects.
+		// Lowercased at the front, which Go requires of an error and no
+		// matcher cares about.
 		if r.LocalPortFree != nil {
 			if err := r.LocalPortFree(port); err != nil {
-				return nil, fmt.Errorf("Bind for 127.0.0.1:%d failed: port is already allocated: %w", port, err)
+				return nil, fmt.Errorf("bind for 127.0.0.1:%d failed: port is already allocated: %w", port, err)
 			}
 		}
 

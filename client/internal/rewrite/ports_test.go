@@ -149,7 +149,7 @@ func TestATakenLocalPortIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("the container was created with a local port that cannot be opened")
 	}
-	if !strings.Contains(err.Error(), "Bind for 127.0.0.1:8080 failed: port is already allocated") {
+	if !strings.Contains(err.Error(), "bind for 127.0.0.1:8080 failed: port is already allocated") {
 		t.Errorf("the error does not read like the daemon refusing: %v", err)
 	}
 }
