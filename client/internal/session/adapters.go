@@ -46,7 +46,14 @@ func (s shareRegistrar) Share(localPath string) (string, error) {
 // sshForwarder adapts the SSH client to the port manager's Forwarder.
 type sshForwarder struct{ client *tunnelclient.Client }
 
-func (f sshForwarder) Forward(local, remote string) (ports.Forward, error) {
+func (f sshForwarder) Forward(network, local, remote string) (ports.Forward, error) {
+	// Datagrams take the other channel type and their own listener, and
+	// everything about that lives in udpForward: the manager has one path
+	// (ADR 0038).
+	if network == "udp" {
+		return newUDPForward(local, remote, f.client.DialRemoteUDP)
+	}
+
 	fwd, err := f.client.Forward(local, remote)
 	if err != nil {
 		return nil, err

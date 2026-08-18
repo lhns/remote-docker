@@ -32,12 +32,17 @@ each opens the number its own container asked for, and sees the other machine's 
 This covers `-p 8080:80 -p 9090:80` as well, where one container port is
 published twice: both numbers are yours.
 
-**UDP ports stop colliding too, and still cannot be reached through the
-tunnel** — they never could, in any version, because the tunnel carries TCP.
-Making them work is written down as a gap in
-[ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md) rather than left to
-be rediscovered. One thing to know if you rely on a published UDP port from
-inside the workspace itself: its number is now the daemon's choice.
+**Published UDP ports work now as well**, which they never did in any earlier
+version: SSH forwards TCP, so `-p 53:53/udp` published on the workspace and
+nothing carried it back. It travels through the same connection as everything
+else, and needs no port, setting or flag
+([ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md)).
+
+Two things worth knowing. Datagrams travel inside the SSH stream, so a delayed
+one delays those behind it: unremarkable for DNS, syslog or metrics, and not
+the same as a real UDP path if you are measuring latency. And a workspace
+running an older agent simply does not carry them, exactly as before, rather
+than failing.
 
 Compose projects do still collide: the same compose file from two machines is
 one project on the daemon they share, which the README explains and gives the

@@ -222,8 +222,15 @@ premise of the project, and it applies to building it too. So:
   it silently forwards ports nobody asked for. One container port published
   twice is published ONCE with both numbers in front of it: two bindings asking
   for any port are identical, and the daemon allocates one port for them and
-  fails to bind it twice, so the container never starts. UDP is remapped and NOT
-  forwarded, which is a gap with a shape (ADR 0038) rather than a decision. The number is honoured only on the machine that asked for it:
+  fails to bind it twice, so the container never starts.
+- **A datagram keeps its boundary because of the length in front of it**
+  (ADR 0038). An SSH channel is a byte STREAM, so a plain copy delivers two
+  datagrams as one and the receiver cannot tell; `core/tunnel` frames them and
+  treats a truncated one as an error rather than an EOF. The agent refusing the
+  channel type IS the version check: a workspace too old to know it rejects the
+  channel, the client opens no listener, and nothing else changes. There is one
+  path through the ports manager for both protocols -- `Forwarder.Forward` takes
+  the network -- so never add a UDP branch there. The number is honoured only on the machine that asked for it:
   an account's machines each forward the whole account's containers (ADR 0029),
   so on any other machine the container keeps the port the daemon published,
   and two machines can both ask for 8080 without contending for one listener. The refusal moves to the client along with the port, since it

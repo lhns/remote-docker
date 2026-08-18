@@ -36,6 +36,8 @@ PIN_SH='while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done'
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
+# shellcheck source=test/udp.sh
+. "$REPO/test/udp.sh"
 
 # expect_output runs a container and compares its stdout to a literal.
 #
@@ -397,6 +399,8 @@ for port in 18082 18083; do
     fi
 done
 docker rm -f itest-twice >/dev/null 2>&1
+
+udp_section
 
 echo
 echo "== 11. named volumes are left alone =="

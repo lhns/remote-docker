@@ -25,6 +25,8 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/lhns/remote-docker/core/tunnel"
+
 	"github.com/lhns/remote-docker/core/logx"
 )
 
@@ -47,14 +49,6 @@ type remoteForwardCancelRequest struct {
 type remoteForwardChannelData struct {
 	DestAddr   string
 	DestPort   uint32
-	OriginAddr string
-	OriginPort uint32
-}
-
-type localForwardChannelData struct {
-	DestAddr string
-	DestPort uint32
-
 	OriginAddr string
 	OriginPort uint32
 }
@@ -83,6 +77,12 @@ type Reverse interface {
 type Local interface {
 	AllowDial(ctx gssh.Context, host string, port uint32) bool
 	Dial(ctx gssh.Context, addr string) (net.Conn, error)
+
+	// DialUDP opens a datagram flow to addr, from inside whatever namespace
+	// this account belongs in. The returned conn carries whole datagrams: a
+	// connected UDP socket is one, and that is what makes the framing this
+	// package adds the only thing the channel needs (ADR 0038).
+	DialUDP(ctx gssh.Context, addr string) (net.Conn, error)
 }
 
 // Forwards is the pair of handlers, and the listeners they have open.
@@ -216,7 +216,7 @@ func (f *Forwards) serve(conn *gossh.ServerConn, ln net.Listener, bindAddr strin
 // HandleChannel answers direct-tcpip, which is `ssh -L`. Register it as the
 // handler for that channel type.
 func (f *Forwards) HandleChannel(_ *gssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx gssh.Context) {
-	var d localForwardChannelData
+	var d tunnel.ForwardPayload
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		_ = newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
 		return

@@ -34,6 +34,10 @@ type fakeForwarder struct {
 	// remotes records what each local listener was pointed at, which is the
 	// half that differs once a published port is chosen by the daemon.
 	remotes map[string]string
+
+	// networks records what each forward was asked to carry, which is the one
+	// thing that differs between a published tcp port and a udp one.
+	networks map[string]string
 }
 
 func newForwarder() *fakeForwarder {
@@ -41,10 +45,11 @@ func newForwarder() *fakeForwarder {
 		forwards: map[string]*fakeForward{},
 		refuse:   map[string]bool{},
 		remotes:  map[string]string{},
+		networks: map[string]string{},
 	}
 }
 
-func (f *fakeForwarder) Forward(local, remote string) (Forward, error) {
+func (f *fakeForwarder) Forward(network, local, remote string) (Forward, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refuse[local] {
@@ -52,6 +57,7 @@ func (f *fakeForwarder) Forward(local, remote string) (Forward, error) {
 	}
 	f.opened = append(f.opened, local)
 	f.remotes[local] = remote
+	f.networks[local] = network
 	fwd := &fakeForward{local: addr(local)}
 	f.forwards[local] = fwd
 	return fwd, nil
@@ -228,20 +234,56 @@ func TestReconcileSurvivesAPortConflict(t *testing.T) {
 	}
 }
 
-func TestPublishedTCP(t *testing.T) {
-	got := publishedTCP(Container{Ports: []Published{
+func TestPublished(t *testing.T) {
+	got := published(Container{Ports: []Published{
 		{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 		{PublicPort: 0, PrivatePort: 443, Type: "tcp"},   // exposed, not published
-		{PublicPort: 5353, PrivatePort: 53, Type: "udp"}, // SSH carries TCP only
+		{PublicPort: 5353, PrivatePort: 53, Type: "udp"}, // carried too, since ADR 0038
 		{PublicPort: 8080, PrivatePort: 80, Type: "tcp"}, // IPv6 duplicate
 		{PublicPort: 9090, PrivatePort: 90, Type: "tcp"},
 	}})
 
-	if len(got) != 2 {
-		t.Fatalf("publishedTCP returned %d ports, want 2: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("published returned %d ports, want 3: %+v", len(got), got)
 	}
-	if got[0].PublicPort != 8080 || got[1].PublicPort != 9090 {
-		t.Errorf("got %+v, want 8080 then 9090", got)
+	if got[0].PublicPort != 5353 || got[1].PublicPort != 8080 || got[2].PublicPort != 9090 {
+		t.Errorf("got %+v, want them in port order", got)
+	}
+}
+
+// One number, two protocols: 53/tcp and 53/udp are different ports that share
+// it, and dropping either as a duplicate would lose a forward.
+func TestPublishedKeepsBothProtocolsOfOneNumber(t *testing.T) {
+	got := published(Container{Ports: []Published{
+		{PublicPort: 5353, PrivatePort: 53, Type: "tcp"},
+		{PublicPort: 5353, PrivatePort: 53, Type: "udp"},
+		{PublicPort: 5353, PrivatePort: 53, Type: "udp"}, // IPv6 duplicate
+	}})
+
+	if len(got) != 2 {
+		t.Fatalf("published returned %d ports, want both protocols: %+v", len(got), got)
+	}
+}
+
+// The network is what the forwarder is asked for, and an empty type is tcp.
+func TestForwardsAreOpenedOnTheRightNetwork(t *testing.T) {
+	docker := &fakeDocker{containers: []Container{
+		{ID: "a", Name: "dns", Ports: []Published{
+			{PublicPort: 5353, PrivatePort: 53, Type: "udp"},
+			{PublicPort: 8080, PrivatePort: 80},
+		}},
+	}}
+	fwd := newForwarder()
+	m := &Manager{Docker: docker, Forwarder: fwd}
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := fwd.networks["127.0.0.1:5353"]; got != "udp" {
+		t.Errorf("the udp port was forwarded as %q", got)
+	}
+	if got := fwd.networks["127.0.0.1:8080"]; got != "tcp" {
+		t.Errorf("a port with no type was forwarded as %q, want tcp", got)
 	}
 }
 
