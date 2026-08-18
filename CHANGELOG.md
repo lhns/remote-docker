@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.3.0 — 2026-08-19
 
 ### Two people can publish the same port
 
