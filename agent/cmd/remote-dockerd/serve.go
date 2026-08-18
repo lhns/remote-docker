@@ -73,6 +73,14 @@ const (
 	// graph volume is Ceph-backed has to say fuse-overlayfs here too.
 	envDindImage   = "WORKSPACE_DIND_IMAGE"
 	envDindStorage = "WORKSPACE_DIND_STORAGE_DRIVER"
+
+	// envDindMounts adds bind mounts to every account's daemon, for
+	// configuration it can only be given as files: a daemon.json naming an
+	// insecure registry, or the certificates for a registry with a private CA.
+	// A workspace mounts those into its own daemon and each account's daemon
+	// needs the same ones, or a pull that works on the workspace fails inside
+	// every account.
+	envDindMounts = "WORKSPACE_DIND_MOUNTS"
 )
 
 func newServeCommand() *cobra.Command {
@@ -211,6 +219,17 @@ func serve(addr, wsAddr string) error {
 		// filesystem needs the same answer, or dockerd falls back to
 		// vfs, which copies the whole image on every container create and says
 		// nothing about why everything became slow.
+		// Refused at startup rather than per session: a mount nobody can parse
+		// would otherwise become a daemon that will not start, once per
+		// account, with the setting that produced it nowhere in the message.
+		extraMounts, err := daemons.ParseMounts(os.Getenv(envDindMounts))
+		if err != nil {
+			return fmt.Errorf("%s: %w", envDindMounts, err)
+		}
+		if len(extraMounts) > 0 {
+			log.Info("per-account daemons get extra mounts", "count", len(extraMounts))
+		}
+
 		storage := os.Getenv(envDindStorage)
 		if storage == "" {
 			storage = daemons.StorageDriverFrom(dockerdArgs)
@@ -239,6 +258,7 @@ func serve(addr, wsAddr string) error {
 				Workspace:     id,
 				Image:         image,
 				StorageDriver: storage,
+				Mounts:        extraMounts,
 			},
 			Log: logger("daemons"),
 

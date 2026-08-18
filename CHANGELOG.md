@@ -10,6 +10,25 @@ software.
 
 ## Unreleased
 
+### Per-account daemons can be given a registry configuration
+
+A workspace with a private or insecure registry mounts `daemon.json`, or a CA
+under `/etc/docker/certs.d`, into its own daemon. With a daemon per account,
+each account's daemon does its own pulling and saw none of that: a registry
+that worked on the workspace failed inside every account, and the daemon that
+could not pull was reported as a session refused for another reason.
+
+`WORKSPACE_DIND_MOUNTS` passes the same paths on:
+
+```yaml
+WORKSPACE_DIND_MOUNTS: /etc/docker/daemon.json:/etc/docker/daemon.json:ro
+```
+
+Comma-separated, `source:destination[:ro]`, both absolute. The README has the
+two traps: a `daemon.json` that sets `storage-driver` or `hosts` collides with
+the flags the agent passes, and a change applies to an account that already has
+a daemon once that account has nothing running.
+
 ### A refused connection says what was actually wrong
 
 When the workspace refused to reserve the tunnel port, the client always said
