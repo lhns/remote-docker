@@ -744,6 +744,17 @@ function was.
 
 ## Conventions
 
+- **A push is not finished until CI has answered.** Watch the run to the end,
+  read the failing job rather than guessing at it, and report what happened
+  rather than what was submitted. CI is the only place a real daemon, a real
+  kernel mount or a real registry says anything, and it has twice now
+  contradicted unit tests that passed: address families duplicating a reported
+  port, and a daemon allocating one port for two identical bindings and failing
+  to bind it twice.
+- **An assertion prints what it saw.** A one-line failure with nothing to act
+  on costs a round trip of ten minutes, and `tail -1` on a docker error prints
+  "Run 'docker run --help' for more information" while throwing away the reason,
+  which is on the first line.
 - **A change is not finished until it has had a cleanup pass, and that pass is
   part of the work rather than something to be asked for.** Read the whole diff
   once more and cut: logic that now exists twice, complexity that arrived while
