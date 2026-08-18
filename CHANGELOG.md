@@ -12,96 +12,82 @@ software.
 
 ### Two people can publish the same port
 
-On a workspace where everybody shares one Docker daemon, `-p 8080:80` was first
-come, first served: the second person got `Bind for 0.0.0.0:8080 failed: port is
-already allocated` and had to pick another number.
+`-p 8080:80` was first come, first served on a workspace where everybody shares
+one daemon: the second person got `port is already allocated`. The workspace now
+publishes on a port of its own choosing and your machine keeps the number you
+asked for, so both work. So does `-p 8080:80 -p 9090:80`, and so do two machines
+of one account.
 
-The workspace now publishes on a port of its own choosing and your machine still
-gets the one you asked for, so both of you can run `-p 8080:80` and neither
-notices the other. Nothing changes in how you use it.
+On the workspace, `docker ps` reports the port it picked, so anything reaching a
+service there without going through the tunnel has to look it up. The clash
+moves to your own machine: two of your own containers asking for 8080 get the
+same error as before, from the client instead of the daemon.
 
-Two things to know. On the workspace, `docker ps` and `docker port` report the
-port it picked, so anything reaching a service directly at `workspace-host:8080`
-rather than through the tunnel has to look that up. And the clash moves to your
-own machine: two of your own containers asking for 8080 now get the same error
-from the client, which is the same answer as before from a different place.
+### Published UDP ports work
 
-If you use one account from two machines, both can now publish 8080 as well:
-each opens the number its own container asked for, and sees the other machine's container at whatever the workspace published it on.
-
-This covers `-p 8080:80 -p 9090:80` as well, where one container port is
-published twice: both numbers are yours.
-
-**Published UDP ports work now as well**, which they never did in any earlier
-version: SSH forwards TCP, so `-p 53:53/udp` published on the workspace and
-nothing carried it back. It travels through the same connection as everything
-else, and needs no port, setting or flag
+They never did in any earlier version, because SSH forwards TCP and nothing
+carried datagrams back. They now travel through the same connection as
+everything else, with no port, setting or flag to turn on
 ([ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md)).
 
-Two things worth knowing. Datagrams travel inside the SSH stream, so a delayed
-one delays those behind it: unremarkable for DNS, syslog or metrics, and not
-the same as a real UDP path if you are measuring latency. And a workspace
-running an older agent simply does not carry them, exactly as before, rather
-than failing.
-
-Compose projects do still collide: the same compose file from two machines is
-one project on the daemon they share, which the README explains and gives the
-remedy for.
+Datagrams ride inside the SSH stream, so a delayed one delays those behind it:
+unremarkable for DNS, syslog or metrics, and not the same as a real UDP path if
+you are measuring latency. A workspace running an older agent carries none, as
+before, rather than failing.
 
 ### Per-account daemons can be given a registry configuration
 
 A workspace with a private or insecure registry mounts `daemon.json`, or a CA
-under `/etc/docker/certs.d`, into its own daemon. With a daemon per account,
-each account's daemon does its own pulling and saw none of that: a registry
-that worked on the workspace failed inside every account, and the daemon that
-could not pull was reported as a session refused for another reason.
-
-`WORKSPACE_DIND_MOUNTS` passes the same paths on:
+under `/etc/docker/certs.d`, into its own daemon. Each account's daemon does its
+own pulling and saw none of it, so a registry that worked on the workspace
+failed inside every account.
 
 ```yaml
 WORKSPACE_DIND_MOUNTS: /etc/docker/daemon.json:/etc/docker/daemon.json:ro
 ```
 
 Comma-separated, `source:destination[:ro]`, both absolute. The README has the
-two traps: a `daemon.json` that sets `storage-driver` or `hosts` collides with
-the flags the agent passes, and a change applies to an account that already has
-a daemon once that account has nothing running.
+two
+traps: `storage-driver` or `hosts` in that file collides with the flags the
+agent
+passes, and the change reaches an account that already has a daemon once that
+account has nothing running.
 
 ### A refused connection says what was actually wrong
 
-When the workspace refused to reserve the tunnel port, the client always said
-the same thing: another session for this account may still be open. It has no
-way to know — SSH's forwarding refusal carries no reason at all — and in the
-case that prompted this it was wrong, sending somebody hunting a session that
-did not exist while their daemon was down.
+The client used to answer every refused tunnel port with "another session for
+this account may still be open". It cannot know that — SSH's refusal carries no
+reason — and in the case that prompted this it was wrong, sending somebody after
+a session that did not exist while their daemon was down. It now asks the
+workspace and prints the answer, with the one thing worth trying under it.
 
-The client now asks the workspace after a refusal and prints what it says, with
-the one thing worth trying under it. Two other messages were wrong in the same
-way: a 404 from a reverse proxy told you to check a `--ws-path` setting that
-does not exist, and a workspace that could not read which port a machine's
-volumes need would hand out a different one instead of saying so.
+Two other messages were guesses in the same shape: a 404 from a reverse proxy
+named a `--ws-path` setting that does not exist, and a workspace that could not
+read which port a machine's volumes need handed out a different one instead of
+saying so.
 
 ### A broken per-account daemon repairs itself instead of looping forever
 
-A workspace refused every session for minutes, saying another session might
-still hold the port. None did: the account's own Docker daemon was crash-looping
-and the reverse tunnel is bound inside it, so nothing could connect while it was
-down. It stayed that way, because the agent would only rebuild a daemon once it
-had proved nothing was running inside, and it asked the daemon that was down.
+A daemon that would not start blocked every session for that account, and stayed
+broken: the agent would only rebuild one after proving nothing was running
+inside it, which it asked the daemon that was down. A daemon that is not running
+no longer counts as busy, so it gets rebuilt, keeping its images and containers.
 
-Two things change. A daemon that is not running no longer counts as busy, so it
-gets rebuilt, keeping its images and containers. And a daemon no longer carries
-a restart policy: the agent starts it when its account connects, and is the only
-thing that starts it.
-
-**One behaviour is deliberately given up.** After the workspace restarts, an
+It also no longer carries a restart policy — the agent starts it when its
+account
+connects and is the only thing that starts it — so after a workspace restart an
 account's detached containers come back when that account next connects rather
-than immediately. Anything using a bind mount could not run without its client
-session anyway, since the files come from that machine.
+than immediately. Switching a workspace to one shared daemon now stops the
+per-account daemons it leaves behind, without removing them.
 
-Switching a workspace to one shared daemon now also stops the per-account
-daemons it leaves behind. Stopped, never removed: they come back with everything
-in them if the workspace is switched back.
+### Known: compose projects collide between two machines
+
+One account used from two machines shares a daemon, so the same compose file
+from both is one project: they recreate each other's containers, or, if the
+paths match, one silently serves the other's files. Give each machine its own
+`COMPOSE_PROJECT_NAME`. The README has it, and
+[ADR 0029](docs/adr/0029-one-account-many-machines.md) records why neither
+namespacing nor detection is built.
 
 ## 0.2.2 — 2026-08-14
 
@@ -209,7 +195,8 @@ open to it:
 remote-docker remote create dev --host wss://dev.example.com --user alice
 ```
 
-`host` now takes a scheme — `ssh://`, `ws://` or `wss://` — and a bare host still
+`host` now takes a scheme — `ssh://`, `ws://` or `wss://` — and a bare host
+still
 means SSH on 2222, so nothing already configured changes. `--ca-file` verifies a
 proxy holding a private certificate; `--insecure` accepts any certificate, for
 one workspace. Neither changes whether the session is authenticated: the
@@ -398,7 +385,8 @@ PATH ([ADR 0024](docs/adr/0024-the-docker-cli-is-the-root.md)).
 
 The Docker CLI, Buildx and Compose v5 are embedded, so `docker build` is
 BuildKit and `docker compose up` works, from one file, on a machine where
-nothing can be installed ([ADR 0009](docs/adr/0009-embedding-the-docker-cli.md)).
+nothing can be installed ([ADR
+0009](docs/adr/0009-embedding-the-docker-cli.md)).
 
 Everything of this program's own lives under `remote`: `remote ls`,
 `remote create`, `remote status`, `remote start`, `remote stop`, `remote gc`,
