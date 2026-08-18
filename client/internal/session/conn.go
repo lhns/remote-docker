@@ -294,10 +294,24 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 		},
 
 		// What the user asked for, read back from the label the rewriter
-		// wrote. A container without one was created before this, or by
-		// something that is not us, and its published port is its local port
-		// as it always was.
+		// wrote, and only on the machine that asked.
+		//
+		// An account's machines share the daemon and each forwards the whole
+		// account's containers, which is what lets somebody start a container
+		// on the pc and reach it from the phone (ADR 0029). The requested
+		// number is a fact about the machine that requested it, so on any
+		// other machine the container is forwarded at the port the daemon
+		// published, exactly as it was before ADR 0037. Two machines can then
+		// both ask for 8080 and each gets it, with the other appearing
+		// wherever the workspace put it.
+		//
+		// A container with no client label predates ADR 0029 or was created by
+		// something that is not us; its published port is its local port, as
+		// it always was.
 		LocalPort: func(c ports.Container, p ports.Published) int {
+			if c.Labels[rewrite.ClientLabel] != s.clientID {
+				return 0
+			}
 			return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
 		},
 	}

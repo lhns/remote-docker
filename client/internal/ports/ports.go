@@ -148,8 +148,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 
-	// Open forwards for anything newly published.
-	for id, container := range wanted {
+	// Open forwards for anything newly published, in a stable order.
+	//
+	// Ranging the map left the outcome to Go randomising it, which only shows
+	// when two containers want one local port: whichever was reached first got
+	// it, and a reconcile a moment later could hand it to the other. Rare, and
+	// the kind of rare that is reported as "sometimes it forwards the wrong
+	// one".
+	ids := make([]string, 0, len(wanted))
+	for id := range wanted {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		container := wanted[id]
 		existing, ok := m.active[id]
 		if !ok {
 			existing = &containerForwards{name: container.Name, forwards: map[int]Forward{}}

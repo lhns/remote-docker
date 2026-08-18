@@ -51,6 +51,19 @@ worse than the collision:
 - UDP, because the tunnel carries TCP. A moved UDP port would be neither
   reachable nor predictable, so it stays where it was and still collides.
 
+**The requested number is honoured only on the machine that asked.** An
+account's machines share the daemon and each client forwards the whole
+account's containers, which is what lets somebody start a container on the pc
+and reach it from the phone ([ADR 0029](0029-one-account-many-machines.md)).
+The number in the label is a fact about the machine that typed it, so anywhere
+else the container is forwarded at the port the daemon published, exactly as it
+was before this record. Two machines of one account can then both ask for 8080
+and both get it, each seeing the other container wherever the workspace put it.
+
+Without that rule the two contend for one local listener and the winner is
+whichever the reconciliation reached first, which is a map iteration and
+therefore a coin toss that can land differently on the next container event.
+
 **The refusal moves to the client.** The scarce resource is now a port on the
 user's own machine, so that is where a clash is reported, in the daemon's own
 words (`port is already allocated`) because that is the failure being replaced

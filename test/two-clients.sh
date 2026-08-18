@@ -208,6 +208,50 @@ fi
 dpc rm -f shared-by-both >/dev/null 2>&1
 
 echo
+echo "== 7b. both machines publish, and each gets its own number =="
+# One account has one daemon, so before ADR 0037 the second of these was
+# refused: a published port is bound on the workspace and 18095 was taken.
+# Neither binds it there now, so both containers run.
+#
+# These two clients share a machine, which real ones do not, so each asks for a
+# number of its own. What is under test is that the workspace refuses neither,
+# and that each client opens the number ITS OWN container asked for instead of
+# contending for the other one.
+echo "<h1>pc</h1>" >"$WORK/project-$PC/index.html"
+echo "<h1>phone</h1>" >"$WORK/project-$PHONE/index.html"
+
+dpc run -d --name pc-web -p 18095:80 -v "$WORK/project-$PC:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
+dphone run -d --name phone-web -p 18096:80 -v "$WORK/project-$PHONE:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
+
+for probe in "18095 pc" "18096 phone"; do
+    set -- $probe
+    reached=false
+    for _ in $(seq 1 45); do
+        if curl -fsS --max-time 3 "http://127.0.0.1:$1/" 2>/dev/null | grep -q "<h1>$2</h1>"; then
+            reached=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$reached" = true ]; then
+        ok "$2 reached its own container on the port it asked for"
+    else
+        bad "$2 never reached 127.0.0.1:$1"
+    fi
+done
+
+# And the workspace bound neither number, which is what stops the two from
+# colliding there in the first place.
+if dpc port pc-web 80/tcp 2>/dev/null | grep -q ":18095$"; then
+    bad "the workspace bound 18095 itself"
+else
+    ok "the workspace published on ports of its own choosing"
+fi
+
+dpc rm -f pc-web >/dev/null 2>&1
+dphone rm -f phone-web >/dev/null 2>&1
+
+echo
 echo "== 8. neither machine collects the other's volumes =="
 # Each machine's share volume is named for the machine, so a collection on one
 # must leave the other's alone. Losing one is not tidy: the daemon recreates a

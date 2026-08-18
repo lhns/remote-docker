@@ -220,7 +220,10 @@ premise of the project, and it applies to building it too. So:
   front of whatever came back. The label is the only record, because forwards
   are rebuilt from the daemon's container list on every reconnect, so dropping
   it silently forwards ports nobody asked for. `remappable` lists what is left
-  alone and why. The refusal moves to the client along with the port, since it
+  alone and why. The number is honoured only on the machine that asked for it:
+  an account's machines each forward the whole account's containers (ADR 0029),
+  so on any other machine the container keeps the port the daemon published,
+  and two machines can both ask for 8080 without contending for one listener. The refusal moves to the client along with the port, since it
   is the only thing that knows what this machine already has open.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume

@@ -78,3 +78,48 @@ func TestForwardingAnswersAboutTheLocalPort(t *testing.T) {
 		t.Error("the published port reads as taken on this machine, where nothing is listening on it")
 	}
 }
+
+// Two containers of one account, one from this machine and one from another.
+// Both asked for 8080 on their own machine; only one of them asked for it HERE.
+//
+// The other is forwarded where the daemon published it, which is how it worked
+// before ADR 0037 and is what lets somebody start a container on the pc and
+// reach it from the phone (ADR 0029). Without this they contend for one local
+// port and one of them silently loses.
+func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
+	const mine, theirs = "thismachine", "othermachine"
+
+	docker := &fakeDocker{containers: []Container{
+		{ID: "a", Name: "mine", Ports: []Published{tcp(32768, 80)},
+			Labels: map[string]string{"client": mine}},
+		{ID: "b", Name: "theirs", Ports: []Published{tcp(32769, 80)},
+			Labels: map[string]string{"client": theirs}},
+	}}
+	fwd := newForwarder()
+	m := &Manager{
+		Docker:    docker,
+		Forwarder: fwd,
+		LocalPort: func(c Container, _ Published) int {
+			if c.Labels["client"] != mine {
+				return 0
+			}
+			return 8080
+		},
+	}
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	opened := slices.Clone(fwd.opened)
+	slices.Sort(opened)
+	if !slices.Equal(opened, []string{"127.0.0.1:32769", "127.0.0.1:8080"}) {
+		t.Fatalf("opened %v, want 8080 here and the other at what the daemon published", opened)
+	}
+	if got := fwd.remotes["127.0.0.1:8080"]; got != "127.0.0.1:32768" {
+		t.Errorf("8080 dials %q, want the container this machine created", got)
+	}
+	if got := fwd.remotes["127.0.0.1:32769"]; got != "127.0.0.1:32769" {
+		t.Errorf("the other container is forwarded from %q", got)
+	}
+}

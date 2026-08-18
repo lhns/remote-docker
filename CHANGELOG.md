@@ -26,6 +26,9 @@ rather than through the tunnel has to look that up. And the clash moves to your
 own machine: two of your own containers asking for 8080 now get the same error
 from the client, which is the same answer as before from a different place.
 
+If you use one account from two machines, both can now publish 8080 as well:
+each opens the number its own container asked for, and sees the other machine's container at whatever the workspace published it on.
+
 UDP ports are unchanged and still collide, because the tunnel carries TCP.
 
 ### Per-account daemons can be given a registry configuration
