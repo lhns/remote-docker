@@ -1,27 +1,24 @@
 package tunnelclient
 
 import (
-	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/core/tunnel"
 )
 
-// DialRemoteUDP opens a datagram flow from the workspace to addr.
+// DialRemoteUDP opens a datagram flow from the workspace to addr (ADR 0038).
 //
-// One flow per local sender, so what comes back on the workspace's socket
-// belongs to exactly one of them (ADR 0038). The returned conn carries whole
-// datagrams: one Write is one datagram and one Read is one datagram, which the
-// length prefix in core/tunnel is what makes true over a byte stream.
+// One Write is one datagram and one Read is one datagram, which the length
+// prefix in core/tunnel is what makes true over a byte stream.
 //
 // A workspace too old to know this channel type REJECTS it, and that refusal is
 // the version check: there is nothing to ask first.
-func (c *Client) DialRemoteUDP(addr string) (net.Conn, error) {
+func (c *Client) DialRemoteUDP(addr string) (io.ReadWriteCloser, error) {
 	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("tunnel: %s is not an address: %w", addr, err)
@@ -44,23 +41,15 @@ func (c *Client) DialRemoteUDP(addr string) (net.Conn, error) {
 	}
 	go ssh.DiscardRequests(reqs)
 
-	return &datagramConn{ch: ch, remote: addr}, nil
+	return &datagramConn{ch: ch}, nil
 }
 
-// datagramConn is one datagram flow, shaped as a net.Conn so a caller can treat
-// it like the connected UDP socket it stands in for.
-type datagramConn struct {
-	ch     ssh.Channel
-	remote string
-}
+// datagramConn is one datagram flow. Read, Write and Close and no more: it
+// stands in for a connected UDP socket, and nothing that uses it wants an
+// address or a deadline.
+type datagramConn struct{ ch ssh.Channel }
 
-func (d *datagramConn) Read(p []byte) (int, error) {
-	n, err := tunnel.ReadDatagram(d.ch, p)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
-}
+func (d *datagramConn) Read(p []byte) (int, error) { return tunnel.ReadDatagram(d.ch, p) }
 
 func (d *datagramConn) Write(p []byte) (int, error) {
 	if err := tunnel.WriteDatagram(d.ch, p); err != nil {
@@ -70,19 +59,3 @@ func (d *datagramConn) Write(p []byte) (int, error) {
 }
 
 func (d *datagramConn) Close() error { return d.ch.Close() }
-
-// The rest of net.Conn, which nothing on this path uses: a datagram flow has no
-// deadlines of its own, and its addresses are the tunnel's.
-func (d *datagramConn) LocalAddr() net.Addr  { return udpAddr("127.0.0.1:0") }
-func (d *datagramConn) RemoteAddr() net.Addr { return udpAddr(d.remote) }
-
-func (d *datagramConn) SetDeadline(_ time.Time) error      { return errNoDeadline }
-func (d *datagramConn) SetReadDeadline(_ time.Time) error  { return errNoDeadline }
-func (d *datagramConn) SetWriteDeadline(_ time.Time) error { return errNoDeadline }
-
-var errNoDeadline = errors.New("tunnel: a datagram flow has no deadline of its own")
-
-type udpAddr string
-
-func (a udpAddr) Network() string { return "udp" }
-func (a udpAddr) String() string  { return string(a) }
