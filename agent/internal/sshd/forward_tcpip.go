@@ -146,9 +146,26 @@ func (p localPolicy) Dial(ctx gssh.Context, dest string) (net.Conn, error) {
 }
 
 func (s *Server) dialFor(ctx context.Context, account sessionAccount, dest string) (net.Conn, error) {
+	return s.dialForNetwork(ctx, account, "tcp", dest)
+}
+
+// DialUDP is Dial for datagrams, which reach a published UDP port (ADR 0038).
+//
+// The same namespace and the same policy: only the network differs, and a
+// connected UDP socket is a net.Conn whose reads and writes are whole
+// datagrams, so nothing above has to reassemble anything.
+func (p localPolicy) DialUDP(ctx gssh.Context, dest string) (net.Conn, error) {
+	account, ok := accountFor(ctx)
+	if !ok {
+		return nil, errNoAccount
+	}
+	return p.s.dialForNetwork(ctx, account, "udp", dest)
+}
+
+func (s *Server) dialForNetwork(ctx context.Context, account sessionAccount, network, dest string) (net.Conn, error) {
 	target, err := s.cfg.Daemons.Ensure(ctx, account.Name())
 	if err != nil {
 		return nil, err
 	}
-	return netns.Dial(target.NetNSPath, "tcp", dest)
+	return netns.Dial(target.NetNSPath, network, dest)
 }

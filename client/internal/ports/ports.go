@@ -23,7 +23,11 @@ import (
 // Forwarder opens a local listener carrying connections to an address inside
 // the workspace.
 type Forwarder interface {
-	Forward(localAddr, remoteAddr string) (Forward, error)
+	// Forward carries what arrives at localAddr to remoteAddr inside the
+	// workspace. The network is "tcp" or "udp": what differs between them is
+	// entirely the forwarder's business, so this package has one path rather
+	// than two (ADR 0038).
+	Forward(network, localAddr, remoteAddr string) (Forward, error)
 }
 
 // Forward is one live local listener.
@@ -117,7 +121,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if m.Owned != nil && !m.Owned(c) {
 			continue
 		}
-		if len(publishedTCP(c)) == 0 {
+		if len(published(c)) == 0 {
 			continue
 		}
 		wanted[c.ID] = c
@@ -138,7 +142,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 		keep := map[int]bool{}
-		for _, p := range publishedTCP(container) {
+		for _, p := range published(container) {
 			for _, local := range m.localPorts(container, p) {
 				keep[local] = true
 			}
@@ -173,7 +177,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			existing = &containerForwards{name: container.Name, forwards: map[int]Forward{}}
 			m.active[id] = existing
 		}
-		for _, p := range publishedTCP(container) {
+		for _, p := range published(container) {
 			for _, local := range m.localPorts(container, p) {
 				if _, already := existing.forwards[local]; already {
 					continue
@@ -195,7 +199,7 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 	local := net.JoinHostPort(bindAddr, fmt.Sprint(localPort))
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(p.PublicPort))
 
-	fwd, err := m.Forwarder.Forward(local, remote)
+	fwd, err := m.Forwarder.Forward(network(p), local, remote)
 	if err != nil {
 		// Deliberately not retried on another port. A listener at an address
 		// nobody asked for looks like success and breaks the next thing that
@@ -261,26 +265,39 @@ func (m *Manager) Active() []int {
 // side to forward. UDP is skipped because the SSH transport carries TCP only,
 // and pretending otherwise would produce a listener that silently drops
 // everything.
-func publishedTCP(c Container) []Published {
+func published(c Container) []Published {
 	var out []Published
-	seen := map[int]bool{}
+	seen := map[string]bool{}
 	for _, p := range c.Ports {
 		if p.PublicPort == 0 {
 			continue
 		}
-		if !workspace.IsTCP(p.Type) {
+		// One entry per address family, so a port published on both IPv4 and
+		// IPv6 appears twice. Keyed on the protocol as well, because 53/tcp and
+		// 53/udp are different ports that happen to share a number.
+		key := network(p) + "/" + strconv.Itoa(p.PublicPort)
+		if seen[key] {
 			continue
 		}
-		if seen[p.PublicPort] {
-			// The daemon reports one entry per address family, so a port
-			// published on both IPv4 and IPv6 appears twice.
-			continue
-		}
-		seen[p.PublicPort] = true
+		seen[key] = true
 		out = append(out, p)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].PublicPort < out[j].PublicPort })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PublicPort != out[j].PublicPort {
+			return out[i].PublicPort < out[j].PublicPort
+		}
+		return network(out[i]) < network(out[j])
+	})
 	return out
+}
+
+// network is what a published port is carried over. An empty type is tcp, which
+// is what the daemon and the CLI both mean by it.
+func network(p Published) string {
+	if workspace.IsTCP(p.Type) {
+		return "tcp"
+	}
+	return "udp"
 }
 
 // log is the manager's logger, or silence (logx.Or). Nil is not an oversight

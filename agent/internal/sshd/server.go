@@ -21,6 +21,7 @@ import (
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core-agent/tunnelserver"
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -153,6 +154,11 @@ func New(cfg Config) (*Server, error) {
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
 			"direct-tcpip": s.tcpip.HandleChannel,
+
+			// Datagrams to a published UDP port. A client whose workspace
+			// predates this asks for a channel type the server does not know
+			// and is refused, which is the whole version check (ADR 0038).
+			tunnel.UDPChannelType: s.tcpip.HandleUDPChannel,
 		},
 
 		Handler: s.handleSession,
