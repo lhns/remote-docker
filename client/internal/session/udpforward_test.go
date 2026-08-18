@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -62,12 +63,6 @@ func (f *fakeFlow) isClosed() bool {
 	return f.closed
 }
 
-func (f *fakeFlow) LocalAddr() net.Addr              { return nil }
-func (f *fakeFlow) RemoteAddr() net.Addr             { return nil }
-func (f *fakeFlow) SetDeadline(time.Time) error      { return nil }
-func (f *fakeFlow) SetReadDeadline(time.Time) error  { return nil }
-func (f *fakeFlow) SetWriteDeadline(time.Time) error { return nil }
-
 // dialer hands out fake flows and keeps them, so a test can answer as the
 // container and count how many were opened.
 type dialer struct {
@@ -76,7 +71,7 @@ type dialer struct {
 	err   error
 }
 
-func (d *dialer) dial(string) (net.Conn, error) {
+func (d *dialer) dial(string) (io.ReadWriteCloser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.err != nil {

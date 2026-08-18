@@ -1,15 +1,9 @@
 // Command udpecho answers every datagram with the same bytes, and can send one.
 //
-// It exists because the only honest test of UDP through the tunnel is a
-// datagram that comes back, and both ends of that have to be something (ADR
-// 0038). Nothing in a stock alpine image is: busybox nc speaks UDP but does not
-// echo, and adding socat means a package install inside a test.
-//
-// A probe rather than a fixture image, which is what this project already does
-// when a test needs a small program in a container: watchprobe and pokeprobe
-// are the same idea for inotify. It is BOTH ends so the test does not depend on
-// which netcat a runner happens to have, and behaves the same everywhere
-// because it is the same binary.
+// Both ends of the one test that can prove UDP crosses the tunnel: something
+// in the container has to answer, and something here has to ask (ADR 0038).
+// Nothing in a stock alpine image does either, and the same binary at both
+// ends behaves the same everywhere.
 //
 //	udpecho :5353                             answer datagrams
 //	udpecho send 127.0.0.1:15353 hello        send one and print the answer

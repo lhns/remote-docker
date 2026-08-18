@@ -12,14 +12,10 @@ const MaxDatagram = 65535
 
 // A datagram keeps its boundary because of the length in front of it.
 //
-// An SSH channel is a byte STREAM: it preserves order and content and says
-// nothing about where one write ended, and it may split or join them however
-// it likes. UDP is the opposite, where the boundary is the message, so a plain
-// copy would deliver "abc" and "de" as "abcde" or "ab" "cde" and the receiver
-// would have no way to know. Two bytes of length restore what the stream took
-// away.
-//
-// Big-endian, because that is what every other length on the wire here is.
+// An SSH channel is a byte STREAM: it says nothing about where one write ended
+// and may split or join them freely, so a plain copy delivers "abc" and "de" as
+// "abcde" and the receiver cannot tell. Two bytes of length restore what the
+// stream took away. Big-endian, as every other length on this wire is.
 
 // WriteDatagram writes one datagram with its length in front.
 func WriteDatagram(w io.Writer, payload []byte) error {

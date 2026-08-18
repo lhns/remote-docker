@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"sync"
 
@@ -10,7 +11,7 @@ import (
 
 // dialDatagrams opens one datagram flow to an address inside the workspace.
 // An interface so the forward below can be tested without a workspace.
-type dialDatagrams func(remoteAddr string) (net.Conn, error)
+type dialDatagrams func(remoteAddr string) (io.ReadWriteCloser, error)
 
 // udpForward carries datagrams that arrive on a local port to a published UDP
 // port inside the workspace (ADR 0038).
@@ -20,17 +21,15 @@ type dialDatagrams func(remoteAddr string) (net.Conn, error)
 // comes back on it belongs to exactly one local sender.
 //
 // A flow lives as long as this forward, which is the rule a TCP forward already
-// follows: it ends when the container stops or stops publishing the port. There
-// is no timeout of its own, and the cost of that is in ADR 0038: a sender whose
-// source port changes per datagram, which is what a resolver does, leaves a
-// flow behind per datagram.
+// follows: it ends when the container stops or stops publishing the port. What
+// that costs a sender whose source port changes per datagram is in ADR 0038.
 type udpForward struct {
 	conn   net.PacketConn
 	remote string
 	dial   dialDatagrams
 
 	mu     sync.Mutex
-	flows  map[string]net.Conn
+	flows  map[string]io.ReadWriteCloser
 	closed bool
 
 	wg sync.WaitGroup
@@ -46,7 +45,7 @@ func newUDPForward(localAddr, remoteAddr string, dial dialDatagrams) (*udpForwar
 		conn:   conn,
 		remote: remoteAddr,
 		dial:   dial,
-		flows:  map[string]net.Conn{},
+		flows:  map[string]io.ReadWriteCloser{},
 	}
 	f.wg.Add(1)
 	go f.serve()
@@ -82,7 +81,7 @@ func (f *udpForward) serve() {
 
 // flowFor is the flow belonging to a sender, opening one the first time it is
 // seen.
-func (f *udpForward) flowFor(from net.Addr) (net.Conn, error) {
+func (f *udpForward) flowFor(from net.Addr) (io.ReadWriteCloser, error) {
 	key := from.String()
 
 	f.mu.Lock()
@@ -123,7 +122,7 @@ func (f *udpForward) flowFor(from net.Addr) (net.Conn, error) {
 }
 
 // replies carries what the container sends back to the sender it belongs to.
-func (f *udpForward) replies(to net.Addr, flow net.Conn) {
+func (f *udpForward) replies(to net.Addr, flow io.ReadWriteCloser) {
 	defer f.wg.Done()
 	defer f.drop(to.String())
 
@@ -160,7 +159,7 @@ func (f *udpForward) Close() error {
 	}
 	f.closed = true
 	flows := f.flows
-	f.flows = map[string]net.Conn{}
+	f.flows = map[string]io.ReadWriteCloser{}
 	f.mu.Unlock()
 
 	err := f.conn.Close()

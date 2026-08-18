@@ -36,8 +36,6 @@ PIN_SH='while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done'
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
-# shellcheck source=test/udp.sh
-. "$REPO/test/udp.sh"
 
 # expect_output runs a container and compares its stdout to a literal.
 #
@@ -400,7 +398,54 @@ for port in 18082 18083; do
 done
 docker rm -f itest-twice >/dev/null 2>&1
 
-udp_section
+echo
+echo "== 10b. a published UDP port answers here =="
+# SSH forwards TCP, so this was unreachable until ADR 0038 put a length in
+# front of each datagram and carried them in a channel of their own. What is
+# asserted is the round trip: a datagram sent to the port asked for HERE
+# reaches a container in the workspace and its answer comes back.
+#
+# The probe is both ends deliberately. Nothing in alpine echoes UDP, and the
+# two netcats disagree about -u and -w, so a test built on whichever one a
+# runner has fails for a reason it is not about.
+if ! (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/udpecho" ./probes/udpecho); then
+    bad "could not build the udp echo probe"
+elif ! dockert run -d --name itest-udp -p 15353:5353/udp     -v "$PROJECT:/probe:ro" alpine:3 /probe/udpecho :5353 >"$WORK/udp-run.log" 2>&1; then
+    bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '
+' ' ')"
+else
+    # The daemon publishes where it likes (ADR 0037): the number above is this
+    # machine's, and these two must not be the same.
+    published=$(dockert port itest-udp 5353/udp 2>/dev/null | head -1)
+    case "$published" in
+    *:15353) bad "the workspace bound 15353 itself" ;;
+    *:[0-9]*) ok "the workspace published ${published##*:}/udp, not the 15353 asked for" ;;
+    *) bad "could not read the workspace-side udp port: [$published]" ;;
+    esac
+
+    # Retried rather than sent once: the forward opens when the ports manager
+    # next reconciles, and the probe has to be listening by then.
+    answered=false
+    for _ in $(seq 1 45); do
+        reply=$("$PROJECT/udpecho" send 127.0.0.1:15353 "through the tunnel" 2>/dev/null)
+        if [ "$reply" = "through the tunnel" ]; then
+            answered=true
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$answered" = true ]; then
+        ok "a datagram reached the container and its answer came back"
+    else
+        bad "no answer came back from 127.0.0.1:15353"
+        dockert logs itest-udp 2>&1 | sed 's/^/        probe: /' | tail -5
+        sed 's/^/        /' "$WORK/up.log" | tail -8
+    fi
+
+    docker rm -f itest-udp >/dev/null 2>&1
+fi
+rm -f "$PROJECT/udpecho"
 
 echo
 echo "== 11. named volumes are left alone =="
