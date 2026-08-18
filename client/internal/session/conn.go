@@ -293,16 +293,8 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 			return c.Labels[rewrite.OwnerLabel] == live.info.User
 		},
 
-		// What the user asked for, and only on the machine that asked. Every
-		// client forwards the whole account's containers (ADR 0029), so
-		// another machine's are forwarded where the daemon published them:
-		// zero here means the published port. Two machines can then both ask
-		// for 8080 without contending for one listener (ADR 0037).
-		LocalPort: func(c ports.Container, p ports.Published) int {
-			if c.Labels[rewrite.ClientLabel] != s.clientID {
-				return 0
-			}
-			return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
+		LocalPorts: func(c ports.Container, p ports.Published) []int {
+			return localPortsFor(c, p, s.clientID)
 		},
 	}
 	live.wg.Go(func() { s.watchPorts(ctx, live) })
@@ -383,4 +375,22 @@ func localPortFree(live *liveConn, port int) error {
 		return fmt.Errorf("something on this machine is listening there")
 	}
 	return l.Close()
+}
+
+// localPortsFor is every port to open here for one published port, or nothing
+// to use the published port itself.
+//
+// Only on the machine that asked. Every client forwards the whole account's
+// containers (ADR 0029), so another machine's are forwarded where the daemon
+// published them, and two machines can both ask for 8080 without contending for
+// one listener (ADR 0037).
+//
+// More than one when a container port was published more than once
+// (`-p 8080:80 -p 9090:80`): the workspace publishes it once and both numbers
+// are opened in front of that, because both front the same container port.
+func localPortsFor(c ports.Container, p ports.Published, clientID string) []int {
+	if c.Labels[rewrite.ClientLabel] != clientID {
+		return nil
+	}
+	return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
 }

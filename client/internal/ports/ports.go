@@ -14,10 +14,10 @@ import (
 	"net"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Forwarder opens a local listener carrying connections to an address inside
@@ -78,13 +78,16 @@ type Manager struct {
 	// because somebody else ran docker compose up.
 	Owned func(Container) bool
 
-	// LocalPort is the port to open on this machine for a published one.
+	// LocalPorts are the ports to open on this machine for a published one.
 	//
-	// They differ because the workspace daemon chooses what to publish, so
-	// nobody collides on a shared daemon, and the client puts the number the
-	// user actually typed in front of it (ADR 0037). Nil, and a container
-	// whose ports were not remapped, both mean the published port itself.
-	LocalPort func(Container, Published) int
+	// They differ from the published port because the workspace daemon chooses
+	// what to publish, so nobody collides on a shared daemon, and the client
+	// puts the numbers the user actually typed in front of it (ADR 0037).
+	// SEVERAL when one container port was published more than once, since the
+	// workspace publishes it once and every number fronts the same thing.
+	//
+	// Nil, or an empty answer, means the published port itself.
+	LocalPorts func(Container, Published) []int
 
 	mu     sync.Mutex
 	active map[string]*containerForwards
@@ -136,7 +139,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		keep := map[int]bool{}
 		for _, p := range publishedTCP(container) {
-			keep[p.PublicPort] = true
+			for _, local := range m.localPorts(container, p) {
+				keep[local] = true
+			}
 		}
 		for port, fwd := range existing.forwards {
 			if !keep[port] {
@@ -169,10 +174,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.active[id] = existing
 		}
 		for _, p := range publishedTCP(container) {
-			if _, already := existing.forwards[p.PublicPort]; already {
-				continue
+			for _, local := range m.localPorts(container, p) {
+				if _, already := existing.forwards[local]; already {
+					continue
+				}
+				m.openLocked(existing, container, p, local)
 			}
-			m.openLocked(existing, container, p)
 		}
 		if len(existing.forwards) == 0 {
 			delete(m.active, id)
@@ -184,9 +191,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // openLocked starts one forward. Failures are reported and skipped rather than
 // aborting the reconciliation: one unavailable port must not stop every other
 // container's ports from being forwarded.
-func (m *Manager) openLocked(entry *containerForwards, container Container, p Published) {
-	bind := bindAddr
-	local := net.JoinHostPort(bind, fmt.Sprint(m.localPort(container, p)))
+func (m *Manager) openLocked(entry *containerForwards, container Container, p Published, localPort int) {
+	local := net.JoinHostPort(bindAddr, fmt.Sprint(localPort))
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(p.PublicPort))
 
 	fwd, err := m.Forwarder.Forward(local, remote)
@@ -197,21 +203,19 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 		m.log().Warn("could not forward", "addr", local, "container", container.Name, "err", err)
 		return
 	}
-	entry.forwards[p.PublicPort] = fwd
+	entry.forwards[localPort] = fwd
 	m.log().Info("forwarding", "from", fwd.LocalAddr(), "container", container.Name, "port", p.PrivatePort)
 }
 
-// localPort is the port to open here for a published one. Keyed on the
-// published port everywhere else: it is what reconcile compares against the
-// daemon, and the only one that survives a container being recreated.
-func (m *Manager) localPort(c Container, p Published) int {
-	if m.LocalPort == nil {
-		return p.PublicPort
+// localPorts are the ports to open here for a published one, and never empty:
+// with no answer the published port is its own.
+func (m *Manager) localPorts(c Container, p Published) []int {
+	if m.LocalPorts != nil {
+		if local := m.LocalPorts(c, p); len(local) > 0 {
+			return local
+		}
 	}
-	if local := m.LocalPort(c, p); local > 0 {
-		return local
-	}
-	return p.PublicPort
+	return []int{p.PublicPort}
 }
 
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
@@ -264,7 +268,7 @@ func publishedTCP(c Container) []Published {
 		if p.PublicPort == 0 {
 			continue
 		}
-		if p.Type != "" && !strings.EqualFold(p.Type, "tcp") {
+		if !workspace.IsTCP(p.Type) {
 			continue
 		}
 		if seen[p.PublicPort] {

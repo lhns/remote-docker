@@ -96,3 +96,32 @@ explanation of a port number would have to start by asking which mode this is.
   [ADR 0029](0029-one-account-many-machines.md) records that as a requirement
   rather than a quirk; nothing here addresses it.
 
+## Amendment, 2026-08-19: two of the three exclusions are gone
+
+**Several bindings for one container port are handled after all, and the reason
+they were not was wrong.** It said the daemon reports the assigned ports in no
+defined order so they cannot be paired back to what was asked for. True, and
+irrelevant: every one of them fronts the same container port, so it does not
+matter which number goes with which.
+
+They are PUBLISHED ONCE. Emptying every binding makes them identical, and a
+real daemon then allocates a single port for them and fails to bind it twice:
+
+```
+failed to bind host port 0.0.0.0:32778/tcp: address already in use
+```
+
+so the container never starts. Measured in CI, which is the only place a real
+daemon answers. One binding is kept and emptied, the rest are dropped, and the
+client opens every requested number in front of that one publication. On the
+workspace `docker ps` therefore shows one publication where the user wrote two,
+which is the same trade this record already makes about the number itself.
+
+**UDP is remapped too**, so it stops colliding on the workspace, and is still
+not forwarded, because the tunnel has no way to carry it.
+[ADR 0038](0038-udp-does-not-cross-the-tunnel.md) records that as a gap with a
+shape rather than a decision that UDP does not matter.
+
+What is left where it was asked for is one case: a binding whose `HostPort` is
+already empty, which is the user asking for any port.
+

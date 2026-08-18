@@ -108,9 +108,13 @@ Hyper-V and are willing to be the first.
 - **Published ports reach your localhost.** `-p 8080:80` means
   `localhost:8080` here, opened automatically as containers start. The number
   is yours alone: the workspace publishes on a port of its own choosing, so two
-  people sharing a workspace can both ask for 8080. On the workspace itself,
-  `docker ps` shows the port it picked rather than the one you typed
+  people sharing a workspace can both ask for 8080, and `-p 8080:80 -p 9090:80`
+  gives you both. On the workspace itself, `docker ps` shows the port it picked
+  rather than the one you typed
   ([ADR 0037](docs/adr/0037-the-published-port-belongs-to-the-client.md)).
+  **TCP only**: a published UDP port has never been reachable from your machine
+  and still is not
+  ([ADR 0038](docs/adr/0038-udp-does-not-cross-the-tunnel.md)).
 - **The real tooling, unmodified.** `docker`, `docker compose`,
   Testcontainers, IDE plugins, anything that speaks the Docker API. The
   translation happens at the API, not in a command wrapper. The Docker CLI,

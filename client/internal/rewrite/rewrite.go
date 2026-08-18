@@ -178,15 +178,40 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	return out, nil
 }
 
-// label stamps OwnerLabel and ClientLabel onto the container's labels,
-// preserving any the caller set.
+// ownerLabels are the marks on everything this client creates: whose it is, and
+// which of that account's machines made it.
 //
-// Both, because the account says whose container it is and the client says
-// which of that account's machines started it. Only the second can tell one
-// machine's containers from the other's, which is what decides whether a
-// connection may be released.
+// One function because both the container path and the volume path stamp them,
+// and a writer that forgets the client label produces something no collector
+// can attribute to a machine (ADR 0029).
+func (r *Rewriter) ownerLabels() map[string]string {
+	labels := map[string]string{}
+	if r.Owner != "" {
+		labels[OwnerLabel] = r.Owner
+	}
+	// Independently of the owner: a volume marked with the machine and not the
+	// account is still attributable to a machine, which is what the collector
+	// asks about second.
+	if r.Client != "" {
+		labels[ClientLabel] = r.Client
+	}
+	return labels
+}
+
+// label stamps what this client marks a container with, preserving any label
+// the caller set.
+//
+// The owner says whose container it is and the client says which of that
+// account's machines started it; only the second can tell one machine's
+// containers from the other's, which is what decides whether a connection may
+// be released. The ports label says which local port each publication was
+// asked for (ADR 0037).
 func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace.RequestedPorts, changed *bool) error {
-	if r.Owner == "" && len(requested) == 0 {
+	want := r.ownerLabels()
+	if ports := requested.String(); ports != "" {
+		want[PortsLabel] = ports
+	}
+	if len(want) == 0 {
 		return nil
 	}
 
@@ -199,21 +224,18 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace
 		}
 	}
 
-	ports := requested.String()
-	if labels[OwnerLabel] == r.Owner && labels[PortsLabel] == ports &&
-		(r.Client == "" || labels[ClientLabel] == r.Client) {
-		return nil
-	}
-	if r.Owner != "" {
-		labels[OwnerLabel] = r.Owner
-		if r.Client != "" {
-			labels[ClientLabel] = r.Client
+	stale := false
+	for k, v := range want {
+		if labels[k] != v {
+			stale = true
+			break
 		}
 	}
-	// Without it the ports are forwarded to whatever the daemon assigned,
-	// which is not what anybody typed.
-	if ports != "" {
-		labels[PortsLabel] = ports
+	if !stale {
+		return nil
+	}
+	for k, v := range want {
+		labels[k] = v
 	}
 
 	encoded, err := json.Marshal(labels)
@@ -358,13 +380,8 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, err
 	}
 
 	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath)
-	labels := map[string]string{ManagedLabel: ManagedShare}
-	if r.Owner != "" {
-		labels[OwnerLabel] = r.Owner
-	}
-	if r.Client != "" {
-		labels[ClientLabel] = r.Client
-	}
+	labels := r.ownerLabels()
+	labels[ManagedLabel] = ManagedShare
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
 		return "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
 	}

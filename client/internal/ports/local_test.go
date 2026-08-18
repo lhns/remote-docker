@@ -15,11 +15,11 @@ func TestTheLocalPortIsTheOneTheUserAskedFor(t *testing.T) {
 	m := &Manager{
 		Docker:    docker,
 		Forwarder: fwd,
-		LocalPort: func(_ Container, p Published) int {
+		LocalPorts: func(_ Container, p Published) []int {
 			if p.PrivatePort == 80 {
-				return 8080
+				return []int{8080}
 			}
-			return 0
+			return nil
 		},
 	}
 
@@ -42,9 +42,9 @@ func TestWithoutAnAnswerTheLocalPortIsThePublishedOne(t *testing.T) {
 	}}
 	fwd := newForwarder()
 	m := &Manager{
-		Docker:    docker,
-		Forwarder: fwd,
-		LocalPort: func(Container, Published) int { return 0 },
+		Docker:     docker,
+		Forwarder:  fwd,
+		LocalPorts: func(Container, Published) []int { return nil },
 	}
 
 	if err := m.Reconcile(t.Context()); err != nil {
@@ -63,9 +63,9 @@ func TestForwardingAnswersAboutTheLocalPort(t *testing.T) {
 		{ID: "a", Name: "web", Ports: []Published{tcp(32768, 80)}},
 	}}
 	m := &Manager{
-		Docker:    docker,
-		Forwarder: newForwarder(),
-		LocalPort: func(Container, Published) int { return 8080 },
+		Docker:     docker,
+		Forwarder:  newForwarder(),
+		LocalPorts: func(Container, Published) []int { return []int{8080} },
 	}
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -99,11 +99,11 @@ func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 	m := &Manager{
 		Docker:    docker,
 		Forwarder: fwd,
-		LocalPort: func(c Container, _ Published) int {
+		LocalPorts: func(c Container, _ Published) []int {
 			if c.Labels["client"] != mine {
-				return 0
+				return nil
 			}
-			return 8080
+			return []int{8080}
 		},
 	}
 
@@ -121,5 +121,45 @@ func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 	}
 	if got := fwd.remotes["127.0.0.1:32769"]; got != "127.0.0.1:32769" {
 		t.Errorf("the other container is forwarded from %q", got)
+	}
+}
+
+// One container port published once on the workspace, with two numbers in front
+// of it here: `-p 8080:80 -p 9090:80`. Both listeners dial the same published
+// port, because both front the same container port.
+func TestSeveralLocalPortsForOnePublication(t *testing.T) {
+	docker := &fakeDocker{containers: []Container{
+		{ID: "a", Name: "web", Ports: []Published{tcp(32768, 80)}},
+	}}
+	fwd := newForwarder()
+	m := &Manager{
+		Docker:    docker,
+		Forwarder: fwd,
+		LocalPorts: func(Container, Published) []int {
+			return []int{8080, 9090}
+		},
+	}
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	opened := slices.Clone(fwd.opened)
+	slices.Sort(opened)
+	if !slices.Equal(opened, []string{"127.0.0.1:8080", "127.0.0.1:9090"}) {
+		t.Fatalf("opened %v, want both numbers", opened)
+	}
+	for _, local := range opened {
+		if got := fwd.remotes[local]; got != "127.0.0.1:32768" {
+			t.Errorf("%s dials %q, want the one published port", local, got)
+		}
+	}
+
+	// And both are held, so a reconcile that changes nothing closes neither.
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if len(fwd.opened) != 2 {
+		t.Errorf("a second reconcile opened %v", fwd.opened)
 	}
 }
