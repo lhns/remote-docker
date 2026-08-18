@@ -166,18 +166,28 @@ Both outcomes are bad, and the second is worse for being quiet:
 This is the failure `VolumeNameForID` already prevents for volumes, one level
 up: the volume carries the client in its NAME precisely because the daemon is
 shared while the files are not. Container and project names must be separated
-the same way, and until they are, this record is incomplete rather than merely
-undocumented. What would satisfy it: a project namespace per machine by default,
-and a refusal, or at minimum a warning that names the other machine, when a
-create would adopt a project another client owns.
+the same way.
 
-Until it is built the remedy is `COMPOSE_PROJECT_NAME`, or `compose -p`, set
-differently on each machine. That is a convention nothing enforces, which is
-what makes it a requirement rather than an answer.
+**Preliminary decision, 2026-08-18: neither is built, and the limitation is
+accepted.** Two answers were considered and both rejected for now.
 
-*(2026-08-18: knowingly accepted for now. It is written down here and in the
-README so that somebody meeting it has a name for it, and so the next person to
-open this record does not have to rediscover it.)*
+*Namespacing* the names, by mangling them per client on the way in and
+unmangling them on the way out, is the general fix and is a virtualisation of
+the daemon's namespace: it touches responses as well as requests, and leaves
+`only /containers/create is ever decoded` behind, which is the property that
+makes this proxy easy to trust.
+
+*Detection* is weaker than it sounds. The signal exists, since every container
+carries its client, but the quiet case never reaches a create at all: compose
+lists a project, decides everything is up to date, and stops. So a check would
+have to sit on the list, where it is compose-shaped rather than general, and its
+warning would land in the background session's log rather than in the terminal
+somebody just typed in. A warning nobody reads is not detection.
+
+The remedy is therefore a convention: `COMPOSE_PROJECT_NAME`, or `compose -p`,
+set differently on each machine, which the README explains. It is written down
+in both places so that somebody meeting this has a name for it, and so the next
+person to open this record does not rediscover it from scratch.
 
 **Rejected: a second account for the phone.** It works today with no code, and
 it splits the daemon too: two image caches, two sets of containers, and the

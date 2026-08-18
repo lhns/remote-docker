@@ -42,15 +42,10 @@ const ClientLabel = "com.github.lhns.remote-docker.client"
 //
 //	80/tcp=8080,443/tcp=8443
 //
-// The workspace daemon assigns the published port itself, so two accounts
-// asking for 8080 never collide, and this is how the client knows which local
-// port to open in front of whatever it was given (ADR 0037).
+// The daemon assigns the published port itself so nobody collides, and this
+// says which local port the client opens in front of it (ADR 0037).
 //
-// A LABEL, not memory, because the ports manager rebuilds its forwards from
-// the daemon's container list: after a client restart, or a reconnect, nothing
-// else remembers what the user typed.
-//
-// Keyed by CONTAINER port, which is the half that does not change. The
-// published port is chosen by the daemon and is exactly what has to be looked
-// up, and the daemon reports the container port beside it.
+// A label rather than memory: forwards are rebuilt from the daemon's container
+// list, so after a restart or a reconnect nothing else remembers what was
+// typed. Keyed by container port, which is the half that does not change.
 const PortsLabel = "com.github.lhns.remote-docker.ports"

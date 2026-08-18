@@ -186,9 +186,9 @@ export COMPOSE_PROJECT_NAME=demo-laptop     # demo-desktop on the other
 docker compose up -d
 ```
 
-This is a limitation rather than a design: the requirement is recorded in
-[ADR 0029](docs/adr/0029-one-account-many-machines.md) and nothing enforces it
-yet.
+This is a limitation rather than a design.
+[ADR 0029](docs/adr/0029-one-account-many-machines.md) records it, along with
+the two fixes considered and why neither is built yet.
 
 ## Commands
 

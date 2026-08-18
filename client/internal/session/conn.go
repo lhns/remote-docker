@@ -293,21 +293,11 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 			return c.Labels[rewrite.OwnerLabel] == live.info.User
 		},
 
-		// What the user asked for, read back from the label the rewriter
-		// wrote, and only on the machine that asked.
-		//
-		// An account's machines share the daemon and each forwards the whole
-		// account's containers, which is what lets somebody start a container
-		// on the pc and reach it from the phone (ADR 0029). The requested
-		// number is a fact about the machine that requested it, so on any
-		// other machine the container is forwarded at the port the daemon
-		// published, exactly as it was before ADR 0037. Two machines can then
-		// both ask for 8080 and each gets it, with the other appearing
-		// wherever the workspace put it.
-		//
-		// A container with no client label predates ADR 0029 or was created by
-		// something that is not us; its published port is its local port, as
-		// it always was.
+		// What the user asked for, and only on the machine that asked. Every
+		// client forwards the whole account's containers (ADR 0029), so
+		// another machine's are forwarded where the daemon published them:
+		// zero here means the published port. Two machines can then both ask
+		// for 8080 without contending for one listener (ADR 0037).
 		LocalPort: func(c ports.Container, p ports.Published) int {
 			if c.Labels[rewrite.ClientLabel] != s.clientID {
 				return 0

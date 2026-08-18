@@ -58,7 +58,7 @@ and reach it from the phone ([ADR 0029](0029-one-account-many-machines.md)).
 The number in the label is a fact about the machine that typed it, so anywhere
 else the container is forwarded at the port the daemon published, exactly as it
 was before this record. Two machines of one account can then both ask for 8080
-and both get it, each seeing the other container wherever the workspace put it.
+and both get it, each seeing the other's container wherever the workspace put it.
 
 Without that rule the two contend for one local listener and the winner is
 whichever the reconciliation reached first, which is a map iteration and

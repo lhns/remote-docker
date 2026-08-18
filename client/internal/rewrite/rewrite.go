@@ -110,11 +110,10 @@ type Rewriter struct {
 	Guard *Guard
 
 	// LocalPortFree reports whether this machine can open a port, and is asked
-	// before a published port is handed to the daemon to choose (ADR 0037).
+	// before a published port is handed to the daemon to choose. See
+	// rewritePorts, which explains why the question moved here.
 	//
-	// The clash moves here from the workspace: the number the user typed is
-	// bound on this machine now, so this is where it can be taken. Nil skips
-	// the question, which is what a rewriter with no session behind it wants.
+	// Nil skips it, which is what a rewriter with no session behind it wants.
 	LocalPortFree func(port int) error
 }
 
