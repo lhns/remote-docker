@@ -292,6 +292,12 @@ jobs:
       - name: compose version
         run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
 
+      # goreleaser's sboms block shells out to syft, so it has to be here as
+      # well as in the image and chart jobs. Same pin as those.
+      - uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.14.0
+
       # The release description is the CHANGELOG's section for this version,
       # not a list of commits. goreleaser generates the list by default, which
       # is the git history rewritten slightly -- useful, and not what somebody
