@@ -8,6 +8,17 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Release archives carry an SBOM and third-party notices
+
+The workspace image and the Helm chart have been published with an SPDX SBOM
+since they existed; the archives people actually download had none, and now get
+one each beside them on the release page. They also carry
+`THIRD-PARTY-NOTICES.md`: every module linked into the binary with its licence
+text, which Apache-2.0 asks for and which the MPL-2.0 components reached through
+buildx require.
+
 ## 0.3.0 — 2026-08-19
 
 ### Two people can publish the same port

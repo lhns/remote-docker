@@ -128,6 +128,12 @@ gofmt -l .   # must print nothing
 bash test/elf.sh android dist/remote-docker-android_android_arm64/remote-docker
 bash test/elf.sh linux   dist/remote-docker_linux_arm64/remote-docker
 
+# every module linked into a released binary, with its licence text. Run by
+# .goreleaser.yaml before any build, so an archive cannot ship without it, and
+# generated rather than committed because it is derived from go.sum. It FAILS
+# on a module with no licence file, which is a question rather than an omission.
+bash scripts/third-party-notices.sh
+
 # Building the android target AT ALL now needs an NDK, since it is the one
 # target with cgo. CI has one already; a machine without one fails naming CC.
 ANDROID_NDK_HOME=/path/to/ndk GOOS=android GOARCH=arm64 goreleaser build \
