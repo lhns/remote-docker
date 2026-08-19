@@ -10,8 +10,13 @@ on:
 permissions:
   contents: read
 
+# A run on main is never cancelled by the next commit. The group is per REF, and
+# every commit on main shares one, so a push used to cancel the previous
+# commit's run and leave it in the history as cancelled rather than tested. On
+# main the sha joins the group and each commit gets its own; a pull request
+# branch keeps one group, where a new push does make the old run pointless.
 concurrency:
-  group: integration-${{ github.ref }}
+  group: integration-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
 
 jobs:
