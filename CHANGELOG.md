@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.3.1 — 2026-08-19
 
 ### Release archives carry an SBOM and third-party notices
 
