@@ -31,9 +31,10 @@ const termuxSelfExeEnv = "TERMUX_EXEC__PROC_SELF_EXE"
 // with it and the file is really there, so an ordinary machine keeps the
 // kernel's answer and a stale variable cannot redirect anything.
 //
-// Always absolute: the variable holds the path as it was typed. `shim install`
-// makes a link that has to resolve from elsewhere, and the respawn below sets
-// the child's directory, so a relative path would find nothing there.
+// Always absolute: the variable holds the path as it was typed. Installing this
+// binary as `docker` makes a link that has to resolve from elsewhere (ADR 0024),
+// and the respawn below sets the child's directory, so a relative path would
+// find nothing there.
 func selfPath() (string, error) {
 	exe, err := os.Executable()
 

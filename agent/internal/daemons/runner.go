@@ -135,7 +135,8 @@ const aliveTTL = 2 * time.Second
 // because the cost of being early is a session that fails for a reason the
 // user cannot act on.
 //
-// Raised from 90s with ADR 0036. The parent daemon used to start every
+// Raised from 90s when the agent became the only supervisor (ADR 0019).
+// The parent daemon used to start every
 // account's dind when the workspace came up, so they booted in parallel with
 // nobody waiting; now the first account to ask pays for its own boot, whenever
 // it asks. CI measured one missing 90 seconds after a workspace restart.

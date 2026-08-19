@@ -1,9 +1,12 @@
 # 0038 — UDP crosses the tunnel
 
 - Status: Accepted and implemented 2026-08-19; extends
-  [ADR 0008](0008-automatic-port-forwarding.md) and
-  [ADR 0037](0037-the-published-port-belongs-to-the-client.md)
+  [ADR 0008](0008-published-ports-reach-the-client.md)
 - Date: 2026-08-19
+- Current answer: implemented. A channel of our own
+  (`direct-udp@remote-docker.lhns.de`) with a two-byte length in front of each
+  datagram, one flow per source address, and an agent that refuses the channel
+  type as the version check.
 
 > SSH forwards TCP, so a published UDP port was unreachable in every version of
 > this project. It is carried now, in a channel of our own with a length in
@@ -23,7 +26,7 @@ than about whether it should work.
 
 ## The decision
 
-**Remap UDP anyway**, as ADR 0037 does for TCP: the daemon assigns the published
+**Remap UDP anyway**, as ADR 0008 does for TCP: the daemon assigns the published
 port and the requested number goes in the label. Two accounts publishing 53/udp
 then stop colliding on the workspace, which is the one thing that can be fixed
 without new protocol.
@@ -43,7 +46,7 @@ here:
 - a channel type of our own, since SSH has none to borrow, carrying
   length-prefixed datagrams both ways;
 - the framing in `core/tunnel`, which is where the two ends agree on what they
-  speak (ADR 0030);
+  speak (ADR 0021);
 - the agent opening a UDP socket inside the account's network namespace, under
   the policy `AllowDial` already applies to a local forward: loopback only, and
   not a port another account holds;

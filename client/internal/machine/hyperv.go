@@ -152,7 +152,7 @@ func parseVMAddress(raw string) string {
 // Host networking rather than a published port because the agent also binds a
 // port per enrolled account for its reverse tunnels (the uid->port formula),
 // and publishing a range that the formula decides would put the formula in two
-// places -- the mistake ADR 0011 exists to record.
+// places -- the mistake ADR 0021 exists to record.
 func ignition(spec Spec, publicKey string) (string, error) {
 	unit := hyperVUnit(spec)
 

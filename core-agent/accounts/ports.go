@@ -50,7 +50,7 @@ type Ports struct {
 	// makes every one of them unmountable.
 	//
 	// A func because finding that out means asking Docker, and nothing in this
-	// module may know Docker exists (ADR 0031). Nil skips the question, which
+	// module may know Docker exists (ADR 0021). Nil skips the question, which
 	// is what a workspace with no daemon of its own wants.
 	Preferred func(account, client string) (int, error)
 

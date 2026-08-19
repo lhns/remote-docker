@@ -39,7 +39,7 @@ func unixName(prefix, account string) string {
 // this account is mapped to.
 //
 // The UID is the identity, not the name. It is what the uidmap binds, what the
-// reverse-tunnel port is derived from (ADR 0011), and what owns the files; the
+// reverse-tunnel port is derived from (ADR 0021), and what owns the files; the
 // unix name is a label on top of it. So an existing workspace, whose accounts
 // were created before the prefix and are called `alice`, is adopted exactly as
 // it stands -- no rename, no home directory moved, no port changed.

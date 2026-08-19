@@ -28,7 +28,7 @@ core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
                          NO third-party dependency at all; the one x/sys in
                          go.mod is the probes reading raw inotify.
   workspace/             THE CONTRACT, imported by both binaries
-  tunnel/                THE AGREEMENT (ADR 0030): the one bidirectional copy
+  tunnel/                THE AGREEMENT (ADR 0021): the one bidirectional copy
                          and the one answer to what half-closing means, plus
                          the names both ends speak. Imports no SSH library --
                          the two implementations live with the ends that run
@@ -72,7 +72,7 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   accounts/              one unix account per enrolled key, and the ports
   notify/                replays the client's changes as real syscalls
   netns/                 run a function inside another process's netns
-                         (an empty path means this one -- ADR 0020)
+                         (an empty path means this one -- ADR 0019)
 
 agent/go.mod             the agent module: THE GLUE. 4 direct third-party
                          requires, 24 go.sum lines
@@ -86,7 +86,7 @@ agent/go.mod             the agent module: THE GLUE. 4 direct third-party
     supervise/           starts and watches the workspace's own dockerd
     elevate/             relaunch privileged, for Swarm (ADR 0013)
     daemons/             a dockerd per account, and the one resolver both
-                         modes answer through (ADR 0020)
+                         modes answer through (ADR 0019)
     dockercli/           the one way this side runs the docker binary, and
                          the volume lookup notify asks for
 
@@ -102,7 +102,7 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# FIVE MODULES (ADR 0021, ADR 0031), and `./...` stops at a module boundary,
+# FIVE MODULES (ADR 0021), and `./...` stops at a module boundary,
 # so the loop is the only thing that covers the repository. Running it at the
 # root fails outright, which is the point: there is no module there to build.
 for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
@@ -199,7 +199,7 @@ premise of the project, and it applies to building it too. So:
   leaves a stream that cannot half-close alone; `SpliceAndClose` closes it, and
   that difference is deliberate -- a port forward carries no output stream and
   must not leak a blocked reader. A test pins both.
-- **The transport is handed its auth and decides none of it** (ADR 0030).
+- **The transport is handed its auth and decides none of it** (ADR 0021).
   `core-client/tunnelclient` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
   `client/internal/session` builds both and is the only place that knows
   enrolment is a file in `authorized_keys.d`. There is no default host key rule, because
@@ -220,7 +220,7 @@ premise of the project, and it applies to building it too. So:
   deletion, because the daemon rejects it on a volume mount. Unit tests pin
   both, and `test/integration.sh` section 9b pins the end of it: the container
   is refused AND the directory on this machine is unchanged.
-- **A published port is the CLIENT's number, not the workspace's** (ADR 0037).
+- **A published port is the CLIENT's number, not the workspace's** (ADR 0008).
   The rewriter empties `HostPort` so the daemon picks, and records what was
   asked for in `PortsLabel`; the ports manager opens that number locally in
   front of whatever came back. The label is the only record, because forwards
@@ -525,14 +525,14 @@ premise of the project, and it applies to building it too. So:
   to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
   shared-daemon mode only, the NFS client -- and changes nothing else. Never
   add an `if onAVM`: both daemon modes already read one switch and a VM obeys
-  it unchanged, which is the same argument ADR 0020 makes about daemon targets.
+  it unchanged, which is the same argument ADR 0019 makes about daemon targets.
   The asymmetry that is easy to get wrong: with a daemon per account the NFS
   mount happens inside `docker:dind`, which ships a client; in shared mode the
   machine itself mounts.
 - **`shadow` must stay in the image.** The agent shells out to `useradd`, which
   handles the locking between passwd, group and gshadow that hand-editing gets
   wrong.
-- **Replay must never mutate.** `internal/server/notify` performs syscalls on
+- **Replay must never mutate.** `core-agent/notify` performs syscalls on
   the user's own files, through the export it is notifying about. `O_CREAT`,
   `O_TRUNC` and a non-identity `utimensat` are all forbidden, even where they
   would produce a better event: the file may have been deleted again between
@@ -585,7 +585,7 @@ premise of the project, and it applies to building it too. So:
   the PARENT for the container's state first: exited, restarting, created or
   dead cannot be running anything. The old rule stands for a daemon that is up
   and slow to answer, where being wrong costs somebody's containers.
-- **A per-account daemon carries no restart policy** (ADR 0036). It used to,
+- **A per-account daemon carries no restart policy** (ADR 0019). It used to,
   which made the parent dockerd a second supervisor with no backoff and nothing
   in our log. `Ensure` starts one when its account connects and that is the
   whole lifecycle. The cost: an account's detached containers come back when
@@ -611,7 +611,7 @@ them:
   propagation workaround — dissolved by per-bind volumes (ADR 0006).
 - The ControlMaster split between the two clients — multiplexing is inherent
   to one `ssh.Client` (ADR 0004).
-- The duplicated uid→port formula — one function now (ADR 0011).
+- The duplicated uid→port formula — one function now (ADR 0021).
 
 ## State of play
 
@@ -817,12 +817,29 @@ function was.
   width is not ours to guess, so the answer is a message short enough not to
   need wrapping. Help text is the exception, since cobra does not reflow it.
 - A finding that contradicts an ADR gets the ADR corrected, not ignored.
+- **One ADR, one decision, and a cleanup pass is what keeps that true.**
+  Everything a decision needed in order to work belongs in its record; two
+  things that could be revisited independently belong in two. A later record
+  that CHANGES an earlier answer is merged back into it, because two records
+  answering one question means the first now states something untrue. A record
+  whose decision is entirely dead is DELETED rather than kept as a tombstone:
+  git has it, and a reader scanning the index should not have to step over it.
+  Merging or deleting is not free -- there are hundreds of `ADR NNNN` citations
+  across code and docs, every one pointing at a record that goes away has to be
+  rewritten in its own prose, and `docs/adr/README.md` carries a table of
+  retired numbers so an old commit message still resolves.
+- **An ADR is technical, not an essay.** Bullets over paragraphs, tables and
+  code over description, measured numbers over adjectives; the reasoning, not
+  the narration of how it was found. Every record carries `Status` and `Date`,
+  and one that has accumulated dated amendments carries a `Current answer:`
+  bullet, because today's answer must not require reading a changelog to the
+  end.
 - **A claim about the outside world carries the date it was checked and the one
   command that re-checks it.** Claims about our own code are covered by tests;
   claims about anything else are covered by nothing and expire silently. Two
   did, on the same day: ADR 0009 said embedding Compose would pin docker/cli
   back a major version, which stopped being true when compose v5 shipped, and
-  ADR 0022 said Windows had no standalone docker CLI, which `winget install
+  the retired shim record said Windows had no standalone docker CLI, which `winget install
   Docker.DockerCLI` disproves. Both were quoted as current fact in the README,
   in `--help`, and in advice to a user. If the check cannot be a command, say
   the claim is a judgement and name who would re-make it.

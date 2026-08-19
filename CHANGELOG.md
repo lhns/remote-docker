@@ -425,7 +425,7 @@ client, over a reverse tunnel in the SSH connection
   survive the rewrite, and the integration suite asserts that the container is
   refused *and* that nothing appeared on your machine.
 - Published container ports become reachable locally as containers start
-  ([ADR 0008](docs/adr/0008-automatic-port-forwarding.md)).
+  ([ADR 0008](docs/adr/0008-published-ports-reach-the-client.md)).
 - File changes made on your machine can be replayed inside the workspace as
   real syscalls, so watchers in containers fire
   ([ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md)). Off

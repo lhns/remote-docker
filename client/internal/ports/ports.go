@@ -86,7 +86,7 @@ type Manager struct {
 	//
 	// They differ from the published port because the workspace daemon chooses
 	// what to publish, so nobody collides on a shared daemon, and the client
-	// puts the numbers the user actually typed in front of it (ADR 0037).
+	// puts the numbers the user actually typed in front of it (ADR 0008).
 	// SEVERAL when one container port was published more than once, since the
 	// workspace publishes it once and every number fronts the same thing.
 	//

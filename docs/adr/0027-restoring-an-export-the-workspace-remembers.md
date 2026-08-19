@@ -1,6 +1,7 @@
-# 0027: Restoring an export the workspace remembers
+# 0027 — Restoring an export the workspace remembers
 
-Accepted, 2026-08-11.
+- Status: Accepted; amends [ADR 0007](0007-virtual-nfs-export-namespace.md)
+- Date: 2026-08-11
 
 ## Context
 

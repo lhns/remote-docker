@@ -4,7 +4,7 @@
 // There is no Go Docker client here on purpose: adding one to ask "what is
 // this volume's mountpoint" or "what is this container's pid" would be a large
 // dependency for a `--format` string, and the image already carries the CLI.
-// That trade is recorded in internal/server/elevate, which made it first.
+// That trade is recorded in agent/internal/elevate, which made it first.
 //
 // This package exists because four callers then made it separately, and each
 // re-decided the same four things: which binary, how to name the daemon, how

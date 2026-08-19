@@ -79,7 +79,7 @@ func Dial(path, network, address string) (net.Conn, error) {
 // Untagged, unlike the rest of this package: it is string formatting, not a
 // system call, and it is needed by callers that only want to NAME a namespace
 // rather than enter one. It was declared once per build tag and a third time
-// in internal/server/daemons: three copies of one path format that have to
+// in agent/internal/daemons: three copies of one path format that have to
 // agree for anything here to work.
 func Path(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)

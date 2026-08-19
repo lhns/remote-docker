@@ -333,7 +333,7 @@ else
 fi
 
 # And the workspace published somewhere else entirely, which is what stops two
-# accounts on one daemon colliding over 18080 (ADR 0037). The number above is
+# accounts on one daemon colliding over 18080 (ADR 0008). The number above is
 # this machine's; this one is the daemon's own choice.
 published=$(dockert port itest-web 80/tcp 2>/dev/null | head -1)
 case "$published" in
@@ -414,7 +414,7 @@ elif ! dockert run -d --name itest-udp -p 15353:5353/udp     -v "$PROJECT:/probe
     bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '
 ' ' ')"
 else
-    # The daemon publishes where it likes (ADR 0037): the number above is this
+    # The daemon publishes where it likes (ADR 0008): the number above is this
     # machine's, and these two must not be the same.
     published=$(dockert port itest-udp 5353/udp 2>/dev/null | head -1)
     case "$published" in

@@ -1,6 +1,7 @@
-# 0028: A port reservation belongs to a session, not to an account
+# 0028 — A port reservation belongs to a session, not to an account
 
-Accepted, 2026-08-11.
+- Status: Accepted; corrects [ADR 0010](0010-go-ssh-server-agent.md)
+- Date: 2026-08-11
 
 ## Context
 

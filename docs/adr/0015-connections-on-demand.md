@@ -9,7 +9,7 @@
 keepalive every fifteen seconds, a Docker events stream, and a port-reconcile
 ticker. Per workspace.
 
-Multiple workspaces are a supported and encouraged arrangement (ADR 0011,
+Multiple workspaces are a supported and encouraged arrangement (ADR 0021,
 `context install --all`): install contexts for dev, ci and staging, leave the
 sessions running, and switch between them with `docker --context`. Three idle
 sessions then cost three processes, three connections and three event streams

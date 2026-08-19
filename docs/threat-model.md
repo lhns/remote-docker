@@ -154,7 +154,7 @@ an identifier the client sent would let one machine adopt another's volumes.
 there is no interactive user on the far side of an automated tunnel
 (`core-client/keys/hostkey.go`). First use records the key. There is no default
 host key rule anywhere in the transport: `core-client/tunnelclient` refuses a
-nil callback by name rather than accepting anybody (ADR 0030).
+nil callback by name rather than accepting anybody (ADR 0021).
 
 **T — forging enrolment (1).** Writing `authorized_keys.d` is the operator's
 privilege and is outside the boundary: whoever can put a file there could
@@ -429,7 +429,7 @@ sequenceDiagram
 
     B->>D: list containers
     D-->>B: labels: owner, machine, ports asked for
-    Note over B: the labels decide which LOCAL ports to open (ADR 0037)
+    Note over B: the labels decide which LOCAL ports to open (ADR 0008)
 
     B->>P: direct-tcpip 127.0.0.1:32768 (a published port)
     P->>P: loopback? yes
@@ -531,7 +531,7 @@ timeout is somebody watching the channel count climb, which is the same trigger
 ADR 0038 already records.
 
 **T/S — the client trusts labels any account can write (1–2).** Which containers
-a client forwards, and since ADR 0037 which LOCAL port it opens for them, are
+a client forwards, and since the port became the client's (ADR 0008) which LOCAL port it opens for them, are
 read from labels on the container: the owner, the machine, and the ports asked
 for. On a shared daemon any account can create a container carrying somebody
 else's labels, so a hostile one can make another user's client open listeners on

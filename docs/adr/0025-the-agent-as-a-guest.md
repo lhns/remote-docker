@@ -1,7 +1,11 @@
 # 0025. The agent as a guest on a machine it does not own
 
 - Status: Accepted; extends [ADR 0010](0010-go-ssh-server-agent.md)
-- Date: 2026-08-11
+- Date: 2026-08-11, amended 2026-08-14
+- Current answer: one agent, three deployments (container, VM, Kubernetes) and
+  no mode flag. The operator supplies what the guest may not assume: dockerd
+  (`WORKSPACE_ENABLE_DIND=false`) and, in shared-daemon mode only, the NFS
+  client.
 
 ## Context
 
@@ -76,4 +80,4 @@ decides what the agent is a guest of, and the agent has no `if onKubernetes`.
 - **Two deployment shapes to keep working**, and the image is still the one
   that CI exercises most. The switches are shared rather than parallel, which
   is what keeps this from becoming two implementations -- the same argument
-  ADR 0020 makes about daemon targets.
+  ADR 0019 makes about daemon targets.

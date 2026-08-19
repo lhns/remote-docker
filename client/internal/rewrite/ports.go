@@ -20,7 +20,7 @@ type binding map[string]json.RawMessage
 // accounts (ADR 0012) two people running -p 8080:80 collide and the second is
 // refused. Nothing needs that number to be 8080 there: the client opens the
 // local listener, so the daemon can publish wherever it likes as long as the
-// label says which local port belongs in front of it (ADR 0037).
+// label says which local port belongs in front of it (ADR 0008).
 //
 // Returns what to record, keyed by container port.
 func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *bool) (workspace.RequestedPorts, error) {

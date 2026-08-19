@@ -205,7 +205,7 @@ func (r *Rewriter) ownerLabels() map[string]string {
 // account's machines started it; only the second can tell one machine's
 // containers from the other's, which is what decides whether a connection may
 // be released. The ports label says which local port each publication was
-// asked for (ADR 0037).
+// asked for (ADR 0008).
 func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace.RequestedPorts, changed *bool) error {
 	want := r.ownerLabels()
 	if ports := requested.String(); ports != "" {

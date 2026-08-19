@@ -1,273 +1,137 @@
-# 0009. Embedding the Docker CLI, Buildx and Compose
+# 0009 — Embedding the Docker CLI, Buildx and Compose
 
 - Status: Accepted
-- Date: 2026-08-07
+- Date: 2026-08-07, last measured 2026-08-19
+- Current answer: **all three are embedded** — `docker/cli`, `buildx` (so
+  `docker build` is BuildKit) and `compose/v5`. 95 MB, no fork, no downgrade.
 
 ## Context
 
-ADR 0005 gives us a Docker API endpoint, which any Docker client can use. But
-the premise of the project is a machine that cannot have software installed,
-and the `docker` CLI is software. Solving the daemon and the filesystem while
-still requiring a local Docker installation leaves the original problem
-half-solved.
+- ADR 0005 gives a Docker API endpoint any client can use, but the premise is a
+  machine that cannot have software installed, and the `docker` CLI is software.
+- The requirement is a **fully fledged client**, not a curated subset, and
+  specifically `docker build` — the piece most likely to be dismissed as too
+  hard.
+- All three are Go programs on cobra exposing their command trees as libraries.
+  Buildx matters because it is *not* part of `docker/cli` core.
+- `docker build` is better behaved through a proxy than expected: BuildKit
+  uploads the context over the API as a stream, so it never reaches the workspace
+  through NFS. What it needs is `/session`, an HTTP upgrade carrying gRPC.
 
-The requirement is therefore a **fully fledged Docker client**: not a curated
-subset of commands, and specifically including `docker build`, which is the one
-most likely to be dismissed as too hard.
+## The decision
 
-All three pieces are Go programs built on cobra, and all three expose their
-command trees as libraries:
+Embed all three, registering their cobra trees against our own endpoint. Ship
+the whole tree rather than curating it: removing Swarm commands means
+maintaining a fork of somebody else's command tree forever, so they are
+documented as untested instead (`docker swarm`, `service`, `stack`, `node`).
 
-- `github.com/docker/cli` — the command tree, `cli/command`
-- `github.com/docker/buildx` — `commands.NewRootCmd`, normally a CLI plugin
-- `github.com/docker/compose/v2` — likewise a plugin
-
-Buildx matters because it is *not* part of `docker/cli` core. Embedding the CLI
-alone leaves `docker build` on the deprecated classic builder, which is a real
-functional gap rather than a packaging detail.
-
-`docker build` turns out to be better-behaved through a proxy than expected.
-BuildKit uploads the build context over the API as a stream, so the context
-comes from the client machine and never needs to reach the workspace through
-NFS at all. What it does need is a `/session` connection, which is an HTTP
-upgrade carrying gRPC.
-
-## What integration actually found
-
-Measured rather than assumed:
-
-| | |
+| | size |
 |---|---|
-| builds at `CGO_ENABLED=0` | yes — the single-binary premise survives |
-| binary, `docker/cli` embedded | 42 MB |
-| subcommands registered | 57 |
-| `docker build` | **present in the tree** |
-| `docker compose` | **absent** |
+| `docker/cli` alone | 42 MB, 57 subcommands |
+| + buildx | 91 MB |
+| + compose v5 | 95 MB — it shares cli, buildx and buildkit |
 
-Two of this record's original assumptions were wrong, and the corrections
-matter more than the confirmations:
+**Registration is the plugin harness done by hand.** Each of these is normally a
+separate binary docker execs, and using their plugin entry points would
+initialise a second CLI over the one already pointed at our endpoint:
 
-**~~Buildx is no longer a separate plugin binary for our purposes.~~** This
-correction was itself wrong, and running a build shows it:
-
-    $ remote-docker docker build .
-    Sending build context to Docker daemon  30.93MB
-    Step 1/1 : FROM debian
-    Successfully built 826a5616954e
-
-That is the CLASSIC builder. `build` being present in `docker/cli`'s command
-tree is not the same as BuildKit being available: buildx is still a separate
-plugin binary, it is not in go.mod, and without it `docker build` falls back to
-the pre-BuildKit path -- silently, and even with `DOCKER_BUILDKIT=1`.
-
-The daemon is not the limitation. It advertises `Builder-Version: 2` on
-`/_ping`; the embedded client cannot use it.
-
-So the functional gap this record was most worried about DOES exist, and it is
-the one thing embedding costs that nothing else does: no cache mounts, no
-parallel stages, and the whole context re-uploaded on every build rather than
-streamed incrementally. Anyone who wants BuildKit can point a real docker CLI
-at the workspace's docker context, which is written for exactly this reason --
-`docker --context <workspace> build .` uses that machine's buildx.
-
-**Compose is still a separate module** and is not obtained by embedding the
-CLI. `docker compose` falls through to the parent's help.
-
-### Compose: attempted, and deliberately not taken
-
-Three attempts, each failing differently, which together explain why:
-
-| Attempt | Result |
-|---|---|
-| `docker/cli@latest` + Compose | buildx v0.29 uses `github.com/docker/docker` types; cli v29.7 uses `github.com/moby/moby` — the same types under two module paths |
-| force buildx v0.36 | Compose needs `moby/buildkit/util/tracing/env`, absent from the buildkit that buildx pins |
-| let Compose choose the whole stack | **builds** — cli v28.5.1, buildx v0.29.1, buildkit v0.25.1, 86 MB, 36 subcommands |
-
-### 2026-08, later the same day: compose is embedded too
-
-The revisit trigger below was met without anyone noticing. Compose is on **v5**
-now, module `github.com/docker/compose/v5`, and that line completed the
-`moby/moby` migration: it builds against buildx v0.36, buildkit v0.32 and
-`moby/moby/api` v1.55, which is the stack this binary already carries. The
-three-way pin that defeated the earlier attempts does not exist any more.
-
-What it took, measured rather than estimated:
-
-| | |
-|---|---|
-| dependency changes | `go get github.com/docker/compose/v5`, no downgrade of cli, buildx or buildkit |
-| code | one file, `installCompose`, mirroring how buildx is registered |
-| binary | 91MB to 95MB, because compose shares docker/cli, buildx and buildkit |
-| fork | none needed; upstream is used directly |
-
-The wiring is compose's own `pluginMain` minus the plugin harness: build a
-`BackendOptions` carrying the confirmation prompt, call
-`commands.RootCommand(cli, opts)`, add `HooksCommand`. `plugin.Run` is
-deliberately not used, for the same reason buildx's root command is not
-registered: it expects to be a separate process docker execs, and it would
-initialise a second CLI over the one already pointed at our endpoint.
-
-The check that would have caught it, in one command:
-
-    (cd client && go get github.com/docker/compose/v5 && go build ./...)
-
-**The lesson is about the record, not the dependency.** This ADR said "revisit
-when buildx and Compose have completed the `moby/moby` migration", and then the
-conclusion outlived the condition: it was quoted as current fact in the README,
-in `--help`, and in advice to a user to go and install a standalone compose,
-none of which checked what compose actually shipped. A revisit trigger nobody
-evaluates is a decision that has quietly stopped being true.
-
-### 2026-08: buildx is now embedded, and compose still is not
-
-The blocker moved rather than vanished. buildx v0.36 builds against
-`docker/cli` v29.7.2 -- no downgrade, no three-way pin -- so `docker build`
-routes through BuildKit, which is what a real docker CLI does when the plugin
-is present. `build` is REPLACED rather than added beside: upstream, `docker
-build` IS `docker buildx build`, and the classic builder is only the fallback.
-
-Two things this needed that the plugin harness usually does:
-
-- **The drivers register themselves via blank imports in buildx's own main.**
+- **buildx's drivers register via blank imports in buildx's own `main`.**
   Without them the command is present, correctly wired, and answers "no drivers
   available".
-- **buildx's ROOT command is not registered.** Its subcommands expect the
-  plugin harness to have run and `docker buildx version` panics on a nil
-  dereference without it. `build` is what docker's tree exposes anyway.
+- **buildx's ROOT command is not registered.** Its subcommands expect the harness
+  to have run, and `docker buildx version` panics on a nil dereference without
+  it. `build` is what docker's tree exposes anyway, and upstream `docker build`
+  IS `docker buildx build` — so `build` is REPLACED, not added beside.
+- **compose is `pluginMain` minus the harness**: build a `BackendOptions`
+  carrying the confirmation prompt, call `commands.RootCommand(cli, opts)`, add
+  `HooksCommand`. `plugin.Run` is deliberately not used.
 
-It cost 45 MB: 45 -> 91 MB. That is the price of the feature this record was
-originally most worried about losing, and it buys the `/session` hijack its
-first exercised caller -- BuildKit streams the context over it, and until now
-nothing did.
+## Two integration hazards, neither visible from a dependency graph
 
-**Compose remains out, for the reason below with new numbers.** compose v2.40.3
-requires buildx v0.29.1, buildkit v0.25.1 and `docker/cli` v28.5.1, while
-buildx v0.36.1 requires buildkit v0.32.2 -- which no longer contains
-`moby/buildkit/util/tracing/env`, the package compose imports. Taking compose
-means pinning `docker/cli` back a major version AND buildx back seven minors,
-losing the modern builder to gain a command that already works through the
-proxy as a separate binary.
+Both need the command tree actually built and run.
 
-**Compose's unreleased main was tried too, and does not help.** The obvious
-guess is that compose simply lags -- v2.40.3 predates buildx v0.36 -- so
-`@main` should have caught up. It has not: the November 2025 commit still
-imports `moby/buildkit/util/tracing/env`, a package buildkit deleted somewhere
-between v0.25 and v0.32. Compose has not adapted at all, so there is no
-version of it that builds against the buildkit buildx now requires.
+- **Client options go on `Flags()`, never `PersistentFlags()`.** Cobra merges
+  persistent flags into every subcommand, and `--context` has the shorthand `-c`,
+  which `build` already uses for `--cpu-shares`: installing them persistently
+  makes `docker build --help` *panic*. The real CLI uses `Flags()` with
+  `TraverseChildren: true`, which is what still lets `docker --context x ps`
+  parse.
+- **The genproto exclusion has to be at whole-module scope.** `docker/cli` is a
+  `+incompatible` module, so its `go.mod` constraints do not propagate through
+  MVS, and the pre-split `google.golang.org/genproto` monolith still provides
+  `googleapis/api/annotations` — as does the split `genproto/googleapis/api`.
+  Requiring the newer monolith is not enough: `go mod tidy` drops a require that
+  nothing imports directly, and MVS picks the old one back up transitively. An
+  `exclude` of the old version in `go.mod` is what holds.
 
-**Pinning buildkit back does not work either, and this was measured rather
-than assumed.** With `replace github.com/moby/buildkit => v0.25.1` -- the
-version compose wants -- buildx v0.36 fails to build: it needs
-`moby/buildkit/util/pgpsign`, which v0.25.1 does not have. The two have
-diverged in BOTH directions, so no single buildkit satisfies them. That closes
-the last option that did not involve owning somebody else's source.
+## `build` in the tree is not BuildKit
 
-**What compose actually needs is one line**, which makes the situation more
-annoying rather than less. The import is blank:
+The trap that cost this record two wrong assumptions. `build` being present in
+`docker/cli`'s tree says nothing about which builder runs it:
 
-	_ "github.com/moby/buildkit/util/tracing/env" //nolint:blank-imports
+```
+$ remote-docker docker build .
+Sending build context to Docker daemon  30.93MB
+Step 1/1 : FROM debian
+Successfully built 826a5616954e
+```
 
-Compose calls nothing from that package. It is pulled in for an `init()` that
-wires OTEL trace-context propagation from the environment -- no API surface at
-all. So compose is not blocked on a migration; nobody upstream has deleted or
-repointed the line since buildkit dropped the package.
+That is the CLASSIC builder — silently, even with `DOCKER_BUILDKIT=1`, and with
+the daemon advertising `Builder-Version: 2` on `/_ping`. Only linking buildx
+fixes it. `test/integration.sh` therefore asserts the build is BuildKit rather
+than asserting that `docker build` succeeded.
 
-**Go has no per-file override, and that is what makes a one-line problem
-expensive.** `replace` works at module granularity and `go mod vendor` is
-all-or-nothing:
+## How compose got here, and the lesson that outlives it
 
-| route | cost |
-|---|---|
-| `go mod vendor`, then delete the import | vendors EVERYTHING -- cli, buildx, buildkit, containerd, the k8s libraries -- tens of thousands of files in git, and the edit reapplied by hand after every regeneration |
-| `replace` to a local directory | a complete copy of the replaced module in-tree; for buildkit that is the builder itself, rebased on every release |
+Compose was excluded twice, both times for a real dependency deadlock in the
+ecosystem's `github.com/docker/docker` → `github.com/moby/moby` migration:
 
-Either way the price of a one-line fix is owning a fork of the component that
-builds the images, to restore a package compose imports for a side effect it
-does not use. Not proportionate: `docker compose` already works through the
-proxy as a separate binary, so what is missing is the "nothing to install"
-premise, not the functionality.
+- compose v2.40.3 wanted cli v28.5.1, buildx v0.29.1 and buildkit v0.25.1, while
+  buildx v0.36.1 wanted buildkit v0.32.2. Taking compose meant pinning `docker/cli`
+  back a major version and buildx back seven minors.
+- The blocker was one blank import — `moby/buildkit/util/tracing/env`, wired for
+  an `init()` compose calls nothing from — deleted from buildkit between v0.25
+  and v0.32. Compose's `main` had not adapted either, and no single buildkit
+  satisfied both, so the only routes were `go mod vendor` (all of it, re-edited
+  after every regeneration) or a `replace` onto a fork of the builder itself.
+  Not proportionate for a side effect nobody used.
 
-When compose adopts a current buildkit, embedding it becomes two lines --
-`installCompose` in cmd/remote-docker/docker.go is written and was reverted
-rather than never attempted. Dependabot will surface the release that makes it
-possible.
+**compose v5 resolved it**: it builds against buildx v0.36, buildkit v0.32 and
+`moby/moby/api` v1.55 — the stack this binary already carries — so embedding it
+was `go get` plus one file, with no downgrade and no fork.
 
-So it is possible, and it is **not taken**. The working combination requires
-pinning `docker/cli` back from v29.7.2 to v28.5.1 — a major version — and
-roughly doubles the binary, in exchange for a three-way version pin that any
-independent upgrade breaks.
+**The lesson is about the record, not the dependency.** This ADR said "revisit
+when buildx and Compose have completed the migration", and then its conclusion
+outlived the condition: "compose cannot be embedded" was quoted as current fact
+in the README, in `--help`, and in advice to a user to install a standalone
+compose. A revisit trigger nobody evaluates is a decision that has quietly
+stopped being true. The check was one command:
 
-The cause is that the Docker ecosystem is mid-migration from
-`github.com/docker/docker` to `github.com/moby/moby`, and cli, buildx and
-Compose are not mutually consistent across it right now. Downgrading a major
-version of our primary dependency to work around somebody else's in-progress
-rename is the kind of decision that is cheap today and expensive later.
-
-**What is actually lost is small.** Compose already works *through* the proxy,
-and the integration suite proves it — that is the point of translating at the
-API rather than in a command wrapper (ADR 0005). The gap is only someone with
-*nothing* installed, and in practice the Docker CLI and Compose ship together,
-so a machine with one usually has both.
-
-Revisit when buildx and Compose have completed the `moby/moby` migration. The
-working combination above is recorded so that revisit does not repeat these
-three attempts. *(Both have; see the update at the top. Compose v5 is
-embedded.)*
-
-Two integration hazards, neither of which a dependency-weight spike could have
-surfaced, because both need the command tree actually built and run:
-
-- **Client options must go on `Flags()`, not `PersistentFlags()`.** Cobra
-  merges persistent flags into every subcommand, and `--context` has the
-  shorthand `-c`, which `build` already uses for `--cpu-shares`. Installing
-  them persistently makes `docker build --help` *panic*. The real CLI uses
-  `Flags()` with `TraverseChildren: true`, which is what still lets
-  `docker --context x ps` parse.
-- **The genproto exclusion has to be at whole-module scope.** `docker/cli` is
-  a `+incompatible` module, so its `go.mod` constraints do not propagate
-  through MVS, and the pre-split `google.golang.org/genproto` monolith still
-  provides `googleapis/api/annotations` — as does the split
-  `genproto/googleapis/api`. Requiring the newer monolith is not enough:
-  `go mod tidy` drops a require that nothing imports directly, and MVS then
-  picks the old one back up from a transitive dependency. An `exclude` of the
-  old version in `go.mod` is what actually holds.
-
-42 MB is acceptable for a tool whose entire premise is that nothing has to be
-installed. Compose will add to it.
-
-## Decision
-
-Embed `docker/cli`, `buildx` and `compose/v2` into the `remote-docker` binary,
-registering their cobra command trees so that everything the real CLI can do,
-this binary can do, against our own endpoint.
-
-Ship the whole tree rather than curating it. Swarm commands (`docker swarm`,
-`service`, `stack`, `node`) are neither the point of this project nor tested
-against it, but removing them means maintaining a fork of someone else's
-command tree forever. They are documented as untested, not deleted.
+```bash
+(cd client && go get github.com/docker/compose/v5 && go build ./...)
+```
 
 ## Consequences
 
-- One binary provides the daemon connection, the filesystem, the builder and
-  the client. Genuinely zero-install, which is the whole premise.
-- **The proxy must be transparent to hijacked and streamed connections.** This
-  follows directly from `docker build` and is the main technical consequence:
-  `/session` is an HTTP upgrade carrying gRPC, and `/containers/*/attach`,
-  `/exec/*/start`, `/build`, `/events` and `/logs` are all long-lived or
-  bidirectional. A proxy that buffers, or that only understands
-  request/response, appears to work for `docker ps` and then fails at exactly
-  the commands people care about. See ADR 0005.
-- Build contexts upload from the client over the SSH connection. Large contexts
-  are therefore bound by the tunnel, which makes `.dockerignore` hygiene matter
-  as much as keeping build artifacts off the NFS share does (ADR 0002).
-- We inherit three large dependency trees and their release cadence. A CVE
-  anywhere in them becomes ours to ship a fix for, and binary size is
-  substantially larger than a client that assumed a local `docker`. Accepted:
-  the alternative does not meet the requirement.
-- Version skew is now ours to manage. The embedded CLI, buildx and Compose must
+- **One binary provides the daemon connection, the filesystem, the builder and
+  the client.** Genuinely zero-install, which is the whole premise.
+- **The proxy must be transparent to hijacked and streamed connections.** The
+  main technical consequence, following directly from `docker build`: `/session`
+  is an HTTP upgrade carrying gRPC, and `/containers/*/attach`, `/exec/*/start`,
+  `/build`, `/events` and `/logs` are long-lived or bidirectional. A proxy that
+  buffers, or only understands request/response, works for `docker ps` and fails
+  at exactly the commands people care about (ADR 0005).
+- **Build contexts upload from the client over the SSH connection**, so large
+  contexts are bound by the tunnel and `.dockerignore` hygiene matters as much as
+  keeping build artifacts off the NFS share (ADR 0002).
+- **Three large dependency trees and their release cadence are ours.** A CVE
+  anywhere in them is ours to ship a fix for, and the binary is far larger than a
+  client assuming a local `docker`. Accepted: the alternative does not meet the
+  requirement.
+- **Version skew is ours to manage.** The embedded CLI, buildx and compose must
   agree with each other and negotiate an API version the workspace daemon
-  supports. This wants an integration test that runs the real command tree
-  against the real daemon, not a unit test of our own code.
-- The three trees must be registered so their `--help`, completion and plugin
-  discovery behave like the real thing. A client that is fully fledged except
-  that `docker build --help` is wrong is not fully fledged.
+  supports. That wants an integration test running the real command tree against
+  a real daemon, not a unit test of our own code.
+- **The trees must be registered so `--help`, completion and plugin discovery
+  behave like the real thing.** A client that is fully fledged except that
+  `docker build --help` is wrong is not fully fledged.

@@ -43,7 +43,7 @@ const ClientLabel = "com.github.lhns.remote-docker.client"
 //	80/tcp=8080,443/tcp=8443
 //
 // The daemon assigns the published port itself so nobody collides, and this
-// says which local port the client opens in front of it (ADR 0037).
+// says which local port the client opens in front of it (ADR 0008).
 //
 // A label rather than memory: forwards are rebuilt from the daemon's container
 // list, so after a restart or a reconnect nothing else remembers what was

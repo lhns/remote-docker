@@ -4,7 +4,7 @@ package session
 // and not the transport's.
 //
 // core-client/tunnelclient takes a signer and a host key callback and decides
-// nothing about either (ADR 0030). Enrolment is the other half of that: the
+// nothing about either (ADR 0021). Enrolment is the other half of that: the
 // workspace grants access by filename, out of band, so the fix for a refusal
 // names a file the transport has never heard of. It belongs here, at the one
 // place that dials.

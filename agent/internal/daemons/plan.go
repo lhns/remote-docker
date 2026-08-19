@@ -126,7 +126,8 @@ type Spec struct {
 	Remove bool
 
 	// No restart policy, and this is where somebody will look for one. It
-	// carried `unless-stopped` until ADR 0036, which made the parent dockerd a
+	// carried `unless-stopped` until the agent became the only thing that
+	// starts a daemon (ADR 0019). The parent dockerd was otherwise a
 	// second supervisor beside the agent: a daemon that would not start
 	// crash-looped with nothing of ours watching. Ensure starts one when its
 	// account connects, and that is the whole lifecycle.

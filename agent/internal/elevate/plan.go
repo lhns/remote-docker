@@ -25,7 +25,7 @@ const NameSuffix = ".elevated"
 
 // ImageEnv names the workspace's own image, passed to the child.
 //
-// Declared here rather than in internal/server/daemons, which is what reads
+// Declared here rather than in agent/internal/daemons, which is what reads
 // it, because this is the only code that can KNOW it: finding out means
 // inspecting ourselves through the host's Docker socket, and keeping that
 // socket out of the privileged child is the whole trust boundary
@@ -49,7 +49,7 @@ type Mount struct {
 
 // Arg renders the mount as a -v value.
 //
-// Exported because internal/server/daemons renders mounts for its own
+// Exported because agent/internal/daemons renders mounts for its own
 // containers and had a byte-identical copy of this, down to the reasoning
 // below, which is exactly the kind of duplication that survives until the
 // two copies disagree about something load-bearing.

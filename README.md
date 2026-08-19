@@ -111,7 +111,7 @@ Hyper-V and are willing to be the first.
   people sharing a workspace can both ask for 8080, and `-p 8080:80 -p 9090:80`
   gives you both. On the workspace itself, `docker ps` shows the port it picked
   rather than the one you typed
-  ([ADR 0037](docs/adr/0037-the-published-port-belongs-to-the-client.md)).
+  ([ADR 0008](docs/adr/0008-published-ports-reach-the-client.md)).
   **UDP works too**, through the same connection
   ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)). One thing to
   know before relying on it: datagrams travel inside the SSH stream, so a
@@ -260,7 +260,6 @@ default.**
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | `30m` before an unused session exits; negative never |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
-| `REMOTE_DOCKER_SHIM_DIR` | | | `%LOCALAPPDATA%\remote-docker\bin`, `~/.local/bin` |
 
 Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 
@@ -811,8 +810,8 @@ echoing back as a change of its own
 
 ## Project layout
 
-Five Go modules in one repository ([ADR 0021](docs/adr/0021-three-modules.md),
-[ADR 0031](docs/adr/0031-if-it-knows-about-docker-it-is-glue.md)). Three of them
+Five Go modules in one repository
+([ADR 0021](docs/adr/0021-the-module-layout.md)). Three of them
 are the core and know nothing about Docker; the two binaries are the glue that
 does.
 
