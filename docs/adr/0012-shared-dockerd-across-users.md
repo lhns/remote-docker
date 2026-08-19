@@ -66,7 +66,7 @@ no dind image supplying one.)*
   the export is not in the namespace shells run in. `test/integration.sh`
   measures the reachability and `test/per-user-dind.sh` asserts its absence in
   the default mode.
-- **Published ports no longer collide** (ADR 0037, 2026-08-18). Two accounts
+- **Published ports no longer collide** (ADR 0008, 2026-08-18). Two accounts
   running `-p 8080:80` used to be first come, first served, since a published
   port is bound in this container. The daemon is now asked for any free port and
   each client opens the number its user typed, so both work. TCP only: a UDP

@@ -1,7 +1,11 @@
 # 0009. Embedding the Docker CLI, Buildx and Compose
 
 - Status: Accepted
-- Date: 2026-08-07
+- Date: 2026-08-07, last measured 2026-08-19
+- Current answer: **all three are embedded** — docker/cli, buildx (so `build`
+  is BuildKit, not the classic builder) and compose v5. The sections below are
+  dated attempts in order; compose was out twice for dependency conflicts that
+  compose v5 resolved.
 
 ## Context
 

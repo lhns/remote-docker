@@ -10,7 +10,7 @@
 // It knows nothing about Docker and nothing about who may log in. Both are
 // deliberate. Docker is glue and lives in the binaries; auth is policy, so this
 // package is handed a signer and a host key callback and never decides which
-// key or which trust rule (ADR 0030). The caller building those two values is
+// key or which trust rule (ADR 0021). The caller building those two values is
 // the only place that can also say what to do when they are refused, which is
 // why the enrolment hint lives there rather than here.
 package tunnelclient
@@ -48,7 +48,7 @@ type Config struct {
 	// Dial, if set, opens the connection SSH runs over. Nil dials TCP to Addr.
 	//
 	// Passed in rather than chosen here, like Signer and HostKey, because only
-	// the caller knows the deployment (ADR 0030). The client uses it to open a
+	// the caller knows the deployment (ADR 0021). The client uses it to open a
 	// WebSocket when the workspace is behind a reverse proxy; the SSH handshake
 	// that follows is the same either way.
 	Dial func(ctx context.Context) (net.Conn, error)

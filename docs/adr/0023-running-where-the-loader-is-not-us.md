@@ -1,7 +1,10 @@
 # 0023. Running where the loader is not us
 
 - Status: Accepted; extends [ADR 0004](0004-single-go-binary-client.md)
-- Date: 2026-08-11
+- Date: 2026-08-11, amended 2026-08-14
+- Current answer: ask `self.go` which file this is (`selfPath`) and how to run
+  it again (`selfCommand`), never `os.Executable` or `exec.Command`. Android is
+  the one target built WITH cgo, for bionic's resolver.
 
 ## Context
 
@@ -127,7 +130,8 @@ undone.
 - **`shim install` was broken here and nobody had reported it**, because nobody
   had got that far. It links to this binary, so it would have put a `docker` on
   PATH that was the Android dynamic linker. It works on the device now.
-- **`os.Args[0]` survives the loader.** ADR 0022 took the invoked name from
+- **`os.Args[0]` survives the loader.** The retired shim (ADR 0024 replaced
+  it) took the invoked name from
   `argv[0]` and never from `os.Executable`, for a reason that predated this
   platform, and it turned out to be the only identity that stays meaningful
   when the process really is the linker. *(2026-08-11: ADR 0024 deleted the

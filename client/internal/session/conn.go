@@ -60,7 +60,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// for the first connection and wrong for every one after a reboot.
 	// Whether this workspace is reached over SSH directly or through a reverse
 	// proxy (ADR 0034). Worked out here because tunnelclient is handed its
-	// connection rather than choosing one (ADR 0030).
+	// connection rather than choosing one (ADR 0021).
 	transport, err := s.opts.Config.Transport()
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 		// The published port moves to whatever the daemon picks, so the number
 		// the user typed is claimed on THIS machine and a clash has to be
-		// reported here (ADR 0037).
+		// reported here (ADR 0008).
 		LocalPortFree: func(port int) error { return localPortFree(live, port) },
 	}
 	if s.opts.Role.hosting() {
@@ -383,7 +383,7 @@ func localPortFree(live *liveConn, port int) error {
 // Only on the machine that asked. Every client forwards the whole account's
 // containers (ADR 0029), so another machine's are forwarded where the daemon
 // published them, and two machines can both ask for 8080 without contending for
-// one listener (ADR 0037).
+// one listener (ADR 0008).
 //
 // More than one when a container port was published more than once
 // (`-p 8080:80 -p 9090:80`): the workspace publishes it once and both numbers

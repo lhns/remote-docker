@@ -56,7 +56,7 @@ port = PORT_BASE + (uid - UID_BASE)
   that would have made a per-session port wrong.
 - The formula must be identical on both sides. Originally it lived in two shell
   scripts, and when those disagreed the client tunnelled to one port while the
-  mount read another — a failure that presents as a network fault. ADR 0011
+  mount read another — a failure that presents as a network fault. ADR 0021
   removes the duplication.
 - A shared loopback interface inside the workspace means port ownership is not
   self-enforcing: any account that can request a reverse forward can try to

@@ -10,7 +10,7 @@
 // Nothing here knows what a forward is FOR. Whether an account may bind a port,
 // which namespace it must be reachable from, and what happens to a reservation
 // when the connection ends are all the caller's, because all three are policy
-// this project invented and none of them is SSH (ADR 0030). What is left is the
+// this project invented and none of them is SSH (ADR 0021). What is left is the
 // protocol: the payload shapes, the listener bookkeeping, opening a channel per
 // accepted connection, and taking the listener down with the connection.
 package tunnelserver

@@ -197,7 +197,7 @@ func serve(addr, wsAddr string) error {
 	// THE one place the mode is chosen. Everything downstream asks the resolver
 	// and is told; nothing else branches on which arrangement this workspace
 	// runs, which is what stops one session being routed to another account's
-	// daemon by a check somebody forgot to copy (ADR 0020).
+	// daemon by a check somebody forgot to copy (ADR 0019).
 	//
 	// The shared daemon is a supported configuration rather than a fallback: a
 	// single-account workspace has nothing to separate and would pay for

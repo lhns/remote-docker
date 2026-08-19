@@ -209,7 +209,8 @@ dpc rm -f shared-by-both >/dev/null 2>&1
 
 echo
 echo "== 7b. both machines publish, and each gets its own number =="
-# One account has one daemon, so before ADR 0037 the second of these was
+# One account has one daemon, so before the port became the client's
+# (ADR 0008) the second of these was
 # refused: a published port is bound on the workspace and 18095 was taken.
 # Neither binds it there now, so both containers run.
 #

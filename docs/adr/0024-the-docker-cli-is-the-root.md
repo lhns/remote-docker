@@ -1,15 +1,16 @@
 # 0024. The Docker CLI is the root
 
-- Status: Accepted; supersedes [ADR 0022](0022-answering-to-the-name-docker.md)
+- Status: Accepted; supersedes the retired shim decision (ADR 0022, deleted:
+  nothing it decided is still true, and git has it)
 - Date: 2026-08-11
 
 ## Context
 
 ADR 0009 embedded the Docker CLI so that nothing would have to be installed on
-the machine using this. ADR 0022 then noticed that `remote-docker docker ps` is
-the right thing under the wrong name, and made the binary answer to `docker` as
-well, by dispatching on `os.Args[0]` and by shipping `shim install` to create
-that name on PATH.
+the machine using this. The first answer (ADR 0022) noticed that
+`remote-docker docker ps` is the right thing under the wrong name, and made the
+binary answer to `docker` as well, by dispatching on `os.Args[0]` and by
+shipping `shim install` to create that name on PATH.
 
 That worked, and it cost 550 lines: a symlink-then-hardlink-then-copy ladder, a
 marker file so the shim could be recognised without executing it, registry PATH
@@ -42,7 +43,7 @@ lists them; the verbs stay docker's own, as they already were.
 **Our flags move off the root onto `remote`.** This is the part that is load
 bearing rather than tidy. `--host` and `--user` are docker's own root flags,
 and they coexisted with ours only because pflag silently skips a duplicate long
-name; a clashing *shorthand* panics the subtree outright, which is why ADR 0022
+name; a clashing *shorthand* panics the subtree outright, which is why the shim
 had to forbid shorthands everywhere. Off the root, the whole hazard is gone.
 
 **Which workspace a docker command talks to is the docker context**, which is
@@ -109,7 +110,7 @@ belongs.
   subcommand read `docker --context remote ps` as our namespace and ran the
   command with no session. A test caught it. `scanRootArgs` is the one walk
   that answers both this and the context question; it began as two.
-- **ADR 0022's `os.Args[0]` rule ends here**, and it was right for its whole
+- **The shim's `os.Args[0]` rule ends here**, and it was right for its whole
   life. ADR 0023 records that it was the only identity surviving Termux's
   loader, which remains a true and useful finding about that platform even
   though the rule it described is gone.

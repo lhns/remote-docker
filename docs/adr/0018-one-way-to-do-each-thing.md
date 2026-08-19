@@ -86,7 +86,7 @@ make them dead code, and the reasoning that would conclude otherwise is exactly
 the reasoning to distrust here.
 
 They are the default arm of the agent's session dispatch, so anyone with an
-enrolled key still gets a shell from a stock `ssh` — and `internal/server/sshd/server.go`
+enrolled key still gets a shell from a stock `ssh` — and `agent/internal/sshd/server.go`
 leans on precisely that. Its justification for allowing unrestricted local
 forwarding is that everything reachable that way "is inside the workspace,
 which the account can already reach with a shell". Remove the PTY and that

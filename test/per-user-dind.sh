@@ -252,7 +252,8 @@ fi
 
 echo
 echo "== 8. two accounts publish, and the limit is this machine =="
-# Where the collision lives after ADR 0037. The workspace no longer binds the
+# Where the collision lives now that the port is the client's (ADR 0008). The
+# workspace no longer binds the
 # number anybody asked for, so neither daemon can refuse the other. What can
 # refuse is the CLIENT, because the requested number is opened here, and both
 # accounts in this suite are driven from one runner: two people on two machines
@@ -350,7 +351,7 @@ echo "== 10. the workspace restarts and a daemon comes back when its account con
 # What survives is deliberately stated as CONTAINERS EXISTING, not running.
 # A restarted dockerd starts only containers with a restart policy, and neither
 # the account's containers nor the daemon itself has one: the agent is the only
-# supervisor (ADR 0036), so the daemon starts when its account next connects and
+# supervisor (ADR 0019), so the daemon starts when its account next connects and
 # brings its graph with it.
 before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
 ' ' ')
@@ -368,7 +369,7 @@ for _ in $(seq 1 120); do
     sleep 1
 done
 
-# Asserted rather than assumed, because it is what ADR 0036 trades away: no
+# Asserted rather than assumed, because it is what ADR 0019 trades away: no
 # restart policy, no session yet, so nothing has started it.
 if outputs '^(exited|created)$' hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.State.Status}}'; then
     ok "$A's daemon stayed down until $A connects"

@@ -1,6 +1,9 @@
-# 0029: One account, many machines
+# 0029 — One account, many machines
 
-Accepted, 2026-08-11.
+- Status: Accepted; amends [ADR 0003](0003-client-serves-workspace-mounts.md),
+  [ADR 0007](0007-virtual-nfs-export-namespace.md) and
+  [ADR 0019](0019-a-dockerd-per-account.md)
+- Date: 2026-08-11
 
 ## Context
 

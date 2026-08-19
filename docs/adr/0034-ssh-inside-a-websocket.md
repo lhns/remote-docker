@@ -1,6 +1,6 @@
 # 0034 — SSH inside a WebSocket
 
-- Status: Accepted; extends [ADR 0030](0030-a-core-module-for-the-tunnel.md)
+- Status: Accepted; extends [ADR 0021](0021-the-module-layout.md)
 - Date: 2026-08-14
 
 > SSH is the session. A WebSocket is one way to carry it, and the agent never
@@ -31,7 +31,7 @@ All of that would have to be rebuilt to arrive at what SSH already does. So the
 WebSocket carries SSH rather than replacing it, and everything above the
 transport is untouched.
 
-Two hooks were enough, and both follow ADR 0030's rule that the transport is
+Two hooks were enough, and both follow ADR 0021's rule that the transport is
 handed its decisions rather than making them: `tunnelclient.Config` takes a
 `Dial` function where it dialled TCP itself, and the SSH server accepts from a
 second listener.
@@ -68,7 +68,7 @@ one and `--insecure` per workspace for a self-signed proxy. `--insecure` gives
 up knowing WHICH front door answered and nothing else: the host key still proves
 this is the workspace, the client key still proves which machine is calling, and
 a hostile proxy sees ciphertext it can neither read nor forge. There is no
-trust-on-first-use, for the reason ADR 0030 gives about host keys: every default
+trust-on-first-use, for the reason ADR 0021 gives about host keys: every default
 is either a prompt nobody is there to answer or an acceptance of anybody.
 
 ## Consequences

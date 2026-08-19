@@ -83,7 +83,8 @@ func TestForwardingAnswersAboutTheLocalPort(t *testing.T) {
 // Both asked for 8080 on their own machine; only one of them asked for it HERE.
 //
 // The other is forwarded where the daemon published it, which is how it worked
-// before ADR 0037 and is what lets somebody start a container on the pc and
+// before the published port became the client's (ADR 0008), and is what lets
+// somebody start a container on the pc and
 // reach it from the phone (ADR 0029). Without this they contend for one local
 // port and one of them silently loses.
 func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {

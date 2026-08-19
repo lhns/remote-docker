@@ -2,7 +2,11 @@
 
 - Status: Accepted; extends [ADR 0003](0003-client-serves-workspace-mounts.md)
   and [ADR 0029](0029-one-account-many-machines.md)
-- Date: 2026-08-13
+- Date: 2026-08-13, amended 2026-08-15
+- Current answer: never write a client-chosen address into durable workspace
+  state unless the agent can reconstruct it. The agent reads a machine's port
+  back off its own volumes; `clientports` is a cache, not the record, and a
+  record that cannot be read is refused rather than guessed.
 
 Two rules, and the second follows from the first:
 
