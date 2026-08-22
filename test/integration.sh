@@ -324,30 +324,31 @@ mkdir -p "$PROJECT/conf"
 echo "the file the container asked for" >"$PROJECT/conf/wanted.conf"
 echo "TOKEN=secret" >"$PROJECT/conf/sibling.env"
 
-if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     cat /etc/app.conf 2>&1) && echo "$out" | grep -q "the file the container asked for"; then
-    ok "a single file mounted at the path the container asked for"
-else
-    bad "a single-file bind did not read back: $(echo "$out" | head -2 | tr '
-' ' ')"
-fi
+# One run answers three questions, because each needs a container start: the
+# target is a FILE (a volume mounted whole would put a directory there, which
+# looks fine until something opens it), it holds what this machine holds, and
+# the sibling that was never asked for did not come with it.
+out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3 sh -c '
+    test -f /etc/app.conf && echo is-a-file
+    cat /etc/app.conf
+    cat /etc/sibling.env 2>/dev/null' 2>&1)
 
-# It must be a FILE. A volume mounted whole would put a directory there, which
-# reads as a working mount right up until something opens it.
-if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     sh -c 'test -f /etc/app.conf && echo is-a-file' 2>&1) && echo "$out" | grep -q "is-a-file"; then
+if echo "$out" | grep -q "is-a-file"; then
     ok "the target is a file, not a directory"
 else
     bad "the target is not a regular file: $(echo "$out" | head -2 | tr '
 ' ' ')"
 fi
-
-# The property the per-file export exists for: the siblings in that directory
-# were not asked for and must not come with it.
-if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     sh -c 'cat /etc/sibling.env 2>&1; ls /etc/app.conf' 2>&1) &&
-    ! echo "$out" | grep -q "TOKEN=secret"; then
-    ok "a sibling of the exported file did not come with it"
+if echo "$out" | grep -q "the file the container asked for"; then
+    ok "a single file mounted at the path the container asked for"
 else
-    bad "a file beside the exported one was reachable: $(echo "$out" | head -2 | tr '
+    bad "a single-file bind did not read back: $(echo "$out" | head -2 | tr '
 ' ' ')"
+fi
+if echo "$out" | grep -q "TOKEN=secret"; then
+    bad "a file beside the exported one was reachable"
+else
+    ok "a sibling of the exported file did not come with it"
 fi
 
 # An edit here reaches the container, which is the case people actually want:

@@ -327,6 +327,10 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.
 
 // fileMount renders a single-file bind as the volume mount that replaces it.
 //
+// Typed rather than assembled as generic JSON, unlike everything the caller
+// sent: nothing here comes from them but the target and the options, so there
+// are no unknown fields to preserve.
+//
 // The options field is the reason this can fail. A rewritten mount keeps every
 // option it arrived with -- `ro` above all, since the export behind it is
 // read-write -- and a bind option has no general translation to a volume mount,
@@ -339,28 +343,31 @@ func fileMount(volume, file string, bind BindSpec) (map[string]json.RawMessage, 
 		case "ro":
 			readOnly = true
 		default:
-			return nil, fmt.Errorf("rewrite: mounting the single file %s with option %q is not supported"+
-				"\n\tfix: mount the directory containing it instead", bind.Source, opt)
+			return nil, fmt.Errorf("rewrite: mounting the single file %s with option %q is not supported%s",
+				bind.Source, opt, fixMountTheDirectory)
 		}
 	}
 
-	mount := map[string]json.RawMessage{
-		"Type":          json.RawMessage(`"volume"`),
-		"VolumeOptions": json.RawMessage(`{}`),
+	encoded, err := json.Marshal(struct {
+		Type          string
+		Source        string
+		Target        string
+		ReadOnly      bool
+		VolumeOptions struct{ Subpath string }
+	}{
+		Type:          "volume",
+		Source:        volume,
+		Target:        bind.Target,
+		ReadOnly:      readOnly,
+		VolumeOptions: struct{ Subpath string }{Subpath: file},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rewrite: encoding the mount for %s: %w", bind.Source, err)
 	}
-	for key, value := range map[string]any{
-		"Source":   volume,
-		"Target":   bind.Target,
-		"ReadOnly": readOnly,
-	} {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("rewrite: encoding mount %s: %w", key, err)
-		}
-		mount[key] = encoded
-	}
-	if err := setSubpath(mount, file); err != nil {
-		return nil, err
+
+	var mount map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &mount); err != nil {
+		return nil, fmt.Errorf("rewrite: encoding the mount for %s: %w", bind.Source, err)
 	}
 	return mount, nil
 }
@@ -468,6 +475,10 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 	return nil
 }
 
+// fixMountTheDirectory is the remedy for every way a single file can be
+// refused, so the wording lives in one place.
+const fixMountTheDirectory = "\n\tfix: mount the directory containing it instead"
+
 // minSubpathMajor is the first Docker release carrying VolumeOptions.Subpath,
 // which is API v1.45. Without it a single-file bind cannot be expressed at all
 // (ADR 0039).
@@ -502,9 +513,8 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (name, file 
 	}
 	if file != "" && !supportsSubpath(r.DockerVersion) {
 		return "", "", fmt.Errorf(
-			"rewrite: mounting the single file %s needs Docker %d or newer on the workspace, which reports %s"+
-				"\n\tfix: mount the directory containing it instead",
-			localPath, minSubpathMajor, r.DockerVersion)
+			"rewrite: mounting the single file %s needs Docker %d or newer on the workspace, which reports %s%s",
+			localPath, minSubpathMajor, r.DockerVersion, fixMountTheDirectory)
 	}
 
 	name, err = workspace.VolumeNameForExport(r.Client, exportPath)

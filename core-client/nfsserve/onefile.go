@@ -41,6 +41,10 @@ func (s *singleFileFS) visible(p string) bool {
 	return strings.TrimPrefix(slashed(p), "/") == s.name
 }
 
+// readable is visible plus the root itself, which is a real directory and has
+// to answer as one.
+func (s *singleFileFS) readable(p string) bool { return isRootPath(p) || s.visible(p) }
+
 func (s *singleFileFS) Open(p string) (billy.File, error) {
 	if !s.visible(p) {
 		return nil, os.ErrNotExist
@@ -63,20 +67,14 @@ func (s *singleFileFS) Create(p string) (billy.File, error) {
 }
 
 func (s *singleFileFS) Stat(p string) (os.FileInfo, error) {
-	if isRootPath(p) {
-		return s.Filesystem.Stat(p)
-	}
-	if !s.visible(p) {
+	if !s.readable(p) {
 		return nil, os.ErrNotExist
 	}
 	return s.Filesystem.Stat(p)
 }
 
 func (s *singleFileFS) Lstat(p string) (os.FileInfo, error) {
-	if isRootPath(p) {
-		return s.Filesystem.Lstat(p)
-	}
-	if !s.visible(p) {
+	if !s.readable(p) {
 		return nil, os.ErrNotExist
 	}
 	return s.Filesystem.Lstat(p)
