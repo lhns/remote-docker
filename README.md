@@ -105,6 +105,9 @@ Hyper-V and are willing to be the first.
 
 - **Bind mounts from anywhere on your machine.** Another drive, above the
   working directory, unrelated to it. Not only a synced project folder.
+  **Single files work too** -- `-v ./nginx.conf:/etc/nginx/nginx.conf` -- and
+  only that file is shared, not the directory holding it
+  ([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)).
 - **Published ports reach your localhost.** `-p 8080:80` means
   `localhost:8080` here, opened automatically as containers start. The number
   is yours alone: the workspace publishes on a port of its own choosing, so two
@@ -703,6 +706,27 @@ to separate.
 - **Databases.** `nolock` plus `fcntl` locking is a corruption risk.
 - **Very large trees over a WAN.** NFSv3 is synchronous per operation, so
   latency multiplies. Over a LAN it is fine.
+
+### What cannot be bind mounted
+
+A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.
+Directories and files both work; three things do not, and say so rather than
+failing later:
+
+- **Sockets**, `/var/run/docker.sock` above all. A socket is a kernel object
+  reached through a path, so a file share carries the name and nothing behind
+  it. This is not a single-file limitation: a socket sitting inside a directory
+  you share is equally unreachable, and always has been.
+- **Devices and FIFOs**, for the same reason. `--device` is unaffected, since it
+  names a device on the workspace rather than on your machine.
+- **Windows named pipes** (`npipe` mounts) are passed through untouched, so the
+  workspace looks for a pipe path that means nothing there.
+
+Two things that do work, but not the way `docker inspect` will describe them:
+every bind becomes a volume, and a single file becomes a volume with a subpath
+([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)). Mount
+propagation (`:rshared` and friends) is dropped in the process: the mount
+happens inside the workspace daemon's own namespace, where it means nothing.
 
 ### A session must be running
 

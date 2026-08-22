@@ -13,19 +13,21 @@ import (
 // fakeSharer records what was exported and hands back deterministic paths.
 type fakeSharer struct {
 	shared []string
-	cwd    string // a local path to report as the /cwd share
+	cwd    string            // a local path to report as the /cwd share
+	files  map[string]string // local path -> base name, for single-file shares
 	err    error
 }
 
-func (f *fakeSharer) Share(localPath string) (string, error) {
+func (f *fakeSharer) Share(localPath string) (string, string, error) {
 	if f.err != nil {
-		return "", f.err
+		return "", "", f.err
 	}
 	f.shared = append(f.shared, localPath)
+	file := f.files[localPath]
 	if localPath == f.cwd {
-		return workspace.ExportCWD, nil
+		return workspace.ExportCWD, file, nil
 	}
-	return workspace.ExportPathForID(workspace.ShareID(localPath)), nil
+	return workspace.ExportPathForID(workspace.ShareID(localPath)), file, nil
 }
 
 type fakeVolumes struct {
@@ -444,5 +446,160 @@ func TestRewriteForwardsExoticMountTypes(t *testing.T) {
 	}
 	if string(out) != string(body) {
 		t.Errorf("exotic mount types were altered:\n  in  %s\n  out %s", body, out)
+	}
+}
+
+// newFileRewriter reports localPath as a single-file share exporting base.
+func newFileRewriter(localPath, base string) (*Rewriter, *fakeVolumes) {
+	s := &fakeSharer{files: map[string]string{localPath: base}}
+	v := &fakeVolumes{}
+	return &Rewriter{Shares: s, Volumes: v, NFSPort: 30000}, v
+}
+
+// A `-v` of a single file cannot stay in Binds: a bind string has no field for
+// a subpath, and the subpath is what makes the container see a file rather than
+// a directory (ADR 0039).
+func TestASingleFileBindMovesToMounts(t *testing.T) {
+	const local = "/home/alice/nginx.conf"
+	r, _ := newFileRewriter(local, "nginx.conf")
+
+	out, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["`+local+`:/etc/nginx/nginx.conf:ro"]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	hc := decodeHostConfig(t, out)
+	if binds, ok := hc["Binds"].([]any); ok && len(binds) != 0 {
+		t.Errorf("Binds still carries %v; the daemon refuses a target named twice", binds)
+	}
+
+	mounts, _ := hc["Mounts"].([]any)
+	if len(mounts) != 1 {
+		t.Fatalf("Mounts = %v, want the moved file mount", mounts)
+	}
+	mount := mounts[0].(map[string]any)
+
+	wantVolume := workspace.VolumeNameForID("", workspace.ShareID(local))
+	if mount["Type"] != "volume" || mount["Source"] != wantVolume {
+		t.Errorf("mount = %v, want a volume mount of %q", mount, wantVolume)
+	}
+	if mount["Target"] != "/etc/nginx/nginx.conf" {
+		t.Errorf("Target = %v, want the path the user asked for", mount["Target"])
+	}
+	if mount["ReadOnly"] != true {
+		t.Error("ro was dropped, and the export behind it is read-write")
+	}
+	options, _ := mount["VolumeOptions"].(map[string]any)
+	if options["Subpath"] != "nginx.conf" {
+		t.Errorf("Subpath = %v, want nginx.conf", options["Subpath"])
+	}
+}
+
+// A directory bind beside a file bind keeps its string form, so the two paths
+// do not become one rewrite that has to know about both.
+func TestADirectoryBindIsUnaffectedByAFileBeside(t *testing.T) {
+	const file = "/home/alice/my.cnf"
+	r, _ := newFileRewriter(file, "my.cnf")
+
+	out, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/home/alice/src:/app","`+file+`:/etc/my.cnf"]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	hc := decodeHostConfig(t, out)
+	binds, _ := hc["Binds"].([]any)
+	want := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/src")) + ":/app"
+	if len(binds) != 1 || binds[0] != want {
+		t.Errorf("Binds = %v, want [%q]", binds, want)
+	}
+	if mounts, _ := hc["Mounts"].([]any); len(mounts) != 1 {
+		t.Errorf("Mounts = %v, want only the file", mounts)
+	}
+}
+
+// The --mount form already has somewhere to put the subpath, and whatever
+// VolumeOptions the caller set survives beside it.
+func TestASingleFileMountGainsASubpath(t *testing.T) {
+	const local = "/home/alice/my.cnf"
+	r, _ := newFileRewriter(local, "my.cnf")
+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Mounts":[
+		{"Type":"bind","Source":"`+local+`","Target":"/etc/my.cnf","VolumeOptions":{"NoCopy":true}}
+	]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	mount := decodeHostConfig(t, out)["Mounts"].([]any)[0].(map[string]any)
+	if mount["Type"] != "volume" {
+		t.Errorf("Type = %v, want volume", mount["Type"])
+	}
+	options, _ := mount["VolumeOptions"].(map[string]any)
+	if options["Subpath"] != "my.cnf" {
+		t.Errorf("Subpath = %v, want my.cnf", options["Subpath"])
+	}
+	if options["NoCopy"] != true {
+		t.Error("VolumeOptions was replaced rather than merged, losing NoCopy")
+	}
+}
+
+// A bind option with no volume-mount equivalent is refused by name. Dropping it
+// silently would break the rule that a rewritten mount keeps what it arrived
+// with, and `ro` is the one that matters.
+func TestASingleFileBindRefusesAnOptionItCannotCarry(t *testing.T) {
+	const local = "/home/alice/app.conf"
+	r, _ := newFileRewriter(local, "app.conf")
+
+	_, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["`+local+`:/etc/app.conf:ro,z"]}}`))
+	if err == nil {
+		t.Fatal("ContainerCreate = nil error, want a refusal naming the option")
+	}
+	if !strings.Contains(err.Error(), `"z"`) {
+		t.Errorf("the refusal is %q, and does not name the option", err)
+	}
+}
+
+// A workspace too old to carry a subpath is refused before anything is
+// created, naming the version it reported.
+func TestASingleFileNeedsADaemonThatCanMountIt(t *testing.T) {
+	const local = "/home/alice/app.conf"
+	s := &fakeSharer{files: map[string]string{local: "app.conf"}}
+	v := &fakeVolumes{}
+	r := &Rewriter{Shares: s, Volumes: v, NFSPort: 30000, DockerVersion: "24.0.7"}
+
+	_, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["`+local+`:/etc/app.conf"]}}`))
+	if err == nil {
+		t.Fatal("ContainerCreate = nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "24.0.7") {
+		t.Errorf("the refusal is %q, and does not say what the workspace reported", err)
+	}
+	if len(v.created) != 0 {
+		t.Errorf("a volume was created for a mount that cannot work: %v", v.created)
+	}
+}
+
+func TestSupportsSubpath(t *testing.T) {
+	for _, c := range []struct {
+		version string
+		want    bool
+	}{
+		{"29.0.1", true},
+		{"26.0.0", true},
+		{"25.0.5", false},
+		{"24.0.7", false},
+		// Unknown is treated as capable: refusing a working setup because a
+		// version string was an unexpected shape is worse than letting the
+		// daemon answer.
+		{"unavailable", true},
+		{"", true},
+	} {
+		if got := supportsSubpath(c.version); got != c.want {
+			t.Errorf("supportsSubpath(%q) = %v, want %v", c.version, got, c.want)
+		}
 	}
 }

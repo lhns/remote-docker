@@ -77,6 +77,13 @@ func ParseMode(s string) (Mode, error) {
 type Share struct {
 	ExportPath string
 	LocalPath  string
+
+	// File is the base name when this share exports a single file rather than
+	// a directory (ADR 0039). The watch then goes on the CONTAINING directory,
+	// because that is where the events for a file arrive -- an editor writing
+	// through a temporary file replaces the inode, and a watch on the old one
+	// sees nothing -- and everything but that name is dropped.
+	File string
 }
 
 // Sink carries frames to the agent. Nil while no connection is established.

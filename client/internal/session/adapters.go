@@ -28,10 +28,10 @@ type shareRegistrar struct {
 	changed  func()
 }
 
-func (s shareRegistrar) Share(localPath string) (string, error) {
+func (s shareRegistrar) Share(localPath string) (exportPath, file string, err error) {
 	share, err := s.registry.Register(localPath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	// Recorded here because this is the one funnel every rewrite goes through,
 	// and the record is what lets a container STARTED in some later session
@@ -40,7 +40,7 @@ func (s shareRegistrar) Share(localPath string) (string, error) {
 	if s.changed != nil {
 		s.changed()
 	}
-	return share.ExportPath, nil
+	return share.ExportPath, share.File, nil
 }
 
 // sshForwarder adapts the SSH client to the port manager's Forwarder.

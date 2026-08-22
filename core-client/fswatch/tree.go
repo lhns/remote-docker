@@ -21,6 +21,10 @@ type shareRoot struct {
 	export string
 	local  string   // the original spelling, for opening
 	parts  []string // normalised components, for matching
+
+	// only is the single base name this root reports, for a share that exports
+	// one file. Empty for a directory, which reports everything below it.
+	only string
 }
 
 // tree owns which directories are watched.
@@ -76,11 +80,20 @@ func dirKey(goos, p string) string {
 }
 
 // rootFor finds the share a path belongs to, and its path within that share.
+//
+// The one funnel every event goes through, which is why a single-file share is
+// filtered here: its watch is on the containing directory, so the siblings
+// generate events that belong to nobody.
 func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
 	for _, r := range t.roots {
-		if rel, ok := relativeTo(t.goos, r.parts, local); ok {
-			return r, rel, true
+		rel, ok := relativeTo(t.goos, r.parts, local)
+		if !ok {
+			continue
 		}
+		if r.only != "" && rel != "/"+r.only {
+			continue
+		}
+		return r, rel, true
 	}
 	return nil, "", false
 }
@@ -115,12 +128,24 @@ func (t *tree) sync(shares []Share) {
 		if have[s.ExportPath] {
 			continue
 		}
+		local := s.LocalPath
+		if s.File != "" {
+			local = filepath.Dir(local)
+		}
 		r := &shareRoot{
 			export: s.ExportPath,
-			local:  s.LocalPath,
-			parts:  splitLocal(t.goos, s.LocalPath),
+			local:  local,
+			parts:  splitLocal(t.goos, local),
+			only:   s.File,
 		}
 		t.roots = append(t.roots, r)
+		if r.only != "" {
+			// One watch, and no walk: the siblings in that directory are not
+			// exported and their subdirectories are not ours to spend the
+			// budget on.
+			t.addOne(r, r.local)
+			continue
+		}
 		t.addTree(r, r.local, nil)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -14,13 +15,20 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Share is one local directory exposed to the workspace.
+// Share is one local directory exposed to the workspace, or one file.
 type Share struct {
 	// ExportPath is how the workspace addresses it: "/cwd" or "/m/<id>".
 	ExportPath string
 
-	// LocalPath is the directory on this machine, in its original spelling.
+	// LocalPath is the directory or file on this machine, in its original
+	// spelling.
 	LocalPath string
+
+	// File is the base name when LocalPath is a single file, and empty for a
+	// directory. The export is a synthesised directory holding exactly that
+	// name, and the mount carries it as a volume subpath so the container sees
+	// a file at the target (ADR 0039).
+	File string
 
 	fs billy.Filesystem
 }
@@ -83,11 +91,15 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nfsserve: cannot export %s: %w", localPath, err)
 	}
-	if !info.IsDir() {
-		// A bind mount of a single file is legal in Docker but has no
-		// meaningful NFS export, and silently exporting the parent directory
-		// would share more than was asked for.
-		return nil, fmt.Errorf("nfsserve: %s is not a directory; only directories can be exported", localPath)
+	// A directory is exported as itself; a regular file as a synthesised
+	// directory holding only that file (ADR 0039). Anything else cannot be
+	// served: a socket, a device or a FIFO is a kernel object reached through
+	// a path, not content, so what crosses NFS is the name and nothing behind
+	// it. That is equally true of one sitting inside a directory this registry
+	// already exports, which is why the message says so.
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("nfsserve: %s is a %s, and that cannot be reached through a file share",
+			localPath, describeMode(info.Mode()))
 	}
 
 	key := workspace.CanonicalKey(localPath)
@@ -105,11 +117,26 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	// WithBoundOS keeps every operation inside baseDir. It is the boundary
 	// that stops a crafted path escaping a share, and it is why each share
 	// gets its own filesystem instead of one rooted higher up.
-	inner := osfs.New(localPath, osfs.WithBoundOS())
+	//
+	// For a file the bound directory is the one containing it, and singleFileFS
+	// is what stops the siblings in there being reachable.
+	base, file := localPath, ""
+	if !info.IsDir() {
+		// Dir and Base rather than trimming a split: they are what keep a file
+		// sitting at a root ("/x.conf", "C:\x.conf") pointing at that root
+		// instead of at an empty path.
+		base, file = filepath.Dir(localPath), filepath.Base(localPath)
+	}
+
+	inner := osfs.New(base, osfs.WithBoundOS())
+	if file != "" {
+		inner = &singleFileFS{Filesystem: inner, name: file}
+	}
 
 	share := &Share{
 		ExportPath: exportPath,
 		LocalPath:  localPath,
+		File:       file,
 		fs:         withAttrs(inner, r.attrs, exportPath),
 	}
 	r.shares[exportPath] = share

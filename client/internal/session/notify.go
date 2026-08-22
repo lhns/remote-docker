@@ -111,7 +111,11 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 	all := registry.Shares()
 	out := make([]fswatch.Share, 0, len(all))
 	for _, share := range all {
-		out = append(out, fswatch.Share{ExportPath: share.ExportPath, LocalPath: share.LocalPath})
+		out = append(out, fswatch.Share{
+			ExportPath: share.ExportPath,
+			LocalPath:  share.LocalPath,
+			File:       share.File,
+		})
 	}
 	return out
 }

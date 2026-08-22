@@ -250,6 +250,18 @@ premise of the project, and it applies to building it too. So:
   `COMPOSE_PROJECT_NAME` per machine, which nothing enforces. Do not add a
   second mechanism that assumes containers are per machine without reading that
   record first.
+- **A single file is exported as a directory holding only that file**, and
+  mounted with `VolumeOptions.Subpath` so the container sees a file (ADR 0039).
+  Two halves, and neither works alone: the export root must be a DIRECTORY or the
+  kernel cannot mount it, and a volume mount is a DIRECTORY mount unless a
+  subpath names something inside it. The synthesised directory is why no symlink,
+  tmpfs or chroot is needed on this machine -- the export namespace is already
+  ours. A `-v` of a file leaves `Binds` for `Mounts` in the same walk, because a
+  bind string has no subpath field and the daemon refuses one target named twice.
+  What is refused is a SOCKET, device or FIFO, and the message says why: a kernel
+  object is reached through a path, so a file share carries the name and nothing
+  behind it -- which is equally true of a socket inside a shared directory, and
+  saying "not a directory" hid that for two people.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.

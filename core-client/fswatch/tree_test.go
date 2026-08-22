@@ -375,3 +375,46 @@ func TestDirKeyFoldsCaseOnlyWhereTheFilesystemDoes(t *testing.T) {
 // writeFile creates a file with a byte of content, for tests that need
 // something for the walk to find.
 func writeFile(p string) error { return os.WriteFile(p, []byte("x"), 0o644) }
+
+// A single-file share watches the containing directory and nothing below it:
+// the siblings are not exported, and their subtrees are not ours to spend the
+// budget on (ADR 0039).
+func TestASingleFileShareWatchesOnlyItsDirectory(t *testing.T) {
+	root := mkdirs(t, t.TempDir(), "conf", "conf/sites", "conf/sites/deep")
+	conf := filepath.Join(root, "conf", "nginx.conf")
+	if err := os.WriteFile(conf, []byte("server {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	be := newFakeBackend()
+	tr := newTestTree(t, be, 100, nil)
+
+	tr.sync([]Share{{ExportPath: "/m/abc", LocalPath: conf, File: "nginx.conf"}})
+
+	added := be.addedSet()
+	dir := filepath.Join(root, "conf")
+	if !added[dir] {
+		t.Errorf("did not watch %s, where the file's events arrive", dir)
+	}
+	if len(added) != 1 {
+		t.Errorf("watched %v, want only the containing directory", added)
+	}
+}
+
+// Everything but the exported name is dropped, so a sibling being edited does
+// not reach the workspace as a change to a share it is not in.
+func TestASingleFileShareReportsOnlyItsOwnFile(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	if err := os.WriteFile(conf, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tr := newTestTree(t, newFakeBackend(), 100, nil)
+	tr.sync([]Share{{ExportPath: "/m/abc", LocalPath: conf, File: "nginx.conf"}})
+
+	if _, rel, ok := tr.rootFor(conf); !ok || rel != "/nginx.conf" {
+		t.Errorf("rootFor(the file) = %q, %v; want /nginx.conf, true", rel, ok)
+	}
+	if _, _, ok := tr.rootFor(filepath.Join(dir, "secret.env")); ok {
+		t.Error("a sibling of the exported file was reported as part of the share")
+	}
+}

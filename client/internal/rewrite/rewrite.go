@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/lhns/remote-docker/core/workspace"
@@ -65,8 +67,11 @@ func (g *Guard) exported(volume string) bool {
 // without an NFS server, and so registration failures are the rewriter's
 // problem rather than the server's.
 type Sharer interface {
-	// Share exports localPath and returns its export path, e.g. "/m/<id>".
-	Share(localPath string) (exportPath string, err error)
+	// Share exports localPath and returns its export path, e.g. "/m/<id>",
+	// and, when localPath is a single file, the base name it is exported
+	// under. A file's export is a synthesised directory holding only that
+	// name, and the mount carries the name as a volume subpath (ADR 0039).
+	Share(localPath string) (exportPath, file string, err error)
 }
 
 // VolumeEnsurer creates a volume on the workspace daemon if it is not already
@@ -115,6 +120,11 @@ type Rewriter struct {
 	//
 	// Nil skips it, which is what a rewriter with no session behind it wants.
 	LocalPortFree func(port int) error
+
+	// DockerVersion is what the workspace reports its daemon to be. Read for
+	// one question: whether a single file can be mounted at all (ADR 0039).
+	// Empty means unknown, which is treated as capable.
+	DockerVersion string
 }
 
 // ContainerCreate rewrites the body of POST /containers/create.
@@ -141,14 +151,16 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		if err := json.Unmarshal(hostConfigRaw, &hostConfig); err != nil {
 			return nil, fmt.Errorf("rewrite: decoding HostConfig: %w", err)
 		}
-		if err := r.rewriteBinds(ctx, hostConfig, &hostChanged); err != nil {
+		// Binds first: a single-file bind cannot be expressed as a bind
+		// string, so it leaves that list and arrives in Mounts (ADR 0039).
+		moved, err := r.rewriteBinds(ctx, hostConfig, &hostChanged)
+		if err != nil {
 			return nil, err
 		}
-		if err := r.rewriteMounts(ctx, hostConfig, &hostChanged); err != nil {
+		if err := r.rewriteMounts(ctx, hostConfig, moved, &hostChanged); err != nil {
 			return nil, err
 		}
 
-		var err error
 		if requested, err = r.rewritePorts(hostConfig, &hostChanged); err != nil {
 			return nil, err
 		}
@@ -248,56 +260,140 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace
 }
 
 // rewriteBinds handles HostConfig.Binds, the `-v` form.
-func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.RawMessage, changed *bool) error {
+//
+// A bind whose source is a single FILE leaves this list: a bind string has no
+// field for a volume subpath, and the subpath is what makes the container see a
+// file rather than a directory (ADR 0039). Those are returned for the Mounts
+// pass to append, and removed here in the same walk, because the daemon rejects
+// the same target appearing in both lists.
+func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
 	raw, ok := hostConfig["Binds"]
 	if !ok || string(raw) == "null" {
-		return nil
+		return nil, nil
 	}
 
 	var binds []string
 	if err := json.Unmarshal(raw, &binds); err != nil {
-		return fmt.Errorf("rewrite: decoding Binds: %w", err)
+		return nil, fmt.Errorf("rewrite: decoding Binds: %w", err)
 	}
 
-	for i, spec := range binds {
+	kept := make([]string, 0, len(binds))
+	var moved []map[string]json.RawMessage
+
+	for _, spec := range binds {
 		parsed, err := ParseBind(spec)
 		if err != nil {
 			// Not something we understand. Forward it and let the daemon
 			// produce its own error, which will be about the actual problem.
+			kept = append(kept, spec)
 			continue
 		}
 		if !IsLocalPath(parsed.Source) {
 			// A named volume. Left alone: rewriting one would replace the
 			// user's persistent data with an export of a directory that does
 			// not exist.
+			kept = append(kept, spec)
 			continue
 		}
 
-		volume, err := r.volumeFor(ctx, parsed.Source)
+		volume, file, err := r.volumeFor(ctx, parsed.Source)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		if file != "" {
+			mount, err := fileMount(volume, file, parsed)
+			if err != nil {
+				return nil, err
+			}
+			moved = append(moved, mount)
+			*changed = true
+			continue
 		}
 		parsed.Source = volume
-		binds[i] = parsed.String()
+		kept = append(kept, parsed.String())
 		*changed = true
 	}
 
 	if !*changed {
-		return nil
+		return nil, nil
 	}
-	encoded, err := json.Marshal(binds)
+	encoded, err := json.Marshal(kept)
 	if err != nil {
-		return fmt.Errorf("rewrite: encoding Binds: %w", err)
+		return nil, fmt.Errorf("rewrite: encoding Binds: %w", err)
 	}
 	hostConfig["Binds"] = encoded
+	return moved, nil
+}
+
+// fileMount renders a single-file bind as the volume mount that replaces it.
+//
+// The options field is the reason this can fail. A rewritten mount keeps every
+// option it arrived with -- `ro` above all, since the export behind it is
+// read-write -- and a bind option has no general translation to a volume mount,
+// so anything beyond ro/rw is refused by name rather than dropped.
+func fileMount(volume, file string, bind BindSpec) (map[string]json.RawMessage, error) {
+	readOnly := false
+	for _, opt := range strings.Split(bind.Options, ",") {
+		switch strings.TrimSpace(opt) {
+		case "", "rw":
+		case "ro":
+			readOnly = true
+		default:
+			return nil, fmt.Errorf("rewrite: mounting the single file %s with option %q is not supported"+
+				"\n\tfix: mount the directory containing it instead", bind.Source, opt)
+		}
+	}
+
+	mount := map[string]json.RawMessage{
+		"Type":          json.RawMessage(`"volume"`),
+		"VolumeOptions": json.RawMessage(`{}`),
+	}
+	for key, value := range map[string]any{
+		"Source":   volume,
+		"Target":   bind.Target,
+		"ReadOnly": readOnly,
+	} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("rewrite: encoding mount %s: %w", key, err)
+		}
+		mount[key] = encoded
+	}
+	if err := setSubpath(mount, file); err != nil {
+		return nil, err
+	}
+	return mount, nil
+}
+
+// setSubpath puts the exported file's name in the mount's VolumeOptions,
+// keeping whatever was already there: a caller may have set NoCopy or Labels,
+// and replacing the object would drop them.
+func setSubpath(mount map[string]json.RawMessage, file string) error {
+	options := map[string]json.RawMessage{}
+	if raw, ok := mount["VolumeOptions"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &options); err != nil {
+			return fmt.Errorf("rewrite: decoding VolumeOptions: %w", err)
+		}
+	}
+	encodedFile, err := json.Marshal(file)
+	if err != nil {
+		return fmt.Errorf("rewrite: encoding subpath: %w", err)
+	}
+	options["Subpath"] = encodedFile
+
+	encoded, err := json.Marshal(options)
+	if err != nil {
+		return fmt.Errorf("rewrite: encoding VolumeOptions: %w", err)
+	}
+	mount["VolumeOptions"] = encoded
 	return nil
 }
 
 // rewriteMounts handles HostConfig.Mounts, the `--mount` form that Compose and
 // the API-level clients prefer.
-func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json.RawMessage, changed *bool) error {
+func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
 	raw, ok := hostConfig["Mounts"]
-	if !ok || string(raw) == "null" {
+	if (!ok || string(raw) == "null") && len(moved) == 0 {
 		return nil
 	}
 
@@ -305,11 +401,13 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 	// carries BindOptions, VolumeOptions, TmpfsOptions and Consistency, and
 	// dropping any of them changes the mount.
 	var mounts []map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &mounts); err != nil {
-		return fmt.Errorf("rewrite: decoding Mounts: %w", err)
+	if ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &mounts); err != nil {
+			return fmt.Errorf("rewrite: decoding Mounts: %w", err)
+		}
 	}
 
-	touched := false
+	touched := len(moved) > 0
 	for _, mount := range mounts {
 		var mountType string
 		if err := json.Unmarshal(mount["Type"], &mountType); err != nil {
@@ -328,7 +426,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 			continue
 		}
 
-		volume, err := r.volumeFor(ctx, source)
+		volume, file, err := r.volumeFor(ctx, source)
 		if err != nil {
 			return err
 		}
@@ -339,6 +437,14 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 			return fmt.Errorf("rewrite: encoding mount source: %w", err)
 		}
 		mount["Source"] = encodedSource
+
+		// A file is exported as a directory holding only itself, so the mount
+		// names it as a subpath and the container sees the file (ADR 0039).
+		if file != "" {
+			if err := setSubpath(mount, file); err != nil {
+				return err
+			}
+		}
 
 		// BindOptions describes propagation for a bind, and the daemon
 		// rejects it on a volume mount. The propagation it asks for is
@@ -352,6 +458,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 	if !touched {
 		return nil
 	}
+	mounts = append(mounts, moved...)
 	encoded, err := json.Marshal(mounts)
 	if err != nil {
 		return fmt.Errorf("rewrite: encoding Mounts: %w", err)
@@ -361,29 +468,55 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 	return nil
 }
 
+// minSubpathMajor is the first Docker release carrying VolumeOptions.Subpath,
+// which is API v1.45. Without it a single-file bind cannot be expressed at all
+// (ADR 0039).
+const minSubpathMajor = 26
+
+// supportsSubpath reads the workspace's reported Docker version.
+//
+// Unknown means yes: the version is a string from another machine, and refusing
+// a working setup because it was not in the expected shape is worse than
+// letting the daemon answer for itself. It reports "unavailable" when its own
+// daemon is down, and that path already fails elsewhere with a better message.
+func supportsSubpath(version string) bool {
+	major, _, _ := strings.Cut(version, ".")
+	n, err := strconv.Atoi(strings.TrimSpace(major))
+	if err != nil {
+		return true
+	}
+	return n >= minSubpathMajor
+}
+
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (string, error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (name, file string, err error) {
 	// Held across BOTH steps: registering the share is what tells the collector
 	// this volume is spoken for, and the volume does not exist until the step
 	// after it.
 	defer r.Guard.hold()()
 
-	exportPath, err := r.Shares.Share(localPath)
+	exportPath, file, err := r.Shares.Share(localPath)
 	if err != nil {
-		return "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
+		return "", "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
+	}
+	if file != "" && !supportsSubpath(r.DockerVersion) {
+		return "", "", fmt.Errorf(
+			"rewrite: mounting the single file %s needs Docker %d or newer on the workspace, which reports %s"+
+				"\n\tfix: mount the directory containing it instead",
+			localPath, minSubpathMajor, r.DockerVersion)
 	}
 
-	name, err := workspace.VolumeNameForExport(r.Client, exportPath)
+	name, err = workspace.VolumeNameForExport(r.Client, exportPath)
 	if err != nil {
-		return "", fmt.Errorf("rewrite: %w", err)
+		return "", "", fmt.Errorf("rewrite: %w", err)
 	}
 
 	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath)
 	labels := r.ownerLabels()
 	labels[ManagedLabel] = ManagedShare
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
-		return "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
+		return "", "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
 	}
-	return name, nil
+	return name, file, nil
 }

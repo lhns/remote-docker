@@ -70,21 +70,102 @@ func TestRegisterDistinctDirectories(t *testing.T) {
 	}
 }
 
-func TestRegisterRejectsNonDirectories(t *testing.T) {
+// A file is exported as a synthesised directory holding only that file, and
+// the base name travels on the share so the mount can name it as a subpath
+// (ADR 0039).
+func TestRegisterAFile(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "a-file")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+	file := filepath.Join(dir, "nginx.conf")
+	if err := os.WriteFile(file, []byte("server {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r := newTestRegistry(t)
 
-	// Exporting the parent instead would silently share more than was asked
-	// for, which is exactly the property ADR 0007 relies on not happening.
-	if _, err := r.Register(file); err == nil {
-		t.Error("Register(file) = nil error, want an error")
+	share, err := r.Register(file)
+	if err != nil {
+		t.Fatalf("Register(file): %v", err)
 	}
+	if share.File != "nginx.conf" {
+		t.Errorf("share.File = %q, want nginx.conf", share.File)
+	}
+	if share.LocalPath != file {
+		t.Errorf("share.LocalPath = %q, want %q", share.LocalPath, file)
+	}
+}
+
+// The whole reason a file gets its own export: the siblings in its directory
+// must not come with it. Exporting the parent would share them, which is the
+// property ADR 0007 relies on not happening.
+func TestAFileShareHidesItsSiblings(t *testing.T) {
+	dir := t.TempDir()
+	wanted := filepath.Join(dir, "wanted.conf")
+	secret := filepath.Join(dir, "secret.env")
+	for _, f := range []string{wanted, secret} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newTestRegistry(t)
+
+	share, err := r.Register(wanted)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	entries, err := share.fs.ReadDir("/")
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "wanted.conf" {
+		t.Fatalf("the export lists %+v, want only wanted.conf", names(entries))
+	}
+	if _, err := share.fs.Open("secret.env"); err == nil {
+		t.Error("a sibling of the exported file is readable through the share")
+	}
+	if _, err := share.fs.Stat("secret.env"); err == nil {
+		t.Error("a sibling of the exported file is visible through the share")
+	}
+	// The root itself still has to behave like a directory, or the kernel
+	// cannot mount it.
+	if _, err := share.fs.Stat("/"); err != nil {
+		t.Errorf("Stat(/) on a file share: %v", err)
+	}
+}
+
+func names(entries []os.FileInfo) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Name()
+	}
+	return out
+}
+
+func TestRegisterRejectsWhatItCannotServe(t *testing.T) {
+	dir := t.TempDir()
+	r := newTestRegistry(t)
+
 	if _, err := r.Register(filepath.Join(dir, "does-not-exist")); err == nil {
 		t.Error("Register(missing) = nil error, want an error")
+	}
+}
+
+// The message names what the path is, because "not a directory" sent somebody
+// looking for a single-file limitation when the real one is that a socket is a
+// kernel object and NFS carries only the name of it.
+func TestDescribeMode(t *testing.T) {
+	for _, c := range []struct {
+		mode os.FileMode
+		want string
+	}{
+		{os.ModeSocket, "socket"},
+		{os.ModeDevice, "device"},
+		{os.ModeNamedPipe, "named pipe"},
+		{os.ModeSymlink, "symlink"},
+		{os.ModeIrregular, "special file"},
+	} {
+		if got := describeMode(c.mode); got != c.want {
+			t.Errorf("describeMode(%v) = %q, want %q", c.mode, got, c.want)
+		}
 	}
 }
 
@@ -255,5 +336,28 @@ func TestNoResolverMeansAMissIsAMiss(t *testing.T) {
 	r := NewRegistry(Attrs{})
 	if _, _, ok := r.LookupOrRestore("/m/0123456789abcdef"); ok {
 		t.Error("a registry with no resolver restored something")
+	}
+}
+
+// A file directly under a root has a containing directory too, and getting it
+// wrong exports nothing at all.
+func TestRegisterAFileAtARoot(t *testing.T) {
+	dir := t.TempDir()
+	// The nearest portable stand-in for "/x.conf": the volume root on Windows,
+	// "/" elsewhere, is not writable in a test, so this asserts the split
+	// rather than the export.
+	file := filepath.Join(dir, "at-root.conf")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	share, err := newTestRegistry(t).Register(file)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if share.File != "at-root.conf" {
+		t.Errorf("share.File = %q", share.File)
+	}
+	if got := filepath.Dir(file); filepath.Dir(share.LocalPath) != got {
+		t.Errorf("the share does not sit under %q", got)
 	}
 }

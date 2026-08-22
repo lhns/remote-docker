@@ -313,6 +313,77 @@ else
 fi
 
 echo
+echo "== 9c. a single file can be bind mounted =="
+# `-v ./nginx.conf:/etc/nginx/nginx.conf` is ordinary in compose and was refused
+# outright until ADR 0039. A file has no directory to export, so the client
+# exports a SYNTHESISED directory holding only that file and the mount names it
+# as a volume subpath. Two things have to hold, and only a real daemon can say:
+# the subpath resolves to a FILE rather than a directory, and it resolves out of
+# an NFS-backed volume.
+mkdir -p "$PROJECT/conf"
+echo "the file the container asked for" >"$PROJECT/conf/wanted.conf"
+echo "TOKEN=secret" >"$PROJECT/conf/sibling.env"
+
+if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     cat /etc/app.conf 2>&1) && echo "$out" | grep -q "the file the container asked for"; then
+    ok "a single file mounted at the path the container asked for"
+else
+    bad "a single-file bind did not read back: $(echo "$out" | head -2 | tr '
+' ' ')"
+fi
+
+# It must be a FILE. A volume mounted whole would put a directory there, which
+# reads as a working mount right up until something opens it.
+if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     sh -c 'test -f /etc/app.conf && echo is-a-file' 2>&1) && echo "$out" | grep -q "is-a-file"; then
+    ok "the target is a file, not a directory"
+else
+    bad "the target is not a regular file: $(echo "$out" | head -2 | tr '
+' ' ')"
+fi
+
+# The property the per-file export exists for: the siblings in that directory
+# were not asked for and must not come with it.
+if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     sh -c 'cat /etc/sibling.env 2>&1; ls /etc/app.conf' 2>&1) &&
+    ! echo "$out" | grep -q "TOKEN=secret"; then
+    ok "a sibling of the exported file did not come with it"
+else
+    bad "a file beside the exported one was reachable: $(echo "$out" | head -2 | tr '
+' ' ')"
+fi
+
+# An edit here reaches the container, which is the case people actually want:
+# edit nginx.conf, reload the service.
+echo "edited after the mount" >"$PROJECT/conf/wanted.conf"
+if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     cat /etc/app.conf 2>&1) && echo "$out" | grep -q "edited after the mount"; then
+    ok "an edit on this machine is visible through a single-file mount"
+else
+    bad "the mount served a stale file: $(echo "$out" | head -2 | tr '
+' ' ')"
+fi
+
+# Read-only has to survive this path too, for the reason section 9b gives: the
+# export behind it is read-write.
+if dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf:ro" alpine:3     sh -c 'echo nope > /etc/app.conf' >/dev/null 2>&1; then
+    bad "a container wrote through a read-only single-file mount"
+else
+    ok "a read-only single-file mount refused the write"
+fi
+if [ "$(cat "$PROJECT/conf/wanted.conf")" = "edited after the mount" ]; then
+    ok "the file on this machine is unchanged"
+else
+    bad "a read-only single-file mount let the file be rewritten"
+fi
+
+# The --mount spelling reaches the rewriter differently: a JSON object whose
+# type changes from bind to volume, rather than a string that leaves Binds
+# entirely.
+if out=$(dockert run --rm --mount "type=bind,source=$PROJECT/conf/wanted.conf,target=/etc/app.conf"     alpine:3 cat /etc/app.conf 2>&1) && echo "$out" | grep -q "edited after the mount"; then
+    ok "--mount of a single file works too"
+else
+    bad "--mount of a single file failed: $(echo "$out" | head -2 | tr '
+' ' ')"
+fi
+
+echo
 echo "== 10. a published port is reachable here =="
 dockert run -d --name itest-web -p 18080:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
 echo "<h1>served from the client</h1>" >"$PROJECT/index.html"
