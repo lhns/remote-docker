@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.4.0 — 2026-08-22
 
 ### Single files can be bind mounted
 
@@ -23,6 +23,14 @@ a file share is the name, not the kernel object behind it. That was always true
 of a socket inside a shared directory too, and the old message ("not a
 directory") hid it. README now lists what cannot be bind mounted, which was
 written down nowhere before.
+
+### Two fields left the workspace-info reply
+
+`WORKSPACE_MOUNTPOINT` and `WORKSPACE_MOUNTED` described the `~/workspace`
+convenience mount deleted in 0.2.0. They were still sent on every connection
+while nothing set or read them. Anything parsing that reply keeps working:
+unknown keys have always been carried through rather than rejected, so an older
+agent's copies are still accepted.
 
 ## 0.3.1 — 2026-08-19
 
