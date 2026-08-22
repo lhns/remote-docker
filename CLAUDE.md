@@ -250,6 +250,15 @@ premise of the project, and it applies to building it too. So:
   `COMPOSE_PROJECT_NAME` per machine, which nothing enforces. Do not add a
   second mechanism that assumes containers are per machine without reading that
   record first.
+- **A single file needs BOTH halves, and neither works alone** (ADR 0039). The
+  export root must be a DIRECTORY or the kernel cannot mount it, so the file is
+  exported as a synthesised one holding just it; and a volume mount is a
+  DIRECTORY mount unless `VolumeOptions.Subpath` names something inside it. A
+  `-v` of a file therefore leaves `Binds` for `Mounts` in the same walk, since a
+  bind string has no subpath field and the daemon refuses one target named twice.
+  A SOCKET is refused with the reason, not with "not a directory": what crosses
+  a file share is the name and not the kernel object behind it, which is equally
+  true of a socket inside a shared directory.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.

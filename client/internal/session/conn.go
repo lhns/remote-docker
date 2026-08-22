@@ -131,6 +131,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:  s.clientID,
 		Guard:   live.guard,
 
+		// Read for one question: whether this workspace can mount a single
+		// file, which needs a volume subpath (ADR 0039).
+		DockerVersion: info.Docker,
+
 		// The published port moves to whatever the daemon picks, so the number
 		// the user typed is claimed on THIS machine and a clash has to be
 		// reported here (ADR 0008).

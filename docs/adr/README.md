@@ -38,6 +38,7 @@ than trusted.
 | [0027](0027-restoring-an-export-the-workspace-remembers.md) | Restoring an export the workspace remembers | |
 | [0032](0032-the-workspace-is-the-record.md) | An address is stable container-side, and the workspace is the record | |
 | [0033](0033-handles-derived-from-the-path.md) | The root handle is derived, the rest are not | |
+| [0039](0039-a-single-file-is-a-one-file-export.md) | A single file is a one-file export | |
 
 ## Code layout
 

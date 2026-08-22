@@ -8,6 +8,22 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Single files can be bind mounted
+
+`-v ./nginx.conf:/etc/nginx/nginx.conf` was refused outright, which anyone
+bringing an existing compose file met immediately. It works now, and only that
+file is shared, not the directory holding it
+([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)). It needs
+Docker 26 or newer on the workspace, and says so when it is older.
+
+Sockets, devices and FIFOs are still refused, now with the reason: what crosses
+a file share is the name, not the kernel object behind it. That was always true
+of a socket inside a shared directory too, and the old message ("not a
+directory") hid it. README now lists what cannot be bind mounted, which was
+written down nowhere before.
+
 ## 0.3.1 — 2026-08-19
 
 ### Release archives carry an SBOM and third-party notices

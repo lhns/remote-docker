@@ -405,3 +405,55 @@ func TestOneServerServesListenersInTurn(t *testing.T) {
 		l.Close()
 	}
 }
+
+// A single-file share, over the real protocol: the export is a directory with
+// one entry, and the file behind it reads (ADR 0039).
+func TestServeASingleFile(t *testing.T) {
+	dir := t.TempDir()
+	const content = "server { listen 80; }\n"
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling that was never asked for, and must not be reachable.
+	if err := os.WriteFile(filepath.Join(dir, "secret.env"), []byte("TOKEN=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry(DefaultAttrs)
+	share, err := r.Register(filepath.Join(dir, "nginx.conf"))
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	target := mustMount(t, serve(t, r), share.ExportPath)
+
+	entries, err := target.ReadDirPlus(".")
+	if err != nil {
+		t.Fatalf("ReadDirPlus: %v", err)
+	}
+	var listed []string
+	for _, e := range entries {
+		if name := e.FileName; name != "." && name != ".." {
+			listed = append(listed, name)
+		}
+	}
+	if len(listed) != 1 || listed[0] != "nginx.conf" {
+		t.Errorf("the export lists %v, want only nginx.conf", listed)
+	}
+
+	f, err := target.Open("nginx.conf")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("read %q, want %q", got, content)
+	}
+
+	if _, err := target.Open("secret.env"); err == nil {
+		t.Error("a sibling of the exported file is readable over the wire")
+	}
+}

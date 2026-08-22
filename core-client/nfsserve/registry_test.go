@@ -70,21 +70,54 @@ func TestRegisterDistinctDirectories(t *testing.T) {
 	}
 }
 
-func TestRegisterRejectsNonDirectories(t *testing.T) {
+// A file is exported as a synthesised directory holding only that file, and
+// the base name travels on the share so the mount can name it as a subpath
+// (ADR 0039).
+func TestRegisterAFile(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "a-file")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+	file := filepath.Join(dir, "nginx.conf")
+	if err := os.WriteFile(file, []byte("server {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r := newTestRegistry(t)
 
-	// Exporting the parent instead would silently share more than was asked
-	// for, which is exactly the property ADR 0007 relies on not happening.
-	if _, err := r.Register(file); err == nil {
-		t.Error("Register(file) = nil error, want an error")
+	share, err := r.Register(file)
+	if err != nil {
+		t.Fatalf("Register(file): %v", err)
 	}
+	if share.File != "nginx.conf" {
+		t.Errorf("share.File = %q, want nginx.conf", share.File)
+	}
+	if share.LocalPath != file {
+		t.Errorf("share.LocalPath = %q, want %q", share.LocalPath, file)
+	}
+}
+
+func TestRegisterRejectsWhatItCannotServe(t *testing.T) {
+	dir := t.TempDir()
+	r := newTestRegistry(t)
+
 	if _, err := r.Register(filepath.Join(dir, "does-not-exist")); err == nil {
 		t.Error("Register(missing) = nil error, want an error")
+	}
+}
+
+// The message names what the path is, because "not a directory" sent somebody
+// looking for a single-file limitation when the real one is that a socket is a
+// kernel object and NFS carries only the name of it.
+func TestDescribeMode(t *testing.T) {
+	for _, c := range []struct {
+		mode os.FileMode
+		want string
+	}{
+		{os.ModeSocket, "socket"},
+		{os.ModeDevice, "device"},
+		{os.ModeNamedPipe, "named pipe"},
+		{os.ModeIrregular, "special file"},
+	} {
+		if got := describeMode(c.mode); got != c.want {
+			t.Errorf("describeMode(%v) = %q, want %q", c.mode, got, c.want)
+		}
 	}
 }
 

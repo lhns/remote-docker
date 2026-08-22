@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 	"os"
 
@@ -135,7 +134,14 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	// The session error comes FIRST when both are present: a broken credential
 	// helper is a warning about how images are pulled, and no session at all
 	// is why the command cannot run.
-	if deferred := cmp.Or(session, credentials); deferred != nil {
+	//
+	// Spelled out rather than cmp.Or: staticcheck cannot see that a generic
+	// returning a nil error is nil, and reports the comparison as always true.
+	deferred := session
+	if deferred == nil {
+		deferred = credentials
+	}
+	if deferred != nil {
 		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return deferred }
 	}
 	return cmd
