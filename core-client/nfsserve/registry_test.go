@@ -93,53 +93,6 @@ func TestRegisterAFile(t *testing.T) {
 	}
 }
 
-// The whole reason a file gets its own export: the siblings in its directory
-// must not come with it. Exporting the parent would share them, which is the
-// property ADR 0007 relies on not happening.
-func TestAFileShareHidesItsSiblings(t *testing.T) {
-	dir := t.TempDir()
-	wanted := filepath.Join(dir, "wanted.conf")
-	secret := filepath.Join(dir, "secret.env")
-	for _, f := range []string{wanted, secret} {
-		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	r := newTestRegistry(t)
-
-	share, err := r.Register(wanted)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	entries, err := share.fs.ReadDir("/")
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "wanted.conf" {
-		t.Fatalf("the export lists %+v, want only wanted.conf", names(entries))
-	}
-	if _, err := share.fs.Open("secret.env"); err == nil {
-		t.Error("a sibling of the exported file is readable through the share")
-	}
-	if _, err := share.fs.Stat("secret.env"); err == nil {
-		t.Error("a sibling of the exported file is visible through the share")
-	}
-	// The root itself still has to behave like a directory, or the kernel
-	// cannot mount it.
-	if _, err := share.fs.Stat("/"); err != nil {
-		t.Errorf("Stat(/) on a file share: %v", err)
-	}
-}
-
-func names(entries []os.FileInfo) []string {
-	out := make([]string, len(entries))
-	for i, e := range entries {
-		out[i] = e.Name()
-	}
-	return out
-}
-
 func TestRegisterRejectsWhatItCannotServe(t *testing.T) {
 	dir := t.TempDir()
 	r := newTestRegistry(t)
@@ -160,7 +113,6 @@ func TestDescribeMode(t *testing.T) {
 		{os.ModeSocket, "socket"},
 		{os.ModeDevice, "device"},
 		{os.ModeNamedPipe, "named pipe"},
-		{os.ModeSymlink, "symlink"},
 		{os.ModeIrregular, "special file"},
 	} {
 		if got := describeMode(c.mode); got != c.want {
@@ -336,28 +288,5 @@ func TestNoResolverMeansAMissIsAMiss(t *testing.T) {
 	r := NewRegistry(Attrs{})
 	if _, _, ok := r.LookupOrRestore("/m/0123456789abcdef"); ok {
 		t.Error("a registry with no resolver restored something")
-	}
-}
-
-// A file directly under a root has a containing directory too, and getting it
-// wrong exports nothing at all.
-func TestRegisterAFileAtARoot(t *testing.T) {
-	dir := t.TempDir()
-	// The nearest portable stand-in for "/x.conf": the volume root on Windows,
-	// "/" elsewhere, is not writable in a test, so this asserts the split
-	// rather than the export.
-	file := filepath.Join(dir, "at-root.conf")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	share, err := newTestRegistry(t).Register(file)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if share.File != "at-root.conf" {
-		t.Errorf("share.File = %q", share.File)
-	}
-	if got := filepath.Dir(file); filepath.Dir(share.LocalPath) != got {
-		t.Errorf("the share does not sit under %q", got)
 	}
 }

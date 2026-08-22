@@ -30,20 +30,19 @@ nfsserve: /home/you/nginx.conf is not a directory; only directories can be expor
 | volume | as for any bind: `rd-<client>-<id>`, NFS options, managed labels |
 | mount | `Type: volume`, plus `VolumeOptions.Subpath: <base name>` |
 
-**No host-side trickery.** No symlink farm, no temp directory, no tmpfs, no
-chroot. The export namespace is ours to compose (ADR 0007): each share already
-carries its own `billy.Filesystem`, so `singleFileFS` presents one entry and
-answers `ErrNotExist` for every other name in the real directory. Nothing is
-created on the user's machine, and it is the same code on Windows, macOS and
-Linux.
+**No host-side trickery**: no symlink farm, temp directory, tmpfs or chroot.
+The export namespace is ours to compose (ADR 0007), so `singleFileFS` presents
+one entry and answers `ErrNotExist` for every other name in the real directory.
+Nothing is created on the user's machine, and it is one code path on all three
+platforms.
 
-**One export per file, not one per directory.** Exporting the parent once and
-using two subpaths would be fewer volumes and would share the whole directory,
-which is the property the original refusal protected.
+**One export per file, not one per directory.** Exporting the parent once with
+two subpaths would be fewer volumes and would share the whole directory, which
+is the property the original refusal protected.
 
-**The subpath is what makes it a file.** Read out of the daemon rather than
-assumed — `internal/safepath/join_linux.go` stats the resolved path and creates a
-temp FILE to bind-mount onto when it is not a directory:
+**The subpath is what makes it a file**, read out of the daemon rather than
+assumed — `internal/safepath/join_linux.go` creates a temp FILE to bind-mount
+onto when the resolved path is not a directory:
 
 ```go
 isDir := (stat.Mode & unix.S_IFMT) == unix.S_IFDIR
@@ -54,44 +53,36 @@ f, err := os.CreateTemp("", "safe-mount")
 *(Read 2026-08-19 from `docker/docker@v28.5.2`. Re-check with
 `grep -rn "func tempMountPoint" -A 25` in that module.)*
 
-**A `-v` of a file leaves `Binds`.** A bind string has no field for a subpath,
-so the entry is removed from `Binds` and appended to `Mounts` in the same walk —
-the daemon rejects one target named in both lists. `ro` becomes `ReadOnly`; any
-other bind option is refused **by name**, because a rewritten mount keeps every
-option it arrived with and `ro` is the one standing between a container and the
-user's files.
+**A `-v` of a file leaves `Binds`** for `Mounts`, in the same walk: a bind
+string has no subpath field, and the daemon rejects one target named in both
+lists. `ro` becomes `ReadOnly`; any other bind option is refused **by name**,
+since a rewritten mount keeps what it arrived with and `ro` is what stands
+between a container and the user's files.
 
-**Sockets, devices and FIFOs stay refused, with the real reason.** A socket is a
-kernel object reached through a path, so what crosses NFS is the name and
-nothing behind it: `connect()` needs the object in the local kernel. That is
-equally true of a socket inside a directory this client already exports, which
-is why the message says so rather than saying "not a directory" — the old
-wording sent two people looking for a single-file limitation that was not the
+**Sockets, devices and FIFOs stay refused, with the real reason**: `connect()`
+needs the kernel object, and a file share carries the name and nothing behind
+it. Equally true of a socket inside an exported directory, which is why the
+message says so — "not a directory" pointed at single files and hid the
 cause.
 
-**Refused early on a workspace that cannot do it.** `VolumeOptions.Subpath` is
-API v1.45, so Docker 26. The client already knows the workspace's version from
-`workspace.Info`, and a file mount against an older daemon is refused before a
-share or a volume is created. An unreadable version string counts as capable:
-refusing a working setup because a string was an odd shape is worse than letting
-the daemon answer.
+**Refused early on a workspace that cannot do it.** `Subpath` is API v1.45, so
+Docker 26; the version is already in `workspace.Info`, and an older daemon is
+refused before a share or volume exists. An unreadable version counts as
+capable — refusing a working setup over an odd string is worse than letting the
+daemon answer.
 
 ## Consequences
 
-- **One volume per exported file.** A stack binding five config files gets five
-  volumes. They carry the managed labels, so the collector handles them like any
-  other, and `rewrite.Guard` already spans registering the share and creating the
-  volume.
-- **The watch moves to the containing directory.** Events for a file arrive
-  there — an editor writing through a temporary file replaces the inode, and a
-  watch on the old one sees nothing. Everything but the exported name is dropped
-  in `rootFor`, which is the one funnel every event passes, and the walk stops at
-  that single directory so a file share cannot spend the watch budget on
-  siblings' subtrees.
-- **`docker inspect` shows a volume with a subpath**, not a bind. Same trade as
-  every other rewrite (ADR 0006), one level finer.
-- **A file replaced by a directory, or removed, is not re-derived.** The export
-  is registered from what the path was when the container was created. Recreating
-  the container re-registers it.
+- **One volume per exported file.** Five config files, five volumes. They carry
+  the managed labels, so the collector treats them like any other.
+- **The watch moves to the containing directory**, because that is where a
+  file's events arrive: an editor writing through a temporary file replaces the
+  inode, and a watch on the old one sees nothing. `rootFor` drops every other
+  name, and the walk stops at that one directory so a file share cannot spend the
+  budget on siblings' subtrees.
+- **`docker inspect` shows a volume with a subpath**, not a bind. The same trade
+  as every rewrite (ADR 0006), one level finer.
+- **A file replaced by a directory is not re-derived.** The export is what the
+  path was when the container was created; recreating it re-registers.
 - **Untested: a symlinked file source.** `safeOpenFd` resolves symlinks and may
-  refuse one. Nothing here depends on it and nothing asserts it.
+  refuse one. Nothing here depends on it.

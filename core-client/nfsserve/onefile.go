@@ -128,6 +128,9 @@ func (s *singleFileFS) Chroot(string) (billy.Filesystem, error) { return nil, os
 
 // describeMode names what a path is, for a refusal that says why rather than
 // what it is not.
+//
+// No symlink case: the caller stats with os.Stat, which follows them, so a link
+// to a socket reports socket and a link to a directory is a directory.
 func describeMode(m os.FileMode) string {
 	switch {
 	case m&os.ModeSocket != 0:
@@ -136,8 +139,6 @@ func describeMode(m os.FileMode) string {
 		return "device"
 	case m&os.ModeNamedPipe != 0:
 		return "named pipe"
-	case m&os.ModeSymlink != 0:
-		return "symlink"
 	default:
 		return "special file"
 	}

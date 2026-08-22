@@ -710,23 +710,22 @@ to separate.
 ### What cannot be bind mounted
 
 A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.
-Directories and files both work; three things do not, and say so rather than
-failing later:
+Directories and files both work; these do not, and say so rather than failing
+later:
 
-- **Sockets**, `/var/run/docker.sock` above all. A socket is a kernel object
-  reached through a path, so a file share carries the name and nothing behind
-  it. This is not a single-file limitation: a socket sitting inside a directory
-  you share is equally unreachable, and always has been.
-- **Devices and FIFOs**, for the same reason. `--device` is unaffected, since it
-  names a device on the workspace rather than on your machine.
-- **Windows named pipes** (`npipe` mounts) are passed through untouched, so the
+- **Sockets**, `/var/run/docker.sock` above all, and **devices and FIFOs**.
+  `connect()` needs the kernel object, and a file share carries the name and
+  nothing behind it. Not a single-file limitation: a socket inside a directory
+  you share is equally unreachable, and always has been. (`--device` is
+  unaffected — it names a device on the workspace.)
+- **Windows named pipes** (`npipe` mounts) pass through untouched, so the
   workspace looks for a pipe path that means nothing there.
 
-Two things that do work, but not the way `docker inspect` will describe them:
-every bind becomes a volume, and a single file becomes a volume with a subpath
+Two things work but are not what `docker inspect` will show: every bind is a
+volume, and a single file is a volume with a subpath
 ([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)). Mount
-propagation (`:rshared` and friends) is dropped in the process: the mount
-happens inside the workspace daemon's own namespace, where it means nothing.
+propagation (`:rshared` and friends) is dropped with it, since the mount happens
+inside the workspace daemon's own namespace.
 
 ### A session must be running
 
