@@ -79,6 +79,13 @@ a machine that already answers SSH. `ssh you@workspace` gets the same shell,
 from a client every one of these machines already has, and does not require a
 mount to exist for it to land in.
 
+*(2026-08-22: the mount's two fields left the CONTRACT as well.*
+*`WORKSPACE_MOUNTPOINT` and `WORKSPACE_MOUNTED` were still parsed and still*
+*encoded into every `workspace-info` reply, while nothing set them and nothing*
+*read them. Removing them is compatible in both directions: an older agent's*
+*copies land in `Info.Extra` like any unknown key, and neither was ever*
+*required.)*
+
 ## What stays, and this is the part to read before deleting anything
 
 **`serveExec` and `servePTY` stay.** Deleting the client's `shell` does not
