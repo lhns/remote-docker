@@ -293,26 +293,6 @@ func TestSyncIgnoresUnusableFiles(t *testing.T) {
 	}
 }
 
-func TestAuthenticate(t *testing.T) {
-	s := newStore(t)
-	aliceKey := s.writeKey(t, "alice.pub")
-	bobKey := s.writeKey(t, "bob.pub")
-	if err := s.Sync(); err != nil {
-		t.Fatal(err)
-	}
-
-	if !s.Authenticate("alice", aliceKey) {
-		t.Error("alice's key was rejected for alice")
-	}
-	// The one that matters: one account's key must not open another's.
-	if s.Authenticate("alice", bobKey) {
-		t.Error("bob's key authenticated as alice")
-	}
-	if s.Authenticate("nobody", aliceKey) {
-		t.Error("an unknown account authenticated")
-	}
-}
-
 func TestSanitizeName(t *testing.T) {
 	tests := map[string]string{
 		"alice":         "alice",

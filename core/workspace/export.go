@@ -19,10 +19,6 @@ import (
 // handle state, while still supporting bind sources anywhere on the client:
 // another drive, above the working directory, or unrelated to it.
 const (
-	// ExportRoot is the NFS export path. rclone served the working directory
-	// directly; we serve a mux and mount subtrees of it.
-	ExportRoot = "/"
-
 	// ExportCWD is where the invoking working directory is always registered,
 	// so the interactive shell has somewhere meaningful to land.
 	ExportCWD = "/cwd"

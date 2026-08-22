@@ -69,30 +69,6 @@ func TestUIDForPortRejectsOutOfRange(t *testing.T) {
 	}
 }
 
-// OwnsPort is the entire port-ownership policy. The case that matters is the
-// negative one: user A must not be able to bind user B's port, which is the
-// cross-user NFS hijack the sshd-based server could not prevent without
-// correctly generated permitlisten strings.
-func TestOwnsPort(t *testing.T) {
-	m := DefaultMapping()
-
-	if !m.OwnsPort(10000, 30000) {
-		t.Error("uid 10000 should own port 30000")
-	}
-	if m.OwnsPort(10000, 30001) {
-		t.Error("uid 10000 must not own uid 10001's port")
-	}
-	if m.OwnsPort(10001, 30000) {
-		t.Error("uid 10001 must not own uid 10000's port")
-	}
-	if m.OwnsPort(10000, 22) {
-		t.Error("uid 10000 must not own a port outside the workspace range")
-	}
-	if m.OwnsPort(0, 30000) {
-		t.Error("a non-workspace uid must own no port at all")
-	}
-}
-
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string

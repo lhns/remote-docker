@@ -119,12 +119,6 @@ func (s *Store) Lookup(name string) (*Account, bool) {
 	return a, ok
 }
 
-// Authenticate reports whether a key may log in as name.
-func (s *Store) Authenticate(name string, key ssh.PublicKey) bool {
-	a, ok := s.Lookup(name)
-	return ok && a.Authorized(key)
-}
-
 // List returns every known account, ordered by name.
 func (s *Store) List() []*Account {
 	s.mu.RLock()

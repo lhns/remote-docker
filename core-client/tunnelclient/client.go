@@ -247,10 +247,10 @@ func (c *Client) Close() error {
 // here. This is ssh -R, and it is how the client's NFS export reaches the
 // remote dockerd.
 //
-// The workspace will refuse an address that is not this account's. See
-// workspace.Mapping.OwnsPort. A refusal here is a policy decision on the far
-// side, not a transport failure, and reads as "port already bound" from the
-// SSH protocol's point of view.
+// The workspace will refuse an address that is not this account's, which its
+// reverse-forward policy decides from what that account holds (ADR 0029). A
+// refusal here is a policy decision on the far side, not a transport failure,
+// and reads as "port already bound" from the SSH protocol's point of view.
 func (c *Client) Listen(addr string) (net.Listener, error) {
 	l, err := c.ssh.Listen("tcp", addr)
 	if err != nil {

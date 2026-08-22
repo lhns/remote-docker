@@ -15,13 +15,11 @@ import (
 // emitted, kept so the Go agent could be a drop-in substitution for it. It
 // can be revisited now that the agent is the only server.
 type Info struct {
-	User       string
-	UID        int
-	GID        int
-	NFSPort    int
-	Mountpoint string
-	Mounted    bool
-	Docker     string
+	User    string
+	UID     int
+	GID     int
+	NFSPort int
+	Docker  string
 
 	// Agent is the version of remote-dockerd answering. Added after the
 	// format was in use, which is safe: ParseInfo keeps unrecognised keys in
@@ -57,16 +55,14 @@ type Info struct {
 
 // Wire keys, named once so the parser and the encoder cannot drift.
 const (
-	keyUser       = "WORKSPACE_USER"
-	keyUID        = "WORKSPACE_UID"
-	keyGID        = "WORKSPACE_GID"
-	keyNFSPort    = "WORKSPACE_NFS_PORT"
-	keyMountpoint = "WORKSPACE_MOUNTPOINT"
-	keyMounted    = "WORKSPACE_MOUNTED"
-	keyDocker     = "WORKSPACE_DOCKER"
-	keyAgent      = "WORKSPACE_AGENT"
-	keyStorage    = "WORKSPACE_STORAGE"
-	keyMode       = "WORKSPACE_MODE"
+	keyUser    = "WORKSPACE_USER"
+	keyUID     = "WORKSPACE_UID"
+	keyGID     = "WORKSPACE_GID"
+	keyNFSPort = "WORKSPACE_NFS_PORT"
+	keyDocker  = "WORKSPACE_DOCKER"
+	keyAgent   = "WORKSPACE_AGENT"
+	keyStorage = "WORKSPACE_STORAGE"
+	keyMode    = "WORKSPACE_MODE"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own
@@ -103,10 +99,6 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.GID, err = strconv.Atoi(value)
 		case keyNFSPort:
 			info.NFSPort, err = strconv.Atoi(value)
-		case keyMountpoint:
-			info.Mountpoint = value
-		case keyMounted:
-			info.Mounted, err = strconv.ParseBool(value)
 		case keyAgent:
 			info.Agent = value
 		case keyStorage:
@@ -158,8 +150,6 @@ func (i Info) Encode(w io.Writer) error {
 		{keyUID, strconv.Itoa(i.UID)},
 		{keyGID, strconv.Itoa(i.GID)},
 		{keyNFSPort, strconv.Itoa(i.NFSPort)},
-		{keyMountpoint, i.Mountpoint},
-		{keyMounted, strconv.FormatBool(i.Mounted)},
 		{keyDocker, docker},
 		{keyAgent, i.Agent},
 		{keyStorage, i.Storage},

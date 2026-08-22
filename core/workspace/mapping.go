@@ -73,14 +73,3 @@ func (m Mapping) UIDForPort(port int) (int, error) {
 	}
 	return m.UIDBase + port - m.PortBase, nil
 }
-
-// OwnsPort reports whether the account with this uid is entitled to bind port.
-//
-// This is the whole of the port-ownership policy. Under the old sshd-based
-// server the equivalent rule was a permitlisten="..." string generated into
-// each user's authorized_keys and enforced by sshd; expressing it as a
-// predicate means it can be tested directly and cannot be mis-generated.
-func (m Mapping) OwnsPort(uid, port int) bool {
-	want, err := m.PortForUID(uid)
-	return err == nil && want == port
-}

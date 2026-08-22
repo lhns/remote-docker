@@ -25,14 +25,19 @@ func TestParseInfoAcceptsShellScriptOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseInfo: %v", err)
 	}
+	// The two mount keys are what an OLD agent still sends: they described the
+	// `~/workspace` convenience mount that ADR 0018 deleted. They must land in
+	// Extra rather than being rejected, which is the whole point of Extra.
 	want := Info{
-		User:       "alice",
-		UID:        10000,
-		GID:        10000,
-		NFSPort:    30000,
-		Mountpoint: "/home/alice/workspace",
-		Mounted:    false,
-		Docker:     "28.0.1",
+		User:    "alice",
+		UID:     10000,
+		GID:     10000,
+		NFSPort: 30000,
+		Docker:  "28.0.1",
+		Extra: map[string]string{
+			"WORKSPACE_MOUNTPOINT": "/home/alice/workspace",
+			"WORKSPACE_MOUNTED":    "false",
+		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseInfo() = %+v, want %+v", got, want)
@@ -99,7 +104,6 @@ func TestParseInfoRejects(t *testing.T) {
 		{"port above maximum", "WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=70000\n"},
 		{"non-numeric port", "WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=abc\n"},
 		{"non-numeric uid", "WORKSPACE_USER=alice\nWORKSPACE_UID=x\nWORKSPACE_NFS_PORT=30000\n"},
-		{"non-boolean mounted", "WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=30000\nWORKSPACE_MOUNTED=maybe\n"},
 		{"line without a separator", "WORKSPACE_USER=alice\nnonsense\nWORKSPACE_NFS_PORT=30000\n"},
 		{"empty input", ""},
 	}
@@ -114,14 +118,12 @@ func TestParseInfoRejects(t *testing.T) {
 
 func TestInfoRoundTrip(t *testing.T) {
 	want := Info{
-		User:       "alice",
-		UID:        10000,
-		GID:        10000,
-		NFSPort:    30000,
-		Mountpoint: "/home/alice/workspace",
-		Mounted:    true,
-		Docker:     "28.0.1",
-		Extra:      map[string]string{"WORKSPACE_ZZZ": "z", "WORKSPACE_AAA": "a"},
+		User:    "alice",
+		UID:     10000,
+		GID:     10000,
+		NFSPort: 30000,
+		Docker:  "28.0.1",
+		Extra:   map[string]string{"WORKSPACE_ZZZ": "z", "WORKSPACE_AAA": "a"},
 	}
 
 	var buf strings.Builder
