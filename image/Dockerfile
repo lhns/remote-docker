@@ -10,7 +10,7 @@
 # The build context is the REPOSITORY ROOT, not image/, because the agent is
 # built from source here. Build with:
 #     docker build -f image/Dockerfile .
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 # The golang images set GOTOOLCHAIN=local, which turns a go.mod that asks for a
 # newer Go than the base image into a hard build failure -- and go.mod's
