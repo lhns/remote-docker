@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -125,6 +128,47 @@ type Rewriter struct {
 	// one question: whether a single file can be mounted at all (ADR 0039).
 	// Empty means unknown, which is treated as capable.
 	DockerVersion string
+
+	// DaemonPaths are paths the workspace's daemon resolves for itself, from
+	// workspace-info (ADR 0041). A bind naming one is passed through untouched,
+	// so a tool that builds its own flags -- kind mounting /lib/modules -- gets
+	// the daemon's copy instead of an export of this machine.
+	DaemonPaths []string
+
+	// LocalExists reports whether a path is on THIS machine, and decides the
+	// case where both sides could claim a source: this machine wins, so a Linux
+	// client's own /etc is still its own. Nil means os.Stat.
+	LocalExists func(path string) bool
+}
+
+// ownedByDaemon reports whether a bind source should be left for the workspace
+// to resolve.
+//
+// Asked in one place, and only for a source this machine does not have, which
+// is what keeps a typo failing: /hme/me/project matches no daemon path, so it
+// is exported and errors exactly as before.
+func (r *Rewriter) ownedByDaemon(source string) bool {
+	if len(r.DaemonPaths) == 0 {
+		return false
+	}
+	clean := path.Clean(filepath.ToSlash(source))
+	matched := false
+	for _, owned := range r.DaemonPaths {
+		owned = path.Clean(filepath.ToSlash(owned))
+		if clean == owned || strings.HasPrefix(clean, owned+"/") {
+			matched = true
+			break
+		}
+	}
+	return matched && !r.localExists(source)
+}
+
+func (r *Rewriter) localExists(p string) bool {
+	if r.LocalExists != nil {
+		return r.LocalExists(p)
+	}
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // ContainerCreate rewrites the body of POST /containers/create.
@@ -295,6 +339,13 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.
 			kept = append(kept, spec)
 			continue
 		}
+		if r.ownedByDaemon(parsed.Source) {
+			// The workspace has this path and this machine does not, so the
+			// daemon resolves it (ADR 0041). Untouched, which is also how every
+			// option on it survives.
+			kept = append(kept, spec)
+			continue
+		}
 
 		volume, file, err := r.volumeFor(ctx, parsed.Source)
 		if err != nil {
@@ -429,7 +480,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 		if err := json.Unmarshal(mount["Source"], &source); err != nil {
 			continue
 		}
-		if !IsLocalPath(source) {
+		if !IsLocalPath(source) || r.ownedByDaemon(source) {
 			continue
 		}
 

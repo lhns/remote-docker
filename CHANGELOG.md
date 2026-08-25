@@ -19,6 +19,28 @@ mentions reparent to PID 1 -- the workspace's own tini, whose job is reaping
 them. It is registered as a subreaper now, so it collects its own subtree and
 says nothing.
 
+### A bind may name a path the workspace owns
+
+A tool that builds its own `docker run` flags cannot be told to spell them
+differently -- `kind` hardcodes `-v /lib/modules:/lib/modules:ro`, meaning the
+DAEMON's modules tree, while every bind source here means a path on your machine.
+It failed on the client, and creating the directory to silence it delivered an
+empty tree to the node.
+
+Paths listed in `WORKSPACE_DIND_MOUNTS` are now resolved by the workspace's own
+daemon instead of being exported from your machine
+([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)). Nothing new to set: the
+operator already declares those mounts, and the client learns them at connect.
+A source your machine also has still wins, and a typo still fails, because it
+matches nothing.
+
+Two smaller changes come with it. `WORKSPACE_DIND_MOUNTS` is now read in
+shared-daemon mode as well, where it declares without mounting -- so a malformed
+value that was silently ignored there now fails at startup. And a mount whose
+source is not on the workspace is refused rather than mounted: docker creates a
+missing bind source, so a typo used to hand the daemon an empty directory and
+surface inside a container much later.
+
 ## 0.4.0 — 2026-08-22
 
 ### Single files can be bind mounted

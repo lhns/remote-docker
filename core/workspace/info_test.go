@@ -201,3 +201,43 @@ func TestAgentVersionIsBackwardCompatible(t *testing.T) {
 		t.Errorf("Agent = %q, want the agent's build", got.Agent)
 	}
 }
+
+// The daemon paths travel as one comma-separated key, and an agent that
+// predates it sends nothing, which must read as "none" (ADR 0041).
+func TestDaemonPathsRoundTrip(t *testing.T) {
+	want := Info{
+		User: "alice", UID: 10000, NFSPort: 30000,
+		DaemonPaths: []string{"/lib/modules", "/sys/fs/cgroup"},
+	}
+
+	var buf strings.Builder
+	if err := want.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if !strings.Contains(buf.String(), "WORKSPACE_DAEMON_PATHS=/lib/modules,/sys/fs/cgroup") {
+		t.Fatalf("encoded as:\n%s", buf.String())
+	}
+
+	got, err := ParseInfo(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatalf("ParseInfo: %v", err)
+	}
+	if !reflect.DeepEqual(got.DaemonPaths, want.DaemonPaths) {
+		t.Errorf("DaemonPaths = %v, want %v", got.DaemonPaths, want.DaemonPaths)
+	}
+
+	// An older agent, and an agent with nothing to declare, are the same
+	// thing here: no paths at all rather than one called "".
+	for _, reply := range []string{
+		"WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=30000\n",
+		"WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=30000\nWORKSPACE_DAEMON_PATHS=\n",
+	} {
+		old, err := ParseInfo(strings.NewReader(reply))
+		if err != nil {
+			t.Fatalf("ParseInfo: %v", err)
+		}
+		if len(old.DaemonPaths) != 0 {
+			t.Errorf("%q gave DaemonPaths = %v", reply, old.DaemonPaths)
+		}
+	}
+}

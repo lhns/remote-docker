@@ -393,3 +393,64 @@ func ParseMounts(spec string) ([]elevate.Mount, error) {
 	}
 	return mounts, nil
 }
+
+// MissingSources reports the mounts whose source is not on this machine.
+//
+// Separate from ParseMounts, which is pure so it can be tested anywhere, and
+// asked once at startup. It matters because docker CREATES a missing bind
+// source: without this, `/typo:/lib/modules` gives the daemon an empty
+// directory, and the failure surfaces inside somebody's container rather than
+// here, with nothing naming the setting that caused it.
+//
+// stat is injected for the same reason: the check belongs to the agent's
+// filesystem, and the rule belongs in a test.
+func MissingSources(mounts []elevate.Mount, stat func(string) error) []elevate.Mount {
+	var out []elevate.Mount
+	for _, m := range mounts {
+		if stat(m.Source) != nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// DaemonPaths reports the paths a bind may name because the workspace put them
+// in the daemon's own filesystem (ADR 0041).
+//
+// Which side of a mount that is depends on which daemon resolves the bind, and
+// the answer is settled here so no use site has to ask:
+//
+//   - per-account: the DESTINATION, because the account's dind is where the
+//     mount lands and that daemon resolves the bind;
+//   - shared: the SOURCE, because there is no dind to mount into and the
+//     workspace's own dockerd sees the path as it exists in this container.
+//
+// Identical for the usual /lib/modules:/lib/modules:ro, and the difference
+// between working and silently wrong for anyone who remaps.
+func DaemonPaths(mounts []elevate.Mount, perAccount bool) []string {
+	var out []string
+	for _, m := range mounts {
+		if perAccount {
+			out = append(out, m.Destination)
+			continue
+		}
+		out = append(out, m.Source)
+	}
+	return out
+}
+
+// UnmountedRemaps are the entries whose destination cannot be honoured, which is
+// every remap in shared-daemon mode: no dind means no mount, so the daemon has
+// the source and nothing at the destination.
+//
+// Returned rather than logged here so the caller can say it once, at startup,
+// with the setting named.
+func UnmountedRemaps(mounts []elevate.Mount) []elevate.Mount {
+	var out []elevate.Mount
+	for _, m := range mounts {
+		if m.Source != m.Destination {
+			out = append(out, m)
+		}
+	}
+	return out
+}

@@ -91,6 +91,11 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		Storage: s.storageDriver(session.Context(), account.Name()),
 		Mode:    s.mode(),
 		Agent:   s.cfg.Version,
+
+		// Which side of a dind mount this is was decided once, on the way in
+		// (ADR 0041). The client matches sources against the list and never
+		// asks which mode this workspace runs.
+		DaemonPaths: s.cfg.DaemonPaths,
 	}
 
 	if err := info.Encode(session); err != nil {
