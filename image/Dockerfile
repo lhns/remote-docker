@@ -90,6 +90,15 @@ EXPOSE 2222
 # overlay2 will not work -- set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs
 VOLUME ["/var/lib/docker"]
 
+# tini warns loudly whenever it is not PID 1, and the one dind's entrypoint
+# starts for dockerd never is: it runs under the agent, which supervises it.
+# Nothing is wrong when it says so -- orphans reparent to PID 1, which is the
+# tini below, whose whole job is reaping them -- but the message reads like a
+# fault and has been reported as one. This makes the inner tini a subreaper so
+# it collects its own subtree instead, and is a no-op for the tini that is
+# already PID 1.
+ENV TINI_SUBREAPER=1
+
 # tini reaps the processes the agent forks per session. The agent is the
 # entrypoint and `serve` the default, so `command: ["elevate"]` in a Swarm
 # deployment selects the other mode without overriding anything else.

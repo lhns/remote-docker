@@ -8,6 +8,17 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### The workspace no longer logs a tini warning that means nothing
+
+Starting a workspace printed `Tini is not running as PID 1 and isn't registered
+as a child subreaper`, which reads like a fault and is not one: that tini is the
+one dind's entrypoint starts for dockerd, under the agent, and the orphans it
+mentions reparent to PID 1 -- the workspace's own tini, whose job is reaping
+them. It is registered as a subreaper now, so it collects its own subtree and
+says nothing.
+
 ## 0.4.0 — 2026-08-22
 
 ### Single files can be bind mounted
