@@ -12,6 +12,11 @@ import (
 const (
 	testRoot = `C:\Program Files\Git`
 	testTemp = `C:\Users\pierr\AppData\Local\Temp`
+
+	// What testRoot normalises to. Windows paths are compared in slash form,
+	// because path/filepath follows the HOST's rules and these are Windows paths
+	// wherever the tests run -- on Linux, filepath.Dir of one is ".".
+	testRootSlashed = "C:/Program Files/Git"
 )
 
 func testEnv(pairs map[string]string) func(string) string {
@@ -28,8 +33,8 @@ func testMSYS() msys {
 
 func TestMSYSFromEnv(t *testing.T) {
 	m := testMSYS()
-	if !m.known() || m.root != testRoot {
-		t.Fatalf("root = %q, want %q", m.root, testRoot)
+	if !m.known() || m.root != testRootSlashed {
+		t.Fatalf("root = %q, want %q", m.root, testRootSlashed)
 	}
 
 	// SHELL is two levels down from the root, and is the fallback.
@@ -37,8 +42,8 @@ func TestMSYSFromEnv(t *testing.T) {
 		"SHELL":   testRoot + `\bin\bash.exe`,
 		"MSYSTEM": "MINGW64",
 	}))
-	if viaShell.root != testRoot {
-		t.Errorf("via SHELL: root = %q, want %q", viaShell.root, testRoot)
+	if viaShell.root != testRootSlashed {
+		t.Errorf("via SHELL: root = %q, want %q", viaShell.root, testRootSlashed)
 	}
 
 	// No Git Bash means no repair at all, which is every other shell.

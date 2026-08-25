@@ -1,9 +1,6 @@
 package main
 
-import (
-	"path/filepath"
-	"strings"
-)
+import "strings"
 
 // Git Bash rewrites arguments before this program starts.
 //
@@ -42,15 +39,33 @@ func msysFrom(getenv func(string) string) msys {
 	switch {
 	case getenv("EXEPATH") != "":
 		// EXEPATH is the bin directory: C:\Program Files\Git\bin.
-		root = filepath.Dir(getenv("EXEPATH"))
+		root = parent(getenv("EXEPATH"))
 	case strings.Contains(strings.ToLower(getenv("SHELL")), "bash.exe"):
 		// SHELL is the bash binary, two levels down from the root.
-		root = filepath.Dir(filepath.Dir(getenv("SHELL")))
+		root = parent(parent(getenv("SHELL")))
 	}
 	if root == "" || getenv("MSYSTEM") == "" {
 		return msys{}
 	}
-	return msys{root: root, temp: getenv("TEMP")}
+	return msys{root: root, temp: slashed(getenv("TEMP"))}
+}
+
+// slashed normalises a Windows path so the rest of this file can compare it.
+//
+// NOT path/filepath: these are Windows paths whatever this program runs on, and
+// filepath follows the HOST's rules. On Linux a backslash is an ordinary
+// character, so filepath.Dir of a Windows path is "." and every comparison here
+// silently stops working -- which is how CI caught this. Same reason wsl.go
+// carries no build tag: the decisions have to be testable anywhere.
+func slashed(p string) string { return strings.ReplaceAll(p, `\`, "/") }
+
+// parent is the directory holding p, in slash form.
+func parent(p string) string {
+	s := strings.TrimSuffix(slashed(p), "/")
+	if i := strings.LastIndex(s, "/"); i > 0 {
+		return s[:i]
+	}
+	return ""
 }
 
 func (m msys) known() bool { return m.root != "" }
@@ -126,16 +141,16 @@ func (m msys) unmangleBind(value string) (repaired, note string, ok bool) {
 // unmangleTarget maps one converted container path back. An empty result means
 // this was not a converted path, so the argument is left alone.
 func (m msys) unmangleTarget(field string) (target, note string) {
-	slashed := filepath.ToSlash(field)
+	field = slashed(field)
 
 	// A single-letter path is mapped to a drive: /x becomes X:\.
-	if drive, rest, found := strings.Cut(slashed, ":"); found && len(drive) == 1 {
+	if drive, rest, found := strings.Cut(field, ":"); found && len(drive) == 1 {
 		if strings.Trim(rest, "/") == "" {
 			return "/" + strings.ToLower(drive), ""
 		}
 	}
 
-	if rest, ok := under(slashed, m.root); ok {
+	if rest, ok := under(field, m.root); ok {
 		restored := "/" + rest
 		// Git Bash maps /bin and /usr/bin onto one directory, so this one
 		// reversal cannot be exact. Measured: /lib and /usr/lib do NOT collide.
@@ -147,18 +162,18 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 	}
 
 	// /tmp follows the Windows TEMP variable rather than living under the root.
-	if rest, ok := under(slashed, m.temp); ok {
+	if rest, ok := under(field, m.temp); ok {
 		return "/tmp/" + rest, ""
 	}
-	if same(slashed, m.temp) {
+	if same(field, m.temp) {
 		return "/tmp", ""
 	}
 
 	// A Windows path this program cannot invert. Saying so beats guessing: the
 	// user needs MSYS_NO_PATHCONV=1 or a leading double slash.
-	if looksWindows(slashed) {
+	if looksWindows(field) {
 		return "", "cannot restore the target " + field +
-			"; run with MSYS_NO_PATHCONV=1 or write the target as //" + strings.TrimPrefix(slashed, "/")
+			"; run with MSYS_NO_PATHCONV=1 or write the target as //" + strings.TrimPrefix(field, "/")
 	}
 	return "", ""
 }
@@ -168,7 +183,7 @@ func under(p, base string) (string, bool) {
 	if base == "" {
 		return "", false
 	}
-	prefix := strings.TrimSuffix(filepath.ToSlash(base), "/") + "/"
+	prefix := strings.TrimSuffix(base, "/") + "/"
 	if len(p) <= len(prefix) || !strings.EqualFold(p[:len(prefix)], prefix) {
 		return "", false
 	}
@@ -177,7 +192,7 @@ func under(p, base string) (string, bool) {
 
 func same(p, base string) bool {
 	return base != "" && strings.EqualFold(strings.TrimSuffix(p, "/"),
-		strings.TrimSuffix(filepath.ToSlash(base), "/"))
+		strings.TrimSuffix(base, "/"))
 }
 
 // looksWindows reports whether a path is drive-rooted, which a container path
