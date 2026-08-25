@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/docker/cli/cli"
 )
@@ -17,6 +18,17 @@ func main() {
 	// and would still see the extra word.
 	self, _ := selfPath()
 	os.Args = dropSelfArgument(os.Args, self)
+
+	// Git Bash rewrites `-v` before this program starts, and only the container
+	// side of it is wrong (ADR 0040). Here for the same reason as the line
+	// above: the embedded Docker CLI reads os.Args in its own right.
+	if runtime.GOOS == "windows" {
+		var notes []string
+		os.Args, notes = msysFrom(os.Getenv).repairArgs(os.Args)
+		for _, note := range notes {
+			fmt.Fprintf(os.Stderr, "%s: Git Bash rewrote a -v argument; %s\n", programName(), note)
+		}
+	}
 
 	root := newRootCommand()
 	err := root.Execute()

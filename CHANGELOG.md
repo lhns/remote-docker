@@ -41,6 +41,20 @@ source is not on the workspace is refused rather than mounted: docker creates a
 missing bind source, so a typo used to hand the daemon an empty directory and
 surface inside a container much later.
 
+### `-v` works from Git Bash
+
+Git Bash rewrites arguments before this program starts, and it cannot know that
+`-v` has two halves meaning different things -- so `-v /c/Users/you/x:/app`
+arrived as `C:\Users\you\x;C:\Program Files\Git\app` and the mount failed naming
+a path nobody typed. The container side is restored now
+([ADR 0040](docs/adr/0040-git-bash-mangles-argv.md)), and the source keeps the
+Windows spelling Git Bash correctly gave it.
+
+Only `-v`, and only where the shape proves the rewrite happened. `-w /src` and
+`-e PATH=/usr/bin:/bin` are mangled too and are not repaired: for those,
+`MSYS_NO_PATHCONV=1` or a leading `//` still works. `--mount` was never affected.
+
+
 ## 0.4.0 — 2026-08-22
 
 ### Single files can be bind mounted

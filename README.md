@@ -721,6 +721,44 @@ to separate.
 - **Very large trees over a WAN.** NFSv3 is synchronous per operation, so
   latency multiplies. Over a LAN it is fine.
 
+### Windows shells
+
+**PowerShell and cmd need nothing.** Paths are Windows paths and arrive as
+typed.
+
+**Git Bash rewrites arguments before this program sees them**, which is MSYS
+doing what it exists to do: a native Windows program cannot read `/c/Users/you`,
+so the runtime maps POSIX paths to Windows form while building the command line.
+It cannot know that `-v` has two halves meaning different things, so it converts
+both and turns the `:` into a `;`:
+
+```
+you type      -v /c/Users/you/x:/app
+docker gets   C:\Users\you\x;C:\Program Files\Git\app
+```
+
+The container side is restored automatically now
+([ADR 0040](docs/adr/0040-git-bash-mangles-argv.md)), and the source keeps the
+Windows spelling Git Bash correctly gave it, so `-v` works from Git Bash without
+setting anything. Where the reversal cannot be exact -- Git Bash maps `/bin` and
+`/usr/bin` onto one directory -- it says what it read.
+
+Only `-v` is repaired. These are mangled too and are not:
+
+| you type | docker gets |
+|---|---|
+| `-w /src` | `C:/Program Files/Git/src` |
+| `-e PATH=/usr/bin:/bin` | `…\usr\bin;…\usr\bin` |
+
+For those, and for anything else that surprises you, either escape at the source
+-- `MSYS_NO_PATHCONV=1 docker …`, whose value is ignored and which disables
+conversion entirely, or a leading double slash (`//app`) -- or use `--mount`,
+which Git Bash has never mangled:
+
+```bash
+docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
+```
+
 ### What cannot be bind mounted
 
 A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.

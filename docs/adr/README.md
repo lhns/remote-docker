@@ -73,6 +73,7 @@ What the binary is, what it answers to, and where it can run.
 | [0018](0018-one-way-to-do-each-thing.md) | One way to do each thing |
 | [0023](0023-running-where-the-loader-is-not-us.md) | Running where the loader is not us |
 | [0024](0024-the-docker-cli-is-the-root.md) | The Docker CLI is the root |
+| [0040](0040-git-bash-mangles-argv.md) | Git Bash mangles argv, and the client undoes it |
 
 ## Sessions and connections
 
