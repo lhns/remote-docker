@@ -2,34 +2,18 @@ package main
 
 import "strings"
 
-// Git Bash rewrites arguments before this program starts.
-//
-// MSYS converts POSIX-looking arguments to Windows form in the PARENT, while
-// building the command line for a native Windows child, so both argv and
-// GetCommandLineW hold only the converted text. Measured 2026-08-25:
+// Git Bash rewrites `-v` before this program starts (ADR 0040):
 //
 //	-v /c/Users/you/x:/app:ro  ->  C:\Users\you\x;C:\Program Files\Git\app;ro
-//	-v /etc/hostname:/x        ->  C:\Program Files\Git\etc\hostname;X:\
-//	-w /src                    ->  C:/Program Files/Git/src
-//	--mount type=bind,source=/c/…,target=/app   ->   both sides correct
 //
-// It gets the SOURCE right, using a mount table this program does not have, and
-// cannot get the target right, because nothing tells it that `-v` has two halves
-// meaning different things. So only the target is restored here (ADR 0040).
-//
-// The callee cannot opt out of the conversion: it depends on whether the child
-// links msys-2.0.dll, and MSYS_NO_PATHCONV is read from the environment by the
-// caller. Undoing it is the only move available to us.
+// MSYS maps the SOURCE correctly, with a mount table this program does not
+// have, and cannot map the target, because nothing tells it that `-v` has two
+// halves meaning different things. Only the target is restored here.
 
 // msys is what a Git Bash parent tells us about itself.
 type msys struct {
-	// root is the installation directory, "C:\Program Files\Git", which POSIX
-	// paths are mapped under.
-	root string
-
-	// temp is where /tmp lands, which is NOT under root: it follows the
-	// Windows TEMP variable.
-	temp string
+	root string // where POSIX paths are mapped: C:\Program Files\Git
+	temp string // where /tmp lands, which is NOT under root
 }
 
 // msysFrom reads the environment Git Bash passes down. A zero msys means the
@@ -50,13 +34,11 @@ func msysFrom(getenv func(string) string) msys {
 	return msys{root: root, temp: slashed(getenv("TEMP"))}
 }
 
-// slashed normalises a Windows path so the rest of this file can compare it.
+// slashed normalises a Windows path for comparison.
 //
-// NOT path/filepath: these are Windows paths whatever this program runs on, and
-// filepath follows the HOST's rules. On Linux a backslash is an ordinary
-// character, so filepath.Dir of a Windows path is "." and every comparison here
-// silently stops working -- which is how CI caught this. Same reason wsl.go
-// carries no build tag: the decisions have to be testable anywhere.
+// NOT path/filepath, which follows the HOST's rules: on Linux a backslash is an
+// ordinary character, so filepath.Dir of a Windows path is "." and every
+// comparison here silently stops working. CI caught it.
 func slashed(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 
 // parent is the directory holding p, in slash form.
@@ -87,38 +69,35 @@ func (m msys) repairArgs(args []string) ([]string, []string) {
 			if i+1 >= len(out) {
 				continue
 			}
-			fixed, note, ok := m.unmangleBind(out[i+1])
-			if ok {
-				out[i+1] = fixed
-			}
-			notes = appendNote(notes, note)
+			out[i+1], notes = m.repair(out[i+1], notes)
 			i++
 		case strings.HasPrefix(arg, "-v="), strings.HasPrefix(arg, "--volume="):
 			flag, value, _ := strings.Cut(arg, "=")
-			fixed, note, ok := m.unmangleBind(value)
-			if ok {
-				out[i] = flag + "=" + fixed
-			}
-			notes = appendNote(notes, note)
+			value, notes = m.repair(value, notes)
+			out[i] = flag + "=" + value
 		}
 	}
 	return out, notes
 }
 
-func appendNote(notes []string, note string) []string {
-	if note == "" {
-		return notes
+// repair is one value and whatever it has to say, so the two spellings of the
+// flag do not each spell out the same three steps.
+func (m msys) repair(value string, notes []string) (string, []string) {
+	fixed, note, ok := m.unmangleBind(value)
+	if note != "" {
+		notes = append(notes, note)
 	}
-	return append(notes, note)
+	if !ok {
+		return value, notes
+	}
+	return fixed, notes
 }
 
-// unmangleBind restores one bind specification, reporting whether it was
-// mangled at all and what a reader should be told.
+// unmangleBind restores one bind specification.
 //
-// The trigger is deliberately two conditions. A `;` alone proves nothing: NTFS
-// permits it in a file name. A `;` AND a Windows-shaped target is a shape a real
-// bind specification cannot have, because the target is a path in a Linux
-// container.
+// Two conditions trigger it, never one: a `;`, which a real bind never has, AND
+// a target this converts back. `;` alone proves nothing, since NTFS permits it
+// in a file name.
 func (m msys) unmangleBind(value string) (repaired, note string, ok bool) {
 	if !strings.Contains(value, ";") {
 		return "", "", false
@@ -150,6 +129,9 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 		}
 	}
 
+	if same(field, m.root) {
+		return "/", ""
+	}
 	if rest, ok := under(field, m.root); ok {
 		restored := "/" + rest
 		// Git Bash maps /bin and /usr/bin onto one directory, so this one
@@ -169,8 +151,7 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 		return "/tmp", ""
 	}
 
-	// A Windows path this program cannot invert. Saying so beats guessing: the
-	// user needs MSYS_NO_PATHCONV=1 or a leading double slash.
+	// Cannot be inverted. Saying so beats guessing.
 	if looksWindows(field) {
 		return "", "cannot restore the target " + field +
 			"; run with MSYS_NO_PATHCONV=1 or write the target as //" + strings.TrimPrefix(field, "/")

@@ -86,6 +86,18 @@ func TestUnmangleBind(t *testing.T) {
 		{"a nested target",
 			`C:\data;C:\Program Files\Git\etc\nginx\nginx.conf`,
 			`C:\data:/etc/nginx/nginx.conf`},
+		{"the target is the root itself",
+			`C:\x;C:\Program Files\Git\`,
+			`C:\x:/`},
+		{"a single-letter target beside a relative source",
+			`.\rel;B:\`,
+			`.\rel:/b`},
+		{"both sides were POSIX",
+			`C:\Program Files\Git\lib\modules;C:\Program Files\Git\lib\modules;ro`,
+			`C:\Program Files\Git\lib\modules:/lib/modules:ro`},
+		{"options keep their commas",
+			`C:\x;C:\Program Files\Git\app;ro,z`,
+			`C:\x:/app:ro,z`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, _, ok := m.unmangleBind(c.mangled)
@@ -198,5 +210,32 @@ func TestRepairArgsDoesNothingOutsideGitBash(t *testing.T) {
 	got, notes := msys{}.repairArgs(args)
 	if !reflect.DeepEqual(got, args) || notes != nil {
 		t.Errorf("repairArgs without Git Bash = %q, %v", got, notes)
+	}
+}
+
+// Not every mangling produces the `;` form: what MSYS does depends on the SHAPE
+// of what was typed. These were measured too, and none can be told apart from a
+// value somebody meant, so they arrive unchanged rather than guessed at.
+func TestManglingsThatCannotBeRepaired(t *testing.T) {
+	m := testMSYS()
+	for _, c := range []struct {
+		typed, received string
+	}{
+		// One segment a side: MSYS reads the leading /a as a drive instead of
+		// building a path list, so there is no ; to key on.
+		{`-v /a:/b`, `a:/b`},
+		{`-v /a:/b:ro`, `a:/b:ro`},
+		{`-v /a:/`, `a:/`},
+		// An anonymous volume is one field, so again no ;, and a lone Windows
+		// path is a shape a real command could have.
+		{`-v /data`, `C:/Program Files/Git/data`},
+		{`-v /x`, `X:/`},
+		// The escape hatch did its job before this program was started.
+		{`-v //app`, `/app`},
+	} {
+		if got, _, ok := m.unmangleBind(c.received); ok {
+			t.Errorf("%s arrived as %q and was rewritten to %q; it cannot be told from a real value",
+				c.typed, c.received, got)
+		}
 	}
 }
