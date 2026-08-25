@@ -203,10 +203,8 @@ func serve(addr, wsAddr string) error {
 	// The shared daemon is a supported configuration rather than a fallback: a
 	// single-account workspace has nothing to separate and would pay for
 	// separation in memory and in duplicated layer cache.
-	// Parsed in BOTH modes. In per-account mode it also performs the mounts; in
-	// shared mode there is no dind to mount into and it only declares what the
-	// workspace's own daemon already has, put there by the deployment
-	// (ADR 0041).
+	// Parsed in BOTH modes: per-account it also performs the mounts, shared it
+	// only declares what the workspace's own daemon already has (ADR 0041).
 	extraMounts, err := daemons.ParseMounts(os.Getenv(envDindMounts))
 	if err != nil {
 		return fmt.Errorf("%s: %w", envDindMounts, err)
@@ -215,9 +213,6 @@ func serve(addr, wsAddr string) error {
 		_, err := os.Stat(p)
 		return err
 	}); len(missing) > 0 {
-		// Refused rather than mounted: docker CREATES a missing bind source, so
-		// the daemon would get an empty directory and the failure would surface
-		// inside somebody's container with nothing naming this setting.
 		return fmt.Errorf("%s: %s is not on this machine", envDindMounts, missing[0].Source)
 	}
 	if !perUserDind {

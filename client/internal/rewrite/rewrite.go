@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,36 +130,29 @@ type Rewriter struct {
 
 	// DaemonPaths are paths the workspace's daemon resolves for itself, from
 	// workspace-info (ADR 0041). A bind naming one is passed through untouched,
-	// so a tool that builds its own flags -- kind mounting /lib/modules -- gets
-	// the daemon's copy instead of an export of this machine.
+	// which is what lets kind mount /lib/modules.
 	DaemonPaths []string
 
-	// LocalExists reports whether a path is on THIS machine, and decides the
-	// case where both sides could claim a source: this machine wins, so a Linux
-	// client's own /etc is still its own. Nil means os.Stat.
+	// LocalExists reports whether a path is on THIS machine. Nil means os.Stat.
 	LocalExists func(path string) bool
 }
 
-// ownedByDaemon reports whether a bind source should be left for the workspace
-// to resolve.
+// ownedByDaemon reports whether the workspace resolves this source itself.
 //
-// Asked in one place, and only for a source this machine does not have, which
-// is what keeps a typo failing: /hme/me/project matches no daemon path, so it
-// is exported and errors exactly as before.
+// Asked only of a source this machine does not have, which is what keeps a typo
+// failing: it matches nothing, so it is exported and refused as before.
+//
+// Slashes by hand rather than filepath, which follows the HOST's rules: a
+// Windows source compared on a Linux test machine would otherwise never match.
 func (r *Rewriter) ownedByDaemon(source string) bool {
-	if len(r.DaemonPaths) == 0 {
-		return false
-	}
-	clean := path.Clean(filepath.ToSlash(source))
-	matched := false
+	clean := path.Clean(strings.ReplaceAll(source, `\`, "/"))
 	for _, owned := range r.DaemonPaths {
-		owned = path.Clean(filepath.ToSlash(owned))
+		owned = path.Clean(owned)
 		if clean == owned || strings.HasPrefix(clean, owned+"/") {
-			matched = true
-			break
+			return !r.localExists(source)
 		}
 	}
-	return matched && !r.localExists(source)
+	return false
 }
 
 func (r *Rewriter) localExists(p string) bool {
@@ -340,9 +332,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.
 			continue
 		}
 		if r.ownedByDaemon(parsed.Source) {
-			// The workspace has this path and this machine does not, so the
-			// daemon resolves it (ADR 0041). Untouched, which is also how every
-			// option on it survives.
+			// Untouched, which is also how every option on it survives.
 			kept = append(kept, spec)
 			continue
 		}
