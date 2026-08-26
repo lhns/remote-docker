@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.5.1 — 2026-08-26
 
 ### A workspace path works from Git Bash too
 
