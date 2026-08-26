@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.5.0 — 2026-08-26
 
 ### The workspace no longer logs a tini warning that means nothing
 
