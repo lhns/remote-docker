@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -125,6 +127,40 @@ type Rewriter struct {
 	// one question: whether a single file can be mounted at all (ADR 0039).
 	// Empty means unknown, which is treated as capable.
 	DockerVersion string
+
+	// DaemonPaths are paths the workspace's daemon resolves for itself, from
+	// workspace-info (ADR 0041). A bind naming one is passed through untouched,
+	// which is what lets kind mount /lib/modules.
+	DaemonPaths []string
+
+	// LocalExists reports whether a path is on THIS machine. Nil means os.Stat.
+	LocalExists func(path string) bool
+}
+
+// ownedByDaemon reports whether the workspace resolves this source itself.
+//
+// Asked only of a source this machine does not have, which is what keeps a typo
+// failing: it matches nothing, so it is exported and refused as before.
+//
+// Slashes by hand rather than filepath, which follows the HOST's rules: a
+// Windows source compared on a Linux test machine would otherwise never match.
+func (r *Rewriter) ownedByDaemon(source string) bool {
+	clean := path.Clean(strings.ReplaceAll(source, `\`, "/"))
+	for _, owned := range r.DaemonPaths {
+		owned = path.Clean(owned)
+		if clean == owned || strings.HasPrefix(clean, owned+"/") {
+			return !r.localExists(source)
+		}
+	}
+	return false
+}
+
+func (r *Rewriter) localExists(p string) bool {
+	if r.LocalExists != nil {
+		return r.LocalExists(p)
+	}
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // ContainerCreate rewrites the body of POST /containers/create.
@@ -295,6 +331,11 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.
 			kept = append(kept, spec)
 			continue
 		}
+		if r.ownedByDaemon(parsed.Source) {
+			// Untouched, which is also how every option on it survives.
+			kept = append(kept, spec)
+			continue
+		}
 
 		volume, file, err := r.volumeFor(ctx, parsed.Source)
 		if err != nil {
@@ -429,7 +470,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 		if err := json.Unmarshal(mount["Source"], &source); err != nil {
 			continue
 		}
-		if !IsLocalPath(source) {
+		if !IsLocalPath(source) || r.ownedByDaemon(source) {
 			continue
 		}
 

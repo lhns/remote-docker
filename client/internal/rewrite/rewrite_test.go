@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -601,5 +602,125 @@ func TestSupportsSubpath(t *testing.T) {
 		if got := supportsSubpath(c.version); got != c.want {
 			t.Errorf("supportsSubpath(%q) = %v, want %v", c.version, got, c.want)
 		}
+	}
+}
+
+// newDaemonRewriter reports paths the workspace's daemon owns, and which of
+// them this machine also has.
+func newDaemonRewriter(owned []string, here ...string) (*Rewriter, *fakeSharer, *fakeVolumes) {
+	s := &fakeSharer{}
+	v := &fakeVolumes{}
+	return &Rewriter{
+		Shares: s, Volumes: v, NFSPort: 30000,
+		DaemonPaths: owned,
+		LocalExists: func(p string) bool { return slices.Contains(here, p) },
+	}, s, v
+}
+
+// kind builds `-v /lib/modules:/lib/modules:ro` itself and its flags are not
+// ours to edit, so the client has to leave the source alone (ADR 0041).
+func TestADaemonOwnedSourceIsLeftAlone(t *testing.T) {
+	r, sharer, volumes := newDaemonRewriter([]string{"/lib/modules"})
+
+	out, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/lib/modules:/lib/modules:ro","/home/me/src:/app"]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	binds := decodeHostConfig(t, out)["Binds"].([]any)
+	if binds[0] != "/lib/modules:/lib/modules:ro" {
+		t.Errorf("the daemon's own path was rewritten to %v", binds[0])
+	}
+	// The bind beside it is untouched by any of this.
+	want := workspace.VolumeNameForID("", workspace.ShareID("/home/me/src")) + ":/app"
+	if binds[1] != want {
+		t.Errorf("the ordinary bind = %v, want %q", binds[1], want)
+	}
+	if slices.Contains(sharer.shared, "/lib/modules") {
+		t.Error("the daemon's own path was exported from this machine")
+	}
+	if len(volumes.created) != 1 {
+		t.Errorf("created %d volumes, want one for the ordinary bind", len(volumes.created))
+	}
+}
+
+// A subdirectory of an owned path is owned; a name that merely starts with the
+// same letters is not.
+func TestDaemonOwnershipMatchesOnPathBoundaries(t *testing.T) {
+	r, _, _ := newDaemonRewriter([]string{"/lib/modules"})
+
+	for _, c := range []struct {
+		source string
+		owned  bool
+	}{
+		{"/lib/modules", true},
+		{"/lib/modules/5.15", true},
+		{"/lib/modules-backup", false},
+		{"/lib", false},
+	} {
+		if got := r.ownedByDaemon(c.source); got != c.owned {
+			t.Errorf("ownedByDaemon(%q) = %v, want %v", c.source, got, c.owned)
+		}
+	}
+}
+
+// This machine wins when both could claim the path, so a Linux client's own
+// /etc is still its own.
+func TestThisMachineWinsWhenItHasThePathToo(t *testing.T) {
+	r, sharer, _ := newDaemonRewriter([]string{"/etc"}, "/etc/hostname")
+
+	if _, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/etc/hostname:/x"]}}`)); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if !slices.Contains(sharer.shared, "/etc/hostname") {
+		t.Error("a path this machine has was handed to the workspace")
+	}
+}
+
+// A typo matches no owned path, so it is exported and fails exactly as before.
+// That is what makes this safe where a blanket passthrough is not.
+func TestATypoStillFails(t *testing.T) {
+	r, sharer, _ := newDaemonRewriter([]string{"/lib/modules"})
+
+	if _, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/hme/me/project:/app"]}}`)); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if !slices.Contains(sharer.shared, "/hme/me/project") {
+		t.Error("a mistyped source was passed to the workspace instead of failing")
+	}
+}
+
+// The --mount spelling takes the other path through the rewriter.
+func TestADaemonOwnedMountIsLeftAlone(t *testing.T) {
+	r, _, volumes := newDaemonRewriter([]string{"/lib/modules"})
+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Mounts":[
+		{"Type":"bind","Source":"/lib/modules","Target":"/lib/modules","ReadOnly":true}
+	]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	mount := decodeHostConfig(t, out)["Mounts"].([]any)[0].(map[string]any)
+	if mount["Type"] != "bind" || mount["Source"] != "/lib/modules" {
+		t.Errorf("mount = %v, want the bind untouched", mount)
+	}
+	if len(volumes.created) != 0 {
+		t.Errorf("a volume was created for the daemon's own path: %v", volumes.created)
+	}
+}
+
+// An agent that predates the key sends nothing, which must read as "none".
+func TestNoDaemonPathsIsTheOldBehaviour(t *testing.T) {
+	r, sharer, _ := newDaemonRewriter(nil)
+
+	if _, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/lib/modules:/lib/modules:ro"]}}`)); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if !slices.Contains(sharer.shared, "/lib/modules") {
+		t.Error("without a list, a source was still not exported")
 	}
 }

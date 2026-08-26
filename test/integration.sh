@@ -130,7 +130,11 @@ echo "== 4. start the workspace =="
 # The WebSocket listener is published as well, so section 19 can put a real
 # reverse proxy in front of it. The agent serves it by default; nothing else in
 # this suite touches it.
-if start_workspace false -p "$WS_PORT:2280"; then
+# WORKSPACE_DIND_MOUNTS declares which paths the workspace's own daemon
+# resolves, which section 9d then binds (ADR 0041). This suite runs the SHARED
+# daemon, so the source side is what the daemon sees -- there is no dind to
+# mount into -- and both of these exist inside the workspace container.
+if start_workspace false -p "$WS_PORT:2280"     -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro; then
     ok "workspace container started"
 else
     bad "workspace container failed to start"
@@ -382,6 +386,37 @@ if out=$(dockert run --rm --mount "type=bind,source=$PROJECT/conf/wanted.conf,ta
 else
     bad "--mount of a single file failed: $(echo "$out" | head -2 | tr '
 ' ' ')"
+fi
+
+echo
+echo "== 9d. a bind may name a path the workspace owns =="
+# kind builds `-v /lib/modules:/lib/modules:ro` itself, and its flags are not the
+# user's to edit. A path the workspace declared is therefore resolved by the
+# DAEMON rather than exported from this machine (ADR 0041).
+#
+# /etc/workspace exists in the workspace container and NOT on this runner, so a
+# successful read is the passthrough working: had the client tried to export it,
+# there would be nothing here to export.
+if out=$(dockert run --rm -v /etc/workspace:/w:ro alpine:3 ls /w 2>&1) &&
+    echo "$out" | grep -q "authorized_keys.d"; then
+    ok "a declared path was resolved by the workspace"
+else
+    bad "a declared path did not resolve: $(echo "$out" | head -2 | tr '
+' ' ')"
+fi
+
+# And the other half of the rule: THIS machine wins when it has the path too.
+# /etc/hostname is declared as well and exists on the runner, so the container
+# must read the RUNNER's file, not the workspace container's.
+runner_host=$(cat /etc/hostname)
+ws_host=$(hostdocker exec "$CONTAINER" cat /etc/hostname 2>/dev/null)
+if [ "$runner_host" = "$ws_host" ]; then
+    info "the runner and the workspace report the same hostname; skipping the tie-break"
+elif out=$(dockert run --rm -v /etc/hostname:/x:ro alpine:3 cat /x 2>&1) &&
+    echo "$out" | grep -q "^$runner_host$"; then
+    ok "a path this machine also has was exported from here, not the workspace"
+else
+    bad "the tie-break read [$(echo "$out" | head -1)], want the runner's [$runner_host]"
 fi
 
 echo

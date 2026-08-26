@@ -510,7 +510,7 @@ node. The socket is deliberately not passed to the privileged child.
 | `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
 | `WORKSPACE_DIND_IMAGE` | the workspace's own image | image a per-account daemon runs |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
-| `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon; see below |
+| `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon, and the paths a bind may name; see below |
 | `WORKSPACE_SHELL` | `/bin/bash` | shell an SSH session lands in |
 | `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
 | `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; uid decides the rest |
@@ -545,6 +545,20 @@ The first two lines are the workspace's own daemon, which you already needed.
 `source:destination` or `source:destination:ro`, comma-separated. Both paths
 must be absolute: docker reads a relative source as a volume NAME, so it would
 quietly mount an empty volume and the daemon would read no configuration at all.
+
+**It also declares which paths a bind may name.** A client leaves
+`-v /lib/modules:/lib/modules:ro` alone rather than trying to export it from the
+user's machine, which is what makes tools that build their own flags work
+([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)). Which side of the mount
+that is depends on the daemon doing the resolving: with a daemon per account it
+is the DESTINATION, since that is where the mount lands; with a shared daemon
+nothing is mounted at all and it is the SOURCE, as the path exists in the
+workspace container. Identical for the usual `/lib/modules:/lib/modules:ro`, and
+a remap in shared mode is warned about at startup because it cannot be honoured.
+
+A source that is not on the workspace is refused at startup rather than mounted:
+docker creates a missing bind source, so a typo would otherwise give the daemon
+an empty directory and surface inside somebody's container much later.
 
 Two things to know before you use it. A `daemon.json` that sets `storage-driver`
 or `hosts` collides with the flags the agent passes, and dockerd refuses to
@@ -720,6 +734,16 @@ later:
   unaffected — it names a device on the workspace.)
 - **Windows named pipes** (`npipe` mounts) pass through untouched, so the
   workspace looks for a pipe path that means nothing there.
+
+**A bind source is a path on YOUR machine**, always, which is the point of the
+whole thing. A path that exists only on the workspace fails here, and the error
+is about your filesystem. The exception is deliberate and belongs to whoever runs
+the workspace: paths listed in `WORKSPACE_DIND_MOUNTS` are resolved by the
+workspace's own daemon
+([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)), which is what lets a
+tool that builds its own flags -- `kind` mounting `/lib/modules` -- work at all.
+A path your machine also has still wins, so nothing changes for the mounts you
+already use.
 
 Two things work but are not what `docker inspect` will show: every bind is a
 volume, and a single file is a volume with a subpath

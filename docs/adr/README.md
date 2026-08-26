@@ -39,6 +39,7 @@ than trusted.
 | [0032](0032-the-workspace-is-the-record.md) | An address is stable container-side, and the workspace is the record | |
 | [0033](0033-handles-derived-from-the-path.md) | The root handle is derived, the rest are not | |
 | [0039](0039-a-single-file-is-a-one-file-export.md) | A single file is a one-file export | |
+| [0041](0041-the-workspaces-own-paths.md) | The workspace's own paths are the ones it mounted into the daemon | |
 
 ## Code layout
 

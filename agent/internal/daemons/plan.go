@@ -393,3 +393,52 @@ func ParseMounts(spec string) ([]elevate.Mount, error) {
 	}
 	return mounts, nil
 }
+
+// MissingSources reports the mounts whose source is not on this machine.
+//
+// docker CREATES a missing bind source, so `/typo:/lib/modules` would give the
+// daemon an empty directory and surface inside somebody's container with
+// nothing naming the setting. Separate from ParseMounts, which stays pure, and
+// stat is injected for the same reason.
+func MissingSources(mounts []elevate.Mount, stat func(string) error) []elevate.Mount {
+	var out []elevate.Mount
+	for _, m := range mounts {
+		if stat(m.Source) != nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// DaemonPaths reports the paths a bind may name, because the workspace put them
+// in the daemon's own filesystem (ADR 0041).
+//
+// Which side that is depends on the daemon resolving the bind, and is settled
+// here so no use site has to ask: per-account, the DESTINATION, where the dind
+// mount lands; shared, the SOURCE, since nothing is mounted and the workspace's
+// own dockerd sees the path as it exists here. Identical for the usual
+// /lib/modules:/lib/modules:ro.
+func DaemonPaths(mounts []elevate.Mount, perAccount bool) []string {
+	var out []string
+	for _, m := range mounts {
+		if perAccount {
+			out = append(out, m.Destination)
+		} else {
+			out = append(out, m.Source)
+		}
+	}
+	return out
+}
+
+// UnmountedRemaps are entries a shared daemon cannot honour: nothing is mounted
+// there, so it has the source and nothing at the destination. Returned rather
+// than logged, so the caller says it once with the setting named.
+func UnmountedRemaps(mounts []elevate.Mount) []elevate.Mount {
+	var out []elevate.Mount
+	for _, m := range mounts {
+		if m.Source != m.Destination {
+			out = append(out, m)
+		}
+	}
+	return out
+}

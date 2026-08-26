@@ -1,6 +1,8 @@
 package daemons
 
 import (
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -96,5 +98,63 @@ func TestExtraMountsReachThePlanAndTheFingerprint(t *testing.T) {
 	}
 	if Fingerprint(with) == Fingerprint(plain) {
 		t.Error("adding a mount left the fingerprint alone, so no existing daemon would be rebuilt")
+	}
+}
+
+// Which side of a mount a bind may name depends on which daemon resolves it,
+// and that question is answered here so no use site has to ask (ADR 0041).
+func TestDaemonPathsFollowTheDaemonThatResolvesTheBind(t *testing.T) {
+	mounts, err := ParseMounts("/lib/modules:/lib/modules:ro, /opt/mods:/lib/other")
+	if err != nil {
+		t.Fatalf("ParseMounts: %v", err)
+	}
+
+	// A per-account daemon is a dind container: the mount lands at the
+	// destination, and that is what a bind may name.
+	if got := DaemonPaths(mounts, true); !slices.Equal(got, []string{"/lib/modules", "/lib/other"}) {
+		t.Errorf("per-account: %v, want the destinations", got)
+	}
+
+	// A shared daemon has no dind to mount into, so it sees the path as it
+	// exists in the workspace container: the source.
+	if got := DaemonPaths(mounts, false); !slices.Equal(got, []string{"/lib/modules", "/opt/mods"}) {
+		t.Errorf("shared: %v, want the sources", got)
+	}
+
+	if got := DaemonPaths(nil, true); len(got) != 0 {
+		t.Errorf("no mounts produced %v", got)
+	}
+}
+
+// A remap cannot be honoured by a shared daemon, and the operator hears about
+// it rather than finding out from a container.
+func TestUnmountedRemaps(t *testing.T) {
+	mounts, err := ParseMounts("/lib/modules:/lib/modules:ro, /opt/mods:/lib/other")
+	if err != nil {
+		t.Fatalf("ParseMounts: %v", err)
+	}
+	got := UnmountedRemaps(mounts)
+	if len(got) != 1 || got[0].Source != "/opt/mods" {
+		t.Errorf("UnmountedRemaps = %+v, want only the remap", got)
+	}
+}
+
+// docker CREATES a missing bind source, so a typo would hand the daemon an
+// empty directory and surface inside somebody's container. It is refused at
+// startup instead.
+func TestMissingSources(t *testing.T) {
+	mounts, err := ParseMounts("/there:/a, /typo:/b")
+	if err != nil {
+		t.Fatalf("ParseMounts: %v", err)
+	}
+	stat := func(p string) error {
+		if p == "/there" {
+			return nil
+		}
+		return os.ErrNotExist
+	}
+	got := MissingSources(mounts, stat)
+	if len(got) != 1 || got[0].Source != "/typo" {
+		t.Errorf("MissingSources = %+v, want only /typo", got)
 	}
 }

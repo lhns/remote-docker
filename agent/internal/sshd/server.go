@@ -53,6 +53,12 @@ type Config struct {
 	// see which workspace agent it is talking to.
 	Version string
 
+	// DaemonPaths are the paths a bind may name because the workspace put them
+	// in the daemon's own filesystem, derived from WORKSPACE_DIND_MOUNTS and
+	// reported in workspace-info (ADR 0041). The client leaves such a bind
+	// alone instead of exporting it. Empty is the old behaviour.
+	DaemonPaths []string
+
 	Log *slog.Logger
 }
 

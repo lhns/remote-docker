@@ -135,6 +135,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		// file, which needs a volume subpath (ADR 0039).
 		DockerVersion: info.Docker,
 
+		// Paths the workspace's daemon resolves for itself, so a bind naming
+		// one is left alone (ADR 0041).
+		DaemonPaths: info.DaemonPaths,
+
 		// The published port moves to whatever the daemon picks, so the number
 		// the user typed is claimed on THIS machine and a clash has to be
 		// reported here (ADR 0008).

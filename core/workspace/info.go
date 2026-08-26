@@ -27,6 +27,14 @@ type Info struct {
 	// new client reading an old agent's sees it empty.
 	Agent string
 
+	// DaemonPaths are the paths the daemon serving this account resolves for
+	// itself, so a bind naming one is left alone rather than exported from the
+	// client (ADR 0041). Derived by the agent from WORKSPACE_DIND_MOUNTS.
+	//
+	// Empty from an agent that predates the key, which reads as "none" and is
+	// exactly the old behaviour.
+	DaemonPaths []string
+
 	// Mode is how this workspace serves daemons: "shared" (ADR 0012) or
 	// "per-account" (ADR 0019).
 	//
@@ -55,20 +63,33 @@ type Info struct {
 
 // Wire keys, named once so the parser and the encoder cannot drift.
 const (
-	keyUser    = "WORKSPACE_USER"
-	keyUID     = "WORKSPACE_UID"
-	keyGID     = "WORKSPACE_GID"
-	keyNFSPort = "WORKSPACE_NFS_PORT"
-	keyDocker  = "WORKSPACE_DOCKER"
-	keyAgent   = "WORKSPACE_AGENT"
-	keyStorage = "WORKSPACE_STORAGE"
-	keyMode    = "WORKSPACE_MODE"
+	keyUser        = "WORKSPACE_USER"
+	keyUID         = "WORKSPACE_UID"
+	keyGID         = "WORKSPACE_GID"
+	keyNFSPort     = "WORKSPACE_NFS_PORT"
+	keyDocker      = "WORKSPACE_DOCKER"
+	keyAgent       = "WORKSPACE_AGENT"
+	keyStorage     = "WORKSPACE_STORAGE"
+	keyMode        = "WORKSPACE_MODE"
+	keyDaemonPaths = "WORKSPACE_DAEMON_PATHS"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own
 // dockerd. It is a normal answer, not a parse failure: the client wants to
 // show it rather than refuse to start.
 const DockerUnavailable = "unavailable"
+
+// splitPaths reads a comma-separated list, dropping blanks so a trailing comma
+// or an empty value is "none" rather than a path called "".
+func splitPaths(value string) []string {
+	var out []string
+	for _, p := range strings.Split(value, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // ParseInfo reads KEY=VALUE lines. Blank lines and # comments are skipped, and
 // unrecognised keys are kept in Extra rather than rejected.
@@ -105,6 +126,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Storage = value
 		case keyMode:
 			info.Mode = value
+		case keyDaemonPaths:
+			info.DaemonPaths = splitPaths(value)
 		case keyDocker:
 			info.Docker = value
 		default:
@@ -154,6 +177,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyAgent, i.Agent},
 		{keyStorage, i.Storage},
 		{keyMode, i.Mode},
+		{keyDaemonPaths, strings.Join(i.DaemonPaths, ",")},
 	}
 
 	extraKeys := make([]string, 0, len(i.Extra))

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -202,6 +203,29 @@ func serve(addr, wsAddr string) error {
 	// The shared daemon is a supported configuration rather than a fallback: a
 	// single-account workspace has nothing to separate and would pay for
 	// separation in memory and in duplicated layer cache.
+	// Parsed in BOTH modes: per-account it also performs the mounts, shared it
+	// only declares what the workspace's own daemon already has (ADR 0041).
+	extraMounts, err := daemons.ParseMounts(os.Getenv(envDindMounts))
+	if err != nil {
+		return fmt.Errorf("%s: %w", envDindMounts, err)
+	}
+	if missing := daemons.MissingSources(extraMounts, func(p string) error {
+		_, err := os.Stat(p)
+		return err
+	}); len(missing) > 0 {
+		return fmt.Errorf("%s: %s is not on this machine", envDindMounts, missing[0].Source)
+	}
+	if !perUserDind {
+		for _, m := range daemons.UnmountedRemaps(extraMounts) {
+			log.Warn("a shared daemon mounts nothing, so only the source is offered to binds",
+				"source", m.Source, "ignored-destination", m.Destination)
+		}
+	}
+	daemonPaths := daemons.DaemonPaths(extraMounts, perUserDind)
+	if len(daemonPaths) > 0 {
+		log.Info("binds may name the daemon's own paths", "paths", strings.Join(daemonPaths, ","))
+	}
+
 	targets := daemons.Shared("")
 	if perUserDind {
 		// The id identifies THIS workspace across redeploys, which a container
@@ -219,13 +243,6 @@ func serve(addr, wsAddr string) error {
 		// filesystem needs the same answer, or dockerd falls back to
 		// vfs, which copies the whole image on every container create and says
 		// nothing about why everything became slow.
-		// Refused at startup rather than per session: a mount nobody can parse
-		// would otherwise become a daemon that will not start, once per
-		// account, with the setting that produced it nowhere in the message.
-		extraMounts, err := daemons.ParseMounts(os.Getenv(envDindMounts))
-		if err != nil {
-			return fmt.Errorf("%s: %w", envDindMounts, err)
-		}
 		if len(extraMounts) > 0 {
 			log.Info("per-account daemons get extra mounts", "count", len(extraMounts))
 		}
@@ -358,7 +375,9 @@ func serve(addr, wsAddr string) error {
 		Ports:    ports,
 		Daemons:  targets,
 		Version:  version,
-		Log:      logger("sshd"),
+
+		DaemonPaths: daemonPaths,
+		Log:         logger("sshd"),
 	})
 	if err != nil {
 		return err
