@@ -136,8 +136,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		DockerVersion: info.Docker,
 
 		// Paths the workspace's daemon resolves for itself, so a bind naming
-		// one is left alone (ADR 0041).
+		// one is left alone (ADR 0041), and the other spelling a shell may have
+		// left a source in (ADR 0040).
 		DaemonPaths: info.DaemonPaths,
+		PosixSource: s.opts.PosixSource,
 
 		// The published port moves to whatever the daemon picks, so the number
 		// the user typed is claimed on THIS machine and a clash has to be

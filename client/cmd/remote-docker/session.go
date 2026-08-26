@@ -45,6 +45,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 		// talks to whoever is serving, or only asks the workspace a question.
 		Role:         session.Host,
 		Version:      version,
+		PosixSource:  msysFrom(os.Getenv).posixSource,
 		Watch:        watch,
 		WatchBudget:  cfg.WatchBudget,
 		WatchExclude: cfg.WatchExclude,

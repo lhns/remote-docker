@@ -57,6 +57,11 @@ type Options struct {
 	WatchBudget  int
 	WatchExclude []string
 
+	// PosixSource reports the POSIX path a shell may have rewritten a bind
+	// source into. Supplied by the command layer, which is where the shell is
+	// known; nil everywhere else, which is every platform but Windows.
+	PosixSource func(source string) string
+
 	// Version is the build this session is running, reported to anything
 	// asking whether it matches the client talking to it.
 	Version string

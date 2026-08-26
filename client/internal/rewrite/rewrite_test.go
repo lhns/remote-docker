@@ -724,3 +724,66 @@ func TestNoDaemonPathsIsTheOldBehaviour(t *testing.T) {
 		t.Error("without a list, a source was still not exported")
 	}
 }
+
+// Git Bash rewrites BOTH halves of a `-v`, and only the container side can be
+// restored blind (ADR 0040) -- so a workspace path typed there arrives as a
+// Windows path under the Git installation and would match nothing. The two
+// features have to compose, or `-v /lib/modules:/lib/modules:ro` works for kind
+// and fails for the person testing the same command by hand.
+func TestAMangledSourceStillMatchesADaemonPath(t *testing.T) {
+	const mangled = `C:\Program Files\Git\lib\modules`
+
+	r, sharer, _ := newDaemonRewriter([]string{"/lib/modules"})
+	r.PosixSource = func(source string) string {
+		if strings.HasPrefix(source, `C:\Program Files\Git`) {
+			return strings.ReplaceAll(strings.TrimPrefix(source, `C:\Program Files\Git`), `\`, "/")
+		}
+		return ""
+	}
+
+	// Encoded rather than pasted: a Windows path is full of backslashes, which
+	// are escapes in JSON.
+	spec, err := json.Marshal(mangled + ":/lib/modules:ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":[`+string(spec)+`]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if binds := decodeHostConfig(t, out)["Binds"].([]any); binds[0] != mangled+":/lib/modules:ro" {
+		t.Errorf("the bind was rewritten to %v", binds[0])
+	}
+	if len(sharer.shared) != 0 {
+		t.Errorf("a workspace path was exported from this machine: %v", sharer.shared)
+	}
+}
+
+// The second reading is a CANDIDATE, and the workspace declaring the path is
+// what makes it credible. Without that, the Windows path is just a Windows path.
+func TestASecondReadingIsOnlyTakenWhenTheWorkspaceDeclaredIt(t *testing.T) {
+	posix := func(string) string { return "/lib/modules" }
+
+	// Nothing declared: the source is exported as it always was.
+	r, sharer, _ := newDaemonRewriter(nil)
+	r.PosixSource = posix
+	if _, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["C:/whatever:/x"]}}`)); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if len(sharer.shared) != 1 {
+		t.Errorf("with nothing declared, the source was not exported: %v", sharer.shared)
+	}
+
+	// Declared, but the Windows path is really here: this machine still wins.
+	r, sharer, _ = newDaemonRewriter([]string{"/lib/modules"}, "C:/whatever")
+	r.PosixSource = posix
+	if _, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["C:/whatever:/x"]}}`)); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if len(sharer.shared) != 1 {
+		t.Error("a path this machine has was handed to the workspace")
+	}
+}

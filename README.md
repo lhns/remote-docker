@@ -750,6 +750,12 @@ Only `-v` is repaired. These are mangled too and are not:
 | `-w /src` | `C:/Program Files/Git/src` |
 | `-e PATH=/usr/bin:/bin` | `…\usr\bin;…\usr\bin` |
 
+A path the workspace owns works from Git Bash too. Both halves of `-v` are
+converted, so `-v /lib/modules:/lib/modules:ro` arrives with a source under the
+Git installation; the client offers that reading back and takes it when the
+workspace declared the path and this machine does not have it. `//lib/modules`
+survives conversion untouched and works as well, if you would rather be explicit.
+
 For those, and for anything else that surprises you, either escape at the source
 -- `MSYS_NO_PATHCONV=1 docker …`, whose value is ignored and which disables
 conversion entirely, or a leading double slash (`//app`) -- or use `--mount`,

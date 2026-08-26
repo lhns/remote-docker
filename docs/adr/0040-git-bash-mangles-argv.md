@@ -100,6 +100,18 @@ Each of these looks like the obvious answer.
   because it has to be: `-v /a:/b` arrives as `a:/b`, which is what mounting a
   named volume `a` at `/b` looks like, so warning would fire on correct commands.
   The cost, stated plainly: that spelling silently becomes a named volume.
+- **The source is restored only where the workspace vouches for it.** Both halves
+  are converted, so a workspace path typed in Git Bash --
+  `-v /lib/modules:/lib/modules:ro`, the very command kind issues -- arrives with
+  a source under the Git installation and matches nothing in ADR 0041's list.
+  Restoring it blind is not possible: `C:\Program Files\Git\etc` is what MSYS
+  makes of BOTH `/etc` and `/c/Program Files/Git/etc`, and mounting from under
+  the Git installation is ordinary. So `posixSource` offers the other reading and
+  the rewriter takes it only when the workspace declares that path AND this
+  machine does not have it. kind itself never needed this, since its flags do not
+  pass through a shell.
+- **`--mount` does not escape it**: measured, its `source=` is converted the same
+  way, though its `target=` is left alone.
 - **`--mount` was never affected** and is the recommendation for anyone who
   wants no ambiguity at all.
 - **A future Git Bash changing its mapping** would make the reversal wrong rather
