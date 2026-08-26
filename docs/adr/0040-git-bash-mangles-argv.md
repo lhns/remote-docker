@@ -93,6 +93,13 @@ Each of these looks like the obvious answer.
   the second is lossy in a way no reversal can fix (both halves arrive as the
   same Windows path). `MSYS_NO_PATHCONV=1` or a leading `//` remains the answer
   for those, and the README says so.
+- **Failing to repair warns; failing to notice cannot.** A target recognised as
+  mangled but not invertible is left alone with one line on stderr, and docker
+  then gives its own error -- we explain rather than pre-empt a daemon that may
+  accept something we do not understand. A shape carrying no signature is silent,
+  because it has to be: `-v /a:/b` arrives as `a:/b`, which is what mounting a
+  named volume `a` at `/b` looks like, so warning would fire on correct commands.
+  The cost, stated plainly: that spelling silently becomes a named volume.
 - **`--mount` was never affected** and is the recommendation for anyone who
   wants no ambiguity at all.
 - **A future Git Bash changing its mapping** would make the reversal wrong rather
