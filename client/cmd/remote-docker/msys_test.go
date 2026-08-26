@@ -239,3 +239,30 @@ func TestManglingsThatCannotBeRepaired(t *testing.T) {
 		}
 	}
 }
+
+// A source Git Bash rewrote can be read back, and only the caller can decide
+// whether that reading is the one meant (ADR 0040).
+func TestPosixSource(t *testing.T) {
+	m := testMSYS()
+	for _, c := range []struct{ source, want string }{
+		{`C:\Program Files\Git\lib\modules`, "/lib/modules"},
+		{`C:\Program Files\Git\etc`, "/etc"},
+		{`C:\Program Files\Git`, "/"},
+		{`C:\Users\pierr\AppData\Local\Temp\x`, "/tmp/x"},
+
+		// Not something MSYS produced from a POSIX path, so there is no second
+		// reading to offer: a real Windows source, and a relative one.
+		{`C:\Users\pierr\project`, ""},
+		{`.\rel`, ""},
+		{`/already/posix`, ""},
+	} {
+		if got := m.posixSource(c.source); got != c.want {
+			t.Errorf("posixSource(%q) = %q, want %q", c.source, got, c.want)
+		}
+	}
+
+	// Outside Git Bash there is nothing to undo.
+	if got := (msys{}).posixSource(`C:\Program Files\Git\etc`); got != "" {
+		t.Errorf("posixSource without Git Bash = %q", got)
+	}
+}

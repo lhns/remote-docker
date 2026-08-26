@@ -8,6 +8,23 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### A workspace path works from Git Bash too
+
+The two changes in 0.5.0 did not compose. Git Bash converts BOTH halves of a
+`-v`, and only the container side can be restored blind, so
+`-v /lib/modules:/lib/modules:ro` -- the command kind issues, and the one you
+would type to test it -- arrived with a source under the Git installation and
+matched none of the workspace's declared paths. It worked for kind, whose flags
+never pass through a shell, and failed for the person checking the same thing by
+hand.
+
+The client now offers the other reading of such a source and takes it when the
+workspace declared that path and this machine does not have it. Restoring it
+blind is not possible: `C:\Program Files\Git\etc` is what Git Bash makes of
+both `/etc` and `/c/Program Files/Git/etc`.
+
 ## 0.5.0 — 2026-08-26
 
 ### The workspace no longer logs a tini warning that means nothing

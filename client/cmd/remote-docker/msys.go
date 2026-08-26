@@ -159,6 +159,32 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 	return "", ""
 }
 
+// posixSource reports the POSIX path a rewritten bind SOURCE may have been, and
+// "" when it is not one MSYS could have produced.
+//
+// A candidate, never a correction: `C:\Program Files\Git\etc` is what MSYS makes
+// of both `/etc` and `/c/Program Files/Git/etc`, and mounting something from
+// under the Git installation is ordinary. Only the caller can break the tie,
+// which is why this returns a possibility rather than rewriting anything -- see
+// rewrite.ownedByDaemon, which accepts it only when the workspace declares that
+// path and this machine does not have it (ADR 0040, ADR 0041).
+func (m msys) posixSource(source string) string {
+	if !m.known() {
+		return ""
+	}
+	source = slashed(source)
+	if same(source, m.root) {
+		return "/"
+	}
+	if rest, ok := under(source, m.root); ok {
+		return "/" + rest
+	}
+	if rest, ok := under(source, m.temp); ok {
+		return "/tmp/" + rest
+	}
+	return ""
+}
+
 // under reports whether p is inside base, and what remains below it.
 func under(p, base string) (string, bool) {
 	if base == "" {
