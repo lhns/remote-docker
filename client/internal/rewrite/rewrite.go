@@ -138,9 +138,8 @@ type Rewriter struct {
 
 	// PosixSource reports the POSIX path a shell may have rewritten a bind
 	// source into, and "" when it did not. Git Bash converts BOTH halves of a
-	// `-v`, and only the container side can be restored blind (ADR 0040), so a
-	// workspace path typed there arrives as a Windows path and would otherwise
-	// match nothing here. Nil disables the second reading.
+	// `-v` and only the container side can be restored blind (ADR 0040), so a
+	// workspace path typed there arrives as a Windows path. Nil disables it.
 	PosixSource func(source string) string
 }
 
@@ -152,23 +151,27 @@ type Rewriter struct {
 // Slashes by hand rather than filepath, which follows the HOST's rules: a
 // Windows source compared on a Linux test machine would otherwise never match.
 func (r *Rewriter) ownedByDaemon(source string) bool {
-	// Both readings of the source: as typed, and as a shell may have rewritten
-	// it. The second is a candidate only, and the workspace declaring it is
-	// what makes it credible.
-	spellings := []string{source}
-	if r.PosixSource != nil {
-		if posix := r.PosixSource(source); posix != "" {
-			spellings = append(spellings, posix)
-		}
+	if r.declared(source) {
+		return !r.localExists(source)
 	}
+	// The other reading: what a shell may have rewritten this source from. A
+	// candidate only, and the workspace declaring it is what makes it credible.
+	if r.PosixSource != nil && r.declared(r.PosixSource(source)) {
+		return !r.localExists(source)
+	}
+	return false
+}
 
-	for _, spelling := range spellings {
-		clean := path.Clean(strings.ReplaceAll(spelling, `\`, "/"))
-		for _, owned := range r.DaemonPaths {
-			owned = path.Clean(owned)
-			if clean == owned || strings.HasPrefix(clean, owned+"/") {
-				return !r.localExists(source)
-			}
+// declared reports whether the workspace named this path, or one above it.
+func (r *Rewriter) declared(source string) bool {
+	if source == "" {
+		return false
+	}
+	clean := path.Clean(strings.ReplaceAll(source, `\`, "/"))
+	for _, owned := range r.DaemonPaths {
+		owned = path.Clean(owned)
+		if clean == owned || strings.HasPrefix(clean, owned+"/") {
+			return true
 		}
 	}
 	return false

@@ -129,11 +129,7 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 		}
 	}
 
-	if same(field, m.root) {
-		return "/", ""
-	}
-	if rest, ok := under(field, m.root); ok {
-		restored := "/" + rest
+	if restored := m.posixSource(field); restored != "" {
 		// Git Bash maps /bin and /usr/bin onto one directory, so this one
 		// reversal cannot be exact. Measured: /lib and /usr/lib do NOT collide.
 		if restored == "/usr/bin" || strings.HasPrefix(restored, "/usr/bin/") {
@@ -141,14 +137,6 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 				strings.Replace(restored, "/usr", "", 1) + ")"
 		}
 		return restored, ""
-	}
-
-	// /tmp follows the Windows TEMP variable rather than living under the root.
-	if rest, ok := under(field, m.temp); ok {
-		return "/tmp/" + rest, ""
-	}
-	if same(field, m.temp) {
-		return "/tmp", ""
 	}
 
 	// Cannot be inverted. Saying so beats guessing.
@@ -159,27 +147,25 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 	return "", ""
 }
 
-// posixSource reports the POSIX path a rewritten bind SOURCE may have been, and
-// "" when it is not one MSYS could have produced.
+// posixSource reports the POSIX path a converted path may have been, and "" when
+// it is not one MSYS could have produced.
 //
 // A candidate, never a correction: `C:\Program Files\Git\etc` is what MSYS makes
-// of both `/etc` and `/c/Program Files/Git/etc`, and mounting something from
-// under the Git installation is ordinary. Only the caller can break the tie,
-// which is why this returns a possibility rather than rewriting anything -- see
-// rewrite.ownedByDaemon, which accepts it only when the workspace declares that
-// path and this machine does not have it (ADR 0040, ADR 0041).
-func (m msys) posixSource(source string) string {
-	if !m.known() {
-		return ""
-	}
-	source = slashed(source)
-	if same(source, m.root) {
+// of BOTH `/etc` and `/c/Program Files/Git/etc`. Only the caller can break that
+// tie -- see rewrite.ownedByDaemon, which takes it only when the workspace
+// declares the path and this machine does not have it (ADR 0041).
+func (m msys) posixSource(p string) string {
+	p = slashed(p)
+	switch {
+	case same(p, m.root):
 		return "/"
+	case same(p, m.temp):
+		return "/tmp"
 	}
-	if rest, ok := under(source, m.root); ok {
+	if rest, ok := under(p, m.root); ok {
 		return "/" + rest
 	}
-	if rest, ok := under(source, m.temp); ok {
+	if rest, ok := under(p, m.temp); ok {
 		return "/tmp/" + rest
 	}
 	return ""
