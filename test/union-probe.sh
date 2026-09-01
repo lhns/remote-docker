@@ -565,7 +565,13 @@ if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTD
         sudo nsenter -t "$pid2" -m -- mkdir -p /rd/lower /rd/merged             /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work
         if sudo nsenter -t "$pid2" -m -- mount -t nfs 127.0.0.1:"$EXPORT_DIR" /rd/lower             -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2 2>"$WORK/dindnfs.err"; then
             ok "the lower mounts inside the dind"
-            report "the filesystem holding the upper inside the dind"                 sudo nsenter -t "$pid2" -m -- sh -c "stat -f -c %T /var/lib/docker/rd-union/upper"
+            # The first two attempts both failed with "cannot read upper dir"
+            # for a directory that stat had just answered for, which cannot
+            # both be true. So both views are printed: what the namespace we
+            # mount from sees, and what the container itself sees.
+            report "the upper, as the mount namespace sees it"                 sudo nsenter -t "$pid2" -m -- sh -c "stat -f -c %T /var/lib/docker/rd-union/upper; ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work"
+            report "the upper, as the dind itself sees it"                 docker exec "$DIND2" sh -c "ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper 2>&1"
+            report "which fuse-overlayfs, and which version"                 sudo nsenter -t "$pid2" -m -- sh -c "command -v fuse-overlayfs; fuse-overlayfs --version 2>&1 | head -3"
             if sudo nsenter -t "$pid2" -m -- fuse-overlayfs                 -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work                 /rd/merged 2>"$WORK/dindfuse.err"; then
                 ok "fuse-overlayfs mounts inside the dind"
                 if outputs 'pristine and nested' docker exec "$DIND2"                     docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then

@@ -55,6 +55,16 @@ type Info struct {
 	// Added the same way as Agent, and safe for the same reason.
 	Storage string
 
+	// Union says whether this workspace can serve a delegated share as a
+	// cache: a union mount of the live export and a local cache, which needs
+	// fuse-overlayfs and /dev/fuse where the account's daemon runs (ADR 0044).
+	//
+	// Reported rather than discovered, for the same reason as Docker: the
+	// client refuses the mode by name, before it creates anything, instead of
+	// failing in the middle of a container start. Empty from an agent that
+	// predates the key, which reads as "cannot" and is the old behaviour.
+	Union string
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -72,6 +82,23 @@ const (
 	keyStorage     = "WORKSPACE_STORAGE"
 	keyMode        = "WORKSPACE_MODE"
 	keyDaemonPaths = "WORKSPACE_DAEMON_PATHS"
+	keyUnion       = "WORKSPACE_UNION"
+)
+
+// What Union says. A reason rather than a boolean: "no" with nothing after it
+// sends somebody to the source, and the remedy differs per cause.
+const (
+	// UnionReady means a delegated share can be served as a cache here.
+	UnionReady = "ready"
+
+	// UnionNoBinary means fuse-overlayfs is missing where the account's daemon
+	// runs. In per-account mode that is the dind's image, whose remedy is
+	// WORKSPACE_DIND_IMAGE (agent/internal/daemons/plan.go:38).
+	UnionNoBinary = "no-fuse-overlayfs"
+
+	// UnionNoDevice means /dev/fuse is not usable there, which is a kernel
+	// module or a container without the device rather than an image.
+	UnionNoDevice = "no-dev-fuse"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own
@@ -128,6 +155,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Mode = value
 		case keyDaemonPaths:
 			info.DaemonPaths = splitPaths(value)
+		case keyUnion:
+			info.Union = value
 		case keyDocker:
 			info.Docker = value
 		default:
@@ -178,6 +207,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyStorage, i.Storage},
 		{keyMode, i.Mode},
 		{keyDaemonPaths, strings.Join(i.DaemonPaths, ",")},
+		{keyUnion, i.Union},
 	}
 
 	extraKeys := make([]string, 0, len(i.Extra))

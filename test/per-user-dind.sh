@@ -77,6 +77,10 @@ echo "reached the inner daemon" >"$WORK/dindconf/marker"
 # which carries none of the tooling this workspace decided it needs --
 # fuse-overlayfs above all -- so this suite would exercise an image no
 # deployment should be using and miss anything that depends on it.
+#
+# It has to be LOADED into the workspace's daemon as well, below: the image was
+# built on the runner, and the daemon that starts each account's dind is the
+# workspace's own.
 if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"     -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
@@ -114,6 +118,16 @@ done
 
 info "waiting for the parent dockerd"
 wait_parent_dockerd
+
+# Before any account connects, because the first connection is what starts that
+# account's daemon (ADR 0019) and it would otherwise try to pull this image
+# from a registry.
+info "loading the workspace image into the workspace's own daemon"
+if load_image_into_workspace "$IMAGE"; then
+    ok "each account's daemon can start from the workspace image"
+else
+    bad "could not load $IMAGE into the workspace's daemon"
+fi
 
 echo
 echo "== 4. a session each =="
