@@ -84,7 +84,7 @@ DIND=union-probe-dind
 cleanup() {
     echo
     echo "== cleanup =="
-    docker rm -f "$HOLDER" "$DIND" union-probe-fusehold union-probe-fusewatch >/dev/null 2>&1
+    docker rm -f "$HOLDER" "$DIND" union-probe-dind2 union-probe-fusehold union-probe-fusewatch >/dev/null 2>&1
     docker volume rm union-probe-vol >/dev/null 2>&1
     sudo umount "$WORK/fuse-merged" 2>/dev/null
     sudo umount "$MERGED" 2>/dev/null
@@ -534,6 +534,53 @@ else
 fi
 
 echo
+echo "== 11. the shape that actually ships, end to end =="
+# Sections 6c and 10 each work; this is the two together, which is the only
+# combination Stage 1 would be built on: a union mounted INSIDE a per-account
+# dind's namespace, read by a container that dind starts.
+#
+# Its own dind, on the HOST network, because the export here listens on the
+# host's loopback while a dind has a netns of its own. The real system does not
+# need that: the reverse tunnel is bound inside the account's dind precisely so
+# 127.0.0.1 there is the client's NFS server (ADR 0019).
+DIND2=union-probe-dind2
+docker rm -f "$DIND2" >/dev/null 2>&1
+if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTDIR=     docker:28-dind >/dev/null 2>&1; then
+    for _ in $(seq 1 30); do
+        docker exec "$DIND2" docker info >/dev/null 2>&1 && break
+        sleep 2
+    done
+    # The workspace's own image carries fuse-overlayfs; docker:28-dind does not,
+    # which is why a real deployment runs the workspace image for a per-account
+    # daemon (agent/internal/daemons/plan.go:38). Installed here rather than
+    # building that image, to keep this probe cheap and independent.
+    if docker exec "$DIND2" apk add --no-cache fuse-overlayfs >/dev/null 2>&1; then
+        pid2=$(docker inspect -f '{{.State.Pid}}' "$DIND2" 2>/dev/null)
+        sudo nsenter -t "$pid2" -m -- mkdir -p /rd/lower /rd/upper /rd/work /rd/merged
+        if sudo nsenter -t "$pid2" -m -- mount -t nfs 127.0.0.1:"$EXPORT_DIR" /rd/lower             -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2 2>"$WORK/dindnfs.err"; then
+            ok "the lower mounts inside the dind"
+            if sudo nsenter -t "$pid2" -m -- fuse-overlayfs                 -o lowerdir=/rd/lower,upperdir=/rd/upper,workdir=/rd/work /rd/merged                 2>"$WORK/dindfuse.err"; then
+                ok "fuse-overlayfs mounts inside the dind"
+                if outputs 'pristine and nested' docker exec "$DIND2"                     docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then
+                    ok "a container on the account own daemon reads the lower through the union"
+                else
+                    bad "the shipping shape does not work: [$LAST_OUTPUT]"
+                fi
+            else
+                bad "fuse-overlayfs would not mount in the dind: $(cat "$WORK/dindfuse.err")"
+            fi
+        else
+            bad "the lower would not mount in the dind: $(cat "$WORK/dindnfs.err")"
+        fi
+    else
+        info "could not install fuse-overlayfs in the dind; section 11 is unanswered"
+    fi
+    docker rm -f "$DIND2" >/dev/null 2>&1
+else
+    info "could not start a dind on the host network; section 11 is unanswered"
+fi
+
+
 echo "The answers above decide the design, not the pass count: section 4 says"
 echo "whether a mounted cache can be filled at all, and section 5 says whether"
 echo "hot reload survives it."
