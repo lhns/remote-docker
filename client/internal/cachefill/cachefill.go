@@ -90,23 +90,36 @@ type Stats struct {
 // deleted by the container or simply never sent.
 func (s Stats) Complete() bool { return s.Files == s.TotalFiles }
 
-// Plan walks a share and decides what to cache, in the order to send it.
+// SmallFile is the size below which a file is sent as the walk finds it,
+// without waiting for the scan to finish.
 //
-// SMALLEST FIRST, which is the whole of the ordering policy. The win is a round
-// trip saved per file, so a thousand small files are worth far more than one
-// large one that costs the same bandwidth and saves a single round trip. A
-// repository of source and build assets therefore caches its source and serves
-// its assets live, with nobody having to configure that.
+// The reason this exists: sorting the whole tree before sending anything means
+// the first byte waits for a stat of every file in the project, and on a large
+// one that scan can take longer than the upload it was meant to optimise. A
+// source tree is overwhelmingly files under this size, and those are the ones
+// worth caching first anyway, so sending them immediately gets both -- an
+// upload that starts at once AND the cheapest files first.
+//
+// 64 KiB: comfortably above a source file, well below anything whose transfer
+// time is worth reordering for.
+const SmallFile = 64 << 10
+
+// Walk finds what to cache and hands each entry over as it is found.
+//
+// Streaming rather than returning a list, so a caller can start sending before
+// the scan is done. Small files arrive in walk order and are worth sending
+// straight away; everything else the caller should hold back and sort, which is
+// what Plan does for callers that would rather have the whole answer.
+//
+// The budget is applied here, so a walk over a huge tree stops early rather
+// than building a list of everything it will not send.
 //
 // Errors are skipped rather than returned. A directory that cannot be read is a
 // part of the tree that stays live, which is the same outcome as a budget that
 // ran out, and refusing the whole share over one unreadable path would be worse
 // than the thing it protects against.
-func Plan(root string, excludes []string, budget Budget) ([]Entry, Stats) {
-	var (
-		found []Entry
-		stats Stats
-	)
+func Walk(root string, excludes []string, budget Budget, yield func(Entry)) Stats {
+	var stats Stats
 	skip := excluded(excludes)
 
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -126,10 +139,10 @@ func Plan(root string, excludes []string, budget Budget) ([]Entry, Stats) {
 			}
 			return nil
 		}
+		// Directories arrive with the files inside them, and what a tar cannot
+		// carry to another machine -- sockets, devices, pipes -- is not cached
+		// at all. The live export answers for those.
 		if d.IsDir() || !d.Type().IsRegular() {
-			// Directories arrive with the files inside them, and what a tar
-			// cannot carry to another machine -- sockets, devices, pipes -- is
-			// not cached at all. The live export answers for those.
 			return nil
 		}
 
@@ -144,26 +157,37 @@ func Plan(root string, excludes []string, budget Budget) ([]Entry, Stats) {
 
 		stats.TotalFiles++
 		stats.TotalBytes += info.Size()
-		found = append(found, Entry{Path: filepath.ToSlash(rel), Size: info.Size()})
+
+		if stats.Files >= budget.files() || stats.Bytes+info.Size() > budget.bytes() {
+			// Over the ceiling. Counted above and not sent, so the share is
+			// reported as partly cached and the rest is served live.
+			return nil
+		}
+		stats.Files++
+		stats.Bytes += info.Size()
+		yield(Entry{Path: filepath.ToSlash(rel), Size: info.Size()})
 		return nil
 	})
+	return stats
+}
 
+// Plan walks a share and decides what to cache, in the order to send it.
+//
+// SMALLEST FIRST, which is the whole of the ordering policy. The win is a round
+// trip saved per file, so a thousand small files are worth far more than one
+// large one that costs the same bandwidth and saves a single round trip. A
+// repository of source and build assets therefore caches its source and serves
+// its assets live, with nobody having to configure that.
+//
+// Errors are skipped rather than returned. A directory that cannot be read is a
+// part of the tree that stays live, which is the same outcome as a budget that
+// ran out, and refusing the whole share over one unreadable path would be worse
+// than the thing it protects against.
+func Plan(root string, excludes []string, budget Budget) ([]Entry, Stats) {
+	var found []Entry
+	stats := Walk(root, excludes, budget, func(e Entry) { found = append(found, e) })
 	sort.SliceStable(found, func(i, j int) bool { return found[i].Size < found[j].Size })
-
-	kept := found[:0]
-	for _, e := range found {
-		if len(kept) >= budget.files() || stats.Bytes+e.Size > budget.bytes() {
-			// Stop at the ceiling rather than skipping this one and trying the
-			// next: the list is sorted, so everything after it is larger, and
-			// carrying on would spend the whole budget looking for something
-			// small enough to fit.
-			break
-		}
-		kept = append(kept, e)
-		stats.Files++
-		stats.Bytes += e.Size
-	}
-	return kept, stats
+	return found, stats
 }
 
 // excluded is the set of directory names never cached.

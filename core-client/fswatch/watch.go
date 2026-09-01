@@ -149,6 +149,7 @@ type Watcher struct {
 
 	mu           sync.Mutex
 	sink         Sink
+	observer     Observer
 	stats        Stats
 	disconnected map[string]int
 
@@ -229,6 +230,36 @@ func (w *Watcher) Sync(shares []Share) {
 		case w.syncC <- shares:
 		default:
 		}
+	}
+}
+
+// Observer is told about every change, before the mode decides what a watcher
+// inside a container can be shown.
+//
+// Two consumers with different needs, which is why this is not the Sink. The
+// notify channel may only report what it can replay faithfully -- a deletion
+// over NFS cannot be, so ModePartial drops it rather than misrepresent it. A
+// cache has the opposite requirement: a deletion is the one event it MUST have,
+// because a cached copy of a file that is gone would shadow its absence
+// (ADR 0044).
+type Observer interface {
+	Observe(event workspace.FSEvent)
+}
+
+// SetObserver attaches one, replacing any before it. Nil detaches.
+func (w *Watcher) SetObserver(o Observer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.observer = o
+}
+
+// observe tells the observer, if there is one.
+func (w *Watcher) observe(event workspace.FSEvent) {
+	w.mu.Lock()
+	o := w.observer
+	w.mu.Unlock()
+	if o != nil {
+		o.Observe(event)
 	}
 }
 
@@ -388,6 +419,14 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 	if op == 0 {
 		return
 	}
+
+	// Delivered before the mode strips anything, and that is the difference
+	// between the two consumers. A deletion cannot be REPLAYED faithfully
+	// through an NFS mount, which is what ModePartial is about; it can be
+	// applied to a cache exactly (ADR 0044), where a stale entry would
+	// otherwise shadow a file that is gone.
+	w.observe(workspace.FSEvent{Export: root.export, Path: rel, Op: op, Dir: isDir})
+
 	if w.opts.Mode == ModePartial {
 		// Strip what this mode will not misrepresent. If nothing is left, the
 		// event is not worth a frame.

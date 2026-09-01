@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -82,36 +83,82 @@ func (s *Session) Fill(export, localPath string) {
 	}()
 }
 
-// fill walks the tree and sends it, cheapest first.
+// fill walks the tree and sends it, cheapest first and without waiting for the
+// walk to finish.
+//
+// Two passes over one scan, because sorting the whole tree before sending
+// anything would make the first byte wait for a stat of every file in the
+// project -- on a large one, longer than the upload it was meant to speed up.
+// So a small file goes into the batch being built as the walk finds it, and
+// anything larger is held back, sorted, and sent after. A source tree is
+// overwhelmingly small files, which are also the ones worth caching first, so
+// the upload starts at once and still sends the cheapest first.
 func (s *Session) fill(export, localPath string, state *fillState) error {
-	entries, stats := cachefill.Plan(localPath, s.opts.WatchExclude, cachefill.Budget{})
+	var (
+		batch []cachefill.Entry
+		size  int64
+		large []cachefill.Entry
+		sent  error
+	)
+
+	send := func(entries []cachefill.Entry) {
+		if sent != nil || len(entries) == 0 {
+			return
+		}
+		sent = s.sendBatch(export, localPath, entries, state)
+	}
+
+	stats := cachefill.Walk(localPath, s.opts.WatchExclude, cachefill.Budget{}, func(e cachefill.Entry) {
+		if sent != nil {
+			return
+		}
+		if e.Size > cachefill.SmallFile {
+			large = append(large, e)
+			return
+		}
+		if len(batch) > 0 && size+e.Size > cachefill.DefaultBatchBytes {
+			send(batch)
+			batch, size = nil, 0
+		}
+		batch = append(batch, e)
+		size += e.Size
+	})
 
 	s.fills.mu.Lock()
 	state.Stats = stats
 	s.fills.mu.Unlock()
 
+	send(batch)
+	sort.SliceStable(large, func(i, j int) bool { return large[i].Size < large[j].Size })
+	for _, b := range cachefill.Batches(large, cachefill.DefaultBatchBytes) {
+		send(b)
+	}
+	return sent
+}
+
+// sendBatch builds one tar and applies it.
+func (s *Session) sendBatch(export, localPath string, entries []cachefill.Entry, state *fillState) error {
 	live := s.liveCache()
 	if live == nil {
+		// No connection to send it over. Not an error: the share is served
+		// from the lower meanwhile, and the next fill starts from scratch.
 		return nil
 	}
 
-	for _, batch := range cachefill.Batches(entries, cachefill.DefaultBatchBytes) {
-		body, err := tarOf(localPath, batch)
-		if err != nil {
-			return err
-		}
-
-		ctx, cancel := context.WithTimeout(s.ctx, fillBatchTimeout)
-		err = live.Apply(ctx, export, int64(len(body)), bytes.NewReader(body))
-		cancel()
-		if err != nil {
-			return err
-		}
-
-		s.fills.mu.Lock()
-		state.Sent += len(batch)
-		s.fills.mu.Unlock()
+	body, err := tarOf(localPath, entries)
+	if err != nil {
+		return err
 	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, fillBatchTimeout)
+	defer cancel()
+	if err := live.Apply(ctx, export, int64(len(body)), bytes.NewReader(body)); err != nil {
+		return err
+	}
+
+	s.fills.mu.Lock()
+	state.Sent += len(entries)
+	s.fills.mu.Unlock()
 	return nil
 }
 

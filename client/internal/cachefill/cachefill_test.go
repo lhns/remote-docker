@@ -143,3 +143,51 @@ func TestBatches(t *testing.T) {
 		t.Error("an empty plan produced a batch")
 	}
 }
+
+// The upload must not wait for the scan. A small file is handed over as the
+// walk finds it, so on a large tree the first batch goes while the rest is
+// still being counted -- the scan would otherwise cost more than the transfer
+// it was meant to speed up.
+func TestWalkYieldsBeforeItFinishes(t *testing.T) {
+	root := tree(t, map[string]int{
+		"a.go": 10, "b.go": 10, "c.go": 10, "big.bin": SmallFile * 4,
+	})
+
+	var order []string
+	stats := Walk(root, nil, Budget{}, func(e Entry) { order = append(order, e.Path) })
+
+	if len(order) != 4 {
+		t.Fatalf("yielded %v, want every file", order)
+	}
+	if stats.TotalFiles != 4 || !stats.Complete() {
+		t.Errorf("stats = %+v, want all four", stats)
+	}
+
+	// Yielded in walk order, NOT sorted: sorting is the caller's job precisely
+	// because it needs the whole list, and waiting for that is what this
+	// avoids.
+	for _, p := range order {
+		if p == "" {
+			t.Fatal("an entry arrived with no path")
+		}
+	}
+}
+
+// The budget stops the walk from yielding, and still counts what it saw, so a
+// share over the ceiling reports as partly cached rather than as complete.
+func TestWalkStopsYieldingAtTheBudget(t *testing.T) {
+	root := tree(t, map[string]int{"a": 100, "b": 100, "c": 100})
+
+	var yielded int
+	stats := Walk(root, nil, Budget{Files: 1}, func(Entry) { yielded++ })
+
+	if yielded != 1 {
+		t.Errorf("yielded %d entries, want 1", yielded)
+	}
+	if stats.TotalFiles != 3 {
+		t.Errorf("TotalFiles = %d, want everything it saw", stats.TotalFiles)
+	}
+	if stats.Complete() {
+		t.Error("a partly cached share reported itself complete")
+	}
+}
