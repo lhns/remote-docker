@@ -141,3 +141,9 @@ Two things could still be tried, neither attempted:
 - This does not affect builds, tests, `docker run`, `docker compose up`, or any
   tool that reads its inputs once. Those are unaffected and are what the
   integration suite covers.
+- **A `delegated` copy does not close this** (ADR 0043), and it is worth being
+  precise about why. The copy is a local filesystem in the workspace, so a
+  watcher there behaves exactly as it would anywhere -- but nothing from this
+  machine reaches it while a container runs, so there is nothing to notice. The
+  gap is sidestepped rather than closed. It would close if the copy were
+  refreshed from the client, which is the part ADR 0043 records as not built.
