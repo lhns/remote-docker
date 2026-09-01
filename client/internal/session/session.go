@@ -265,6 +265,12 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			return nil, err
 		}
 		s.watch = watcher
+		// Every change, before the mode decides what a container's watcher can
+		// be shown: a deletion cannot be replayed faithfully over NFS, which
+		// is what ModePartial is about, but it can be applied to a cache
+		// exactly, and a cached copy of a file that is gone is the one way
+		// this mode can be wrong rather than slow (ADR 0044).
+		s.watch.SetObserver(&invalidator{session: s})
 		s.watch.Sync(sharesOf(s.registry))
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}

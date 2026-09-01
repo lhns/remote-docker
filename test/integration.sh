@@ -1497,6 +1497,9 @@ echo "== 15c. the delegated consistency, which is a union =="
 # cache was filled is not in the cache, and the container must still see it --
 # that is what makes an incomplete cache correct, and it is the whole reason
 # the cache can be filled in the background.
+# Run against the WATCHING client section 15 started: invalidation rides the
+# watcher, because a cached copy of a file that changed here is the one way this
+# mode can be wrong rather than merely slow.
 DELEGDIR="$WORK/delegated"
 mkdir -p "$DELEGDIR"
 echo "first" >"$DELEGDIR/marker"
@@ -1541,6 +1544,39 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             ok "that write has not reached this machine, which write-back is for"
         else
             bad "a delegated write reached this machine with no write-back built"
+        fi
+
+        # An edit here reaches the container, because the workspace writes it
+        # THROUGH the union rather than into the layer underneath (ADR 0044).
+        echo "edited here" >"$DELEGDIR/marker"
+        seen=""
+        for _ in $(seq 1 20); do
+            seen=$(docker exec itest-deleg cat /w/marker 2>&1)
+            [ "$seen" = "edited here" ] && break
+            sleep 1
+        done
+        if [ "$seen" = "edited here" ]; then
+            ok "an edit here reaches a running delegated container"
+        else
+            bad "the cache stayed stale after an edit: [$seen]"
+        fi
+
+        # And a DELETION, which no mode in this project has managed before: a
+        # cached copy of a file that is gone would shadow its absence, and the
+        # Docker API cannot remove a path from a volume at all.
+        rm -f "$DELEGDIR/marker"
+        gone=false
+        for _ in $(seq 1 20); do
+            if ! docker exec itest-deleg test -e /w/marker 2>/dev/null; then
+                gone=true
+                break
+            fi
+            sleep 1
+        done
+        if [ "$gone" = true ]; then
+            ok "a file deleted here disappears from the container"
+        else
+            bad "a deleted file is still visible through the union"
         fi
     else
         bad "a container would not start against a delegated union"

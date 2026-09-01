@@ -56,8 +56,7 @@ type invalidator struct {
 // Cheap and non-blocking on purpose: it runs on the watcher's own path, and a
 // share with no cache -- which is most of them -- costs one map lookup.
 func (i *invalidator) Observe(event workspace.FSEvent) {
-	local, ok := i.session.cachedShare(event.Export)
-	if !ok {
+	if _, ok := i.session.cachedShare(event.Export); !ok {
 		return
 	}
 	if event.Dir {
@@ -72,7 +71,6 @@ func (i *invalidator) Observe(event workspace.FSEvent) {
 	if excludedPath(event.Path, i.session.opts.WatchExclude) {
 		return
 	}
-	_ = local
 
 	deleted := event.Op&(workspace.OpRemove|workspace.OpRename) != 0
 
@@ -92,6 +90,21 @@ func (i *invalidator) Observe(event workspace.FSEvent) {
 	if i.timer == nil {
 		i.timer = time.AfterFunc(invalidateDelay, i.flush)
 	}
+}
+
+// stop cancels a pending flush and forgets what was waiting.
+//
+// A flush runs on a timer, so it can fire after everything it needs has gone --
+// at the end of a session, or of a test. Stopping it is how that is avoided
+// rather than tolerated.
+func (i *invalidator) stop() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.timer != nil {
+		i.timer.Stop()
+		i.timer = nil
+	}
+	i.pending = nil
 }
 
 // flush applies what has accumulated.
