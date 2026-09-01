@@ -150,7 +150,23 @@ func ownedBy(k, account string) bool { return strings.HasPrefix(k, account+"\x00
 // Idempotent, because preparing twice is ordinary: a client reconnects, or a
 // second container wants the same directory. A share already mounted and alive
 // answers with the same path and does nothing else.
-func (m *Manager) Prepare(ctx context.Context, account string, d Daemon, req workspace.CacheRequest) (string, error) {
+func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon, req workspace.CacheRequest) (string, error) {
+	// The cache volume this machine's share must use, DERIVED rather than
+	// taken from the request. Validate only asks whether the name is a managed
+	// one, which every machine of an account satisfies for every other
+	// machine's volumes -- so without this a second machine could have the
+	// agent mount somebody else's cache as the upper of its own union and
+	// write into it through its own container. The digest is the key that
+	// authenticated, so a machine can only ever name its own (ADR 0029).
+	expected, err := workspace.CacheVolumeForExport(client, req.Export)
+	if err != nil {
+		return "", fmt.Errorf("unions: %w", err)
+	}
+	if req.Cache != expected {
+		return "", fmt.Errorf("unions: %s asked to cache %s in %q, which is not this machine's cache volume",
+			account, req.Export, req.Cache)
+	}
+
 	if err := req.Validate(); err != nil {
 		return "", err
 	}

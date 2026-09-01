@@ -135,7 +135,8 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		if err != nil {
 			return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: %v", err)}, nil
 		}
-		merged, err := s.cfg.Unions.Prepare(ctx, name, unions.Daemon{Host: target.Host, PID: target.PID}, req)
+		merged, err := s.cfg.Unions.Prepare(ctx, name, account.Client(),
+			unions.Daemon{Host: target.Host, PID: target.PID}, req)
 		if err != nil {
 			return workspace.CacheReply{Err: err.Error()}, nil
 		}

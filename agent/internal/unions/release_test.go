@@ -3,9 +3,11 @@ package unions
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/lhns/remote-docker/core-agent/union"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type fakeVolumes struct {
@@ -104,5 +106,51 @@ func TestReleaseAccountKeepsEverythingWhenTheDaemonCannotAnswer(t *testing.T) {
 
 	if len(m.shares) != 2 {
 		t.Errorf("kept %d of 2 unions when the daemon could not be asked", len(m.shares))
+	}
+}
+
+// A prepare may only name THIS machine's cache volume.
+//
+// Validate asks whether the name is a managed one, which every machine of an
+// account satisfies for every other machine's volumes -- one account's machines
+// share a daemon (ADR 0029). Without this a second machine could have the agent
+// mount somebody else's cache as the upper of its own union and write into it
+// through its own container.
+func TestPrepareRefusesAnotherMachinesCache(t *testing.T) {
+	const (
+		mine   = "aabbccdd"
+		theirs = "11223344"
+		export = "/m/00112233445566ff"
+	)
+
+	ours, err := workspace.CacheVolumeForExport(mine, export)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notOurs, err := workspace.CacheVolumeForExport(theirs, export)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ours == notOurs {
+		t.Fatal("the two machines derived the same cache volume name")
+	}
+
+	m := &Manager{Volumes: fakeVolumes{}, shares: map[string]*live{}}
+	req := workspace.CacheRequest{
+		Op: workspace.OpPrepare, Export: export, Port: 30001, Cache: notOurs,
+	}
+
+	// It is a managed volume, so Validate accepts it: this refusal is the only
+	// thing between the two machines.
+	if err := req.Validate(); err != nil {
+		t.Fatalf("the request itself was refused, so this test proves nothing: %v", err)
+	}
+
+	_, err = m.Prepare(context.Background(), "alice", mine, Daemon{}, req)
+	if err == nil {
+		t.Fatal("the agent agreed to mount another machine's cache")
+	}
+	if !strings.Contains(err.Error(), "this machine's cache volume") {
+		t.Errorf("refused for the wrong reason: %v", err)
 	}
 }

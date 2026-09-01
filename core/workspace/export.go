@@ -164,6 +164,19 @@ func VolumeNameForExport(client, exportPath string) (string, error) {
 	return VolumeNameForID(client, id), nil
 }
 
+// CacheVolumeForExport is the cache volume a given machine's share must use.
+//
+// Derived rather than accepted, so the agent can check what a client asked it
+// to mount instead of trusting the name it was handed: the digest is the key
+// that authenticated, so a machine can only ever name its own (ADR 0029).
+func CacheVolumeForExport(client, exportPath string) (string, error) {
+	name, err := VolumeNameForExport(client, exportPath)
+	if err != nil {
+		return "", err
+	}
+	return name + "-" + CacheRole, nil
+}
+
 // ParseVolumeName splits a managed volume name into the client that created it
 // and the share it backs.
 //
