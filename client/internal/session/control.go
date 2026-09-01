@@ -11,7 +11,9 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -254,6 +256,7 @@ func (s *Session) Status() any {
 	for _, share := range s.registry.Shares() {
 		st.Shares = append(st.Shares, share.LocalPath)
 	}
+	st.Caches = s.cacheStatus()
 	return st
 }
 
@@ -347,4 +350,39 @@ func (s *Session) Close() error {
 		s.wg.Wait()
 	})
 	return nil
+}
+
+// cacheStatus is one line per delegated share, saying how much of it is cached.
+//
+// A fraction rather than a verdict: over the budget, still filling, and
+// complete are all states a share works in, and the difference between them is
+// how much of it is local rather than whether it is right.
+func (s *Session) cacheStatus() []string {
+	s.fills.mu.Lock()
+	defer s.fills.mu.Unlock()
+
+	var out []string
+	for export, state := range s.fills.state {
+		local := s.fills.roots[export]
+		stats := state.Stats
+
+		what := "filling"
+		switch {
+		case state.Err != nil:
+			what = "stopped: " + state.Err.Error()
+		case !state.Done:
+		case stats.Complete():
+			what = "cached"
+		default:
+			// Over the budget, or a walk that could not read part of the tree.
+			// The rest is served from the live mount, which is slower and
+			// right, and saying so is the only way anybody would know.
+			what = "cached in part; the rest is read live"
+		}
+
+		out = append(out, fmt.Sprintf("%s: %d of %d files, %s",
+			local, state.Sent, stats.TotalFiles, what))
+	}
+	sort.Strings(out)
+	return out
 }

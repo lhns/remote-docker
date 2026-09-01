@@ -64,19 +64,15 @@ func TestCacheRequestValidate(t *testing.T) {
 			want: "component",
 		},
 		{
-			// Removing the share root is unmounting it, which is a different
-			// request with a different name.
+			// Removing the share root is unmounting it, and the mount goes
+			// when the channel does rather than on request.
 			name: "a drop that names the share root",
 			req:  CacheRequest{Op: OpDrop, Export: share, Paths: []string{"/"}},
 			want: "root",
 		},
 		{
-			name: "a release",
-			req:  CacheRequest{Op: OpRelease, Export: share},
-		},
-		{
 			name: "an export that is not one this program serves",
-			req:  CacheRequest{Op: OpRelease, Export: "/etc"},
+			req:  CacheRequest{Op: OpChanges, Export: "/etc"},
 			want: "export",
 		},
 		{

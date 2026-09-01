@@ -161,7 +161,6 @@ func TestPartitionsForTheCaller(t *testing.T) {
 		{Path: "/b", Kind: Delete},
 		{Path: "/c", Kind: Conflict, Wins: true},
 		{Path: "/d", Kind: Conflict, Wins: false},
-		{Path: "/e", Kind: Refresh},
 	}
 
 	// A conflict the container won is fetched like any other write; one it lost

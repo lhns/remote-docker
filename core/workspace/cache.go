@@ -56,9 +56,6 @@ const (
 	// the agent has to be involved at all.
 	OpDrop CacheOp = "drop"
 
-	// OpRelease unmounts a share's union and forgets it.
-	OpRelease CacheOp = "release"
-
 	// OpChanges asks what the CONTAINER changed: the cache layer is exactly
 	// that record, because an overlay's upper holds what was written through
 	// it and nothing else. No heuristic is needed to tell a container's write
@@ -201,11 +198,11 @@ func (r CacheRequest) Validate() error {
 			}
 			if strings.TrimSpace(p) == "/" {
 				// The share root is not a path the client may remove: it is
-				// the mount itself, and dropping it is OpRelease's job.
+				// the mount itself, and the mount goes when the channel does.
 				return fmt.Errorf("workspace: cache drop for %s names the share root", r.Export)
 			}
 		}
-	case OpChanges, OpRelease:
+	case OpChanges:
 	case OpPull:
 		if len(r.Paths) == 0 {
 			return fmt.Errorf("workspace: cache pull for %s names no paths", r.Export)

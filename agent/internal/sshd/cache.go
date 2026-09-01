@@ -13,7 +13,12 @@ import (
 )
 
 // serveCache carries a delegated share's cache: mounting its union, filling it,
-// and dropping what the client deleted (ADR 0044).
+// dropping what the client deleted, and handing back what the container wrote
+// (ADR 0044).
+//
+// The channel closing is what releases a share, which is why there is no
+// request for it: the session that asked for the mount is the only thing that
+// needs it, and when it goes so does the mount.
 //
 // Runs as root, like serveNotify and for the same reason: it mounts inside a
 // daemon's namespace and writes into a volume the account cannot reach. Every
@@ -133,11 +138,6 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		}
 		return workspace.CacheReply{Bytes: int64(len(pulled))}, pulled
 
-	case workspace.OpRelease:
-		if err := s.cfg.Unions.Release(ctx, name, req.Export); err != nil {
-			return workspace.CacheReply{Err: err.Error()}, nil
-		}
-		return workspace.CacheReply{}, nil
 	}
 
 	// Validate has already refused every op this agent does not know, so

@@ -182,32 +182,6 @@ func excluded(names []string) map[string]bool {
 	return set
 }
 
-// Batches groups entries into sends of at most maxBytes.
-//
-// Batched because the channel frames a payload by length: the workspace has to
-// be told how many bytes follow before they are sent, so a batch is built in
-// memory and its size is what bounds that. One file larger than the batch size
-// still goes on its own -- a batch is a limit on grouping, not on a file.
-func Batches(entries []Entry, maxBytes int64) [][]Entry {
-	var (
-		out   [][]Entry
-		batch []Entry
-		size  int64
-	)
-	for _, e := range entries {
-		if len(batch) > 0 && size+e.Size > maxBytes {
-			out = append(out, batch)
-			batch, size = nil, 0
-		}
-		batch = append(batch, e)
-		size += e.Size
-	}
-	if len(batch) > 0 {
-		out = append(out, batch)
-	}
-	return out
-}
-
 // DefaultBatchBytes is how much one send carries.
 //
 // 16 MiB: large enough that a source tree is a handful of sends rather than

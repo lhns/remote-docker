@@ -16,6 +16,10 @@
 //	local  != manifest  ->  you changed it
 //	cached != manifest  ->  the container changed it
 //
+// A file only YOU changed produces no action at all: nothing has to come back,
+// and bringing the cache up to date is the invalidator's job rather than this
+// one's (client/internal/session/invalidate.go).
+//
 // Which leaves exactly one case where a clock is needed at all -- both sides
 // changed -- and that is the only place the measured offset between the two
 // machines is used.
@@ -45,10 +49,6 @@ const (
 	// did not touch it.
 	Delete
 
-	// Refresh means you changed it and the container did not: nothing comes
-	// back, and the cache is brought up to date instead.
-	Refresh
-
 	// Conflict means both sides changed it. Reported whichever way it
 	// resolves, because silently choosing is the one thing this must not do.
 	Conflict
@@ -60,8 +60,6 @@ func (k Kind) String() string {
 		return "write"
 	case Delete:
 		return "delete"
-	case Refresh:
-		return "refresh"
 	default:
 		return "conflict"
 	}

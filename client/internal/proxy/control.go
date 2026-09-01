@@ -131,6 +131,16 @@ type Status struct {
 	Watching  string   `json:"watching,omitempty"`
 	Shares    []string `json:"shares,omitempty"`
 
+	// Caches is one line per delegated share saying how much of it is cached
+	// (ADR 0044).
+	//
+	// Reported because a partly cached share is not a failure and has nothing
+	// else to show for itself: it works, it is simply slower for the part that
+	// did not fit, and without this the only symptom is a directory that feels
+	// fast in places. A share still filling reads the same way, which is the
+	// point -- both are "some of it is local", and neither is wrong.
+	Caches []string `json:"caches,omitempty"`
+
 	// Drops is how many times this session has found its connection dead and
 	// opened another, and LastDrop when it last did.
 	//

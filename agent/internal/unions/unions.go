@@ -206,21 +206,6 @@ func (m *Manager) alive(spec union.Spec) bool {
 	return union.Alive(ctx, spec) == nil
 }
 
-// Release unmounts a share's union and forgets it.
-func (m *Manager) Release(ctx context.Context, account, export string) error {
-	m.mu.Lock()
-	l, ok := m.shares[key(account, export)]
-	if ok {
-		m.stop(key(account, export), l)
-	}
-	m.mu.Unlock()
-
-	if !ok {
-		return nil
-	}
-	return union.Unmount(ctx, m.Self, l.spec)
-}
-
 // ReleaseAccount drops every share an account holds, which is what a session
 // ending means.
 func (m *Manager) ReleaseAccount(ctx context.Context, account string) {

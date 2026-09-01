@@ -83,31 +83,6 @@ func TestWalkYieldsEverythingAndLetsTheSelectorChoose(t *testing.T) {
 	}
 }
 
-// A batch is a limit on grouping, not on a file: one larger than the limit
-// still goes, on its own.
-func TestBatches(t *testing.T) {
-	entries := []Entry{
-		{Path: "a", Size: 10},
-		{Path: "b", Size: 10},
-		{Path: "huge", Size: 500},
-		{Path: "c", Size: 10},
-	}
-
-	batches := Batches(entries, 25)
-	if len(batches) != 3 {
-		t.Fatalf("batches = %v, want three", batches)
-	}
-	if len(batches[0]) != 2 {
-		t.Errorf("the first batch is %v, want the two that fit", batches[0])
-	}
-	if len(batches[1]) != 1 || batches[1][0].Path != "huge" {
-		t.Errorf("the oversized file was not sent alone: %v", batches[1])
-	}
-	if len(Batches(nil, 10)) != 0 {
-		t.Error("an empty plan produced a batch")
-	}
-}
-
 // The buffer keeps the smallest files seen so far, so the upload can start
 // before the scan ends and still send the cheapest first.
 func TestSelectorKeepsTheSmallest(t *testing.T) {
