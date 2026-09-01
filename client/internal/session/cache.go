@@ -102,10 +102,41 @@ func (c *cacheChannel) do(req workspace.CacheRequest, body io.Reader) (workspace
 	if err := json.Unmarshal([]byte(line), &reply); err != nil {
 		return workspace.CacheReply{}, fmt.Errorf("cache: reading the answer for %s: %w", req.Op, err)
 	}
+	// Whatever the outcome, a promised payload is read: it follows on the same
+	// stream, and leaving it there would put the next reply in the middle of a
+	// tar.
+	if reply.Bytes > 0 {
+		reply.Payload = make([]byte, reply.Bytes)
+		if _, err := io.ReadFull(c.r, reply.Payload); err != nil {
+			return workspace.CacheReply{}, fmt.Errorf("cache: reading the payload for %s: %w", req.Op, err)
+		}
+	}
 	if reply.Err != "" {
 		return reply, fmt.Errorf("%s", reply.Err)
 	}
 	return reply, nil
+}
+
+// Changes asks what the container did to a share.
+func (c *cacheChannel) Changes(_ context.Context, export string) ([]workspace.CacheChange, error) {
+	reply, err := c.do(workspace.CacheRequest{Op: workspace.OpChanges, Export: export}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return reply.Changes, nil
+}
+
+// Pull fetches the named paths out of a share's cache layer, as a tar.
+func (c *cacheChannel) Pull(_ context.Context, export string, paths []string) ([]byte, error) {
+	reply, err := c.do(workspace.CacheRequest{
+		Op:     workspace.OpPull,
+		Export: export,
+		Paths:  paths,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return reply.Payload, nil
 }
 
 // Prepare mounts a share's union and answers with the path a container binds.

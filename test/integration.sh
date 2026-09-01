@@ -1540,10 +1540,19 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         else
             bad "writing into the union: [$LAST_OUTPUT]"
         fi
-        if [ ! -e "$DELEGDIR/written-there" ]; then
-            ok "that write has not reached this machine, which write-back is for"
+        # Write-back: the container's write reaches this machine, because the
+        # cache layer of an overlay IS the record of what it changed (ADR 0044).
+        # Polled, so it takes a few seconds rather than being instant, which is
+        # the cost of the mode and is stated as such.
+        back=""
+        for _ in $(seq 1 30); do
+            [ -f "$DELEGDIR/written-there" ] && back=$(cat "$DELEGDIR/written-there") && break
+            sleep 1
+        done
+        if [ "$back" = "from the container" ]; then
+            ok "a container's write reaches this machine"
         else
-            bad "a delegated write reached this machine with no write-back built"
+            bad "the container's write never arrived here: [$back]"
         fi
 
         # An edit here reaches the container, because the workspace writes it

@@ -193,6 +193,11 @@ type liveConn struct {
 	nfsTunnel net.Listener
 	ports     *ports.Manager
 
+	// clockSkew is the workspace's clock minus this machine's, measured when
+	// this connection was made and used for one comparison: which side wrote
+	// last when a file changed in both places (ADR 0044).
+	clockSkew time.Duration
+
 	// notify is the change-notification channel, nil when the workspace does
 	// not support it or watching is off.
 	notify io.Closer

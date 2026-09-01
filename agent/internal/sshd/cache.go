@@ -62,10 +62,18 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 			continue
 		}
 
-		reply := s.applyCache(session, account, req, reader)
+		reply, payload := s.applyCache(session, account, req, reader)
 		if err := enc.Encode(reply); err != nil {
 			_ = session.Exit(1)
 			return
+		}
+		// The payload follows its reply line, exactly as a request's does: the
+		// client has been told how many bytes to read before they arrive.
+		if len(payload) > 0 {
+			if _, err := session.Write(payload); err != nil {
+				_ = session.Exit(1)
+				return
+			}
 		}
 	}
 }
@@ -75,12 +83,12 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 // The payload of an apply is read whatever the outcome: it follows the frame on
 // the same stream, so a request refused without draining it would leave a tar
 // where the next line is expected and desynchronise everything after it.
-func (s *Server) applyCache(session gssh.Session, account sessionAccount, req workspace.CacheRequest, body io.Reader) workspace.CacheReply {
+func (s *Server) applyCache(session gssh.Session, account sessionAccount, req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, []byte) {
 	if err := req.Validate(); err != nil {
 		if req.Op == workspace.OpApply {
 			_, _ = io.CopyN(io.Discard, body, req.Bytes)
 		}
-		return workspace.CacheReply{Err: err.Error()}
+		return workspace.CacheReply{Err: err.Error()}, nil
 	}
 
 	name := account.Name()
@@ -90,35 +98,49 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 	case workspace.OpPrepare:
 		target, err := s.cfg.Daemons.Ensure(ctx, name)
 		if err != nil {
-			return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: %v", err)}
+			return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: %v", err)}, nil
 		}
 		merged, err := s.cfg.Unions.Prepare(ctx, name, unions.Daemon{Host: target.Host, PID: target.PID}, req)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error()}
+			return workspace.CacheReply{Err: err.Error()}, nil
 		}
-		return workspace.CacheReply{Merged: merged}
+		return workspace.CacheReply{Merged: merged}, nil
 
 	case workspace.OpApply:
 		err := s.cfg.Unions.Apply(ctx, name, req.Export, io.LimitReader(body, req.Bytes))
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error()}
+			return workspace.CacheReply{Err: err.Error()}, nil
 		}
-		return workspace.CacheReply{}
+		return workspace.CacheReply{}, nil
 
 	case workspace.OpDrop:
 		if err := s.cfg.Unions.Drop(ctx, name, req.Export, req.Paths); err != nil {
-			return workspace.CacheReply{Err: err.Error()}
+			return workspace.CacheReply{Err: err.Error()}, nil
 		}
-		return workspace.CacheReply{}
+		return workspace.CacheReply{}, nil
+
+	case workspace.OpChanges:
+		changes, err := s.cfg.Unions.Changes(ctx, name, req.Export)
+		if err != nil {
+			return workspace.CacheReply{Err: err.Error()}, nil
+		}
+		return workspace.CacheReply{Changes: changes}, nil
+
+	case workspace.OpPull:
+		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)
+		if err != nil {
+			return workspace.CacheReply{Err: err.Error()}, nil
+		}
+		return workspace.CacheReply{Bytes: int64(len(pulled))}, pulled
 
 	case workspace.OpRelease:
 		if err := s.cfg.Unions.Release(ctx, name, req.Export); err != nil {
-			return workspace.CacheReply{Err: err.Error()}
+			return workspace.CacheReply{Err: err.Error()}, nil
 		}
-		return workspace.CacheReply{}
+		return workspace.CacheReply{}, nil
 	}
 
 	// Validate has already refused every op this agent does not know, so
 	// reaching here would mean the two disagree.
-	return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: nothing handles %q", req.Op)}
+	return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: nothing handles %q", req.Op)}, nil
 }

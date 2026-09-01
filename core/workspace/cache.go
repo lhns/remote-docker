@@ -58,7 +58,36 @@ const (
 
 	// OpRelease unmounts a share's union and forgets it.
 	OpRelease CacheOp = "release"
+
+	// OpChanges asks what the CONTAINER changed: the cache layer is exactly
+	// that record, because an overlay's upper holds what was written through
+	// it and nothing else. No heuristic is needed to tell a container's write
+	// from a file that was copied in.
+	OpChanges CacheOp = "changes"
+
+	// OpPull asks for the bytes of named paths out of the cache layer, so the
+	// client can write them back to its own disk.
+	OpPull CacheOp = "pull"
 )
+
+// CacheChange is one thing the container did to a share.
+type CacheChange struct {
+	// Path is within the share, leading slash, forward slashes.
+	Path string `json:"p"`
+
+	Size int64 `json:"s,omitempty"`
+
+	// ModTime is when the container wrote it, in Unix nanoseconds on the
+	// WORKSPACE's clock. Compared against the client's own only for a file
+	// both sides changed, and only after the session's measured offset is
+	// applied -- two clocks that were never set together.
+	ModTime int64 `json:"m,omitempty"`
+
+	// Deleted says the container removed it. An overlay records that as a
+	// whiteout in the upper layer, which is why a deletion can be told from a
+	// file that was simply never cached.
+	Deleted bool `json:"d,omitempty"`
+}
 
 // CacheRequest is one frame from the client. Exactly one op, and the fields
 // that op needs.
@@ -111,8 +140,21 @@ type CacheReply struct {
 	// same shape as the paths a workspace already declares (ADR 0041).
 	Merged string `json:"m,omitempty"`
 
+	// Changes answers OpChanges: what the container did to the share.
+	Changes []CacheChange `json:"c,omitempty"`
+
+	// Bytes is the length of the tar that follows this reply, answering
+	// OpPull. Framed by length for the same reason a request's payload is: a
+	// tar is binary, and any delimiter would have to be escaped out of it.
+	Bytes int64 `json:"n,omitempty"`
+
 	// Hello announces the version, on the first line and nothing else.
 	Hello *CacheHello `json:"hello,omitempty"`
+
+	// Payload is the tar that followed this reply, filled in by the reader
+	// rather than by the wire: Bytes is what is sent, and this is what those
+	// bytes turned out to be.
+	Payload []byte `json:"-"`
 }
 
 // CacheHello is the agent's opening line, sent before it reads anything.
@@ -163,7 +205,16 @@ func (r CacheRequest) Validate() error {
 				return fmt.Errorf("workspace: cache drop for %s names the share root", r.Export)
 			}
 		}
-	case OpRelease:
+	case OpChanges, OpRelease:
+	case OpPull:
+		if len(r.Paths) == 0 {
+			return fmt.Errorf("workspace: cache pull for %s names no paths", r.Export)
+		}
+		for _, p := range r.Paths {
+			if err := validateSharePath(p); err != nil {
+				return fmt.Errorf("workspace: cache pull: %w", err)
+			}
+		}
 	default:
 		return fmt.Errorf("workspace: cache request has unknown op %q", r.Op)
 	}

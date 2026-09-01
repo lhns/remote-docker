@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/cachefill"
+	"github.com/lhns/remote-docker/client/internal/writeback"
 )
 
 // Filling a delegated share's cache, in the background (ADR 0044).
@@ -38,6 +39,12 @@ type fills struct {
 	// roots is where each delegated share's files are on this machine, which
 	// is what invalidation needs to read a changed file back.
 	roots map[string]string
+
+	// manifests are what the fill put in each cache: for every path, the size
+	// and modification time it had HERE when it was sent. That is the baseline
+	// write-back compares both sides against, which is what lets it decide
+	// almost every case without comparing two machines' clocks (ADR 0044).
+	manifests map[string]map[string]writeback.Baseline
 }
 
 func (f *fills) set(export, localPath string, s *fillState) {
@@ -46,9 +53,11 @@ func (f *fills) set(export, localPath string, s *fillState) {
 	if f.state == nil {
 		f.state = map[string]*fillState{}
 		f.roots = map[string]string{}
+		f.manifests = map[string]map[string]writeback.Baseline{}
 	}
 	f.state[export] = s
 	f.roots[export] = localPath
+	f.manifests[export] = map[string]writeback.Baseline{}
 }
 
 func (f *fills) get(export string) (fillState, bool) {
@@ -126,8 +135,29 @@ func (s *Session) sendBatch(export, localPath string, entries []cachefill.Entry,
 
 	s.fills.mu.Lock()
 	state.Sent += len(entries)
+	s.noteSent(export, localPath, entries)
 	s.fills.mu.Unlock()
 	return nil
+}
+
+// noteSent records what a batch put in the cache. The caller holds the lock.
+//
+// Read from disk again rather than taken from the walk: what matters is the
+// state of the file as it was SENT, and a file rewritten between the walk and
+// the read would otherwise be recorded as something it never was -- which
+// write-back would later read as the container having changed it.
+func (s *Session) noteSent(export, localPath string, entries []cachefill.Entry) {
+	manifest := s.fills.manifests[export]
+	if manifest == nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := os.Stat(filepath.Join(localPath, filepath.FromSlash(e.Path)))
+		if err != nil {
+			continue
+		}
+		manifest["/"+e.Path] = writeback.Baseline{Size: info.Size(), ModTime: info.ModTime()}
+	}
 }
 
 // fillBatchTimeout bounds one send. Generous, because a batch is up to

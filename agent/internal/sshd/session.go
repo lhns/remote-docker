@@ -105,6 +105,10 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		// through a container start, which is the same reason Docker's
 		// version is reported.
 		Union: s.unionCapability(session.Context(), account.Name()),
+
+		// This workspace's clock, so the client can measure the offset between
+		// the two machines rather than assume they agree (ADR 0044).
+		Now: time.Now().UnixNano(),
 	}
 
 	if err := info.Encode(session); err != nil {

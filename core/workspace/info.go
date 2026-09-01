@@ -65,6 +65,15 @@ type Info struct {
 	// predates the key, which reads as "cannot" and is the old behaviour.
 	Union string
 
+	// Now is the workspace's clock when it answered, in Unix nanoseconds.
+	//
+	// For exactly one question: when a file was changed BOTH here and in a
+	// container, which side wrote last (ADR 0044). The two machines were never
+	// set together, so the difference is measured rather than assumed away.
+	// Zero from an agent that predates the key, which reads as "no offset" and
+	// is the old behaviour.
+	Now int64
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -83,6 +92,7 @@ const (
 	keyMode        = "WORKSPACE_MODE"
 	keyDaemonPaths = "WORKSPACE_DAEMON_PATHS"
 	keyUnion       = "WORKSPACE_UNION"
+	keyNow         = "WORKSPACE_NOW"
 )
 
 // What Union says. A reason rather than a boolean: "no" with nothing after it
@@ -157,6 +167,8 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.DaemonPaths = splitPaths(value)
 		case keyUnion:
 			info.Union = value
+		case keyNow:
+			info.Now, err = strconv.ParseInt(value, 10, 64)
 		case keyDocker:
 			info.Docker = value
 		default:
@@ -208,6 +220,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyMode, i.Mode},
 		{keyDaemonPaths, strings.Join(i.DaemonPaths, ",")},
 		{keyUnion, i.Union},
+		{keyNow, strconv.FormatInt(i.Now, 10)},
 	}
 
 	extraKeys := make([]string, 0, len(i.Extra))

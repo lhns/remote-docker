@@ -72,3 +72,25 @@ func call(fn func() (string, error)) (string, error) {
 	}
 	return fn()
 }
+
+// RawVolumes answers where a volume's data lives INSIDE the daemon's own
+// filesystem, without relocating it into the agent's.
+//
+// The distinction matters for exactly one caller. A union is mounted in the
+// daemon's mount namespace (ADR 0044), so the layer paths it is given have to
+// mean something THERE; a path relocated through /proc/<pid>/root names nothing
+// inside that namespace. Everything else wants Volumes, which relocates,
+// because everything else reads the files from out here.
+type RawVolumes struct{}
+
+// RawMountpoint asks the daemon at host where a volume's data is.
+func (RawVolumes) RawMountpoint(ctx context.Context, host, volume string) (string, error) {
+	mp, err := CLI{Host: host}.Line(ctx, "volume", "inspect", volume, "--format", "{{.Mountpoint}}")
+	if err != nil {
+		return "", fmt.Errorf("dockercli: inspecting volume %s: %w", volume, err)
+	}
+	if mp == "" {
+		return "", fmt.Errorf("dockercli: volume %s reported no mountpoint", volume)
+	}
+	return mp, nil
+}

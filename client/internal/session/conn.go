@@ -119,6 +119,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	s.registry.SetAttrs(attrsFor(info))
 
 	live := &liveConn{ssh: client, info: info, machine: hold}
+	if info.Now != 0 {
+		// Measured here, once, rather than per comparison: the round trip that
+		// fetched this is the only thing between the two readings, and it is
+		// far smaller than the differences this exists to catch.
+		live.clockSkew = time.Duration(info.Now - time.Now().UnixNano())
+	}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	// One guard for this connection, shared by the two things that disagree
 	// about a volume's lifetime. See rewrite.Guard.
@@ -183,6 +189,11 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	if s.opts.Role.hosting() {
 		s.startPorts(liveCtx, live)
 		s.startNotify(live)
+
+		// Carrying container writes back, for delegated shares (ADR 0044).
+		// Per connection, because it needs one; it does nothing at all until a
+		// share has a cache and that cache is complete.
+		live.wg.Go(func() { s.watchWriteBack(liveCtx) })
 
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
