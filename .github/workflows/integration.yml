@@ -134,6 +134,33 @@ jobs:
       - name: verdict
         run: echo "NFS client works inside a privileged container on this runner."
 
+  # Can a cache be a union mount? Every question the cache mode (ADR 0044) asks
+  # of the KERNEL rather than of our code, answered in about three minutes with
+  # no binary of ours but the watch probe.
+  #
+  # Beside nfs-capability rather than inside it because it settles a different
+  # thing, and it is here rather than in a branch's own workflow because the
+  # answers expire: they are about the runner's kernel, and that moves.
+  union-capability:
+    name: can a cache be a union mount
+    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      - name: probe
+        run: bash test/union-probe.sh
+
   # The whole thing, together: a real workspace container, the real client
   # binary, and a real kernel NFS mount inside the dind daemon.
   end-to-end:
