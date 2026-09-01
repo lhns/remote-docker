@@ -217,8 +217,8 @@ jobs:
 
       # Only this job needs it. In every other suite the mount happens inside a
       # container that carries its own client.
-      - name: install an NFS client on the runner
-        run: sudo apt-get update && sudo apt-get install -y nfs-common
+      - name: install an NFS client and fuse-overlayfs on the runner
+        run: sudo apt-get update && sudo apt-get install -y nfs-common fuse-overlayfs
 
       - name: run the suite
         run: bash test/vm.sh
