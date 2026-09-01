@@ -87,6 +87,9 @@ mkdir -p "$EXPORT_DIR" "$LOWER" "$UPPER" "$WORKDIR" "$MERGED"
 mkdir -p "$EXPORT_DIR/pkg"
 echo "from the lower" >"$EXPORT_DIR/only-lower.txt"
 echo "original" >"$EXPORT_DIR/pkg/edited.txt"
+# Never touched by anything below, so section 6 can read them as a control.
+echo "pristine at the root" >"$EXPORT_DIR/pristine-root.txt"
+echo "pristine and nested" >"$EXPORT_DIR/pkg/pristine-nested.txt"
 
 if ! command -v exportfs >/dev/null 2>&1; then
     sudo apt-get update -qq && sudo apt-get install -y -qq nfs-kernel-server
@@ -238,37 +241,51 @@ else
 fi
 
 echo
-echo "== 6. the miss path: a file that is only in the lower =="
-# What happens when the client edits a file the cache does not hold. The lower
-# is live, so the bytes are right; the question is whether a stale attribute or
-# a cached negative gets in the way.
+echo "== 6. reading the lower, which is the whole point of falling through =="
+# Deliberately an experiment rather than an assertion. The first run of this
+# probe read a lower file from the CONTAINER and got EOPNOTSUPP where the same
+# read from the HOST had worked, and one failure cannot say which of the two
+# variables mattered -- host against container, or a file at the root against
+# one in a subdirectory. So all four are read, pristine, before anything is
+# modified underneath.
+report "host, merged, at the root" cat "$MERGED/pristine-root.txt"
+report "host, merged, nested" cat "$MERGED/pkg/pristine-nested.txt"
+report "container, at the root" docker exec "$HOLDER" cat /w/pristine-root.txt
+report "container, nested" docker exec "$HOLDER" cat /w/pkg/pristine-nested.txt
+report "container, listing a lower directory" docker exec "$HOLDER" ls -la /w/pkg
+report "container, listing the root" docker exec "$HOLDER" ls -la /w
+
+if outputs '^pristine and nested$' docker exec "$HOLDER" cat /w/pkg/pristine-nested.txt; then
+    ok "a container reads a file that exists only in the lower"
+else
+    bad "A CONTAINER CANNOT READ THE LOWER: [$LAST_OUTPUT]"
+    info "falling through is the whole point, so this decides the design"
+fi
+
+# Only now, the coherence question: the client edits a file the cache does not
+# hold, which is the case the invalidation channel does NOT cover because there
+# is nothing cached to invalidate.
 echo "changed underneath" >"$EXPORT_DIR/pkg/edited.txt"
 sleep 2
-if outputs '^changed underneath$' docker exec "$HOLDER" cat /w/pkg/edited.txt; then
-    ok "an edit to a file only in the lower is visible through the union"
-else
-    bad "the union served a stale lower: [$LAST_OUTPUT]"
-fi
+report "container, a lower file changed underneath" docker exec "$HOLDER" cat /w/pkg/edited.txt
 
 echo "appeared underneath" >"$EXPORT_DIR/pkg/new-below.txt"
 sleep 2
-if outputs '^appeared underneath$' docker exec "$HOLDER" cat /w/pkg/new-below.txt; then
-    ok "a file created in the lower appears through the union"
-else
-    info "a file created in the lower did NOT appear: [$LAST_OUTPUT]"
-    info "the cache would have to be told, which is what the invalidation channel is for"
-fi
+report "container, a lower file created underneath" docker exec "$HOLDER" cat /w/pkg/new-below.txt
 
-echo
 echo "== 7. does the lower cost a d_type fallback? =="
 # overlayfs needs the file type from READDIR. If the lower cannot supply it the
 # kernel stats every entry, which would make a directory walk through the union
 # SLOWER than the plain mount it is meant to beat.
 for i in $(seq 1 200); do echo x >"$EXPORT_DIR/pkg/f$i"; done
 sleep 1
-lower_walk=$( { time -p find "$LOWER" -type f >/dev/null; } 2>&1 | awk '/^real/ {print $2}')
-merged_walk=$( { time -p find "$MERGED" -type f >/dev/null; } 2>&1 | awk '/^real/ {print $2}')
-info "a walk of 200 files: lower ${lower_walk}s, merged ${merged_walk}s"
+lower_walk=$( { time -p find "$LOWER" -type f >"$WORK/lower.list"; } 2>&1 | awk '/^real/ {print $2}')
+merged_walk=$( { time -p find "$MERGED" -type f >"$WORK/merged.list"; } 2>&1 | awk '/^real/ {print $2}')
+# The counts matter more than the seconds: a walk that found nothing is the
+# fastest walk there is.
+info "lower: $(wc -l <"$WORK/lower.list") files in ${lower_walk}s"
+info "merged: $(wc -l <"$WORK/merged.list") files in ${merged_walk}s"
+report "the same walk from inside the container"     docker exec "$HOLDER" sh -c "find /w -type f | wc -l"
 report "what the kernel said about the lower" sh -c "sudo dmesg 2>/dev/null | grep -i 'overlayfs' | tail -5"
 
 echo
