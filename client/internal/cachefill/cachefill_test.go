@@ -311,21 +311,42 @@ func TestStreamStopsWhenSendingFails(t *testing.T) {
 	}
 }
 
-// Batches arrive cheapest first, which is the whole ordering policy.
+// The cheapest go first, which is the whole ordering policy: the win is a round
+// trip saved per file, so a thousand small ones are worth more than one large
+// one that costs the same bandwidth.
+//
+// What is promised is what the buffer can see, NOT a global sort: sending
+// starts once the scan has seen Sample files rather than waiting for all of
+// them, which is the other half of the policy. So the assertion is that a large
+// file never goes out while smaller ones are still waiting -- with more small
+// files than one batch holds, it cannot be in the first batch however the scan
+// and the drain interleave.
 func TestStreamSendsTheCheapestFirst(t *testing.T) {
+	// The walk visits these in name order, so an unsorted Stream would send
+	// the largest file first. Which is what this catches: the entries go out
+	// in the order the selector chose, not the order the tree was read in.
 	files := map[string]int{"huge.bin": 40000, "mid.txt": 4000}
-	for i := range Sample {
+	for i := range 20 {
 		files[fmt.Sprintf("tiny%03d.go", i)] = 4
 	}
 
 	batches, _ := collect(t, tree(t, files), Budget{})
+	if len(batches) == 0 {
+		t.Fatal("nothing was sent")
+	}
+	if first := batches[0][0]; first.Size != 4 {
+		t.Errorf("the first file sent was %d bytes; the cheapest go first", first.Size)
+	}
 
-	var last int64
-	for _, b := range batches {
+	// Ascending WITHIN a batch, which is all a batch can promise. Across
+	// batches it cannot: sending starts once the scan has seen Sample files
+	// rather than waiting for the whole tree, so a later batch may hold
+	// something smaller than an earlier one that had not been found yet.
+	for i, b := range batches {
+		var last int64
 		for _, e := range b {
 			if e.Size < last {
-				t.Fatalf("a %d-byte file followed a %d-byte one; batches must be ascending",
-					e.Size, last)
+				t.Errorf("batch %d has a %d-byte file after a %d-byte one", i, e.Size, last)
 			}
 			last = e.Size
 		}

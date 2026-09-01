@@ -16,11 +16,13 @@ import (
 
 // What the container changed, read out of the cache layer (ADR 0044).
 //
-// The upper layer of an overlay IS that record, exactly: it holds what was
-// written through the union and nothing else. So telling a container's write
-// from a file that was merely copied in needs no heuristic, no timestamps and
-// no comparison -- it is the difference between being in the upper layer and
-// not.
+// The upper layer of an overlay holds what was written through the union --
+// which is the container's writes AND the fill's own copies, since the fill
+// goes through the union too. So being in the layer is not the answer on its
+// own. What the client sent is what separates them, and it is checked twice:
+// here against the record this process keeps of what it applied, so the reply
+// stays proportional to what changed, and on the client against the manifest,
+// which is the rule (ADR 0044).
 //
 // Read directly rather than through the merged mount, which is the one place
 // this design reads a layer instead of the union. Reading is safe where writing
@@ -32,6 +34,15 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 	l, upper, err := m.upperRoot(ctx, account, export)
 	if err != nil {
 		return nil, err
+	}
+
+	// Asked before the walk, because WalkDir reports a root it cannot read
+	// through the same callback as any other entry -- so an upper that is not
+	// there at all comes back as no changes and no error, which is
+	// indistinguishable from a container that wrote nothing. The failure that
+	// hides is a share whose write-back silently never happens.
+	if _, err := os.Stat(upper); err != nil {
+		return nil, fmt.Errorf("unions: the cache layer of %s cannot be read: %w", export, err)
 	}
 
 	var out []workspace.CacheChange

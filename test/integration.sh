@@ -1500,12 +1500,26 @@ echo "== 15c. the delegated consistency, which is a union =="
 # Run against the WATCHING client section 15 started: invalidation rides the
 # watcher, because a cached copy of a file that changed here is the one way this
 # mode can be wrong rather than merely slow.
+# Everything worth seeing when a union assertion fails, in one place because
+# three of them want the same thing: what the session thinks it has cached,
+# what the client logged, and what the WORKSPACE logged -- which the workflow's
+# own log step cannot show, because the suite has torn the container down by
+# the time it runs.
+deleg_diagnostics() {
+    "$WORK/remote-docker" remote status 2>&1 |
+        grep -iE "cache|watch" | sed 's/^/        client: /'
+    grep -iE "cache|union|fuse|wrote" "$WORK/watch-up.log" 2>/dev/null |
+        tail -10 | sed 's/^/        client: /'
+    docker logs "$CONTAINER" 2>&1 |
+        grep -iE "union|cache|fuse|overlay" | tail -15 | sed 's/^/        workspace: /'
+}
+
 DELEGDIR="$WORK/delegated"
 mkdir -p "$DELEGDIR"
 echo "first" >"$DELEGDIR/marker"
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
-    if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"         alpine:3 sleep 300 >"$WORK/deleg-run.log" 2>&1; then
+    if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"         alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
         ok "a container starts against a delegated union"
 
         if outputs '^first$' docker exec itest-deleg cat /w/marker; then
@@ -1585,12 +1599,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             ok "a container's write reaches this machine"
         else
             bad "the container's write never arrived here: [$back]"
-            # What the session thinks it is doing. Write-back is gated on the
-            # fill being complete, so the cache row says whether the gate is
-            # the reason, and the log says whether anything was tried.
-            "$WORK/remote-docker" remote status 2>&1 | grep -iE "cache|watch" | sed 's/^/        /'
-            grep -iE "cache|union|wrote|writing back" "$WORK/watch-up.log" 2>/dev/null |
-                tail -10 | sed 's/^/        /'
+            deleg_diagnostics
         fi
 
         # An edit here reaches the container, because the workspace writes it
@@ -1606,6 +1615,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             ok "an edit here reaches a running delegated container"
         else
             bad "the cache stayed stale after an edit: [$seen]"
+            deleg_diagnostics
         fi
 
         # And a DELETION, which no mode in this project has managed before: a
@@ -1624,13 +1634,16 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             ok "a file deleted here disappears from the container"
         else
             bad "a deleted file is still visible through the union"
+            deleg_diagnostics
         fi
     else
         bad "a container would not start against a delegated union"
         sed 's/^/        /' "$WORK/deleg-run.log"
         dump_workspace_log 40
     fi
-    docker rm -f itest-deleg >/dev/null 2>&1
+    # itest-deleg is deliberately LEFT RUNNING. Section 16 restarts the client,
+    # which closes every channel this session had, and the container's share has
+    # to survive that -- see the assertion there.
 else
     bad "no client is running, so the union could not be tested"
 fi
@@ -1658,6 +1671,21 @@ fi
 if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
     if [ "$out" = "through-the-daemon" ]; then
         ok "docker works through the background session"
+
+        # The union outlives the channel that asked for it (ADR 0044). The
+        # client was killed and started again above, so every channel this
+        # share was prepared on is gone -- and the container bound to it is
+        # still running. Reading a file the CONTAINER wrote proves both the
+        # mount and its cache layer are the same ones as before: a union
+        # released with a container on it cannot be repaired, so this is the
+        # difference between a working share and one broken for good.
+        if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
+            ok "a container's union survives the client restarting"
+        else
+            bad "the union did not survive a client restart: [$LAST_OUTPUT]"
+            dump_workspace_log 30
+        fi
+        docker rm -f itest-deleg >/dev/null 2>&1
 
         # And the verdict, which is the whole point of `status`. A session is
         # demonstrably up: the command above went through it.

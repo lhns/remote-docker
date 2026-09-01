@@ -42,6 +42,10 @@ type Volumes interface {
 	// relocated through /proc/<pid>/root. The union is mounted in that
 	// daemon's namespace, so a relocated path would name nothing there.
 	RawMountpoint(ctx context.Context, host, volume string) (string, error)
+
+	// MountSources is every host path a running container has bound, which is
+	// how a union still in use is recognised.
+	MountSources(ctx context.Context, host string) (map[string]bool, error)
 }
 
 // Daemon is what the manager needs to know about the daemon serving an account.
@@ -70,6 +74,7 @@ type Manager struct {
 // live is one mounted union.
 type live struct {
 	spec   union.Spec
+	host   string // the daemon this union is mounted in, for asking who holds it
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -125,6 +130,10 @@ func (l *live) isApplied(name string, size int64, modTime time.Time) bool {
 // the same directory and must never share a mount.
 func key(account, export string) string { return account + "\x00" + export }
 
+// ownedBy reports whether a share key belongs to an account, and exists so
+// that only key() above knows how one is put together.
+func ownedBy(k, account string) bool { return strings.HasPrefix(k, account+"\x00") }
+
 // Prepare mounts a share's union if it is not already mounted, and answers with
 // the path a container binds.
 //
@@ -169,7 +178,7 @@ func (m *Manager) Prepare(ctx context.Context, account string, d Daemon, req wor
 		m.stop(k, existing)
 	}
 
-	l := m.start(spec)
+	l := m.start(spec, d.Host)
 	m.shares[k] = l
 
 	if err := m.waitReady(ctx, spec); err != nil {
@@ -180,9 +189,9 @@ func (m *Manager) Prepare(ctx context.Context, account string, d Daemon, req wor
 }
 
 // start runs the union's server and keeps running it.
-func (m *Manager) start(spec union.Spec) *live {
+func (m *Manager) start(spec union.Spec, host string) *live {
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &live{spec: spec, cancel: cancel, done: make(chan struct{})}
+	l := &live{spec: spec, host: host, cancel: cancel, done: make(chan struct{})}
 
 	go func() {
 		defer close(l.done)
@@ -253,16 +262,31 @@ func (m *Manager) alive(spec union.Spec) bool {
 	return union.Alive(ctx, spec) == nil
 }
 
-// ReleaseAccount drops every share an account holds, which is what a session
-// ending means.
+// ReleaseAccount drops the shares an account holds that nothing is using,
+// which is what a cache session ending means.
+//
+// NOT every share: the union outlives the channel that asked for it, because
+// the channel goes whenever the connection under it is released (ADR 0015)
+// while the containers bound to the union keep running (ADR 0044).
 func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
+	held := m.heldByContainers(ctx, account)
+
 	m.mu.Lock()
 	var specs []union.Spec
 	for k, l := range m.shares {
-		if strings.HasPrefix(k, account+"\x00") {
-			specs = append(specs, l.spec)
-			m.stop(k, l)
+		if !ownedBy(k, account) {
+			continue
 		}
+		if held[l.spec.Merged()] {
+			// A container is still bound to it. Unmounting now frees nothing --
+			// the container keeps the mount it already has, and keeps it BROKEN,
+			// because a mount that has gone wrong stays wrong until the last
+			// container lets go of it. Released instead the next time the account
+			// disconnects with nothing holding this share.
+			continue
+		}
+		specs = append(specs, l.spec)
+		m.stop(k, l)
 	}
 	m.mu.Unlock()
 
@@ -271,6 +295,44 @@ func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
 			logx.Or(m.Log).Warn("could not unmount a union", "export", spec.Export, "err", err)
 		}
 	}
+}
+
+// heldByContainers is the set of this account's union mounts that a running
+// container is still bound to.
+//
+// A union is bound into a container by PATH rather than as a volume, so nothing
+// else in the workspace knows the two are related and the daemon is the only
+// thing that can say. On any doubt this answers "held": keeping a mount nobody
+// needs costs a process, while taking one that is in use costs somebody's
+// container permanently, since a mount that has gone wrong stays wrong until
+// the last container lets go of it.
+func (m *Manager) heldByContainers(ctx context.Context, account string) map[string]bool {
+	m.mu.Lock()
+	hosts := map[string]bool{}
+	shares := map[string]bool{}
+	for k, l := range m.shares {
+		if ownedBy(k, account) {
+			hosts[l.host] = true
+			shares[l.spec.Merged()] = true
+		}
+	}
+	m.mu.Unlock()
+
+	held := map[string]bool{}
+	for host := range hosts {
+		sources, err := m.Volumes.MountSources(ctx, host)
+		if err != nil {
+			logx.Or(m.Log).Warn("cannot tell which unions are in use; keeping them",
+				"account", account, "err", err)
+			return shares
+		}
+		for source := range sources {
+			if shares[source] {
+				held[source] = true
+			}
+		}
+	}
+	return held
 }
 
 // stop ends supervision. The caller holds the lock.

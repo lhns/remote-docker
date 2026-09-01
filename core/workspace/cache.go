@@ -18,13 +18,10 @@ import (
 // mutates nothing. This one ships bytes and writes them, which is a different
 // promise, and separating the two is what keeps the first one true.
 //
-// Everything the agent does goes THROUGH the merged mount rather than into the
-// cache layer directly. That is not a preference: overlayfs leaves the result
-// undefined when the layers change underneath a mounted union, and it was
-// measured -- a file written straight into the cache stays invisible to a
-// container that had already looked for it (test/union-probe.sh section 4).
-// Writing through the union is also what makes the container's own inotify
-// fire, which is how ADR 0014 closes for these shares.
+// Every op here is performed THROUGH the merged mount rather than into the
+// cache layer directly, which is a kernel constraint rather than a preference.
+// The reasoning is in agent/internal/unions/write.go, beside the code it
+// binds, and in ADR 0044.
 const (
 	// CacheVersion is the wire version, announced by the agent before anything
 	// else so a mismatch is a refusal rather than a stall.
@@ -56,10 +53,11 @@ const (
 	// the agent has to be involved at all.
 	OpDrop CacheOp = "drop"
 
-	// OpChanges asks what the CONTAINER changed: the cache layer is exactly
-	// that record, because an overlay's upper holds what was written through
-	// it and nothing else. No heuristic is needed to tell a container's write
-	// from a file that was copied in.
+	// OpChanges asks what the cache layer holds that the client did not put
+	// there, which is what the container wrote. The layer alone cannot say
+	// that -- the fill writes through the union too, so its own copies are in
+	// there beside the container's -- and the manifest is what separates them
+	// (ADR 0044).
 	OpChanges CacheOp = "changes"
 
 	// OpPull asks for the bytes of named paths out of the cache layer, so the

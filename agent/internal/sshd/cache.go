@@ -4,9 +4,11 @@ package sshd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 
@@ -32,6 +34,11 @@ import (
 // not pipelined: every op here changes a mount or a file, the client waits for
 // each in turn anyway, and a protocol that could reorder them would have to
 // explain what two overlapping applies to one share mean.
+// releaseTimeout bounds asking the daemon which unions are still in use. The
+// session is gone by then, so nothing is waiting on this but the workspace's
+// own tidying.
+const releaseTimeout = 30 * time.Second
+
 func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	if s.cfg.Unions == nil {
 		_, _ = fmt.Fprintln(session.Stderr(), "workspace-cache: this workspace does not serve delegated shares")
@@ -50,15 +57,24 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	}
 
 	name := account.Name()
-	defer s.cfg.Unions.ReleaseAccount(session.Context(), name)
+	defer func() {
+		// A context of its own, NOT the session's: that one is already
+		// cancelled by the time this runs, and releasing asks the daemon which
+		// unions are still held. On a cancelled context it cannot ask, answers
+		// "keep" as it must, and the workspace would never release one at all.
+		ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+		defer cancel()
+		s.cfg.Unions.ReleaseAccount(ctx, name)
+	}()
 
 	reader := bufio.NewReaderSize(session, workspace.MaxCacheFrame)
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			if err != io.EOF {
-				s.log().Info("a cache session ended", "account", name, "err", err)
-			}
+			// Always, including a clean EOF: the end of this channel is what
+			// releases the account's unions, so a share that stops working
+			// wants this line to explain when its cache went away.
+			s.log().Info("a cache session ended", "account", name, "err", err)
 			_ = session.Exit(0)
 			return
 		}
@@ -70,6 +86,14 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		}
 
 		reply, payload := s.applyCache(session, account, req, reader)
+		if reply.Err != "" {
+			// The client is told, and it can only pass the message on to
+			// whoever is watching its log. This side has the daemon, the
+			// mount and the namespace the failure happened in, so it says so
+			// where somebody debugging a share will look.
+			s.log().Warn("a cache request failed",
+				"account", name, "op", req.Op, "export", req.Export, "err", reply.Err)
+		}
 		if err := enc.Encode(reply); err != nil {
 			_ = session.Exit(1)
 			return

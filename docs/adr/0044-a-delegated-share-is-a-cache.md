@@ -120,6 +120,28 @@ applied to a cache exactly — and it is the one event the cache must not miss.
 The Docker API cannot help here at all: it can write into a volume and never
 remove from one, which is the whole reason the agent needs a channel.
 
+### A union outlives the channel that asked for it
+
+The cache channel rides the SSH connection, and that connection is released
+whenever the session goes idle and reopened on the next request (ADR 0015). The
+union must not follow it: a container binds the merged PATH, so unmounting under
+a running container does not free anything and does not stop it either — it
+leaves that container holding a mount that can never be repaired, which is the
+same refcount rule that makes `compose down` cure a broken mount where
+restarting the session does not.
+
+So a share is released only when no container is bound to it. The daemon is the
+only thing that can say, because a union is bound by path rather than as a
+volume and nothing else in the workspace relates the two. On any doubt the mount
+is KEPT: one nobody needs costs a process, and one taken while in use costs
+somebody's container for as long as it runs.
+
+Got wrong first, and it presented a long way from the cause: the container
+started, read its cache and wrote into it, and then every later request answered
+`has no cache; prepare it first` — write-back silent, invalidation silent, and a
+read that should have fallen through to the live export returning
+`No such file or directory`.
+
 ### Write-back: baselines first, clocks last
 
 The upper layer is where everything written through the union lands — which is

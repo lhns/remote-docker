@@ -410,6 +410,25 @@ premise of the project, and it applies to building it too. So:
   fresh. Anything claiming to repair a mount has to reckon with that or it will
   look like it did nothing.
 
+- **A delegated share's union outlives the channel that asked for it, and is
+  released only when no container is bound to it** (ADR 0044). The cache
+  channel rides the connection, which ADR 0015 releases the moment a session
+  goes idle; tying the mount to that unmounts a union under a running
+  container, which frees nothing and leaves that container with a mount the
+  rule above says can never be repaired. The daemon is the only thing that can
+  say who holds one, because a union is bound by PATH and not as a volume, so
+  nothing else in the workspace relates the two -- and "cannot tell" means
+  KEEP. It presented far from its cause: the container started, read its cache
+  and wrote into it, and everything afterwards answered `has no cache; prepare
+  it first`, with write-back and invalidation both silent.
+
+- **The cache layer does NOT say who wrote what.** An overlay's upper holds
+  what was written through the union, and the fill writes through the union
+  too, so its own copies sit there beside the container's. The manifest is what
+  separates them, on both ends (ADR 0044). Left unfiltered, every write-back
+  round asks for the whole tree back and an idle session is told about every
+  cached file every five seconds.
+
 - **The share ROOT handle must survive this process; nothing below it needs
   to.** MOUNT issues the root handle once and the kernel never mounts again, so
   a root that stops resolving leaves every lookup starting from something dead
