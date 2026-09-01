@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strconv"
@@ -82,6 +83,16 @@ type VolumeEnsurer interface {
 	EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error
 }
 
+// Seeder fills a volume with a tar stream, which is how a delegated share's
+// copy is made (ADR 0043). ResetVolume empties one first, so the copy is the
+// tree as it is now rather than as it was plus whatever has since been
+// deleted; a volume something is using is left alone, because there is nothing
+// safe to do about it.
+type Seeder interface {
+	ResetVolume(ctx context.Context, name string) error
+	SeedVolume(ctx context.Context, image, volume string, tree io.Reader) error
+}
+
 // The labels this package stamps. Defined in the contract, because the agent
 // reads them back (workspace.ClientLabel), so both ends must agree.
 const (
@@ -118,6 +129,11 @@ type Rewriter struct {
 	// before the axis existed (ADR 0042).
 	Consistency      workspace.Consistency
 	ConsistencyPaths map[string]workspace.Consistency
+
+	// Seed fills a delegated share's volume from this machine. Nil refuses
+	// `delegated` by name, which is what a session that cannot reach the
+	// daemon looks like.
+	Seed Seeder
 
 	// Watching says whether this session replays local changes into the
 	// workspace. `cached` rests on it: a long attribute cache with nothing to
@@ -219,7 +235,7 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	// One request, two mount lists, and a directory named in both is one share
 	// with one volume behind it. req is what lets the second list see what the
 	// first settled.
-	req := &request{}
+	req := &request{image: imageOf(payload)}
 
 	// No HostConfig means no binds and no ports, and the labels below may
 	// still change the payload.
@@ -387,7 +403,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, req *request, hostConfig ma
 			return nil, err
 		}
 
-		volume, file, err := r.volumeFor(ctx, parsed.Source, consistency)
+		volume, file, err := r.volumeFor(ctx, parsed.Source, req.image, consistency)
 		if err != nil {
 			return nil, err
 		}
@@ -533,7 +549,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, req *request, hostConfig m
 			return err
 		}
 
-		volume, file, err := r.volumeFor(ctx, source, consistency)
+		volume, file, err := r.volumeFor(ctx, source, req.image, consistency)
 		if err != nil {
 			return err
 		}
@@ -601,7 +617,7 @@ func supportsSubpath(version string) bool {
 
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency workspace.Consistency) (name, file string, err error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath, image string, consistency workspace.Consistency) (name, file string, err error) {
 	// Held across BOTH steps: registering the share is what tells the collector
 	// this volume is spoken for, and the volume does not exist until the step
 	// after it.
@@ -622,11 +638,51 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency 
 		return "", "", fmt.Errorf("rewrite: %w", err)
 	}
 
-	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, consistency)
 	labels := r.ownerLabels()
 	labels[ManagedLabel] = ManagedShare
+
+	if consistency == workspace.Delegated {
+		// No driver options at all: a plain local volume, which is a directory
+		// on the workspace and therefore as fast as the workspace's own disk.
+		// The share is still registered above, so naming, ownership and
+		// collection are the same as every other managed volume.
+		if err := r.seed(ctx, image, name, localPath, labels); err != nil {
+			return "", "", err
+		}
+		return name, file, nil
+	}
+
+	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, consistency)
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
 		return "", "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
 	}
 	return name, file, nil
+}
+
+// seed makes the copy a delegated share is (ADR 0043).
+//
+// Emptied first, so what the container sees is the tree as it is now: without
+// that, a file deleted here would stay in the copy for as long as the volume
+// lives. A volume another container is holding cannot be emptied and is filled
+// over instead, which is the one case where a deletion here does not reach the
+// copy.
+//
+// Synchronous, and that is deliberate. A container starting against a
+// half-populated tree fails in ways nobody can debug.
+func (r *Rewriter) seed(ctx context.Context, image, name, localPath string, labels map[string]string) error {
+	if err := r.Seed.ResetVolume(ctx, name); err != nil {
+		return fmt.Errorf("rewrite: emptying the copy of %s: %w", localPath, err)
+	}
+	// An empty map rather than nil: the body is JSON, and a null where the
+	// daemon expects an object is a different thing to send it.
+	if err := r.Volumes.EnsureVolume(ctx, name, map[string]string{}, labels); err != nil {
+		return fmt.Errorf("rewrite: creating the copy of %s: %w", localPath, err)
+	}
+
+	tree := tarTree(localPath)
+	defer tree.Close()
+	if err := r.Seed.SeedVolume(ctx, image, name, tree); err != nil {
+		return fmt.Errorf("rewrite: copying %s into the workspace: %w", localPath, err)
+	}
+	return nil
 }

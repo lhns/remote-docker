@@ -356,7 +356,7 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 |---|---|
 | `consistent`, `default` *(the default)* | the mount revalidates every second |
 | `cached` | the container may cache reads and directory structure; this machine is authoritative |
-| `delegated` | Docker's word for a copy the container writes to. Not implemented; asking for it says so |
+| `delegated` | not a mount at all: a copy on the workspace, filled from here when the container is created |
 
 Note the comma: a `-v` has three fields and the third is a LIST, so
 `ro,cached` and never `:cached:ro`.
@@ -366,6 +366,12 @@ Set it for a whole workspace, or for one tree:
 ```json
 {"consistency": "cached", "consistencyPaths": {"/home/me/live": "consistent"}}
 ```
+
+`delegated` is the one to reach for when a container only has to READ a tree
+and reads dominate: the files are copied to the workspace once and every read
+after that is its own disk. The cost is that it is a snapshot. What the
+container writes there never comes back, an edit here does not reach a
+container already running, and the next container gets the tree as it is then.
 
 **`cached` needs [file watching](#file-watching) on**, and refuses to run
 without it. An edit to an existing file arrives immediately, because the replay

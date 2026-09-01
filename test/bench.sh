@@ -48,7 +48,7 @@ WRITES=${BENCH_WRITES:-100}
 # where a rate of 0 means unshaped; the mode is Docker's consistency word,
 # written on the mount exactly as a person would write it (ADR 0042).
 SHAPES=${BENCH_SHAPES:-"0ms:0 20ms:0 80ms:0 0ms:10mbit"}
-MODES=${BENCH_MODES:-"consistent cached"}
+MODES=${BENCH_MODES:-"consistent cached delegated"}
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"

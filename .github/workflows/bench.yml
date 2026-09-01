@@ -20,6 +20,9 @@ on:
       files:
         description: "files in the tree"
         default: "300"
+      modes:
+        description: "consistency modes to compare"
+        default: "consistent cached delegated"
 
 permissions:
   contents: read
@@ -47,6 +50,7 @@ jobs:
         env:
           BENCH_SHAPES: ${{ inputs.shapes || '0ms:0 20ms:0 80ms:0 0ms:10mbit' }}
           BENCH_FILES: ${{ inputs.files || '300' }}
+          BENCH_MODES: ${{ inputs.modes || 'consistent cached delegated' }}
         run: bash test/bench.sh
 
       - name: workspace logs on failure

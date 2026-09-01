@@ -42,8 +42,20 @@ Per workspace as `consistency`, per directory as `consistencyPaths`, and
 outranks the workspace setting. Switching costs a volume rebuild and no
 migration.
 
-`delegated`, Docker's word for a copy the container writes to, parses and is
-refused: it is not implemented, and saying so beats behaving as though it were.
+### And `delegated` stops mounting altogether
+
+What `cached` cannot remove is the file's own bytes: a live mount has to fetch
+what it is asked for, which was 300 reads and 422 permission checks in every
+row above. `delegated` is Docker's word for a copy the container owns, and here
+it is exactly that -- a plain local volume on the workspace, filled from this
+machine as one tar stream before the container is created. Reads after that
+cost the workspace's own disk.
+
+It is a snapshot, and this release says so rather than implying otherwise:
+nothing is written back, and a container already running does not see an edit
+made here. The next container gets the tree as it is then. Write-back and a
+live refresh are separate work, recorded in ADR 0043 as the reason they are
+not here.
 
 ### The numbers are reproducible now
 

@@ -136,6 +136,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		// session rather than of the setting: `cached` rests on the watcher
 		// poking what changed, and a hosting session is the only one that has
 		// one.
+		// Filling a delegated share's copy, which is the one mode that is not
+		// a mount at all (ADR 0043).
+		Seed: live.api,
+
 		Consistency:      s.opts.Consistency,
 		ConsistencyPaths: s.opts.ConsistencyPaths,
 		Watching:         s.watch != nil,

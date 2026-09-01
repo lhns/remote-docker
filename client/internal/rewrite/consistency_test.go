@@ -1,12 +1,40 @@
 package rewrite
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
+
+// fakeSeeder records what would have been sent to the workspace.
+type fakeSeeder struct {
+	reset  bool
+	image  string
+	volume string
+	tree   string
+	err    error
+}
+
+func (f *fakeSeeder) ResetVolume(context.Context, string) error {
+	f.reset = true
+	return f.err
+}
+
+func (f *fakeSeeder) SeedVolume(_ context.Context, image, volume string, tree io.Reader) error {
+	f.image, f.volume = image, volume
+	body, err := io.ReadAll(tree)
+	if err != nil {
+		return err
+	}
+	f.tree = string(body)
+	return f.err
+}
 
 // cachedRewriter is a rewriter that may serve `cached`, which means one with a
 // watcher behind it.
@@ -212,16 +240,72 @@ func TestCachedNeedsTheWatcher(t *testing.T) {
 	}
 }
 
-// Not implemented yet, and saying so beats behaving as though it were: a
-// container reading a live mount when it asked for a delegated copy is a
-// difference nobody could see.
-func TestDelegatedIsRefusedForNow(t *testing.T) {
-	r, _ := cachedRewriter()
+// delegated is not a mount: the volume is a plain local one and the tree is
+// streamed into it before the container exists (ADR 0043).
+func TestDelegatedMakesACopy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "marker"), []byte("copied"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := r.ContainerCreate(t.Context(),
-		[]byte(`{"HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`))
+	r, volumes := cachedRewriter()
+	seeder := &fakeSeeder{}
+	r.Seed = seeder
+
+	body, err := json.Marshal(map[string]any{
+		"Image":      "alpine:3",
+		"HostConfig": map[string]any{"Binds": []string{root + ":/app:delegated"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ContainerCreate(t.Context(), body); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	// A local volume, so reads are the workspace's own disk. Any NFS option
+	// here would mean the copy was still being mounted over the tunnel.
+	if len(volumes.created) != 1 {
+		t.Fatalf("want one volume, got %v", volumes.created)
+	}
+	for name, opts := range volumes.created {
+		if len(opts) != 0 {
+			t.Errorf("volume %s was created with driver options %v", name, opts)
+		}
+		if seeder.volume != name {
+			t.Errorf("filled %q, but created %q", seeder.volume, name)
+		}
+	}
+
+	// Emptied before it is filled, or a file deleted here would live in the
+	// copy for as long as the volume does.
+	if !seeder.reset {
+		t.Error("the copy was filled without being emptied first")
+	}
+	if seeder.image != "alpine:3" {
+		t.Errorf("filled through image %q, want the one the caller is about to run", seeder.image)
+	}
+	if got := entries(t, strings.NewReader(seeder.tree)); got["marker"] != "copied" {
+		t.Errorf("the copy holds %v, want the file that was there", got)
+	}
+}
+
+// The copy is filled through a container, so it needs an image the daemon has
+// and a session that can reach the daemon at all.
+func TestDelegatedRefusesWhatItCannotFill(t *testing.T) {
+	withoutSeeder, _ := cachedRewriter()
+	_, err := withoutSeeder.ContainerCreate(t.Context(), []byte(
+		`{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`))
 	if err == nil || !strings.Contains(err.Error(), string(workspace.Delegated)) {
-		t.Fatalf("err = %v, want delegated named", err)
+		t.Fatalf("with no seeder: err = %v, want delegated named", err)
+	}
+
+	withoutImage, _ := cachedRewriter()
+	withoutImage.Seed = &fakeSeeder{}
+	_, err = withoutImage.ContainerCreate(t.Context(), []byte(
+		`{"HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`))
+	if err == nil || !strings.Contains(err.Error(), "image") {
+		t.Fatalf("with no image: err = %v, want the image named", err)
 	}
 }
 
