@@ -556,10 +556,17 @@ if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTD
     # building that image, to keep this probe cheap and independent.
     if docker exec "$DIND2" apk add --no-cache fuse-overlayfs >/dev/null 2>&1; then
         pid2=$(docker inspect -f '{{.State.Pid}}' "$DIND2" 2>/dev/null)
-        sudo nsenter -t "$pid2" -m -- mkdir -p /rd/lower /rd/upper /rd/work /rd/merged
+        # The upper and the work directory go on the daemon's DATA ROOT, which
+        # is a real filesystem, and not on /rd -- a dind's own root is
+        # overlayfs, and section 8 established the kernel refuses an upper
+        # there. The first run of this section did exactly that and got
+        # "cannot read upper dir", which is the design's own constraint
+        # arriving as a probe bug.
+        sudo nsenter -t "$pid2" -m -- mkdir -p /rd/lower /rd/merged             /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work
         if sudo nsenter -t "$pid2" -m -- mount -t nfs 127.0.0.1:"$EXPORT_DIR" /rd/lower             -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2 2>"$WORK/dindnfs.err"; then
             ok "the lower mounts inside the dind"
-            if sudo nsenter -t "$pid2" -m -- fuse-overlayfs                 -o lowerdir=/rd/lower,upperdir=/rd/upper,workdir=/rd/work /rd/merged                 2>"$WORK/dindfuse.err"; then
+            report "the filesystem holding the upper inside the dind"                 sudo nsenter -t "$pid2" -m -- sh -c "stat -f -c %T /var/lib/docker/rd-union/upper"
+            if sudo nsenter -t "$pid2" -m -- fuse-overlayfs                 -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work                 /rd/merged 2>"$WORK/dindfuse.err"; then
                 ok "fuse-overlayfs mounts inside the dind"
                 if outputs 'pristine and nested' docker exec "$DIND2"                     docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then
                     ok "a container on the account own daemon reads the lower through the union"

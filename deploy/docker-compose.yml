@@ -30,6 +30,15 @@ services:
       # Empty means overlay2. Use --storage-driver=fuse-overlayfs only if you
       # replace the volume below with Ceph- or NFS-backed storage.
       WORKSPACE_DOCKERD_ARGS: ${WORKSPACE_DOCKERD_ARGS:-}
+      # Which image a per-account daemon runs (ADR 0019). The agent cannot find
+      # this out for itself -- it would mean inspecting its own container
+      # through the host's Docker socket, which this deployment deliberately
+      # does not have -- so the same value that names the service image is
+      # passed in. Without it the fallback is stock docker:dind, which carries
+      # neither fuse-overlayfs nor anything else this workspace decided it
+      # needs, and a daemon inheriting --storage-driver=fuse-overlayfs then
+      # crash-loops naming a binary rather than the cause.
+      WORKSPACE_IMAGE: ${WORKSPACE_IMAGE:-remote-docker-workspace:latest}
 
     volumes:
       - workspace-docker:/var/lib/docker

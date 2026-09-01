@@ -71,7 +71,13 @@ echo "== 3. start the workspace with a daemon per account =="
 mkdir -p "$WORK/dindconf"
 echo "reached the inner daemon" >"$WORK/dindconf/marker"
 
-if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"; then
+# WORKSPACE_DIND_IMAGE is the workspace's OWN image, which is what a real
+# deployment runs (the Helm chart sets exactly this, and elevate passes
+# WORKSPACE_IMAGE where it can). Without it the fallback is stock docker:dind,
+# which carries none of the tooling this workspace decided it needs --
+# fuse-overlayfs above all -- so this suite would exercise an image no
+# deployment should be using and miss anything that depends on it.
+if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"     -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
     bad "workspace container failed to start"
