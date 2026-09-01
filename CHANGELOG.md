@@ -8,6 +8,46 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### A shared directory can stop revalidating every attribute
+
+Reading a project through the share costs a round trip per file per second,
+because the mount revalidates any attribute older than that. Over a link with
+real latency that is the whole cost: measured on a GitHub runner over 300
+files, reading them takes 0.6s unshaped, 45s at 40ms RTT and 239s at 160ms,
+while a 10mbit link costs almost nothing. Latency, not bandwidth.
+
+Docker already has a word for the fix, and every client already parses it:
+
+```bash
+docker run -v ./project:/app:ro,cached
+docker run --mount type=bind,source=./project,target=/app,consistency=cached
+#  compose:  consistency: cached
+```
+
+`cached` says the container may cache read data and directory structure, and
+that this machine is authoritative. Here that becomes a long attribute cache
+on the NFS mount. What keeps it coherent is the watcher: an edit here is
+replayed into the workspace as a real syscall, which refreshes exactly the
+inode that changed. So `cached` needs watching on, and asking for it without
+says so rather than serving a mount that goes stale.
+
+Per workspace as `consistency`, per directory as `consistencyPaths`, and
+`REMOTE_DOCKER_CONSISTENCY` for a CI run. A mount outranks a rule, a rule
+outranks the workspace setting. Switching costs a volume rebuild and no
+migration.
+
+`delegated`, Docker's word for a copy the container writes to, parses and is
+refused: it is not implemented, and saying so beats behaving as though it were.
+
+### The numbers are reproducible now
+
+`test/bench.sh` walks, reads and writes a project-shaped tree through a real
+session, with netem shaping the workspace's loopback for both delay and rate,
+and reports the NFS per-operation counts beside the wall-clock. It runs from a
+pull request labelled `bench`, or on request: it is a measurement, not a gate.
+
 ## 0.5.1 — 2026-08-26
 
 ### A workspace path works from Git Bash too

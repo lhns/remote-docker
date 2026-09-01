@@ -256,6 +256,7 @@ default.**
 | `REMOTE_DOCKER_USER` | `user` | `--user` | your local username |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
+| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | | `consistent`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
 | `REMOTE_DOCKER_WATCH` | `watch` | `workspace create --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |
@@ -326,6 +327,51 @@ and on macOS one file descriptor per file. Only the directories you share are
 watched, never your whole disk, and there is a budget. What that costs, why
 deletions are the honest gap, and what to do when the budget runs out are in
 [Caveats](#file-watching-in-detail).
+
+## Faster access to a shared directory
+
+Reading a project through the share costs a round trip per file, and the mount
+revalidates any attribute older than a second. Over a link with real latency
+that is the whole cost. Measured over 300 files by `test/bench.sh`, with the
+workspace's loopback shaped:
+
+| RTT | walk | read | write |
+|---|---|---|---|
+| 0.1ms | 0.25s | 0.59s | 1.00s |
+| 40ms | 5.35s | 45.12s | 10.29s |
+| 160ms | 44.12s | 238.84s | 40.18s |
+| 0.3ms, 10mbit | 0.34s | 1.11s | 1.06s |
+
+Latency, not bandwidth: a thin link costs almost nothing and a distant one
+costs 400x. Docker's own mount consistency is how you say a directory may be
+cached, and every client already parses it:
+
+```bash
+docker run -v ./project:/app:ro,cached
+docker run --mount type=bind,source=./project,target=/app,consistency=cached
+#  compose:  volumes: [{type: bind, source: ./project, target: /app, consistency: cached}]
+```
+
+| word | what it means here |
+|---|---|
+| `consistent`, `default` *(the default)* | the mount revalidates every second |
+| `cached` | the container may cache reads and directory structure; this machine is authoritative |
+| `delegated` | Docker's word for a copy the container writes to. Not implemented; asking for it says so |
+
+Note the comma: a `-v` has three fields and the third is a LIST, so
+`ro,cached` and never `:cached:ro`.
+
+Set it for a whole workspace, or for one tree:
+
+```json
+{"consistency": "cached", "consistencyPaths": {"/home/me/live": "consistent"}}
+```
+
+**`cached` needs [file watching](#file-watching) on**, and refuses to run
+without it. A long attribute cache is only safe because an edit here is
+replayed into the workspace, which refreshes exactly the file that changed. A
+mount outranks a per-directory rule, which outranks the workspace setting, and
+switching costs a volume rebuild rather than a migration.
 
 What is in this release, and what is still unproven:
 [`CHANGELOG.md`](CHANGELOG.md).
