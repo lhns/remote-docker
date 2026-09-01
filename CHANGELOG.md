@@ -51,6 +51,13 @@ it is exactly that -- a plain local volume on the workspace, filled from this
 machine as one tar stream before the container is created. Reads after that
 cost the workspace's own disk.
 
+Measured on the same run: reading 300 files takes 0.06s whatever the latency,
+against 98s for `cached` at 160ms RTT. Starting the container is cheaper too,
+0.25s against 1.43s, because the tree crosses in one stream rather than a round
+trip per file. That last number is about a small tree -- the copy is
+bandwidth-bound where a mount is latency-bound, so a large project is a wait
+once, at container start.
+
 It is a snapshot, and this release says so rather than implying otherwise:
 nothing is written back, and a container already running does not see an edit
 made here. The next container gets the tree as it is then. Write-back and a

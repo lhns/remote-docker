@@ -67,6 +67,33 @@ having:
 Until those exist, **`delegated` is a snapshot taken when the container was
 created**, and `cached` is the mode for anything watching for changes.
 
+## What it bought
+
+Same run as ADR 0042's tables, and `start` is the container coming up, which is
+where a delegated share pays for itself:
+
+| RTT | mode | start | walk | read | write |
+|---|---|---|---|---|---|
+| 0.1ms | cached | 0.14s | 0.09s | 0.30s | 0.19s |
+| | **delegated** | 0.24s | 0.06s | 0.06s | 0.06s |
+| 40ms | cached | 0.46s | 3.00s | 24.50s | 12.30s |
+| | **delegated** | 0.24s | **0.06s** | **0.06s** | **0.06s** |
+| 160ms | cached | 1.43s | 11.65s | 98.20s | 49.18s |
+| | **delegated** | **0.25s** | **0.06s** | **0.06s** | **0.06s** |
+| 0.3ms, 10mbit | cached | 0.15s | 0.17s | 0.62s | 0.32s |
+| | **delegated** | 0.26s | 0.06s | 0.06s | 0.06s |
+
+- **Flat across the latency knob**, which is the whole claim: 0.06s at 160ms is
+  the same 0.06s as unshaped, and there is no NFS mount, so the per-operation
+  counts are empty rather than reduced.
+- **Starting is CHEAPER at distance, not dearer.** The tree crosses in one
+  stream, so seeding 300 files costs 0.25s at 160ms while a mount takes 1.43s
+  just to bring the container up.
+- **That last number is about a small tree**, 300 files of 400 bytes. The seed
+  is bandwidth-bound where the mount is latency-bound, so what scales it is the
+  project's SIZE: a gigabyte over a thin link is a wait, once, at container
+  start, and `start` is a column so that it is never hidden.
+
 ## Consequences
 
 - **A file deleted on this machine is gone from the next container's copy**, and

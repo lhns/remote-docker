@@ -14,10 +14,10 @@ files in 20 directories, netem on the workspace's loopback (2026-09-01):
 
 | shape | RTT | walk | read | write |
 |---|---|---|---|---|
-| unshaped | 0.1ms | 0.09s | 0.43s | 0.85s |
-| 20ms | 40ms | 4.87s | 58.83s | 17.15s |
-| 80ms | 160ms | 42.72s | 291.96s | 74.08s |
-| 10mbit | 0.3ms | 0.18s | 0.84s | 0.41s |
+| unshaped | 0.1ms | 0.09s | 0.41s | 0.79s |
+| 20ms | 40ms | 4.86s | 58.76s | 17.23s |
+| 80ms | 160ms | 42.70s | 291.99s | 74.12s |
+| 10mbit | 0.3ms | 0.19s | 0.84s | 0.41s |
 
 Two things follow, and both decide the shape of the answer:
 
@@ -91,13 +91,13 @@ else differs.
 
 | RTT | mode | walk | read | write | GETATTR | LOOKUP |
 |---|---|---|---|---|---|---|
-| 0.1ms | consistent | 0.09s | 0.43s | 0.85s | 431 | 114 |
-| | **cached** | 0.09s | 0.31s | 0.20s | **0** | **0** |
-| 40ms | consistent | 4.87s | 58.83s | 17.15s | 1228 | 3 |
-| | **cached** | **3.00s** | **24.48s** | 12.29s | **0** | **0** |
-| 160ms | consistent | 42.72s | 291.96s | 74.08s | 1888 | 3 |
-| | **cached** | **11.65s** | **98.18s** | 48.81s | **12** | **0** |
-| 0.3ms, 10mbit | consistent | 0.18s | 0.84s | 0.41s | 547 | 3 |
+| 0.1ms | consistent | 0.09s | 0.41s | 0.79s | 435 | 110 |
+| | **cached** | 0.09s | 0.30s | 0.19s | **0** | **0** |
+| 40ms | consistent | 4.86s | 58.76s | 17.23s | 1233 | 3 |
+| | **cached** | **3.00s** | **24.50s** | 12.30s | **0** | **0** |
+| 160ms | consistent | 42.70s | 291.99s | 74.12s | 1888 | 3 |
+| | **cached** | **11.65s** | **98.20s** | 49.18s | **13** | **0** |
+| 0.3ms, 10mbit | consistent | 0.19s | 0.84s | 0.41s | 546 | 3 |
 | | **cached** | 0.17s | 0.62s | 0.32s | **0** | **0** |
 
 - **The revalidation is gone**, which is what the mode is: GETATTR goes to zero

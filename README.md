@@ -337,7 +337,7 @@ workspace's loopback shaped, reading them all:
 
 | RTT | default | `cached` | `delegated` |
 |---|---|---|---|
-| 0.1ms | 0.43s | 0.31s | 0.06s |
+| 0.1ms | 0.41s | 0.30s | 0.06s |
 | 40ms | 58.8s | 24.5s | 0.06s |
 | 160ms | 292.0s | 98.2s | 0.06s |
 | 0.3ms, 10mbit | 0.84s | 0.62s | 0.06s |
