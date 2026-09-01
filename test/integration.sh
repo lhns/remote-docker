@@ -1687,7 +1687,11 @@ sleep 2
 # the record of what the last fill sent says it may go (ADR 0044).
 rm -f "$DELEGDIR/while-down.txt"
 
-if "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
+# Watching on, because this session has to serve the delegated share section
+# 15c left running and start a container against another. The mode refuses to
+# run without it, by design: its cache holds copies, and the watcher is the
+# only thing that keeps them honest (ADR 0044).
+if REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
     ok "start returned without holding a terminal"
     sed 's/^/        /' "$WORK/start.log"
 else
