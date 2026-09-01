@@ -196,7 +196,21 @@ confusion is content appearing in somebody's source tree that they never wrote.
   serves, and a killed server leaves a mount that answers nothing.
 - **A mount that has gone wrong stays wrong until the last container lets go of
   it**, which CLAUDE.md already says of every mount here. Remounting at the same
-  path does not repair a container already bound to the dead one, so a live
-  union is adopted rather than replaced.
+  path does not repair a container already bound to the dead one.
+
+  **Open, and not yet done:** adopting a live union instead of replacing it.
+  Two things block it, and they are the same thing. `union.Alive` stats the
+  merged path, and the directories a union needs are created before it is
+  mounted and outlive it — so a share that has never been mounted, and one
+  whose server died and left the mountpoint behind, both read as serving. Doing
+  better means asking whether the path is a MOUNT, which the child already does
+  from inside the namespace by comparing st_dev against the parent, and which
+  the agent would have to do from outside through `/proc/<pid>/root`. Whether
+  that answers there is a question about the kernel rather than about this code,
+  so `test/union-probe.sh` section 12 measures it rather than assuming it.
+
+  Until then: an agent restart leaves a running container's delegated share
+  broken, because the supervisor mounts again over a mount that was still
+  serving.
 - **Disk**: one cache per share per client, growing with what the container
   writes as well as with the tree.

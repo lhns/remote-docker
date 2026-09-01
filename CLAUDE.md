@@ -821,6 +821,15 @@ function was.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
+- **A delegated share across an AGENT restart.** The client restarting is
+  covered (`integration.sh` section 16 reads through a union whose channels are
+  all gone), and the agent restarting is NOT: the supervisor mounts again over a
+  mount that was still serving, so a running container is left with a share it
+  cannot use. `union.Alive` stats the merged path and therefore cannot tell a
+  live mount from the directory a dead one leaves behind, which is the same
+  gap seen from the other side. `test/union-probe.sh` section 12 measures what
+  fixing it would rest on. Do not say a delegated share survives an agent
+  restart.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

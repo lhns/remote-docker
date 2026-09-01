@@ -41,6 +41,8 @@
 #   the cache lands somewhere the kernel refuses      8
 #   a mount going away leaves a container half-fed    9
 #   a daemon per account cannot be reached at all     10
+#   a dead union cannot be told from its leftover dir  12
+#   an agent restart cannot adopt a live mount         12
 #
 # THE VERDICT, measured 2026-09-01 on ubuntu-latest:
 #
@@ -626,6 +628,73 @@ if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTD
     docker rm -f "$DIND2" >/dev/null 2>&1
 else
     info "could not start a dind on the host network; section 11 is unanswered"
+fi
+
+
+echo
+echo "== 12. telling a live union from the directory it leaves behind =="
+# The agent supervises a union it cannot enter, and it reads the mount through
+# /proc/<pid>/root. Two things rest on that read being able to say "mounted"
+# rather than merely "the path is there":
+#
+#   - a union whose server died leaves its mountpoint behind as an ordinary
+#     empty directory. Read as alive, a container binds it and sees nothing,
+#     with nothing to say the share is empty.
+#   - after an agent restart the child is an orphan whose mount is still
+#     serving. Mounting over that would strand every container bound to it, so
+#     the supervisor has to recognise it and adopt it instead.
+#
+# The test is st_dev against the parent, which is what the child already uses
+# from INSIDE the namespace. What is unmeasured, and is the whole question here,
+# is whether it still answers from OUTSIDE, through /proc/<pid>/root -- so this
+# section asks it rather than assuming it.
+DIND3=union-probe-dind3
+docker rm -f "$DIND3" >/dev/null 2>&1
+if docker run -d --name "$DIND3" --privileged --network host -e DOCKER_TLS_CERTDIR=     docker:28-dind >/dev/null 2>&1; then
+    for _ in $(seq 1 30); do
+        docker exec "$DIND3" docker info >/dev/null 2>&1 && break
+        sleep 2
+    done
+
+    pid=$(docker inspect -f '{{.State.Pid}}' "$DIND3" 2>/dev/null)
+    docker exec "$DIND3" sh -c 'mkdir -p /rd/probe12/lower /rd/probe12/merged' >/dev/null 2>&1
+
+    # An ordinary directory first, so what a dead union leaves behind has a
+    # measured answer of its own rather than being inferred from the mounted one.
+    # sudo, because traversing another process's root needs it. The agent has
+    # that already: it runs as root in the workspace container.
+    if sudo test -d "/proc/$pid/root/rd/probe12/merged"; then
+        ok "the agent can see the daemon's directories through /proc/<pid>/root"
+
+        bare=$(sudo stat -c %d "/proc/$pid/root/rd/probe12/merged" 2>/dev/null)
+        up=$(sudo stat -c %d "/proc/$pid/root/rd/probe12" 2>/dev/null)
+        info "an unmounted directory: dev=$bare parent=$up"
+        if [ -n "$bare" ] && [ "$bare" = "$up" ]; then
+            ok "an unmounted directory is on its parent's device, so it reads as NOT mounted"
+        else
+            bad "an unmounted directory already differs from its parent: [$bare] vs [$up]"
+        fi
+
+        # And now with something actually mounted there. tmpfs rather than a
+        # union: what is under test is whether crossing a mount is visible from
+        # out here, which is a property of the mount and not of its filesystem.
+        if docker exec "$DIND3" mount -t tmpfs none /rd/probe12/merged >/dev/null 2>&1; then
+            mounted_dev=$(sudo stat -c %d "/proc/$pid/root/rd/probe12/merged" 2>/dev/null)
+            info "a mounted directory: dev=$mounted_dev parent=$up"
+            if [ -n "$mounted_dev" ] && [ "$mounted_dev" != "$up" ]; then
+                ok "a mount in another namespace IS visible as a device change from outside it"
+            else
+                bad "a mount is indistinguishable from a directory out here: [$mounted_dev] vs [$up]"
+            fi
+        else
+            info "could not mount a tmpfs in the dind; section 12 is half answered"
+        fi
+    else
+        bad "the daemon's directories are not reachable through /proc/$pid/root"
+    fi
+    docker rm -f "$DIND3" >/dev/null 2>&1
+else
+    info "could not start a third dind; section 12 is unanswered"
 fi
 
 
