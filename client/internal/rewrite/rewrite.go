@@ -112,6 +112,19 @@ type Rewriter struct {
 	// a volume created by a client that predates this carries.
 	Client string
 
+	// Consistency is the mount consistency a share gets when the mount named
+	// none, and ConsistencyPaths overrides it for one directory and everything
+	// under it. Unset is Docker's own default, which is what this project did
+	// before the axis existed (ADR 0042).
+	Consistency      workspace.Consistency
+	ConsistencyPaths map[string]workspace.Consistency
+
+	// Watching says whether this session replays local changes into the
+	// workspace. `cached` rests on it: a long attribute cache with nothing to
+	// invalidate it is a stale mount, so asking for one without a watcher is
+	// refused rather than quietly served.
+	Watching bool
+
 	// Guard is shared with the Collector, and is what stops one deleting the
 	// volume the other has just created.
 	Guard *Guard
@@ -203,6 +216,11 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	var hostConfig map[string]json.RawMessage
 	var requested workspace.RequestedPorts
 
+	// One request, two mount lists, and a directory named in both is one share
+	// with one volume behind it. req is what lets the second list see what the
+	// first settled.
+	req := &request{}
+
 	// No HostConfig means no binds and no ports, and the labels below may
 	// still change the payload.
 	if hostConfigRaw, ok := payload["HostConfig"]; ok {
@@ -211,11 +229,11 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		}
 		// Binds first: a single-file bind cannot be expressed as a bind
 		// string, so it leaves that list and arrives in Mounts (ADR 0039).
-		moved, err := r.rewriteBinds(ctx, hostConfig, &hostChanged)
+		moved, err := r.rewriteBinds(ctx, req, hostConfig, &hostChanged)
 		if err != nil {
 			return nil, err
 		}
-		if err := r.rewriteMounts(ctx, hostConfig, moved, &hostChanged); err != nil {
+		if err := r.rewriteMounts(ctx, req, hostConfig, moved, &hostChanged); err != nil {
 			return nil, err
 		}
 
@@ -324,7 +342,7 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace
 // file rather than a directory (ADR 0039). Those are returned for the Mounts
 // pass to append, and removed here in the same walk, because the daemon rejects
 // the same target appearing in both lists.
-func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
+func (r *Rewriter) rewriteBinds(ctx context.Context, req *request, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
 	raw, ok := hostConfig["Binds"]
 	if !ok || string(raw) == "null" {
 		return nil, nil
@@ -359,7 +377,17 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, hostConfig map[string]json.
 			continue
 		}
 
-		volume, file, err := r.volumeFor(ctx, parsed.Source)
+		// Docker's consistency word rides in the option list and is consumed
+		// here: it describes the mount this program makes, not one the daemon
+		// could act on.
+		asked, options := splitConsistency(parsed.Options)
+		parsed.Options = options
+		consistency, err := r.resolveConsistency(req, parsed.Source, asked)
+		if err != nil {
+			return nil, err
+		}
+
+		volume, file, err := r.volumeFor(ctx, parsed.Source, consistency)
 		if err != nil {
 			return nil, err
 		}
@@ -461,7 +489,7 @@ func setSubpath(mount map[string]json.RawMessage, file string) error {
 
 // rewriteMounts handles HostConfig.Mounts, the `--mount` form that Compose and
 // the API-level clients prefer.
-func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
+func (r *Rewriter) rewriteMounts(ctx context.Context, req *request, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
 	raw, ok := hostConfig["Mounts"]
 	if (!ok || string(raw) == "null") && len(moved) == 0 {
 		return nil
@@ -496,7 +524,16 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, hostConfig map[string]json
 			continue
 		}
 
-		volume, file, err := r.volumeFor(ctx, source)
+		asked, err := takeConsistency(mount)
+		if err != nil {
+			return err
+		}
+		consistency, err := r.resolveConsistency(req, source, asked)
+		if err != nil {
+			return err
+		}
+
+		volume, file, err := r.volumeFor(ctx, source, consistency)
 		if err != nil {
 			return err
 		}
@@ -564,7 +601,7 @@ func supportsSubpath(version string) bool {
 
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (name, file string, err error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency workspace.Consistency) (name, file string, err error) {
 	// Held across BOTH steps: registering the share is what tells the collector
 	// this volume is spoken for, and the volume does not exist until the step
 	// after it.
@@ -585,7 +622,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string) (name, file 
 		return "", "", fmt.Errorf("rewrite: %w", err)
 	}
 
-	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath)
+	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, consistency)
 	labels := r.ownerLabels()
 	labels[ManagedLabel] = ManagedShare
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {

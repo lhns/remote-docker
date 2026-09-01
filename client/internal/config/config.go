@@ -77,6 +77,18 @@ type Config struct {
 	// watched. Empty means the default.
 	WatchExclude []string
 
+	// Consistency is what a share's mount gets when the mount itself named
+	// nothing: "consistent" (the default), "cached" or "delegated". Docker's
+	// own vocabulary, applied to the NFS mount (ADR 0042).
+	//
+	// ConsistencyPaths overrides it for one directory and everything under it,
+	// which is the common case of one slow tree among fast ones.
+	//
+	// Both held as raw strings for the same reason as Watch: this package is
+	// the lowest layer and the command reports a bad value.
+	Consistency      string
+	ConsistencyPaths map[string]string
+
 	// IdleTimeout is how long the workspace connection may sit unused before
 	// being released (ADR 0015). Zero means the default; negative never
 	// releases. Configurable chiefly so the integration suite can exercise
@@ -132,13 +144,19 @@ type File struct {
 // are parsed in applyWorkspace, where a malformed one is ignored rather than
 // fatal, exactly as the environment's are.
 type Workspace struct {
-	Host         string   `json:"host,omitempty"`
-	Port         int      `json:"port,omitempty"`
-	CAFile       string   `json:"caFile,omitempty"`
-	Insecure     bool     `json:"insecure,omitempty"`
-	User         string   `json:"user,omitempty"`
-	Endpoint     string   `json:"endpoint,omitempty"`
-	Watch        string   `json:"watch,omitempty"`
+	Host        string `json:"host,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	CAFile      string `json:"caFile,omitempty"`
+	Insecure    bool   `json:"insecure,omitempty"`
+	User        string `json:"user,omitempty"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	Watch       string `json:"watch,omitempty"`
+	Consistency string `json:"consistency,omitempty"`
+
+	// Keyed by a path on this machine; the value applies to it and to
+	// everything under it.
+	ConsistencyPaths map[string]string `json:"consistencyPaths,omitempty"`
+
 	WatchBudget  int      `json:"watchBudget,omitempty"`
 	WatchExclude []string `json:"watchExclude,omitempty"`
 	IdleTimeout  string   `json:"idleTimeout,omitempty"`
@@ -259,6 +277,7 @@ const (
 	EnvCAFile   = "REMOTE_DOCKER_CA_FILE"
 	EnvInsecure = "REMOTE_DOCKER_INSECURE"
 
+	EnvConsistency  = "REMOTE_DOCKER_CONSISTENCY"
 	EnvWatch        = "REMOTE_DOCKER_WATCH"
 	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
 	EnvWatchExclude = "REMOTE_DOCKER_WATCH_EXCLUDE"
@@ -391,6 +410,12 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Watch != "" {
 		cfg.Watch = ws.Watch
 	}
+	if ws.Consistency != "" {
+		cfg.Consistency = ws.Consistency
+	}
+	if len(ws.ConsistencyPaths) > 0 {
+		cfg.ConsistencyPaths = ws.ConsistencyPaths
+	}
 	if ws.WatchBudget != 0 {
 		cfg.WatchBudget = ws.WatchBudget
 	}
@@ -450,6 +475,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvWatch); v != "" {
 		cfg.Watch = v
+	}
+	if v := os.Getenv(EnvConsistency); v != "" {
+		cfg.Consistency = v
 	}
 	if v := os.Getenv(EnvWatchBudget); v != "" {
 		// Ignored rather than fatal if malformed, for the same reason as the

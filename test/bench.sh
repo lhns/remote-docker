@@ -31,6 +31,7 @@ WORK=$(mktemp -d)
 # shellcheck disable=SC2034  # IMAGE and CONTAINER are read by lib.sh.
 IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-bench
+PIN=bench-workload
 SSH_PORT=22224
 ACCOUNT=bench
 
@@ -52,6 +53,10 @@ SHAPES=${BENCH_SHAPES:-"0ms:0 20ms:0 80ms:0 0ms:10mbit"}
 cleanup() {
     echo
     echo "== cleanup =="
+    # Before the client goes: the workload container is on the workspace daemon
+    # and is only reachable through the session. A short timeout because on an
+    # abort the session may already be gone.
+    timeout 30 docker rm -f "$PIN" >/dev/null 2>&1
     if [ -n "${CLIENT_PID:-}" ]; then
         kill "$CLIENT_PID" 2>/dev/null
         wait "$CLIENT_PID" 2>/dev/null
@@ -107,6 +112,12 @@ delta() {
 }
 
 # elapsed prints the seconds a command took, to hundredths.
+#
+# The workloads run through exec in a container that is already up. A container
+# per workload timed the tunnel's round trips for creating one -- seconds of it
+# at 80ms -- on top of what is being measured, and the mount is REFCOUNTED, so
+# `--rm` dropped the count to zero and unmounted: /proc/self/mountstats had
+# nothing left to report and every nfs_ops column came back empty.
 elapsed() {
     local start end
     start=$(date +%s.%N)
@@ -163,8 +174,8 @@ done
 mkdir -p "$PROJECT/out"
 ok "tree built"
 
-# The image is pulled and the session's mount established before anything is
-# timed, so the first row does not carry a pull.
+# The image is pulled and the volume created before anything is timed, so the
+# first row does not carry a pull.
 dockert run --rm -v "$PROJECT:/w" alpine:3 true >/dev/null 2>&1
 ok "warm"
 
@@ -182,14 +193,24 @@ for spec in $SHAPES; do
         continue
     fi
 
+    # One container per row, started before anything is timed and holding the
+    # mount for the whole of it: a fresh mount, so the row starts with a cold
+    # attribute cache, and a live one, so the counters can still be read at the
+    # end.
+    dockert rm -f "$PIN" >/dev/null 2>&1
+    if ! dockert run -d --name "$PIN" -v "$PROJECT:/w" alpine:3 sleep 3600 >/dev/null 2>&1; then
+        bad "could not start the workload container for $spec"
+        continue
+    fi
+
     before=$(nfsops)
-    walk=$(elapsed dockert run --rm -v "$PROJECT:/w" alpine:3 \
-        sh -c 'find /w -type f | wc -l')
-    read=$(elapsed dockert run --rm -v "$PROJECT:/w" alpine:3 \
-        sh -c 'find /w -name "*.go" -exec cat {} +')
-    write=$(elapsed dockert run --rm -v "$PROJECT:/w" alpine:3 \
-        sh -c "for i in \$(seq 1 $WRITES); do echo built >/w/out/\$i; done")
+    walk=$(elapsed dockert exec "$PIN" sh -c 'find /w -type f | wc -l')
+    read=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
+    # Escaped: seq and the loop variable belong to the shell in the container.
+    burst="for i in \$(seq 1 $WRITES); do echo built >/w/out/\$i; done"
+    write=$(elapsed dockert exec "$PIN" sh -c "$burst")
     after=$(nfsops)
+    dockert rm -f "$PIN" >/dev/null 2>&1
 
     printf '%-12s %-8s %-8s %-8s %-8s %s\n' \
         "$delay/$rate" "$(rtt)" "$walk" "$read" "$write" "$(delta "$before" "$after")"
