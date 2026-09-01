@@ -1566,6 +1566,12 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             ok "a container's write reaches this machine"
         else
             bad "the container's write never arrived here: [$back]"
+            # What the session thinks it is doing. Write-back is gated on the
+            # fill being complete, so the cache row says whether the gate is
+            # the reason, and the log says whether anything was tried.
+            "$WORK/remote-docker" remote status 2>&1 | grep -iE "cache|watch" | sed 's/^/        /'
+            grep -iE "cache|union|wrote|writing back" "$WORK/watch-up.log" 2>/dev/null |
+                tail -10 | sed 's/^/        /'
         fi
 
         # An edit here reaches the container, because the workspace writes it

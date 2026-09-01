@@ -175,3 +175,50 @@ func TestPartitionsForTheCaller(t *testing.T) {
 		t.Errorf("Conflicts = %v, want both reported whichever way they resolved", got)
 	}
 }
+
+// The cache is filled THROUGH the union, so the fill's own copy of every file
+// is in the layer that records what the container changed. Left unfiltered,
+// every round asks the workspace for the whole tree back -- which is not a
+// small waste but a stream large enough to be refused, so nothing is ever
+// written back at all.
+func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
+	manifest := map[string]Baseline{
+		"/filled.go":  {Size: 10, ModTime: sentAt},
+		"/written.go": {Size: 10, ModTime: sentAt},
+	}
+	local := localFrom(map[string]stub{
+		"/filled.go":  {size: 10, mod: sentAt},
+		"/written.go": {size: 10, mod: sentAt},
+	})
+
+	// Both are in the cache layer. Only the second differs from what the fill
+	// put there.
+	changes := []workspace.CacheChange{
+		{Path: "/filled.go", Size: 10, ModTime: sentAt.UnixNano()},
+		{Path: "/written.go", Size: 20, ModTime: laterHere.UnixNano()},
+	}
+
+	actions := Decide(manifest, changes, local, 0, true)
+
+	if _, ok := kindOf(actions, "/filled.go"); ok {
+		t.Error("the fill's own copy was decided to be a container write")
+	}
+	if got, ok := kindOf(actions, "/written.go"); !ok || got != Write {
+		t.Errorf("/written.go = %v %v, want a write", got, ok)
+	}
+}
+
+// Same size, different content, and the container's write lands within the
+// same timestamp: the filter must key on the pair rather than on either half.
+func TestDecideCarriesBackASameSizedRewrite(t *testing.T) {
+	manifest := map[string]Baseline{"/same-size.go": {Size: 10, ModTime: sentAt}}
+	local := localFrom(map[string]stub{"/same-size.go": {size: 10, mod: sentAt}})
+
+	changes := []workspace.CacheChange{
+		{Path: "/same-size.go", Size: 10, ModTime: laterHere.UnixNano()},
+	}
+
+	if got, ok := kindOf(Decide(manifest, changes, local, 0, true), "/same-size.go"); !ok || got != Write {
+		t.Errorf("/same-size.go = %v %v, want a write", got, ok)
+	}
+}

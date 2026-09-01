@@ -208,3 +208,37 @@ type shareCache struct {
 }
 
 func (c shareCache) Fill(export, localPath string) { c.session.Fill(export, localPath) }
+
+// pathsPerFrame bounds how many paths one request names.
+//
+// The paths of a pull or a drop ride in the JSON header line, which the
+// protocol caps at workspace.MaxCacheFrame -- so a `git checkout` across a
+// large branch, or a build that wrote ten thousand files, is not a big request
+// but a REFUSED one, and the refusal is the whole operation rather than a part
+// of it. Half the frame, because the op, the export and JSON's own escaping
+// share the line.
+const pathsPerFrame = workspace.MaxCacheFrame / 2
+
+// chunkPaths splits a path list into requests that each fit one frame.
+func chunkPaths(paths []string) [][]string {
+	var (
+		out   [][]string
+		batch []string
+		size  int
+	)
+	for _, p := range paths {
+		// Quotes, a comma, and headroom for the escaping of a name this does
+		// not inspect.
+		cost := len(p) + 8
+		if len(batch) > 0 && size+cost > pathsPerFrame {
+			out = append(out, batch)
+			batch, size = nil, 0
+		}
+		batch = append(batch, p)
+		size += cost
+	}
+	if len(batch) > 0 {
+		out = append(out, batch)
+	}
+	return out
+}

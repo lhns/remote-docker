@@ -29,7 +29,7 @@ import (
 
 // Changes lists what the container did to a share.
 func (m *Manager) Changes(ctx context.Context, account, export string) ([]workspace.CacheChange, error) {
-	upper, err := m.upperRoot(ctx, account, export)
+	l, upper, err := m.upperRoot(ctx, account, export)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +68,13 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 			return nil
 		}
 
+		// Exactly what the client's own stream wrote through this union, so
+		// not a container change at all. Left in, an idle session is told
+		// about the whole cached tree every few seconds forever.
+		if l.isApplied(name, info.Size(), info.ModTime()) {
+			return nil
+		}
+
 		out = append(out, workspace.CacheChange{
 			Path:    name,
 			Size:    info.Size(),
@@ -83,7 +90,7 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 
 // Pull streams the named paths out of the cache layer as a tar.
 func (m *Manager) Pull(ctx context.Context, account, export string, paths []string) ([]byte, error) {
-	upper, err := m.upperRoot(ctx, account, export)
+	_, upper, err := m.upperRoot(ctx, account, export)
 	if err != nil {
 		return nil, err
 	}
@@ -140,19 +147,19 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 }
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.
-func (m *Manager) upperRoot(ctx context.Context, account, export string) (string, error) {
+func (m *Manager) upperRoot(_ context.Context, account, export string) (*live, string, error) {
 	m.mu.Lock()
 	l, ok := m.shares[key(account, export)]
 	m.mu.Unlock()
 
 	if !ok {
-		return "", fmt.Errorf("unions: %s has no cache", export)
+		return nil, "", fmt.Errorf("unions: %s has no cache", export)
 	}
 	root, err := notify.Relocate(l.spec.Upper(), func() (string, error) { return l.spec.Root(), nil })
 	if err != nil {
-		return "", fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
+		return nil, "", fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
 	}
-	return root, nil
+	return l, root, nil
 }
 
 // isWhiteout reports whether an entry is an overlay's record of a deletion.

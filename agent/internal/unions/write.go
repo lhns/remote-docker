@@ -35,7 +35,7 @@ import (
 
 // Apply extracts a tar into a share's union.
 func (m *Manager) Apply(ctx context.Context, account, export string, body io.Reader) error {
-	root, err := m.mergedRoot(ctx, account, export)
+	l, root, err := m.mergedRoot(ctx, account, export)
 	if err != nil {
 		// The payload still has to be drained, or the next frame is read out
 		// of the middle of a tar. The caller cannot do it: only here is it
@@ -53,50 +53,59 @@ func (m *Manager) Apply(ctx context.Context, account, export string, body io.Rea
 		if err != nil {
 			return fmt.Errorf("unions: reading the batch for %s: %w", export, err)
 		}
-		if err := writeEntry(root, header, tr); err != nil {
+		info, err := writeEntry(root, header, tr)
+		if err != nil {
 			return err
+		}
+		if info != nil {
+			// As it LANDED, not as it was asked for: a filesystem that keeps
+			// coarser timestamps than the tar carries would otherwise make
+			// this record match nothing, and every filled file would be
+			// reported as a container write for the rest of the session.
+			l.noteApplied("/"+strings.TrimPrefix(header.Name, "/"), info.Size(), info.ModTime())
 		}
 	}
 }
 
-// writeEntry puts one tar entry into the union.
+// writeEntry puts one tar entry into the union, answering with the file it left
+// behind for a regular file and nil for anything else.
 //
 // Only the three kinds a shared tree is made of. A device, a socket or a fifo
 // is skipped rather than refused: the client does not send them, and a batch
 // that failed because of one would leave the cache half applied for a file
 // nothing can use anyway.
-func writeEntry(root string, header *tar.Header, body io.Reader) error {
+func writeEntry(root string, header *tar.Header, body io.Reader) (os.FileInfo, error) {
 	target, err := within(root, header.Name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	switch header.Typeflag {
 	case tar.TypeDir:
-		return os.MkdirAll(target, header.FileInfo().Mode().Perm())
+		return nil, os.MkdirAll(target, header.FileInfo().Mode().Perm())
 
 	case tar.TypeSymlink:
 		// Replaced rather than merged: a symlink that changed target is a
 		// different link, and there is no way to edit one in place.
 		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("unions: replacing the link %s: %w", header.Name, err)
+			return nil, fmt.Errorf("unions: replacing the link %s: %w", header.Name, err)
 		}
-		return os.Symlink(header.Linkname, target)
+		return nil, os.Symlink(header.Linkname, target)
 
 	case tar.TypeReg:
 		if err := os.MkdirAll(path.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("unions: creating the directory for %s: %w", header.Name, err)
+			return nil, fmt.Errorf("unions: creating the directory for %s: %w", header.Name, err)
 		}
 		f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode().Perm())
 		if err != nil {
-			return fmt.Errorf("unions: writing %s: %w", header.Name, err)
+			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}
 		if _, err := io.Copy(f, body); err != nil {
 			_ = f.Close()
-			return fmt.Errorf("unions: writing %s: %w", header.Name, err)
+			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}
 		if err := f.Close(); err != nil {
-			return fmt.Errorf("unions: writing %s: %w", header.Name, err)
+			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}
 		// The client's own modification time, so the cache and the tree it
 		// came from agree about when a file was last written. Write-back
@@ -105,10 +114,16 @@ func writeEntry(root string, header *tar.Header, body io.Reader) error {
 		if !header.ModTime.IsZero() {
 			_ = os.Chtimes(target, time.Time{}, header.ModTime)
 		}
-		return nil
+		info, err := os.Stat(target)
+		if err != nil {
+			// Written, and this pass cannot say with what timestamp. Reported
+			// as a change once and settled by the client's manifest.
+			return nil, nil //nolint:nilerr // the file is there; only the record is missing
+		}
+		return info, nil
 
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -122,7 +137,7 @@ func writeEntry(root string, header *tar.Header, body io.Reader) error {
 // here: the lower has lost the file too, so there is nothing the whiteout could
 // wrongly hide.
 func (m *Manager) Drop(ctx context.Context, account, export string, paths []string) error {
-	root, err := m.mergedRoot(ctx, account, export)
+	l, root, err := m.mergedRoot(ctx, account, export)
 	if err != nil {
 		return err
 	}
@@ -135,29 +150,30 @@ func (m *Manager) Drop(ctx context.Context, account, export string, paths []stri
 		if err := os.RemoveAll(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("unions: dropping %s from %s: %w", p, export, err)
 		}
+		l.forgetApplied(p)
 	}
 	return nil
 }
 
 // mergedRoot is where a share's union can be written, as the AGENT can reach
 // it, and it refuses a share that is not serving.
-func (m *Manager) mergedRoot(ctx context.Context, account, export string) (string, error) {
+func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live, string, error) {
 	m.mu.Lock()
 	l, ok := m.shares[key(account, export)]
 	m.mu.Unlock()
 
 	if !ok {
-		return "", fmt.Errorf("unions: %s has no cache; prepare it first", export)
+		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first", export)
 	}
 	if err := union.Alive(ctx, l.spec); err != nil {
-		return "", err
+		return nil, "", err
 	}
 
 	root, err := notify.Relocate(l.spec.Merged(), func() (string, error) { return l.spec.Root(), nil })
 	if err != nil {
-		return "", fmt.Errorf("unions: locating the cache for %s: %w", export, err)
+		return nil, "", fmt.Errorf("unions: locating the cache for %s: %w", export, err)
 	}
-	return root, nil
+	return l, root, nil
 }
 
 // within resolves a path inside the share and refuses one that leaves it.

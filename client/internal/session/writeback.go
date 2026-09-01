@@ -113,7 +113,7 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 			"path", strings.TrimPrefix(conflict.Path, "/"), "outcome", conflict.Why)
 	}
 
-	if paths := writeback.Writes(actions); len(paths) > 0 {
+	for _, paths := range chunkPaths(writeback.Writes(actions)) {
 		body, err := live.Pull(ctx, export, paths)
 		if err != nil {
 			s.logQuiet(ctx, "fetching what a container wrote", "export", export, "err", err)

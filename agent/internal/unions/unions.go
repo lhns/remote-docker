@@ -72,6 +72,53 @@ type live struct {
 	spec   union.Spec
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// applied is what the client's fill and invalidations wrote through this
+	// union, by path.
+	//
+	// The cache is written through the merged mount (ADR 0044), so the filled
+	// copy of every file is in the cache LAYER, which is what Changes reads --
+	// and without this an idle session is told about the whole tree every few
+	// seconds forever. The client checks the same thing against its own
+	// manifest, and that check is the rule; this one keeps the answer
+	// proportional to what actually changed.
+	//
+	// Lost on an agent restart, which costs one oversized reply and no
+	// correctness: the client's manifest still decides.
+	appliedMu sync.Mutex
+	applied   map[string]applied
+}
+
+// applied is one file as the client's stream left it.
+type applied struct {
+	size    int64
+	modTime time.Time
+}
+
+// noteApplied records what was just written through the union.
+func (l *live) noteApplied(name string, size int64, modTime time.Time) {
+	l.appliedMu.Lock()
+	defer l.appliedMu.Unlock()
+	if l.applied == nil {
+		l.applied = map[string]applied{}
+	}
+	l.applied[name] = applied{size: size, modTime: modTime}
+}
+
+// forgetApplied drops a path, so a file the client removed and the container
+// later recreates is reported.
+func (l *live) forgetApplied(name string) {
+	l.appliedMu.Lock()
+	defer l.appliedMu.Unlock()
+	delete(l.applied, name)
+}
+
+// isApplied reports whether an entry is exactly what the client last wrote.
+func (l *live) isApplied(name string, size int64, modTime time.Time) bool {
+	l.appliedMu.Lock()
+	defer l.appliedMu.Unlock()
+	a, ok := l.applied[name]
+	return ok && a.size == size && a.modTime.Equal(modTime)
 }
 
 // key names a share within an account, since two accounts may share a name for

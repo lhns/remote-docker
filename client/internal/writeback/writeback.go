@@ -15,6 +15,7 @@
 //
 //	local  != manifest  ->  you changed it
 //	cached != manifest  ->  the container changed it
+//	cached == manifest  ->  nobody did; this is what the fill wrote
 //
 // A file only YOU changed produces no action at all: nothing has to come back,
 // and bringing the cache up to date is the invalidator's job rather than this
@@ -108,6 +109,21 @@ func Decide(
 	for _, change := range changes {
 		base, sent := manifest[change.Path]
 		info, here := local(change.Path)
+
+		// What the fill itself put there. The cache is written THROUGH the
+		// union (ADR 0044), so the filled copy of every file is in the layer
+		// this reads, beside whatever the container wrote -- and without this
+		// every round asks for the whole tree back, which is a stream large
+		// enough to be refused rather than a small mistake.
+		//
+		// Being wrong here is cheap and self-correcting: if a timestamp did
+		// not survive the round trip exactly, the file is written back with
+		// the bytes it already has and the baseline moves to what both sides
+		// then hold.
+		if sent && !change.Deleted && change.Size == base.Size &&
+			time.Unix(0, change.ModTime).Equal(base.ModTime) {
+			continue
+		}
 
 		// A path the fill never sent is not the container's doing as far as
 		// this can tell -- it may be a file it created, or one that was never

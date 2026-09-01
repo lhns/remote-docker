@@ -122,9 +122,13 @@ remove from one, which is the whole reason the agent needs a channel.
 
 ### Write-back: baselines first, clocks last
 
-The upper layer **is** the record of what the container changed, so no heuristic
-is needed. The manifest — what the fill sent, with each file's size and time as
-it was **here** — makes both sides answerable separately:
+The upper layer is where everything written through the union lands — which is
+the container's writes **and the fill's own copies**, because the fill goes
+through the union too. So the layer alone does not say who wrote what, and the
+manifest is what does: what the fill sent, with each file's size and time as it
+was **here**. An entry matching its baseline exactly is the copy the fill put
+there; anything else is the container's. That makes both sides answerable
+separately:
 
 | your file vs manifest | cached file vs manifest | outcome |
 |---|---|---|
@@ -134,10 +138,18 @@ it was **here** — makes both sides answerable separately:
 | changed | whiteout | conflict; your file is kept |
 | changed | changed | conflict; last writer wins |
 | not in the manifest | anything | left alone |
+| unchanged | identical to the manifest | the fill wrote it; nothing happened |
 
 Only the last-writer case needs a clock, and the offset between the two machines
 is measured through `workspace-info` rather than assumed away. Every conflict is
 reported by path whichever way it resolves.
+
+The fill's own copies are filtered on **both** ends, and the two failures are
+different sizes. The client's check is the rule, and being wrong there costs a
+file written back with the bytes it already has, which settles on the next round.
+The agent keeps its own record of what it applied so the reply stays proportional
+to what changed; without it a fully cached tree is listed in one reply every five
+seconds for as long as the session runs.
 
 **Nothing is written back while the cache is incomplete.** A file the fill never
 sent looks exactly like one the container created, and the cost of that

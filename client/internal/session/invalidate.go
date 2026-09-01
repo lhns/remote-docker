@@ -150,8 +150,8 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 	ctx, cancel := context.WithTimeout(i.session.ctx, invalidateTimeout)
 	defer cancel()
 
-	if len(dropped) > 0 {
-		if err := live.Drop(ctx, export, dropped); err != nil {
+	for _, paths := range chunkPaths(dropped) {
+		if err := live.Drop(ctx, export, paths); err != nil {
 			i.session.logQuiet(ctx, "dropping from a cache", "export", export, "err", err)
 		}
 	}
