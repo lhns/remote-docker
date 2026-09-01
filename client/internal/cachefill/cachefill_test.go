@@ -352,3 +352,47 @@ func TestStreamSendsTheCheapestFirst(t *testing.T) {
 		}
 	}
 }
+
+// An invalidation's paths arrive all at once rather than through the Selector,
+// so they need the same bound a fill's sends have: one tar held whole in
+// memory, and lost entirely if anything about it fails.
+func TestBatchesBoundsByBytesAndByCount(t *testing.T) {
+	var big []Entry
+	for i := range 5 {
+		big = append(big, Entry{Path: fmt.Sprintf("big%d.bin", i), Size: DefaultBatchBytes / 2})
+	}
+	if got := len(Batches(big)); got < 3 {
+		t.Errorf("%d entries of half a batch each went out in %d batches", len(big), got)
+	}
+
+	var many []Entry
+	for i := range MaxBatchFiles * 2 {
+		many = append(many, Entry{Path: fmt.Sprintf("f%05d.go", i)})
+	}
+	batches := Batches(many)
+	if len(batches) != 2 {
+		t.Errorf("%d empty files went out in %d batches, want 2", len(many), len(batches))
+	}
+	for _, b := range batches {
+		if len(b) > MaxBatchFiles {
+			t.Errorf("a batch holds %d files, over the %d cap", len(b), MaxBatchFiles)
+		}
+	}
+}
+
+// One entry larger than a whole batch still goes, alone: refusing it would drop
+// a file from the cache for being big, and the fill's own budget is what
+// decides whether a big file is worth caching at all.
+func TestBatchesKeepsAnOversizedEntry(t *testing.T) {
+	batches := Batches([]Entry{{Path: "huge.bin", Size: DefaultBatchBytes * 3}, {Path: "a.go", Size: 4}})
+	if len(batches) != 2 || len(batches[0]) != 1 {
+		t.Errorf("an oversized entry was batched wrongly: %d batches", len(batches))
+	}
+}
+
+// Nothing to send is no batches, rather than one empty one.
+func TestBatchesOfNothing(t *testing.T) {
+	if got := Batches(nil); len(got) != 0 {
+		t.Errorf("Batches(nil) = %v, want none", got)
+	}
+}

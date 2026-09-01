@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -144,7 +145,14 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 			dropped = append(dropped, p)
 			continue
 		}
-		changed = append(changed, cachefill.Entry{Path: strings.TrimPrefix(p, "/")})
+		// The size is what bounds a batch. A path that cannot be stat'ed still
+		// goes: it may have been deleted again since the event, and tarOf
+		// leaves out what it cannot open.
+		entry := cachefill.Entry{Path: strings.TrimPrefix(p, "/")}
+		if info, err := os.Stat(filepath.Join(local, filepath.FromSlash(entry.Path))); err == nil {
+			entry.Size = info.Size()
+		}
+		changed = append(changed, entry)
 	}
 
 	ctx, cancel := context.WithTimeout(i.session.ctx, invalidateTimeout)
@@ -155,8 +163,8 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 			i.session.logQuiet(ctx, "dropping from a cache", "export", export, "err", err)
 		}
 	}
-	if len(changed) > 0 {
-		body, err := tarOf(local, changed)
+	for _, batch := range cachefill.Batches(changed) {
+		body, err := tarOf(local, batch)
 		if err != nil {
 			i.session.logQuiet(ctx, "reading a change for a cache", "export", export, "err", err)
 			return

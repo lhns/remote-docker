@@ -426,3 +426,33 @@ func withSent(stats Stats, s *Selector) Stats {
 	stats.Files, stats.Bytes = s.Sent()
 	return stats
 }
+
+// Batches splits entries into sends bounded the same way a fill's are.
+//
+// For the paths an invalidation carries, which arrive all at once rather than
+// through the Selector: a `git checkout` across a branch, or a build that
+// rewrote a generated directory, is thousands of files in one event. Sent as
+// one batch it is one tar held whole in memory, framed as one payload, and
+// lost entirely if anything about it fails.
+//
+// An entry with no Size counts as nothing against the byte budget, so a caller
+// that has not stat'ed its paths is still bounded by MaxBatchFiles.
+func Batches(entries []Entry) [][]Entry {
+	var (
+		out   [][]Entry
+		batch []Entry
+		size  int64
+	)
+	for _, e := range entries {
+		if len(batch) > 0 && (size+e.Size > DefaultBatchBytes || len(batch) >= MaxBatchFiles) {
+			out = append(out, batch)
+			batch, size = nil, 0
+		}
+		batch = append(batch, e)
+		size += e.Size
+	}
+	if len(batch) > 0 {
+		out = append(out, batch)
+	}
+	return out
+}
