@@ -390,3 +390,21 @@ func TestASingleFileTakesAConsistencyToo(t *testing.T) {
 		t.Errorf("volume options = %q, want the long attribute cache", o)
 	}
 }
+
+// delegated holds actual copies, so the watcher is what keeps them honest: a
+// cached copy of a file that changed here is the one way this mode could be
+// wrong rather than merely slow.
+func TestDelegatedNeedsTheWatcherToo(t *testing.T) {
+	r, _, _ := newRewriter()
+	r.Cache = &fakeCache{}
+	r.UnionReady = workspace.UnionReady
+
+	_, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`))
+	if err == nil {
+		t.Fatal("a cache was served with nothing to keep it honest")
+	}
+	if !strings.Contains(err.Error(), "watch") {
+		t.Errorf("error = %v, want the setting named", err)
+	}
+}

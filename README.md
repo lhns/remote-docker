@@ -356,7 +356,7 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 |---|---|
 | `consistent`, `default` *(the default)* | the mount revalidates every second |
 | `cached` | the container may cache reads and directory structure; this machine is authoritative |
-| `delegated` | not a mount at all: a copy on the workspace, filled from here when the container is created |
+| `delegated` | a cache on the workspace over the live mount: what it holds is local disk, what it does not falls through |
 
 Note the comma: a `-v` has three fields and the third is a LIST, so
 `ro,cached` and never `:cached:ro`.
@@ -367,18 +367,32 @@ Set it for a whole workspace, or for one tree:
 {"consistency": "cached", "consistencyPaths": {"/home/me/live": "consistent"}}
 ```
 
-`delegated` is the one to reach for when a container only has to READ a tree
-and reads dominate: the files are copied to the workspace once and every read
-after that is its own disk. The cost is that it is a snapshot. What the
-container writes there never comes back, an edit here does not reach a
-container already running, and the next container gets the tree as it is then.
+`delegated` is the one to reach for when reads dominate. The workspace keeps a
+cache beside the live mount and fills it in the background, so a file it has
+costs its own disk and a file it does not is read over the mount as usual --
+correct either way, which is why nothing waits for the copy and why a project
+larger than the cache budget still works, just partly cached.
 
-**`cached` needs [file watching](#file-watching) on**, and refuses to run
-without it: a long attribute cache is safe only because an edit here is
-replayed into the workspace, which refreshes exactly the file that changed. So
-an edit to an existing file arrives at once, and a file you CREATE or DELETE
-can take up to a minute to appear in a listing unless watching is `coarse`,
-which pokes the directory too.
+It is a two-way cache, not a snapshot: an edit here reaches a running container,
+a file you delete disappears from it, and what the container writes comes back
+to you within a few seconds. That last delay is the one thing a plain mount has
+and this does not. When a file changed in both places, the newer write wins and
+the conflict is reported by path.
+
+**`cached` and `delegated` both need [file watching](#file-watching) on**, and
+refuse to run without it, for related but not identical reasons.
+
+`cached` keeps a long attribute cache, which is safe only because an edit here
+is replayed into the workspace and refreshes exactly the file that changed. So
+an edit to an existing file arrives at once, and a file you CREATE or DELETE can
+take up to a minute to appear in a listing unless watching is `coarse`, which
+pokes the directory too.
+
+`delegated` holds actual copies, so the watcher is what keeps them honest: a
+cached copy of a file you changed is the one way this mode could be wrong rather
+than merely slow. Which is also why it only caches what the watcher covers --
+anything under an excluded directory is read over the mount instead, slower and
+right.
 
 A mount outranks a per-directory rule, which outranks the workspace setting,
 and switching costs a volume rebuild rather than a migration.

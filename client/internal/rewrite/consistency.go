@@ -102,6 +102,16 @@ func (r *Rewriter) resolveConsistency(req *request, source string, asked workspa
 					"\tfix: use %s, which is served by the mount itself",
 				source, workspace.Delegated, workspace.Cached)
 		}
+		if !r.Watching {
+			// A stronger requirement than `cached`'s, and for a stronger
+			// reason: that mode goes stale for at most actimeo, while a cached
+			// COPY of a file that changed here is stale until something
+			// removes it, and the watcher is what removes it (ADR 0044).
+			return workspace.Unset, fmt.Errorf(
+				"rewrite: %s asks for the %s consistency, whose cache is kept honest by the watcher, and watching is off\n"+
+					"\tfix: set watch to partial or coarse for this workspace",
+				source, workspace.Delegated)
+		}
 		if err := unionAvailable(r.UnionReady); err != nil {
 			return workspace.Unset, fmt.Errorf("rewrite: %s asks for the %s consistency, and %w",
 				source, workspace.Delegated, err)
@@ -133,26 +143,6 @@ func (r *Rewriter) resolveConsistency(req *request, source string, asked workspa
 // request is what one /containers/create carries across its two mount lists.
 type request struct {
 	consistency map[string]workspace.Consistency
-
-	// image is what the caller is about to run, and is what a delegated share
-	// is filled through: the copy needs a container to be mounted in, and this
-	// is the one image the daemon is certain to have (ADR 0043).
-	image string
-}
-
-// imageOf reads the image out of a create payload, and "" when there is none
-// to read. A body this program cannot understand is not one to refuse here:
-// the daemon answers for it, and only a delegated mount needs this at all.
-func imageOf(payload map[string]json.RawMessage) string {
-	raw, ok := payload["Image"]
-	if !ok {
-		return ""
-	}
-	var image string
-	if err := json.Unmarshal(raw, &image); err != nil {
-		return ""
-	}
-	return image
 }
 
 // unionAvailable turns the workspace's answer into a remedy.

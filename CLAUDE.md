@@ -274,13 +274,31 @@ premise of the project, and it applies to building it too. So:
   served. One directory is one share, one volume and one consistency: two
   mounts of it disagreeing are refused, because the second EnsureVolume would
   silently recreate the first's volume.
-- **A delegated share is a copy, and the copy is filled through a container**
-  (ADR 0043). There is no API that writes into a volume, so a container is
-  created with it mounted -- never started, and removed as soon as the tar is
-  in -- through the caller's OWN image, the one image the daemon is certain to
-  have. It is a snapshot: nothing is written back and nothing refreshes it
-  while a container runs, and both halves are asserted in `test/integration.sh`
-  section 15c so that stops being a claim.
+- **A delegated share is a UNION, and the agent is its only writer** (ADR
+  0044). The live export is the lower layer and a local cache is the upper, so a
+  read the cache holds is the workspace's own disk and one it does not FALLS
+  THROUGH and is correct -- which is what lets the cache be filled in the
+  background, bounded by a budget, and still never be wrong. Two things about it
+  are measured rather than chosen: the kernel's overlay cannot be used at all
+  here, because an overlay whose lower is NFS is readable only from the mount
+  namespace that created it (a container gets EOPNOTSUPP, and so does the host
+  under `unshare --mount`); and a file written into the cache LAYER rather than
+  through the union stays invisible to a container that already missed on it, so
+  the obvious way to fill it is a silent bug. `test/union-probe.sh` asserts both
+  and runs on every pull request.
+- **Writing through the union is what closes ADR 0014.** The write is a real
+  operation in the container's own view, so its inotify fires natively --
+  IN_MODIFY, IN_CLOSE_WRITE and IN_DELETE, the last of which nothing here had
+  managed. It is also why invalidation rides the watcher BEFORE the mode strips
+  anything: a deletion cannot be replayed faithfully over NFS, which is what
+  `partial` is about, but it can be applied to a cache exactly, and it is the one
+  event the cache must not miss.
+- **Nothing is written back from a cache that is incomplete** (ADR 0044). A file
+  the fill never sent looks exactly like one the container created, and the cost
+  of that confusion is content appearing in somebody's source tree that they
+  never wrote. Every other write-back case is decided by comparing each side
+  against what the fill SENT, so only a file both sides changed needs a clock --
+  and that offset is measured through workspace-info rather than assumed.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
@@ -669,7 +687,7 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
-Since consistency modes (ADR 0042, ADR 0043): a `cached` mount reading a file
+Since consistency modes (ADR 0042, ADR 0044): a `cached` mount reading a file
 and still seeing an edit made here despite a 60s attribute cache, and a
 `delegated` copy holding this machine's files, being a plain local volume,
 NOT changing under a running container, and being filled again for the next

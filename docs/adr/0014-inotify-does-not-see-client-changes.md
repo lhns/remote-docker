@@ -1,8 +1,11 @@
 # 0014. inotify does not see client-side changes
 
-- Status: **Open — narrowed to deletions and renames**
+- Status: **Open** for a mount — `consistent` and `cached`, narrowed to
+  deletions and renames. **CLOSED for `delegated`** (ADR 0044), where there is a
+  local filesystem in the path and the event is real rather than approximated.
 - Date: 2026-08-07
-- Updated: 2026-08-07, once candidate 2 was measured
+- Updated: 2026-08-07 once candidate 2 was measured; 2026-09-01 when the union
+  closed it for one mode
 
 This record exists to stop the problem being rediscovered, and to say plainly
 what is not solved. It is not a decision. It should stay open until one of the
@@ -141,9 +144,14 @@ Two things could still be tried, neither attempted:
 - This does not affect builds, tests, `docker run`, `docker compose up`, or any
   tool that reads its inputs once. Those are unaffected and are what the
   integration suite covers.
-- **A `delegated` copy does not close this** (ADR 0043), and it is worth being
-  precise about why. The copy is a local filesystem in the workspace, so a
-  watcher there behaves exactly as it would anywhere -- but nothing from this
-  machine reaches it while a container runs, so there is nothing to notice. The
-  gap is sidestepped rather than closed. It would close if the copy were
-  refreshed from the client, which is the part ADR 0043 records as not built.
+- **A `delegated` share CLOSES this** (ADR 0044), and it is the only thing in
+  this project that does. The workspace mounts a union whose upper layer is a
+  cache, and every change from this machine is written THROUGH that union -- so
+  the container's kernel performs a real filesystem operation and emits the
+  event itself, rather than being poked into approximating one. Measured through
+  the union in `test/union-probe.sh`: `IN_MODIFY`, `IN_CLOSE_WRITE`, and
+  `IN_DELETE`, which nothing here had managed before.
+
+  It does not close for `consistent` or `cached`, which are NFS mounts and are
+  what everything above still describes. The difference is not the mode's
+  ambition but its mechanism: there is a local filesystem in the path.

@@ -10,7 +10,7 @@ import (
 )
 
 // Reading a local tree as a tar stream, for the delegated consistency
-// (ADR 0043).
+// (ADR 0044).
 //
 // The client reads its own disk sequentially, which is the fastest path there
 // is, and the result goes to the workspace as one stream rather than as a file

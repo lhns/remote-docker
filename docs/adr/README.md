@@ -41,7 +41,7 @@ than trusted.
 | [0039](0039-a-single-file-is-a-one-file-export.md) | A single file is a one-file export | |
 | [0041](0041-the-workspaces-own-paths.md) | The workspace's own paths are the ones it mounted into the daemon | |
 | [0042](0042-mount-consistency-modes.md) | Docker's mount consistency, applied to the NFS mount | |
-| [0043](0043-delegated-is-a-copy.md) | Delegated is a copy, filled through a container | no write-back yet |
+| [0044](0044-a-delegated-share-is-a-cache.md) | A delegated share is a cache, not a snapshot | |
 
 ## Code layout
 
@@ -90,7 +90,7 @@ What the binary is, what it answers to, and where it can run.
 
 | # | Title | Status |
 |---|---|---|
-| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open**, narrowed |
+| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open** for a mount; closed for `delegated` (0044) |
 | [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | |
 
 ## The agent, and where a workspace runs
@@ -118,6 +118,7 @@ here in an old commit message or comment means:
 | 0031 if it knows about Docker, it is glue | [0021](0021-the-module-layout.md) |
 | 0036 the agent supervises its daemons | [0019](0019-a-dockerd-per-account.md) |
 | 0037 the published port belongs to the client | [0008](0008-published-ports-reach-the-client.md) |
+| 0043 delegated is a copy | [0044](0044-a-delegated-share-is-a-cache.md), which made it a cache |
 
 ## Status
 

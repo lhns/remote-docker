@@ -248,7 +248,7 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	// One request, two mount lists, and a directory named in both is one share
 	// with one volume behind it. req is what lets the second list see what the
 	// first settled.
-	req := &request{image: imageOf(payload)}
+	req := &request{}
 
 	// No HostConfig means no binds and no ports, and the labels below may
 	// still change the payload.
@@ -416,7 +416,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, req *request, hostConfig ma
 			return nil, err
 		}
 
-		volume, file, err := r.volumeFor(ctx, parsed.Source, req.image, consistency)
+		volume, file, err := r.volumeFor(ctx, parsed.Source, consistency)
 		if err != nil {
 			return nil, err
 		}
@@ -562,7 +562,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, req *request, hostConfig m
 			return err
 		}
 
-		volume, file, err := r.volumeFor(ctx, source, req.image, consistency)
+		volume, file, err := r.volumeFor(ctx, source, consistency)
 		if err != nil {
 			return err
 		}
@@ -630,7 +630,7 @@ func supportsSubpath(version string) bool {
 
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath, image string, consistency workspace.Consistency) (name, file string, err error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency workspace.Consistency) (name, file string, err error) {
 	// Held across BOTH steps: registering the share is what tells the collector
 	// this volume is spoken for, and the volume does not exist until the step
 	// after it.
