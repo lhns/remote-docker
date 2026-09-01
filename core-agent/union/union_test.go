@@ -1,0 +1,125 @@
+package union
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
+)
+
+func testSpec() Spec {
+	return Spec{
+		PID:      4242,
+		Export:   "/m/00112233445566ff",
+		Port:     30001,
+		CacheDir: "/var/lib/docker/volumes/rd-aabbccdd-00112233445566ff/_data",
+	}
+}
+
+// Every path a share uses is derived from its export, so two shares cannot
+// collide and the same share resolves to the same places on every reconnect.
+func TestSpecPaths(t *testing.T) {
+	s := testSpec()
+
+	if got, want := s.Lower(), "/run/rd-union/00112233445566ff/lower"; got != want {
+		t.Errorf("Lower() = %q, want %q", got, want)
+	}
+	if got, want := s.Merged(), "/run/rd-union/00112233445566ff/merged"; got != want {
+		t.Errorf("Merged() = %q, want %q", got, want)
+	}
+
+	// The cache layer lives in the volume, because the kernel refuses a union
+	// upper on overlayfs and a dind's own root is overlayfs.
+	for _, p := range []string{s.Upper(), s.Work()} {
+		if !strings.HasPrefix(p, s.CacheDir+"/") {
+			t.Errorf("%q is not inside the cache volume %q", p, s.CacheDir)
+		}
+	}
+	if s.Upper() == s.Work() {
+		t.Error("the upper and the work directory are the same path")
+	}
+
+	// The working-directory share is the commonest of all -- it is what
+	// `-v .:/app` becomes -- and it has no id to strip.
+	cwd := Spec{Export: workspace.ExportCWD}
+	if got, want := cwd.Merged(), "/run/rd-union/cwd/merged"; got != want {
+		t.Errorf("the cwd share landed at %q, want %q", got, want)
+	}
+}
+
+// The lower is the same mount a share's volume would have been given, asked of
+// the contract rather than copied, so the two cannot drift.
+func TestSpecLowerMount(t *testing.T) {
+	source, fstype, options := testSpec().LowerMount()
+
+	if fstype != "nfs" {
+		t.Errorf("fstype = %q, want nfs", fstype)
+	}
+	if source != ":/m/00112233445566ff" {
+		t.Errorf("source = %q, want the export path", source)
+	}
+	for _, want := range []string{"addr=127.0.0.1", "port=30001", "nfsvers=3", "soft"} {
+		if !strings.Contains(options, want) {
+			t.Errorf("options %q are missing %q", options, want)
+		}
+	}
+
+	// Consistent underneath, deliberately: the cache above is what makes reads
+	// fast, and a long attribute cache below would only add staleness the
+	// union has no way to notice.
+	if !strings.Contains(options, "actimeo=1,") {
+		t.Errorf("options %q do not mount the lower consistently", options)
+	}
+}
+
+// -f is load-bearing. Without it fuse-overlayfs daemonises, the agent's child
+// exits at once, and that is indistinguishable from the union dying on the
+// spot -- which would make supervision impossible.
+func TestSpecArgsStayInTheForeground(t *testing.T) {
+	args := testSpec().Args()
+
+	if args[0] != Binary {
+		t.Errorf("args[0] = %q, want %q", args[0], Binary)
+	}
+	foreground := false
+	for _, a := range args {
+		if a == "-f" {
+			foreground = true
+		}
+	}
+	if !foreground {
+		t.Errorf("args = %q, want -f so the process can be supervised", args)
+	}
+	if args[len(args)-1] != testSpec().Merged() {
+		t.Errorf("args = %q, want the merged path last", args)
+	}
+}
+
+// The spec is what the agent assembled, and every field becomes a privileged
+// mount inside somebody's daemon.
+func TestSpecValidate(t *testing.T) {
+	if err := testSpec().Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+
+	for _, c := range []struct {
+		name string
+		spec Spec
+		want string
+	}{
+		{"an export this program does not serve", Spec{Export: "/etc", Port: 1, CacheDir: "/x"}, "export"},
+		{"no port to reach the client on", Spec{Export: workspace.ExportCWD, CacheDir: "/x"}, "port"},
+		{"a cache that is not a path", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "relative"}, "cache directory"},
+		{"a cache that is the root", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/"}, "cache directory"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.spec.Validate()
+			if err == nil {
+				t.Fatalf("Validate() accepted %+v", c.spec)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Validate() = %v, want it to name %q", err, c.want)
+			}
+		})
+	}
+}

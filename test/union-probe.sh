@@ -572,6 +572,17 @@ if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTD
             report "the upper, as the mount namespace sees it"                 sudo nsenter -t "$pid2" -m -- sh -c "stat -f -c %T /var/lib/docker/rd-union/upper; ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work"
             report "the upper, as the dind itself sees it"                 docker exec "$DIND2" sh -c "ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper 2>&1"
             report "which fuse-overlayfs, and which version"                 sudo nsenter -t "$pid2" -m -- sh -c "command -v fuse-overlayfs; fuse-overlayfs --version 2>&1 | head -3"
+            # ls and fuse-overlayfs disagreed about a directory that both of
+            # them were shown -- but in SEPARATE nsenter invocations, which
+            # leaves the process and the namespace entry confounded. One shell,
+            # both commands, settles which.
+            report "ls and the mount, in one namespace entry"                 sudo nsenter -t "$pid2" -m -- sh -c                 "ls -la /var/lib/docker/rd-union/upper && echo ---- && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged; echo exit=\$?"
+
+            # And the same mount asked for by the dind ITSELF, which enters all
+            # of its own namespaces the way docker does rather than the way
+            # nsenter does.
+            report "the same mount, run by the dind itself"                 docker exec "$DIND2" sh -c                 "mkdir -p /rd2 && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd2 2>&1; echo exit=\$?"
+
             if sudo nsenter -t "$pid2" -m -- fuse-overlayfs                 -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work                 /rd/merged 2>"$WORK/dindfuse.err"; then
                 ok "fuse-overlayfs mounts inside the dind"
                 if outputs 'pristine and nested' docker exec "$DIND2"                     docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then
