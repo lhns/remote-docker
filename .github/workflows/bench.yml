@@ -24,6 +24,15 @@ on:
         description: "consistency modes to compare"
         default: "consistent cached delegated"
 
+# Never cancelled by a newer run, and each run is its own group. A bench takes
+# half an hour and reports numbers rather than passing: losing one to a push
+# that happened while it ran costs the whole measurement and leaves the table it
+# was for unfilled. Observed on 2026-09-01, when four benches in a row died to
+# commits on the branch being measured.
+concurrency:
+  group: bench-${{ github.sha }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
