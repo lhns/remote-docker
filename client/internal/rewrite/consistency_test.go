@@ -12,28 +12,30 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// fakeSeeder records what would have been sent to the workspace.
-type fakeSeeder struct {
-	reset  bool
-	image  string
-	volume string
-	tree   string
-	err    error
+// fakeCache stands in for the workspace's union mounts.
+type fakeCache struct {
+	prepared string // the export it was asked to mount
+	cache    string // the volume it was told to use as the cache layer
+	port     int
+	tree     string // what was applied into it
+	err      error
 }
 
-func (f *fakeSeeder) ResetVolume(context.Context, string) error {
-	f.reset = true
-	return f.err
-}
-
-func (f *fakeSeeder) SeedVolume(_ context.Context, image, volume string, tree io.Reader) error {
-	f.image, f.volume = image, volume
-	body, err := io.ReadAll(tree)
-	if err != nil {
-		return err
+func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int) (string, error) {
+	if f.err != nil {
+		return "", f.err
 	}
-	f.tree = string(body)
-	return f.err
+	f.prepared, f.cache, f.port = export, cache, port
+	return "/run/rd-union/testshare/merged", nil
+}
+
+func (f *fakeCache) Apply(_ context.Context, _ string, size int64, body io.Reader) error {
+	if f.err != nil {
+		return f.err
+	}
+	got, err := io.ReadAll(io.LimitReader(body, size))
+	f.tree = string(got)
+	return err
 }
 
 // cachedRewriter is a rewriter that may serve `cached`, which means one with a
@@ -240,17 +242,19 @@ func TestCachedNeedsTheWatcher(t *testing.T) {
 	}
 }
 
-// delegated is not a mount: the volume is a plain local one and the tree is
-// streamed into it before the container exists (ADR 0043).
-func TestDelegatedMakesACopy(t *testing.T) {
+// delegated is not a copy and not a volume the container mounts: the workspace
+// mounts a UNION for it, this share's live export underneath and a cache on
+// top, and the container binds what that answers with (ADR 0044).
+func TestDelegatedMountsAUnion(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "marker"), []byte("copied"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "marker"), []byte("cached"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	r, volumes := cachedRewriter()
-	seeder := &fakeSeeder{}
-	r.Seed = seeder
+	cache := &fakeCache{}
+	r.Cache = cache
+	r.UnionReady = workspace.UnionReady
 
 	body, err := json.Marshal(map[string]any{
 		"Image":      "alpine:3",
@@ -259,53 +263,71 @@ func TestDelegatedMakesACopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ContainerCreate(t.Context(), body); err != nil {
+	out, err := r.ContainerCreate(t.Context(), body)
+	if err != nil {
 		t.Fatalf("ContainerCreate: %v", err)
 	}
 
-	// A local volume, so reads are the workspace's own disk. Any NFS option
-	// here would mean the copy was still being mounted over the tunnel.
+	// What the container binds is the merged path the workspace answered with,
+	// not a volume: the union is mounted there, in the daemon's own namespace.
+	bind := decodeHostConfig(t, out)["Binds"].([]any)[0].(string)
+	if !strings.HasPrefix(bind, "/run/rd-union/") {
+		t.Errorf("bind = %q, want the union the workspace mounted", bind)
+	}
+
+	// One volume, holding the cache layer, named so the collector can still
+	// attribute it to this share (ADR 0029).
 	if len(volumes.created) != 1 {
 		t.Fatalf("want one volume, got %v", volumes.created)
 	}
 	for name, opts := range volumes.created {
 		if len(opts) != 0 {
-			t.Errorf("volume %s was created with driver options %v", name, opts)
+			t.Errorf("the cache volume %s was given driver options %v", name, opts)
 		}
-		if seeder.volume != name {
-			t.Errorf("filled %q, but created %q", seeder.volume, name)
+		if !workspace.IsCacheVolume(name) {
+			t.Errorf("%q is not named as a cache layer", name)
+		}
+		if cache.cache != name {
+			t.Errorf("the union was told to use %q, but %q was created", cache.cache, name)
 		}
 	}
 
-	// Emptied before it is filled, or a file deleted here would live in the
-	// copy for as long as the volume does.
-	if !seeder.reset {
-		t.Error("the copy was filled without being emptied first")
+	if cache.port != r.NFSPort {
+		t.Errorf("the union was given port %d, want this session's %d", cache.port, r.NFSPort)
 	}
-	if seeder.image != "alpine:3" {
-		t.Errorf("filled through image %q, want the one the caller is about to run", seeder.image)
-	}
-	if got := entries(t, strings.NewReader(seeder.tree)); got["marker"] != "copied" {
-		t.Errorf("the copy holds %v, want the file that was there", got)
+	if got := entries(t, strings.NewReader(cache.tree)); got["marker"] != "cached" {
+		t.Errorf("the cache was filled with %v, want the file that was there", got)
 	}
 }
 
-// The copy is filled through a container, so it needs an image the daemon has
-// and a session that can reach the daemon at all.
-func TestDelegatedRefusesWhatItCannotFill(t *testing.T) {
-	withoutSeeder, _ := cachedRewriter()
-	_, err := withoutSeeder.ContainerCreate(t.Context(), []byte(
-		`{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`))
-	if err == nil || !strings.Contains(err.Error(), string(workspace.Delegated)) {
-		t.Fatalf("with no seeder: err = %v, want delegated named", err)
+// The mode is refused before anything is created, naming the remedy, rather
+// than half way through a container start.
+func TestDelegatedRefusesWhatTheWorkspaceCannotServe(t *testing.T) {
+	const bind = `{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`
+
+	noChannel, _ := cachedRewriter()
+	noChannel.UnionReady = workspace.UnionReady
+	if _, err := noChannel.ContainerCreate(t.Context(), []byte(bind)); err == nil ||
+		!strings.Contains(err.Error(), string(workspace.Delegated)) {
+		t.Fatalf("with no channel: err = %v, want delegated named", err)
 	}
 
-	withoutImage, _ := cachedRewriter()
-	withoutImage.Seed = &fakeSeeder{}
-	_, err = withoutImage.ContainerCreate(t.Context(), []byte(
-		`{"HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`))
-	if err == nil || !strings.Contains(err.Error(), "image") {
-		t.Fatalf("with no image: err = %v, want the image named", err)
+	for _, c := range []struct{ reported, want string }{
+		{workspace.UnionNoBinary, "WORKSPACE_DIND_IMAGE"},
+		{workspace.UnionNoDevice, "/dev/fuse"},
+		{"", "update the workspace"},
+	} {
+		r, _ := cachedRewriter()
+		r.Cache = &fakeCache{}
+		r.UnionReady = c.reported
+
+		_, err := r.ContainerCreate(t.Context(), []byte(bind))
+		if err == nil {
+			t.Fatalf("%q was served anyway", c.reported)
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q refused with %v, want it to name %q", c.reported, err, c.want)
+		}
 	}
 }
 

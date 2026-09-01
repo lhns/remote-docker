@@ -192,6 +192,13 @@ type liveConn struct {
 	// not support it or watching is off.
 	notify io.Closer
 
+	// cacheChan serves delegated shares (ADR 0044). Opened on first use, and
+	// once: a session that mounts no delegated share never opens it, and a
+	// workspace too old to serve it must not be asked twice per container.
+	cacheOnce sync.Once
+	cacheChan *cacheChannel
+	cacheErr  error
+
 	// machine holds a local machine open, nil for a workspace that is simply
 	// there. Closing it lets the machine shut itself down.
 	machine io.Closer

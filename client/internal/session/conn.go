@@ -139,9 +139,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		ConsistencyPaths: s.opts.ConsistencyPaths,
 		Watching:         s.watch != nil,
 
-		// Filling a delegated share's copy, which is the one mode that is not
-		// a mount at all (ADR 0043).
-		Seed: live.api,
+		// A delegated share is a union the WORKSPACE mounts, so the client
+		// asks for it rather than building it (ADR 0044). Opened lazily: a
+		// session that never mounts one never opens the channel, and an older
+		// workspace refusing the command must not stop the session.
+		Cache:      live.cache(),
+		UnionReady: info.Union,
 
 		// Read for one question: whether this workspace can mount a single
 		// file, which needs a volume subpath (ADR 0039).
@@ -211,6 +214,28 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 		CAFile:   cfg.CAFile,
 		Insecure: cfg.Insecure,
 	})
+}
+
+// cache opens the workspace's cache channel on first use, and answers nil once
+// it is known this workspace has none.
+//
+// Lazily, because the channel exists for one consistency: a session that never
+// mounts a delegated share never opens it, and an older workspace refusing the
+// command is not a reason for the session to fail. The rewriter turns a nil
+// into a refusal naming the mode.
+func (l *liveConn) cache() rewrite.Cache {
+	l.cacheOnce.Do(func() {
+		c, err := openCache(l.ssh)
+		if err != nil {
+			l.cacheErr = err
+			return
+		}
+		l.cacheChan = c
+	})
+	if l.cacheChan == nil {
+		return nil
+	}
+	return l.cacheChan
 }
 
 // shareReconcileInterval matches the port manager's: the same reasoning
