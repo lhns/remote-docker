@@ -152,7 +152,7 @@ func TestParseIDRejects(t *testing.T) {
 }
 
 func TestNFSVolumeOptions(t *testing.T) {
-	opts := NFSVolumeOptions(30000, "/m/00112233445566ff")
+	opts := NFSVolumeOptions(30000, "/m/00112233445566ff", Unset)
 
 	if opts["type"] != "nfs" {
 		t.Errorf("type = %q, want nfs", opts["type"])
@@ -176,6 +176,37 @@ func TestNFSVolumeOptions(t *testing.T) {
 		if !strings.Contains(o, want) {
 			t.Errorf("options %q are missing %q", o, want)
 		}
+	}
+}
+
+// The consistency varies the attribute caching and nothing else, which is what
+// makes a mode switch a volume recreation rather than a migration.
+func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
+	live := NFSVolumeOptions(30000, "/m/00112233445566ff", Consistent)["o"]
+	cached := NFSVolumeOptions(30000, "/m/00112233445566ff", Cached)["o"]
+
+	if live == cached {
+		t.Fatal("cached produced the same mount options as consistent")
+	}
+	if !strings.Contains(live, "actimeo=1,") || strings.Contains(live, "nocto") {
+		t.Errorf("consistent options = %q, want the short attribute cache and no nocto", live)
+	}
+	if !strings.Contains(cached, "actimeo=60,") || !strings.Contains(cached, "nocto") {
+		t.Errorf("cached options = %q, want a long attribute cache and nocto", cached)
+	}
+
+	// Everything a mount needs to work at all is the same in both, so the two
+	// differ in caching and in nothing that could break one of them.
+	for _, want := range []string{"addr=127.0.0.1", "port=30000", "nfsvers=3", "soft", "rsize=1048576"} {
+		if !strings.Contains(cached, want) {
+			t.Errorf("cached options %q are missing %q", cached, want)
+		}
+	}
+
+	// Unset is what a mount that named nothing gets, and it must not be a
+	// third behaviour: the workspace default decides before this is reached.
+	if unset := NFSVolumeOptions(30000, "/m/00112233445566ff", Unset)["o"]; unset != live {
+		t.Errorf("unset options = %q, want the same as consistent %q", unset, live)
 	}
 }
 

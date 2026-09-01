@@ -245,13 +245,23 @@ func ParseID(s string) (string, error) {
 // NFS_ACL sideband, and without noacl the client probes for one on every
 // mount and the server logs the refusal as an error. port == mountport skips
 // rpcbind.
-func NFSVolumeOptions(port int, exportPath string) map[string]string {
+//
+// The attribute caching is the one part that varies, and it is what the
+// consistency asks for (ADR 0042). Everything else is the same mount whatever
+// was asked for, which is what makes switching a volume recreation and nothing
+// more.
+func NFSVolumeOptions(port int, exportPath string, consistency Consistency) map[string]string {
+	options := append([]string{
+		"addr=127.0.0.1",
+		fmt.Sprintf("port=%d", port),
+		fmt.Sprintf("mountport=%d", port),
+		"nfsvers=3", "nolock", "noacl", "soft", "timeo=30", "retrans=2",
+	}, attributeOptions(consistency)...)
+	options = append(options, "noatime", "rsize=1048576", "wsize=1048576")
+
 	return map[string]string{
-		"type": "nfs",
-		"o": fmt.Sprintf(
-			"addr=127.0.0.1,port=%d,mountport=%d,nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2,actimeo=1,noatime,rsize=1048576,wsize=1048576",
-			port, port,
-		),
+		"type":   "nfs",
+		"o":      strings.Join(options, ","),
 		"device": ":" + exportPath,
 	}
 }

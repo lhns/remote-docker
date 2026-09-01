@@ -142,6 +142,12 @@ ANDROID_NDK_HOME=/path/to/ndk GOOS=android GOARCH=arm64 goreleaser build \
 # end to end -- needs docker and a kernel with NFS client support
 bash test/integration.sh
 
+# how fast a mounted directory is, per consistency mode per shaped link. Not a
+# gate and not on a push: it reports numbers, takes half an hour, and is what a
+# claim about speed has to come from. Run it from the `bench` label on a pull
+# request, or workflow_dispatch once it is on main.
+bash test/bench.sh
+
 # the chart, in eight seconds and without a cluster
 helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
@@ -259,6 +265,22 @@ premise of the project, and it applies to building it too. So:
   A SOCKET is refused with the reason, not with "not a directory": what crosses
   a file share is the name and not the kernel object behind it, which is equally
   true of a socket inside a shared directory.
+- **A consistency word is consumed, never forwarded** (ADR 0042). Docker's
+  `cached`/`delegated`/`consistent` arrive in a `-v` option list or as a
+  `--mount` field, and describe the mount THIS program makes: once the bind is
+  a volume the word means nothing the daemon can act on, so it is taken out.
+  `cached` is `actimeo=60,nocto` and rests entirely on the watcher poking what
+  changed, which is why asking for it with watching off is refused rather than
+  served. One directory is one share, one volume and one consistency: two
+  mounts of it disagreeing are refused, because the second EnsureVolume would
+  silently recreate the first's volume.
+- **A delegated share is a copy, and the copy is filled through a container**
+  (ADR 0043). There is no API that writes into a volume, so a container is
+  created with it mounted -- never started, and removed as soon as the tar is
+  in -- through the caller's OWN image, the one image the daemon is certain to
+  have. It is a snapshot: nothing is written back and nothing refreshes it
+  while a container runs, and both halves are asserted in `test/integration.sh`
+  section 15c so that stops being a claim.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
@@ -646,6 +668,12 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 `COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
+
+Since consistency modes (ADR 0042, ADR 0043): a `cached` mount reading a file
+and still seeing an edit made here despite a 60s attribute cache, and a
+`delegated` copy holding this machine's files, being a plain local volume,
+NOT changing under a running container, and being filled again for the next
+one -- with no seed container left behind.
 
 Since the root became the Docker CLI (ADR 0024): the binary working under the
 name `docker` as a symlink AND as a copy with `remote` still reachable through

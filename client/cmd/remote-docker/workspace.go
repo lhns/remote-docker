@@ -10,6 +10,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/core-client/keys"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // The workspaces in ~/.remote-docker.json, which until now could only be
@@ -31,7 +32,7 @@ import (
 // disagreed with all of them would trade one confusion for another. The old
 // verbs remain as aliases.
 func newWorkspaceCreateCommand() *cobra.Command {
-	var host, user, endpoint, watch, caFile string
+	var host, user, endpoint, watch, consistency, caFile string
 	var port int
 	var makeDefault, noContext, insecure bool
 
@@ -58,9 +59,15 @@ func newWorkspaceCreateCommand() *cobra.Command {
 			}
 			_, existed := file.Workspaces[name]
 
+			// Parsed before it is written, so a word nothing understands is
+			// refused here rather than on the first container.
+			if _, err := workspace.ParseConsistency(consistency); err != nil {
+				return err
+			}
+
 			ws := config.Workspace{
 				Host: host, Port: port, User: user, Endpoint: endpoint, Watch: watch,
-				CAFile: caFile, Insecure: insecure,
+				Consistency: consistency, CAFile: caFile, Insecure: insecure,
 			}
 			if err := file.Set(name, ws); err != nil {
 				return err
@@ -107,6 +114,8 @@ func newWorkspaceCreateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&user, "user", "", "workspace account; defaults to your local username")
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "override where the local Docker API is served")
 	cmd.Flags().StringVar(&watch, "watch", "", "replay file changes: off, partial or coarse")
+	cmd.Flags().StringVar(&consistency, "consistency", "",
+		"how shares are mounted: consistent, cached or delegated")
 	cmd.Flags().BoolVar(&makeDefault, "default", false, "make this the default workspace")
 	cmd.Flags().BoolVar(&noContext, "no-context", false, "do not create a docker context")
 	return cmd
@@ -428,6 +437,7 @@ func newWorkspaceInspectCommand() *cobra.Command {
 			row(out, "endpoint", dockerHostOf(cfg))
 			row(out, "docker context", cfg.ContextName())
 			row(out, "watch", cfg.Watch)
+			row(out, "consistency", cfg.Consistency)
 			for _, ex := range cfg.WatchExclude {
 				row(out, "watch exclude", ex)
 			}

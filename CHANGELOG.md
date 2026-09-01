@@ -8,6 +8,69 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### A shared directory can stop revalidating every attribute
+
+Reading a project through the share costs a round trip per file per second,
+because the mount revalidates any attribute older than that. Over a link with
+real latency that is the whole cost: measured on a GitHub runner over 300
+files, reading them takes 0.4s unshaped, 59s at 40ms RTT and 292s at 160ms,
+while a 10mbit link costs almost nothing. Latency, not bandwidth.
+
+Docker already has a word for the fix, and every client already parses it:
+
+```bash
+docker run -v ./project:/app:ro,cached
+docker run --mount type=bind,source=./project,target=/app,consistency=cached
+#  compose:  consistency: cached
+```
+
+`cached` says the container may cache read data and directory structure, and
+that this machine is authoritative. Here that becomes a long attribute cache
+on the NFS mount. What keeps it coherent is the watcher: an edit here is
+replayed into the workspace as a real syscall, which refreshes exactly the
+inode that changed. So `cached` needs watching on, and asking for it without
+says so rather than serving a mount that goes stale.
+
+Measured on the same run: 292s becomes 98s at 160ms RTT, 59s becomes 24s at
+40ms, and the 1,888 attribute revalidations behind those numbers become 12.
+What is left is the files' own bytes, which no cache can avoid fetching.
+
+Per workspace as `consistency`, per directory as `consistencyPaths`, and
+`REMOTE_DOCKER_CONSISTENCY` for a CI run. A mount outranks a rule, a rule
+outranks the workspace setting. Switching costs a volume rebuild and no
+migration.
+
+### And `delegated` stops mounting altogether
+
+What `cached` cannot remove is the file's own bytes: a live mount has to fetch
+what it is asked for, which was 300 reads and 422 permission checks in every
+row above. `delegated` is Docker's word for a copy the container owns, and here
+it is exactly that -- a plain local volume on the workspace, filled from this
+machine as one tar stream before the container is created. Reads after that
+cost the workspace's own disk.
+
+Measured on the same run: reading 300 files takes 0.06s whatever the latency,
+against 98s for `cached` at 160ms RTT. Starting the container is cheaper too,
+0.25s against 1.43s, because the tree crosses in one stream rather than a round
+trip per file. That last number is about a small tree -- the copy is
+bandwidth-bound where a mount is latency-bound, so a large project is a wait
+once, at container start.
+
+It is a snapshot, and this release says so rather than implying otherwise:
+nothing is written back, and a container already running does not see an edit
+made here. The next container gets the tree as it is then. Write-back and a
+live refresh are separate work, recorded in ADR 0043 as the reason they are
+not here.
+
+### The numbers are reproducible now
+
+`test/bench.sh` walks, reads and writes a project-shaped tree through a real
+session, with netem shaping the workspace's loopback for both delay and rate,
+and reports the NFS per-operation counts beside the wall-clock. It runs from a
+pull request labelled `bench`, or on request: it is a measurement, not a gate.
+
 ## 0.5.1 — 2026-08-26
 
 ### A workspace path works from Git Bash too

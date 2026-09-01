@@ -1430,6 +1430,129 @@ else
     bad "could not build the replay probe"
 fi
 
+echo
+echo "== 15b. the cached consistency =="
+# Docker's own word for it, applied to the NFS mount: the container may cache
+# read data and directory structure, so the kernel stops revalidating every
+# attribute (ADR 0042). What makes that safe is the watcher, which is why this
+# section runs against the watching client section 15 started and why asking
+# for it without one is refused.
+#
+# The claim being tested is the pair: a long attribute cache AND an edit here
+# still arriving. Either alone is easy and neither alone is the feature.
+CACHEDIR="$WORK/cachedir"
+mkdir -p "$CACHEDIR"
+echo "first" >"$CACHEDIR/marker"
+
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-cached -v "$CACHEDIR:/w:cached"         alpine:3 sleep 300 >"$WORK/cached-run.log" 2>&1; then
+        ok "a container starts against a cached mount"
+
+        if outputs '^first$' docker exec itest-cached cat /w/marker; then
+            ok "it reads the file through the cached mount"
+        else
+            bad "reading through a cached mount: [$LAST_OUTPUT]"
+        fi
+
+        # The volume carries the mount options, which is where the mode lives:
+        # nothing else about the mount differs, so this is the whole of it.
+        vol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-cached 2>/dev/null)
+        if outputs 'actimeo=60' docker volume inspect -f '{{.Options.o}}' "$vol"; then
+            ok "the volume was built with the long attribute cache"
+        else
+            bad "volume $vol options: [$LAST_OUTPUT]"
+        fi
+
+        # The part a long attribute cache would break. actimeo=60 means the
+        # kernel may trust what it has for a minute, so without the watcher's
+        # poke this reads "first" until it expires.
+        echo "second" >"$CACHEDIR/marker"
+        seen=""
+        for _ in $(seq 1 20); do
+            seen=$(docker exec itest-cached cat /w/marker 2>&1)
+            [ "$seen" = "second" ] && break
+            sleep 1
+        done
+        if [ "$seen" = "second" ]; then
+            ok "an edit here is visible through the cached mount"
+        else
+            bad "the cached mount still reads [$seen] after 20s"
+        fi
+    else
+        bad "a container would not start against a cached mount"
+        sed 's/^/        /' "$WORK/cached-run.log"
+    fi
+    docker rm -f itest-cached >/dev/null 2>&1
+else
+    bad "no watching client is running, so cached could not be tested"
+fi
+
+echo
+echo "== 15c. the delegated consistency =="
+# Docker's word for a copy the container owns, and here it is exactly that: a
+# plain local volume on the workspace, filled from this machine before the
+# container is created (ADR 0043). Reads then cost the workspace's own disk
+# rather than a round trip.
+#
+# The whole mechanism rests on one thing CI is the only place to check: that
+# `PUT /containers/{id}/archive` writes into a volume mounted on a container
+# that was CREATED and never started. If that is wrong, this section fails at
+# the first assertion and nothing else in the suite is affected.
+DELEGDIR="$WORK/delegated"
+mkdir -p "$DELEGDIR"
+echo "first" >"$DELEGDIR/marker"
+
+if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"     alpine:3 sleep 300 >"$WORK/deleg-run.log" 2>&1; then
+    ok "a container starts against a delegated copy"
+
+    if outputs '^first$' docker exec itest-deleg cat /w/marker; then
+        ok "the copy holds this machine's file"
+    else
+        bad "reading the delegated copy: [$LAST_OUTPUT]"
+    fi
+
+    # A local volume, which is the point: any NFS option here would mean it
+    # was still being mounted over the tunnel.
+    dvol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-deleg 2>/dev/null)
+    if outputs '^local:$' docker volume inspect -f '{{.Driver}}:{{index .Options "o"}}' "$dvol"; then
+        ok "the copy is a plain local volume"
+    else
+        bad "volume $dvol is [$LAST_OUTPUT], want a local volume with no mount options"
+    fi
+
+    # The honest limitation, asserted rather than described: a copy is a copy,
+    # so an edit here does not reach a container already running against it.
+    echo "second" >"$DELEGDIR/marker"
+    sleep 3
+    if outputs '^first$' docker exec itest-deleg cat /w/marker; then
+        ok "an edit here does NOT reach a running delegated container"
+    else
+        bad "the copy changed under the container: [$LAST_OUTPUT]"
+    fi
+
+    # And the other half of that: the next container gets the tree as it is
+    # now, because the copy is emptied and filled again.
+    docker rm -f itest-deleg >/dev/null 2>&1
+    if outputs '^second$' dockert run --rm -v "$DELEGDIR:/w:delegated" alpine:3 cat /w/marker; then
+        ok "the next container is filled from the tree as it is now"
+    else
+        bad "a reseeded copy reads [$LAST_OUTPUT], want second"
+    fi
+
+    # The container that exists only to have the volume mounted is removed as
+    # soon as the tar is in. One left behind would hold the volume, and the
+    # next thing wanting it would report it as in use.
+    left=$(docker ps -aq --filter "label=com.github.lhns.remote-docker=seed" 2>/dev/null | wc -l)
+    if [ "$left" -eq 0 ]; then
+        ok "no seed container was left behind"
+    else
+        bad "$left seed containers are still there"
+    fi
+else
+    bad "a container would not start against a delegated copy"
+    sed 's/^/        /' "$WORK/deleg-run.log"
+fi
+docker rm -f itest-deleg >/dev/null 2>&1
 
 echo
 echo "== 16. a background session, with no terminal held open =="

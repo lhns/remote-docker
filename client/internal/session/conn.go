@@ -131,6 +131,18 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:  s.clientID,
 		Guard:   live.guard,
 
+		// What a share's mount asks of the kernel's attribute cache when the
+		// mount itself named nothing (ADR 0042). Watching is asked of the
+		// session rather than of the setting: `cached` rests on the watcher
+		// poking what changed, and only a hosting session has one.
+		Consistency:      s.opts.Consistency,
+		ConsistencyPaths: s.opts.ConsistencyPaths,
+		Watching:         s.watch != nil,
+
+		// Filling a delegated share's copy, which is the one mode that is not
+		// a mount at all (ADR 0043).
+		Seed: live.api,
+
 		// Read for one question: whether this workspace can mount a single
 		// file, which needs a volume subpath (ADR 0039).
 		DockerVersion: info.Docker,

@@ -40,6 +40,8 @@ than trusted.
 | [0033](0033-handles-derived-from-the-path.md) | The root handle is derived, the rest are not | |
 | [0039](0039-a-single-file-is-a-one-file-export.md) | A single file is a one-file export | |
 | [0041](0041-the-workspaces-own-paths.md) | The workspace's own paths are the ones it mounted into the daemon | |
+| [0042](0042-mount-consistency-modes.md) | Docker's mount consistency, applied to the NFS mount | |
+| [0043](0043-delegated-is-a-copy.md) | Delegated is a copy, filled through a container | no write-back yet |
 
 ## Code layout
 

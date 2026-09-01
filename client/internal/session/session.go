@@ -57,6 +57,12 @@ type Options struct {
 	WatchBudget  int
 	WatchExclude []string
 
+	// Consistency is the mount consistency a share gets when the mount named
+	// none, and ConsistencyPaths overrides it per directory (ADR 0042).
+	// Parsed by the command layer, which is where a bad value is reported.
+	Consistency      workspace.Consistency
+	ConsistencyPaths map[string]workspace.Consistency
+
 	// PosixSource reports the POSIX path a shell may have rewritten a bind
 	// source into. Supplied by the command layer, which is where the shell is
 	// known; nil everywhere else, which is every platform but Windows.
