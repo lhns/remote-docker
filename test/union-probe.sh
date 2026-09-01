@@ -262,6 +262,20 @@ else
     info "falling through is the whole point, so this decides the design"
 fi
 
+# The controls that say WHICH of the three ingredients is at fault, because the
+# failure above is EOPNOTSUPP on open while stat and readdir both work, and that
+# narrows nothing on its own.
+#
+# The first is the one that matters most: this project already has containers
+# reading NFS mounts in every integration run, so if a plain bind of the same
+# mount works, NFS in a container is fine and the fault is specific to reading
+# an NFS LOWER through an overlay from another mount namespace.
+report "a container reading the NFS mount directly, no overlay"     docker run --rm -v "$LOWER:/n" alpine:3 cat /n/pristine-root.txt
+report "a container reading the merged mount, privileged"     docker run --rm --privileged -v "$MERGED:/w" alpine:3 cat /w/pristine-root.txt
+report "a container reading the merged mount, host network and pid"     docker run --rm --network host --pid host -v "$MERGED:/w" alpine:3 cat /w/pristine-root.txt
+report "the same open from the host, in a private mount namespace"     sudo unshare --mount sh -c "cat $MERGED/pristine-root.txt"
+report "what the kernel said while that was happening"     sh -c "sudo dmesg | tail -15"
+
 # Only now, the coherence question: the client edits a file the cache does not
 # hold, which is the case the invalidation channel does NOT cover because there
 # is nothing cached to invalidate.
