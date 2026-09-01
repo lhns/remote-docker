@@ -585,14 +585,29 @@ if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTD
             # ENOENT is exactly what that would produce, and exactly what
             # fuse-overlayfs reports.
             report "what /proc/self is, entering the mount namespace only"                 sudo nsenter -t "$pid2" -m -- sh -c "readlink /proc/self; ls /proc/self/fd 2>&1 | head -3"
-            report "the same mount, entering the pid namespace as well"                 sudo nsenter -t "$pid2" -m -p --fork -- sh -c                 "mkdir -p /rd3 && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd3 2>&1; echo exit=\$?"
+            # nsenter here cannot fork into the pid namespace -- it has neither
+            # -f nor --fork -- so the invocation this project actually uses
+            # cannot be spelled with it. Our own child does it directly:
+            # setns(CLONE_NEWPID), setns(CLONE_NEWNS), then run fuse-overlayfs
+            # as a CHILD, which is the same set of namespaces the dind gets when
+            # it runs the binary itself. That is what the assertion below uses.
+            report "whether this nsenter can enter the pid namespace at all"                 sudo nsenter -t "$pid2" -m -p --fork -- true
 
             # And the same mount asked for by the dind ITSELF, which enters all
             # of its own namespaces the way docker does rather than the way
             # nsenter does.
             report "the same mount, run by the dind itself"                 docker exec "$DIND2" sh -c                 "mkdir -p /rd2 && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd2 2>&1; echo exit=\$?"
 
-            if sudo nsenter -t "$pid2" -m -- fuse-overlayfs                 -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work                 /rd/merged 2>"$WORK/dindfuse.err"; then
+            # THE assertion, in the namespaces the union really runs in. The
+            # agent's child enters the dind's pid AND mount namespaces and then
+            # runs fuse-overlayfs as a child of its own, which is exactly the
+            # position a process the dind started is in.
+            #
+            # Recorded above and not asserted: the same mount with the MOUNT
+            # namespace alone, which fails with ENOENT about a directory that
+            # is plainly there, because /proc/self resolves to nothing when the
+            # pid namespace was left behind and libfuse leans on /proc/self/fd.
+            if docker exec "$DIND2" sh -c                 "fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged"                 2>"$WORK/dindfuse.err"; then
                 ok "fuse-overlayfs mounts inside the dind"
                 if outputs 'pristine and nested' docker exec "$DIND2"                     docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then
                     ok "a container on the account own daemon reads the lower through the union"
