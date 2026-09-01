@@ -233,6 +233,42 @@ seconds for as long as the session runs.
 sent looks exactly like one the container created, and the cost of that
 confusion is content appearing in somebody's source tree that they never wrote.
 
+## What it measured
+
+`test/bench.sh` on a GitHub runner, 2026-09-01, 300 files, one shaped link per
+row. Seconds, and `nfs_ops` is what the mount was asked for during the read:
+
+| RTT | mode | start | walk | read 300 | write | nfs_ops during the read |
+|---|---|---|---|---|---|---|
+| 0.1ms | `consistent` | 0.14 | 0.09 | 0.41 | 0.75 | READ=300 ACCESS=535 GETATTR=437 |
+| 0.1ms | `cached` | 0.14 | 0.09 | 0.30 | 0.19 | READ=300 ACCESS=422 |
+| 0.1ms | `delegated` | 0.28 | 0.44 | 0.33 | 0.14 | READ=349 ACCESS=300 |
+| 40ms | `consistent` | 0.38 | 18.91 | 32.49 | 12.68 | GETATTR=3552 |
+| 40ms | `cached` | 0.38 | 2.99 | 24.46 | 12.28 | READ=300 ACCESS=422 |
+| 40ms | `delegated` | 0.14 | **0.06** | **0.09** | **0.08** | **none** |
+| 160ms | `consistent` | 1.10 | 96.98 | 164.47 | 74.00 | GETATTR=4220 |
+| 160ms | `cached` | 1.10 | 11.64 | 98.12 | 49.43 | READ=300 ACCESS=422 |
+| 160ms | `delegated` | **0.15** | **0.06** | **0.08** | **0.08** | **none** |
+| 10mbit | `delegated` | 0.14 | 0.06 | 0.08 | 0.08 | none |
+
+The claim was that the wall clock stops tracking the latency knob, and it does:
+`delegated` reads in 0.08s at 160ms RTT where `cached` takes 98.12s and
+`consistent` 164.47s, and it does so while remaining a live mount. The
+`nfs_ops` column is the reason and the proof: nothing is asked of the mount at
+all, where `cached` still pays 300 READs and 422 ACCESSes it cannot avoid.
+
+Start does not grow, which is the other half of the claim: 0.15s at 160ms
+against 1.10s for both mounted modes, because a container never waits for the
+fill.
+
+**Incomplete, and not to be quoted as done:** the second table — cold, settle,
+warm, invalidate, write-back — produced rows for two of four shapes on that run.
+`0ms/0` gave 0.10 / 0.08 / 0.10 / 1.11 / 1.00 and `20ms/0` gave 0.62 / 0.08 /
+0.10 / 1.12 / write-back timing out at 60s; the 80ms and 10mbit shapes started
+no container at all, and the bench did not say why. The cold-versus-warm gap it
+is meant to show is also not visible on a 300-file tree that settles in 0.08s,
+so that table wants a larger one (`BENCH_FILES`) as well as a diagnosis.
+
 ## Consequences
 
 - **`delegated` requires the watcher**, exactly as `cached` does, and for a

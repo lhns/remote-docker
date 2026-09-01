@@ -275,8 +275,14 @@ for spec in $SHAPES; do
     measured=$(rtt)
 
     dockert rm -f "$PIN" >/dev/null 2>&1
-    if ! dockert run -d --name "$PIN" -v "$PROJECT:/w:delegated" alpine:3 sleep 3600 >/dev/null 2>&1; then
+    if ! dockert run -d --name "$PIN" -v "$PROJECT:/w:delegated"         alpine:3 sleep 3600 >"$WORK/bench-deleg.log" 2>&1; then
+        # What docker said, and what the workspace was doing. A row that is
+        # simply absent from a benchmark reads as a mode that was not measured
+        # rather than one that failed, which is the more misleading of the two.
         bad "no delegated container for $spec"
+        sed 's/^/        /' "$WORK/bench-deleg.log"
+        hostdocker logs "$CONTAINER" 2>&1 |
+            grep -iE "union|cache|fuse" | tail -10 | sed 's/^/        workspace: /'
         continue
     fi
 
@@ -320,6 +326,12 @@ for spec in $SHAPES; do
         fi
         sleep 1
     done
+    if [ "$wb" = timeout ]; then
+        # A number that is missing has to say why, or the table reports a
+        # feature as slow when it did not run at all.
+        hostdocker logs "$CONTAINER" 2>&1 |
+            grep -iE "cache layer|union|cache request" | tail -5 | sed 's/^/        workspace: /'
+    fi
     rm -f "$PROJECT/writeback-probe" "$PROJECT/pkg1/invalidate-probe"
 
     printf '%-12s %-8s %-8s %-8s %-8s %-11s %-10s
