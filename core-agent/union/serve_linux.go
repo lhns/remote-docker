@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -56,13 +55,30 @@ func Serve(spec Spec) error {
 	}
 
 	args := spec.Args()
-
-	binary, err := exec.LookPath(args[0])
-	if err != nil {
+	if _, err := exec.LookPath(args[0]); err != nil {
 		return fmt.Errorf("union: %s is not in the image this daemon runs: %w\n"+
 			"\tfix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE", Binary, err)
 	}
-	return syscall.Exec(binary, args, os.Environ())
+
+	// A CHILD rather than an exec, and this is the part no manual states
+	// plainly.
+	//
+	// Entering the mount namespace alone leaves this process holding a pid
+	// from the AGENT's pid namespace while looking at the daemon's /proc,
+	// which is a procfs for a different one. /proc/self then resolves to
+	// nothing, and libfuse reaches for /proc/self/fd constantly. It fails as
+	// ENOENT and reports it as "cannot read upper dir: No such file or
+	// directory" -- about a directory that is plainly there and that ls in the
+	// same shell had just listed (measured, test/union-probe.sh section 11).
+	//
+	// setns(CLONE_NEWPID) does not move the caller. It decides where its
+	// CHILDREN are born, so the union has to be one.
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("union: serving %s: %w", spec.Export, err)
+	}
+	return nil
 }
 
 // enter joins the mount namespace of pid.
@@ -73,19 +89,38 @@ func Serve(spec Spec) error {
 // it, so it has to be broken first, and it cannot be put back -- which is why
 // this happens in a child process rather than in the agent.
 func enter(pid int) error {
+	// The PID namespace FIRST, and reading its path before the mount namespace
+	// changes on purpose: afterwards /proc names the daemon's own procfs
+	// rather than the agent's.
+	//
+	// It moves nothing by itself -- setns(CLONE_NEWPID) decides where this
+	// process's CHILDREN are born, which is exactly why the union is a child.
+	if err := setns(pid, "pid", unix.CLONE_NEWPID); err != nil {
+		return err
+	}
+
+	// The unshare is not optional and not tidiness: the kernel's mntns_install
+	// replaces the caller's root and working directory, so it refuses a caller
+	// whose filesystem state is shared with anything else. Go's threads all
+	// share it, so it has to be broken first, and it cannot be put back --
+	// which is why this happens in a child process rather than in the agent.
 	if err := unix.Unshare(unix.CLONE_FS); err != nil {
 		return fmt.Errorf("union: unsharing filesystem state: %w", err)
 	}
+	return setns(pid, "mnt", unix.CLONE_NEWNS)
+}
 
-	path := fmt.Sprintf("/proc/%d/ns/mnt", pid)
+// setns joins one of pid's namespaces.
+func setns(pid int, kind string, flag int) error {
+	path := fmt.Sprintf("/proc/%d/ns/%s", pid, kind)
 	ns, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("union: opening %s: %w", path, err)
 	}
 	defer func() { _ = ns.Close() }()
 
-	if err := unix.Setns(int(ns.Fd()), unix.CLONE_NEWNS); err != nil {
-		return fmt.Errorf("union: entering the daemon's mount namespace: %w", err)
+	if err := unix.Setns(int(ns.Fd()), flag); err != nil {
+		return fmt.Errorf("union: entering the daemon's %s namespace: %w", kind, err)
 	}
 	return nil
 }
