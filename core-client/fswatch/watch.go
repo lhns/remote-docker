@@ -244,6 +244,13 @@ func (w *Watcher) Sync(shares []Share) {
 // (ADR 0044).
 type Observer interface {
 	Observe(event workspace.FSEvent)
+
+	// Lost says the watcher could not report everything, which for a cache is
+	// a different problem from a missed notification: the events it did not
+	// see may have been deletions, and a cached copy of a deleted file
+	// shadows its absence until something removes it. The observer's answer is
+	// to reconcile rather than to log a line.
+	Lost(notice workspace.FSNotice)
 }
 
 // SetObserver attaches one, replacing any before it. Nil detaches.
@@ -251,6 +258,16 @@ func (w *Watcher) SetObserver(o Observer) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.observer = o
+}
+
+// lost tells the observer that something was missed, if there is one.
+func (w *Watcher) lost(notice workspace.FSNotice) {
+	w.mu.Lock()
+	o := w.observer
+	w.mu.Unlock()
+	if o != nil {
+		o.Lost(notice)
+	}
 }
 
 // observe tells the observer, if there is one.
@@ -462,6 +479,7 @@ func opFor(e fsnotify.Event) workspace.FSOp {
 // emit queues a frame, dropping rather than blocking.
 func (w *Watcher) emit(out chan<- workspace.NotifyFrame, events []workspace.FSEvent, notices []workspace.FSNotice) {
 	for _, n := range notices {
+		w.lost(n)
 		w.queue(out, workspace.NotifyFrame{Notice: &n})
 	}
 	if len(events) == 0 {
@@ -519,6 +537,7 @@ func (w *Watcher) send(out <-chan workspace.NotifyFrame) {
 			// before anything else, so the agent never mistakes a partial
 			// picture for a complete one.
 			for _, n := range pending {
+				w.lost(n)
 				if err := sink.Send(w.ctx, workspace.NotifyFrame{Notice: &n}); err != nil {
 					w.log().Warn("reporting dropped changes", "err", err)
 				}

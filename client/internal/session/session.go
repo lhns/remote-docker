@@ -159,6 +159,11 @@ type Session struct {
 	// to restore nothing.
 	shares *shareStore
 
+	// cached is what each delegated share's fill last sent, across sessions.
+	// It is what makes a deletion made while nothing was running removable
+	// from the cache (ADR 0044). Nil on a query session, which fills nothing.
+	cached *cachedStore
+
 	// watch outlives any single connection too, and for the same reason the
 	// registry does: watches are a local resource, and re-walking a large
 	// tree on every idle reconnect would cost more than the connection. Only
@@ -249,6 +254,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	// a directory.
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
+		s.cached = newCachedStore(config.CachedPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
 		s.nfs = nfsserve.New(s.registry)
 	}

@@ -624,6 +624,18 @@ func SharesPath(workspace string) string {
 	return filepath.Join(StateDir(), "shares", workspace+".json")
 }
 
+// CachedPath records which files a delegated share's cache was filled with.
+//
+// Per workspace for the same reason SharesPath is: a cache lives on one
+// workspace's daemon, and another's record must never decide what to remove
+// from it.
+func CachedPath(workspace string) string {
+	if workspace == "" {
+		workspace = "default"
+	}
+	return filepath.Join(StateDir(), "caches", workspace+".json")
+}
+
 // KeyComment identifies this machine on the key it generates.
 //
 // It is the only thing distinguishing one file from another in a workspace's

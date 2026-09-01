@@ -141,6 +141,27 @@ It ran that way in CI for the whole life of the mode, behind a green section.
 The suites now assert that a container's share reports fuse-overlayfs rather
 than the daemon's own disk, which is the one thing a bare directory cannot fake.
 
+### A deletion nobody observed
+
+A cache volume outlives the session that filled it, and a fill only ever
+overwrites and adds — it has no way to notice what is GONE. So a file deleted
+here while nothing was running is still in the cache, and still in every
+container, with no event anywhere to explain it.
+
+The client keeps a record of what each fill sent, per workspace, bound to the
+machine and account that wrote it. At the next fill it stats those paths and
+drops the ones this machine no longer has. Only paths a fill put there are ever
+considered, and that is what makes it safe: a path in the cache that no fill
+sent is a container's own file, and this must never remove one.
+
+A watcher overflow is the same problem inside a session — the events it dropped
+may have been deletions — so `fswatch.Observer` is told, and answers with the
+same reconcile rather than a log line.
+
+What it does NOT cover: a container already running when the client restarts
+keeps what its cache holds until that share is filled again. Narrower, and
+deliberate.
+
 ### The collector cannot see a cache volume in use
 
 A union is bound into a container by path, so nothing ever references the volume

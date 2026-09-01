@@ -440,6 +440,14 @@ premise of the project, and it applies to building it too. So:
   `invalid argument`, about a list whose every word is individually valid. That
   is what kept the union from ever mounting. `Spec.LowerMount` does the split,
   and the error now prints the two halves so the next one names itself.
+- **A fill cannot carry a deletion, so the client records what it sent** (ADR
+  0044). A fill overwrites and adds; a file deleted here while nothing was
+  running leaves no event for anyone to replay, so it stays in the cache and
+  stays visible to every container. The record of what the last fill sent is
+  what makes it removable, and only paths from that record are ever dropped --
+  a path in the cache no fill put there is a container's own file. A watcher
+  overflow is the same problem inside a session, which is why `Observer` has
+  `Lost` and answers it with a reconcile rather than a log line.
 - **A cache volume is never in use as far as the daemon is concerned, and the
   collector must ask the WORKSPACE instead** (ADR 0044). A union is bound into
   a container by PATH, so nothing references the volume behind it and

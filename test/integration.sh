@@ -1520,6 +1520,10 @@ deleg_diagnostics() {
 DELEGDIR="$WORK/delegated"
 mkdir -p "$DELEGDIR"
 echo "first" >"$DELEGDIR/marker"
+# Deleted in section 16 while no client is running, which is the one deletion
+# nothing can observe: no watcher sees it, so the fill cannot carry it and only
+# the record of what the last fill sent can explain it.
+echo "here before the fill" >"$DELEGDIR/while-down.txt"
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"         alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
@@ -1677,6 +1681,12 @@ wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
 sleep 2
 
+# WHILE NOTHING IS RUNNING, which is the whole point: no watcher sees this, so
+# no invalidation carries it, and the fill that comes next only overwrites and
+# adds. The cache still holds the file, and the container still sees it, until
+# the record of what the last fill sent says it may go (ADR 0044).
+rm -f "$DELEGDIR/while-down.txt"
+
 if "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
     ok "start returned without holding a terminal"
     sed 's/^/        /' "$WORK/start.log"
@@ -1703,6 +1713,35 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
             deleg_diagnostics
         fi
         docker rm -f itest-deleg >/dev/null 2>&1
+
+        # And the deletion made while nothing was running. A NEW container,
+        # because the reconcile happens when a share is next filled: one that
+        # is already running keeps what its cache holds until then, which is a
+        # narrower gap and a deliberate one.
+        #
+        # Polled, because the fill and the reconcile it starts with are
+        # asynchronous by design -- the container does not wait for either, and
+        # what the cache does not hold yet is served from the live export.
+        if dockert run -d --name itest-reconcile -v "$DELEGDIR:/w:delegated"             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
+            gone=""
+            for _ in $(seq 1 20); do
+                if ! docker exec itest-reconcile test -e /w/while-down.txt 2>/dev/null; then
+                    gone=yes
+                    break
+                fi
+                sleep 1
+            done
+            if [ -n "$gone" ]; then
+                ok "a file deleted while the session was down is gone from the cache"
+            else
+                bad "a file deleted while the session was down is still in the cache"
+                deleg_diagnostics
+            fi
+            docker rm -f itest-reconcile >/dev/null 2>&1
+        else
+            bad "the reconcile container would not start"
+            sed 's/^/        /' "$WORK/reconcile-run.log"
+        fi
 
         # And the verdict, which is the whole point of `status`. A session is
         # demonstrably up: the command above went through it.

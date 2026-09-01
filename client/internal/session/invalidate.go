@@ -52,6 +52,30 @@ type invalidator struct {
 	timer   *time.Timer
 }
 
+// Lost is called when the watcher could not report everything it saw.
+//
+// A reconcile rather than a log line, and the difference matters: the events
+// that were dropped may have been deletions, and a cached copy of a file that
+// is gone shadows its absence for as long as it sits there. Every share this
+// session has filled is checked against this machine's own disk, which is
+// local work and no round trips unless something really is missing.
+func (i *invalidator) Lost(notice workspace.FSNotice) {
+	i.session.log().Warn("the watcher dropped changes; checking the caches against this machine",
+		"reason", notice.Reason, "dropped", notice.Dropped)
+
+	for _, export := range i.session.cachedShares() {
+		local, ok := i.session.cachedShare(export)
+		if !ok {
+			continue
+		}
+		// This session's own manifest, not the record on disk: it is what the
+		// cache holds right now, where the record is what the last completed
+		// fill left. A share still filling has the more accurate of the two
+		// here.
+		go i.session.dropDeleted(export, local, i.session.manifestPaths(export))
+	}
+}
+
 // Observe is called for every change the watcher sees, for every share.
 //
 // Cheap and non-blocking on purpose: it runs on the watcher's own path, and a
@@ -171,7 +195,16 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 		}
 		if err := live.Apply(ctx, export, int64(len(body)), bytes.NewReader(body)); err != nil {
 			i.session.logQuiet(ctx, "updating a cache", "export", export, "err", err)
+			continue
 		}
+		// The manifest means "what this client put in the cache", and a file
+		// created here after the fill is exactly that. Left out, it is in the
+		// cache and in nobody's record: write-back cannot tell it from a
+		// container's own file, and a later deletion of it has nothing to
+		// reconcile against.
+		i.session.fills.mu.Lock()
+		i.session.noteSent(export, local, batch)
+		i.session.fills.mu.Unlock()
 	}
 }
 

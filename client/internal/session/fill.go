@@ -83,6 +83,12 @@ func (s *Session) Fill(export, localPath string) {
 	s.fills.set(export, localPath, state)
 
 	go func() {
+		// Before the fill, because it is a REMOVAL and the fill cannot make
+		// one: a file deleted here while nothing was running is still in the
+		// cache and still visible to a container until something takes it out
+		// (ADR 0044).
+		s.reconcileDeletions(export, localPath)
+
 		err := s.fill(export, localPath, state)
 		s.fills.mu.Lock()
 		state.Done, state.Err = true, err
@@ -98,7 +104,78 @@ func (s *Session) Fill(export, localPath string) {
 			// it would have been. Said once rather than per batch.
 			s.logQuiet(s.ctx, "a share's cache could not be filled", "export", export, "err", err)
 		}
+
+		// What the NEXT session has to reconcile against. Recorded even on a
+		// partial fill, because it names what is in the cache, and what is in
+		// the cache is what a later deletion has to be able to remove.
+		if s.cached != nil {
+			s.cached.record(export, s.manifestPaths(export))
+		}
 	}()
+}
+
+// reconcileDeletions takes out of the cache what this machine no longer has.
+//
+// The one thing a fill cannot do. It overwrites what changed and adds what is
+// new, so a change made while no session ran is carried by the fill itself --
+// and a DELETION leaves no trace for it to carry. Without this, a file removed
+// here yesterday is still in the container today.
+//
+// Only paths a previous fill recorded are considered, which is what keeps it
+// safe: a path in the cache that no fill put there is a container's own file,
+// and this must never remove one of those.
+func (s *Session) reconcileDeletions(export, localPath string) {
+	if s.cached == nil {
+		return
+	}
+	filled, ok := s.cached.filled(export)
+	if !ok {
+		return
+	}
+	s.dropDeleted(export, localPath, filled)
+}
+
+// dropDeleted removes from a share's cache every one of the named paths that
+// this machine no longer has.
+//
+// Only paths a fill put there are ever passed in, and that is what keeps it
+// safe: a path in the cache that no fill sent is a container's own file, and
+// this must never remove one of those.
+func (s *Session) dropDeleted(export, localPath string, filled []string) {
+	gone := deletedSince(localPath, filled)
+	if len(gone) == 0 {
+		return
+	}
+
+	live := s.liveCache()
+	if live == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, invalidateTimeout)
+	defer cancel()
+
+	for _, paths := range chunkPaths(gone) {
+		if err := live.Drop(ctx, export, paths); err != nil {
+			s.logQuiet(ctx, "removing from a cache what this machine no longer has",
+				"export", export, "err", err)
+			return
+		}
+	}
+	s.log().Info("took deleted files out of a share's cache",
+		"export", export, "files", len(gone))
+}
+
+// manifestPaths is what this session's fill put in a share's cache.
+func (s *Session) manifestPaths(export string) []string {
+	s.fills.mu.Lock()
+	defer s.fills.mu.Unlock()
+
+	paths := make([]string, 0, len(s.fills.manifests[export]))
+	for p := range s.fills.manifests[export] {
+		paths = append(paths, p)
+	}
+	return paths
 }
 
 // fill scans the tree and uploads from it at the same time, cheapest first.
