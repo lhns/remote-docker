@@ -91,20 +91,6 @@ type Stats struct {
 // deleted by the container or simply never sent.
 func (s Stats) Complete() bool { return s.Files == s.TotalFiles }
 
-// SmallFile is the size below which a file is sent as the walk finds it,
-// without waiting for the scan to finish.
-//
-// The reason this exists: sorting the whole tree before sending anything means
-// the first byte waits for a stat of every file in the project, and on a large
-// one that scan can take longer than the upload it was meant to optimise. A
-// source tree is overwhelmingly files under this size, and those are the ones
-// worth caching first anyway, so sending them immediately gets both -- an
-// upload that starts at once AND the cheapest files first.
-//
-// 64 KiB: comfortably above a source file, well below anything whose transfer
-// time is worth reordering for.
-const SmallFile = 64 << 10
-
 // Walk finds what to cache and hands each entry over as it is found.
 //
 // Streaming rather than returning a list, so a caller can start sending before

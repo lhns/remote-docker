@@ -1514,6 +1514,25 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "reading the cache: [$LAST_OUTPUT]"
         fi
 
+        # And the cache really was filled, which the read above does NOT show:
+        # a miss falls through to the live export and returns the same bytes,
+        # so that assertion passes just as well with an empty cache. This is
+        # also what write-back is gated on, so a fill that quietly did nothing
+        # would otherwise present much later as a write that never arrived.
+        filled=""
+        for _ in $(seq 1 20); do
+            if outputs "delegated: .* files, cached\$"                 "$WORK/remote-docker" remote status; then
+                filled=yes
+                break
+            fi
+            sleep 1
+        done
+        if [ -n "$filled" ]; then
+            ok "the fill completed, so the share is cached rather than only live"
+        else
+            bad "the share never reported a complete cache: [$LAST_OUTPUT]"
+        fi
+
         # THE assertion. This file did not exist when the cache was filled, so
         # it can only be coming from the live export underneath.
         # Retried, because two caches sit between the two sides -- the NFS

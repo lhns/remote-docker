@@ -86,7 +86,11 @@ func (s *Session) Fill(export, localPath string) {
 		err := s.fill(export, localPath, state)
 		s.fills.mu.Lock()
 		state.Done, state.Err = true, err
-		state.Cached = err == nil && state.Sent == state.Stats.Files
+		// What the tree held against what the cache got, which is the question
+		// write-back turns on. Not "did every batch we sent arrive", which is
+		// the same number counted twice: a budget that stops the fill short
+		// leaves batches that all succeeded and a cache that is missing files.
+		state.Cached = err == nil && state.Stats.Complete()
 		s.fills.mu.Unlock()
 
 		if err != nil {
