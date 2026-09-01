@@ -68,6 +68,19 @@ jobs:
         with:
           go-version-file: core/go.mod
           cache: true
+          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
+          # cache key looks for a go.mod there. Without this it reports
+          # "Dependencies file is not found" and restores nothing, so every job
+          # in every workflow re-downloads the whole graph: 250 modules in `test`
+          # alone, measured 2026-09-01. It also made two jobs fail outright that
+          # day, when proxy.golang.org was returning stream errors for downloads
+          # a cache hit would never have made.
+          cache-dependency-path: |
+            core/go.sum
+            core-agent/go.sum
+            core-client/go.sum
+            agent/go.sum
+            client/go.sum
 
       - uses: actions/download-artifact@v8
         with:

@@ -48,6 +48,26 @@ FILES=${BENCH_FILES:-300}
 # feature -- cannot appear. The first table keeps 300, because its rows are
 # compared against ADR 0042's, which were measured on that tree.
 CACHE_FILES=${BENCH_CACHE_FILES:-3000}
+
+# READ_SAMPLE is what cold and warm read, and it is a FIXED NUMBER of files
+# rather than the whole tree.
+#
+# The tree is large so that settling takes long enough to measure. The read must
+# not scale with it: cold is by definition the miss path, and a miss costs a
+# round trip per file, so reading 3000 of them at 160ms RTT is the ~164s per 300
+# that the first table already reports -- twenty-five minutes for one row, four
+# times over. Measured the hard way on 2026-09-01, when a bench ran for an hour
+# and had not finished the first shape.
+#
+# A fixed sample also makes the two columns comparable across shapes, and with
+# the first table's 300-file rows: two of the twenty directories hold 300 of the
+# 3000 files at the defaults.
+#
+# Two globs rather than `find | head`, because `head` closes the pipe and the
+# producer takes a SIGPIPE, which under `set -o pipefail` fails the measurement
+# for succeeding. CLAUDE.md keeps that as a rule about assertions; it is the
+# same hazard here.
+READ_SAMPLE='cat /w/pkg1/*.go /w/pkg2/*.go >/dev/null'
 DIRS=${BENCH_DIRS:-20}
 WRITES=${BENCH_WRITES:-100}
 
@@ -317,7 +337,7 @@ for spec in $SHAPES; do
     fi
 
     # Straight away, before the fill has had a chance: this is the miss path.
-    cold=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
+    cold=$(elapsed dockert exec "$PIN" sh -c "$READ_SAMPLE")
 
     # Settled is what the session itself says, rather than a guess at how long
     # a copy ought to take.
@@ -334,7 +354,7 @@ for spec in $SHAPES; do
         sleep 1
     done
 
-    warm=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
+    warm=$(elapsed dockert exec "$PIN" sh -c "$READ_SAMPLE")
 
     # An edit here, and how long until the container sees it.
     echo "edited at $(date +%s)" >"$tree/pkg1/invalidate-probe"
