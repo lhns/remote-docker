@@ -1508,10 +1508,13 @@ echo "== 15c. the delegated consistency, which is a union =="
 deleg_diagnostics() {
     "$WORK/remote-docker" remote status 2>&1 |
         grep -iE "cache|watch" | sed 's/^/        client: /'
-    grep -iE "cache|union|fuse|wrote" "$WORK/watch-up.log" 2>/dev/null |
-        tail -10 | sed 's/^/        client: /'
-    docker logs "$CONTAINER" 2>&1 |
-        grep -iE "union|cache|fuse|overlay" | tail -15 | sed 's/^/        workspace: /'
+    grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
+        tail -12 | sed 's/^/        client: /'
+    # dump_workspace_log, because `docker` here is the CLIENT's endpoint and
+    # the workspace container is not one of ITS containers -- asking it for the
+    # workspace's log is a question about a container that does not exist, which
+    # answers nothing and looks like a workspace that logged nothing.
+    dump_workspace_log 25
 }
 
 DELEGDIR="$WORK/delegated"

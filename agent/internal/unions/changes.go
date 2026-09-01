@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/core-agent/notify"
+	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -96,6 +97,8 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 	if err != nil {
 		return nil, fmt.Errorf("unions: reading what changed in %s: %w", export, err)
 	}
+	logx.Or(m.Log).Debug("read a cache layer",
+		"export", export, "upper", upper, "changed", len(out))
 	return out, nil
 }
 

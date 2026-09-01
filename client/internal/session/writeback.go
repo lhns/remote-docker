@@ -86,6 +86,11 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 
 	live := s.liveCache()
 	if live == nil {
+		// No connection to ask over. Not an error -- the changes are still in
+		// the cache and the next round collects them -- but it is the
+		// difference between "nothing to bring back" and "could not look",
+		// which nothing said.
+		s.log().Debug("no connection to collect a container's writes over", "export", export)
 		return
 	}
 
@@ -100,9 +105,12 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 	if len(changes) == 0 {
 		return
 	}
+	s.log().Debug("collecting what a container changed", "export", export, "paths", len(changes))
 
 	actions := writeback.Decide(s.manifestOf(export), changes, s.localFile(local), s.skew(), true)
 	if len(actions) == 0 {
+		s.log().Debug("nothing the container changed needs bringing back",
+			"export", export, "paths", len(changes))
 		return
 	}
 
