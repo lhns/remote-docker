@@ -21,6 +21,7 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
+	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/notify"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -50,6 +51,8 @@ func (s *Server) handleSession(session gssh.Session) {
 		s.serveDockerSocket(session, account)
 	case tunnel.NotifyCommand:
 		s.serveNotify(session, account)
+	case tunnel.CacheCommand:
+		s.serveCache(session, account)
 	default:
 		s.serveExec(session, account, command)
 	}
@@ -96,6 +99,16 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		// (ADR 0041). The client matches sources against the list and never
 		// asks which mode this workspace runs.
 		DaemonPaths: s.cfg.DaemonPaths,
+
+		// Whether a delegated share can be a cache here (ADR 0044). Answered
+		// now so the client refuses the mode by name rather than half way
+		// through a container start, which is the same reason Docker's
+		// version is reported.
+		Union: s.unionCapability(session.Context(), account.Name()),
+
+		// This workspace's clock, so the client can measure the offset between
+		// the two machines rather than assume they agree (ADR 0044).
+		Now: time.Now().UnixNano(),
 	}
 
 	if err := info.Encode(session); err != nil {
@@ -351,6 +364,32 @@ func (s *Server) storageDriver(ctx context.Context, account string) string {
 		return ""
 	}
 	return out
+}
+
+// unionCapability reports whether this workspace can serve a delegated share as
+// a cache, for the account asking.
+//
+// Asked of the daemon that would serve it rather than of the agent, because
+// that is where the answer differs: in per-account mode fuse-overlayfs has to
+// be in the image THAT daemon runs, and the agent's own filesystem says nothing
+// about it. Lookup rather than Ensure, for the same reason the version and the
+// storage driver use it: this is the client's first round trip and must not
+// wait for a daemon to boot.
+func (s *Server) unionCapability(ctx context.Context, account string) string {
+	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
+	defer cancel()
+
+	if s.cfg.Unions == nil {
+		return ""
+	}
+	target, ok := s.cfg.Daemons.Lookup(ctx, account)
+	if !ok {
+		// A daemon that has not started yet cannot be asked, and guessing
+		// would be worse than saying nothing: an empty answer reads as "not
+		// available", which is what an older agent's answer reads as too.
+		return ""
+	}
+	return unions.Capability(ctx, target.Root)
 }
 
 // supplementaryGroups is the account's group membership as /etc/group has it.

@@ -47,6 +47,12 @@ core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
   wstunnel/              dialling a workspace through a reverse proxy (ADR 0034)
   fswatch/               watches shared dirs on three platforms, budget,
                          excludes, overflow
+  cachefill/             which files a delegated share's cache gets and in what
+                         order: walk, a size-bounded buffer that evicts its
+                         largest, batches. Knows nothing of what carries them
+  writeback/             the rules for what a container's changes mean for the
+                         files here. Pure: given the manifest, the changes and
+                         the local file, it says what to do and nothing else
   keys/                  the keypair and known_hosts: this machine's identity
 
 client/go.mod            the client module: THE GLUE. docker/cli, buildx
@@ -57,6 +63,8 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
     machine/             provisioning a workspace on this machine (ADR 0026)
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
+    session/cached.go    what each fill sent, across sessions, so a deletion
+                         made while nothing ran can be taken out of the cache
     ports/               published ports -> local forwards. Stays glue whole:
                          its manager is keyed on container ids throughout, and
                          the generic forward is already tunnelclient's
@@ -74,8 +82,9 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
 
-agent/go.mod             the agent module: THE GLUE. 4 direct third-party
-                         requires, 24 go.sum lines
+agent/go.mod             the agent module: THE GLUE. 6 direct third-party
+                         requires, 28 go.sum lines (2026-09-02; re-check with
+                         `wc -l agent/go.sum`)
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     wslisten/            the same SSH server, reached over a WebSocket. Serves
@@ -212,7 +221,7 @@ premise of the project, and it applies to building it too. So:
   every default is either a prompt nobody is there to answer or an acceptance of
   anybody -- so a nil callback is refused by name rather than mid-handshake.
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
-  and that is the whole reason the agent's 24 go.sum lines did not move.
+  and that is the whole reason the agent's go.sum did not move for it.
 - **Only `/containers/create` is ever decoded.** Everything else is copied
   through. The body is handled as generic JSON, never typed structs, so
   unknown fields survive.
@@ -274,13 +283,31 @@ premise of the project, and it applies to building it too. So:
   served. One directory is one share, one volume and one consistency: two
   mounts of it disagreeing are refused, because the second EnsureVolume would
   silently recreate the first's volume.
-- **A delegated share is a copy, and the copy is filled through a container**
-  (ADR 0043). There is no API that writes into a volume, so a container is
-  created with it mounted -- never started, and removed as soon as the tar is
-  in -- through the caller's OWN image, the one image the daemon is certain to
-  have. It is a snapshot: nothing is written back and nothing refreshes it
-  while a container runs, and both halves are asserted in `test/integration.sh`
-  section 15c so that stops being a claim.
+- **A delegated share is a UNION, and the agent is its only writer** (ADR
+  0044). The live export is the lower layer and a local cache is the upper, so a
+  read the cache holds is the workspace's own disk and one it does not FALLS
+  THROUGH and is correct -- which is what lets the cache be filled in the
+  background, bounded by a budget, and still never be wrong. Two things about it
+  are measured rather than chosen: the kernel's overlay cannot be used at all
+  here, because an overlay whose lower is NFS is readable only from the mount
+  namespace that created it (a container gets EOPNOTSUPP, and so does the host
+  under `unshare --mount`); and a file written into the cache LAYER rather than
+  through the union stays invisible to a container that already missed on it, so
+  the obvious way to fill it is a silent bug. `test/union-probe.sh` asserts both
+  and runs on every pull request.
+- **Writing through the union is what closes ADR 0014.** The write is a real
+  operation in the container's own view, so its inotify fires natively --
+  IN_MODIFY, IN_CLOSE_WRITE and IN_DELETE, the last of which nothing here had
+  managed. It is also why invalidation rides the watcher BEFORE the mode strips
+  anything: a deletion cannot be replayed faithfully over NFS, which is what
+  `partial` is about, but it can be applied to a cache exactly, and it is the one
+  event the cache must not miss.
+- **Nothing is written back from a cache that is incomplete** (ADR 0044). A file
+  the fill never sent looks exactly like one the container created, and the cost
+  of that confusion is content appearing in somebody's source tree that they
+  never wrote. Every other write-back case is decided by comparing each side
+  against what the fill SENT, so only a file both sides changed needs a clock --
+  and that offset is measured through workspace-info rather than assumed.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
@@ -391,6 +418,93 @@ premise of the project, and it applies to building it too. So:
   session does not -- down drops the count to zero and unmounts, up mounts
   fresh. Anything claiming to repair a mount has to reckon with that or it will
   look like it did nothing.
+
+- **A payload's codec is chosen from what the AGENT announced, never from what
+  the client can produce** (ADR 0044). The greeting carries the list; a
+  workspace older than compression names none, and a client that picked for
+  itself would send it something it refuses. zstd, which cost the agent a direct
+  dependency; ADR 0021 carries the count and what moved it.
+- **A serving union is ADOPTED, never mounted over** (ADR 0044). After an agent
+  restart the child is an orphan whose mount is still serving every container
+  bound to it; mounting again on the same path stacks a second fuse-overlayfs
+  on the same upper and work directories, which overlayfs does not allow, while
+  the containers keep the mount they already had. The supervisor waits for a
+  serving mount to go instead -- which is only safe because "alive" means
+  MOUNTED: against a stat it would wait forever on the empty directory a dead
+  union leaves behind. Reachable only where dockerd outlives the agent, so
+  `test/vm.sh` is where it is asserted and a container deployment cannot show
+  it: there the agent is pid 1 and takes every dind with it.
+- **A union that never mounted looks exactly like one that did, and every
+  test passes against it.** Everything reaches a share through a PATH: the
+  agent writes the cache through the merged path, the container binds it, an
+  edit here is written into it and a deletion removes from it. Leave the
+  directory there with nothing mounted on it and all of that still works -- the
+  cache is a directory, the container reads it, and the only thing missing is
+  the lower, so a read that should fall through returns nothing and the
+  container's writes land where nobody looks. It ran that way in CI for the
+  whole life of the mode, behind a green section, while the child crash-looped
+  every two seconds. Two things follow, and neither is optional: `union.Alive`
+  asks whether the path is a MOUNT (st_dev against its parent, which works from
+  outside the namespace too -- `test/union-probe.sh` section 12), and the
+  suites assert that a container's share reports fuse-overlayfs rather than the
+  daemon's own disk.
+- **The union child enters the daemon's NETWORK namespace as well as its pid
+  and mount ones.** With a daemon per account the reverse forward carrying the
+  NFS export is bound inside that daemon's netns and reaches nowhere else (ADR
+  0019), so a lower mounted from the agent's namespace has no server to talk
+  to. Not the cause of any failure yet seen -- the suite that found the union
+  broken runs the SHARED daemon, where the child enters nothing -- so this is a
+  requirement rather than a fix, and saying otherwise would be naming a cause
+  nobody checked.
+- **A docker volume's option list is not a mount(2) argument.**
+  `workspace.NFSVolumeOptions` is written for the local volume driver, which
+  splits kernel FLAGS out of that list before it calls mount(2). `noatime` is
+  MS_NOATIME and not something the NFS client parses, so handing the list over
+  whole makes the NFS parser reject all of it -- reported as EINVAL, printed as
+  `invalid argument`, about a list whose every word is individually valid. That
+  is what kept the union from ever mounting. `Spec.LowerMount` does the split,
+  and the error now prints the two halves so the next one names itself.
+- **A fill cannot carry a deletion, so the client records what it sent** (ADR
+  0044). A fill overwrites and adds; a file deleted here while nothing was
+  running leaves no event for anyone to replay, so it stays in the cache and
+  stays visible to every container. The record of what the last fill sent is
+  what makes it removable, and only paths from that record are ever dropped --
+  a path in the cache no fill put there is a container's own file. A watcher
+  overflow is the same problem inside a session, which is why `Observer` has
+  `Lost` and answers it with a reconcile rather than a log line.
+- **A cache volume is never in use as far as the daemon is concerned, and the
+  collector must ask the WORKSPACE instead** (ADR 0044). A union is bound into
+  a container by PATH, so nothing references the volume behind it and
+  `VolumesInUse` always calls it unused. Removing it empties the layer under a
+  running container's mount: the mount still answers, the container still runs,
+  and the files it wrote are gone -- which is uncommitted work vanishing from a
+  directory that looks fine. `rewrite.Guard` covers only the shares THIS
+  session prepared, so a container left running across a client restart is
+  exactly the case it misses. `OpMounted` asks, and cannot-ask means keep.
+  The agent answers it from the FILESYSTEM and not from its own record: a union
+  outlives the agent that started it, so after an agent restart the mounts are
+  serving while the manager knows nothing about them, and a truthful "none
+  mounted" then deletes the cache under a running container. The share ids come
+  from the mounts and the client digest from the key that authenticated, so the
+  names are the asking machine's own.
+- **A delegated share's union outlives the channel that asked for it, and is
+  released only when no container is bound to it** (ADR 0044). The cache
+  channel rides the connection, which ADR 0015 releases the moment a session
+  goes idle; tying the mount to that unmounts a union under a running
+  container, which frees nothing and leaves that container with a mount the
+  rule above says can never be repaired. The daemon is the only thing that can
+  say who holds one, because a union is bound by PATH and not as a volume, so
+  nothing else in the workspace relates the two -- and "cannot tell" means
+  KEEP. It presented far from its cause: the container started, read its cache
+  and wrote into it, and everything afterwards answered `has no cache; prepare
+  it first`, with write-back and invalidation both silent.
+
+- **The cache layer does NOT say who wrote what.** An overlay's upper holds
+  what was written through the union, and the fill writes through the union
+  too, so its own copies sit there beside the container's. The manifest is what
+  separates them, on both ends (ADR 0044). Left unfiltered, every write-back
+  round asks for the whole tree back and an idle session is told about every
+  cached file every five seconds.
 
 - **The share ROOT handle must survive this process; nothing below it needs
   to.** MOUNT issues the root handle once and the kernel never mounts again, so
@@ -669,11 +783,17 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
-Since consistency modes (ADR 0042, ADR 0043): a `cached` mount reading a file
-and still seeing an edit made here despite a 60s attribute cache, and a
-`delegated` copy holding this machine's files, being a plain local volume,
-NOT changing under a running container, and being filled again for the next
-one -- with no seed container left behind.
+Since consistency modes (ADR 0042, ADR 0044): a `cached` mount reading a file
+and still seeing an edit made here despite a 60s attribute cache; and a
+`delegated` share being a UNION -- asserted to report fuse-overlayfs rather
+than a directory that resembles one, which is the only assertion a share whose
+lower never mounted cannot fake. Through it: a read the cache does not hold
+falling through to the live export, an edit here reaching a running container,
+a file deleted here disappearing from one, a container's write arriving on this
+machine, a file deleted while NO client was running being gone from the cache on
+the next fill, and the union surviving a client restart with a container still
+bound to it. Both daemon modes, since `per-user-dind.sh` asserts the same union
+inside an account's own dind.
 
 Since the root became the Docker CLI (ADR 0024): the binary working under the
 name `docker` as a symlink AND as a copy with `remote` still reachable through
@@ -784,6 +904,20 @@ function was.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
+- **The cache mode's own benchmark table.** `test/bench.sh`'s second table --
+  cold, settle, warm, invalidate, write-back -- has never produced a complete
+  set of rows: two shapes of four, and only the 0.1ms one measures the mode
+  rather than the bench (ADR 0044 has both rows and says which is which). The
+  first table, which is what every speed claim rests on, IS complete.
+- **Write-back's conflict resolution, and the measured clock offset.** All six
+  rows of the baseline table are unit tested and the skew correction has its own
+  test; no integration suite has ever made a file change in both places at once.
+  Say "unit tested", never "tested".
+- **Union adoption anywhere but `test/vm.sh`.** It is asserted only there,
+  because it is only reachable where dockerd outlives the agent (ADR 0025): in a
+  container the agent is pid 1 and takes every dind with it. That suite needs
+  `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
+  the section skips and says so.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

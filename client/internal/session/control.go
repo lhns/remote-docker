@@ -11,7 +11,10 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -193,8 +196,32 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 		Owner:   live.info.User,
 		Client:  s.clientID,
 		Guard:   live.guard,
+		Caches:  s.mountedCaches,
 		Log:     s.opts.Log,
 	}
+}
+
+// mountedCaches asks the workspace which cache volumes it has a union on.
+//
+// The collector's one question about a cache volume that neither the daemon nor
+// this session can answer: a union is bound by path, so no container references
+// the volume, and a share prepared by an EARLIER session is not in this one's
+// registry at all (ADR 0044).
+func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
+	live := s.liveCache()
+	if live == nil {
+		return nil, errors.New("session: no cache channel to ask which caches are mounted")
+	}
+	names, err := live.Mounted(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	mounted := make(map[string]bool, len(names))
+	for _, n := range names {
+		mounted[n] = true
+	}
+	return mounted, nil
 }
 
 // exportsVolume reports whether a managed volume backs a directory this
@@ -254,6 +281,7 @@ func (s *Session) Status() any {
 	for _, share := range s.registry.Shares() {
 		st.Shares = append(st.Shares, share.LocalPath)
 	}
+	st.Caches = s.cacheStatus()
 	return st
 }
 
@@ -347,4 +375,66 @@ func (s *Session) Close() error {
 		s.wg.Wait()
 	})
 	return nil
+}
+
+// humanBytes is a size somebody can read at a glance.
+//
+// A byte count is the more useful half of "how much of this is cached": a share
+// can be most of its files and a fraction of its bytes, or the other way round,
+// and which one it is decides whether the cache is worth anything.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for n/div >= unit && exp < 3 {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// cacheStatus is one line per delegated share, saying how much of it is cached.
+//
+// A fraction rather than a verdict: over the budget, still filling, and
+// complete are all states a share works in, and the difference between them is
+// how much of it is local rather than whether it is right.
+func (s *Session) cacheStatus() []string {
+	s.fills.mu.Lock()
+	defer s.fills.mu.Unlock()
+
+	var out []string
+	for export, state := range s.fills.state {
+		local := s.fills.roots[export]
+		stats := state.Stats
+
+		what := "filling"
+		switch {
+		case state.Err != nil:
+			what = "stopped: " + state.Err.Error()
+		case !state.Done:
+		case stats.Complete():
+			what = "cached"
+		default:
+			// Over the budget, or a walk that could not read part of the tree.
+			// The rest is served from the live mount, which is slower and
+			// right, and saying so is the only way anybody would know.
+			what = "cached in part; the rest is read live"
+		}
+
+		// "N of M" only once M is known. Stats lands when the walk finishes, so
+		// while a fill runs TotalFiles is 0 and the fraction reads "512 of 0
+		// files" -- a number that looks like a bug in the thing it is
+		// reporting on.
+		if state.Done {
+			out = append(out, fmt.Sprintf("%s: %d of %d files, %s of %s, %s",
+				local, state.Sent, stats.TotalFiles,
+				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), what))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: %d files so far, %s", local, state.Sent, what))
+	}
+	sort.Strings(out)
+	return out
 }

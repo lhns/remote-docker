@@ -686,6 +686,95 @@ add, and worth adding on a shared cluster.
 
 ---
 
+## Flow 9: the cache channel
+
+The client ships file CONTENTS to the agent, which writes them as root inside an
+account's daemon and removes files there on request. ADR 0044 is why it exists.
+
+Deliberately the opposite of flow 6, and the contrast is the point: the notify
+channel carries paths and mutates nothing, because it cannot know whether the
+file it is told about still exists. This one carries bytes and mutates on
+purpose, so its safety comes from where it is allowed to write rather than from
+refusing to write at all.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Cl as client
+    participant Ch as workspace-cache
+    participant Ag as agent (root)
+    participant U as the union, in the daemon's namespace
+    participant C as container
+
+    Cl->>Ch: prepare{export:/m/ab12, cache:rd-<client>-ab12-cache, port}
+    Ch->>Ag: validate on arrival
+    Ag->>Ag: export whitelisted, volume is a MANAGED one, port in range
+    Ag->>U: mount lower (NFS), mount fuse-overlayfs
+    Cl->>Ch: apply{bytes, codec} + a tar
+    Ag->>Ag: codec known? each entry contained after the join?
+    Ag->>U: write THROUGH the merged mount
+    U-->>C: the container's own inotify fires
+    Cl->>Ch: drop{paths}
+    Ag->>U: unlink through the merged mount
+    Ag-->>Cl: changes / pull, for write-back
+    Note over Ag,U: the account and the machine come from the KEY,<br/>never from the request
+```
+
+**T/E — a root process told which paths to write (3, 6).** Two independent
+checks, exactly as flow 6. `workspace.CacheRequest.Validate` whitelists the
+export and every path without `path.Clean`, because cleaning *repairs* a
+traversal into something plausible instead of refusing it. Then `within`
+re-checks containment after the join, because `path.Join` cleans. Every tar
+entry goes through the same `within` on its own name, so the archive is not a
+way around the check that the request went through. *Covered by*
+`core/workspace/cache_test.go`.
+
+**T — a drop removes files, which nothing else in this system may do (9).** The
+Docker API can write into a volume and can never remove from one, which is the
+whole reason the agent is involved rather than the client doing this itself. The
+share root is refused by name: removing it is unmounting, and the mount's
+lifetime is not the client's to end that way.
+
+**E — a prepare naming a volume this machine did not create (3).** Two checks,
+because one is not enough. `IsManagedVolume` keeps the agent from mounting a
+volume this program never made, inside the account's daemon, as root. But every
+machine of an account satisfies that for every OTHER machine's volumes, so the
+agent also DERIVES the name it expects from the key's digest and refuses
+anything else — otherwise a second machine could mount somebody else's cache as
+its own upper and write into it through its own container. *Covered by*
+`cache_test.go` and `agent/internal/unions`.
+
+**S — the account and the machine are what the key established.** A request
+names neither. The session's account comes from the authenticated key and the
+machine is the digest of that key (ADR 0029), so one session cannot address
+another account's union, and the manager keys every share on the pair.
+
+**T — a payload naming a codec the agent has not got (5).** Refused rather than
+read as a tar. The greeting says what this agent accepts, so an unknown codec is
+a bug on the client's side, and decoding it as something else would put whatever
+the bytes happened to be through the archive reader.
+
+**I — write-back moves a container's output onto the user's own disk.** The one
+direction here that writes outside the workspace, so it is gated twice: nothing
+is written back while the cache is incomplete, because a file the fill never
+sent cannot be told from one the container created; and every extracted path is
+checked against the share root on the RESULT of the join, for the same reason as
+above. A conflict is reported by path whichever way it resolves rather than
+silently taking a side.
+
+**I — `mounted` names cache volumes.** It answers with the asking machine's own
+names: the ids come from the mounts and the digest from the key. An account's
+machines already share a daemon and can list its volumes, so this exposes
+nothing that `docker volume ls` did not.
+
+**D — an apply is as large as the client says it is.** The frame's header is
+bounded (`MaxCacheFrame`); the payload deliberately is not, because it is a tar
+of somebody's project. What it consumes is that account's own graph volume, and
+an enrolled account can already fill that from any container it starts. Listed
+under accepted risks for that reason rather than defended against here.
+
+---
+
 ## The software you run
 
 Not an arrow in any flow, and it decides whether the arrows are the ones drawn
@@ -737,6 +826,11 @@ Stated here rather than buried, because each is a deliberate trade.
 - **In shared-daemon mode an account can reach another account's export.**
   Flow 5 has the mechanism. It is not fixable inside `ForwardPolicy`, and the
   answers are ADR 0012's stated assumption or the default mode.
+- **A cache is as big as the project it caches.** An apply carries a tar of
+  somebody's tree and the payload is not capped, because capping it would refuse
+  a large project rather than protect anything: the bytes land in that account's
+  own graph volume, which any container it starts can fill anyway. An operator
+  who needs a bound wants a quota on that volume, not a limit here.
 - **Whatever an operator mounts into per-account daemons, those accounts get.**
   `WORKSPACE_DIND_MOUNTS` exists so every account's daemon gets the same
   `daemon.json` or registry configuration, and an account is root inside its own
@@ -788,6 +882,14 @@ Stated here rather than buried, because each is a deliberate trade.
   deliberately not changed: its lifetime is the forward's because TCP's is, and
   a second lifetime rule is a second thing to get wrong. ADR 0038 records the
   cost and the trigger that would change it.
+- **A prepare may only name the asking machine's own cache volume.** Found
+  writing flow 9. `CacheRequest.Validate` asks whether the volume is a MANAGED
+  one, which every machine of an account satisfies for every other machine's
+  volumes — one account's machines share a daemon (ADR 0029). So a second
+  machine could have the agent mount somebody else's cache as the upper of its
+  own union and write into it through its own container. The agent now derives
+  the name from the key digest and compares, rather than trusting the one it was
+  handed. Inside one account either way, and a narrowing worth having.
 - **The limit of `AllowDial`, written down and tested.** A shell reaches what a
   forwarding rule cannot gate. The default mode's namespace is what actually
   prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export

@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
+	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core-agent/tunnelserver"
 	"github.com/lhns/remote-docker/core/logx"
@@ -52,6 +53,12 @@ type Config struct {
 	// Version is the agent's build, reported in workspace-info so a client can
 	// see which workspace agent it is talking to.
 	Version string
+
+	// Unions mounts a delegated share as a cache over the live export
+	// (ADR 0044). Nil means this workspace does not serve the mode at all,
+	// which workspace-info reports as an empty capability and the client
+	// refuses by name.
+	Unions *unions.Manager
 
 	// DaemonPaths are the paths a bind may name because the workspace put them
 	// in the daemon's own filesystem, derived from WORKSPACE_DIND_MOUNTS and

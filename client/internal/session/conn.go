@@ -119,6 +119,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	s.registry.SetAttrs(attrsFor(info))
 
 	live := &liveConn{ssh: client, info: info, machine: hold}
+	if info.Now != 0 {
+		// Measured here, once, rather than per comparison: the round trip that
+		// fetched this is the only thing between the two readings, and it is
+		// far smaller than the differences this exists to catch.
+		live.clockSkew = time.Duration(info.Now - time.Now().UnixNano())
+	}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
 	// One guard for this connection, shared by the two things that disagree
 	// about a volume's lifetime. See rewrite.Guard.
@@ -139,9 +145,12 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		ConsistencyPaths: s.opts.ConsistencyPaths,
 		Watching:         s.watch != nil,
 
-		// Filling a delegated share's copy, which is the one mode that is not
-		// a mount at all (ADR 0043).
-		Seed: live.api,
+		// A delegated share is a union the WORKSPACE mounts, so the client
+		// asks for it rather than building it (ADR 0044). Opened lazily: a
+		// session that never mounts one never opens the channel, and an older
+		// workspace refusing the command must not stop the session.
+		Cache:      s.shareCacheFor(live),
+		UnionReady: info.Union,
 
 		// Read for one question: whether this workspace can mount a single
 		// file, which needs a volume subpath (ADR 0039).
@@ -181,6 +190,11 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		s.startPorts(liveCtx, live)
 		s.startNotify(live)
 
+		// Carrying container writes back, for delegated shares (ADR 0044).
+		// Per connection, because it needs one; it does nothing at all until a
+		// share has a cache and that cache is complete.
+		live.wg.Go(func() { s.watchWriteBack(liveCtx) })
+
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
 				s.logQuiet(liveCtx, "collecting unused share volumes", "err", err)
@@ -211,6 +225,30 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 		CAFile:   cfg.CAFile,
 		Insecure: cfg.Insecure,
 	})
+}
+
+// cache opens the workspace's cache channel on first use, and answers nil once
+// it is known this workspace has none.
+//
+// Lazily, because the channel exists for one consistency: a session that never
+// mounts a delegated share never opens it, and an older workspace refusing the
+// command is not a reason for the session to fail. The rewriter turns a nil
+// into a refusal naming the mode.
+func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
+	l.cacheOnce.Do(func() {
+		c, err := openCache(l.ssh)
+		if err != nil {
+			// Said once. The rewriter refuses the mode by name on its own, so
+			// this is the only place the channel's own reason is visible.
+			s.logQuiet(s.ctx, "opening the workspace's cache channel", "err", err)
+			return
+		}
+		l.cacheChan = c
+	})
+	if l.cacheChan == nil {
+		return nil
+	}
+	return shareCache{cacheChannel: l.cacheChan, session: s}
 }
 
 // shareReconcileInterval matches the port manager's: the same reasoning

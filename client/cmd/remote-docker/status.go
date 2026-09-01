@@ -120,6 +120,14 @@ func reportStatus(out io.Writer, f facts) {
 		rowf(out, "account", "%s (uid %d), tunnel port %d", f.info.User, f.info.UID, f.info.NFSPort)
 	}
 
+	// How much of a delegated share is local (ADR 0044). One row each, because
+	// a share cached in part is not a failure and has nothing else to show for
+	// itself: it works, and the part that did not fit is simply read over the
+	// mount.
+	for _, cache := range f.local.Caches {
+		row(out, "cache", cache)
+	}
+
 	// What is in play, which is the question when something behaves oddly.
 	_, _ = fmt.Fprintln(out)
 	row(out, "versions", versionsLine(f))

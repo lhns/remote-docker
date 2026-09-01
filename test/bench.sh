@@ -41,6 +41,37 @@ dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
 # Sized for CI. Every operation on every file costs a round trip, so at 80ms a
 # tree ten times this size is an hour rather than a table.
 FILES=${BENCH_FILES:-300}
+
+# CACHE_FILES is the tree the cache table uses, bigger than the one above on
+# purpose: 300 files settle in a fraction of a second whatever the link, so cold
+# and warm measure the same thing and the gap between them -- which is the whole
+# feature -- cannot appear. The first table keeps 300, because its rows are
+# compared against ADR 0042's, which were measured on that tree.
+#
+# 1000 and not more: at 3000 a settle over a 40ms link did not finish inside the
+# 300s this waits, and the job hit its own timeout after two of four shapes
+# (measured 2026-09-01). A thousand files still takes long enough to see.
+CACHE_FILES=${BENCH_CACHE_FILES:-1000}
+
+# READ_SAMPLE is what cold and warm read, and it is a FIXED NUMBER of files
+# rather than the whole tree.
+#
+# The tree is large so that settling takes long enough to measure. The read must
+# not scale with it: cold is by definition the miss path, and a miss costs a
+# round trip per file, so reading 3000 of them at 160ms RTT is the ~164s per 300
+# that the first table already reports -- twenty-five minutes for one row, four
+# times over. Measured the hard way on 2026-09-01, when a bench ran for an hour
+# and had not finished the first shape.
+#
+# A fixed sample also makes the two columns comparable across shapes, and with
+# the first table's 300-file rows: two of the twenty directories hold 300 of the
+# 3000 files at the defaults.
+#
+# Two globs rather than `find | head`, because `head` closes the pipe and the
+# producer takes a SIGPIPE, which under `set -o pipefail` fails the measurement
+# for succeeding. CLAUDE.md keeps that as a rule about assertions; it is the
+# same hazard here.
+READ_SAMPLE='cat /w/pkg1/*.go /w/pkg2/*.go >/dev/null'
 DIRS=${BENCH_DIRS:-20}
 WRITES=${BENCH_WRITES:-100}
 
@@ -172,12 +203,19 @@ echo
 echo "== a project-shaped tree: $FILES files across $DIRS directories =="
 PROJECT="$WORK/project"
 filler=$(head -c 400 /dev/zero | tr '\0' 'x')
-for d in $(seq 1 "$DIRS"); do mkdir -p "$PROJECT/pkg$d"; done
-for f in $(seq 1 "$FILES"); do
-    printf 'package p%d\n// %s\n' "$f" "$filler" \
-        >"$PROJECT/pkg$((f % DIRS + 1))/file$f.go"
-done
-mkdir -p "$PROJECT/out"
+# build_tree makes a project-shaped tree of a given size, because the cache
+# table needs one of its own and a bigger one.
+build_tree() {
+    local root=$1 files=$2 d f
+    for d in $(seq 1 "$DIRS"); do mkdir -p "$root/pkg$d"; done
+    for f in $(seq 1 "$files"); do
+        printf 'package p%d\n// %s\n' "$f" "$filler" \
+            >"$root/pkg$((f % DIRS + 1))/file$f.go"
+    done
+    mkdir -p "$root/out"
+}
+
+build_tree "$PROJECT" "$FILES"
 ok "tree built"
 
 # The image is pulled and the volume created before anything is timed, so the
@@ -236,6 +274,127 @@ for spec in $SHAPES; do
             "$delay/$rate" "$mode" "$measured" "$start" "$walk" "$read" "$write" \
             "$(delta "$before" "$after")"
     done
+done
+
+unshape
+
+# The cache's own numbers, which the table above cannot hold: they are about a
+# mode that has a state -- filling, settled -- rather than a speed.
+#
+# This is what "a mode with no row does not ship" means for the cache (ADR
+# 0044). Four claims, four columns:
+#
+#   cold      a read straight after the container starts, before the fill has
+#             got anywhere. Should look like `cached`, because that is what it
+#             IS: a miss goes to the live mount.
+#   settle    how long until the cache holds the whole tree. The number
+#             compression improves, and the one that scales with the tree
+#             rather than with the latency.
+#
+# On a tree of its OWN per shape, and a bigger one. A share id comes from its
+# path, so reusing one directory reuses its cache volume and every shape after
+# the first measured a cache that was already full -- settle read 0.08s at 40ms
+# RTT, which is not a fill of 300 files over a shaped link and was the tell.
+# 3000 files rather than 300 so that settling takes long enough to see at all.
+#   warm      the same read afterwards. The gap between cold and warm is the
+#             entire feature.
+#   invalidate  an edit here, then the container reading it.
+#   writeback   the container writing, then this machine reading it.
+echo
+printf '%-12s %-8s %-8s %-8s %-8s %-11s %-10s
+'     shape rtt_ms cold_s settle_s warm_s invalidate_s writeback_s
+printf '%s
+' "$(printf '=%.0s' $(seq 1 72))"
+
+for spec in $SHAPES; do
+    case " $MODES " in *" delegated "*) ;; *) break ;; esac
+
+    delay=${spec%%:*}
+    rate=${spec##*:}
+    if [ "$delay" = "0ms" ] && [ "$rate" = "0" ]; then
+        unshape
+    elif ! shape "$delay" "$rate"; then
+        continue
+    fi
+    measured=$(rtt)
+
+    # A DIRECTORY OF ITS OWN per shape, and it is what makes this table mean
+    # anything. A share id is derived from its path, so reusing one directory
+    # reuses its cache volume: from the second shape on, the cache was already
+    # full and settle measured nothing. It read 0.08s at 40ms RTT, which is not
+    # a fill of 300 files over a shaped link and was the tell.
+    safe=$(printf '%s' "$spec" | tr -c 'a-zA-Z0-9' '-')
+    tree="$WORK/cache$safe"
+    rm -rf "$tree"
+    build_tree "$tree" "$CACHE_FILES"
+
+    dockert rm -f "$PIN" >/dev/null 2>&1
+    if ! dockert run -d --name "$PIN" -v "$tree:/w:delegated"         alpine:3 sleep 3600 >"$WORK/bench-deleg.log" 2>&1; then
+        # What docker said, and what the workspace was doing. A row that is
+        # simply absent from a benchmark reads as a mode that was not measured
+        # rather than one that failed, which is the more misleading of the two.
+        bad "no delegated container for $spec"
+        sed 's/^/        /' "$WORK/bench-deleg.log"
+        hostdocker logs "$CONTAINER" 2>&1 |
+            grep -iE "union|cache|fuse" | tail -10 | sed 's/^/        workspace: /'
+        continue
+    fi
+
+    # Straight away, before the fill has had a chance: this is the miss path.
+    cold=$(elapsed dockert exec "$PIN" sh -c "$READ_SAMPLE")
+
+    # Settled is what the session itself says, rather than a guess at how long
+    # a copy ought to take.
+    settle_start=$(date +%s.%N)
+    settled=timeout
+    for _ in $(seq 1 300); do
+        # This share's row, not any share's: every earlier shape left a
+        # settled cache behind, and an unanchored match would report the first
+        # of those as this one settling instantly.
+        if outputs "cache$safe: .*, cached\$" "$WORK/remote-docker" remote status; then
+            settled=$( { date +%s.%N; } | awk -v s="$settle_start" '{ printf "%.2f", $1 - s }')
+            break
+        fi
+        sleep 1
+    done
+
+    warm=$(elapsed dockert exec "$PIN" sh -c "$READ_SAMPLE")
+
+    # An edit here, and how long until the container sees it.
+    echo "edited at $(date +%s)" >"$tree/pkg1/invalidate-probe"
+    inv_start=$(date +%s.%N)
+    inv=timeout
+    for _ in $(seq 1 60); do
+        if outputs 'edited at' dockert exec "$PIN" cat /w/pkg1/invalidate-probe; then
+            inv=$( { date +%s.%N; } | awk -v s="$inv_start" '{ printf "%.2f", $1 - s }')
+            break
+        fi
+        sleep 1
+    done
+
+    # And the other direction, which no earlier mode had at all.
+    dockert exec "$PIN" sh -c 'echo "from the container" >/w/writeback-probe' >/dev/null 2>&1
+    wb_start=$(date +%s.%N)
+    wb=timeout
+    for _ in $(seq 1 60); do
+        if [ -f "$tree/writeback-probe" ]; then
+            wb=$( { date +%s.%N; } | awk -v s="$wb_start" '{ printf "%.2f", $1 - s }')
+            break
+        fi
+        sleep 1
+    done
+    if [ "$wb" = timeout ]; then
+        # A number that is missing has to say why, or the table reports a
+        # feature as slow when it did not run at all.
+        hostdocker logs "$CONTAINER" 2>&1 |
+            grep -iE "cache layer|union|cache request" | tail -5 | sed 's/^/        workspace: /'
+    fi
+    rm -f "$tree/writeback-probe" "$tree/pkg1/invalidate-probe"
+
+    printf '%-12s %-8s %-8s %-8s %-8s %-11s %-10s
+'         "$delay/$rate" "$measured" "$cold" "$settled" "$warm" "$inv" "$wb"
+    dockert rm -f "$PIN" >/dev/null 2>&1
+    rm -rf "$tree"
 done
 
 unshape

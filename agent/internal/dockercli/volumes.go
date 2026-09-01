@@ -3,6 +3,7 @@ package dockercli
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/lhns/remote-docker/core-agent/notify"
 )
@@ -71,4 +72,66 @@ func call(fn func() (string, error)) (string, error) {
 		return "", nil
 	}
 	return fn()
+}
+
+// RawVolumes answers where a volume's data lives INSIDE the daemon's own
+// filesystem, without relocating it into the agent's.
+//
+// The distinction matters for exactly one caller. A union is mounted in the
+// daemon's mount namespace (ADR 0044), so the layer paths it is given have to
+// mean something THERE; a path relocated through /proc/<pid>/root names nothing
+// inside that namespace. Everything else wants Volumes, which relocates,
+// because everything else reads the files from out here.
+type RawVolumes struct{}
+
+// RawMountpoint asks the daemon at host where a volume's data is.
+func (RawVolumes) RawMountpoint(ctx context.Context, host, volume string) (string, error) {
+	mp, err := CLI{Host: host}.Line(ctx, "volume", "inspect", volume, "--format", "{{.Mountpoint}}")
+	if err != nil {
+		return "", fmt.Errorf("dockercli: inspecting volume %s: %w", volume, err)
+	}
+	if mp == "" {
+		return "", fmt.Errorf("dockercli: volume %s reported no mountpoint", volume)
+	}
+	return mp, nil
+}
+
+// MountSources is every host path a running container has bound, on the daemon
+// at host.
+//
+// Asked about unions rather than volumes: a share's union is bound into a
+// container by PATH, so no volume filter can find it, and releasing one that a
+// container still holds breaks that container for good -- a mount that has gone
+// wrong stays wrong until the last container lets go of it.
+func (RawVolumes) MountSources(ctx context.Context, host string) (map[string]bool, error) {
+	cli := CLI{Host: host}
+
+	ids, err := cli.Line(ctx, "ps", "-q")
+	if err != nil {
+		return nil, fmt.Errorf("dockercli: listing containers: %w", err)
+	}
+	if ids == "" {
+		return map[string]bool{}, nil
+	}
+
+	// A separator inside the template rather than a newline, because whether
+	// docker turns a literal \n in --format into one is a claim about the CLI
+	// that nothing here checks. A mount source is an absolute path, so a
+	// vertical bar cannot appear inside one.
+	args := append([]string{"inspect", "--format", "{{range .Mounts}}{{.Source}}|{{end}}"},
+		strings.Fields(ids)...)
+	out, err := cli.Line(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("dockercli: inspecting containers: %w", err)
+	}
+
+	sources := map[string]bool{}
+	for _, field := range strings.FieldsFunc(out, func(r rune) bool {
+		return r == '|' || r == '\n'
+	}) {
+		if field = strings.TrimSpace(field); field != "" {
+			sources[field] = true
+		}
+	}
+	return sources, nil
 }

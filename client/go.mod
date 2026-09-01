@@ -12,6 +12,7 @@ require (
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/compose/v5 v5.5.0
 	github.com/google/go-containerregistry v0.22.0
+	github.com/klauspost/compress v1.19.2
 	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
@@ -140,7 +141,6 @@ require (
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
 	github.com/lestrrat-go/dsig v1.0.0 // indirect
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect

@@ -260,6 +260,8 @@ default.**
 | `REMOTE_DOCKER_WATCH` | `watch` | `workspace create --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |
+| `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, for a `delegated` share's cache |
+| `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, for a `delegated` share's cache |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | `30m` before an unused session exits; negative never |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
@@ -337,10 +339,16 @@ workspace's loopback shaped, reading them all:
 
 | RTT | default | `cached` | `delegated` |
 |---|---|---|---|
-| 0.1ms | 0.41s | 0.30s | 0.06s |
-| 40ms | 58.8s | 24.5s | 0.06s |
-| 160ms | 292.0s | 98.2s | 0.06s |
-| 0.3ms, 10mbit | 0.84s | 0.62s | 0.06s |
+| 0.1ms | 0.41s | 0.30s | 0.33s |
+| 40ms | 32.5s | 24.5s | 0.09s |
+| 160ms | 164.5s | 98.1s | 0.08s |
+| 0.3ms, 10mbit | 0.31s | 0.62s | 0.08s |
+
+One run, 2026-09-01, so the three columns are comparable with each other rather
+than assembled from separate ones. Re-check with the `bench` label on a pull
+request. With no latency to hide, `delegated` is no faster than `cached` and
+costs a little: the union is worth having for the round trips it removes, and
+where there are none it removes nothing.
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
@@ -356,7 +364,7 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 |---|---|
 | `consistent`, `default` *(the default)* | the mount revalidates every second |
 | `cached` | the container may cache reads and directory structure; this machine is authoritative |
-| `delegated` | not a mount at all: a copy on the workspace, filled from here when the container is created |
+| `delegated` | a cache on the workspace over the live mount: what it holds is local disk, what it does not falls through |
 
 Note the comma: a `-v` has three fields and the third is a LIST, so
 `ro,cached` and never `:cached:ro`.
@@ -367,18 +375,50 @@ Set it for a whole workspace, or for one tree:
 {"consistency": "cached", "consistencyPaths": {"/home/me/live": "consistent"}}
 ```
 
-`delegated` is the one to reach for when a container only has to READ a tree
-and reads dominate: the files are copied to the workspace once and every read
-after that is its own disk. The cost is that it is a snapshot. What the
-container writes there never comes back, an edit here does not reach a
-container already running, and the next container gets the tree as it is then.
+`delegated` is the one to reach for when reads dominate. The workspace keeps a
+cache beside the live mount and fills it in the background, so a file it has
+costs its own disk and a file it does not is read over the mount as usual --
+correct either way, which is why nothing waits for the copy and why a project
+larger than the cache budget still works, just partly cached.
 
-**`cached` needs [file watching](#file-watching) on**, and refuses to run
-without it: a long attribute cache is safe only because an edit here is
-replayed into the workspace, which refreshes exactly the file that changed. So
-an edit to an existing file arrives at once, and a file you CREATE or DELETE
-can take up to a minute to appear in a listing unless watching is `coarse`,
-which pokes the directory too.
+It is a two-way cache, not a snapshot: an edit here reaches a running container,
+a file you delete disappears from it, and what the container writes comes back
+to you within a few seconds. That last delay is the one thing a plain mount has
+and this does not. When a file changed in both places, the newer write wins and
+the conflict is reported by path.
+
+**`cached` and `delegated` both need [file watching](#file-watching) on**, and
+refuse to run without it, for related but not identical reasons.
+
+`cached` keeps a long attribute cache, which is safe only because an edit here
+is replayed into the workspace and refreshes exactly the file that changed. So
+an edit to an existing file arrives at once, and a file you CREATE or DELETE can
+take up to a minute to appear in a listing unless watching is `coarse`, which
+pokes the directory too.
+
+`delegated` holds actual copies, so the watcher is what keeps them honest: a
+cached copy of a file you changed is the one way this mode could be wrong rather
+than merely slow. Which is also why it only caches what the watcher covers --
+anything under an excluded directory is read over the mount instead, slower and
+right.
+
+How much of a share gets cached is capped by `cacheFiles` and `cacheBytes`
+(20,000 files and 2 GiB by default). That is a ceiling on the COPY, never on the
+mode: what does not fit is read over the live mount, so a repository bigger than
+the ceiling is cached in part and works. Raise them for a large project whose
+reads are worth the copy, lower them on a metered link, and watch which you are
+getting with `remote status`:
+
+```
+cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, cached in part; the rest is read live
+```
+
+`delegated` also needs **`fuse-overlayfs` in the image the account's daemon
+runs**, because the cache is a union mounted there. The workspace's own image
+carries it, which is what a per-account daemon should be running anyway (see
+[the storage driver](#the-storage-driver-worth-getting-right-once)). The
+workspace reports whether it can serve a union, and the mode is refused by name
+with the remedy rather than failing part-way through a container start.
 
 A mount outranks a per-directory rule, which outranks the workspace setting,
 and switching costs a volume rebuild rather than a migration.

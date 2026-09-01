@@ -198,3 +198,63 @@ func TestCollectorLeavesAnotherMachineAlone(t *testing.T) {
 		t.Error("--orphans reached the other machine's volumes")
 	}
 }
+
+// A cache volume is never referenced by a container -- a union is bound into
+// one by PATH -- so the daemon always calls it unused. Collecting it empties
+// the layer under a running container's mount, which is uncommitted work
+// vanishing from a directory that still looks mounted (ADR 0044). Only the
+// workspace can say, and it is asked.
+func TestCollectKeepsACacheVolumeTheWorkspaceHasMounted(t *testing.T) {
+	const (
+		cache = "rd-aabbccdd-00112233445566ff-cache"
+		other = "rd-aabbccdd-ffeeddccbbaa0011"
+	)
+
+	for _, c := range []struct {
+		name   string
+		caches func(context.Context) (map[string]bool, error)
+		want   []string
+	}{
+		{
+			name:   "the workspace has a union on it",
+			caches: func(context.Context) (map[string]bool, error) { return map[string]bool{cache: true}, nil },
+			want:   []string{other},
+		},
+		{
+			name:   "the workspace has no union on it",
+			caches: func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil },
+			want:   []string{cache, other},
+		},
+		{
+			// Cannot ask means keep: an uncollected cache costs disk, and a
+			// collected one that was in use costs somebody's work.
+			name:   "there is no channel to ask over",
+			caches: nil,
+			want:   []string{other},
+		},
+		{
+			name: "the workspace could not answer",
+			caches: func(context.Context) (map[string]bool, error) {
+				return nil, fmt.Errorf("the cache channel is gone")
+			},
+			want: []string{other},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := &fakeVolumeStore{volumes: []Volume{
+				managed(cache, "alice"),
+				managed(other, "alice"),
+			}}
+			collector := newCollector(store, "alice")
+			collector.Caches = c.caches
+
+			if _, err := collector.Collect(t.Context()); err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			slices.Sort(store.removed)
+			if !slices.Equal(store.removed, c.want) {
+				t.Errorf("removed %v, want %v", store.removed, c.want)
+			}
+		})
+	}
+}

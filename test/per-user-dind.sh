@@ -71,7 +71,17 @@ echo "== 3. start the workspace with a daemon per account =="
 mkdir -p "$WORK/dindconf"
 echo "reached the inner daemon" >"$WORK/dindconf/marker"
 
-if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"; then
+# WORKSPACE_DIND_IMAGE is the workspace's OWN image, which is what a real
+# deployment runs (the Helm chart sets exactly this, and elevate passes
+# WORKSPACE_IMAGE where it can). Without it the fallback is stock docker:dind,
+# which carries none of the tooling this workspace decided it needs --
+# fuse-overlayfs above all -- so this suite would exercise an image no
+# deployment should be using and miss anything that depends on it.
+#
+# It has to be LOADED into the workspace's daemon as well, below: the image was
+# built on the runner, and the daemon that starts each account's dind is the
+# workspace's own.
+if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"     -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
     bad "workspace container failed to start"
@@ -109,12 +119,25 @@ done
 info "waiting for the parent dockerd"
 wait_parent_dockerd
 
+# Before any account connects, because the first connection is what starts that
+# account's daemon (ADR 0019) and it would otherwise try to pull this image
+# from a registry.
+info "loading the workspace image into the workspace's own daemon"
+if load_image_into_workspace "$IMAGE"; then
+    ok "each account's daemon can start from the workspace image"
+else
+    bad "could not load $IMAGE into the workspace's daemon"
+fi
+
 echo
 echo "== 4. a session each =="
 mkdir -p "$WORK/project-$A" "$WORK/project-$B"
 echo "alice's file" >"$WORK/project-$A/marker"
 echo "bob's file"   >"$WORK/project-$B/marker"
 
+# Watching is on because a delegated share requires it: its cache holds actual
+# copies, and the watcher is what keeps them honest (ADR 0044). Section 7b would
+# otherwise be refused on a rule rather than tested on its mechanism.
 start_session() {
     local account=$1 endpoint=$2 log=$3 dir=$4
     (
@@ -125,6 +148,7 @@ start_session() {
         REMOTE_DOCKER_USER="$account" \
         REMOTE_DOCKER_ENDPOINT="$endpoint" \
         REMOTE_DOCKER_IDLE_TIMEOUT=8s \
+        REMOTE_DOCKER_WATCH=partial \
         "$WORK/remote-docker" remote start --foreground
     ) >"$log" 2>&1 &
     echo $!
@@ -248,6 +272,74 @@ if out=$(db run --rm -v "$WORK/project-$B:/w" alpine:3 cat /w/marker 2>&1); then
     fi
 else
     bad "bob's bind mount failed: $(echo "$out" | tail -3)"
+fi
+
+echo
+echo "== 7b. a delegated share, which is a union mounted inside the dind =="
+# The ONLY place the mount-namespace entry is exercised. In shared mode the
+# agent and the daemon are one filesystem and nothing has to be entered; here
+# the union lives inside this account's dind, and the agent has to get in there
+# to mount it (ADR 0044).
+#
+# It also proves the two accounts stay separate at this layer: each union is
+# mounted in its own daemon's namespace, so alice's cache cannot be bob's.
+if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:delegated"     alpine:3 sleep 120 2>&1); then
+    ok "a container starts against a union inside alice's own daemon"
+
+    # That it IS a union, which nothing else here can show: every assertion
+    # below passes just as well against an ordinary directory the agent wrote
+    # the cache into, and a union whose lower could not mount leaves exactly
+    # that. A bind of a real union reports fuse-overlayfs; a bind of a
+    # directory reports the daemon's own disk.
+    if out=$(da exec pud-deleg sh -c 'grep " /w " /proc/mounts' 2>&1); then
+        case "$out" in
+            *fuse*) ok "alice's share is a union, not a directory that resembles one" ;;
+            *)      bad "/w is not a fuse mount: [$out]"
+                    hostdocker logs "$CONTAINER" 2>&1 |
+                        grep -iE "union|fuse" | tail -8 | sed 's/^/        /' ;;
+        esac
+    else
+        bad "could not read the container's mounts: $(echo "$out" | tail -3)"
+    fi
+
+    if out=$(da exec pud-deleg cat /w/marker 2>&1); then
+        if [ "$out" = "alice's file" ]; then
+            ok "it reads alice's file through the union"
+        else
+            bad "the union gave [$out]"
+        fi
+    else
+        bad "reading through the union failed: $(echo "$out" | tail -3)"
+    fi
+
+    # The fallthrough, which is what makes an incomplete cache correct: this
+    # file did not exist when the union was mounted.
+    #
+    # Retried rather than read once. Two caches sit between the two sides -- the
+    # NFS attribute cache under the union, and libfuse's own entry cache -- and
+    # both are about a second, so reading immediately measures the caches rather
+    # than the mechanism. How long it took is reported, because that IS the
+    # answer to "when does a new file appear".
+    echo "after the mount" >"$WORK/project-$A/late.txt"
+    fell=""
+    for i in $(seq 1 15); do
+        out=$(da exec pud-deleg cat /w/late.txt 2>&1)
+        if [ "$out" = "after the mount" ]; then
+            fell=$i
+            break
+        fi
+        sleep 1
+    done
+    if [ -n "$fell" ]; then
+        ok "a file the cache does not have falls through to the live export (${fell}s)"
+    else
+        bad "the fallthrough never happened: $(echo "$out" | tail -3)"
+    fi
+
+    da rm -f pud-deleg >/dev/null 2>&1
+else
+    bad "a container would not start against a union: $(echo "$out" | tail -3)"
+    hostdocker logs "$CONTAINER" 2>&1 | grep -iE "union|fuse" | tail -5 | sed 's/^/        /'
 fi
 
 echo

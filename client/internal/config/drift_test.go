@@ -84,6 +84,14 @@ var settingSources = map[string]struct {
 		env: EnvWatchBudget, override: false, sample: "4096",
 		want: func(c Config) string { return itoa(c.WatchBudget) },
 	},
+	"CacheFiles": {
+		env: EnvCacheFiles, override: false, sample: "5000",
+		want: func(c Config) string { return itoa(c.CacheFiles) },
+	},
+	"CacheBytes": {
+		env: EnvCacheBytes, override: false, sample: "1048576",
+		want: func(c Config) string { return strconv.FormatInt(c.CacheBytes, 10) },
+	},
 	"WatchExclude": {
 		env: EnvWatchExclude, override: false, sample: "node_modules",
 		want: func(c Config) string {
@@ -330,6 +338,12 @@ func typed(field, sample string) any {
 	switch f.Type.Kind() {
 	case reflect.Int:
 		return atoi(sample)
+	case reflect.Int64:
+		// A size, so it can exceed an int on a 32-bit build. The first one
+		// arrived with the cache ceiling and fell through to the string case,
+		// which the file then refused to unmarshal.
+		n, _ := strconv.ParseInt(sample, 10, 64)
+		return n
 	case reflect.Bool:
 		// The file says true, not "true": a switch that only works when it is
 		// spelled as a string would be a bug this test exists to catch.

@@ -4,7 +4,8 @@
 - Date: 2026-09-01
 - Current answer: a share's mount is `consistent` unless something asks for
   `cached`, which raises the attribute cache from 1s to 60s and relies on the
-  watcher for coherence.
+  watcher for coherence, or for `delegated`, which is a cache over that mount
+  ([ADR 0044](0044-a-delegated-share-is-a-cache.md)).
 
 ## What forced it
 
@@ -46,7 +47,7 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 |---|---|---|
 | `consistent`, `default`, unset | behaves as a bind mount | `actimeo=1` — what this project always did |
 | `cached` | the container may cache read data and FS structure; the HOST is authoritative | `actimeo=60,nocto`, invalidated by the watcher |
-| `delegated` | the container may cache reads **and writes**; the CONTAINER is authoritative | refused; see ADR 0043 |
+| `delegated` | the container may cache reads **and writes**; the CONTAINER is authoritative | a union over the mount; [ADR 0044](0044-a-delegated-share-is-a-cache.md) |
 
 **Inventing an option was not open to us.** The CLI and the daemon reject mount
 options they do not know, so `volume-opt=cache=…` on a bind, or a suffix of our
@@ -107,7 +108,8 @@ else differs.
 - **What remains is READ and ACCESS**, 300 and 422 in every row above. Those are
   the file's own bytes and the permission check, and no attribute cache can
   remove them: a live mount has to fetch what it is asked for. Removing THOSE
-  means not mounting, which is ADR 0043.
+  means not mounting, which is where [ADR 0044](0044-a-delegated-share-is-a-cache.md)
+  starts.
 
 ## Consequences
 

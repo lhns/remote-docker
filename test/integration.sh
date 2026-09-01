@@ -1488,73 +1488,187 @@ else
 fi
 
 echo
-echo "== 15c. the delegated consistency =="
-# Docker's word for a copy the container owns, and here it is exactly that: a
-# plain local volume on the workspace, filled from this machine before the
-# container is created (ADR 0043). Reads then cost the workspace's own disk
-# rather than a round trip.
+echo "== 15c. the delegated consistency, which is a union =="
+# Docker's word for a container-authoritative mount, and here it is a UNION the
+# workspace mounts: this share's live NFS export underneath, a local cache on
+# top, and the merged view the container binds (ADR 0044).
 #
-# The whole mechanism rests on one thing CI is the only place to check: that
-# `PUT /containers/{id}/archive` writes into a volume mounted on a container
-# that was CREATED and never started. If that is wrong, this section fails at
-# the first assertion and nothing else in the suite is affected.
+# The assertion that matters is the fallthrough. A file created here AFTER the
+# cache was filled is not in the cache, and the container must still see it --
+# that is what makes an incomplete cache correct, and it is the whole reason
+# the cache can be filled in the background.
+# Run against the WATCHING client section 15 started: invalidation rides the
+# watcher, because a cached copy of a file that changed here is the one way this
+# mode can be wrong rather than merely slow.
+# Everything worth seeing when a union assertion fails, in one place because
+# three of them want the same thing: what the session thinks it has cached,
+# what the client logged, and what the WORKSPACE logged -- which the workflow's
+# own log step cannot show, because the suite has torn the container down by
+# the time it runs.
+deleg_diagnostics() {
+    "$WORK/remote-docker" remote status 2>&1 |
+        grep -iE "cache|watch" | sed 's/^/        client: /'
+    grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
+        tail -12 | sed 's/^/        client: /'
+    # dump_workspace_log, because `docker` here is the CLIENT's endpoint and
+    # the workspace container is not one of ITS containers -- asking it for the
+    # workspace's log is a question about a container that does not exist, which
+    # answers nothing and looks like a workspace that logged nothing.
+    dump_workspace_log 25
+}
+
 DELEGDIR="$WORK/delegated"
 mkdir -p "$DELEGDIR"
 echo "first" >"$DELEGDIR/marker"
+# Deleted in section 16 while no client is running, which is the one deletion
+# nothing can observe: no watcher sees it, so the fill cannot carry it and only
+# the record of what the last fill sent can explain it.
+echo "here before the fill" >"$DELEGDIR/while-down.txt"
 
-if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"     alpine:3 sleep 300 >"$WORK/deleg-run.log" 2>&1; then
-    ok "a container starts against a delegated copy"
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"         alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
+        ok "a container starts against a delegated union"
 
-    if outputs '^first$' docker exec itest-deleg cat /w/marker; then
-        ok "the copy holds this machine's file"
+        if outputs '^first$' docker exec itest-deleg cat /w/marker; then
+            ok "it reads a file the cache was filled with"
+        else
+            bad "reading the cache: [$LAST_OUTPUT]"
+        fi
+
+        # THE assertion this section was missing, and its absence hid a union
+        # that never mounted at all for as long as the mode has existed. Every
+        # check below passes against an ordinary directory: the agent writes
+        # the cache into it, the container reads it, an edit here is written
+        # into it and a deletion removes from it. What cannot pass is this --
+        # a bind of a real union reports fuse-overlayfs as its filesystem, and
+        # a bind of a directory reports whatever the daemon's own disk is.
+        if outputs 'fuse' docker exec itest-deleg sh -c 'grep " /w " /proc/mounts'; then
+            ok "the container's share is a union, not a directory that resembles one"
+        else
+            bad "/w is not a fuse mount: [$LAST_OUTPUT]"
+            deleg_diagnostics
+        fi
+
+        # And the cache really was filled, which the read above does NOT show:
+        # a miss falls through to the live export and returns the same bytes,
+        # so that assertion passes just as well with an empty cache. This is
+        # also what write-back is gated on, so a fill that quietly did nothing
+        # would otherwise present much later as a write that never arrived.
+        filled=""
+        for _ in $(seq 1 20); do
+            if outputs "delegated: .*, cached\$"                 "$WORK/remote-docker" remote status; then
+                filled=yes
+                break
+            fi
+            sleep 1
+        done
+        if [ -n "$filled" ]; then
+            ok "the fill completed, so the share is cached rather than only live"
+        else
+            bad "the share never reported a complete cache: [$LAST_OUTPUT]"
+        fi
+
+        # THE assertion. This file did not exist when the cache was filled, so
+        # it can only be coming from the live export underneath.
+        # Retried, because two caches sit between the two sides -- the NFS
+        # attribute cache under the union and libfuse's own entry cache, both
+        # about a second -- so reading once measures those rather than the
+        # fallthrough. The time it took is the answer to "when does a new file
+        # appear", so it is reported.
+        echo "arrived after the fill" >"$DELEGDIR/late.txt"
+        fell=""
+        for i in $(seq 1 15); do
+            if outputs '^arrived after the fill$' docker exec itest-deleg cat /w/late.txt; then
+                fell=$i
+                break
+            fi
+            sleep 1
+        done
+        if [ -n "$fell" ]; then
+            ok "a file the cache does not have falls through to the live export (${fell}s)"
+        else
+            bad "the union never fell through: [$LAST_OUTPUT]"
+        fi
+
+        # What the container mounts is the union, in the daemon's namespace,
+        # rather than a volume of its own.
+        if outputs '/run/rd-union/' docker inspect             -f '{{range .Mounts}}{{.Source}}{{end}}' itest-deleg; then
+            ok "the container binds the union the workspace mounted"
+        else
+            bad "the mount source is [$LAST_OUTPUT], want a union"
+        fi
+
+        # And a write goes into the cache rather than through to this machine,
+        # which is what "the container is authoritative" means until write-back
+        # exists.
+        docker exec itest-deleg sh -c 'echo "from the container" >/w/written-there' >/dev/null 2>&1
+        if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
+            ok "the container can write into its own view"
+        else
+            bad "writing into the union: [$LAST_OUTPUT]"
+        fi
+        # Write-back: the container's write reaches this machine, because the
+        # cache layer of an overlay IS the record of what it changed (ADR 0044).
+        # Polled, so it takes a few seconds rather than being instant, which is
+        # the cost of the mode and is stated as such.
+        back=""
+        for _ in $(seq 1 30); do
+            [ -f "$DELEGDIR/written-there" ] && back=$(cat "$DELEGDIR/written-there") && break
+            sleep 1
+        done
+        if [ "$back" = "from the container" ]; then
+            ok "a container's write reaches this machine"
+        else
+            bad "the container's write never arrived here: [$back]"
+            deleg_diagnostics
+        fi
+
+        # An edit here reaches the container, because the workspace writes it
+        # THROUGH the union rather than into the layer underneath (ADR 0044).
+        echo "edited here" >"$DELEGDIR/marker"
+        seen=""
+        for _ in $(seq 1 20); do
+            seen=$(docker exec itest-deleg cat /w/marker 2>&1)
+            [ "$seen" = "edited here" ] && break
+            sleep 1
+        done
+        if [ "$seen" = "edited here" ]; then
+            ok "an edit here reaches a running delegated container"
+        else
+            bad "the cache stayed stale after an edit: [$seen]"
+            deleg_diagnostics
+        fi
+
+        # And a DELETION, which no mode in this project has managed before: a
+        # cached copy of a file that is gone would shadow its absence, and the
+        # Docker API cannot remove a path from a volume at all.
+        rm -f "$DELEGDIR/marker"
+        gone=false
+        for _ in $(seq 1 20); do
+            if ! docker exec itest-deleg test -e /w/marker 2>/dev/null; then
+                gone=true
+                break
+            fi
+            sleep 1
+        done
+        if [ "$gone" = true ]; then
+            ok "a file deleted here disappears from the container"
+        else
+            bad "a deleted file is still visible through the union"
+            deleg_diagnostics
+        fi
     else
-        bad "reading the delegated copy: [$LAST_OUTPUT]"
+        bad "a container would not start against a delegated union"
+        sed 's/^/        /' "$WORK/deleg-run.log"
+        dump_workspace_log 40
     fi
-
-    # A local volume, which is the point: any NFS option here would mean it
-    # was still being mounted over the tunnel.
-    dvol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-deleg 2>/dev/null)
-    if outputs '^local:$' docker volume inspect -f '{{.Driver}}:{{index .Options "o"}}' "$dvol"; then
-        ok "the copy is a plain local volume"
-    else
-        bad "volume $dvol is [$LAST_OUTPUT], want a local volume with no mount options"
-    fi
-
-    # The honest limitation, asserted rather than described: a copy is a copy,
-    # so an edit here does not reach a container already running against it.
-    echo "second" >"$DELEGDIR/marker"
-    sleep 3
-    if outputs '^first$' docker exec itest-deleg cat /w/marker; then
-        ok "an edit here does NOT reach a running delegated container"
-    else
-        bad "the copy changed under the container: [$LAST_OUTPUT]"
-    fi
-
-    # And the other half of that: the next container gets the tree as it is
-    # now, because the copy is emptied and filled again.
-    docker rm -f itest-deleg >/dev/null 2>&1
-    if outputs '^second$' dockert run --rm -v "$DELEGDIR:/w:delegated" alpine:3 cat /w/marker; then
-        ok "the next container is filled from the tree as it is now"
-    else
-        bad "a reseeded copy reads [$LAST_OUTPUT], want second"
-    fi
-
-    # The container that exists only to have the volume mounted is removed as
-    # soon as the tar is in. One left behind would hold the volume, and the
-    # next thing wanting it would report it as in use.
-    left=$(docker ps -aq --filter "label=com.github.lhns.remote-docker=seed" 2>/dev/null | wc -l)
-    if [ "$left" -eq 0 ]; then
-        ok "no seed container was left behind"
-    else
-        bad "$left seed containers are still there"
-    fi
+    # itest-deleg is deliberately LEFT RUNNING. Section 16 restarts the client,
+    # which closes every channel this session had, and the container's share has
+    # to survive that -- see the assertion there.
 else
-    bad "a container would not start against a delegated copy"
-    sed 's/^/        /' "$WORK/deleg-run.log"
+    bad "no client is running, so the union could not be tested"
 fi
-docker rm -f itest-deleg >/dev/null 2>&1
 
-echo
 echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session the rest
 # of the suite used -- started detached, stopped by asking rather than by
@@ -1567,7 +1681,17 @@ wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
 sleep 2
 
-if "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
+# WHILE NOTHING IS RUNNING, which is the whole point: no watcher sees this, so
+# no invalidation carries it, and the fill that comes next only overwrites and
+# adds. The cache still holds the file, and the container still sees it, until
+# the record of what the last fill sent says it may go (ADR 0044).
+rm -f "$DELEGDIR/while-down.txt"
+
+# Watching on, because this session has to serve the delegated share section
+# 15c left running and start a container against another. The mode refuses to
+# run without it, by design: its cache holds copies, and the watcher is the
+# only thing that keeps them honest (ADR 0044).
+if REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
     ok "start returned without holding a terminal"
     sed 's/^/        /' "$WORK/start.log"
 else
@@ -1578,6 +1702,50 @@ fi
 if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
     if [ "$out" = "through-the-daemon" ]; then
         ok "docker works through the background session"
+
+        # The union outlives the channel that asked for it (ADR 0044). The
+        # client was killed and started again above, so every channel this
+        # share was prepared on is gone -- and the container bound to it is
+        # still running. Reading a file the CONTAINER wrote proves both the
+        # mount and its cache layer are the same ones as before: a union
+        # released with a container on it cannot be repaired, so this is the
+        # difference between a working share and one broken for good.
+        if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
+            ok "a container's union survives the client restarting"
+        else
+            bad "the union did not survive a client restart: [$LAST_OUTPUT]"
+            deleg_diagnostics
+        fi
+        docker rm -f itest-deleg >/dev/null 2>&1
+
+        # And the deletion made while nothing was running. A NEW container,
+        # because the reconcile happens when a share is next filled: one that
+        # is already running keeps what its cache holds until then, which is a
+        # narrower gap and a deliberate one.
+        #
+        # Polled, because the fill and the reconcile it starts with are
+        # asynchronous by design -- the container does not wait for either, and
+        # what the cache does not hold yet is served from the live export.
+        if dockert run -d --name itest-reconcile -v "$DELEGDIR:/w:delegated"             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
+            gone=""
+            for _ in $(seq 1 20); do
+                if ! docker exec itest-reconcile test -e /w/while-down.txt 2>/dev/null; then
+                    gone=yes
+                    break
+                fi
+                sleep 1
+            done
+            if [ -n "$gone" ]; then
+                ok "a file deleted while the session was down is gone from the cache"
+            else
+                bad "a file deleted while the session was down is still in the cache"
+                deleg_diagnostics
+            fi
+            docker rm -f itest-reconcile >/dev/null 2>&1
+        else
+            bad "the reconcile container would not start"
+            sed 's/^/        /' "$WORK/reconcile-run.log"
+        fi
 
         # And the verdict, which is the whole point of `status`. A session is
         # demonstrably up: the command above went through it.

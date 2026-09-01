@@ -42,27 +42,63 @@ Per workspace as `consistency`, per directory as `consistencyPaths`, and
 outranks the workspace setting. Switching costs a volume rebuild and no
 migration.
 
-### And `delegated` stops mounting altogether
+### And `delegated` is a cache over the mount, in both directions
 
 What `cached` cannot remove is the file's own bytes: a live mount has to fetch
-what it is asked for, which was 300 reads and 422 permission checks in every
-row above. `delegated` is Docker's word for a copy the container owns, and here
-it is exactly that -- a plain local volume on the workspace, filled from this
-machine as one tar stream before the container is created. Reads after that
-cost the workspace's own disk.
+what it is asked for, which was 300 reads and 422 permission checks in every row
+above. `delegated` keeps a cache on the workspace beside that mount, so a file
+it holds costs the workspace's own disk and a file it does not is read over the
+mount as usual.
 
-Measured on the same run: reading 300 files takes 0.06s whatever the latency,
-against 98s for `cached` at 160ms RTT. Starting the container is cheaper too,
-0.25s against 1.43s, because the tree crosses in one stream rather than a round
-trip per file. That last number is about a small tree -- the copy is
-bandwidth-bound where a mount is latency-bound, so a large project is a wait
-once, at container start.
+That "either way" is the whole design. Nothing waits for the copy, because a
+file the cache has not got yet is still correct; a project bigger than the
+cache budget still works, just partly cached; and a directory the watcher does
+not cover is simply read live rather than cached wrong.
 
-It is a snapshot, and this release says so rather than implying otherwise:
-nothing is written back, and a container already running does not see an edit
-made here. The next container gets the tree as it is then. Write-back and a
-live refresh are separate work, recorded in ADR 0043 as the reason they are
-not here.
+Measured on a GitHub runner over the same 300 files as the rows above:
+
+| RTT | `consistent` | `cached` | `delegated` |
+|---|---|---|---|
+| read 300 files at 160ms | 164.47s | 98.12s | **0.08s** |
+| write at 160ms | 74.00s | 49.43s | **0.08s** |
+| container start at 160ms | 1.10s | 1.10s | **0.15s** |
+
+The read column stops tracking the latency knob entirely, which is what a cache
+over a mount is for, and the mount is asked for nothing at all during it — where
+`cached` still pays 300 reads and 422 permission checks it cannot avoid. Start
+does not grow, because a container never waits for the fill.
+
+It is a two-way cache rather than a snapshot. An edit here reaches a running
+container, a file you delete disappears from it -- which nothing in this project
+has managed before -- and what the container writes comes back to you within a
+few seconds. When a file changed in both places the newer write wins, with the
+clock difference between the two machines measured rather than assumed, and the
+conflict is reported by path either way. Nothing is written back at all until
+the cache is complete, because a file that was never copied over cannot be told
+from one the container created.
+
+The cache is filled over a compressed stream where the workspace can read one,
+which it announces when the channel opens — so an older workspace is sent a
+plain tar rather than something it would refuse. zstd, which compresses a source
+tree harder and faster than the alternatives in the standard library.
+
+It needs file watching on, and it needs `fuse-overlayfs` where the account's
+daemon runs -- the workspace's own image, which is what a per-account daemon
+should be running anyway. The workspace says whether it can, and the mode is
+refused by name with the remedy rather than failing half way through a
+container start.
+
+### Hot reload works properly in a delegated share
+
+The oldest open problem in this project: a container watching a shared directory
+sees no inotify events, because NFS carries no change notification. In a
+delegated share it now does -- and as the real event rather than an
+approximation of one, because the workspace writes your change through the same
+filesystem the container is reading. Measured: `IN_MODIFY`, `IN_CLOSE_WRITE`
+and, for the first time, `IN_DELETE`.
+
+Still unsolved for `consistent` and `cached`, which are mounts and have no local
+filesystem in the path.
 
 ### The numbers are reproducible now
 

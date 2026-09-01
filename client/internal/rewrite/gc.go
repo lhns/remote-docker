@@ -45,6 +45,12 @@ type Collector struct {
 	Remover VolumeRemover
 	InUse   InUse
 
+	// Caches names the cache volumes the WORKSPACE has a union on, which is
+	// the one question about them the daemon cannot answer. Nil means it
+	// cannot be asked, and then no cache volume is collected at all: see
+	// cacheHeld.
+	Caches func(ctx context.Context) (map[string]bool, error)
+
 	// Owner limits collection to this account's volumes.
 	Owner string
 
@@ -108,6 +114,10 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 		if inUse[v.Name] {
 			continue
 		}
+		if held, why := c.cacheHeld(ctx, v.Name); held {
+			c.log().Debug("keeping a cache volume", "volume", v.Name, "why", why)
+			continue
+		}
 		gone, err := c.remove(ctx, v.Name)
 		if err != nil {
 			// A volume that cannot be removed is not fatal: it may have been
@@ -123,6 +133,35 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 		c.log().Info("removed an unused share volume", "volume", v.Name)
 	}
 	return removed, nil
+}
+
+// cacheHeld reports whether a cache volume must be kept, and why.
+//
+// The daemon cannot answer this one. A union is bound into a container by PATH
+// rather than as a volume, so no container ever references the cache volume and
+// VolumesInUse always calls it unused -- while removing it empties the layer
+// under a running container's mount, which is somebody's uncommitted work
+// disappearing from a directory that still looks mounted (ADR 0044).
+//
+// rewrite.Guard covers the shares THIS session prepared. One prepared by an
+// earlier session is invisible here, and only the workspace still knows about
+// it, so the workspace is asked. Cannot ask means keep: an uncollected cache
+// costs disk, and a collected one that was in use costs data.
+func (c *Collector) cacheHeld(ctx context.Context, name string) (bool, string) {
+	if !workspace.IsCacheVolume(name) {
+		return false, ""
+	}
+	if c.Caches == nil {
+		return true, "no way to ask the workspace which caches are mounted"
+	}
+	mounted, err := c.Caches(ctx)
+	if err != nil {
+		return true, "the workspace could not say which caches are mounted"
+	}
+	if mounted[name] {
+		return true, "the workspace has a union on it"
+	}
+	return false, ""
 }
 
 // remove deletes a volume unless this session is exporting the directory

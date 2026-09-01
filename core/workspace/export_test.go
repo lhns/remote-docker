@@ -304,3 +304,44 @@ func TestClientID(t *testing.T) {
 		t.Errorf("a volume named for client %q does not parse", a)
 	}
 }
+
+// A share's cache volume is that share's, as far as anything asking is
+// concerned. A name the collector could not attribute would be a volume nothing
+// claims and everything leaves alone, which is how disk disappears quietly.
+func TestCacheVolumesBelongToTheirShare(t *testing.T) {
+	const client = "aabbccdd"
+	id := ShareID("/home/alice/project")
+
+	share := VolumeNameForID(client, id)
+	cache := VolumeNameForCache(client, id)
+
+	if share == cache {
+		t.Fatalf("the share and its cache have one name: %q", share)
+	}
+	if !IsManagedVolume(cache) {
+		t.Errorf("%q is not recognised as ours", cache)
+	}
+	if !IsCacheVolume(cache) || IsCacheVolume(share) {
+		t.Errorf("the cache role is not told apart: %q, %q", cache, share)
+	}
+
+	gotClient, gotShare, ok := ParseVolumeName(cache)
+	if !ok {
+		t.Fatalf("ParseVolumeName(%q) did not recognise it", cache)
+	}
+	if gotClient != client {
+		t.Errorf("client = %q, want %q", gotClient, client)
+	}
+	if gotShare != id {
+		t.Errorf("share = %q, want %q, the same share the volume backs", gotShare, id)
+	}
+
+	// The working directory is the commonest share of all and has no hex id.
+	cwd, err := VolumeNameForExport(client, ExportCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := ParseVolumeName(cwd + "-" + CacheRole); !ok {
+		t.Errorf("the cwd share's cache is not recognised: %q", cwd+"-"+CacheRole)
+	}
+}

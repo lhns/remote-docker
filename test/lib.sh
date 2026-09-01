@@ -144,6 +144,23 @@ wait_provisioned() {
     return 1
 }
 
+# load_image_into_workspace copies an image from the RUNNER's daemon into the
+# workspace's own.
+#
+# They are different daemons with different image stores, which is easy to
+# forget: the suites build the workspace image on the runner, and a per-account
+# daemon is started by the WORKSPACE's dockerd (ADR 0019), which has never
+# heard of it. Without this it tries Docker Hub and fails with
+#
+#	pull access denied for remote-docker-workspace, repository does not exist
+#
+# naming a registry nobody meant to use. Real deployments pull the image from
+# one, so this is a CI-only step and not a gap in the product.
+load_image_into_workspace() {
+    local image=$1
+    hostdocker save "$image" | hostdocker exec -i "$CONTAINER" docker load >/dev/null 2>&1
+}
+
 # wait_parent_dockerd waits for the workspace's own daemon.
 #
 # Reports when it never arrives, rather than falling through. A silent timeout

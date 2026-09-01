@@ -24,6 +24,15 @@ on:
         description: "consistency modes to compare"
         default: "consistent cached delegated"
 
+# Never cancelled by a newer run, and each run is its own group. A bench takes
+# half an hour and reports numbers rather than passing: losing one to a push
+# that happened while it ran costs the whole measurement and leaves the table it
+# was for unfilled. Observed on 2026-09-01, when four benches in a row died to
+# commits on the branch being measured.
+concurrency:
+  group: bench-${{ github.sha }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -34,7 +43,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'bench'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Two hours. The cache table fills a tree per shape over a shaped link, and
+    # at 60 the job was cut off after two of four shapes -- reported as
+    # "cancelled", which reads as somebody having stopped it. Measured
+    # 2026-09-01.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
@@ -42,6 +55,19 @@ jobs:
         with:
           go-version-file: core/go.mod
           cache: true
+          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
+          # cache key looks for a go.mod there. Without this it reports
+          # "Dependencies file is not found" and restores nothing, so every job
+          # in every workflow re-downloads the whole graph: 250 modules in `test`
+          # alone, measured 2026-09-01. It also made two jobs fail outright that
+          # day, when proxy.golang.org was returning stream errors for downloads
+          # a cache hit would never have made.
+          cache-dependency-path: |
+            core/go.sum
+            core-agent/go.sum
+            core-client/go.sum
+            agent/go.sum
+            client/go.sum
 
       - name: load the nfs client module
         run: sudo modprobe nfs

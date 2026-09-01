@@ -42,6 +42,18 @@ const DialStdioCommand = "docker system dial-stdio"
 // first.
 const NotifyCommand = "workspace-notify"
 
+// CacheCommand carries a delegated share's cache: preparing its union mount,
+// filling it, and invalidating what changed on the client (ADR 0044).
+//
+// Deliberately not NotifyCommand, which promises to carry no content and to
+// mutate nothing. This one is a sync, and a channel of its own is what keeps
+// that promise true of the other.
+//
+// The same version check: an agent too old to know it runs
+// `sh -c "workspace-cache"` and exits 127, so the client refuses the mode
+// naming the workspace rather than discovering it half way through a mount.
+const CacheCommand = "workspace-cache"
+
 // KeepAliveRequest probes a connection that is otherwise idle.
 //
 // OpenSSH's name, because a stock sshd answers it and the agent should not need

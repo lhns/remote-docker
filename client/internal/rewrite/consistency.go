@@ -93,19 +93,28 @@ func (r *Rewriter) resolveConsistency(req *request, source string, asked workspa
 	got := asked.Or(r.consistencyFor(source))
 
 	if got == workspace.Delegated {
-		if r.Seed == nil {
+		// Refused here, before anything is created, rather than half way
+		// through a container start: the same shape as refusing a single-file
+		// mount on a Docker too old for a volume subpath (ADR 0039).
+		if r.Cache == nil {
 			return workspace.Unset, fmt.Errorf(
-				"rewrite: %s asks for the %s consistency, which needs a session that can reach the workspace daemon\n"+
+				"rewrite: %s asks for the %s consistency, which needs a session that can reach the workspace's cache\n"+
 					"\tfix: use %s, which is served by the mount itself",
 				source, workspace.Delegated, workspace.Cached)
 		}
-		if req.image == "" {
-			// The copy is filled through a container, and the only image this
-			// program can be sure the daemon has is the one the caller is about
-			// to run (ADR 0043).
+		if !r.Watching {
+			// A stronger requirement than `cached`'s, and for a stronger
+			// reason: that mode goes stale for at most actimeo, while a cached
+			// COPY of a file that changed here is stale until something
+			// removes it, and the watcher is what removes it (ADR 0044).
 			return workspace.Unset, fmt.Errorf(
-				"rewrite: %s asks for the %s consistency, and this request names no image to fill the copy through",
+				"rewrite: %s asks for the %s consistency, whose cache is kept honest by the watcher, and watching is off\n"+
+					"\tfix: set watch to partial or coarse for this workspace",
 				source, workspace.Delegated)
+		}
+		if err := unionAvailable(r.UnionReady); err != nil {
+			return workspace.Unset, fmt.Errorf("rewrite: %s asks for the %s consistency, and %w",
+				source, workspace.Delegated, err)
 		}
 	}
 	if got == workspace.Cached && !r.Watching {
@@ -134,24 +143,26 @@ func (r *Rewriter) resolveConsistency(req *request, source string, asked workspa
 // request is what one /containers/create carries across its two mount lists.
 type request struct {
 	consistency map[string]workspace.Consistency
-
-	// image is what the caller is about to run, and is what a delegated share
-	// is filled through: the copy needs a container to be mounted in, and this
-	// is the one image the daemon is certain to have (ADR 0043).
-	image string
 }
 
-// imageOf reads the image out of a create payload, and "" when there is none
-// to read. A body this program cannot understand is not one to refuse here:
-// the daemon answers for it, and only a delegated mount needs this at all.
-func imageOf(payload map[string]json.RawMessage) string {
-	raw, ok := payload["Image"]
-	if !ok {
-		return ""
+// unionAvailable turns the workspace's answer into a remedy.
+//
+// A reason rather than a boolean, because the remedies differ and "this
+// workspace cannot" sends somebody to the source. The empty answer is an agent
+// that predates the question, which reads as "cannot" and is the old behaviour.
+func unionAvailable(reported string) error {
+	switch reported {
+	case workspace.UnionReady:
+		return nil
+	case workspace.UnionNoBinary:
+		return fmt.Errorf("the daemon serving it has no %s\n"+
+			"\tfix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE",
+			"fuse-overlayfs")
+	case workspace.UnionNoDevice:
+		return fmt.Errorf("the daemon serving it has no /dev/fuse\n" +
+			"\tfix: load the fuse module on the host, and run the daemon with the device")
+	default:
+		return fmt.Errorf("this workspace does not serve it\n" +
+			"\tfix: update the workspace, or use the cached consistency")
 	}
-	var image string
-	if err := json.Unmarshal(raw, &image); err != nil {
-		return ""
-	}
-	return image
 }

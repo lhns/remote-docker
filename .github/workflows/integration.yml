@@ -10,14 +10,21 @@ on:
 permissions:
   contents: read
 
-# A run on main is never cancelled by the next commit. The group is per REF, and
-# every commit on main shares one, so a push used to cancel the previous
-# commit's run and leave it in the history as cancelled rather than tested. On
-# main the sha joins the group and each commit gets its own; a pull request
-# branch keeps one group, where a new push does make the old run pointless.
+# Every commit gets its own run, and nothing is ever cancelled by a later push.
+#
+# This used to cancel an in-flight run when a branch was pushed again, on the
+# reasoning that the older run tests code nobody will merge. What that costs is
+# the answer you were actually waiting for: a push that fixes one suite kills
+# the run that was still telling you about another, and a cancelled job's
+# conclusion is not "success", so it reads as a failure in anything scanning
+# results.
+#
+# The group is per SHA rather than per ref, which keeps the one thing
+# cancellation was really for -- the same commit triggered twice does not run
+# twice -- without a new commit destroying an old commit's answer.
 concurrency:
-  group: integration-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
-  cancel-in-progress: true
+  group: integration-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   # Decides whether this change needs the suites at all.
@@ -134,6 +141,46 @@ jobs:
       - name: verdict
         run: echo "NFS client works inside a privileged container on this runner."
 
+  # Can a cache be a union mount? Every question the cache mode (ADR 0044) asks
+  # of the KERNEL rather than of our code, answered in about three minutes with
+  # no binary of ours but the watch probe.
+  #
+  # Beside nfs-capability rather than inside it because it settles a different
+  # thing, and it is here rather than in a branch's own workflow because the
+  # answers expire: they are about the runner's kernel, and that moves.
+  union-capability:
+    name: can a cache be a union mount
+    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: true
+          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
+          # cache key looks for a go.mod there. Without this it reports
+          # "Dependencies file is not found" and restores nothing, so every job
+          # in every workflow re-downloads the whole graph: 250 modules in `test`
+          # alone, measured 2026-09-01. It also made two jobs fail outright that
+          # day, when proxy.golang.org was returning stream errors for downloads
+          # a cache hit would never have made.
+          cache-dependency-path: |
+            core/go.sum
+            core-agent/go.sum
+            core-client/go.sum
+            agent/go.sum
+            client/go.sum
+
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
+
+      - name: probe
+        run: bash test/union-probe.sh
+
   # The whole thing, together: a real workspace container, the real client
   # binary, and a real kernel NFS mount inside the dind daemon.
   end-to-end:
@@ -156,8 +203,8 @@ jobs:
             agent/go.sum
             client/go.sum
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: run the suite
         run: bash test/integration.sh
@@ -192,13 +239,13 @@ jobs:
             agent/go.sum
             client/go.sum
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       # Only this job needs it. In every other suite the mount happens inside a
       # container that carries its own client.
-      - name: install an NFS client on the runner
-        run: sudo apt-get update && sudo apt-get install -y nfs-common
+      - name: install an NFS client and fuse-overlayfs on the runner
+        run: sudo apt-get update && sudo apt-get install -y nfs-common fuse-overlayfs
 
       - name: run the suite
         run: bash test/vm.sh
@@ -230,8 +277,8 @@ jobs:
             agent/go.sum
             client/go.sum
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: run the suite
         run: bash test/per-user-dind.sh
@@ -264,8 +311,8 @@ jobs:
             agent/go.sum
             client/go.sum
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: run the suite
         run: bash test/two-clients.sh
@@ -294,8 +341,8 @@ jobs:
             agent/go.sum
             client/go.sum
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       # Reports what it measured whether it passes or fails: the point of this
       # suite is the numbers, and a green tick hides them.

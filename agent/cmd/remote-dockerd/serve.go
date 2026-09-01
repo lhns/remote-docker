@@ -24,6 +24,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/elevate"
 	"github.com/lhns/remote-docker/agent/internal/sshd"
 	"github.com/lhns/remote-docker/agent/internal/supervise"
+	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/agent/internal/wslisten"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core/logx"
@@ -367,6 +368,19 @@ func serve(addr, wsAddr string) error {
 		},
 	}
 
+	// Union mounts for delegated shares (ADR 0044). Self is how the agent runs
+	// itself again: the union is served by a child, because a mount namespace
+	// cannot be entered from inside a Go process that has to keep running.
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating this binary, which serves union mounts: %w", err)
+	}
+	unionManager := &unions.Manager{
+		Self:    self,
+		Volumes: dockercli.RawVolumes{},
+		Log:     logger("unions"),
+	}
+
 	server, err := sshd.New(sshd.Config{
 		Addr:     addr,
 		HostKeys: hostKeys,
@@ -375,6 +389,7 @@ func serve(addr, wsAddr string) error {
 		Ports:    ports,
 		Daemons:  targets,
 		Version:  version,
+		Unions:   unionManager,
 
 		DaemonPaths: daemonPaths,
 		Log:         logger("sshd"),

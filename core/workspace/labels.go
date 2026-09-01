@@ -17,13 +17,6 @@ const ManagedLabel = "com.github.lhns.remote-docker"
 // distinct from anything else that might one day be managed.
 const ManagedShare = "share"
 
-// ManagedSeed is ManagedLabel's value on the temporary container that exists
-// only to have a volume mounted while the client fills it (ADR 0043). It is
-// never started and is removed as soon as the tar is in, so the label is for
-// the case where that did not happen: a container orphaned by a crash holds
-// the volume, and this is what says whose it was.
-const ManagedSeed = "seed"
-
 // OwnerLabel marks every container this client creates.
 //
 // The workspace daemon may be shared between accounts (ADR 0012), so its event

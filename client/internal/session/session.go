@@ -159,6 +159,11 @@ type Session struct {
 	// to restore nothing.
 	shares *shareStore
 
+	// cached is what each delegated share's fill last sent, across sessions.
+	// It is what makes a deletion made while nothing was running removable
+	// from the cache (ADR 0044). Nil on a query session, which fills nothing.
+	cached *cachedStore
+
 	// watch outlives any single connection too, and for the same reason the
 	// registry does: watches are a local resource, and re-walking a large
 	// tree on every idle reconnect would cost more than the connection. Only
@@ -176,6 +181,11 @@ type Session struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	once   sync.Once
+
+	// fills tracks the background cache fills of delegated shares (ADR 0044).
+	// One per share, started when the share is first mounted and outliving the
+	// request that asked for it.
+	fills fills
 }
 
 // liveConn is everything that exists only while connected.
@@ -188,9 +198,20 @@ type liveConn struct {
 	nfsTunnel net.Listener
 	ports     *ports.Manager
 
+	// clockSkew is the workspace's clock minus this machine's, measured when
+	// this connection was made and used for one comparison: which side wrote
+	// last when a file changed in both places (ADR 0044).
+	clockSkew time.Duration
+
 	// notify is the change-notification channel, nil when the workspace does
 	// not support it or watching is off.
 	notify io.Closer
+
+	// cacheChan serves delegated shares (ADR 0044). Opened on first use, and
+	// once: a session that mounts no delegated share never opens it, and a
+	// workspace too old to serve it must not be asked twice per container.
+	cacheOnce sync.Once
+	cacheChan *cacheChannel
 
 	// machine holds a local machine open, nil for a workspace that is simply
 	// there. Closing it lets the machine shut itself down.
@@ -232,6 +253,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	// a directory.
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
+		s.cached = newCachedStore(config.CachedPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
 		s.nfs = nfsserve.New(s.registry)
 	}
@@ -253,6 +275,12 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			return nil, err
 		}
 		s.watch = watcher
+		// Every change, before the mode decides what a container's watcher can
+		// be shown: a deletion cannot be replayed faithfully over NFS, which
+		// is what ModePartial is about, but it can be applied to a cache
+		// exactly, and a cached copy of a file that is gone is the one way
+		// this mode can be wrong rather than slow (ADR 0044).
+		s.watch.SetObserver(&invalidator{session: s})
 		s.watch.Sync(sharesOf(s.registry))
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}

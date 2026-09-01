@@ -125,6 +125,19 @@ func VolumeNameForID(client, id string) string {
 	return VolumeNamePrefix + client + "-" + id
 }
 
+// CacheRole is the suffix on the volume holding a delegated share's cache
+// layer, as distinct from the volume backing the share itself (ADR 0044).
+//
+// A suffix rather than a second prefix, so IsManagedVolume, the collector and
+// ADR 0029's per-client naming all keep working on it unchanged: it is one more
+// managed volume, and the only thing that differs is which layer it holds.
+const CacheRole = "cache"
+
+// VolumeNameForCache is the volume holding a share's cache layer.
+func VolumeNameForCache(client, id string) string {
+	return VolumeNameForID(client, id) + "-" + CacheRole
+}
+
 // IsManagedVolume reports whether a volume name is one of ours. Used before
 // removing anything: a volume we did not create is never ours to delete.
 func IsManagedVolume(name string) bool {
@@ -151,6 +164,19 @@ func VolumeNameForExport(client, exportPath string) (string, error) {
 	return VolumeNameForID(client, id), nil
 }
 
+// CacheVolumeForExport is the cache volume a given machine's share must use.
+//
+// Derived rather than accepted, so the agent can check what a client asked it
+// to mount instead of trusting the name it was handed: the digest is the key
+// that authenticated, so a machine can only ever name its own (ADR 0029).
+func CacheVolumeForExport(client, exportPath string) (string, error) {
+	name, err := VolumeNameForExport(client, exportPath)
+	if err != nil {
+		return "", err
+	}
+	return name + "-" + CacheRole, nil
+}
+
 // ParseVolumeName splits a managed volume name into the client that created it
 // and the share it backs.
 //
@@ -163,6 +189,11 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 	}
 	rest := strings.TrimPrefix(name, VolumeNamePrefix)
 
+	// A cache volume is the same share wearing a role, and the collector must
+	// see it as that share's -- otherwise it is a volume nothing claims and
+	// everything leaves alone, which is how disk disappears quietly.
+	rest = strings.TrimSuffix(rest, "-"+CacheRole)
+
 	client, share, found := strings.Cut(rest, "-")
 	if !found {
 		// rd-<id> or rd-cwd, from before this.
@@ -172,6 +203,12 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 		return "", "", false
 	}
 	return client, share, validShare(share)
+}
+
+// IsCacheVolume reports whether a name is a share's cache layer rather than the
+// share itself.
+func IsCacheVolume(name string) bool {
+	return IsManagedVolume(name) && strings.HasSuffix(name, "-"+CacheRole)
 }
 
 // validShare reports whether a volume name suffix names a share this program

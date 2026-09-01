@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"strconv"
@@ -83,14 +82,22 @@ type VolumeEnsurer interface {
 	EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error
 }
 
-// Seeder fills a volume with a tar stream, which is how a delegated share's
-// copy is made (ADR 0043). ResetVolume empties one first, so the copy is the
-// tree as it is now rather than as it was plus whatever has since been
-// deleted; a volume something is using is left alone, because there is nothing
-// safe to do about it.
-type Seeder interface {
-	ResetVolume(ctx context.Context, name string) error
-	SeedVolume(ctx context.Context, image, volume string, tree io.Reader) error
+// Cache is the workspace's end of a delegated share (ADR 0044).
+//
+// Prepare mounts the union -- the live export underneath, a local cache on top
+// -- and answers with the path the container binds. Apply fills that cache,
+// through the union, which is the only way that is defined: a write into the
+// cache layer underneath a mounted union can stay invisible to a container
+// that already looked.
+type Cache interface {
+	Prepare(ctx context.Context, export, cache string, port int) (string, error)
+
+	// Fill starts copying the tree into the cache and returns AT ONCE. The
+	// container does not wait for it, and does not need to: what the cache
+	// does not hold yet is served from the live export underneath, correctly.
+	// A fill that is slow, partial or still running costs speed and never
+	// correctness, which is the property the whole mode rests on.
+	Fill(export, localPath string)
 }
 
 // The labels this package stamps. Defined in the contract, because the agent
@@ -130,10 +137,16 @@ type Rewriter struct {
 	Consistency      workspace.Consistency
 	ConsistencyPaths map[string]workspace.Consistency
 
-	// Seed fills a delegated share's volume from this machine. Nil refuses
-	// `delegated` by name, which is what a session that cannot reach the
-	// daemon looks like.
-	Seed Seeder
+	// Cache serves delegated shares as union mounts. Nil refuses the mode by
+	// name, which is what a session that cannot reach the workspace's cache
+	// channel looks like -- an older workspace, or one that does not serve it.
+	Cache Cache
+
+	// UnionReady says whether the workspace reported that it can serve a union
+	// at all (workspace.Info.Union). Refused before anything is created rather
+	// than half way through a container start, the same way a single-file
+	// mount is refused on an old Docker (ADR 0039).
+	UnionReady string
 
 	// Watching says whether this session replays local changes into the
 	// workspace. `cached` rests on it: a long attribute cache with nothing to
@@ -235,7 +248,7 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	// One request, two mount lists, and a directory named in both is one share
 	// with one volume behind it. req is what lets the second list see what the
 	// first settled.
-	req := &request{image: imageOf(payload)}
+	req := &request{}
 
 	// No HostConfig means no binds and no ports, and the labels below may
 	// still change the payload.
@@ -403,7 +416,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, req *request, hostConfig ma
 			return nil, err
 		}
 
-		volume, file, err := r.volumeFor(ctx, parsed.Source, req.image, consistency)
+		volume, file, err := r.volumeFor(ctx, parsed.Source, consistency)
 		if err != nil {
 			return nil, err
 		}
@@ -549,7 +562,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, req *request, hostConfig m
 			return err
 		}
 
-		volume, file, err := r.volumeFor(ctx, source, req.image, consistency)
+		volume, file, err := r.volumeFor(ctx, source, consistency)
 		if err != nil {
 			return err
 		}
@@ -617,7 +630,7 @@ func supportsSubpath(version string) bool {
 
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath, image string, consistency workspace.Consistency) (name, file string, err error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency workspace.Consistency) (name, file string, err error) {
 	// Held across BOTH steps: registering the share is what tells the collector
 	// this volume is spoken for, and the volume does not exist until the step
 	// after it.
@@ -642,14 +655,15 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath, image string, consi
 	labels[ManagedLabel] = ManagedShare
 
 	if consistency == workspace.Delegated {
-		// No driver options at all: a plain local volume, which is a directory
-		// on the workspace and therefore as fast as the workspace's own disk.
-		// The share is still registered above, so naming, ownership and
-		// collection are the same as every other managed volume.
-		if err := r.seed(ctx, image, name, localPath, labels); err != nil {
+		// Not a volume the container mounts at all: a union the workspace
+		// mounts for it, with this share's export underneath and a cache on
+		// top. What comes back is a path in the daemon's namespace, which the
+		// caller binds (ADR 0044).
+		merged, err := r.union(ctx, exportPath, name, localPath, labels)
+		if err != nil {
 			return "", "", err
 		}
-		return name, file, nil
+		return merged, file, nil
 	}
 
 	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, consistency)
@@ -659,30 +673,31 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath, image string, consi
 	return name, file, nil
 }
 
-// seed makes the copy a delegated share is (ADR 0043).
+// union prepares a delegated share's cache and fills it, and answers with the
+// path the container binds (ADR 0044).
 //
-// Emptied first, so what the container sees is the tree as it is now: without
-// that, a file deleted here would stay in the copy for as long as the volume
-// lives. A volume another container is holding cannot be emptied and is filled
-// over instead, which is the one case where a deletion here does not reach the
-// copy.
-//
-// Synchronous, and that is deliberate. A container starting against a
-// half-populated tree fails in ways nobody can debug.
-func (r *Rewriter) seed(ctx context.Context, image, name, localPath string, labels map[string]string) error {
-	if err := r.Seed.ResetVolume(ctx, name); err != nil {
-		return fmt.Errorf("rewrite: emptying the copy of %s: %w", localPath, err)
-	}
+// The cache is a managed volume like any other -- named per client (ADR 0029),
+// labelled, collected -- and the workspace mounts it as the upper layer of a
+// union whose lower is this share's live export. A read the cache has costs the
+// workspace's own disk; a read it does not have falls through and is right,
+// which is what lets the cache be filled without the container waiting for it.
+func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string) (string, error) {
+	cache := share + "-" + workspace.CacheRole
+
 	// An empty map rather than nil: the body is JSON, and a null where the
 	// daemon expects an object is a different thing to send it.
-	if err := r.Volumes.EnsureVolume(ctx, name, map[string]string{}, labels); err != nil {
-		return fmt.Errorf("rewrite: creating the copy of %s: %w", localPath, err)
+	if err := r.Volumes.EnsureVolume(ctx, cache, map[string]string{}, labels); err != nil {
+		return "", fmt.Errorf("rewrite: creating the cache for %s: %w", localPath, err)
 	}
 
-	tree := tarTree(localPath)
-	defer tree.Close()
-	if err := r.Seed.SeedVolume(ctx, image, name, tree); err != nil {
-		return fmt.Errorf("rewrite: copying %s into the workspace: %w", localPath, err)
+	merged, err := r.Cache.Prepare(ctx, export, cache, r.NFSPort)
+	if err != nil {
+		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
 	}
-	return nil
+
+	// Asynchronous, and this is where the union earns its keep: the container
+	// starts now, against a cache that is empty and a lower that is right.
+	r.Cache.Fill(export, localPath)
+
+	return merged, nil
 }
