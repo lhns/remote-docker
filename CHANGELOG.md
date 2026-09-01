@@ -55,6 +55,19 @@ file the cache has not got yet is still correct; a project bigger than the
 cache budget still works, just partly cached; and a directory the watcher does
 not cover is simply read live rather than cached wrong.
 
+Measured on a GitHub runner over the same 300 files as the rows above:
+
+| RTT | `consistent` | `cached` | `delegated` |
+|---|---|---|---|
+| read 300 files at 160ms | 164.47s | 98.12s | **0.08s** |
+| write at 160ms | 74.00s | 49.43s | **0.08s** |
+| container start at 160ms | 1.10s | 1.10s | **0.15s** |
+
+The read column stops tracking the latency knob entirely, which is what a cache
+over a mount is for, and the mount is asked for nothing at all during it — where
+`cached` still pays 300 reads and 422 permission checks it cannot avoid. Start
+does not grow, because a container never waits for the fill.
+
 It is a two-way cache rather than a snapshot. An edit here reaches a running
 container, a file you delete disappears from it -- which nothing in this project
 has managed before -- and what the container writes comes back to you within a

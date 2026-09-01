@@ -754,10 +754,16 @@ workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
 Since consistency modes (ADR 0042, ADR 0044): a `cached` mount reading a file
-and still seeing an edit made here despite a 60s attribute cache, and a
-`delegated` copy holding this machine's files, being a plain local volume,
-NOT changing under a running container, and being filled again for the next
-one -- with no seed container left behind.
+and still seeing an edit made here despite a 60s attribute cache; and a
+`delegated` share being a UNION -- asserted to report fuse-overlayfs rather
+than a directory that resembles one, which is the only assertion a share whose
+lower never mounted cannot fake. Through it: a read the cache does not hold
+falling through to the live export, an edit here reaching a running container,
+a file deleted here disappearing from one, a container's write arriving on this
+machine, a file deleted while NO client was running being gone from the cache on
+the next fill, and the union surviving a client restart with a container still
+bound to it. Both daemon modes, since `per-user-dind.sh` asserts the same union
+inside an account's own dind.
 
 Since the root became the Docker CLI (ADR 0024): the binary working under the
 name `docker` as a symlink AND as a copy with `remote` still reachable through
