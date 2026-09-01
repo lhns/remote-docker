@@ -185,9 +185,9 @@ ok "tree built"
 dockert run --rm -v "$PROJECT:/w" alpine:3 true >/dev/null 2>&1
 ok "warm"
 
-printf '\n%-12s %-11s %-8s %-8s %-8s %-8s %s\n' \
-    shape mode rtt_ms walk_s read_s write_s nfs_ops
-printf '%s\n' "$(printf '=%.0s' $(seq 1 86))"
+printf '\n%-12s %-11s %-8s %-8s %-8s %-8s %-8s %s\n' \
+    shape mode rtt_ms start_s walk_s read_s write_s nfs_ops
+printf '%s\n' "$(printf '=%.0s' $(seq 1 95))"
 
 for spec in $SHAPES; do
     delay=${spec%%:*}
@@ -210,11 +210,16 @@ for spec in $SHAPES; do
         # The mode is written on the mount exactly as a person writes it. A
         # share whose consistency changed has its volume rebuilt, which is what
         # makes switching free, so these rows exercise that too.
+        #
+        # start_s is that container coming up, and it is a column rather than
+        # overhead: a delegated share copies the whole tree across before the
+        # container exists, and a mode whose reads are cheap because it paid up
+        # front has to show what it paid.
         dockert rm -f "$PIN" >/dev/null 2>&1
-        if ! dockert run -d --name "$PIN" -v "$PROJECT:/w:$mode" \
-            alpine:3 sleep 3600 >"$WORK/pin.log" 2>&1; then
-            bad "no workload container for $spec $mode"
-            sed 's/^/        /' "$WORK/pin.log"
+        start=$(elapsed dockert run -d --name "$PIN" -v "$PROJECT:/w:$mode" \
+            alpine:3 sleep 3600)
+        if ! outputs true dockert inspect -f '{{.State.Running}}' "$PIN"; then
+            bad "no workload container for $spec $mode: $LAST_OUTPUT"
             continue
         fi
 
@@ -227,8 +232,8 @@ for spec in $SHAPES; do
         after=$(nfsops)
         dockert rm -f "$PIN" >/dev/null 2>&1
 
-        printf '%-12s %-11s %-8s %-8s %-8s %-8s %s\n' \
-            "$delay/$rate" "$mode" "$measured" "$walk" "$read" "$write" \
+        printf '%-12s %-11s %-8s %-8s %-8s %-8s %-8s %s\n' \
+            "$delay/$rate" "$mode" "$measured" "$start" "$walk" "$read" "$write" \
             "$(delta "$before" "$after")"
     done
 done

@@ -114,7 +114,7 @@ func writeEntry(tw *tar.Writer, p, name string, info fs.FileInfo) error {
 		if err != nil {
 			return nil
 		}
-		defer opened.Close()
+		defer func() { _ = opened.Close() }()
 		f = opened
 
 		// The open file's own size, rather than the walk's: between the two a
