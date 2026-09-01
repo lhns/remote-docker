@@ -38,6 +38,16 @@ type Target struct {
 	// joined path stays under the root, because path.Join CLEANS and ".." escapes
 	// look like containment.
 	Root string
+
+	// PID is the daemon's process, which is what a mount namespace is entered
+	// through (ADR 0044). ZERO means the agent's own namespace, the same way
+	// an empty NetNSPath does, so both daemon modes stay one code path.
+	//
+	// Distinct from Root, which names the same process and is a path to READ
+	// through. A union is mounted INSIDE that namespace, and /proc/<pid>/root
+	// cannot express that: a mount made there would land in the agent's own
+	// namespace at a path that happens to point into the daemon's.
+	PID int
 }
 
 // Targets resolves an account to its daemon.
@@ -72,6 +82,7 @@ func (m *Manager) target(d *Daemon) Target {
 		Host:      d.Host(),
 		NetNSPath: d.NetNSPath(),
 		Root:      d.Root(),
+		PID:       d.PID,
 	}
 }
 

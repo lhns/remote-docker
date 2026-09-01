@@ -123,3 +123,55 @@ func TestSpecValidate(t *testing.T) {
 		})
 	}
 }
+
+// The child is handed its spec through the environment and validates it again
+// on arrival: it runs as root inside somebody's daemon, and "the parent
+// checked" is not a property this side can see.
+func TestEnvRoundTrip(t *testing.T) {
+	spec := testSpec()
+	env := map[string]string{}
+	for _, kv := range Env(spec) {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	getenv := func(k string) string { return env[k] }
+
+	got, mode, err := FromEnv(getenv)
+	if err != nil {
+		t.Fatalf("FromEnv() = %v", err)
+	}
+	if mode != ModeServe {
+		t.Errorf("mode = %q, want %q", mode, ModeServe)
+	}
+	if got != spec {
+		t.Errorf("FromEnv() = %+v, want %+v", got, spec)
+	}
+}
+
+func TestFromEnvRefusesWhatItCannotUse(t *testing.T) {
+	base := map[string]string{}
+	for _, kv := range Env(testSpec()) {
+		k, v, _ := strings.Cut(kv, "=")
+		base[k] = v
+	}
+
+	for _, c := range []struct{ name, key, value string }{
+		{"no mode at all", "RD_UNION_MODE", ""},
+		{"a mode this agent does not have", "RD_UNION_MODE", "promote"},
+		{"a port that is not a number", "RD_UNION_PORT", "thirty thousand"},
+		{"an export nothing serves", "RD_UNION_EXPORT", "/etc"},
+		{"a cache directory that is not a path", "RD_UNION_CACHE", "relative"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := map[string]string{}
+			for k, v := range base {
+				env[k] = v
+			}
+			env[c.key] = c.value
+
+			if _, _, err := FromEnv(func(k string) string { return env[k] }); err == nil {
+				t.Errorf("FromEnv accepted %s=%q", c.key, c.value)
+			}
+		})
+	}
+}

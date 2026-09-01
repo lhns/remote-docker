@@ -56,6 +56,7 @@ func Serve(spec Spec) error {
 	}
 
 	args := spec.Args()
+
 	binary, err := exec.LookPath(args[0])
 	if err != nil {
 		return fmt.Errorf("union: %s is not in the image this daemon runs: %w\n"+
@@ -120,4 +121,36 @@ func mounted(path string) bool {
 		return false
 	}
 	return here.Dev != up.Dev
+}
+
+// Release enters the daemon's namespace and unmounts the union, then the
+// lower. Run in the child, for the same reason the mounting is: umount(2) acts
+// on the caller's own mount namespace.
+//
+// Both unmounts are lazy. A container still holding the mount would otherwise
+// make this fail with EBUSY and leave the share half up, and detaching is the
+// honest outcome: the share is being released, and whatever still holds it was
+// already told the session is over.
+func Release(spec Spec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+
+	runtime.LockOSThread()
+	if spec.PID > 0 {
+		if err := enter(spec.PID); err != nil {
+			return err
+		}
+	}
+
+	var failed error
+	for _, target := range []string{spec.Merged(), spec.Lower()} {
+		if !mounted(target) {
+			continue
+		}
+		if err := unix.Unmount(target, unix.MNT_DETACH); err != nil {
+			failed = fmt.Errorf("union: unmounting %s: %w", target, err)
+		}
+	}
+	return failed
 }
