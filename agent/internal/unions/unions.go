@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,7 @@ type Manager struct {
 type live struct {
 	spec   union.Spec
 	host   string // the daemon this union is mounted in, for asking who holds it
+	cache  string // the managed volume holding the layer, for the collector
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -179,6 +181,7 @@ func (m *Manager) Prepare(ctx context.Context, account string, d Daemon, req wor
 	}
 
 	l := m.start(spec, d.Host)
+	l.cache = req.Cache
 	m.shares[k] = l
 
 	if err := m.waitReady(ctx, spec); err != nil {
@@ -333,6 +336,28 @@ func (m *Manager) heldByContainers(ctx context.Context, account string) map[stri
 		}
 	}
 	return held
+}
+
+// MountedCaches names the cache volumes this account has a union on.
+//
+// What the client's volume collector needs and cannot work out: no container
+// references a cache volume, because a union is bound by path, so the daemon
+// reports it unused and the collector empties it under a running container
+// (ADR 0044). Every share this process holds is reported, whether or not its
+// mount currently answers -- a union being down is a reason to repair it, not
+// to delete the cache it will come back to.
+func (m *Manager) MountedCaches(account string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []string
+	for k, l := range m.shares {
+		if ownedBy(k, account) && l.cache != "" {
+			out = append(out, l.cache)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // stop ends supervision. The caller holds the lock.

@@ -440,6 +440,15 @@ premise of the project, and it applies to building it too. So:
   `invalid argument`, about a list whose every word is individually valid. That
   is what kept the union from ever mounting. `Spec.LowerMount` does the split,
   and the error now prints the two halves so the next one names itself.
+- **A cache volume is never in use as far as the daemon is concerned, and the
+  collector must ask the WORKSPACE instead** (ADR 0044). A union is bound into
+  a container by PATH, so nothing references the volume behind it and
+  `VolumesInUse` always calls it unused. Removing it empties the layer under a
+  running container's mount: the mount still answers, the container still runs,
+  and the files it wrote are gone -- which is uncommitted work vanishing from a
+  directory that looks fine. `rewrite.Guard` covers only the shares THIS
+  session prepared, so a container left running across a client restart is
+  exactly the case it misses. `OpMounted` asks, and cannot-ask means keep.
 - **A delegated share's union outlives the channel that asked for it, and is
   released only when no container is bound to it** (ADR 0044). The cache
   channel rides the connection, which ADR 0015 releases the moment a session

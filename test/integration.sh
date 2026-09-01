@@ -1700,7 +1700,7 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
             ok "a container's union survives the client restarting"
         else
             bad "the union did not survive a client restart: [$LAST_OUTPUT]"
-            dump_workspace_log 30
+            deleg_diagnostics
         fi
         docker rm -f itest-deleg >/dev/null 2>&1
 

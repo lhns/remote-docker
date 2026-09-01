@@ -11,6 +11,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -195,8 +196,32 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 		Owner:   live.info.User,
 		Client:  s.clientID,
 		Guard:   live.guard,
+		Caches:  s.mountedCaches,
 		Log:     s.opts.Log,
 	}
+}
+
+// mountedCaches asks the workspace which cache volumes it has a union on.
+//
+// The collector's one question about a cache volume that neither the daemon nor
+// this session can answer: a union is bound by path, so no container references
+// the volume, and a share prepared by an EARLIER session is not in this one's
+// registry at all (ADR 0044).
+func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
+	live := s.liveCache()
+	if live == nil {
+		return nil, errors.New("session: no cache channel to ask which caches are mounted")
+	}
+	names, err := live.Mounted(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	mounted := make(map[string]bool, len(names))
+	for _, n := range names {
+		mounted[n] = true
+	}
+	return mounted, nil
 }
 
 // exportsVolume reports whether a managed volume backs a directory this

@@ -139,6 +139,15 @@ func (c *cacheChannel) Pull(_ context.Context, export string, paths []string) ([
 	return reply.Payload, nil
 }
 
+// Mounted names the cache volumes the workspace has a union on.
+func (c *cacheChannel) Mounted(_ context.Context) ([]string, error) {
+	reply, err := c.do(workspace.CacheRequest{Op: workspace.OpMounted}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return reply.Caches, nil
+}
+
 // Prepare mounts a share's union and answers with the path a container binds.
 func (c *cacheChannel) Prepare(_ context.Context, export, cache string, port int) (string, error) {
 	reply, err := c.do(workspace.CacheRequest{

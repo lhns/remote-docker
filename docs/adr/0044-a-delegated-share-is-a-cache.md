@@ -141,6 +141,20 @@ It ran that way in CI for the whole life of the mode, behind a green section.
 The suites now assert that a container's share reports fuse-overlayfs rather
 than the daemon's own disk, which is the one thing a bare directory cannot fake.
 
+### The collector cannot see a cache volume in use
+
+A union is bound into a container by path, so nothing ever references the volume
+holding its layer and the daemon reports it unused for as long as it exists.
+Collecting it does not fail and does not unmount anything: it empties the
+directory under a live mount, so the container keeps running and the files it
+wrote are gone.
+
+`rewrite.Guard` answers this for the shares a session prepared. It cannot answer
+for one prepared by an earlier session, which is precisely the container left
+running across a client restart — and that is what `OpMounted` is for. Cannot
+ask means keep: an uncollected cache costs disk, a collected one in use costs
+somebody's work.
+
 ### A union outlives the channel that asked for it
 
 The cache channel rides the SSH connection, and that connection is released

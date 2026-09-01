@@ -157,6 +157,9 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		}
 		return workspace.CacheReply{Changes: changes}, nil
 
+	case workspace.OpMounted:
+		return workspace.CacheReply{Caches: s.cfg.Unions.MountedCaches(name)}, nil
+
 	case workspace.OpPull:
 		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)
 		if err != nil {

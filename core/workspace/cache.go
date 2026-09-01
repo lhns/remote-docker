@@ -63,6 +63,16 @@ const (
 	// OpPull asks for the bytes of named paths out of the cache layer, so the
 	// client can write them back to its own disk.
 	OpPull CacheOp = "pull"
+
+	// OpMounted asks which cache volumes this account has a union on, and it
+	// exists for the volume collector. No container references a cache volume
+	// -- a union is bound into a container by PATH -- so the daemon calls it
+	// unused and the collector takes it, emptying the layer under a running
+	// container's mount. The share THIS session prepared is spared by
+	// rewrite.Guard; one prepared by an earlier session is not, and only the
+	// workspace still knows it exists. Names no export, because the question
+	// is about all of them at once.
+	OpMounted CacheOp = "mounted"
 )
 
 // CacheChange is one thing the container did to a share.
@@ -138,6 +148,9 @@ type CacheReply struct {
 	// Changes answers OpChanges: what the container did to the share.
 	Changes []CacheChange `json:"c,omitempty"`
 
+	// Caches answers OpMounted: the cache volumes this account has a union on.
+	Caches []string `json:"v,omitempty"`
+
 	// Bytes is the length of the tar that follows this reply, answering
 	// OpPull. Framed by length for the same reason a request's payload is: a
 	// tar is binary, and any delimiter would have to be escaped out of it.
@@ -164,6 +177,11 @@ type CacheHello struct {
 // the workspace. On the client a failure is our own bug; on the agent it is
 // the only thing between a malformed path and a privileged syscall.
 func (r CacheRequest) Validate() error {
+	// Before the export check, because this one asks about every share at once
+	// and so names none.
+	if r.Op == OpMounted {
+		return nil
+	}
 	if err := ValidExport(r.Export); err != nil {
 		return fmt.Errorf("workspace: cache request export: %w", err)
 	}
