@@ -135,6 +135,9 @@ mkdir -p "$WORK/project-$A" "$WORK/project-$B"
 echo "alice's file" >"$WORK/project-$A/marker"
 echo "bob's file"   >"$WORK/project-$B/marker"
 
+# Watching is on because a delegated share requires it: its cache holds actual
+# copies, and the watcher is what keeps them honest (ADR 0044). Section 7b would
+# otherwise be refused on a rule rather than tested on its mechanism.
 start_session() {
     local account=$1 endpoint=$2 log=$3 dir=$4
     (
@@ -145,6 +148,7 @@ start_session() {
         REMOTE_DOCKER_USER="$account" \
         REMOTE_DOCKER_ENDPOINT="$endpoint" \
         REMOTE_DOCKER_IDLE_TIMEOUT=8s \
+        REMOTE_DOCKER_WATCH=partial \
         "$WORK/remote-docker" remote start --foreground
     ) >"$log" 2>&1 &
     echo $!
