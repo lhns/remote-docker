@@ -38,17 +38,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The repo root is deliberately not a module (ADR 0021), so setup-go's
+      # default key looks for a go.mod that is not there and restores nothing:
+      # every job re-downloaded the whole graph, 250 `go: downloading` lines in
+      # this one. Key the cache on the five real modules instead.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
           cache: true
-          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
-          # cache key looks for a go.mod there. Without this it reports
-          # "Dependencies file is not found" and restores nothing, so every job
-          # in every workflow re-downloads the whole graph: 250 modules in `test`
-          # alone, measured 2026-09-01. It also made two jobs fail outright that
-          # day, when proxy.golang.org was returning stream errors for downloads
-          # a cache hit would never have made.
           cache-dependency-path: |
             core/go.sum
             core-agent/go.sum
@@ -122,17 +119,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Keyed on the five modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
           cache: true
-          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
-          # cache key looks for a go.mod there. Without this it reports
-          # "Dependencies file is not found" and restores nothing, so every job
-          # in every workflow re-downloads the whole graph: 250 modules in `test`
-          # alone, measured 2026-09-01. It also made two jobs fail outright that
-          # day, when proxy.golang.org was returning stream errors for downloads
-          # a cache hit would never have made.
           cache-dependency-path: |
             core/go.sum
             core-agent/go.sum
@@ -153,17 +144,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Keyed on the five modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
           cache: true
-          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
-          # cache key looks for a go.mod there. Without this it reports
-          # "Dependencies file is not found" and restores nothing, so every job
-          # in every workflow re-downloads the whole graph: 250 modules in `test`
-          # alone, measured 2026-09-01. It also made two jobs fail outright that
-          # day, when proxy.golang.org was returning stream errors for downloads
-          # a cache hit would never have made.
           cache-dependency-path: |
             core/go.sum
             core-agent/go.sum
@@ -223,17 +208,11 @@ jobs:
           # has no tags to describe against.
           fetch-depth: 0
 
+      # Keyed on the five modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
           cache: true
-          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
-          # cache key looks for a go.mod there. Without this it reports
-          # "Dependencies file is not found" and restores nothing, so every job
-          # in every workflow re-downloads the whole graph: 250 modules in `test`
-          # alone, measured 2026-09-01. It also made two jobs fail outright that
-          # day, when proxy.golang.org was returning stream errors for downloads
-          # a cache hit would never have made.
           cache-dependency-path: |
             core/go.sum
             core-agent/go.sum

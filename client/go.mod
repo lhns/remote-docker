@@ -11,8 +11,8 @@ require (
 	github.com/docker/buildx v0.36.1
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/compose/v5 v5.5.0
-	github.com/google/go-containerregistry v0.21.9
-	github.com/klauspost/compress v1.19.1
+	github.com/google/go-containerregistry v0.22.0
+	github.com/klauspost/compress v1.19.2
 	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
@@ -247,13 +247,13 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
-	golang.org/x/mod v0.38.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/mod v0.39.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.0 // indirect
