@@ -155,8 +155,8 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: probe
         run: bash test/union-probe.sh
@@ -176,8 +176,8 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: run the suite
         run: bash test/integration.sh
@@ -205,8 +205,8 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       # Only this job needs it. In every other suite the mount happens inside a
       # container that carries its own client.
@@ -236,8 +236,8 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: run the suite
         run: bash test/per-user-dind.sh
@@ -263,8 +263,8 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       - name: run the suite
         run: bash test/two-clients.sh
@@ -286,8 +286,8 @@ jobs:
           go-version-file: core/go.mod
           cache: true
 
-      - name: load the nfs client module
-        run: sudo modprobe nfs
+      - name: load the nfs and fuse modules
+        run: sudo modprobe nfs && sudo modprobe fuse
 
       # Reports what it measured whether it passes or fails: the point of this
       # suite is the numbers, and a green tick hides them.

@@ -1488,73 +1488,70 @@ else
 fi
 
 echo
-echo "== 15c. the delegated consistency =="
-# Docker's word for a copy the container owns, and here it is exactly that: a
-# plain local volume on the workspace, filled from this machine before the
-# container is created (ADR 0043). Reads then cost the workspace's own disk
-# rather than a round trip.
+echo "== 15c. the delegated consistency, which is a union =="
+# Docker's word for a container-authoritative mount, and here it is a UNION the
+# workspace mounts: this share's live NFS export underneath, a local cache on
+# top, and the merged view the container binds (ADR 0044).
 #
-# The whole mechanism rests on one thing CI is the only place to check: that
-# `PUT /containers/{id}/archive` writes into a volume mounted on a container
-# that was CREATED and never started. If that is wrong, this section fails at
-# the first assertion and nothing else in the suite is affected.
+# The assertion that matters is the fallthrough. A file created here AFTER the
+# cache was filled is not in the cache, and the container must still see it --
+# that is what makes an incomplete cache correct, and it is the whole reason
+# the cache can be filled in the background.
 DELEGDIR="$WORK/delegated"
 mkdir -p "$DELEGDIR"
 echo "first" >"$DELEGDIR/marker"
 
-if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"     alpine:3 sleep 300 >"$WORK/deleg-run.log" 2>&1; then
-    ok "a container starts against a delegated copy"
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"         alpine:3 sleep 300 >"$WORK/deleg-run.log" 2>&1; then
+        ok "a container starts against a delegated union"
 
-    if outputs '^first$' docker exec itest-deleg cat /w/marker; then
-        ok "the copy holds this machine's file"
+        if outputs '^first$' docker exec itest-deleg cat /w/marker; then
+            ok "it reads a file the cache was filled with"
+        else
+            bad "reading the cache: [$LAST_OUTPUT]"
+        fi
+
+        # THE assertion. This file did not exist when the cache was filled, so
+        # it can only be coming from the live export underneath.
+        echo "arrived after the fill" >"$DELEGDIR/late.txt"
+        if outputs '^arrived after the fill$' docker exec itest-deleg cat /w/late.txt; then
+            ok "a file the cache does not have falls through to the live export"
+        else
+            bad "the union did not fall through: [$LAST_OUTPUT]"
+        fi
+
+        # What the container mounts is the union, in the daemon's namespace,
+        # rather than a volume of its own.
+        if outputs '/run/rd-union/' docker inspect             -f '{{range .Mounts}}{{.Source}}{{end}}' itest-deleg; then
+            ok "the container binds the union the workspace mounted"
+        else
+            bad "the mount source is [$LAST_OUTPUT], want a union"
+        fi
+
+        # And a write goes into the cache rather than through to this machine,
+        # which is what "the container is authoritative" means until write-back
+        # exists.
+        docker exec itest-deleg sh -c 'echo "from the container" >/w/written-there' >/dev/null 2>&1
+        if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
+            ok "the container can write into its own view"
+        else
+            bad "writing into the union: [$LAST_OUTPUT]"
+        fi
+        if [ ! -e "$DELEGDIR/written-there" ]; then
+            ok "that write has not reached this machine, which write-back is for"
+        else
+            bad "a delegated write reached this machine with no write-back built"
+        fi
     else
-        bad "reading the delegated copy: [$LAST_OUTPUT]"
+        bad "a container would not start against a delegated union"
+        sed 's/^/        /' "$WORK/deleg-run.log"
+        dump_workspace_log 40
     fi
-
-    # A local volume, which is the point: any NFS option here would mean it
-    # was still being mounted over the tunnel.
-    dvol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-deleg 2>/dev/null)
-    if outputs '^local:$' docker volume inspect -f '{{.Driver}}:{{index .Options "o"}}' "$dvol"; then
-        ok "the copy is a plain local volume"
-    else
-        bad "volume $dvol is [$LAST_OUTPUT], want a local volume with no mount options"
-    fi
-
-    # The honest limitation, asserted rather than described: a copy is a copy,
-    # so an edit here does not reach a container already running against it.
-    echo "second" >"$DELEGDIR/marker"
-    sleep 3
-    if outputs '^first$' docker exec itest-deleg cat /w/marker; then
-        ok "an edit here does NOT reach a running delegated container"
-    else
-        bad "the copy changed under the container: [$LAST_OUTPUT]"
-    fi
-
-    # And the other half of that: the next container gets the tree as it is
-    # now, because the copy is emptied and filled again.
     docker rm -f itest-deleg >/dev/null 2>&1
-    if outputs '^second$' dockert run --rm -v "$DELEGDIR:/w:delegated" alpine:3 cat /w/marker; then
-        ok "the next container is filled from the tree as it is now"
-    else
-        bad "a reseeded copy reads [$LAST_OUTPUT], want second"
-    fi
-
-    # The container that exists only to have the volume mounted is removed as
-    # soon as the tar is in. One left behind would hold the volume, and the
-    # next thing wanting it would report it as in use.
-    left=$(docker ps -aq --filter "label=com.github.lhns.remote-docker=seed" 2>/dev/null | wc -l)
-    if [ "$left" -eq 0 ]; then
-        ok "no seed container was left behind"
-    else
-        bad "$left seed containers are still there"
-    fi
 else
-    bad "a container would not start against a delegated copy"
-    sed 's/^/        /' "$WORK/deleg-run.log"
+    bad "no client is running, so the union could not be tested"
 fi
-docker rm -f itest-deleg >/dev/null 2>&1
 
-echo
 echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session the rest
 # of the suite used -- started detached, stopped by asking rather than by
