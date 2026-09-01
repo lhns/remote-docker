@@ -15,7 +15,7 @@ software.
 Reading a project through the share costs a round trip per file per second,
 because the mount revalidates any attribute older than that. Over a link with
 real latency that is the whole cost: measured on a GitHub runner over 300
-files, reading them takes 0.6s unshaped, 45s at 40ms RTT and 239s at 160ms,
+files, reading them takes 0.4s unshaped, 59s at 40ms RTT and 292s at 160ms,
 while a 10mbit link costs almost nothing. Latency, not bandwidth.
 
 Docker already has a word for the fix, and every client already parses it:
@@ -32,6 +32,10 @@ on the NFS mount. What keeps it coherent is the watcher: an edit here is
 replayed into the workspace as a real syscall, which refreshes exactly the
 inode that changed. So `cached` needs watching on, and asking for it without
 says so rather than serving a mount that goes stale.
+
+Measured on the same run: 292s becomes 98s at 160ms RTT, 59s becomes 24s at
+40ms, and the 1,888 attribute revalidations behind those numbers become none.
+What is left is the files' own bytes, which no cache can avoid fetching.
 
 Per workspace as `consistency`, per directory as `consistencyPaths`, and
 `REMOTE_DOCKER_CONSISTENCY` for a CI run. A mount outranks a rule, a rule

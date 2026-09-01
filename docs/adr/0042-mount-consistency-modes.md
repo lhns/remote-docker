@@ -10,21 +10,22 @@
 
 A shared directory is slow enough that people tar their project into the
 workspace by hand instead. Measured by `test/bench.sh` on a GitHub runner, 300
-files in 20 directories, netem on the workspace's loopback:
+files in 20 directories, netem on the workspace's loopback (2026-09-01):
 
 | shape | RTT | walk | read | write |
 |---|---|---|---|---|
-| unshaped | 0.1ms | 0.25s | 0.59s | 1.00s |
-| 20ms | 40ms | 5.35s | 45.12s | 10.29s |
-| 80ms | 160ms | 44.12s | 238.84s | 40.18s |
-| 10mbit | 0.3ms | 0.34s | 1.11s | 1.06s |
+| unshaped | 0.1ms | 0.09s | 0.38s | 0.68s |
+| 20ms | 40ms | 4.87s | 58.76s | 17.11s |
+| 80ms | 160ms | 42.70s | 291.88s | 74.09s |
+| 10mbit | 9.5ms | 0.19s | 0.78s | 0.38s |
 
 Two things follow, and both decide the shape of the answer:
 
 - **Cost tracks LATENCY, not bandwidth.** A 10mbit link costs almost nothing;
-  160ms RTT costs 400×. So the thing to remove is round trips.
+  160ms RTT costs 400x. So the thing to remove is round trips.
 - **`actimeo=1` is where they come from.** Every attribute older than a second
-  is revalidated, and a source tree is nothing but attributes.
+  is revalidated, and a source tree is nothing but attributes. The same run
+  counted 1,888 GETATTRs against 300 READs at 160ms.
 
 ## The decision
 
@@ -80,15 +81,49 @@ the same source asking for different things are refused. The alternative is
 silent: the second `EnsureVolume` recreates the volume the first just made, and
 both containers run under whichever was written last.
 
+## What it bought
+
+Same runner, same tree, same run: the mode is written on the mount and nothing
+else differs.
+
+| RTT | mode | walk | read | write | GETATTR | LOOKUP |
+|---|---|---|---|---|---|---|
+| 0.1ms | consistent | 0.09s | 0.38s | 0.68s | 428 | 117 |
+| | **cached** | 0.09s | 0.28s | 0.19s | **0** | **0** |
+| 40ms | consistent | 4.87s | 58.76s | 17.11s | 1228 | 3 |
+| | **cached** | **2.99s** | **24.48s** | 12.28s | **0** | **0** |
+| 160ms | consistent | 42.70s | 291.88s | 74.09s | 1888 | 3 |
+| | **cached** | **11.65s** | **98.22s** | 49.17s | **13** | **0** |
+| 9.5ms, 10mbit | consistent | 0.19s | 0.78s | 0.38s | 548 | 3 |
+| | **cached** | 0.17s | 0.58s | 0.30s | **0** | **0** |
+
+- **The revalidation is gone**, which is what the mode is: GETATTR goes to zero
+  or near it at every shape.
+- **Worth ~3x at 160ms** on a walk and a read, and less on a write, which is
+  bounded by something else.
+- **What remains is READ and ACCESS**, 300 and 422 in every row above. Those are
+  the file's own bytes and the permission check, and no attribute cache can
+  remove them: a live mount has to fetch what it is asked for. Removing THOSE
+  means not mounting, which is ADR 0043.
+
 ## Consequences
 
 - **Switching costs a volume recreation and nothing else.** `replaceIfStale`
   already rebuilds a managed volume whose driver options changed, so a mode
   change needs no migration. A volume a container still holds is refused with
   the remedy, which is that container.
-- **Deletions remain ADR 0014's gap**, and `cached` does not widen it: the
-  watcher observes a removal here and pokes, and what a container's own watcher
-  sees over NFS is unchanged.
+- **What the poke refreshes is the inode it names, and nothing else.** An edit
+  to an existing file is the case this covers exactly: the SETATTR reply carries
+  the file's real attributes, the workspace's NFS client sees the new mtime and
+  size, and it drops the pages it had. Two other cases are bounded by `actimeo`
+  instead, and are 60s rather than 1s now:
+  - a DELETED file can still appear present, because the parent's cached entry
+    is what says it exists;
+  - a NEW file can be missing from a listing, for the same reason.
+
+  `coarse` watching pokes the directory as well and closes both; `partial` does
+  not. This is the cost of the mode, and it is why `consistent` remains the
+  default.
 - **`nocto` drops close-to-open consistency.** A file being written on the
   workspace and read here mid-write is now less immediately coherent. That
   direction is the one the watcher does not cover; it is also not the direction

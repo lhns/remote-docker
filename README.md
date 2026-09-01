@@ -333,14 +333,14 @@ deletions are the honest gap, and what to do when the budget runs out are in
 Reading a project through the share costs a round trip per file, and the mount
 revalidates any attribute older than a second. Over a link with real latency
 that is the whole cost. Measured over 300 files by `test/bench.sh`, with the
-workspace's loopback shaped:
+workspace's loopback shaped, reading them all:
 
-| RTT | walk | read | write |
-|---|---|---|---|
-| 0.1ms | 0.25s | 0.59s | 1.00s |
-| 40ms | 5.35s | 45.12s | 10.29s |
-| 160ms | 44.12s | 238.84s | 40.18s |
-| 0.3ms, 10mbit | 0.34s | 1.11s | 1.06s |
+| RTT | default | `cached` |
+|---|---|---|
+| 0.1ms | 0.38s | 0.28s |
+| 40ms | 58.8s | 24.5s |
+| 160ms | 291.9s | 98.2s |
+| 9.5ms, 10mbit | 0.78s | 0.58s |
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
@@ -368,7 +368,9 @@ Set it for a whole workspace, or for one tree:
 ```
 
 **`cached` needs [file watching](#file-watching) on**, and refuses to run
-without it. A long attribute cache is only safe because an edit here is
+without it. An edit to an existing file arrives immediately, because the replay
+names that file. A file you CREATE or DELETE can take up to a minute to show up
+in a listing unless watching is `coarse`, which pokes the directory too. A long attribute cache is only safe because an edit here is
 replayed into the workspace, which refreshes exactly the file that changed. A
 mount outranks a per-directory rule, which outranks the workspace setting, and
 switching costs a volume rebuild rather than a migration.
