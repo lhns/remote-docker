@@ -39,15 +39,10 @@ func (c *APIClient) SeedVolume(ctx context.Context, image, volume string, tree i
 	if err != nil {
 		return err
 	}
-	// Always, including on the error path: a container left behind holds the
-	// volume, and the next thing to want that volume reports it as in use.
-	defer func() {
-		if err := c.removeContainer(context.WithoutCancel(ctx), id); err != nil {
-			// Nothing the caller can do, and the seed itself succeeded or
-			// failed on its own terms.
-			_ = err
-		}
-	}()
+	// Always, and with a context of its own: a container left behind holds the
+	// volume, so removing it must survive whatever cancelled the seed. The
+	// error goes nowhere because the caller already has the one that matters.
+	defer func() { _ = c.removeContainer(context.WithoutCancel(ctx), id) }()
 
 	return c.putArchive(ctx, id, seedTarget, tree)
 }
@@ -137,7 +132,6 @@ func (c *APIClient) putArchive(ctx context.Context, id, path string, tree io.Rea
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("proxy: filling the volume: %s", apiError(resp))
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 

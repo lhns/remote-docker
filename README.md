@@ -256,7 +256,7 @@ default.**
 | `REMOTE_DOCKER_USER` | `user` | `--user` | your local username |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
-| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | | `consistent`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
+| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `consistent`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
 | `REMOTE_DOCKER_WATCH` | `watch` | `workspace create --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |

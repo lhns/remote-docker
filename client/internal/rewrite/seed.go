@@ -103,6 +103,28 @@ func writeEntry(tw *tar.Writer, p, name string, info fs.FileInfo) error {
 		link = filepath.ToSlash(target)
 	}
 
+	// Opened BEFORE the header is written, so a file this machine cannot read
+	// -- no permission, or locked by another process, which is ordinary on
+	// Windows -- is simply absent from the copy. Writing the header first
+	// meant the entry had to be filled with something, and what it was filled
+	// with was NULs: a file that is there and is wrong.
+	var f *os.File
+	if info.Mode().IsRegular() {
+		opened, err := os.Open(p)
+		if err != nil {
+			return nil
+		}
+		defer opened.Close()
+		f = opened
+
+		// The open file's own size, rather than the walk's: between the two a
+		// build can have rewritten it, and a header that disagrees with what
+		// follows is a corrupt stream rather than a stale file.
+		if current, err := f.Stat(); err == nil {
+			info = current
+		}
+	}
+
 	header, err := tar.FileInfoHeader(info, link)
 	if err != nil {
 		// Not a file type tar can describe: a socket, a device, a pipe.
@@ -121,25 +143,17 @@ func writeEntry(tw *tar.Writer, p, name string, info fs.FileInfo) error {
 	if err := tw.WriteHeader(header); err != nil {
 		return fmt.Errorf("rewrite: writing %s to the seed: %w", name, err)
 	}
-	if !info.Mode().IsRegular() {
+	if f == nil {
 		return nil
 	}
-
-	f, err := os.Open(p)
-	if err != nil {
-		// Between the walk and the open, or simply not ours to read. The
-		// header is already written, so the entry has to be filled: a short
-		// entry corrupts the stream.
-		return padEntry(tw, header.Size)
-	}
-	defer f.Close()
 
 	written, err := io.Copy(tw, io.LimitReader(f, header.Size))
 	if err != nil {
 		return fmt.Errorf("rewrite: reading %s: %w", p, err)
 	}
-	// A file that shrank between the walk and the read leaves the entry short,
-	// which the tar writer reports as an error on the next header. Pad it.
+	// A file that shrank while it was being read leaves the entry short, which
+	// the tar writer reports on the next header. Pad it rather than fail: the
+	// copy has a truncated file, and the alternative is no copy at all.
 	return padEntry(tw, header.Size-written)
 }
 
