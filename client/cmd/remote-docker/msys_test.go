@@ -98,6 +98,11 @@ func TestUnmangleBind(t *testing.T) {
 		{"options keep their commas",
 			`C:\x;C:\Program Files\Git\app;ro,z`,
 			`C:\x:/app:ro,z`},
+		// A mount consistency rides in that same list (ADR 0042), so this
+		// repair is what carries `:ro,cached` through Git Bash intact.
+		{"a consistency survives with the options",
+			`C:\x;C:\Program Files\Git\app;ro,cached`,
+			`C:\x:/app:ro,cached`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, _, ok := m.unmangleBind(c.mangled)

@@ -343,3 +343,27 @@ func TestAMountConsistencyThatIsNotOneIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want the word named", err)
 	}
 }
+
+// A single file leaves Binds for Mounts (ADR 0039), and the consistency is
+// consumed before that walk: fileMount refuses any option it does not know, so
+// a word left in the list would make `-v file:/f:ro,cached` fail on the option
+// rather than mount the file.
+func TestASingleFileTakesAConsistencyToo(t *testing.T) {
+	r, sharer, volumes := newRewriter()
+	r.Watching = true
+	sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
+
+	out, err := r.ContainerCreate(t.Context(),
+		[]byte(`{"HostConfig":{"Binds":["/home/alice/app.conf:/etc/app.conf:ro,cached"]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+
+	mount := decodeHostConfig(t, out)["Mounts"].([]any)[0].(map[string]any)
+	if mount["ReadOnly"] != true {
+		t.Errorf("ReadOnly = %v, want the flag that keeps a container out of the file", mount["ReadOnly"])
+	}
+	if o := optionsFor(t, volumes); !strings.Contains(o, "actimeo=60") {
+		t.Errorf("volume options = %q, want the long attribute cache", o)
+	}
+}

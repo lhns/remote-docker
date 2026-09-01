@@ -34,7 +34,7 @@ inode that changed. So `cached` needs watching on, and asking for it without
 says so rather than serving a mount that goes stale.
 
 Measured on the same run: 292s becomes 98s at 160ms RTT, 59s becomes 24s at
-40ms, and the 1,888 attribute revalidations behind those numbers become none.
+40ms, and the 1,888 attribute revalidations behind those numbers become 12.
 What is left is the files' own bytes, which no cache can avoid fetching.
 
 Per workspace as `consistency`, per directory as `consistencyPaths`, and

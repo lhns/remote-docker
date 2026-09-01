@@ -335,12 +335,12 @@ revalidates any attribute older than a second. Over a link with real latency
 that is the whole cost. Measured over 300 files by `test/bench.sh`, with the
 workspace's loopback shaped, reading them all:
 
-| RTT | default | `cached` |
-|---|---|---|
-| 0.1ms | 0.38s | 0.28s |
-| 40ms | 58.8s | 24.5s |
-| 160ms | 291.9s | 98.2s |
-| 9.5ms, 10mbit | 0.78s | 0.58s |
+| RTT | default | `cached` | `delegated` |
+|---|---|---|---|
+| 0.1ms | 0.43s | 0.31s | 0.06s |
+| 40ms | 58.8s | 24.5s | 0.06s |
+| 160ms | 292.0s | 98.2s | 0.06s |
+| 0.3ms, 10mbit | 0.84s | 0.62s | 0.06s |
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
@@ -374,12 +374,14 @@ container writes there never comes back, an edit here does not reach a
 container already running, and the next container gets the tree as it is then.
 
 **`cached` needs [file watching](#file-watching) on**, and refuses to run
-without it. An edit to an existing file arrives immediately, because the replay
-names that file. A file you CREATE or DELETE can take up to a minute to show up
-in a listing unless watching is `coarse`, which pokes the directory too. A long attribute cache is only safe because an edit here is
-replayed into the workspace, which refreshes exactly the file that changed. A
-mount outranks a per-directory rule, which outranks the workspace setting, and
-switching costs a volume rebuild rather than a migration.
+without it: a long attribute cache is safe only because an edit here is
+replayed into the workspace, which refreshes exactly the file that changed. So
+an edit to an existing file arrives at once, and a file you CREATE or DELETE
+can take up to a minute to appear in a listing unless watching is `coarse`,
+which pokes the directory too.
+
+A mount outranks a per-directory rule, which outranks the workspace setting,
+and switching costs a volume rebuild rather than a migration.
 
 What is in this release, and what is still unproven:
 [`CHANGELOG.md`](CHANGELOG.md).
