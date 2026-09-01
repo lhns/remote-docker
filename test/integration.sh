@@ -1430,6 +1430,62 @@ else
     bad "could not build the replay probe"
 fi
 
+echo
+echo "== 15b. the cached consistency =="
+# Docker's own word for it, applied to the NFS mount: the container may cache
+# read data and directory structure, so the kernel stops revalidating every
+# attribute (ADR 0042). What makes that safe is the watcher, which is why this
+# section runs against the watching client section 15 started and why asking
+# for it without one is refused.
+#
+# The claim being tested is the pair: a long attribute cache AND an edit here
+# still arriving. Either alone is easy and neither alone is the feature.
+CACHEDIR="$WORK/cachedir"
+mkdir -p "$CACHEDIR"
+echo "first" >"$CACHEDIR/marker"
+
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    if dockert run -d --name itest-cached -v "$CACHEDIR:/w:cached"         alpine:3 sleep 300 >"$WORK/cached-run.log" 2>&1; then
+        ok "a container starts against a cached mount"
+
+        if outputs '^first$' docker exec itest-cached cat /w/marker; then
+            ok "it reads the file through the cached mount"
+        else
+            bad "reading through a cached mount: [$LAST_OUTPUT]"
+        fi
+
+        # The volume carries the mount options, which is where the mode lives:
+        # nothing else about the mount differs, so this is the whole of it.
+        vol=$(docker inspect -f '{{range .Mounts}}{{.Name}}{{end}}' itest-cached 2>/dev/null)
+        if outputs 'actimeo=60' docker volume inspect -f '{{.Options.o}}' "$vol"; then
+            ok "the volume was built with the long attribute cache"
+        else
+            bad "volume $vol options: [$LAST_OUTPUT]"
+        fi
+
+        # The part a long attribute cache would break. actimeo=60 means the
+        # kernel may trust what it has for a minute, so without the watcher's
+        # poke this reads "first" until it expires.
+        echo "second" >"$CACHEDIR/marker"
+        seen=""
+        for _ in $(seq 1 20); do
+            seen=$(docker exec itest-cached cat /w/marker 2>&1)
+            [ "$seen" = "second" ] && break
+            sleep 1
+        done
+        if [ "$seen" = "second" ]; then
+            ok "an edit here is visible through the cached mount"
+        else
+            bad "the cached mount still reads [$seen] after 20s"
+        fi
+    else
+        bad "a container would not start against a cached mount"
+        sed 's/^/        /' "$WORK/cached-run.log"
+    fi
+    docker rm -f itest-cached >/dev/null 2>&1
+else
+    bad "no watching client is running, so cached could not be tested"
+fi
 
 echo
 echo "== 16. a background session, with no terminal held open =="

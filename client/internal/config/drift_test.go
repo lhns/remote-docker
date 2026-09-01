@@ -93,6 +93,19 @@ var settingSources = map[string]struct {
 			return c.WatchExclude[0]
 		},
 	},
+	"Consistency": {
+		env: EnvConsistency, override: false, sample: "cached",
+		want: func(c Config) string { return c.Consistency },
+	},
+	// No environment variable: a per-path rule is a map, and there is no
+	// spelling of one in a variable that would not be a small language of its
+	// own. The workspace default covers the case a variable is wanted for,
+	// which is a CI run saying what every share gets.
+	"ConsistencyPaths": {
+		env: "", override: false, sample: "cached",
+		want: func(c Config) string { return c.ConsistencyPaths[samplePath] },
+	},
+
 	// The samples are spelled the way time.Duration prints them, so a value
 	// that arrived can be compared with the string that set it.
 	"IdleTimeout": {
@@ -308,6 +321,10 @@ func jsonName(field string) string {
 }
 
 // typed converts a sample to the JSON type that field holds.
+// samplePath is the key a map-valued setting is written under, so the entry
+// above can read the same one back.
+const samplePath = "/home/alice/project"
+
 func typed(field, sample string) any {
 	f, _ := reflect.TypeOf(Workspace{}).FieldByName(field)
 	switch f.Type.Kind() {
@@ -319,6 +336,8 @@ func typed(field, sample string) any {
 		return sample == "true"
 	case reflect.Slice:
 		return []string{sample}
+	case reflect.Map:
+		return map[string]string{samplePath: sample}
 	default:
 		return sample
 	}

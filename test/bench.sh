@@ -44,8 +44,11 @@ FILES=${BENCH_FILES:-300}
 DIRS=${BENCH_DIRS:-20}
 WRITES=${BENCH_WRITES:-100}
 
-# One row each: what netem is told, as delay:rate. A rate of 0 means unshaped.
+# One row per mode per shape. The shape is what netem is told, as delay:rate,
+# where a rate of 0 means unshaped; the mode is Docker's consistency word,
+# written on the mount exactly as a person would write it (ADR 0042).
 SHAPES=${BENCH_SHAPES:-"0ms:0 20ms:0 80ms:0 0ms:10mbit"}
+MODES=${BENCH_MODES:-"consistent cached"}
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
@@ -151,7 +154,10 @@ fi
 
 echo
 echo "== the session =="
-"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
+# Watching, because `cached` rests on it: the client pokes what changed, and a
+# long attribute cache with nothing to invalidate it is refused rather than
+# served (ADR 0042).
+REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     ok "the local Docker endpoint answers"
@@ -179,8 +185,9 @@ ok "tree built"
 dockert run --rm -v "$PROJECT:/w" alpine:3 true >/dev/null 2>&1
 ok "warm"
 
-printf '\n%-12s %-8s %-8s %-8s %-8s %s\n' shape rtt_ms walk_s read_s write_s nfs_ops
-printf '%s\n' "----------------------------------------------------------------------------"
+printf '\n%-12s %-11s %-8s %-8s %-8s %-8s %s\n' \
+    shape mode rtt_ms walk_s read_s write_s nfs_ops
+printf '%s\n' "$(printf '=%.0s' $(seq 1 86))"
 
 for spec in $SHAPES; do
     delay=${spec%%:*}
@@ -192,32 +199,42 @@ for spec in $SHAPES; do
         info "cannot shape $spec; skipping the row"
         continue
     fi
+    measured=$(rtt)
 
-    # One container per row, started before anything is timed and holding the
-    # mount for the whole of it: a fresh mount, so the row starts with a cold
-    # attribute cache, and a live one, so the counters can still be read at the
-    # end.
-    dockert rm -f "$PIN" >/dev/null 2>&1
-    if ! dockert run -d --name "$PIN" -v "$PROJECT:/w" alpine:3 sleep 3600 >/dev/null 2>&1; then
-        bad "could not start the workload container for $spec"
-        continue
-    fi
+    for mode in $MODES; do
+        # One container per row, started before anything is timed and holding
+        # the mount for the whole of it: a fresh mount, so the row starts with
+        # a cold attribute cache, and a live one, so the counters can still be
+        # read at the end.
+        #
+        # The mode is written on the mount exactly as a person writes it. A
+        # share whose consistency changed has its volume rebuilt, which is what
+        # makes switching free, so these rows exercise that too.
+        dockert rm -f "$PIN" >/dev/null 2>&1
+        if ! dockert run -d --name "$PIN" -v "$PROJECT:/w:$mode" \
+            alpine:3 sleep 3600 >"$WORK/pin.log" 2>&1; then
+            bad "no workload container for $spec $mode"
+            sed 's/^/        /' "$WORK/pin.log"
+            continue
+        fi
 
-    before=$(nfsops)
-    walk=$(elapsed dockert exec "$PIN" sh -c 'find /w -type f | wc -l')
-    read=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
-    # Escaped: seq and the loop variable belong to the shell in the container.
-    burst="for i in \$(seq 1 $WRITES); do echo built >/w/out/\$i; done"
-    write=$(elapsed dockert exec "$PIN" sh -c "$burst")
-    after=$(nfsops)
-    dockert rm -f "$PIN" >/dev/null 2>&1
+        before=$(nfsops)
+        walk=$(elapsed dockert exec "$PIN" sh -c 'find /w -type f | wc -l')
+        read=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
+        # Escaped: seq and the loop variable belong to the shell in the container.
+        burst="for i in \$(seq 1 $WRITES); do echo built >/w/out/\$i; done"
+        write=$(elapsed dockert exec "$PIN" sh -c "$burst")
+        after=$(nfsops)
+        dockert rm -f "$PIN" >/dev/null 2>&1
 
-    printf '%-12s %-8s %-8s %-8s %-8s %s\n' \
-        "$delay/$rate" "$(rtt)" "$walk" "$read" "$write" "$(delta "$before" "$after")"
+        printf '%-12s %-11s %-8s %-8s %-8s %-8s %s\n' \
+            "$delay/$rate" "$mode" "$measured" "$walk" "$read" "$write" \
+            "$(delta "$before" "$after")"
+    done
 done
 
 unshape
 echo
-echo "Compare rows across modes, not against each other: what a mode has to show"
-echo "is that its wall-clock stops tracking the latency knob. nfs_ops is where"
-echo "the time went, and a mode with no row does not ship."
+echo "Compare a mode against consistent at the same shape: what a mode has to"
+echo "show is that its wall-clock stops tracking the latency knob. nfs_ops is"
+echo "where the time went, and a mode with no row does not ship."
