@@ -113,11 +113,12 @@ from THAT list, never from what it can produce: a workspace older than
 compression names no codecs, and a client that chose for itself would send one
 it would refuse.
 
-**gzip rather than zstd, and the reason is the dependency graph rather than the
-ratio.** gzip is in the standard library; zstd would add a module to the side of
-this that ADR 0021 holds at four direct requires and 24 go.sum lines, and that
-number is a claim the split was made for. A source tree is text, where gzip
-already takes most of what there is to take.
+**zstd, and it costs the agent a dependency.** ADR 0021 keeps that side's graph
+small and states the number, and this takes it from 24 `go.sum` lines to 28. Paid
+deliberately: the fill is the one bulk transfer this protocol makes, and zstd
+compresses a source tree harder and faster than the standard library's gzip. The
+point of stating the count was never that it must not grow, but that growing it
+is a decision somebody made rather than something that happened.
 
 It applies to the client's direction only, which is where the bulk is: the fill
 sends the whole tree, and invalidation sends whatever an editor or a checkout

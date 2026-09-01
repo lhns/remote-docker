@@ -70,7 +70,7 @@ shared one.
 
 | | third-party modules | `go.sum` |
 |---|---|---|
-| agent | 7 | 24 lines |
+| agent | 8 | 28 lines |
 | client | ~130 | 786 lines |
 | core | 1 | 2 lines |
 
@@ -100,7 +100,7 @@ of which fail by *succeeding*:
 
 - **The root package imports NEITHER SSH library.** Go links what is imported, so
   one package importing both would put a server in the client binary. It is why
-  the agent's 24 `go.sum` lines did not move when the transport was extracted.
+  the agent's `go.sum` did not move when the transport was extracted.
   Corollary: anything inexpressible without an SSH library is an implementation,
   so `tunnelclient` dials from `core-client` and `tunnelserver` answers from
   `core-agent`.
@@ -158,8 +158,14 @@ that passes without proving anything.
 
 - **A client dependency cannot break the agent's build.** The whole purchase.
   Unplanned dividend: the agent ships as its own release artifact for a VM
-  workspace (ADR 0025) as a goreleaser block with `dir: agent` and 24 `go.sum`
+  workspace (ADR 0025) as a goreleaser block with `dir: agent` and 28 `go.sum`
   lines.
+
+  That number is watched rather than fixed. It went from 24 to 28 on 2026-09-01
+  when the cache channel took `klauspost/compress` for zstd (ADR 0044) -- a
+  dependency bought on purpose for the one bulk transfer this protocol makes,
+  and the point of stating the count is that such a purchase is visible rather
+  than that it never happens.
 - **`core`'s library packages have no third-party dependency at all.** The one
   `x/sys` in `core/go.mod` is the probes reading raw inotify.
 - **`./...` stops at every module boundary**, so the five-module loop is the only

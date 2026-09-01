@@ -2,7 +2,6 @@ package unions
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/lhns/remote-docker/core-agent/notify"
 	"github.com/lhns/remote-docker/core-agent/union"
@@ -152,12 +153,12 @@ func decoded(codec string, body io.Reader) (io.Reader, func(), error) {
 	case workspace.CodecNone:
 		return body, func() {}, nil
 
-	case workspace.CodecGzip:
-		zr, err := gzip.NewReader(body)
+	case workspace.CodecZstd:
+		zr, err := zstd.NewReader(body)
 		if err != nil {
 			return body, func() {}, fmt.Errorf("unions: reading a %s batch: %w", codec, err)
 		}
-		return zr, func() { _ = zr.Close() }, nil
+		return zr, zr.Close, nil
 
 	default:
 		return body, func() {}, fmt.Errorf("unions: a batch arrived encoded as %q, which this workspace cannot read", codec)

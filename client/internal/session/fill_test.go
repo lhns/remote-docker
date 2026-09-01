@@ -3,12 +3,13 @@ package session
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/lhns/remote-docker/client/internal/cachefill"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -17,7 +18,7 @@ import (
 // The batch a fill sends is a tar, optionally compressed, and the frame states
 // the length of what is ACTUALLY sent -- so whatever builds the bytes has to
 // encode them. A payload whose length describes the tar and whose contents are
-// a gzip stream desynchronises the channel for everything after it.
+// a zstd stream desynchronises the channel for everything after it.
 func TestTarOfEncodesWhatItSays(t *testing.T) {
 	root := t.TempDir()
 	// Compressible on purpose: a tar of random bytes is larger compressed, and
@@ -36,20 +37,18 @@ func TestTarOfEncodesWhatItSays(t *testing.T) {
 		t.Fatalf("the plain batch held %v", names)
 	}
 
-	zipped, err := tarOf(root, entries, workspace.CodecGzip)
+	zipped, err := tarOf(root, entries, workspace.CodecZstd)
 	if err != nil {
-		t.Fatalf("tarOf gzip: %v", err)
+		t.Fatalf("tarOf zstd: %v", err)
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(zipped))
+	zr, err := zstd.NewReader(bytes.NewReader(zipped))
 	if err != nil {
-		t.Fatalf("the batch is not a gzip stream: %v", err)
+		t.Fatalf("the batch is not a zstd stream: %v", err)
 	}
 	if names := tarNames(t, zr); len(names) != 1 || names[0] != "main.go" {
 		t.Fatalf("the compressed batch held %v", names)
 	}
-	if err := zr.Close(); err != nil {
-		t.Errorf("closing the gzip reader: %v", err)
-	}
+	zr.Close()
 
 	// The point of doing it at all, on the kind of content a source tree is.
 	if len(zipped) >= len(plain) {
@@ -65,15 +64,16 @@ func TestTarOfClosesTheCompressor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	zipped, err := tarOf(root, []cachefill.Entry{{Path: "a.go", Size: 1}}, workspace.CodecGzip)
+	zipped, err := tarOf(root, []cachefill.Entry{{Path: "a.go", Size: 1}}, workspace.CodecZstd)
 	if err != nil {
 		t.Fatalf("tarOf: %v", err)
 	}
 
-	zr, err := gzip.NewReader(bytes.NewReader(zipped))
+	zr, err := zstd.NewReader(bytes.NewReader(zipped))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer zr.Close()
 	// Reading to EOF is what checks the footer: a stream missing it fails here
 	// with ErrUnexpectedEOF rather than at the header.
 	if _, err := io.Copy(io.Discard, zr); err != nil {

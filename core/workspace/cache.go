@@ -35,20 +35,20 @@ const (
 	// and what every version can read.
 	CodecNone = ""
 
-	// CodecGzip is a gzip stream wrapping the tar.
+	// CodecZstd is a zstd stream wrapping the tar.
 	//
-	// gzip rather than zstd, and the reason is the agent's dependency graph
-	// rather than the ratio: gzip is in the standard library, and zstd would
-	// add a module to the side of this that ADR 0021 keeps at four direct
-	// requires. A source tree is text, where gzip already gets most of what
-	// there is to get, and the fill is bounded by bandwidth rather than CPU on
-	// exactly the links this helps.
-	CodecGzip = "gzip"
+	// It costs the agent a direct dependency, which is not free on that side:
+	// ADR 0021 split the modules so the agent's graph could be small and
+	// stated, and this takes it from four direct requires to five. Paid
+	// deliberately, because the fill is the one bulk transfer this protocol
+	// makes and zstd compresses a source tree harder and faster than the
+	// standard library's gzip does.
+	CodecZstd = "zstd"
 )
 
 // Codecs are what this version can read, announced in the greeting so a client
 // never sends one the agent would refuse.
-func Codecs() []string { return []string{CodecGzip} }
+func Codecs() []string { return []string{CodecZstd} }
 
 // SupportsCodec reports whether a codec is one this version can read. The empty
 // codec is always readable: it is a plain tar.

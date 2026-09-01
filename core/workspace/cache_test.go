@@ -42,12 +42,17 @@ func TestCacheRequestValidate(t *testing.T) {
 			req:  CacheRequest{Op: OpApply, Export: share},
 		},
 		{
-			// The field exists so compression is a negotiation later rather
-			// than a new protocol; until then, saying yes to one we do not
-			// have would be worse than refusing.
+			// The field is what makes compression a negotiation rather than a
+			// new protocol. Saying yes to one this version has not got would
+			// be worse than refusing: the payload would reach the archive
+			// reader as whatever the bytes happened to be.
 			name: "an apply asking for a codec this version has not got",
-			req:  CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: "zstd"},
+			req:  CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"},
 			want: "codec",
+		},
+		{
+			name: "an apply compressed with the codec this version has",
+			req:  CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd},
 		},
 		{
 			name: "a drop",
@@ -121,9 +126,9 @@ func TestCacheCodecNegotiation(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "an agent that announces gzip",
+			name:  "an agent that announces zstd",
 			hello: CacheHello{Version: CacheVersion, Codecs: Codecs()},
-			codec: CodecGzip,
+			codec: CodecZstd,
 			want:  true,
 		},
 		{
@@ -131,7 +136,7 @@ func TestCacheCodecNegotiation(t *testing.T) {
 			// from what it can produce.
 			name:  "an agent from before compression",
 			hello: CacheHello{Version: CacheVersion},
-			codec: CodecGzip,
+			codec: CodecZstd,
 			want:  false,
 		},
 		{
@@ -160,8 +165,8 @@ func TestCacheCodecNegotiation(t *testing.T) {
 func TestCacheRequestCodecs(t *testing.T) {
 	const share = "/m/00112233445566ff"
 
-	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: CodecGzip}).Validate(); err != nil {
-		t.Errorf("a gzip batch was refused: %v", err)
+	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd}).Validate(); err != nil {
+		t.Errorf("a zstd batch was refused: %v", err)
 	}
 	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"}).Validate(); err == nil {
 		t.Error("a batch named an encoding this version has not got and was accepted")

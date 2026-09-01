@@ -66,8 +66,8 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 	// Chosen from what the AGENT said it can read, never from what this client
 	// can produce: a workspace older than compression announces no codecs at
 	// all, and sending it one would be refused rather than negotiated.
-	if reply.Hello.Accepts(workspace.CodecGzip) {
-		c.codec = workspace.CodecGzip
+	if reply.Hello.Accepts(workspace.CodecZstd) {
+		c.codec = workspace.CodecZstd
 	}
 	return c, nil
 }

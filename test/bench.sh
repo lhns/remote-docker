@@ -41,6 +41,13 @@ dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
 # Sized for CI. Every operation on every file costs a round trip, so at 80ms a
 # tree ten times this size is an hour rather than a table.
 FILES=${BENCH_FILES:-300}
+
+# CACHE_FILES is the tree the cache table uses, bigger than the one above on
+# purpose: 300 files settle in a fraction of a second whatever the link, so cold
+# and warm measure the same thing and the gap between them -- which is the whole
+# feature -- cannot appear. The first table keeps 300, because its rows are
+# compared against ADR 0042's, which were measured on that tree.
+CACHE_FILES=${BENCH_CACHE_FILES:-3000}
 DIRS=${BENCH_DIRS:-20}
 WRITES=${BENCH_WRITES:-100}
 
@@ -172,12 +179,19 @@ echo
 echo "== a project-shaped tree: $FILES files across $DIRS directories =="
 PROJECT="$WORK/project"
 filler=$(head -c 400 /dev/zero | tr '\0' 'x')
-for d in $(seq 1 "$DIRS"); do mkdir -p "$PROJECT/pkg$d"; done
-for f in $(seq 1 "$FILES"); do
-    printf 'package p%d\n// %s\n' "$f" "$filler" \
-        >"$PROJECT/pkg$((f % DIRS + 1))/file$f.go"
-done
-mkdir -p "$PROJECT/out"
+# build_tree makes a project-shaped tree of a given size, because the cache
+# table needs one of its own and a bigger one.
+build_tree() {
+    local root=$1 files=$2 d f
+    for d in $(seq 1 "$DIRS"); do mkdir -p "$root/pkg$d"; done
+    for f in $(seq 1 "$files"); do
+        printf 'package p%d\n// %s\n' "$f" "$filler" \
+            >"$root/pkg$((f % DIRS + 1))/file$f.go"
+    done
+    mkdir -p "$root/out"
+}
+
+build_tree "$PROJECT" "$FILES"
 ok "tree built"
 
 # The image is pulled and the volume created before anything is timed, so the
@@ -250,8 +264,14 @@ unshape
 #             got anywhere. Should look like `cached`, because that is what it
 #             IS: a miss goes to the live mount.
 #   settle    how long until the cache holds the whole tree. The number
-#             compression would improve, and the one that scales with the tree
+#             compression improves, and the one that scales with the tree
 #             rather than with the latency.
+#
+# On a tree of its OWN per shape, and a bigger one. A share id comes from its
+# path, so reusing one directory reuses its cache volume and every shape after
+# the first measured a cache that was already full -- settle read 0.08s at 40ms
+# RTT, which is not a fill of 300 files over a shaped link and was the tell.
+# 3000 files rather than 300 so that settling takes long enough to see at all.
 #   warm      the same read afterwards. The gap between cold and warm is the
 #             entire feature.
 #   invalidate  an edit here, then the container reading it.
@@ -274,8 +294,18 @@ for spec in $SHAPES; do
     fi
     measured=$(rtt)
 
+    # A DIRECTORY OF ITS OWN per shape, and it is what makes this table mean
+    # anything. A share id is derived from its path, so reusing one directory
+    # reuses its cache volume: from the second shape on, the cache was already
+    # full and settle measured nothing. It read 0.08s at 40ms RTT, which is not
+    # a fill of 300 files over a shaped link and was the tell.
+    safe=$(printf '%s' "$spec" | tr -c 'a-zA-Z0-9' '-')
+    tree="$WORK/cache$safe"
+    rm -rf "$tree"
+    build_tree "$tree" "$CACHE_FILES"
+
     dockert rm -f "$PIN" >/dev/null 2>&1
-    if ! dockert run -d --name "$PIN" -v "$PROJECT:/w:delegated"         alpine:3 sleep 3600 >"$WORK/bench-deleg.log" 2>&1; then
+    if ! dockert run -d --name "$PIN" -v "$tree:/w:delegated"         alpine:3 sleep 3600 >"$WORK/bench-deleg.log" 2>&1; then
         # What docker said, and what the workspace was doing. A row that is
         # simply absent from a benchmark reads as a mode that was not measured
         # rather than one that failed, which is the more misleading of the two.
@@ -294,7 +324,10 @@ for spec in $SHAPES; do
     settle_start=$(date +%s.%N)
     settled=timeout
     for _ in $(seq 1 300); do
-        if outputs 'cache .*files, cached$' "$WORK/remote-docker" remote status; then
+        # This share's row, not any share's: every earlier shape left a
+        # settled cache behind, and an unanchored match would report the first
+        # of those as this one settling instantly.
+        if outputs "cache$safe: .* files, cached\$" "$WORK/remote-docker" remote status; then
             settled=$( { date +%s.%N; } | awk -v s="$settle_start" '{ printf "%.2f", $1 - s }')
             break
         fi
@@ -304,7 +337,7 @@ for spec in $SHAPES; do
     warm=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
 
     # An edit here, and how long until the container sees it.
-    echo "edited at $(date +%s)" >"$PROJECT/pkg1/invalidate-probe"
+    echo "edited at $(date +%s)" >"$tree/pkg1/invalidate-probe"
     inv_start=$(date +%s.%N)
     inv=timeout
     for _ in $(seq 1 60); do
@@ -320,7 +353,7 @@ for spec in $SHAPES; do
     wb_start=$(date +%s.%N)
     wb=timeout
     for _ in $(seq 1 60); do
-        if [ -f "$PROJECT/writeback-probe" ]; then
+        if [ -f "$tree/writeback-probe" ]; then
             wb=$( { date +%s.%N; } | awk -v s="$wb_start" '{ printf "%.2f", $1 - s }')
             break
         fi
@@ -332,11 +365,12 @@ for spec in $SHAPES; do
         hostdocker logs "$CONTAINER" 2>&1 |
             grep -iE "cache layer|union|cache request" | tail -5 | sed 's/^/        workspace: /'
     fi
-    rm -f "$PROJECT/writeback-probe" "$PROJECT/pkg1/invalidate-probe"
+    rm -f "$tree/writeback-probe" "$tree/pkg1/invalidate-probe"
 
     printf '%-12s %-8s %-8s %-8s %-8s %-11s %-10s
 '         "$delay/$rate" "$measured" "$cold" "$settled" "$warm" "$inv" "$wb"
     dockert rm -f "$PIN" >/dev/null 2>&1
+    rm -rf "$tree"
 done
 
 unshape

@@ -74,8 +74,8 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
 
-agent/go.mod             the agent module: THE GLUE. 4 direct third-party
-                         requires, 24 go.sum lines
+agent/go.mod             the agent module: THE GLUE. 5 direct third-party
+                         requires, 28 go.sum lines
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     wslisten/            the same SSH server, reached over a WebSocket. Serves
@@ -212,7 +212,7 @@ premise of the project, and it applies to building it too. So:
   every default is either a prompt nobody is there to answer or an acceptance of
   anybody -- so a nil callback is refused by name rather than mid-handshake.
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
-  and that is the whole reason the agent's 24 go.sum lines did not move.
+  and that is the whole reason the agent's go.sum did not move for it.
 - **Only `/containers/create` is ever decoded.** Everything else is copied
   through. The body is handled as generic JSON, never typed structs, so
   unknown fields survive.
@@ -413,9 +413,10 @@ premise of the project, and it applies to building it too. So:
 - **A payload's codec is chosen from what the AGENT announced, never from what
   the client can produce** (ADR 0044). The greeting carries the list; a
   workspace older than compression names none, and a client that picked for
-  itself would send it something it refuses. gzip and not zstd, because zstd is
-  a module and the agent's four direct requires are a claim ADR 0021 was made
-  for -- so this is stdlib or nothing.
+  itself would send it something it refuses. zstd, which cost the agent a
+  direct dependency and took ADR 0021's stated count from 24 go.sum lines to
+  28 -- bought deliberately for the one bulk transfer this protocol makes, and
+  the reason that count is written down is so a purchase like it is visible.
 - **A serving union is ADOPTED, never mounted over** (ADR 0044). After an agent
   restart the child is an orphan whose mount is still serving every container
   bound to it; mounting again on the same path stacks a second fuse-overlayfs

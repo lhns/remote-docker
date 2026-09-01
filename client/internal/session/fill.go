@@ -3,13 +3,14 @@ package session
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/lhns/remote-docker/client/internal/cachefill"
 	"github.com/lhns/remote-docker/client/internal/writeback"
@@ -260,12 +261,19 @@ func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error)
 	// bytes that leave are the encoded ones -- which is what the frame's length
 	// has to describe.
 	var (
-		zw    *gzip.Writer
+		zw    *zstd.Encoder
 		sink  io.Writer = &buf
-		coded           = codec == workspace.CodecGzip
+		coded           = codec == workspace.CodecZstd
 	)
 	if coded {
-		zw = gzip.NewWriter(&buf)
+		var err error
+		// The default level, which is where zstd's ratio-per-second is: a
+		// source tree compresses hard enough that the link, not the CPU, is
+		// what the fill waits on.
+		zw, err = zstd.NewWriter(&buf)
+		if err != nil {
+			return nil, err
+		}
 		sink = zw
 	}
 
