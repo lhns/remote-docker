@@ -84,9 +84,10 @@ func FromEnv(getenv func(string) string) (Spec, string, error) {
 	}
 }
 
-// root is the daemon's filesystem as the agent can read it, which is how the
-// agent inspects a mount it cannot enter. Empty PID means the agent's own.
-func (s Spec) root() string {
+// Root is the daemon's filesystem as the agent can read it, which is how the
+// agent inspects and writes into a mount it cannot enter. A zero PID means the
+// agent's own filesystem, which is the shared-daemon mode.
+func (s Spec) Root() string {
 	if s.PID == 0 {
 		return "/"
 	}
@@ -106,7 +107,7 @@ func (s Spec) root() string {
 // A context because a wedged server answers nothing at all, and every caller
 // asking would otherwise wait with it.
 func Alive(ctx context.Context, spec Spec) error {
-	merged := path.Join(spec.root(), spec.Merged())
+	merged := path.Join(spec.Root(), spec.Merged())
 
 	done := make(chan error, 1)
 	go func() {

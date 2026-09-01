@@ -129,6 +129,8 @@ func (e FSEvent) Validate() error {
 // instead of refusing it, so "/a/../../etc/shadow" would arrive as a path the
 // agent happily touches. A malformed path is a bug worth reporting, never one
 // worth guessing about.
+func ValidSharePath(p string) error { return validateSharePath(p) }
+
 func validateSharePath(p string) error {
 	switch {
 	case p == "":
