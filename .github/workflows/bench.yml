@@ -1,9 +1,17 @@
 name: bench
 
-# Manual only. This reports numbers rather than passing or failing, and it takes
-# minutes: a measurement, not a gate. Run it when a change claims to make a
-# mounted directory faster, and paste the table into the record that claims it.
+# On request only. This reports numbers rather than passing or failing, and it
+# takes minutes: a measurement, not a gate. Run it when a change claims to make
+# a mounted directory faster, and paste the table into the record that claims
+# it.
+#
+# Two ways in, because workflow_dispatch only exists for a workflow already on
+# the default branch -- which a branch developing the thing being measured is
+# not. Labelling the pull request `bench` is how it runs before then, and
+# re-labelling is how it runs again.
 on:
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       shapes:
@@ -19,6 +27,9 @@ permissions:
 jobs:
   mounted-directory:
     name: how fast is a mounted directory
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'bench'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -34,8 +45,8 @@ jobs:
 
       - name: measure
         env:
-          BENCH_SHAPES: ${{ inputs.shapes }}
-          BENCH_FILES: ${{ inputs.files }}
+          BENCH_SHAPES: ${{ inputs.shapes || '0ms:0 20ms:0 80ms:0 0ms:10mbit' }}
+          BENCH_FILES: ${{ inputs.files || '300' }}
         run: bash test/bench.sh
 
       - name: workspace logs on failure
