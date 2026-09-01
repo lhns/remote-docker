@@ -578,6 +578,15 @@ if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTD
             # both commands, settles which.
             report "ls and the mount, in one namespace entry"                 sudo nsenter -t "$pid2" -m -- sh -c                 "ls -la /var/lib/docker/rd-union/upper && echo ---- && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged; echo exit=\$?"
 
+            # The suspect. nsenter -m enters the MOUNT namespace only, so the
+            # process sees the dind's /proc -- a procfs tied to the dind's PID
+            # namespace -- while carrying a pid from the host's. /proc/self
+            # then resolves to nothing, and libfuse uses /proc/self/fd heavily.
+            # ENOENT is exactly what that would produce, and exactly what
+            # fuse-overlayfs reports.
+            report "what /proc/self is, entering the mount namespace only"                 sudo nsenter -t "$pid2" -m -- sh -c "readlink /proc/self; ls /proc/self/fd 2>&1 | head -3"
+            report "the same mount, entering the pid namespace as well"                 sudo nsenter -t "$pid2" -m -p -f -- sh -c                 "mkdir -p /rd3 && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd3 2>&1; echo exit=\$?"
+
             # And the same mount asked for by the dind ITSELF, which enters all
             # of its own namespaces the way docker does rather than the way
             # nsenter does.
