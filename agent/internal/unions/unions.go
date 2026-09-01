@@ -392,23 +392,45 @@ func (m *Manager) heldByContainers(ctx context.Context, account string) map[stri
 	return held
 }
 
-// MountedCaches names the cache volumes this account has a union on.
+// MountedCaches names the cache volumes that have a union on them, for the
+// machine asking.
 //
 // What the client's volume collector needs and cannot work out: no container
 // references a cache volume, because a union is bound by path, so the daemon
 // reports it unused and the collector empties it under a running container
-// (ADR 0044). Every share this process holds is reported, whether or not its
-// mount currently answers -- a union being down is a reason to repair it, not
-// to delete the cache it will come back to.
-func (m *Manager) MountedCaches(account string) []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// (ADR 0044).
+//
+// Answered from the FILESYSTEM as well as from this process's own record, and
+// the filesystem is the half that matters. A union outlives the agent that
+// started it, so after a restart the mounts are serving and this manager knows
+// nothing about them -- and a truthful "none mounted" then costs somebody the
+// contents of a cache their container is still reading. The share ids come from
+// the mounts; the client digest comes from the key that authenticated, so the
+// names are this machine's own and no other machine's are named.
+func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
+	names := map[string]bool{}
 
-	var out []string
+	m.mu.Lock()
 	for k, l := range m.shares {
 		if ownedBy(k, account) && l.cache != "" {
-			out = append(out, l.cache)
+			names[l.cache] = true
 		}
+	}
+	m.mu.Unlock()
+
+	if client != "" {
+		root := "/"
+		if d.PID > 0 {
+			root = fmt.Sprintf("/proc/%d/root", d.PID)
+		}
+		for _, id := range union.MountedShares(root) {
+			names[workspace.VolumeNameForCache(client, id)] = true
+		}
+	}
+
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
 	}
 	sort.Strings(out)
 	return out

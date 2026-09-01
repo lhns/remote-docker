@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strconv"
 )
 
@@ -140,6 +141,37 @@ func Alive(ctx context.Context, spec Spec) error {
 	case <-ctx.Done():
 		return fmt.Errorf("union: %s did not answer: %w", spec.Export, ctx.Err())
 	}
+}
+
+// MountedShares names the share ids that have a union mounted, reading the
+// filesystem under root rather than any process's memory.
+//
+// Which is the point: after an agent restart the mounts are still serving and
+// nothing in this process knows about them. Anything that decides what may be
+// deleted has to ask the filesystem, or it will truthfully report "none" about
+// unions that are running (ADR 0044).
+//
+// root is "/" for the shared daemon and /proc/<pid>/root for one per account,
+// exactly as Spec.Root gives it.
+func MountedShares(root string) []string {
+	entries, err := os.ReadDir(path.Join(root, Root))
+	if err != nil {
+		// No union directory at all is no unions, which is the ordinary case
+		// on a workspace that has never served one.
+		return nil
+	}
+
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if mountedAt(path.Join(root, Root, e.Name(), "merged")) {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Unmount takes a union down, through a child, because umount acts on the

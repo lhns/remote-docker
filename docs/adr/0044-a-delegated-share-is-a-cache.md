@@ -198,6 +198,14 @@ running across a client restart — and that is what `OpMounted` is for. Cannot
 ask means keep: an uncollected cache costs disk, a collected one in use costs
 somebody's work.
 
+The agent answers that from the filesystem rather than from its own record, and
+the filesystem is the half that matters. A union outlives the agent that started
+it, so after an agent restart the mounts are serving and the manager knows
+nothing about them; "none mounted" would be truthful and would delete the cache
+under a running container. The ids come from the mounts under `/run/rd-union`
+and the client digest from the key that authenticated, so a machine is told
+about its own caches and never another's.
+
 ### A union outlives the channel that asked for it
 
 The cache channel rides the SSH connection, and that connection is released

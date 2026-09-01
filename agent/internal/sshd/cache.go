@@ -162,7 +162,15 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		return workspace.CacheReply{Changes: changes}, nil
 
 	case workspace.OpMounted:
-		return workspace.CacheReply{Caches: s.cfg.Unions.MountedCaches(name)}, nil
+		// Lookup rather than Ensure: this is housekeeping, and starting an
+		// account's daemon to answer a question about what may be deleted
+		// would be a side effect nobody asked for. A daemon that is not up has
+		// no mounts to protect.
+		var d unions.Daemon
+		if target, ok := s.cfg.Daemons.Lookup(ctx, name); ok {
+			d = unions.Daemon{Host: target.Host, PID: target.PID}
+		}
+		return workspace.CacheReply{Caches: s.cfg.Unions.MountedCaches(name, account.Client(), d)}, nil
 
 	case workspace.OpPull:
 		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)

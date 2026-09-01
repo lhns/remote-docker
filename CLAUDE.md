@@ -474,6 +474,12 @@ premise of the project, and it applies to building it too. So:
   directory that looks fine. `rewrite.Guard` covers only the shares THIS
   session prepared, so a container left running across a client restart is
   exactly the case it misses. `OpMounted` asks, and cannot-ask means keep.
+  The agent answers it from the FILESYSTEM and not from its own record: a union
+  outlives the agent that started it, so after an agent restart the mounts are
+  serving while the manager knows nothing about them, and a truthful "none
+  mounted" then deletes the cache under a running container. The share ids come
+  from the mounts and the client digest from the key that authenticated, so the
+  names are the asking machine's own.
 - **A delegated share's union outlives the channel that asked for it, and is
   released only when no container is bound to it** (ADR 0044). The cache
   channel rides the connection, which ADR 0015 releases the moment a session

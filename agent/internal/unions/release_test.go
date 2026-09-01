@@ -74,6 +74,28 @@ func TestReleaseAccountDropsAUnionNobodyHolds(t *testing.T) {
 	}
 }
 
+// The collector's question is answered from the filesystem as well as from this
+// process's record, and the filesystem is the half that matters: a union
+// outlives the agent that started it, so after a restart the mounts are serving
+// and the manager knows nothing about them. Reporting "none" then is truthful
+// and costs somebody the contents of a cache their container is still reading.
+func TestMountedCachesIncludesWhatThisProcessDidNotStart(t *testing.T) {
+	m := held(t, fakeVolumes{})
+	m.shares[key("alice", firstExport)].cache = "rd-aabbccdd-aaaa-cache"
+
+	got := m.MountedCaches("alice", "", Daemon{})
+	if len(got) != 1 || got[0] != "rd-aabbccdd-aaaa-cache" {
+		t.Errorf("MountedCaches = %v, want this process's own record", got)
+	}
+
+	// With no client digest nothing can be named for a mount found on disk,
+	// because a cache volume's name is per machine (ADR 0029) -- so the record
+	// is all there is, and the scan is skipped rather than guessed at.
+	if len(m.MountedCaches("bob", "", Daemon{})) != 0 {
+		t.Error("another account's shares were reported")
+	}
+}
+
 // Cannot tell means keep. Taking a mount that is in use costs somebody's
 // container permanently; keeping one nobody needs costs a process.
 func TestReleaseAccountKeepsEverythingWhenTheDaemonCannotAnswer(t *testing.T) {
