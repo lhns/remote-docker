@@ -133,6 +133,18 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
 
+          # And the ADMISSION webhook, which is a different thing from the
+          # controller pod being ready and is what every Ingress creation is
+          # validated against. Creating one in the window between the two
+          # fails with `connection refused` against the webhook service --
+          # measured 2026-09-01, on a commit that changed two markdown files.
+          for _ in $(seq 1 60); do
+            ips=$(kubectl get endpoints -n ingress-nginx ingress-nginx-controller-admission -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
+            [ -n "$ips" ] && break
+            sleep 2
+          done
+          kubectl get endpoints -n ingress-nginx ingress-nginx-controller-admission
+
       - name: install the chart
         run: |
           set -eux
