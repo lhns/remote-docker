@@ -325,6 +325,17 @@ else
                 dump_agent_log false
             fi
 
+            # BEFORE the restart, so a failure afterwards says which half is
+            # broken. Without it, "the held share stopped working" cannot be
+            # told from a union that never served the file at all.
+            if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg cat /w/marker 2>&1) &&
+                echo "$out" | grep -q "served from the machine"; then
+                ok "it reads this machine's file through the union"
+            else
+                bad "the union served nothing before any restart: $(echo "$out" | tail -2 | tr -s '[:space:]' ' ')"
+                dump_agent_log false
+            fi
+
             before=$(unions_running)
             stop_agent
             if start_agent false; then
