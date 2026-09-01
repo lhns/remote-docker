@@ -64,6 +64,7 @@ cleanup() {
     echo
     echo "== cleanup =="
     docker rm -f "$HOLDER" "$DIND" >/dev/null 2>&1
+    docker volume rm union-probe-vol >/dev/null 2>&1
     sudo umount "$MERGED" 2>/dev/null
     sudo umount "$LOWER" 2>/dev/null
     sudo exportfs -u "127.0.0.1:$EXPORT_DIR" 2>/dev/null
@@ -286,6 +287,57 @@ report "container, a lower file changed underneath" docker exec "$HOLDER" cat /w
 echo "appeared underneath" >"$EXPORT_DIR/pkg/new-below.txt"
 sleep 2
 report "container, a lower file created underneath" docker exec "$HOLDER" cat /w/pkg/new-below.txt
+
+# If the cause is that the lower is not present in the container's mount
+# namespace, then putting it there should repair it -- and that is a fix we can
+# actually ship, because the rewriter decides what a container mounts. Cheap to
+# ask, and the answer is either a repair or a rule out.
+report "the container with the LOWER bound in beside the merged mount"     docker run --rm -v "$MERGED:/w" -v "$LOWER:/rd-lower:ro" alpine:3 cat /w/pristine-root.txt
+
+
+echo "== 6b. the shape the design actually ships =="
+# Everything above binds a path this script mounted. What the design ships is a
+# managed VOLUME of type overlay, where the DAEMON performs the overlay mount
+# itself -- moby's local driver has no type whitelist, so this is expressible --
+# and that is a different code path. If the daemon's own mount behaves
+# differently from this script's, the daemon's is the one that matters.
+if docker volume create --name union-probe-vol --opt type=overlay --opt device=overlay     --opt "o=lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" >/dev/null 2>"$WORK/vol.err"; then
+    ok "the local driver accepted a volume of type overlay"
+    report "a container reading the LOWER through that volume"         docker run --rm -v union-probe-vol:/w alpine:3 cat /w/pristine-root.txt
+    report "a container reading the CACHE through that volume"         docker run --rm -v union-probe-vol:/w alpine:3 cat /w/late.txt
+    docker volume rm union-probe-vol >/dev/null 2>&1
+else
+    bad "the local driver refused a volume of type overlay: $(cat "$WORK/vol.err")"
+fi
+
+
+echo "== 6c. fuse-overlayfs, where the union lives in userspace =="
+# The kernel union is readable only from the mount namespace that made it when
+# the lower is NFS -- measured above, from a plain `unshare --mount` with no
+# container anywhere near it. fuse-overlayfs is the other implementation of the
+# same idea, and the reason to try it is that the lower reads happen in the FUSE
+# daemon's own namespace rather than the caller's.
+#
+# It is already in the workspace image, for the graph driver on Ceph-backed
+# storage, so this costs nothing to have if it works. What it would cost is a
+# userspace round trip per operation, INCLUDING cache hits, which is exactly
+# what the benchmark would then have to settle.
+if command -v fuse-overlayfs >/dev/null 2>&1 ||
+    sudo apt-get install -y -qq fuse-overlayfs >/dev/null 2>&1; then
+    mkdir -p "$WORK/fuse-merged"
+    if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR"         "$WORK/fuse-merged" 2>"$WORK/fuse.err"; then
+        ok "fuse-overlayfs mounted over an NFS lower"
+        report "the host reading the lower through it"             cat "$WORK/fuse-merged/pristine-root.txt"
+        report "a CONTAINER reading the lower through it"             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/pristine-root.txt
+        report "a CONTAINER reading the cache through it"             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/late.txt
+        sudo umount "$WORK/fuse-merged" 2>/dev/null
+    else
+        bad "fuse-overlayfs refused the mount: $(cat "$WORK/fuse.err")"
+    fi
+else
+    info "fuse-overlayfs is not available here"
+fi
+
 
 echo "== 7. does the lower cost a d_type fallback? =="
 # overlayfs needs the file type from READDIR. If the lower cannot supply it the
