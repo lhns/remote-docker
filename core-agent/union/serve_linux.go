@@ -101,10 +101,8 @@ func enter(pid int) error {
 
 	// The NETWORK namespace, and it is the LOWER mount that needs it: with a
 	// daemon per account the reverse forward carrying the NFS export is bound
-	// inside that daemon's netns and reaches nowhere else (ADR 0019). Mounting
-	// from the agent's namespace instead finds nothing on the port, and the
-	// kernel reports it as `invalid argument` -- a message about the option
-	// string, for a mount that was looking in the wrong network.
+	// inside that daemon's netns and reaches nowhere else (ADR 0019), so a
+	// mount attempted from the agent's namespace has no server to talk to.
 	//
 	// Before the mount namespace changes, for the same reason the pid one is:
 	// afterwards /proc is the daemon's own and this pid names nothing in it.
@@ -147,11 +145,44 @@ func mountLower(spec Spec) error {
 	if mountedAt(spec.Lower()) {
 		return nil
 	}
-	source, fstype, options := spec.LowerMount()
-	if err := unix.Mount(source, spec.Lower(), fstype, 0, options); err != nil {
-		return fmt.Errorf("union: mounting %s at %s: %w", source, spec.Lower(), err)
+	source, fstype, data, words := spec.LowerMount()
+	flags := mountFlagBits(words)
+	if err := unix.Mount(source, spec.Lower(), fstype, flags, data); err != nil {
+		// The options too, and this is why: the kernel answers a list it
+		// cannot parse with EINVAL, which prints as `invalid argument` and
+		// names nothing. Without the list, the search goes to the address, the
+		// export path and the namespace before it reaches the one word that
+		// was in the wrong half of the call.
+		return fmt.Errorf("union: mounting %s at %s (type %s, flags %v, options %s): %w",
+			source, spec.Lower(), fstype, words, data, err)
 	}
 	return nil
+}
+
+// mountFlagBits turns the option words the kernel takes as flags into MS_ bits.
+//
+// An unknown word is dropped rather than passed on: LowerMount only classes a
+// word as a flag if it is one, so anything here that has no bit is a word this
+// build does not know, and handing it to the filesystem is what this split
+// exists to prevent.
+func mountFlagBits(words []string) uintptr {
+	bits := map[string]uintptr{
+		"noatime":     unix.MS_NOATIME,
+		"relatime":    unix.MS_RELATIME,
+		"strictatime": unix.MS_STRICTATIME,
+		"ro":          unix.MS_RDONLY,
+		"nosuid":      unix.MS_NOSUID,
+		"nodev":       unix.MS_NODEV,
+		"noexec":      unix.MS_NOEXEC,
+		"sync":        unix.MS_SYNCHRONOUS,
+		"dirsync":     unix.MS_DIRSYNC,
+	}
+
+	var flags uintptr
+	for _, w := range words {
+		flags |= bits[w]
+	}
+	return flags
 }
 
 // Release enters the daemon's namespace and unmounts the union, then the

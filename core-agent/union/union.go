@@ -108,17 +108,50 @@ func (s Spec) Dirs() []string {
 	return []string{s.Lower(), s.Merged(), s.Upper(), s.Work()}
 }
 
-// LowerMount is the source, filesystem type and options for the lower.
+// LowerMount is the source, filesystem type, per-filesystem data and mount
+// FLAGS for the lower.
 //
 // The same options a share's volume would have been given, because it is the
 // same mount: workspace.NFSVolumeOptions is asked rather than copied, so the
 // two cannot drift. Consistent rather than cached, deliberately -- the cache
 // above it is what makes reads fast, and a long attribute cache underneath
 // would only add staleness the union cannot see.
-func (s Spec) LowerMount() (source, fstype, options string) {
+//
+// Split, because that option list is written for DOCKER, which separates the
+// two before it calls mount(2) and we have to as well. `noatime` is a kernel
+// mount flag rather than something the NFS client parses, so passing the list
+// through whole makes the NFS parser reject the lot -- and it reports that as
+// EINVAL, which surfaces as `invalid argument` against a mount whose options
+// are, one at a time, all valid.
+func (s Spec) LowerMount() (source, fstype, data string, flags []string) {
 	opts := workspace.NFSVolumeOptions(s.Port, s.Export, workspace.Consistent)
-	return opts["device"], opts["type"], opts["o"]
+
+	var kept []string
+	for _, opt := range strings.Split(opts["o"], ",") {
+		if isMountFlag(opt) {
+			flags = append(flags, opt)
+			continue
+		}
+		kept = append(kept, opt)
+	}
+	return opts["device"], opts["type"], strings.Join(kept, ","), flags
 }
+
+// mountFlags are the option words the KERNEL takes as flags rather than
+// handing to the filesystem.
+//
+// Only the ones NFSVolumeOptions can produce today plus the ones a share could
+// plausibly gain, so a `ro` added there later is carried rather than passed to
+// the NFS parser, which would refuse it and take the mount down with it. Turned
+// into MS_ constants where that is possible, which is the Linux file.
+var mountFlags = map[string]bool{
+	"noatime": true, "atime": true, "relatime": true, "strictatime": true,
+	"ro": true, "rw": true,
+	"nosuid": true, "nodev": true, "noexec": true,
+	"sync": true, "dirsync": true,
+}
+
+func isMountFlag(opt string) bool { return mountFlags[opt] }
 
 // Args are what fuse-overlayfs is run with.
 //

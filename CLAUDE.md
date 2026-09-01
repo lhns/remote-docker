@@ -427,10 +427,19 @@ premise of the project, and it applies to building it too. So:
 - **The union child enters the daemon's NETWORK namespace as well as its pid
   and mount ones.** With a daemon per account the reverse forward carrying the
   NFS export is bound inside that daemon's netns and reaches nowhere else (ADR
-  0019), so a lower mounted from the agent's namespace finds nothing on the
-  port. The kernel reports that as `invalid argument`, which reads as a
-  complaint about the option string and sent the search a long way from a mount
-  that was simply looking in the wrong network.
+  0019), so a lower mounted from the agent's namespace has no server to talk
+  to. Not the cause of any failure yet seen -- the suite that found the union
+  broken runs the SHARED daemon, where the child enters nothing -- so this is a
+  requirement rather than a fix, and saying otherwise would be naming a cause
+  nobody checked.
+- **A docker volume's option list is not a mount(2) argument.**
+  `workspace.NFSVolumeOptions` is written for the local volume driver, which
+  splits kernel FLAGS out of that list before it calls mount(2). `noatime` is
+  MS_NOATIME and not something the NFS client parses, so handing the list over
+  whole makes the NFS parser reject all of it -- reported as EINVAL, printed as
+  `invalid argument`, about a list whose every word is individually valid. That
+  is what kept the union from ever mounting. `Spec.LowerMount` does the split,
+  and the error now prints the two halves so the next one names itself.
 - **A delegated share's union outlives the channel that asked for it, and is
   released only when no container is bound to it** (ADR 0044). The cache
   channel rides the connection, which ADR 0015 releases the moment a session

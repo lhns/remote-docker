@@ -1,6 +1,7 @@
 package union
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,8 +50,15 @@ func TestSpecPaths(t *testing.T) {
 
 // The lower is the same mount a share's volume would have been given, asked of
 // the contract rather than copied, so the two cannot drift.
+//
+// Split into the two halves mount(2) takes, which that list is not already in:
+// it is written for docker's local volume driver, and the driver separates
+// kernel FLAGS from filesystem options before it calls mount(2). Handed over
+// whole, the NFS client's parser refuses the entire list and reports EINVAL --
+// `invalid argument`, about a list whose every word is valid on its own. It is
+// why the union never mounted at all.
 func TestSpecLowerMount(t *testing.T) {
-	source, fstype, options := testSpec().LowerMount()
+	source, fstype, options, flags := testSpec().LowerMount()
 
 	if fstype != "nfs" {
 		t.Errorf("fstype = %q, want nfs", fstype)
@@ -58,16 +66,33 @@ func TestSpecLowerMount(t *testing.T) {
 	if source != ":/m/00112233445566ff" {
 		t.Errorf("source = %q, want the export path", source)
 	}
-	for _, want := range []string{"addr=127.0.0.1", "port=30001", "nfsvers=3", "soft"} {
+	for _, want := range []string{"addr=127.0.0.1", "port=30001", "mountport=30001",
+		"nfsvers=3", "soft", "nolock", "rsize=1048576"} {
 		if !strings.Contains(options, want) {
 			t.Errorf("options %q are missing %q", options, want)
+		}
+	}
+
+	// noatime is MS_NOATIME and not something the NFS client parses.
+	if strings.Contains(options, "noatime") {
+		t.Errorf("options %q still carry a kernel mount flag", options)
+	}
+	if !slices.Contains(flags, "noatime") {
+		t.Errorf("noatime was dropped rather than carried as a flag: %v", flags)
+	}
+
+	// An empty element is an EINVAL of its own, and splitting is where one
+	// would be introduced.
+	for _, part := range strings.Split(options, ",") {
+		if part == "" {
+			t.Errorf("options %q have an empty element", options)
 		}
 	}
 
 	// Consistent underneath, deliberately: the cache above is what makes reads
 	// fast, and a long attribute cache below would only add staleness the
 	// union has no way to notice.
-	if !strings.Contains(options, "actimeo=1,") {
+	if !strings.Contains(options, "actimeo=1") {
 		t.Errorf("options %q do not mount the lower consistently", options)
 	}
 }
