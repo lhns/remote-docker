@@ -148,3 +148,32 @@ func (c *cacheChannel) Drop(_ context.Context, export string, paths []string) er
 
 // Close ends the channel, which releases every union this session prepared.
 func (c *cacheChannel) Close() error { return c.stream.Close() }
+
+// liveCache is this session's cache channel, or nil when there is no live
+// connection or the workspace does not serve one.
+//
+// Asked per batch rather than captured once: a fill outlives the request that
+// started it, and the connection under it can be released and reopened while it
+// runs (ADR 0015).
+func (s *Session) liveCache() *cacheChannel {
+	live, ok := s.gate.currentLive()
+	if !ok || live == nil {
+		return nil
+	}
+	s.shareCacheFor(live)
+	return live.cacheChan
+}
+
+// shareCache is what the rewriter is handed: the channel for the request the
+// container is waiting on, and the session for the fill it is not.
+//
+// Two objects because the two have different lifetimes. Prepare must finish
+// before the container is created; the fill outlives the request entirely and
+// belongs to the session, which is what survives a connection being released
+// and reopened underneath it (ADR 0015).
+type shareCache struct {
+	*cacheChannel
+	session *Session
+}
+
+func (c shareCache) Fill(export, localPath string) { c.session.Fill(export, localPath) }

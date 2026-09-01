@@ -3,7 +3,6 @@ package rewrite
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +16,8 @@ type fakeCache struct {
 	prepared string // the export it was asked to mount
 	cache    string // the volume it was told to use as the cache layer
 	port     int
-	tree     string // what was applied into it
+	filled   string // the export it was asked to fill
+	from     string // the directory it was told to fill from
 	err      error
 }
 
@@ -29,13 +29,10 @@ func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int) (
 	return "/run/rd-union/testshare/merged", nil
 }
 
-func (f *fakeCache) Apply(_ context.Context, _ string, size int64, body io.Reader) error {
-	if f.err != nil {
-		return f.err
-	}
-	got, err := io.ReadAll(io.LimitReader(body, size))
-	f.tree = string(got)
-	return err
+// Fill is asynchronous in the real one; here it records what it was asked to
+// copy, which is what the tests are about.
+func (f *fakeCache) Fill(export, localPath string) {
+	f.filled, f.from = export, localPath
 }
 
 // cachedRewriter is a rewriter that may serve `cached`, which means one with a
@@ -295,8 +292,12 @@ func TestDelegatedMountsAUnion(t *testing.T) {
 	if cache.port != r.NFSPort {
 		t.Errorf("the union was given port %d, want this session's %d", cache.port, r.NFSPort)
 	}
-	if got := entries(t, strings.NewReader(cache.tree)); got["marker"] != "cached" {
-		t.Errorf("the cache was filled with %v, want the file that was there", got)
+	// The fill is asked for and NOT waited on: the container is already
+	// running against a live lower, so a cache that is still filling costs
+	// speed and never correctness.
+	if cache.filled != cache.prepared || cache.from != root {
+		t.Errorf("filled %q from %q, want %q from %q",
+			cache.filled, cache.from, cache.prepared, root)
 	}
 }
 

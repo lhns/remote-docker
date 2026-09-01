@@ -1,11 +1,9 @@
 package rewrite
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"strconv"
@@ -93,7 +91,13 @@ type VolumeEnsurer interface {
 // that already looked.
 type Cache interface {
 	Prepare(ctx context.Context, export, cache string, port int) (string, error)
-	Apply(ctx context.Context, export string, size int64, body io.Reader) error
+
+	// Fill starts copying the tree into the cache and returns AT ONCE. The
+	// container does not wait for it, and does not need to: what the cache
+	// does not hold yet is served from the live export underneath, correctly.
+	// A fill that is slow, partial or still running costs speed and never
+	// correctness, which is the property the whole mode rests on.
+	Fill(export, localPath string)
 }
 
 // The labels this package stamps. Defined in the contract, because the agent
@@ -696,28 +700,9 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
 	}
 
-	if err := r.fill(ctx, export, localPath); err != nil {
-		return "", err
-	}
+	// Asynchronous, and this is where the union earns its keep: the container
+	// starts now, against a cache that is empty and a lower that is right.
+	r.Cache.Fill(export, localPath)
+
 	return merged, nil
-}
-
-// fill streams the tree into a share's cache.
-//
-// The tar is built in memory first, because the channel frames it by length:
-// the agent has to be told how many bytes follow before they are sent, and a
-// stream of unknown size cannot say. That bounds what one batch may be, which
-// is the reason the next version sends the tree in batches rather than whole.
-func (r *Rewriter) fill(ctx context.Context, export, localPath string) error {
-	tree := tarTree(localPath)
-	defer tree.Close()
-
-	body, err := io.ReadAll(tree)
-	if err != nil {
-		return fmt.Errorf("rewrite: reading %s: %w", localPath, err)
-	}
-	if err := r.Cache.Apply(ctx, export, int64(len(body)), bytes.NewReader(body)); err != nil {
-		return fmt.Errorf("rewrite: filling the cache for %s: %w", localPath, err)
-	}
-	return nil
 }

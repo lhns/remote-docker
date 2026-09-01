@@ -176,6 +176,11 @@ type Session struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	once   sync.Once
+
+	// fills tracks the background cache fills of delegated shares (ADR 0044).
+	// One per share, started when the share is first mounted and outliving the
+	// request that asked for it.
+	fills fills
 }
 
 // liveConn is everything that exists only while connected.

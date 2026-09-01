@@ -143,7 +143,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		// asks for it rather than building it (ADR 0044). Opened lazily: a
 		// session that never mounts one never opens the channel, and an older
 		// workspace refusing the command must not stop the session.
-		Cache:      live.cache(),
+		Cache:      s.shareCacheFor(live),
 		UnionReady: info.Union,
 
 		// Read for one question: whether this workspace can mount a single
@@ -223,7 +223,7 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 // mounts a delegated share never opens it, and an older workspace refusing the
 // command is not a reason for the session to fail. The rewriter turns a nil
 // into a refusal naming the mode.
-func (l *liveConn) cache() rewrite.Cache {
+func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
 	l.cacheOnce.Do(func() {
 		c, err := openCache(l.ssh)
 		if err != nil {
@@ -235,7 +235,7 @@ func (l *liveConn) cache() rewrite.Cache {
 	if l.cacheChan == nil {
 		return nil
 	}
-	return l.cacheChan
+	return shareCache{cacheChannel: l.cacheChan, session: s}
 }
 
 // shareReconcileInterval matches the port manager's: the same reasoning
