@@ -32,12 +32,33 @@
 #   the union cannot be built on a remote lower       2
 #   a read does not fall through / a write is lost    3
 #   a filled cache is invisible to the container      4     the foundation
-#   hot reload regresses (ADR 0014)                   5
-#   the lower changing underneath is not seen         6
+#   hot reload regresses (ADR 0014)                   5, 6d
+#   a container cannot read the lower at all          6, 6b, 6c   THE VERDICT
+#   the union costs more than it saves                6d
+#   a userspace union brings a daemon that can die    6d
+#   the per-account dind cannot run one               6e
 #   the union walks slower than the mount it beats    7
 #   the cache lands somewhere the kernel refuses      8
 #   a mount going away leaves a container half-fed    9
 #   a daemon per account cannot be reached at all     10
+#
+# THE VERDICT, measured 2026-09-01 on ubuntu-latest:
+#
+#   The KERNEL union is out. An overlay whose lower is NFS is readable only from
+#   the mount namespace that created it -- a container gets EOPNOTSUPP on any
+#   lower-backed file while upper-backed files work, and so does the HOST in a
+#   plain `unshare --mount` with no container involved. Binding the lower in
+#   beside it does not help, so it is namespace identity rather than visibility,
+#   and a volume of type overlay fails the same way whoever mounts it. docker's
+#   own overlay2 is unaffected because its lower is ext4.
+#
+#   fuse-overlayfs is in, and the workspace image already carries it. A
+#   container reads both layers through it; a write through it fires IN_MODIFY,
+#   IN_CLOSE_WRITE and IN_DELETE inside the container; a deletion leaves the
+#   same char-device whiteout write-back needs; and 200 cached reads cost 0.01s
+#   against 0.00s for the kernel union, which is nothing beside one 160ms round
+#   trip. Its new failure mode is loud: kill the daemon and the container gets
+#   ENOTCONN rather than silence.
 #
 # The risks NOT here are the ones that are about our code rather than the
 # kernel -- write-back conflicts, the collector taking a cache volume, the
@@ -257,11 +278,20 @@ report "container, nested" docker exec "$HOLDER" cat /w/pkg/pristine-nested.txt
 report "container, listing a lower directory" docker exec "$HOLDER" ls -la /w/pkg
 report "container, listing the root" docker exec "$HOLDER" ls -la /w
 
+# MEASURED, 2026-09-01, and the reason the kernel union is not what ships: this
+# fails with EOPNOTSUPP. Not a container problem -- the same open fails from the
+# host in a plain `unshare --mount` and succeeds in the original namespace, so an
+# overlay whose lower is NFS is readable only from the mount namespace that
+# created it. docker's own overlay2 is unaffected because its lower is ext4.
+#
+# Recorded rather than asserted, because a job that is permanently red is a job
+# nobody reads. If a kernel ever fixes this, this line starts passing and the
+# cheaper union becomes available again.
 if outputs '^pristine and nested$' docker exec "$HOLDER" cat /w/pkg/pristine-nested.txt; then
-    ok "a container reads a file that exists only in the lower"
+    ok "the KERNEL union can now be read from a container; it could not on 2026-09-01"
 else
-    bad "A CONTAINER CANNOT READ THE LOWER: [$LAST_OUTPUT]"
-    info "falling through is the whole point, so this decides the design"
+    info "as expected: a container cannot read an NFS lower through the kernel union"
+    info "  [$LAST_OUTPUT]"
 fi
 
 # The controls that say WHICH of the three ingredients is at fault, because the
@@ -329,8 +359,19 @@ if command -v fuse-overlayfs >/dev/null 2>&1 ||
     if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR"         "$WORK/fuse-merged" 2>"$WORK/fuse.err"; then
         ok "fuse-overlayfs mounted over an NFS lower"
         report "the host reading the lower through it"             cat "$WORK/fuse-merged/pristine-root.txt"
-        report "a CONTAINER reading the lower through it"             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/pristine-root.txt
-        report "a CONTAINER reading the cache through it"             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/late.txt
+
+        # THE assertion this script exists for, now that the kernel union is
+        # ruled out: a container reading a file that is only in the lower.
+        if outputs '^pristine at the root$'             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/pristine-root.txt; then
+            ok "a container reads the LOWER through the userspace union"
+        else
+            bad "THE DESIGN IS DEAD: no union is readable from a container: [$LAST_OUTPUT]"
+        fi
+        if outputs '^arrived through the union$'             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/late.txt; then
+            ok "a container reads the CACHE through the userspace union"
+        else
+            bad "a container could not read the cache: [$LAST_OUTPUT]"
+        fi
         sudo umount "$WORK/fuse-merged" 2>/dev/null
     else
         bad "fuse-overlayfs refused the mount: $(cat "$WORK/fuse.err")"
