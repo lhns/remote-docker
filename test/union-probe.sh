@@ -92,6 +92,7 @@ if ! command -v exportfs >/dev/null 2>&1; then
     sudo apt-get update -qq && sudo apt-get install -y -qq nfs-kernel-server
 fi
 sudo modprobe nfs 2>/dev/null
+sudo mkdir -p /etc/exports.d
 echo "$EXPORT_DIR 127.0.0.1(rw,sync,no_subtree_check,insecure,no_root_squash)" |
     sudo tee /etc/exports.d/union-probe.exports >/dev/null
 sudo exportfs -ra
@@ -192,8 +193,11 @@ echo "== 5. does a watcher inside the container see it? =="
 # change notification -- closes for these shares, and closes properly: the write
 # IS the event rather than a poke that approximates one.
 if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./probes/watchprobe); then
-    mkdir -p "$EXPORT_DIR/watched"
-    echo "before" >"$EXPORT_DIR/watched/reloaded.txt"
+    # Through the merged mount, not into the lower: whether a directory created
+    # in the lower shows up is section 6's question, and this section must not
+    # depend on its answer.
+    sudo mkdir -p "$MERGED/watched"
+    echo "before" | sudo tee "$MERGED/watched/reloaded.txt" >/dev/null
     sleep 1
 
     if docker run -d --name union-probe-watch -v "$MERGED:/w" -v "$WORK/watchprobe:/watchprobe" \
@@ -206,7 +210,6 @@ if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" .
         sleep 1
         echo "edited through the union" | sudo tee "$MERGED/watched/reloaded.txt" >/dev/null
         sleep 1
-        sudo rm -f "$MERGED/watched/deleted-me.txt" 2>/dev/null
         echo "created" | sudo tee "$MERGED/watched/created.txt" >/dev/null
         sleep 1
         sudo rm "$MERGED/watched/created.txt"
@@ -305,7 +308,7 @@ echo "== 10. mounting inside another daemon's namespace =="
 # With a daemon per account (ADR 0019) the mounts have to happen inside that
 # dind's mount namespace, which the agent has never entered: core-agent/netns
 # only does CLONE_NEWNET. This is the shape that work would take.
-if docker run -d --name "$DIND" --privileged docker:28-dind >/dev/null 2>&1; then
+if docker run -d --name "$DIND" --privileged -e DOCKER_TLS_CERTDIR= docker:28-dind >/dev/null 2>&1; then
     for _ in $(seq 1 30); do
         docker exec "$DIND" docker info >/dev/null 2>&1 && break
         sleep 2
