@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -35,15 +34,21 @@ type fillState struct {
 type fills struct {
 	mu    sync.Mutex
 	state map[string]*fillState
+
+	// roots is where each delegated share's files are on this machine, which
+	// is what invalidation needs to read a changed file back.
+	roots map[string]string
 }
 
-func (f *fills) set(export string, s *fillState) {
+func (f *fills) set(export, localPath string, s *fillState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state == nil {
 		f.state = map[string]*fillState{}
+		f.roots = map[string]string{}
 	}
 	f.state[export] = s
+	f.roots[export] = localPath
 }
 
 func (f *fills) get(export string) (fillState, bool) {
@@ -66,7 +71,7 @@ func (s *Session) Fill(export, localPath string) {
 		return
 	}
 	state := &fillState{}
-	s.fills.set(export, state)
+	s.fills.set(export, localPath, state)
 
 	go func() {
 		err := s.fill(export, localPath, state)
@@ -83,57 +88,20 @@ func (s *Session) Fill(export, localPath string) {
 	}()
 }
 
-// fill walks the tree and sends it, cheapest first and without waiting for the
-// walk to finish.
+// fill scans the tree and uploads from it at the same time, cheapest first.
 //
-// Two passes over one scan, because sorting the whole tree before sending
-// anything would make the first byte wait for a stat of every file in the
-// project -- on a large one, longer than the upload it was meant to speed up.
-// So a small file goes into the batch being built as the walk finds it, and
-// anything larger is held back, sorted, and sent after. A source tree is
-// overwhelmingly small files, which are also the ones worth caching first, so
-// the upload starts at once and still sends the cheapest first.
+// The policy is cachefill.Stream's; this supplies what it cannot know: where
+// the bytes go.
 func (s *Session) fill(export, localPath string, state *fillState) error {
-	var (
-		batch []cachefill.Entry
-		size  int64
-		large []cachefill.Entry
-		sent  error
-	)
-
-	send := func(entries []cachefill.Entry) {
-		if sent != nil || len(entries) == 0 {
-			return
-		}
-		sent = s.sendBatch(export, localPath, entries, state)
-	}
-
-	stats := cachefill.Walk(localPath, s.opts.WatchExclude, cachefill.Budget{}, func(e cachefill.Entry) {
-		if sent != nil {
-			return
-		}
-		if e.Size > cachefill.SmallFile {
-			large = append(large, e)
-			return
-		}
-		if len(batch) > 0 && size+e.Size > cachefill.DefaultBatchBytes {
-			send(batch)
-			batch, size = nil, 0
-		}
-		batch = append(batch, e)
-		size += e.Size
-	})
+	stats, err := cachefill.Stream(localPath, s.opts.WatchExclude, cachefill.Budget{},
+		func(batch []cachefill.Entry) error {
+			return s.sendBatch(export, localPath, batch, state)
+		})
 
 	s.fills.mu.Lock()
 	state.Stats = stats
 	s.fills.mu.Unlock()
-
-	send(batch)
-	sort.SliceStable(large, func(i, j int) bool { return large[i].Size < large[j].Size })
-	for _, b := range cachefill.Batches(large, cachefill.DefaultBatchBytes) {
-		send(b)
-	}
-	return sent
+	return err
 }
 
 // sendBatch builds one tar and applies it.
