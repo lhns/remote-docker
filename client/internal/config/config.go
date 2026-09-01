@@ -73,6 +73,16 @@ type Config struct {
 	// on macOS.
 	WatchBudget int
 
+	// CacheFiles and CacheBytes cap what a delegated share's cache is filled
+	// with. Zero means cachefill's defaults.
+	//
+	// A ceiling rather than a refusal: what the fill does not copy is served
+	// from the live export underneath, so a project over it is cached in part
+	// and works (ADR 0044). Raise them for a large repository whose reads are
+	// worth the copy; lower them on a metered link.
+	CacheFiles int
+	CacheBytes int64
+
 	// WatchExclude replaces the default list of directory names never
 	// watched. Empty means the default.
 	WatchExclude []string
@@ -158,6 +168,8 @@ type Workspace struct {
 	ConsistencyPaths map[string]string `json:"consistencyPaths,omitempty"`
 
 	WatchBudget  int      `json:"watchBudget,omitempty"`
+	CacheFiles   int      `json:"cacheFiles,omitempty"`
+	CacheBytes   int64    `json:"cacheBytes,omitempty"`
 	WatchExclude []string `json:"watchExclude,omitempty"`
 	IdleTimeout  string   `json:"idleTimeout,omitempty"`
 	DaemonIdle   string   `json:"daemonIdle,omitempty"`
@@ -280,6 +292,8 @@ const (
 	EnvConsistency  = "REMOTE_DOCKER_CONSISTENCY"
 	EnvWatch        = "REMOTE_DOCKER_WATCH"
 	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
+	EnvCacheFiles   = "REMOTE_DOCKER_CACHE_FILES"
+	EnvCacheBytes   = "REMOTE_DOCKER_CACHE_BYTES"
 	EnvWatchExclude = "REMOTE_DOCKER_WATCH_EXCLUDE"
 	EnvIdleTimeout  = "REMOTE_DOCKER_IDLE_TIMEOUT"
 	EnvDaemonIdle   = "REMOTE_DOCKER_DAEMON_IDLE"
@@ -416,6 +430,12 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if len(ws.ConsistencyPaths) > 0 {
 		cfg.ConsistencyPaths = ws.ConsistencyPaths
 	}
+	if ws.CacheFiles != 0 {
+		cfg.CacheFiles = ws.CacheFiles
+	}
+	if ws.CacheBytes != 0 {
+		cfg.CacheBytes = ws.CacheBytes
+	}
 	if ws.WatchBudget != 0 {
 		cfg.WatchBudget = ws.WatchBudget
 	}
@@ -485,6 +505,19 @@ func applyEnv(cfg *Config) {
 		// that connect to nothing.
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.WatchBudget = n
+		}
+	}
+	// Same rule as the watch budget: a malformed number is ignored rather than
+	// fatal, because it would otherwise break every command including those
+	// that connect to nothing.
+	if v := os.Getenv(EnvCacheFiles); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.CacheFiles = n
+		}
+	}
+	if v := os.Getenv(EnvCacheBytes); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.CacheBytes = n
 		}
 	}
 	if v := os.Getenv(EnvWatchExclude); v != "" {

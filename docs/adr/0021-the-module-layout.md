@@ -30,8 +30,8 @@ Contents:
 | module | packages |
 |---|---|
 | `core` | `workspace` (contract), `tunnel` (stream semantics + protocol names), `logx`, test probes |
-| `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient`, `wstunnel` |
-| `core-agent` | `accounts`, `notify`, `netns`, `tunnelserver` |
+| `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient`, `wstunnel`, `cachefill`, `writeback` |
+| `core-agent` | `accounts`, `notify`, `netns`, `tunnelserver`, `union` |
 | `client`, `agent` | everything that names Docker |
 
 Structural rules:

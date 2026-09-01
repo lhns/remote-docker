@@ -260,6 +260,8 @@ default.**
 | `REMOTE_DOCKER_WATCH` | `watch` | `workspace create --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |
+| `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, for a `delegated` share's cache |
+| `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, for a `delegated` share's cache |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | `30m` before an unused session exits; negative never |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
@@ -399,6 +401,17 @@ cached copy of a file you changed is the one way this mode could be wrong rather
 than merely slow. Which is also why it only caches what the watcher covers --
 anything under an excluded directory is read over the mount instead, slower and
 right.
+
+How much of a share gets cached is capped by `cacheFiles` and `cacheBytes`
+(20,000 files and 2 GiB by default). That is a ceiling on the COPY, never on the
+mode: what does not fit is read over the live mount, so a repository bigger than
+the ceiling is cached in part and works. Raise them for a large project whose
+reads are worth the copy, lower them on a metered link, and watch which you are
+getting with `remote status`:
+
+```
+cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, cached in part; the rest is read live
+```
 
 `delegated` also needs **`fuse-overlayfs` in the image the account's daemon
 runs**, because the cache is a union mounted there. The workspace's own image

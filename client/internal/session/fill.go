@@ -12,8 +12,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/lhns/remote-docker/client/internal/cachefill"
-	"github.com/lhns/remote-docker/client/internal/writeback"
+	"github.com/lhns/remote-docker/core-client/cachefill"
+	"github.com/lhns/remote-docker/core-client/writeback"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -176,7 +176,8 @@ func (s *Session) manifestPaths(export string) []string {
 // The policy is cachefill.Stream's; this supplies what it cannot know: where
 // the bytes go.
 func (s *Session) fill(export, localPath string, state *fillState) error {
-	stats, err := cachefill.Stream(localPath, s.opts.WatchExclude, cachefill.Budget{},
+	budget := cachefill.Budget{Files: s.opts.Config.CacheFiles, Bytes: s.opts.Config.CacheBytes}
+	stats, err := cachefill.Stream(localPath, s.opts.WatchExclude, budget,
 		func(batch []cachefill.Entry) error {
 			return s.sendBatch(export, localPath, batch, state)
 		})

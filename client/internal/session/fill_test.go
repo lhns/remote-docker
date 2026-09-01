@@ -11,7 +11,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/lhns/remote-docker/client/internal/cachefill"
+	"github.com/lhns/remote-docker/core-client/cachefill"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/client/internal/cachefill"
+	"github.com/lhns/remote-docker/core-client/cachefill"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 

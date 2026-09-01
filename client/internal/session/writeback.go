@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lhns/remote-docker/client/internal/writeback"
+	"github.com/lhns/remote-docker/core-client/writeback"
 )
 
 // Carrying a delegated container's writes back to this machine (ADR 0044).

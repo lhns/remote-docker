@@ -47,6 +47,12 @@ core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
   wstunnel/              dialling a workspace through a reverse proxy (ADR 0034)
   fswatch/               watches shared dirs on three platforms, budget,
                          excludes, overflow
+  cachefill/             which files a delegated share's cache gets and in what
+                         order: walk, a size-bounded buffer that evicts its
+                         largest, batches. Knows nothing of what carries them
+  writeback/             the rules for what a container's changes mean for the
+                         files here. Pure: given the manifest, the changes and
+                         the local file, it says what to do and nothing else
   keys/                  the keypair and known_hosts: this machine's identity
 
 client/go.mod            the client module: THE GLUE. docker/cli, buildx
@@ -57,6 +63,8 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
     machine/             provisioning a workspace on this machine (ADR 0026)
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
+    session/cached.go    what each fill sent, across sessions, so a deletion
+                         made while nothing ran can be taken out of the cache
     ports/               published ports -> local forwards. Stays glue whole:
                          its manager is keyed on container ids throughout, and
                          the generic forward is already tunnelclient's
