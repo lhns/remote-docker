@@ -188,7 +188,7 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 		}
 	}
 	for _, batch := range cachefill.Batches(changed) {
-		body, err := tarOf(local, batch)
+		body, err := tarOf(local, batch, live.Codec())
 		if err != nil {
 			i.session.logQuiet(ctx, "reading a change for a cache", "export", export, "err", err)
 			return

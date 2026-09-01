@@ -25,6 +25,10 @@ import (
 type cacheChannel struct {
 	stream io.ReadWriteCloser
 
+	// codec is the payload encoding this workspace said it can read, settled
+	// once in the greeting and fixed for the life of the channel.
+	codec string
+
 	mu sync.Mutex
 	r  *bufio.Reader
 }
@@ -58,6 +62,12 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 		_ = stream.Close()
 		return nil, fmt.Errorf("the workspace speaks cache version %d, this client speaks %d",
 			reply.Hello.Version, workspace.CacheVersion)
+	}
+	// Chosen from what the AGENT said it can read, never from what this client
+	// can produce: a workspace older than compression announces no codecs at
+	// all, and sending it one would be refused rather than negotiated.
+	if reply.Hello.Accepts(workspace.CodecGzip) {
+		c.codec = workspace.CodecGzip
 	}
 	return c, nil
 }
@@ -171,9 +181,15 @@ func (c *cacheChannel) Apply(_ context.Context, export string, size int64, body 
 		Op:     workspace.OpApply,
 		Export: export,
 		Bytes:  size,
+		Codec:  c.codec,
 	}, body)
 	return err
 }
+
+// Codec is the payload encoding this channel negotiated, empty for none. The
+// caller encodes: the length in the frame is of what is actually sent, so
+// whatever produces the bytes has to know how they were made.
+func (c *cacheChannel) Codec() string { return c.codec }
 
 // Drop removes paths from a share's cache, which is what a deletion here
 // becomes.

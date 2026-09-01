@@ -104,6 +104,27 @@ ran out" is the same state as "the fill has not reached it yet", so there is no
 project size at which `delegated` stops working — it is cached in part, which is
 what it is for the whole of its fill anyway.
 
+### Compression is a negotiation, not a format
+
+The payload is a byte stream, so a codec wraps it with no protocol change —
+which is exactly what the frame's codec field has been there for since version
+1. The agent announces what it can read in its greeting and the client picks
+from THAT list, never from what it can produce: a workspace older than
+compression names no codecs, and a client that chose for itself would send one
+it would refuse.
+
+**gzip rather than zstd, and the reason is the dependency graph rather than the
+ratio.** gzip is in the standard library; zstd would add a module to the side of
+this that ADR 0021 holds at four direct requires and 24 go.sum lines, and that
+number is a claim the split was made for. A source tree is text, where gzip
+already takes most of what there is to take.
+
+It applies to the client's direction only, which is where the bulk is: the fill
+sends the whole tree, and invalidation sends whatever an editor or a checkout
+touched. Write-back carries what one container wrote since the last round, which
+is small by nature, so it stays a plain tar rather than paying a compressor per
+poll.
+
 ### The cache is a subset of what is watched
 
 A cached copy of a file that changed here is the one way this mode can be
@@ -290,13 +311,18 @@ so that table wants a larger one (`BENCH_FILES`) as well as a diagnosis.
   it**, which CLAUDE.md already says of every mount here. Remounting at the same
   path does not repair a container already bound to the dead one.
 
-  **Open, and not yet done:** adopting a live union instead of replacing it.
-  What blocked it was telling a mount from a directory, and that is now settled
-  — st_dev against the parent answers from outside the namespace as well as
-  inside (measured 2026-09-01, `test/union-probe.sh` section 12: an unmounted
-  directory reads dev 59 against parent 59, a mounted one 63 against 59), and
-  `union.Alive` uses it. What remains is the supervisor: it still mounts again
-  over a mount that was serving, so an agent restart leaves a running
-  container's delegated share broken.
+  So a live union is ADOPTED rather than replaced: the supervisor waits for a
+  serving mount to go before it makes another. That rests on "alive" meaning
+  MOUNTED rather than "the path is there" — against a stat it would wait forever
+  on the empty directory a dead union leaves behind. st_dev against the parent
+  answers that from outside the namespace as well as inside (measured
+  2026-09-01, `test/union-probe.sh` section 12: an unmounted directory reads dev
+  59 against parent 59, a mounted one 63 against 59).
+
+  Reachable only where dockerd outlives the agent, which is the VM deployment
+  (ADR 0025). With the agent in a container it is pid 1, so restarting it takes
+  its dockerd and every dind with it and there is nothing left to adopt — which
+  is why `test/vm.sh` is where this is asserted, by counting union servers for a
+  share across an agent restart.
 - **Disk**: one cache per share per client, growing with what the container
   writes as well as with the tree.

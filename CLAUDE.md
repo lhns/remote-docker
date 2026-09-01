@@ -410,6 +410,22 @@ premise of the project, and it applies to building it too. So:
   fresh. Anything claiming to repair a mount has to reckon with that or it will
   look like it did nothing.
 
+- **A payload's codec is chosen from what the AGENT announced, never from what
+  the client can produce** (ADR 0044). The greeting carries the list; a
+  workspace older than compression names none, and a client that picked for
+  itself would send it something it refuses. gzip and not zstd, because zstd is
+  a module and the agent's four direct requires are a claim ADR 0021 was made
+  for -- so this is stdlib or nothing.
+- **A serving union is ADOPTED, never mounted over** (ADR 0044). After an agent
+  restart the child is an orphan whose mount is still serving every container
+  bound to it; mounting again on the same path stacks a second fuse-overlayfs
+  on the same upper and work directories, which overlayfs does not allow, while
+  the containers keep the mount they already had. The supervisor waits for a
+  serving mount to go instead -- which is only safe because "alive" means
+  MOUNTED: against a stat it would wait forever on the empty directory a dead
+  union leaves behind. Reachable only where dockerd outlives the agent, so
+  `test/vm.sh` is where it is asserted and a container deployment cannot show
+  it: there the agent is pid 1 and takes every dind with it.
 - **A union that never mounted looks exactly like one that did, and every
   test passes against it.** Everything reaches a share through a PATH: the
   agent writes the cache through the merged path, the container binds it, an
@@ -874,15 +890,6 @@ function was.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
-- **A delegated share across an AGENT restart.** The client restarting is
-  covered (`integration.sh` section 16 reads through a union whose channels are
-  all gone), and the agent restarting is NOT: the supervisor mounts again over a
-  mount that was still serving, so a running container is left with a share it
-  cannot use. Telling a mount from a leftover directory is settled --
-  `union.Alive` compares st_dev with the parent, which `test/union-probe.sh`
-  section 12 measured as working from outside the namespace too -- and what is
-  missing is the supervisor waiting for a serving mount to go before making
-  another. Do not say a delegated share survives an agent restart.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

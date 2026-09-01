@@ -30,7 +30,39 @@ const (
 	// MaxCacheFrame bounds one JSON header line. The payload that follows a
 	// frame is not a line and is not bounded by this; only the header is.
 	MaxCacheFrame = 1 << 20
+
+	// CodecNone is an uncompressed payload, which is what an empty codec means
+	// and what every version can read.
+	CodecNone = ""
+
+	// CodecGzip is a gzip stream wrapping the tar.
+	//
+	// gzip rather than zstd, and the reason is the agent's dependency graph
+	// rather than the ratio: gzip is in the standard library, and zstd would
+	// add a module to the side of this that ADR 0021 keeps at four direct
+	// requires. A source tree is text, where gzip already gets most of what
+	// there is to get, and the fill is bounded by bandwidth rather than CPU on
+	// exactly the links this helps.
+	CodecGzip = "gzip"
 )
+
+// Codecs are what this version can read, announced in the greeting so a client
+// never sends one the agent would refuse.
+func Codecs() []string { return []string{CodecGzip} }
+
+// SupportsCodec reports whether a codec is one this version can read. The empty
+// codec is always readable: it is a plain tar.
+func SupportsCodec(codec string) bool {
+	if codec == CodecNone {
+		return true
+	}
+	for _, c := range Codecs() {
+		if c == codec {
+			return true
+		}
+	}
+	return false
+}
 
 // CacheOp is what one frame asks for.
 type CacheOp string
@@ -168,6 +200,25 @@ type CacheReply struct {
 // CacheHello is the agent's opening line, sent before it reads anything.
 type CacheHello struct {
 	Version int `json:"v"`
+
+	// Codecs are the payload encodings this agent can read. Absent means it
+	// predates compression and can read only a plain tar, which is why a
+	// client picks from THIS list rather than from what it can produce: an
+	// older workspace must never be sent something it would refuse.
+	Codecs []string `json:"z,omitempty"`
+}
+
+// Accepts reports whether the agent that sent this greeting can read a codec.
+func (h CacheHello) Accepts(codec string) bool {
+	if codec == CodecNone {
+		return true
+	}
+	for _, c := range h.Codecs {
+		if c == codec {
+			return true
+		}
+	}
+	return false
 }
 
 // Validate rejects a request the agent should not act on.
@@ -200,7 +251,7 @@ func (r CacheRequest) Validate() error {
 		if r.Bytes < 0 {
 			return fmt.Errorf("workspace: cache apply for %s has %d bytes", r.Export, r.Bytes)
 		}
-		if r.Codec != "" {
+		if !SupportsCodec(r.Codec) {
 			return fmt.Errorf("workspace: cache apply for %s asks for codec %q, which this version does not have",
 				r.Export, r.Codec)
 		}

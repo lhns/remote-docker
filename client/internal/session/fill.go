@@ -3,6 +3,7 @@ package session
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/cachefill"
 	"github.com/lhns/remote-docker/client/internal/writeback"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Filling a delegated share's cache, in the background (ADR 0044).
@@ -203,7 +205,7 @@ func (s *Session) sendBatch(export, localPath string, entries []cachefill.Entry,
 		return nil
 	}
 
-	body, err := tarOf(localPath, entries)
+	body, err := tarOf(localPath, entries, live.Codec())
 	if err != nil {
 		return err
 	}
@@ -251,9 +253,23 @@ const fillBatchTimeout = 10 * time.Minute
 // In memory because the channel frames a payload by length: the workspace has
 // to be told how many bytes follow before they are sent. cachefill.Batches is
 // what keeps that bounded.
-func tarOf(root string, entries []cachefill.Entry) ([]byte, error) {
+func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error) {
 	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+
+	// The compressor wraps the tar writer, so the tar is written once and the
+	// bytes that leave are the encoded ones -- which is what the frame's length
+	// has to describe.
+	var (
+		zw    *gzip.Writer
+		sink  io.Writer = &buf
+		coded           = codec == workspace.CodecGzip
+	)
+	if coded {
+		zw = gzip.NewWriter(&buf)
+		sink = zw
+	}
+
+	tw := tar.NewWriter(sink)
 
 	for _, e := range entries {
 		p := filepath.Join(root, filepath.FromSlash(e.Path))
@@ -305,6 +321,15 @@ func tarOf(root string, entries []cachefill.Entry) ([]byte, error) {
 
 	if err := tw.Close(); err != nil {
 		return nil, err
+	}
+	// Both, in order: the tar's own trailer has to be inside the compressed
+	// stream, and the compressor's footer has to be written before the buffer
+	// is measured. Closing only one leaves a payload whose length is right and
+	// whose contents end early.
+	if coded {
+		if err := zw.Close(); err != nil {
+			return nil, err
+		}
 	}
 	return buf.Bytes(), nil
 }

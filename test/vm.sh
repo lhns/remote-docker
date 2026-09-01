@@ -118,8 +118,20 @@ dump_agent_log() {
 # not need it because they have no directory to change into first.
 session() {
     local log=$1
-    (cd "$WORK/project" && exec "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
+    # Watching on, because a delegated share refuses to run without it: its
+    # cache holds copies and the watcher is what keeps them honest (ADR 0044).
+    # Harmless to every other section, which does not use one.
+    (cd "$WORK/project" && exec env REMOTE_DOCKER_WATCH=partial         "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
     CLIENT_PID=$!
+}
+
+# unions_for counts the fuse-overlayfs servers running for a share.
+#
+# From the host's own pid namespace, which sees into the daemon's: the union
+# child enters the dind's namespaces and the server is born there, so it is
+# nested rather than hidden.
+unions_for() {
+    sudo pgrep -af fuse-overlayfs 2>/dev/null | grep -c "$1" || true
 }
 
 echo "== 1. what this machine provides =="
@@ -231,6 +243,68 @@ if out=$(timeout 60 "$WORK/remote-docker" remote status 2>&1) &&
     ok "remote status answers against a machine workspace"
 else
     bad "status failed: $(echo "$out" | tail -2 | tr '\n' ' ')"
+fi
+
+echo
+echo "== 4b. a union, and an agent restart underneath it =="
+# The deployment where this can happen at all. With the agent in a container it
+# is pid 1, so restarting it takes its dockerd and every dind with it; here
+# dockerd is the machine's own and a daemon outlives the agent, which is what
+# makes an orphaned union possible in the first place (ADR 0025, ADR 0044).
+if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg         -v "$WORK/project:/w:delegated" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
+    ok "a container starts against a delegated union"
+
+    if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg             sh -c 'grep " /w " /proc/mounts' 2>&1) && echo "$out" | grep -q fuse; then
+        ok "its share is a union rather than a directory that resembles one"
+    else
+        bad "/w is not a fuse mount: $(echo "$out" | tail -2 | tr '
+' ' ')"
+        dump_agent_log true
+    fi
+
+    before=$(unions_for "$WORK/project")
+    stop_agent
+    if start_agent true; then
+        ok "the agent came back with the daemon still running under it"
+    else
+        bad "the agent did not come back"
+        dump_agent_log true
+    fi
+
+    # A NEW container, because that is what asks the agent to prepare the share
+    # again. Without adoption the supervisor mounts a second fuse-overlayfs on
+    # the same path, over the same upper and work directories -- which
+    # overlayfs does not allow and which nothing else here would notice.
+    if timeout 300 "$WORK/remote-docker" run --rm             -v "$WORK/project:/w:delegated" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
+        ok "a second container prepares the same share after the restart"
+    else
+        bad "the share could not be prepared again: $(tail -2 "$WORK/deleg2.log" | tr '
+' ' ')"
+        dump_agent_log true
+    fi
+
+    after=$(unions_for "$WORK/project")
+    if [ "$before" = 1 ] && [ "$after" = 1 ]; then
+        ok "exactly one union server for the share, before and after the restart"
+    else
+        bad "union servers for the share: $before before the restart, $after after"
+        sudo pgrep -af fuse-overlayfs 2>/dev/null | sed 's/^/        /'
+    fi
+
+    # And the container that held it throughout still reads through its mount.
+    if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg cat /w/marker 2>&1) &&
+        echo "$out" | grep -q "served from the machine"; then
+        ok "the container held its share across the agent restart"
+    else
+        bad "the held share stopped working: $(echo "$out" | tail -2 | tr '
+' ' ')"
+        dump_agent_log true
+    fi
+    timeout 60 "$WORK/remote-docker" rm -f vm-deleg >/dev/null 2>&1
+else
+    bad "no container against a delegated union: $(tail -3 "$WORK/deleg.log" | tr '
+' ' ')"
+    dump_agent_log true
 fi
 
 stop_session

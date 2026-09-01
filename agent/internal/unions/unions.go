@@ -37,6 +37,14 @@ const RestartDelay = 2 * time.Second
 // waiting on it would make every request that asks wait too.
 const aliveTimeout = 2 * time.Second
 
+// readyTimeout is how long Prepare waits for a new union to answer.
+//
+// Generous because the lower is an NFS mount made over the CLIENT's link, and
+// what is being waited for is a round trip to the other side of the world
+// rather than a local mount. A container refused here is a container that does
+// not start, so the cost of being impatient is higher than the cost of waiting.
+const readyTimeout = 90 * time.Second
+
 // Volumes tells the manager where a volume's data lives, as the daemon sees it.
 type Volumes interface {
 	// RawMountpoint is the path INSIDE the daemon's own filesystem, not
@@ -199,6 +207,21 @@ func (m *Manager) start(spec union.Spec, host string) *live {
 	go func() {
 		defer close(l.done)
 		for ctx.Err() == nil {
+			// Adopted rather than replaced. After an agent restart the child
+			// is an orphan whose mount is still serving every container bound
+			// to it, and mounting over that would strand them: a container
+			// keeps the mount it already has, and a second one stacked on the
+			// path cannot repair it. So the supervisor waits for a serving
+			// mount to go before it makes another.
+			//
+			// Safe only because "alive" means MOUNTED rather than "the path is
+			// there" (ADR 0044). Against a stat this would wait forever on the
+			// empty directory a dead union leaves behind, and the share would
+			// never come back.
+			if m.awaitGone(ctx, spec) {
+				continue
+			}
+
 			err := m.run(ctx, spec)
 			if ctx.Err() != nil {
 				return
@@ -213,6 +236,30 @@ func (m *Manager) start(spec union.Spec, host string) *live {
 		}
 	}()
 	return l
+}
+
+// awaitGone waits while a mount this process did not start is still serving,
+// and reports whether it waited at all.
+//
+// The share works throughout: what is being waited for is the right to mount
+// again, not the mount itself.
+func (m *Manager) awaitGone(ctx context.Context, spec union.Spec) bool {
+	if !m.alive(spec) {
+		return false
+	}
+	logx.Or(m.Log).Info("adopting a union that is already mounted",
+		"export", spec.Export, "merged", spec.Merged())
+
+	for m.alive(spec) {
+		select {
+		case <-ctx.Done():
+			return true
+		case <-time.After(RestartDelay):
+		}
+	}
+	logx.Or(m.Log).Info("the adopted union went; mounting one of ours",
+		"export", spec.Export)
+	return true
 }
 
 // run is one attempt: the agent re-executed as the child that enters the
@@ -237,13 +284,20 @@ func (m *Manager) run(ctx context.Context, spec union.Spec) error {
 // its mount is, and a container bound to a mountpoint that is not yet a mount
 // sees an empty directory rather than an error.
 func (m *Manager) waitReady(ctx context.Context, spec union.Spec) error {
-	deadline := time.Now().Add(30 * time.Second)
+	started := time.Now()
+	deadline := started.Add(readyTimeout)
 	for {
 		if m.alive(spec) {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("unions: the union for %s did not come up", spec.Export)
+			// How long, because the budget is the likeliest thing to be wrong:
+			// the lower is an NFS mount over the client's link, and a slow one
+			// takes longer to mount than a fast one. Without the number the
+			// message reads as a union that cannot work rather than one that
+			// was not given time.
+			return fmt.Errorf("unions: the union for %s did not come up in %s",
+				spec.Export, time.Since(started).Round(time.Second))
 		}
 		select {
 		case <-ctx.Done():

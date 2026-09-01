@@ -51,7 +51,11 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	// output at all, so the client tells "too old" from "version mismatch" by
 	// whether a greeting arrived (see core/tunnel.CacheCommand).
 	enc := json.NewEncoder(session)
-	if err := enc.Encode(workspace.CacheReply{Hello: &workspace.CacheHello{Version: workspace.CacheVersion}}); err != nil {
+	hello := &workspace.CacheHello{
+		Version: workspace.CacheVersion,
+		Codecs:  workspace.Codecs(),
+	}
+	if err := enc.Encode(workspace.CacheReply{Hello: hello}); err != nil {
 		_ = session.Exit(1)
 		return
 	}
@@ -138,7 +142,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		return workspace.CacheReply{Merged: merged}, nil
 
 	case workspace.OpApply:
-		err := s.cfg.Unions.Apply(ctx, name, req.Export, io.LimitReader(body, req.Bytes))
+		err := s.cfg.Unions.Apply(ctx, name, req.Export, req.Codec, io.LimitReader(body, req.Bytes))
 		if err != nil {
 			return workspace.CacheReply{Err: err.Error()}, nil
 		}

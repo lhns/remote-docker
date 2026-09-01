@@ -2,6 +2,7 @@ package unions
 
 import (
 	"archive/tar"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -33,8 +34,14 @@ import (
 // mount namespace without entering it, exactly as core-agent/notify already
 // reaches a volume it cannot otherwise see.
 
-// Apply extracts a tar into a share's union.
-func (m *Manager) Apply(ctx context.Context, account, export string, body io.Reader) error {
+// Apply extracts a tar into a share's union, decoding it first when the client
+// compressed it.
+//
+// The codec is checked again here rather than trusted from Validate: a stream
+// that names an encoding this version does not have must not be handed to the
+// archive reader, which would fail somewhere inside it with a message about a
+// corrupt header instead of about the codec.
+func (m *Manager) Apply(ctx context.Context, account, export, codec string, body io.Reader) error {
 	l, root, err := m.mergedRoot(ctx, account, export)
 	if err != nil {
 		// The payload still has to be drained, or the next frame is read out
@@ -43,6 +50,13 @@ func (m *Manager) Apply(ctx context.Context, account, export string, body io.Rea
 		_, _ = io.Copy(io.Discard, body)
 		return err
 	}
+
+	body, done, err := decoded(codec, body)
+	if err != nil {
+		_, _ = io.Copy(io.Discard, body)
+		return err
+	}
+	defer done()
 
 	tr := tar.NewReader(body)
 	for {
@@ -124,6 +138,29 @@ func writeEntry(root string, header *tar.Header, body io.Reader) (os.FileInfo, e
 
 	default:
 		return nil, nil
+	}
+}
+
+// decoded wraps a payload in its codec's reader, and answers with the closer.
+//
+// An unknown codec is refused rather than read as a plain tar: the client was
+// told what this agent accepts in the greeting, so one arriving here is a bug
+// on that side, and reading it anyway would corrupt the cache with whatever the
+// bytes happened to look like.
+func decoded(codec string, body io.Reader) (io.Reader, func(), error) {
+	switch codec {
+	case workspace.CodecNone:
+		return body, func() {}, nil
+
+	case workspace.CodecGzip:
+		zr, err := gzip.NewReader(body)
+		if err != nil {
+			return body, func() {}, fmt.Errorf("unions: reading a %s batch: %w", codec, err)
+		}
+		return zr, func() { _ = zr.Close() }, nil
+
+	default:
+		return body, func() {}, fmt.Errorf("unions: a batch arrived encoded as %q, which this workspace cannot read", codec)
 	}
 }
 

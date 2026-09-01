@@ -108,3 +108,65 @@ func TestCacheRequestAcceptsTheWorkingDirectoryShare(t *testing.T) {
 		t.Errorf("Validate() = %v", err)
 	}
 }
+
+// Compression is a negotiation rather than a new format, which is what the
+// codec field has been there for since version 1. The case that matters is an
+// agent OLDER than it: its greeting names no codecs, and a client must then
+// send a plain tar rather than something it would refuse.
+func TestCacheCodecNegotiation(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		hello CacheHello
+		codec string
+		want  bool
+	}{
+		{
+			name:  "an agent that announces gzip",
+			hello: CacheHello{Version: CacheVersion, Codecs: Codecs()},
+			codec: CodecGzip,
+			want:  true,
+		},
+		{
+			// The whole reason the client picks from the greeting rather than
+			// from what it can produce.
+			name:  "an agent from before compression",
+			hello: CacheHello{Version: CacheVersion},
+			codec: CodecGzip,
+			want:  false,
+		},
+		{
+			name:  "a plain tar, which every version reads",
+			hello: CacheHello{Version: CacheVersion},
+			codec: CodecNone,
+			want:  true,
+		},
+		{
+			name:  "a codec nobody has",
+			hello: CacheHello{Version: CacheVersion, Codecs: Codecs()},
+			codec: "brotli",
+			want:  false,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.hello.Accepts(c.codec); got != c.want {
+				t.Errorf("Accepts(%q) = %v, want %v", c.codec, got, c.want)
+			}
+		})
+	}
+}
+
+// And the agent's side of the same rule: a batch naming an encoding this
+// version has not got is refused by name, before anything reads it as a tar.
+func TestCacheRequestCodecs(t *testing.T) {
+	const share = "/m/00112233445566ff"
+
+	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: CodecGzip}).Validate(); err != nil {
+		t.Errorf("a gzip batch was refused: %v", err)
+	}
+	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"}).Validate(); err == nil {
+		t.Error("a batch named an encoding this version has not got and was accepted")
+	}
+	if !SupportsCodec(CodecNone) {
+		t.Error("a plain tar was not supported")
+	}
+}

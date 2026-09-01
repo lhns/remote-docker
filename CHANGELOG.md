@@ -77,6 +77,11 @@ conflict is reported by path either way. Nothing is written back at all until
 the cache is complete, because a file that was never copied over cannot be told
 from one the container created.
 
+The cache is filled over a compressed stream where the workspace can read one,
+which it announces when the channel opens — so an older workspace is sent a
+plain tar rather than something it would refuse. gzip, because it costs no new
+dependency and a source tree is text.
+
 It needs file watching on, and it needs `fuse-overlayfs` where the account's
 daemon runs -- the workspace's own image, which is what a per-account daemon
 should be running anyway. The workspace says whether it can, and the mode is
