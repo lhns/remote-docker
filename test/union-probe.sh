@@ -63,8 +63,9 @@ DIND=union-probe-dind
 cleanup() {
     echo
     echo "== cleanup =="
-    docker rm -f "$HOLDER" "$DIND" >/dev/null 2>&1
+    docker rm -f "$HOLDER" "$DIND" union-probe-fusehold union-probe-fusewatch >/dev/null 2>&1
     docker volume rm union-probe-vol >/dev/null 2>&1
+    sudo umount "$WORK/fuse-merged" 2>/dev/null
     sudo umount "$MERGED" 2>/dev/null
     sudo umount "$LOWER" 2>/dev/null
     sudo exportfs -u "127.0.0.1:$EXPORT_DIR" 2>/dev/null
@@ -337,6 +338,81 @@ if command -v fuse-overlayfs >/dev/null 2>&1 ||
 else
     info "fuse-overlayfs is not available here"
 fi
+
+
+echo "== 6d. what a userspace union costs and whether it keeps the promises =="
+# fuse-overlayfs answered the question the kernel union failed, so everything
+# the design rests on has to be asked again of IT: the events, the overhead, the
+# shape write-back reads, and what happens when the daemon behind it dies.
+FUSE_MERGED=$WORK/fuse-merged
+mkdir -p "$FUSE_MERGED"
+if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$FUSE_MERGED" 2>/dev/null; then
+    # What it costs. A FUSE round trip is microseconds against a 160ms RTT, so
+    # the cache should still win by orders of magnitude -- but "should" is what
+    # this script exists to replace.
+    for i in $(seq 1 200); do echo "cached body $i" | sudo tee "$FUSE_MERGED/c$i" >/dev/null; done
+    fuse_read=$( { time -p sh -c "cat $FUSE_MERGED/c* >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
+    kern_read=$( { time -p sh -c "cat $MERGED/c* >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
+    direct_read=$( { time -p sh -c "cat $UPPER/c* >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
+    info "200 cached files: fuse ${fuse_read}s, kernel overlay ${kern_read}s, straight off disk ${direct_read}s"
+    lower_via_fuse=$( { time -p sh -c "cat $FUSE_MERGED/pkg/f1 >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
+    info "one file that misses and falls through to NFS: ${lower_via_fuse}s"
+
+    # The ADR 0014 claim, asked of the union we would actually ship.
+    if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./probes/watchprobe); then
+        sudo mkdir -p "$FUSE_MERGED/fusewatch"
+        echo "before" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
+        if docker run -d --name union-probe-fusewatch -v "$FUSE_MERGED:/w"             -v "$WORK/watchprobe:/watchprobe" alpine:3             /watchprobe -timeout 25s /w/fusewatch >/dev/null 2>&1; then
+            for _ in $(seq 1 15); do
+                outputs '^READY' docker logs union-probe-fusewatch && break
+                sleep 1
+            done
+            sleep 1
+            echo "edited through the userspace union" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
+            sleep 1
+            sudo rm -f "$FUSE_MERGED/fusewatch/reloaded.txt"
+            timeout 60 docker wait union-probe-fusewatch >/dev/null 2>&1
+            fuse_watch=$(docker logs union-probe-fusewatch 2>&1)
+            docker rm -f union-probe-fusewatch >/dev/null 2>&1
+            echo "$fuse_watch" | grep -E '^(RESULT|INOTIFY)' | sed 's/^/          /'
+            if echo "$fuse_watch" | grep -qE '^INOTIFY '; then
+                ok "a write through the userspace union reaches the container's watcher"
+            else
+                bad "no inotify event survived fuse-overlayfs; hot reload would need the poke after all"
+            fi
+        fi
+    fi
+
+    # What a container-side deletion leaves behind, which is what write-back
+    # reads to learn about it.
+    sudo rm -f "$FUSE_MERGED/pristine-root.txt"
+    report "what a delete through the userspace union left in the upper"         sudo sh -c "ls -l $UPPER/pristine-root.txt 2>&1; getfattr -d -m - $UPPER/pristine-root.txt 2>&1 | head -5"
+
+    # The new failure mode a userspace union brings: a daemon that can die.
+    if docker run -d --name union-probe-fusehold -v "$FUSE_MERGED:/w" alpine:3 sleep 60 >/dev/null 2>&1; then
+        sudo pkill -f "fuse-overlayfs.*$FUSE_MERGED"
+        sleep 2
+        report "a container reading after the fuse daemon was killed"             docker exec union-probe-fusehold sh -c "cat /w/c1 2>&1; echo exit=\$?"
+        docker rm -f union-probe-fusehold >/dev/null 2>&1
+    fi
+    sudo umount "$FUSE_MERGED" 2>/dev/null
+else
+    bad "fuse-overlayfs would not mount for the second round of questions"
+fi
+
+echo
+echo "== 6e. can a per-account dind run a userspace union at all? =="
+# With a daemon per account (ADR 0019) the union has to live inside that dind's
+# mount namespace, and the dind is docker:28-dind -- which is not the workspace
+# image and may not carry the binary at all. That decides whether this mode can
+# work in the default daemon mode or only in the shared one.
+if docker run --rm docker:28-dind sh -c "command -v fuse-overlayfs" >/dev/null 2>&1; then
+    ok "the per-account dind image already carries fuse-overlayfs"
+else
+    info "docker:28-dind does NOT carry fuse-overlayfs; the agent would have to"
+    info "supply it, or the per-account dind would have to be a different image"
+fi
+report "what the dind has under /dev/fuse"     docker run --rm --privileged docker:28-dind sh -c "ls -l /dev/fuse 2>&1"
 
 
 echo "== 7. does the lower cost a d_type fallback? =="
