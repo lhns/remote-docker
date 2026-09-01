@@ -1531,6 +1531,20 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "reading the cache: [$LAST_OUTPUT]"
         fi
 
+        # THE assertion this section was missing, and its absence hid a union
+        # that never mounted at all for as long as the mode has existed. Every
+        # check below passes against an ordinary directory: the agent writes
+        # the cache into it, the container reads it, an edit here is written
+        # into it and a deletion removes from it. What cannot pass is this --
+        # a bind of a real union reports fuse-overlayfs as its filesystem, and
+        # a bind of a directory reports whatever the daemon's own disk is.
+        if outputs 'fuse' docker exec itest-deleg sh -c 'grep " /w " /proc/mounts'; then
+            ok "the container's share is a union, not a directory that resembles one"
+        else
+            bad "/w is not a fuse mount: [$LAST_OUTPUT]"
+            deleg_diagnostics
+        fi
+
         # And the cache really was filled, which the read above does NOT show:
         # a miss falls through to the live export and returns the same bytes,
         # so that assertion passes just as well with an empty cache. This is

@@ -2,6 +2,7 @@ package union
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -94,6 +95,12 @@ func (s Spec) Root() string {
 	return fmt.Sprintf("/proc/%d/root", s.PID)
 }
 
+// errNotAMount is what a path that exists and is not a mount reports. Named
+// rather than an os error, because "no such file or directory" about a
+// directory that is plainly there is the message this whole check exists to
+// stop being given.
+var errNotAMount = errors.New("nothing is mounted there")
+
 // Alive reports whether the union answers, and it is the ONLY definition of
 // "up" this package offers.
 //
@@ -111,8 +118,17 @@ func Alive(ctx context.Context, spec Spec) error {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := os.Stat(merged)
-		done <- err
+		// Whether it is a MOUNT, not whether the path is there. The
+		// directories are created before the union is mounted and outlive it,
+		// so a stat says yes for a share that never mounted and for one whose
+		// server has died -- and the workspace would then declare it ready,
+		// let a container bind an ordinary empty directory, and write the
+		// cache into it. Nothing would fail; nothing would be a union either.
+		if !mountedAt(merged) {
+			done <- errNotAMount
+			return
+		}
+		done <- nil
 	}()
 
 	select {

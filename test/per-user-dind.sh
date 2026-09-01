@@ -286,6 +286,22 @@ echo "== 7b. a delegated share, which is a union mounted inside the dind =="
 if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:delegated"     alpine:3 sleep 120 2>&1); then
     ok "a container starts against a union inside alice's own daemon"
 
+    # That it IS a union, which nothing else here can show: every assertion
+    # below passes just as well against an ordinary directory the agent wrote
+    # the cache into, and a union whose lower could not mount leaves exactly
+    # that. A bind of a real union reports fuse-overlayfs; a bind of a
+    # directory reports the daemon's own disk.
+    if out=$(da exec pud-deleg sh -c 'grep " /w " /proc/mounts' 2>&1); then
+        case "$out" in
+            *fuse*) ok "alice's share is a union, not a directory that resembles one" ;;
+            *)      bad "/w is not a fuse mount: [$out]"
+                    hostdocker logs "$CONTAINER" 2>&1 |
+                        grep -iE "union|fuse" | tail -8 | sed 's/^/        /' ;;
+        esac
+    else
+        bad "could not read the container's mounts: $(echo "$out" | tail -3)"
+    fi
+
     if out=$(da exec pud-deleg cat /w/marker 2>&1); then
         if [ "$out" = "alice's file" ]; then
             ok "it reads alice's file through the union"

@@ -410,6 +410,27 @@ premise of the project, and it applies to building it too. So:
   fresh. Anything claiming to repair a mount has to reckon with that or it will
   look like it did nothing.
 
+- **A union that never mounted looks exactly like one that did, and every
+  test passes against it.** Everything reaches a share through a PATH: the
+  agent writes the cache through the merged path, the container binds it, an
+  edit here is written into it and a deletion removes from it. Leave the
+  directory there with nothing mounted on it and all of that still works -- the
+  cache is a directory, the container reads it, and the only thing missing is
+  the lower, so a read that should fall through returns nothing and the
+  container's writes land where nobody looks. It ran that way in CI for the
+  whole life of the mode, behind a green section, while the child crash-looped
+  every two seconds. Two things follow, and neither is optional: `union.Alive`
+  asks whether the path is a MOUNT (st_dev against its parent, which works from
+  outside the namespace too -- `test/union-probe.sh` section 12), and the
+  suites assert that a container's share reports fuse-overlayfs rather than the
+  daemon's own disk.
+- **The union child enters the daemon's NETWORK namespace as well as its pid
+  and mount ones.** With a daemon per account the reverse forward carrying the
+  NFS export is bound inside that daemon's netns and reaches nowhere else (ADR
+  0019), so a lower mounted from the agent's namespace finds nothing on the
+  port. The kernel reports that as `invalid argument`, which reads as a
+  complaint about the option string and sent the search a long way from a mount
+  that was simply looking in the wrong network.
 - **A delegated share's union outlives the channel that asked for it, and is
   released only when no container is bound to it** (ADR 0044). The cache
   channel rides the connection, which ADR 0015 releases the moment a session
@@ -825,11 +846,11 @@ function was.
   covered (`integration.sh` section 16 reads through a union whose channels are
   all gone), and the agent restarting is NOT: the supervisor mounts again over a
   mount that was still serving, so a running container is left with a share it
-  cannot use. `union.Alive` stats the merged path and therefore cannot tell a
-  live mount from the directory a dead one leaves behind, which is the same
-  gap seen from the other side. `test/union-probe.sh` section 12 measures what
-  fixing it would rest on. Do not say a delegated share survives an agent
-  restart.
+  cannot use. Telling a mount from a leftover directory is settled --
+  `union.Alive` compares st_dev with the parent, which `test/union-probe.sh`
+  section 12 measured as working from outside the namespace too -- and what is
+  missing is the supervisor waiting for a serving mount to go before making
+  another. Do not say a delegated share survives an agent restart.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

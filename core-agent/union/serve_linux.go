@@ -81,7 +81,7 @@ func Serve(spec Spec) error {
 	return nil
 }
 
-// enter joins the mount namespace of pid.
+// enter joins the pid, network and mount namespaces of pid, in that order.
 //
 // The unshare is not optional and not tidiness: the kernel's mntns_install
 // replaces the caller's root and working directory, so it refuses a caller
@@ -96,6 +96,19 @@ func enter(pid int) error {
 	// It moves nothing by itself -- setns(CLONE_NEWPID) decides where this
 	// process's CHILDREN are born, which is exactly why the union is a child.
 	if err := setns(pid, "pid", unix.CLONE_NEWPID); err != nil {
+		return err
+	}
+
+	// The NETWORK namespace, and it is the LOWER mount that needs it: with a
+	// daemon per account the reverse forward carrying the NFS export is bound
+	// inside that daemon's netns and reaches nowhere else (ADR 0019). Mounting
+	// from the agent's namespace instead finds nothing on the port, and the
+	// kernel reports it as `invalid argument` -- a message about the option
+	// string, for a mount that was looking in the wrong network.
+	//
+	// Before the mount namespace changes, for the same reason the pid one is:
+	// afterwards /proc is the daemon's own and this pid names nothing in it.
+	if err := setns(pid, "net", unix.CLONE_NEWNET); err != nil {
 		return err
 	}
 
@@ -131,7 +144,7 @@ func setns(pid int, kind string, flag int) error {
 // a second container wants the same directory. The second call finds the mount
 // and says nothing.
 func mountLower(spec Spec) error {
-	if mounted(spec.Lower()) {
+	if mountedAt(spec.Lower()) {
 		return nil
 	}
 	source, fstype, options := spec.LowerMount()
@@ -139,23 +152,6 @@ func mountLower(spec Spec) error {
 		return fmt.Errorf("union: mounting %s at %s: %w", source, spec.Lower(), err)
 	}
 	return nil
-}
-
-// mounted reports whether anything is mounted at path, by asking whether the
-// path and its parent are on the same device.
-//
-// Cheaper and more direct than parsing /proc/self/mountinfo, and it is asked
-// from inside the namespace that owns the mount, which is the only place the
-// answer means anything.
-func mounted(path string) bool {
-	var here, up unix.Stat_t
-	if err := unix.Lstat(path, &here); err != nil {
-		return false
-	}
-	if err := unix.Lstat(path+"/..", &up); err != nil {
-		return false
-	}
-	return here.Dev != up.Dev
 }
 
 // Release enters the daemon's namespace and unmounts the union, then the
@@ -180,7 +176,7 @@ func Release(spec Spec) error {
 
 	var failed error
 	for _, target := range []string{spec.Merged(), spec.Lower()} {
-		if !mounted(target) {
+		if !mountedAt(target) {
 			continue
 		}
 		if err := unix.Unmount(target, unix.MNT_DETACH); err != nil {

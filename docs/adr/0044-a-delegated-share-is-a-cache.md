@@ -120,6 +120,27 @@ applied to a cache exactly — and it is the one event the cache must not miss.
 The Docker API cannot help here at all: it can write into a volume and never
 remove from one, which is the whole reason the agent needs a channel.
 
+### Three namespaces, and readiness means mounted
+
+The child enters the daemon's **pid**, **network** and **mount** namespaces, in
+that order. The network one is the lower's: with a daemon per account the
+reverse forward carrying the NFS export is bound inside that daemon's netns and
+reaches nowhere else (ADR 0019), so mounting from the agent's namespace finds
+nothing on the port. The kernel calls that `invalid argument`.
+
+And "up" means the merged path is a MOUNT, not that it exists. A union's
+directories are made before it is mounted and outlive it, so a stat says yes for
+a share that never mounted and for one whose server has died. Both then read as
+serving — and because everything here reaches a share through a path, the whole
+mode keeps working against the bare directory: the agent writes the cache into
+it, the container reads it, an edit here is written into it, a deletion removes
+from it. What is missing is the lower, so a read that should fall through
+returns nothing and the container's writes land where nothing looks for them.
+
+It ran that way in CI for the whole life of the mode, behind a green section.
+The suites now assert that a container's share reports fuse-overlayfs rather
+than the daemon's own disk, which is the one thing a bare directory cannot fake.
+
 ### A union outlives the channel that asked for it
 
 The cache channel rides the SSH connection, and that connection is released
@@ -199,18 +220,12 @@ confusion is content appearing in somebody's source tree that they never wrote.
   path does not repair a container already bound to the dead one.
 
   **Open, and not yet done:** adopting a live union instead of replacing it.
-  Two things block it, and they are the same thing. `union.Alive` stats the
-  merged path, and the directories a union needs are created before it is
-  mounted and outlive it — so a share that has never been mounted, and one
-  whose server died and left the mountpoint behind, both read as serving. Doing
-  better means asking whether the path is a MOUNT, which the child already does
-  from inside the namespace by comparing st_dev against the parent, and which
-  the agent would have to do from outside through `/proc/<pid>/root`. Whether
-  that answers there is a question about the kernel rather than about this code,
-  so `test/union-probe.sh` section 12 measures it rather than assuming it.
-
-  Until then: an agent restart leaves a running container's delegated share
-  broken, because the supervisor mounts again over a mount that was still
-  serving.
+  What blocked it was telling a mount from a directory, and that is now settled
+  — st_dev against the parent answers from outside the namespace as well as
+  inside (measured 2026-09-01, `test/union-probe.sh` section 12: an unmounted
+  directory reads dev 59 against parent 59, a mounted one 63 against 59), and
+  `union.Alive` uses it. What remains is the supervisor: it still mounts again
+  over a mount that was serving, so an agent restart leaves a running
+  container's delegated share broken.
 - **Disk**: one cache per share per client, growing with what the container
   writes as well as with the tree.
