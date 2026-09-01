@@ -271,6 +271,47 @@ else
 fi
 
 echo
+echo "== 7b. a delegated share, which is a union mounted inside the dind =="
+# The ONLY place the mount-namespace entry is exercised. In shared mode the
+# agent and the daemon are one filesystem and nothing has to be entered; here
+# the union lives inside this account's dind, and the agent has to get in there
+# to mount it (ADR 0044).
+#
+# It also proves the two accounts stay separate at this layer: each union is
+# mounted in its own daemon's namespace, so alice's cache cannot be bob's.
+if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:delegated"     alpine:3 sleep 120 2>&1); then
+    ok "a container starts against a union inside alice's own daemon"
+
+    if out=$(da exec pud-deleg cat /w/marker 2>&1); then
+        if [ "$out" = "alice's file" ]; then
+            ok "it reads alice's file through the union"
+        else
+            bad "the union gave [$out]"
+        fi
+    else
+        bad "reading through the union failed: $(echo "$out" | tail -3)"
+    fi
+
+    # The fallthrough, which is what makes an incomplete cache correct: this
+    # file did not exist when the union was mounted.
+    echo "after the mount" >"$WORK/project-$A/late.txt"
+    if out=$(da exec pud-deleg cat /w/late.txt 2>&1); then
+        if [ "$out" = "after the mount" ]; then
+            ok "a file the cache does not have falls through to the live export"
+        else
+            bad "the fallthrough gave [$out]"
+        fi
+    else
+        bad "the fallthrough failed: $(echo "$out" | tail -3)"
+    fi
+
+    da rm -f pud-deleg >/dev/null 2>&1
+else
+    bad "a container would not start against a union: $(echo "$out" | tail -3)"
+    hostdocker logs "$CONTAINER" 2>&1 | grep -iE "union|fuse" | tail -5 | sed 's/^/        /'
+fi
+
+echo
 echo "== 8. two accounts publish, and the limit is this machine =="
 # Where the collision lives now that the port is the client's (ADR 0008). The
 # workspace no longer binds the

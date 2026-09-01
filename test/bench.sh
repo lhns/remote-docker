@@ -239,6 +239,95 @@ for spec in $SHAPES; do
 done
 
 unshape
+
+# The cache's own numbers, which the table above cannot hold: they are about a
+# mode that has a state -- filling, settled -- rather than a speed.
+#
+# This is what "a mode with no row does not ship" means for the cache (ADR
+# 0044). Four claims, four columns:
+#
+#   cold      a read straight after the container starts, before the fill has
+#             got anywhere. Should look like `cached`, because that is what it
+#             IS: a miss goes to the live mount.
+#   settle    how long until the cache holds the whole tree. The number
+#             compression would improve, and the one that scales with the tree
+#             rather than with the latency.
+#   warm      the same read afterwards. The gap between cold and warm is the
+#             entire feature.
+#   invalidate  an edit here, then the container reading it.
+#   writeback   the container writing, then this machine reading it.
+echo
+printf '%-12s %-8s %-8s %-8s %-8s %-11s %-10s
+'     shape rtt_ms cold_s settle_s warm_s invalidate_s writeback_s
+printf '%s
+' "$(printf '=%.0s' $(seq 1 72))"
+
+for spec in $SHAPES; do
+    case " $MODES " in *" delegated "*) ;; *) break ;; esac
+
+    delay=${spec%%:*}
+    rate=${spec##*:}
+    if [ "$delay" = "0ms" ] && [ "$rate" = "0" ]; then
+        unshape
+    elif ! shape "$delay" "$rate"; then
+        continue
+    fi
+    measured=$(rtt)
+
+    dockert rm -f "$PIN" >/dev/null 2>&1
+    if ! dockert run -d --name "$PIN" -v "$PROJECT:/w:delegated" alpine:3 sleep 3600 >/dev/null 2>&1; then
+        bad "no delegated container for $spec"
+        continue
+    fi
+
+    # Straight away, before the fill has had a chance: this is the miss path.
+    cold=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
+
+    # Settled is what the session itself says, rather than a guess at how long
+    # a copy ought to take.
+    settle_start=$(date +%s.%N)
+    settled=timeout
+    for _ in $(seq 1 300); do
+        if outputs 'cache .*files, cached$' "$WORK/remote-docker" remote status; then
+            settled=$( { date +%s.%N; } | awk -v s="$settle_start" '{ printf "%.2f", $1 - s }')
+            break
+        fi
+        sleep 1
+    done
+
+    warm=$(elapsed dockert exec "$PIN" sh -c 'find /w -name "*.go" -exec cat {} +')
+
+    # An edit here, and how long until the container sees it.
+    echo "edited at $(date +%s)" >"$PROJECT/pkg1/invalidate-probe"
+    inv_start=$(date +%s.%N)
+    inv=timeout
+    for _ in $(seq 1 60); do
+        if outputs 'edited at' dockert exec "$PIN" cat /w/pkg1/invalidate-probe; then
+            inv=$( { date +%s.%N; } | awk -v s="$inv_start" '{ printf "%.2f", $1 - s }')
+            break
+        fi
+        sleep 1
+    done
+
+    # And the other direction, which no earlier mode had at all.
+    dockert exec "$PIN" sh -c 'echo "from the container" >/w/writeback-probe' >/dev/null 2>&1
+    wb_start=$(date +%s.%N)
+    wb=timeout
+    for _ in $(seq 1 60); do
+        if [ -f "$PROJECT/writeback-probe" ]; then
+            wb=$( { date +%s.%N; } | awk -v s="$wb_start" '{ printf "%.2f", $1 - s }')
+            break
+        fi
+        sleep 1
+    done
+    rm -f "$PROJECT/writeback-probe" "$PROJECT/pkg1/invalidate-probe"
+
+    printf '%-12s %-8s %-8s %-8s %-8s %-11s %-10s
+'         "$delay/$rate" "$measured" "$cold" "$settled" "$warm" "$inv" "$wb"
+    dockert rm -f "$PIN" >/dev/null 2>&1
+done
+
+unshape
 echo
 echo "Compare a mode against consistent at the same shape: what a mode has to"
 echo "show is that its wall-clock stops tracking the latency knob. nfs_ops is"
