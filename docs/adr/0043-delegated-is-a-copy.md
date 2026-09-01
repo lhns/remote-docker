@@ -14,8 +14,8 @@ left (2026-09-01, 300 files, 160ms RTT):
 
 | mode | read | GETATTR | READ | ACCESS |
 |---|---|---|---|---|
-| consistent | 291.88s | 1888 | 300 | 422 |
-| cached | 98.22s | 13 | 300 | 422 |
+| consistent | 291.99s | 1888 | 300 | 422 |
+| cached | 98.20s | 13 | 300 | 422 |
 
 The remaining 98s is READ and ACCESS: the file's own bytes and the permission
 check, one round trip each. **No attribute cache can remove those** — a live
