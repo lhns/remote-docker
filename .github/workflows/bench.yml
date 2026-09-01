@@ -1,0 +1,43 @@
+name: bench
+
+# Manual only. This reports numbers rather than passing or failing, and it takes
+# minutes: a measurement, not a gate. Run it when a change claims to make a
+# mounted directory faster, and paste the table into the record that claims it.
+on:
+  workflow_dispatch:
+    inputs:
+      shapes:
+        description: "netem shapes, delay:rate, space separated"
+        default: "0ms:0 20ms:0 80ms:0 0ms:10mbit"
+      files:
+        description: "files in the tree"
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  mounted-directory:
+    name: how fast is a mounted directory
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: true
+
+      - name: load the nfs client module
+        run: sudo modprobe nfs
+
+      - name: measure
+        env:
+          BENCH_SHAPES: ${{ inputs.shapes }}
+          BENCH_FILES: ${{ inputs.files }}
+        run: bash test/bench.sh
+
+      - name: workspace logs on failure
+        if: failure()
+        run: docker logs remote-docker-bench 2>&1 | tail -100 || true
