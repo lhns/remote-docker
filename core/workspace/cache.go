@@ -19,9 +19,8 @@ import (
 // promise, and separating the two is what keeps the first one true.
 //
 // Every op here is performed THROUGH the merged mount rather than into the
-// cache layer directly, which is a kernel constraint rather than a preference.
-// The reasoning is in agent/internal/unions/write.go, beside the code it
-// binds, and in ADR 0044.
+// cache layer directly, which is a kernel constraint. The reasoning is in
+// agent/internal/unions/write.go, beside the code it binds.
 const (
 	// CacheVersion is the wire version, announced by the agent before anything
 	// else so a mismatch is a refusal rather than a stall.
@@ -73,37 +72,29 @@ const (
 	// already prepared answers with the same path.
 	OpPrepare CacheOp = "prepare"
 
-	// OpApply writes a tar into the union, through the merged mount. This is
-	// both the backfill and the way a change on the client reaches the cache:
-	// there is no difference between the two, and a protocol that had one
-	// would be describing our implementation rather than the request.
+	// OpApply writes a tar into the union. Both the fill and the way a change
+	// on the client reaches the cache: there is no difference between the two.
 	OpApply CacheOp = "apply"
 
-	// OpDrop removes paths from the union, which is what a deletion on the
-	// client becomes. The Docker API has no way to do this -- it can write
-	// into a volume and never remove from one -- and that is the whole reason
-	// the agent has to be involved at all.
+	// OpDrop removes paths from the union: what a deletion on the client
+	// becomes. The Docker API can write into a volume and never remove from
+	// one, which is why the agent is involved at all.
 	OpDrop CacheOp = "drop"
 
 	// OpChanges asks what the cache layer holds that the client did not put
-	// there, which is what the container wrote. The layer alone cannot say
-	// that -- the fill writes through the union too, so its own copies are in
-	// there beside the container's -- and the manifest is what separates them
-	// (ADR 0044).
+	// there, which is what the container wrote. The layer alone cannot say:
+	// the fill writes through the union too, and the manifest is what
+	// separates them (ADR 0044).
 	OpChanges CacheOp = "changes"
 
 	// OpPull asks for the bytes of named paths out of the cache layer, so the
 	// client can write them back to its own disk.
 	OpPull CacheOp = "pull"
 
-	// OpMounted asks which cache volumes this account has a union on, and it
-	// exists for the volume collector. No container references a cache volume
-	// -- a union is bound into a container by PATH -- so the daemon calls it
-	// unused and the collector takes it, emptying the layer under a running
-	// container's mount. The share THIS session prepared is spared by
-	// rewrite.Guard; one prepared by an earlier session is not, and only the
-	// workspace still knows it exists. Names no export, because the question
-	// is about all of them at once.
+	// OpMounted asks which cache volumes this account has a union on, for the
+	// volume collector: a union is bound into a container by PATH, so nothing
+	// references the volume and the daemon calls it unused (ADR 0044). Names
+	// no export, because the question is about all of them at once.
 	OpMounted CacheOp = "mounted"
 )
 
@@ -182,6 +173,12 @@ type CacheReply struct {
 
 	// Caches answers OpMounted: the cache volumes this account has a union on.
 	Caches []string `json:"v,omitempty"`
+
+	// Unknown says the workspace has no union for the share the request named,
+	// which is a different thing from the request failing. A share is released
+	// when nothing holds it, and a client that cannot tell the two apart goes
+	// on asking about it for the life of the session.
+	Unknown bool `json:"unknown,omitempty"`
 
 	// Bytes is the length of the tar that follows this reply, answering
 	// OpPull. Framed by length for the same reason a request's payload is: a

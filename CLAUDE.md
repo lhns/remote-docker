@@ -74,8 +74,9 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
 
-agent/go.mod             the agent module: THE GLUE. 5 direct third-party
-                         requires, 28 go.sum lines
+agent/go.mod             the agent module: THE GLUE. 6 direct third-party
+                         requires, 28 go.sum lines (2026-09-02; re-check with
+                         `wc -l agent/go.sum`)
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
     wslisten/            the same SSH server, reached over a WebSocket. Serves
@@ -413,10 +414,8 @@ premise of the project, and it applies to building it too. So:
 - **A payload's codec is chosen from what the AGENT announced, never from what
   the client can produce** (ADR 0044). The greeting carries the list; a
   workspace older than compression names none, and a client that picked for
-  itself would send it something it refuses. zstd, which cost the agent a
-  direct dependency and took ADR 0021's stated count from 24 go.sum lines to
-  28 -- bought deliberately for the one bulk transfer this protocol makes, and
-  the reason that count is written down is so a purchase like it is visible.
+  itself would send it something it refuses. zstd, which cost the agent a direct
+  dependency; ADR 0021 carries the count and what moved it.
 - **A serving union is ADOPTED, never mounted over** (ADR 0044). After an agent
   restart the child is an orphan whose mount is still serving every container
   bound to it; mounting again on the same path stacks a second fuse-overlayfs
@@ -897,6 +896,20 @@ function was.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
+- **The cache mode's own benchmark table.** `test/bench.sh`'s second table --
+  cold, settle, warm, invalidate, write-back -- has never produced a complete
+  set of rows: two shapes of four, and only the 0.1ms one measures the mode
+  rather than the bench (ADR 0044 has both rows and says which is which). The
+  first table, which is what every speed claim rests on, IS complete.
+- **Write-back's conflict resolution, and the measured clock offset.** All six
+  rows of the baseline table are unit tested and the skew correction has its own
+  test; no integration suite has ever made a file change in both places at once.
+  Say "unit tested", never "tested".
+- **Union adoption anywhere but `test/vm.sh`.** It is asserted only there,
+  because it is only reachable where dockerd outlives the agent (ADR 0025): in a
+  container the agent is pid 1 and takes every dind with it. That suite needs
+  `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
+  the section skips and says so.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

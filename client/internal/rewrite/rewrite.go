@@ -681,11 +681,6 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency 
 // union whose lower is this share's live export. A read the cache has costs the
 // workspace's own disk; a read it does not have falls through and is right,
 // which is what lets the cache be filled without the container waiting for it.
-//
-// Synchronous here, in the first version. A container reading a file the fill
-// has not reached is served correctly from the lower, so nothing is wrong with
-// filling in the background -- it is just not measured yet, and a claim about
-// speed with no measurement is an opinion.
 func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string) (string, error) {
 	cache := share + "-" + workspace.CacheRole
 

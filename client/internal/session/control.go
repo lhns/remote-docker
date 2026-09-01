@@ -377,6 +377,24 @@ func (s *Session) Close() error {
 	return nil
 }
 
+// humanBytes is a size somebody can read at a glance.
+//
+// A byte count is the more useful half of "how much of this is cached": a share
+// can be most of its files and a fraction of its bytes, or the other way round,
+// and which one it is decides whether the cache is worth anything.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for n/div >= unit && exp < 3 {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGT"[exp])
+}
+
 // cacheStatus is one line per delegated share, saying how much of it is cached.
 //
 // A fraction rather than a verdict: over the budget, still filling, and
@@ -405,8 +423,17 @@ func (s *Session) cacheStatus() []string {
 			what = "cached in part; the rest is read live"
 		}
 
-		out = append(out, fmt.Sprintf("%s: %d of %d files, %s",
-			local, state.Sent, stats.TotalFiles, what))
+		// "N of M" only once M is known. Stats lands when the walk finishes, so
+		// while a fill runs TotalFiles is 0 and the fraction reads "512 of 0
+		// files" -- a number that looks like a bug in the thing it is
+		// reporting on.
+		if state.Done {
+			out = append(out, fmt.Sprintf("%s: %d of %d files, %s of %s, %s",
+				local, state.Sent, stats.TotalFiles,
+				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), what))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: %d files so far, %s", local, state.Sent, what))
 	}
 	sort.Strings(out)
 	return out

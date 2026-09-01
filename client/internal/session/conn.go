@@ -238,7 +238,9 @@ func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
 	l.cacheOnce.Do(func() {
 		c, err := openCache(l.ssh)
 		if err != nil {
-			l.cacheErr = err
+			// Said once. The rewriter refuses the mode by name on its own, so
+			// this is the only place the channel's own reason is visible.
+			s.logQuiet(s.ctx, "opening the workspace's cache channel", "err", err)
 			return
 		}
 		l.cacheChan = c

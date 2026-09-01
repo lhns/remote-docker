@@ -1556,7 +1556,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # would otherwise present much later as a write that never arrived.
         filled=""
         for _ in $(seq 1 20); do
-            if outputs "delegated: .* files, cached\$"                 "$WORK/remote-docker" remote status; then
+            if outputs "delegated: .*, cached\$"                 "$WORK/remote-docker" remote status; then
                 filled=yes
                 break
             fi

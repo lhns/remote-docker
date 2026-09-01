@@ -2,9 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-09-01
-- Replaces the implementation in [ADR 0043](0043-delegated-is-a-copy.md), whose
-  decision — that `delegated` is a copy — stands only in the sense that a cache
-  contains one
+- Supersedes the retired 0043, whose answer — that `delegated` is a copy —
+  stands only in the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for delegated
   shares**, and for the first time as the event rather than an approximation of
   one
@@ -12,22 +11,21 @@
 ## What forced it
 
 ADR 0042's measurement left one number unexplained. `cached` removes every
-attribute revalidation and still takes 98s to read 300 files at 160ms RTT,
+attribute revalidation and still takes 98.1s to read 300 files at 160ms RTT,
 because 300 READs and 422 ACCESSes remain: the file's own bytes and the
 permission check, which no attribute cache can avoid. Removing them means not
-mounting — and ADR 0043's snapshot did exactly that, reaching 0.06s by giving up
-everything else:
+mounting — and a snapshot of the tree did exactly that, reaching 0.06s by
+giving up everything else:
 
 | | `cached` | `delegated` as a snapshot |
 |---|---|---|
-| read 300 files at 160ms | 98.20s | 0.06s |
+| read 300 files at 160ms | 98.1s | 0.06s |
 | a file created here afterwards | visible | **invisible** |
 | an edit here | visible | **never** |
 | a container's write | reaches this machine | **never** |
 
-A mode that is 1,600× faster and wrong about three things is not a trade
-anybody should have to make, and the three are all the same mistake: a copy has
-no way to answer for what it does not hold.
+All three failures are the same mistake: a copy has no way to answer for what
+it does not hold.
 
 ## The decision
 
@@ -36,11 +34,15 @@ the lower layer and a local cache as the upper, and the container binds the
 merged view. A read the cache holds costs the workspace's own disk; a read it
 does not falls through and is **correct**.
 
-That single property is what the whole design rests on, and it turns every hard
-question into a cheap one. A cache still filling, a budget that ran out, a file
-skipped for being excluded, a scan that has not reached a directory yet — all of
-them are the same state as a file that simply is not cached, and all of them are
-right. **Nothing here can make a share wrong; it can only make one slower.**
+That single property is what the whole design rests on. These are all the same
+state, and all correct:
+
+- the fill is still running
+- the budget stopped it short
+- the path is excluded, so it is never cached
+- the scan has not reached that directory
+
+**Nothing here can make a share wrong; it can only make one slower.**
 
 ### The union is fuse-overlayfs, and that was measured
 
@@ -85,24 +87,20 @@ children are born rather than moving the caller.
 
 ### Filling it: cheapest first, without waiting for the scan
 
-The win is a round trip saved per file, so a thousand small files are worth far
-more than one large one that costs the same bandwidth and saves a single round
-trip. But sorting the whole tree before sending anything makes the first byte
-wait for a stat of every file in the project, which on a large one takes longer
-than the upload it was meant to speed up.
-
-So the scan feeds a buffer of candidates bounded by the share's own budget,
-which **evicts its largest** to make room for smaller ones as more of the tree
-is seen, and the upload takes the smallest out of it. After the first hundred
-files the two run together. A file sent early may be larger than one found
-later; that is the price of not waiting, and it is small, because the buffer
-holds everything that fits in the budget and eviction only ever discards files
-that were never going to be sent.
+- The win is a round trip saved per file, so a thousand small files are worth
+  far more than one large one that costs the same bandwidth.
+- Sorting the whole tree first makes the first byte wait for a stat of every
+  file, which on a large project takes longer than the upload it was to speed up.
+- So: a candidate buffer bounded by the share's own budget, which **evicts its
+  largest** as more of the tree is seen; the upload takes the smallest out of
+  it, and after a hundred files the scan and the upload run together.
+- A file sent early may be larger than one found later. That is the price of not
+  waiting, and eviction only ever discards files that were never going to be
+  sent. The mechanism is `client/internal/cachefill`.
 
 **The budget bounds what is copied, never whether the mode runs.** "The budget
 ran out" is the same state as "the fill has not reached it yet", so there is no
-project size at which `delegated` stops working — it is cached in part, which is
-what it is for the whole of its fill anyway.
+project size at which `delegated` stops working.
 
 ### Compression is a negotiation, not a format
 
@@ -142,26 +140,36 @@ applied to a cache exactly — and it is the one event the cache must not miss.
 The Docker API cannot help here at all: it can write into a volume and never
 remove from one, which is the whole reason the agent needs a channel.
 
-### Three namespaces, and readiness means mounted
+### The child enters three namespaces
 
-The child enters the daemon's **pid**, **network** and **mount** namespaces, in
-that order. The network one is the lower's: with a daemon per account the
-reverse forward carrying the NFS export is bound inside that daemon's netns and
-reaches nowhere else (ADR 0019), so mounting from the agent's namespace finds
-nothing on the port. The kernel calls that `invalid argument`.
+**pid**, **network** and **mount**, in that order. The network one is the
+lower's: with a daemon per account the reverse forward carrying the NFS export
+is bound inside that daemon's netns and reaches nowhere else (ADR 0019), so a
+mount attempted from the agent's namespace has no server to talk to.
 
-And "up" means the merged path is a MOUNT, not that it exists. A union's
-directories are made before it is mounted and outlive it, so a stat says yes for
-a share that never mounted and for one whose server has died. Both then read as
-serving — and because everything here reaches a share through a path, the whole
-mode keeps working against the bare directory: the agent writes the cache into
-it, the container reads it, an edit here is written into it, a deletion removes
-from it. What is missing is the lower, so a read that should fall through
-returns nothing and the container's writes land where nothing looks for them.
+### The lower's options are not a mount(2) argument
 
-It ran that way in CI for the whole life of the mode, behind a green section.
-The suites now assert that a container's share reports fuse-overlayfs rather
-than the daemon's own disk, which is the one thing a bare directory cannot fake.
+`workspace.NFSVolumeOptions` builds the list docker's local volume driver takes,
+and that driver splits kernel FLAGS out of it before calling mount(2). Passed
+whole as filesystem data, `noatime` — which is `MS_NOATIME` and not something
+the NFS client parses — makes the parser refuse the entire list. It reports
+EINVAL, printed as `invalid argument`, about a list whose every word is valid on
+its own. `Spec.LowerMount` returns the two halves, and the error prints both.
+
+This is what kept the union from ever mounting, for the whole life of the mode.
+
+### "Up" means MOUNTED, not that the path exists
+
+A union's directories are made before it is mounted and outlive it, so a stat
+says yes for a share that never mounted and for one whose server has died. Both
+then read as serving — and because everything here reaches a share through a
+path, the whole mode keeps working against the bare directory: the agent writes
+the cache into it, the container reads it, an edit here is written into it, a
+deletion removes from it. Only the lower is missing, so a read that should fall
+through returns nothing and the container's writes land where nothing looks.
+
+The suites assert that a container's share reports fuse-overlayfs rather than
+the daemon's own disk, which is the one thing a bare directory cannot fake.
 
 ### A deletion nobody observed
 
@@ -222,12 +230,6 @@ volume and nothing else in the workspace relates the two. On any doubt the mount
 is KEPT: one nobody needs costs a process, and one taken while in use costs
 somebody's container for as long as it runs.
 
-Got wrong first, and it presented a long way from the cause: the container
-started, read its cache and wrote into it, and then every later request answered
-`has no cache; prepare it first` — write-back silent, invalidation silent, and a
-read that should have fallen through to the live export returning
-`No such file or directory`.
-
 ### Write-back: baselines first, clocks last
 
 The upper layer is where everything written through the union lands — which is
@@ -266,7 +268,12 @@ confusion is content appearing in somebody's source tree that they never wrote.
 ## What it measured
 
 `test/bench.sh` on a GitHub runner, 2026-09-01, 300 files, one shaped link per
-row. Seconds, and `nfs_ops` is what the mount was asked for during the read:
+row, ALL ROWS FROM ONE RUN so the modes are comparable with each other. Seconds,
+and `nfs_ops` is what the mount was asked for during the read. Re-check with the
+`bench` label on a pull request.
+
+ADR 0042's table is a different run and its absolute numbers differ; compare
+within a table, never across the two.
 
 | RTT | mode | start | walk | read 300 | write | nfs_ops during the read |
 |---|---|---|---|---|---|---|
@@ -291,13 +298,26 @@ Start does not grow, which is the other half of the claim: 0.15s at 160ms
 against 1.10s for both mounted modes, because a container never waits for the
 fill.
 
-**Incomplete, and not to be quoted as done:** the second table — cold, settle,
-warm, invalidate, write-back — produced rows for two of four shapes on that run.
-`0ms/0` gave 0.10 / 0.08 / 0.10 / 1.11 / 1.00 and `20ms/0` gave 0.62 / 0.08 /
-0.10 / 1.12 / write-back timing out at 60s; the 80ms and 10mbit shapes started
-no container at all, and the bench did not say why. The cold-versus-warm gap it
-is meant to show is also not visible on a 300-file tree that settles in 0.08s,
-so that table wants a larger one (`BENCH_FILES`) as well as a diagnosis.
+The cache's own table, same run. `cold` is a read straight after the container
+starts, `warm` the same read once the fill has settled. This run used a
+3000-file tree per shape; it is 1000 now, for the reason below:
+
+| RTT | cold | settle | warm | invalidate | write-back |
+|---|---|---|---|---|---|
+| 0.1ms | 3.61 | 7.91 | **0.09** | 1.13 | 2.01 |
+| 40ms | 377.18 | did not settle in 300s | 7.17 | 1.25 | did not arrive in 60s |
+
+Cold to warm at no latency is 3.61s to 0.09s, which is the feature stated as a
+number: the same read, before and after the cache holds the tree.
+
+**The 40ms row is a measurement of the bench, not of the mode.** The cold read
+races the fill for the link, so it reports the two competing rather than what a
+miss costs; and the tree did not finish settling inside the 300s the script
+waits, which is why write-back had nothing to report either. The tree was cut
+from 3000 to 1000 files and the job's timeout raised from 60 to 120 minutes
+afterwards. Both remaining shapes, 80ms
+and 10mbit, ran out of job time before starting. Do not quote this table for
+anything but the 0.1ms row until it has run whole.
 
 ## Consequences
 
@@ -306,7 +326,7 @@ so that table wants a larger one (`BENCH_FILES`) as well as a diagnosis.
 - **It requires `fuse-overlayfs` where the account's daemon runs.** In
   per-account mode that is the dind's image, which is why the workspace's own
   image is the right one to run there — already this project's recommendation
-  for the storage driver (`daemons/plan.go:38`). The workspace reports whether
+  for the storage driver (`daemons.DefaultImage`). The workspace reports whether
   it can serve a union, and the client refuses the mode by name, before creating
   anything, naming the remedy.
 - **A container's write reaches this machine after a delay**, not immediately.

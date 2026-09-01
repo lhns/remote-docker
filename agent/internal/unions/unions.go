@@ -10,6 +10,7 @@ package unions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,12 +26,12 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// RestartDelay is how long a failed union waits before being mounted again.
+// restartDelay is how long a failed union waits before being mounted again.
 //
 // The same two seconds supervise.Dockerd uses, and for the same reason: long
 // enough not to spin on a permanent failure, short enough that a transient one
 // is over before anybody looks.
-const RestartDelay = 2 * time.Second
+const restartDelay = 2 * time.Second
 
 // aliveTimeout bounds the liveness check. A union whose server is gone answers
 // ENOTCONN immediately; one whose server is wedged answers nothing at all, and
@@ -136,6 +137,10 @@ func (l *live) isApplied(name string, size int64, modTime time.Time) bool {
 	return ok && a.size == size && a.modTime.Equal(modTime)
 }
 
+// ErrNoShare is what every op answers for a share this workspace is not
+// serving. Named so the client can stop asking rather than guess from a string.
+var ErrNoShare = errors.New("no union for this share")
+
 // key names a share within an account, since two accounts may share a name for
 // the same directory and must never share a mount.
 func key(account, export string) string { return account + "\x00" + export }
@@ -151,13 +156,9 @@ func ownedBy(k, account string) bool { return strings.HasPrefix(k, account+"\x00
 // second container wants the same directory. A share already mounted and alive
 // answers with the same path and does nothing else.
 func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon, req workspace.CacheRequest) (string, error) {
-	// The cache volume this machine's share must use, DERIVED rather than
-	// taken from the request. Validate only asks whether the name is a managed
-	// one, which every machine of an account satisfies for every other
-	// machine's volumes -- so without this a second machine could have the
-	// agent mount somebody else's cache as the upper of its own union and
-	// write into it through its own container. The digest is the key that
-	// authenticated, so a machine can only ever name its own (ADR 0029).
+	// DERIVED, not taken from the request: Validate only asks whether the name
+	// is a managed one, which every machine of an account satisfies for every
+	// other machine's (ADR 0029). See workspace.CacheVolumeForExport.
 	expected, err := workspace.CacheVolumeForExport(client, req.Export)
 	if err != nil {
 		return "", fmt.Errorf("unions: %w", err)
@@ -243,11 +244,11 @@ func (m *Manager) start(spec union.Spec, host string) *live {
 				return
 			}
 			logx.Or(m.Log).Warn("a union exited; mounting it again",
-				"export", spec.Export, "err", err, "in", RestartDelay)
+				"export", spec.Export, "err", err, "in", restartDelay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(RestartDelay):
+			case <-time.After(restartDelay):
 			}
 		}
 	}()
@@ -270,7 +271,7 @@ func (m *Manager) awaitGone(ctx context.Context, spec union.Spec) bool {
 		select {
 		case <-ctx.Done():
 			return true
-		case <-time.After(RestartDelay):
+		case <-time.After(restartDelay):
 		}
 	}
 	logx.Or(m.Log).Info("the adopted union went; mounting one of ours",
@@ -323,12 +324,8 @@ func (m *Manager) waitReady(ctx context.Context, spec union.Spec) error {
 	}
 }
 
-// alive reports whether the union answers.
-//
-// The MOUNT is the truth, not the process. After an agent restart the server is
-// an orphan whose mount still serves; a server can also be running with a mount
-// that answers ENOTCONN. Both are decided here, and neither is decided by
-// looking at a pid.
+// alive reports whether the union answers. The mount is the truth, not the pid:
+// see union.Alive.
 func (m *Manager) alive(spec union.Spec) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), aliveTimeout)
 	defer cancel()
@@ -462,17 +459,6 @@ func (m *Manager) stop(k string, l *live) {
 		// The child is being killed by its context; not waiting further keeps
 		// one wedged process from holding up every other share.
 	}
-}
-
-// Merged answers where a share is mounted, and whether it is.
-func (m *Manager) Merged(account, export string) (string, bool) {
-	m.mu.Lock()
-	l, ok := m.shares[key(account, export)]
-	m.mu.Unlock()
-	if !ok {
-		return "", false
-	}
-	return l.spec.Merged(), m.alive(l.spec)
 }
 
 // Capability reports whether this workspace can serve a union at all, as

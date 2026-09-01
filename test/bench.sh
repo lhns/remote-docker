@@ -47,7 +47,11 @@ FILES=${BENCH_FILES:-300}
 # and warm measure the same thing and the gap between them -- which is the whole
 # feature -- cannot appear. The first table keeps 300, because its rows are
 # compared against ADR 0042's, which were measured on that tree.
-CACHE_FILES=${BENCH_CACHE_FILES:-3000}
+#
+# 1000 and not more: at 3000 a settle over a 40ms link did not finish inside the
+# 300s this waits, and the job hit its own timeout after two of four shapes
+# (measured 2026-09-01). A thousand files still takes long enough to see.
+CACHE_FILES=${BENCH_CACHE_FILES:-1000}
 
 # READ_SAMPLE is what cold and warm read, and it is a FIXED NUMBER of files
 # rather than the whole tree.
@@ -347,7 +351,7 @@ for spec in $SHAPES; do
         # This share's row, not any share's: every earlier shape left a
         # settled cache behind, and an unanchored match would report the first
         # of those as this one settling instantly.
-        if outputs "cache$safe: .* files, cached\$" "$WORK/remote-docker" remote status; then
+        if outputs "cache$safe: .*, cached\$" "$WORK/remote-docker" remote status; then
             settled=$( { date +%s.%N; } | awk -v s="$settle_start" '{ printf "%.2f", $1 - s }')
             break
         fi

@@ -43,7 +43,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'bench'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Two hours. The cache table fills a tree per shape over a shaped link, and
+    # at 60 the job was cut off after two of four shapes -- reported as
+    # "cancelled", which reads as somebody having stopped it. Measured
+    # 2026-09-01.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 

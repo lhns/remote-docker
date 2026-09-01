@@ -212,7 +212,6 @@ type liveConn struct {
 	// workspace too old to serve it must not be asked twice per container.
 	cacheOnce sync.Once
 	cacheChan *cacheChannel
-	cacheErr  error
 
 	// machine holds a local machine open, nil for a workspace that is simply
 	// there. Closing it lets the machine shut itself down.

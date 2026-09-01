@@ -2,21 +2,13 @@ package session
 
 // What a delegated share's cache was filled with, remembered across sessions.
 //
-// A cache volume outlives the session that filled it, and the fill only ever
-// writes: it overwrites what changed and adds what is new, and it has no way to
-// notice what is GONE. So a file deleted here while nothing was running stays
-// in the cache and stays visible to every container afterwards -- "I deleted
-// that yesterday" against a file that is still there today (ADR 0044).
+// A fill only ever writes: it overwrites what changed and adds what is new, and
+// has no way to notice what is GONE. So a file deleted here while nothing was
+// running stays in the cache and stays visible to every container (ADR 0044).
 //
-// The fix needs one thing the session cannot work out for itself. A path the
-// cache holds and this machine does not is either a file you deleted or one a
-// container created, and the cache layer cannot tell them apart -- both are
-// simply present. What separates them is whether the FILL put it there, which
-// is what this file records.
-//
-// Only the paths, not their sizes or times: the fill rewrites every file it
-// sends, so a change made while away is carried by the fill itself and needs no
-// record. Deletion is the one thing that needs one.
+// Telling that from a container's own file needs one thing the session cannot
+// work out: whether the FILL put it there. That is what this records. Only the
+// paths, because a change made while away is carried by the next fill anyway.
 
 import (
 	"encoding/json"
@@ -27,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/lhns/remote-docker/client/internal/config"
 )
 
 // cachedFile is bound to the machine and account that wrote it, exactly as the
@@ -109,19 +103,11 @@ func (s *cachedStore) record(export string, paths []string) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		s.warn("could not keep a record of what a cache holds", err)
-		return
-	}
-	// Written whole and moved into place, because a half-written record is one
-	// that decides to remove the wrong files from somebody's cache.
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		s.warn("could not keep a record of what a cache holds", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
+	// config.WriteAtomic rather than a write and a rename of our own: a
+	// half-written record is one that decides to remove the wrong files from
+	// somebody's cache, and the rename needs the retry that helper carries for
+	// a Windows sharing violation. The share record already goes through it.
+	if err := config.WriteAtomic(s.path, data, 0o600); err != nil {
 		s.warn("could not keep a record of what a cache holds", err)
 	}
 }

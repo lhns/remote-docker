@@ -78,6 +78,21 @@ UPPER=$WORK/cache/upper
 WORKDIR=$WORK/cache/work
 MERGED=$WORK/merged
 HOLDER=union-probe-holder
+# start_dind runs a dind and waits for its daemon, which three sections need and
+# each used to spell out. The second argument is any extra `docker run` flag,
+# which in practice is --network host.
+start_dind() {
+    local name=$1 extra=${2:-}
+    docker rm -f "$name" >/dev/null 2>&1
+    # shellcheck disable=SC2086  # extra is a flag list, and word splitting is the point
+    docker run -d --name "$name" --privileged $extra -e DOCKER_TLS_CERTDIR=         docker:28-dind >/dev/null 2>&1 || return 1
+    for _ in $(seq 1 30); do
+        docker exec "$name" docker info >/dev/null 2>&1 && return 0
+        sleep 2
+    done
+    return 1
+}
+
 DIND=union-probe-dind
 
 # shellcheck source=test/lib.sh
@@ -510,11 +525,7 @@ echo "== 10. mounting inside another daemon's namespace =="
 # With a daemon per account (ADR 0019) the mounts have to happen inside that
 # dind's mount namespace, which the agent has never entered: core-agent/netns
 # only does CLONE_NEWNET. This is the shape that work would take.
-if docker run -d --name "$DIND" --privileged -e DOCKER_TLS_CERTDIR= docker:28-dind >/dev/null 2>&1; then
-    for _ in $(seq 1 30); do
-        docker exec "$DIND" docker info >/dev/null 2>&1 && break
-        sleep 2
-    done
+if start_dind "$DIND"; then
     pid=$(docker inspect -f '{{.State.Pid}}' "$DIND" 2>/dev/null)
     if [ -n "$pid" ] && sudo nsenter -t "$pid" -m -- mkdir -p /union-probe; then
         if sudo nsenter -t "$pid" -m -- mount -t tmpfs probe /union-probe 2>"$WORK/nsenter.err"; then
@@ -546,12 +557,7 @@ echo "== 11. the shape that actually ships, end to end =="
 # need that: the reverse tunnel is bound inside the account's dind precisely so
 # 127.0.0.1 there is the client's NFS server (ADR 0019).
 DIND2=union-probe-dind2
-docker rm -f "$DIND2" >/dev/null 2>&1
-if docker run -d --name "$DIND2" --privileged --network host -e DOCKER_TLS_CERTDIR=     docker:28-dind >/dev/null 2>&1; then
-    for _ in $(seq 1 30); do
-        docker exec "$DIND2" docker info >/dev/null 2>&1 && break
-        sleep 2
-    done
+if start_dind "$DIND2" "--network host"; then
     # The workspace's own image carries fuse-overlayfs; docker:28-dind does not,
     # which is why a real deployment runs the workspace image for a per-account
     # daemon (agent/internal/daemons/plan.go:38). Installed here rather than
@@ -649,13 +655,7 @@ echo "== 12. telling a live union from the directory it leaves behind =="
 # is whether it still answers from OUTSIDE, through /proc/<pid>/root -- so this
 # section asks it rather than assuming it.
 DIND3=union-probe-dind3
-docker rm -f "$DIND3" >/dev/null 2>&1
-if docker run -d --name "$DIND3" --privileged --network host -e DOCKER_TLS_CERTDIR=     docker:28-dind >/dev/null 2>&1; then
-    for _ in $(seq 1 30); do
-        docker exec "$DIND3" docker info >/dev/null 2>&1 && break
-        sleep 2
-    done
-
+if start_dind "$DIND3" "--network host"; then
     pid=$(docker inspect -f '{{.State.Pid}}' "$DIND3" 2>/dev/null)
     docker exec "$DIND3" sh -c 'mkdir -p /rd/probe12/lower /rd/probe12/merged' >/dev/null 2>&1
 

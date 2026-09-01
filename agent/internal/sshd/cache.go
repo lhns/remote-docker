@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -15,6 +16,11 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core/workspace"
 )
+
+// releaseTimeout bounds asking the daemon which unions are still in use. The
+// session is gone by then, so nothing is waiting on this but the workspace's
+// own tidying.
+const releaseTimeout = 30 * time.Second
 
 // serveCache carries a delegated share's cache: mounting its union, filling it,
 // dropping what the client deleted, and handing back what the container wrote
@@ -34,11 +40,6 @@ import (
 // not pipelined: every op here changes a mount or a file, the client waits for
 // each in turn anyway, and a protocol that could reorder them would have to
 // explain what two overlapping applies to one share mean.
-// releaseTimeout bounds asking the daemon which unions are still in use. The
-// session is gone by then, so nothing is waiting on this but the workspace's
-// own tidying.
-const releaseTimeout = 30 * time.Second
-
 func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	if s.cfg.Unions == nil {
 		_, _ = fmt.Fprintln(session.Stderr(), "workspace-cache: this workspace does not serve delegated shares")
@@ -138,27 +139,27 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		merged, err := s.cfg.Unions.Prepare(ctx, name, account.Client(),
 			unions.Daemon{Host: target.Host, PID: target.PID}, req)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error()}, nil
+			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
 		return workspace.CacheReply{Merged: merged}, nil
 
 	case workspace.OpApply:
 		err := s.cfg.Unions.Apply(ctx, name, req.Export, req.Codec, io.LimitReader(body, req.Bytes))
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error()}, nil
+			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
 		return workspace.CacheReply{}, nil
 
 	case workspace.OpDrop:
 		if err := s.cfg.Unions.Drop(ctx, name, req.Export, req.Paths); err != nil {
-			return workspace.CacheReply{Err: err.Error()}, nil
+			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
 		return workspace.CacheReply{}, nil
 
 	case workspace.OpChanges:
 		changes, err := s.cfg.Unions.Changes(ctx, name, req.Export)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error()}, nil
+			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
 		return workspace.CacheReply{Changes: changes}, nil
 
@@ -176,7 +177,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 	case workspace.OpPull:
 		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error()}, nil
+			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
 		return workspace.CacheReply{Bytes: int64(len(pulled))}, pulled
 

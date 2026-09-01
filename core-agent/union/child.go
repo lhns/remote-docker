@@ -105,12 +105,10 @@ var errNotAMount = errors.New("nothing is mounted there")
 // Alive reports whether the union answers, and it is the ONLY definition of
 // "up" this package offers.
 //
-// Deliberately not "is the process running". After an agent restart the server
-// is an orphan whose mount still serves every container bound to it; a server
-// can also be running with a mount that answers ENOTCONN, which is what killing
-// fuse-overlayfs leaves behind. Reading the mountpoint is what tells those
-// apart, and it is read through /proc/<pid>/root because that resolves in the
-// daemon's mount namespace without entering it.
+// The MOUNT is the truth, not the process: an orphaned server still serves, and
+// a live one can hold a mount that answers ENOTCONN. What "mounted" means, and
+// why it is not a stat, is on mountedAt. Read through /proc/<pid>/root, which
+// resolves in the daemon's namespace without entering it.
 //
 // A context because a wedged server answers nothing at all, and every caller
 // asking would otherwise wait with it.
@@ -119,12 +117,6 @@ func Alive(ctx context.Context, spec Spec) error {
 
 	done := make(chan error, 1)
 	go func() {
-		// Whether it is a MOUNT, not whether the path is there. The
-		// directories are created before the union is mounted and outlive it,
-		// so a stat says yes for a share that never mounted and for one whose
-		// server has died -- and the workspace would then declare it ready,
-		// let a container bind an ordinary empty directory, and write the
-		// cache into it. Nothing would fail; nothing would be a union either.
 		if !mountedAt(merged) {
 			done <- errNotAMount
 			return

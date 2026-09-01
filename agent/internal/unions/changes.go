@@ -2,6 +2,7 @@ package unions
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -11,19 +12,14 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/core-agent/notify"
-	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // What the container changed, read out of the cache layer (ADR 0044).
 //
-// The upper layer of an overlay holds what was written through the union --
-// which is the container's writes AND the fill's own copies, since the fill
-// goes through the union too. So being in the layer is not the answer on its
-// own. What the client sent is what separates them, and it is checked twice:
-// here against the record this process keeps of what it applied, so the reply
-// stays proportional to what changed, and on the client against the manifest,
-// which is the rule (ADR 0044).
+// The layer holds what the client's stream wrote as well as what the container
+// did, which is what live.applied exists to separate; its field comment has the
+// argument.
 //
 // Read directly rather than through the merged mount, which is the one place
 // this design reads a layer instead of the union. Reading is safe where writing
@@ -97,8 +93,6 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 	if err != nil {
 		return nil, fmt.Errorf("unions: reading what changed in %s: %w", export, err)
 	}
-	logx.Or(m.Log).Debug("read a cache layer",
-		"export", export, "upper", upper, "changed", len(out))
 	return out, nil
 }
 
@@ -109,7 +103,7 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 		return nil, err
 	}
 
-	var buf strings.Builder
+	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, p := range paths {
 		target, err := within(upper, p)
@@ -157,7 +151,7 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 	if err := tw.Close(); err != nil {
 		return nil, err
 	}
-	return []byte(buf.String()), nil
+	return buf.Bytes(), nil
 }
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.
@@ -167,7 +161,7 @@ func (m *Manager) upperRoot(_ context.Context, account, export string) (*live, s
 	m.mu.Unlock()
 
 	if !ok {
-		return nil, "", fmt.Errorf("unions: %s has no cache", export)
+		return nil, "", fmt.Errorf("unions: %s has no cache: %w", export, ErrNoShare)
 	}
 	root, err := notify.Relocate(l.spec.Upper(), func() (string, error) { return l.spec.Root(), nil })
 	if err != nil {

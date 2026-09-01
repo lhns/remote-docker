@@ -20,20 +20,13 @@ import (
 
 // Filling and emptying a share's cache, always THROUGH the merged mount.
 //
-// Never into the cache layer directly, and that is not a preference: overlayfs
-// leaves the result undefined when a layer changes underneath a mounted union,
-// and it was measured -- a file written straight into the cache stays invisible
-// to a container that had already looked for it and missed
-// (test/union-probe.sh section 4).
+// Never into the cache layer directly: overlayfs leaves a write under a mounted
+// union undefined, and a file written straight into the layer stays invisible
+// to a container that already missed on it (test/union-probe.sh section 4).
+// Going through the union is also what makes the container's own inotify fire
+// natively, which is how ADR 0014 closes for these shares.
 //
-// Going through the union has a second consequence that is worth the whole
-// feature: the write is a real filesystem operation in the container's own
-// view, so its inotify fires natively. That is how ADR 0014 closes for these
-// shares -- not as a poke that approximates an event, but as the event.
-//
-// The agent writes through /proc/<pid>/root, which resolves in the daemon's
-// mount namespace without entering it, exactly as core-agent/notify already
-// reaches a volume it cannot otherwise see.
+// The agent writes through /proc/<pid>/root, as core-agent/notify does.
 
 // Apply extracts a tar into a share's union, decoding it first when the client
 // compressed it.
@@ -52,14 +45,14 @@ func (m *Manager) Apply(ctx context.Context, account, export, codec string, body
 		return err
 	}
 
-	body, done, err := decoded(codec, body)
+	decoded, done, err := decoded(codec, body)
 	if err != nil {
 		_, _ = io.Copy(io.Discard, body)
 		return err
 	}
 	defer done()
 
-	tr := tar.NewReader(body)
+	tr := tar.NewReader(decoded)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -156,12 +149,12 @@ func decoded(codec string, body io.Reader) (io.Reader, func(), error) {
 	case workspace.CodecZstd:
 		zr, err := zstd.NewReader(body)
 		if err != nil {
-			return body, func() {}, fmt.Errorf("unions: reading a %s batch: %w", codec, err)
+			return nil, nil, fmt.Errorf("unions: reading a %s batch: %w", codec, err)
 		}
 		return zr, zr.Close, nil
 
 	default:
-		return body, func() {}, fmt.Errorf("unions: a batch arrived encoded as %q, which this workspace cannot read", codec)
+		return nil, nil, fmt.Errorf("unions: a batch arrived encoded as %q, which this workspace cannot read", codec)
 	}
 }
 
@@ -201,7 +194,7 @@ func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live
 	m.mu.Unlock()
 
 	if !ok {
-		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first", export)
+		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first: %w", export, ErrNoShare)
 	}
 	if err := union.Alive(ctx, l.spec); err != nil {
 		return nil, "", err

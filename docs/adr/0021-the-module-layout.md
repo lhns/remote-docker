@@ -70,9 +70,12 @@ shared one.
 
 | | third-party modules | `go.sum` |
 |---|---|---|
-| agent | 8 | 28 lines |
+| agent | 7 | 24 lines |
 | client | ~130 | 786 lines |
 | core | 1 | 2 lines |
+
+As of 2026-08-10. The agent's has grown since; the Consequences below carry the
+current figure and what moved it.
 
 `GOTOOLCHAIN=auto` fixes that day and converts the class of breakage into a
 silent toolchain download. The coupling had to go.

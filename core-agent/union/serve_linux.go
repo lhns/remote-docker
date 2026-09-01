@@ -60,19 +60,11 @@ func Serve(spec Spec) error {
 			"\tfix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE", Binary, err)
 	}
 
-	// A CHILD rather than an exec, and this is the part no manual states
-	// plainly.
-	//
-	// Entering the mount namespace alone leaves this process holding a pid
-	// from the AGENT's pid namespace while looking at the daemon's /proc,
-	// which is a procfs for a different one. /proc/self then resolves to
-	// nothing, and libfuse reaches for /proc/self/fd constantly. It fails as
-	// ENOENT and reports it as "cannot read upper dir: No such file or
-	// directory" -- about a directory that is plainly there and that ls in the
-	// same shell had just listed (measured, test/union-probe.sh section 11).
-	//
-	// setns(CLONE_NEWPID) does not move the caller. It decides where its
-	// CHILDREN are born, so the union has to be one.
+	// A child, not an exec. This process holds a pid from the AGENT's pid
+	// namespace while looking at the daemon's /proc, so /proc/self resolves to
+	// nothing and libfuse reports it as "cannot read upper dir: No such file or
+	// directory" about a directory that is there (test/union-probe.sh section
+	// 11). setns(CLONE_NEWPID) moves only the caller's CHILDREN.
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -110,11 +102,6 @@ func enter(pid int) error {
 		return err
 	}
 
-	// The unshare is not optional and not tidiness: the kernel's mntns_install
-	// replaces the caller's root and working directory, so it refuses a caller
-	// whose filesystem state is shared with anything else. Go's threads all
-	// share it, so it has to be broken first, and it cannot be put back --
-	// which is why this happens in a child process rather than in the agent.
 	if err := unix.Unshare(unix.CLONE_FS); err != nil {
 		return fmt.Errorf("union: unsharing filesystem state: %w", err)
 	}
@@ -148,11 +135,8 @@ func mountLower(spec Spec) error {
 	source, fstype, data, words := spec.LowerMount()
 	flags := mountFlagBits(words)
 	if err := unix.Mount(source, spec.Lower(), fstype, flags, data); err != nil {
-		// The options too, and this is why: the kernel answers a list it
-		// cannot parse with EINVAL, which prints as `invalid argument` and
-		// names nothing. Without the list, the search goes to the address, the
-		// export path and the namespace before it reaches the one word that
-		// was in the wrong half of the call.
+		// The options too: the kernel answers a list it cannot parse with
+		// EINVAL, which prints as `invalid argument` and names nothing.
 		return fmt.Errorf("union: mounting %s at %s (type %s, flags %v, options %s): %w",
 			source, spec.Lower(), fstype, words, data, err)
 	}

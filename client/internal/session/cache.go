@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -127,9 +128,16 @@ func (c *cacheChannel) do(req workspace.CacheRequest, body io.Reader) (workspace
 	return reply, nil
 }
 
+// errShareGone is the workspace saying it has no union for a share, which is a
+// reason to stop asking rather than to retry.
+var errShareGone = errors.New("session: the workspace has no union for this share")
+
 // Changes asks what the container did to a share.
 func (c *cacheChannel) Changes(_ context.Context, export string) ([]workspace.CacheChange, error) {
 	reply, err := c.do(workspace.CacheRequest{Op: workspace.OpChanges, Export: export}, nil)
+	if reply.Unknown {
+		return nil, errShareGone
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -18,12 +18,6 @@ import (
 )
 
 // Filling a delegated share's cache, in the background (ADR 0044).
-//
-// The container does not wait for this, and that is the whole point of the
-// union: what the cache does not hold yet is served from the live export
-// underneath, correctly. So a fill that is slow, partial, or still running
-// costs speed and never correctness -- which is what makes it safe to start a
-// container and fill behind it.
 
 // fillState is what a share's fill has done so far, for reporting.
 type fillState struct {
@@ -63,6 +57,16 @@ func (f *fills) set(export, localPath string, s *fillState) {
 	f.manifests[export] = map[string]writeback.Baseline{}
 }
 
+// forget drops a share, so a later container against the same directory fills
+// it from scratch rather than against a manifest for a cache that is gone.
+func (f *fills) forget(export string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.state, export)
+	delete(f.roots, export)
+	delete(f.manifests, export)
+}
+
 func (f *fills) get(export string) (fillState, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -86,10 +90,7 @@ func (s *Session) Fill(export, localPath string) {
 	s.fills.set(export, localPath, state)
 
 	go func() {
-		// Before the fill, because it is a REMOVAL and the fill cannot make
-		// one: a file deleted here while nothing was running is still in the
-		// cache and still visible to a container until something takes it out
-		// (ADR 0044).
+		// Before the fill, because a fill cannot remove anything. See cached.go.
 		s.reconcileDeletions(export, localPath)
 
 		err := s.fill(export, localPath, state)
@@ -117,16 +118,8 @@ func (s *Session) Fill(export, localPath string) {
 	}()
 }
 
-// reconcileDeletions takes out of the cache what this machine no longer has.
-//
-// The one thing a fill cannot do. It overwrites what changed and adds what is
-// new, so a change made while no session ran is carried by the fill itself --
-// and a DELETION leaves no trace for it to carry. Without this, a file removed
-// here yesterday is still in the container today.
-//
-// Only paths a previous fill recorded are considered, which is what keeps it
-// safe: a path in the cache that no fill put there is a container's own file,
-// and this must never remove one of those.
+// reconcileDeletions takes out of the cache what this machine no longer has,
+// from what a previous fill recorded (ADR 0044; see cached.go).
 func (s *Session) reconcileDeletions(export, localPath string) {
 	if s.cached == nil {
 		return
@@ -138,12 +131,9 @@ func (s *Session) reconcileDeletions(export, localPath string) {
 	s.dropDeleted(export, localPath, filled)
 }
 
-// dropDeleted removes from a share's cache every one of the named paths that
-// this machine no longer has.
-//
-// Only paths a fill put there are ever passed in, and that is what keeps it
-// safe: a path in the cache that no fill sent is a container's own file, and
-// this must never remove one of those.
+// dropDeleted removes from a share's cache the named paths this machine no
+// longer has. Callers pass only paths a fill recorded: a path in the cache that
+// no fill sent is a container's own file, and this must never remove one.
 func (s *Session) dropDeleted(export, localPath string, filled []string) {
 	gone := deletedSince(localPath, filled)
 	if len(gone) == 0 {

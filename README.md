@@ -337,10 +337,16 @@ workspace's loopback shaped, reading them all:
 
 | RTT | default | `cached` | `delegated` |
 |---|---|---|---|
-| 0.1ms | 0.41s | 0.30s | 0.06s |
-| 40ms | 58.8s | 24.5s | 0.06s |
-| 160ms | 292.0s | 98.2s | 0.06s |
-| 0.3ms, 10mbit | 0.84s | 0.62s | 0.06s |
+| 0.1ms | 0.41s | 0.30s | 0.33s |
+| 40ms | 32.5s | 24.5s | 0.09s |
+| 160ms | 164.5s | 98.1s | 0.08s |
+| 0.3ms, 10mbit | 0.31s | 0.62s | 0.08s |
+
+One run, 2026-09-01, so the three columns are comparable with each other rather
+than assembled from separate ones. Re-check with the `bench` label on a pull
+request. With no latency to hide, `delegated` is no faster than `cached` and
+costs a little: the union is worth having for the round trips it removes, and
+where there are none it removes nothing.
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
@@ -393,6 +399,13 @@ cached copy of a file you changed is the one way this mode could be wrong rather
 than merely slow. Which is also why it only caches what the watcher covers --
 anything under an excluded directory is read over the mount instead, slower and
 right.
+
+`delegated` also needs **`fuse-overlayfs` in the image the account's daemon
+runs**, because the cache is a union mounted there. The workspace's own image
+carries it, which is what a per-account daemon should be running anyway (see
+[the storage driver](#the-storage-driver-worth-getting-right-once)). The
+workspace reports whether it can serve a union, and the mode is refused by name
+with the remedy rather than failing part-way through a container start.
 
 A mount outranks a per-directory rule, which outranks the workspace setting,
 and switching costs a volume rebuild rather than a migration.

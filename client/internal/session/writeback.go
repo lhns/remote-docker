@@ -77,20 +77,17 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 		return
 	}
 
-	// Gated on the fill, and this is the load-bearing refusal: until the cache
-	// holds everything it was going to, a file that is in it and not in the
-	// manifest cannot be told from one the container created.
-	if !state.Done || !state.Cached {
+	// Still filling means there is nothing settled to compare against. Whether
+	// the cache is COMPLETE is the other half, and it goes to Decide, which is
+	// where the rule and its tests live.
+	if !state.Done {
 		return
 	}
 
 	live := s.liveCache()
 	if live == nil {
-		// No connection to ask over. Not an error -- the changes are still in
-		// the cache and the next round collects them -- but it is the
-		// difference between "nothing to bring back" and "could not look",
-		// which nothing said.
-		s.log().Debug("no connection to collect a container's writes over", "export", export)
+		// Nothing to ask over. The changes stay in the cache and the next
+		// round collects them.
 		return
 	}
 
@@ -98,6 +95,14 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 	defer cancel()
 
 	changes, err := live.Changes(ctx, export)
+	if errors.Is(err, errShareGone) {
+		// Released, because nothing is bound to it any more (ADR 0044). The
+		// cache went with it, so there is nothing to carry back and nothing to
+		// compare against: stop polling rather than ask again every five
+		// seconds for the life of the session.
+		s.fills.forget(export)
+		return
+	}
 	if err != nil {
 		s.logQuiet(ctx, "asking what a container changed", "export", export, "err", err)
 		return
@@ -105,12 +110,9 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 	if len(changes) == 0 {
 		return
 	}
-	s.log().Debug("collecting what a container changed", "export", export, "paths", len(changes))
 
-	actions := writeback.Decide(s.manifestOf(export), changes, s.localFile(local), s.skew(), true)
+	actions := writeback.Decide(s.manifestOf(export), changes, s.localFile(local), s.skew(), state.Cached)
 	if len(actions) == 0 {
-		s.log().Debug("nothing the container changed needs bringing back",
-			"export", export, "paths", len(changes))
 		return
 	}
 
@@ -118,7 +120,8 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 		// Reported whichever way it resolved. Choosing silently is the one
 		// thing this must not do.
 		s.log().Warn("a file changed in both places",
-			"path", strings.TrimPrefix(conflict.Path, "/"), "outcome", conflict.Why)
+			"path", strings.TrimPrefix(conflict.Path, "/"),
+			"kind", conflict.Kind, "outcome", conflict.Why)
 	}
 
 	for _, paths := range chunkPaths(writeback.Writes(actions)) {
