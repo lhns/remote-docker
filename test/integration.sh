@@ -1516,11 +1516,24 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
 
         # THE assertion. This file did not exist when the cache was filled, so
         # it can only be coming from the live export underneath.
+        # Retried, because two caches sit between the two sides -- the NFS
+        # attribute cache under the union and libfuse's own entry cache, both
+        # about a second -- so reading once measures those rather than the
+        # fallthrough. The time it took is the answer to "when does a new file
+        # appear", so it is reported.
         echo "arrived after the fill" >"$DELEGDIR/late.txt"
-        if outputs '^arrived after the fill$' docker exec itest-deleg cat /w/late.txt; then
-            ok "a file the cache does not have falls through to the live export"
+        fell=""
+        for i in $(seq 1 15); do
+            if outputs '^arrived after the fill$' docker exec itest-deleg cat /w/late.txt; then
+                fell=$i
+                break
+            fi
+            sleep 1
+        done
+        if [ -n "$fell" ]; then
+            ok "a file the cache does not have falls through to the live export (${fell}s)"
         else
-            bad "the union did not fall through: [$LAST_OUTPUT]"
+            bad "the union never fell through: [$LAST_OUTPUT]"
         fi
 
         # What the container mounts is the union, in the daemon's namespace,

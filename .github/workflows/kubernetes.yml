@@ -20,14 +20,21 @@ on:
 permissions:
   contents: read
 
-# A run on main is never cancelled by the next commit. The group is per REF, and
-# every commit on main shares one, so a push used to cancel the previous
-# commit's run and leave it in the history as cancelled rather than tested. On
-# main the sha joins the group and each commit gets its own; a pull request
-# branch keeps one group, where a new push does make the old run pointless.
+# Every commit gets its own run, and nothing is ever cancelled by a later push.
+#
+# This used to cancel an in-flight run when a branch was pushed again, on the
+# reasoning that the older run tests code nobody will merge. What that costs is
+# the answer you were actually waiting for: a push that fixes one suite kills
+# the run that was still telling you about another, and a cancelled job's
+# conclusion is not "success", so it reads as a failure in anything scanning
+# results.
+#
+# The group is per SHA rather than per ref, which keeps the one thing
+# cancellation was really for -- the same commit triggered twice does not run
+# twice -- without a new commit destroying an old commit's answer.
 concurrency:
-  group: kubernetes-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
-  cancel-in-progress: true
+  group: kubernetes-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   chart:

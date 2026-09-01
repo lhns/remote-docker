@@ -298,15 +298,26 @@ if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:delegated"     alpin
 
     # The fallthrough, which is what makes an incomplete cache correct: this
     # file did not exist when the union was mounted.
+    #
+    # Retried rather than read once. Two caches sit between the two sides -- the
+    # NFS attribute cache under the union, and libfuse's own entry cache -- and
+    # both are about a second, so reading immediately measures the caches rather
+    # than the mechanism. How long it took is reported, because that IS the
+    # answer to "when does a new file appear".
     echo "after the mount" >"$WORK/project-$A/late.txt"
-    if out=$(da exec pud-deleg cat /w/late.txt 2>&1); then
+    fell=""
+    for i in $(seq 1 15); do
+        out=$(da exec pud-deleg cat /w/late.txt 2>&1)
         if [ "$out" = "after the mount" ]; then
-            ok "a file the cache does not have falls through to the live export"
-        else
-            bad "the fallthrough gave [$out]"
+            fell=$i
+            break
         fi
+        sleep 1
+    done
+    if [ -n "$fell" ]; then
+        ok "a file the cache does not have falls through to the live export (${fell}s)"
     else
-        bad "the fallthrough failed: $(echo "$out" | tail -3)"
+        bad "the fallthrough never happened: $(echo "$out" | tail -3)"
     fi
 
     da rm -f pud-deleg >/dev/null 2>&1
