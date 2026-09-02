@@ -72,6 +72,53 @@ jobs:
           render --set ingress.host=ws.example.com --set perUserDind=false --set dockerdArgs=""
           render --set ingress.host=ws.example.com \
                  --set authorizedKeys.alice="ssh-ed25519 AAAAtest alice@laptop"
+          render --set ingress.host=ws.example.com \
+                 --set persistence.graph.existingClaim=graph-x \
+                 --set persistence.state.existingClaim=state-x
+          render --set ingress.host=ws.example.com \
+                 --set persistence.graph.existingClaim=graph-x
+
+      # A volume is EITHER mounted from a claim you supplied or generated from
+      # a template, and rendering valid YAML proves neither. Both directions
+      # are checked because both fail silently: a claim named nowhere is a pod
+      # with no storage, and a claim named twice is a duplicate volume name.
+      - name: existingClaim replaces its template, and only its own
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 "$@"
+          }
+          both=$(render --set ingress.host=ws.example.com \
+                        --set persistence.graph.existingClaim=graph-x \
+                        --set persistence.state.existingClaim=state-x)
+          case "$both" in
+            *volumeClaimTemplates*) echo "both claims supplied, a template was still rendered"; exit 1 ;;
+          esac
+          for want in "claimName: graph-x" "claimName: state-x"; do
+            case "$both" in
+              *"$want"*) ;;
+              *) echo "missing $want"; exit 1 ;;
+            esac
+          done
+
+          # The mixed case is what a careless guard breaks: supplying one claim
+          # must not take the other template away.
+          mixed=$(render --set ingress.host=ws.example.com \
+                         --set persistence.graph.existingClaim=graph-x)
+          case "$mixed" in
+            *"claimName: graph-x"*) ;;
+            *) echo "the supplied graph claim was not mounted"; exit 1 ;;
+          esac
+          case "$mixed" in
+            *volumeClaimTemplates*) ;;
+            *) echo "the generated state template disappeared"; exit 1 ;;
+          esac
+
+          # And the default still generates both, which is what every existing
+          # install renders.
+          case "$(render --set ingress.host=ws.example.com)" in
+            *claimName*) echo "the default mounted a claim it does not create"; exit 1 ;;
+          esac
 
       # The failure this is worth pinning: an ingress with no host matches every
       # request that reaches the controller, so the chart refuses to render one.
