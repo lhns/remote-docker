@@ -15,6 +15,7 @@ import (
 
 	"archive/tar"
 	"github.com/klauspost/compress/zstd"
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/workspace"
 	"github.com/lhns/remote-docker/dircache"
 	"os"
@@ -37,15 +38,15 @@ func TestChunkPathsFitsAFrame(t *testing.T) {
 
 	var seen int
 	for _, b := range batches {
-		encoded, err := json.Marshal(workspace.CacheRequest{
-			Op: workspace.OpPull, Export: workspace.ExportCWD, Paths: b,
+		encoded, err := json.Marshal(cache.Request{
+			Op: cache.OpPull, Export: workspace.ExportCWD, Paths: b,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(encoded)+1 > workspace.MaxCacheFrame {
+		if len(encoded)+1 > cache.MaxFrame {
 			t.Errorf("a batch of %d paths encodes to %d bytes, over the %d frame",
-				len(b), len(encoded), workspace.MaxCacheFrame)
+				len(b), len(encoded), cache.MaxFrame)
 		}
 		seen += len(b)
 	}
@@ -97,7 +98,7 @@ func (s *stalled) Close() error {
 // the session.
 func TestCacheChannelHonoursItsContext(t *testing.T) {
 	stream := &stalled{closed: make(chan struct{})}
-	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, workspace.MaxCacheFrame)}
+	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, cache.MaxFrame)}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -137,7 +138,7 @@ func TestTarOfEncodesWhatItSays(t *testing.T) {
 	}
 	entries := []dircache.Entry{{Path: "main.go", Size: int64(len(body))}}
 
-	plain, err := tarOf(root, entries, workspace.CodecNone)
+	plain, err := tarOf(root, entries, cache.CodecNone)
 	if err != nil {
 		t.Fatalf("tarOf: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestTarOfEncodesWhatItSays(t *testing.T) {
 		t.Fatalf("the plain batch held %v", names)
 	}
 
-	zipped, err := tarOf(root, entries, workspace.CodecZstd)
+	zipped, err := tarOf(root, entries, cache.CodecZstd)
 	if err != nil {
 		t.Fatalf("tarOf zstd: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestTarOfClosesTheCompressor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	zipped, err := tarOf(root, []dircache.Entry{{Path: "a.go", Size: 1}}, workspace.CodecZstd)
+	zipped, err := tarOf(root, []dircache.Entry{{Path: "a.go", Size: 1}}, cache.CodecZstd)
 	if err != nil {
 		t.Fatalf("tarOf: %v", err)
 	}

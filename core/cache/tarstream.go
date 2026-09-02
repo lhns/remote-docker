@@ -1,4 +1,4 @@
-package workspace
+package cache
 
 // Building the tar that carries a cache's files, in the one place both ends
 // agree on it (ADR 0044).

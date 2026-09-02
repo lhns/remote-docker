@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core-agent/union"
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -155,7 +156,7 @@ func ownedBy(k, account string) bool { return strings.HasPrefix(k, account+"\x00
 // Idempotent, because preparing twice is ordinary: a client reconnects, or a
 // second container wants the same directory. A share already mounted and alive
 // answers with the same path and does nothing else.
-func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon, req workspace.CacheRequest) (string, error) {
+func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon, req cache.Request) (string, error) {
 	// DERIVED, not taken from the request: Validate only asks whether the name
 	// is a managed one, which every machine of an account satisfies for every
 	// other machine's (ADR 0029). See workspace.CacheVolumeForExport.

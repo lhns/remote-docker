@@ -23,6 +23,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/replay"
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -52,7 +53,7 @@ func (s *Server) handleSession(session gssh.Session) {
 		s.serveDockerSocket(session, account)
 	case notify.Command:
 		s.serveNotify(session, account)
-	case workspace.CacheCommand:
+	case cache.Command:
 		s.serveCache(session, account)
 	default:
 		s.serveExec(session, account, command)

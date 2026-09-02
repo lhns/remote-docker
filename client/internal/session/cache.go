@@ -15,7 +15,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/dircache"
 )
 
@@ -46,34 +46,34 @@ type cacheChannel struct {
 // one runs `sh -c "workspace-cache"` and exits 127 with nothing to say. Reading
 // a greeting first is the only thing that separates them.
 func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
-	stream, err := client.OpenStream(workspace.CacheCommand)
+	stream, err := client.OpenStream(cache.Command)
 	if err != nil {
 		return nil, err
 	}
 
-	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, workspace.MaxCacheFrame)}
+	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, cache.MaxFrame)}
 
 	line, err := c.r.ReadString('\n')
 	if err != nil {
 		_ = stream.Close()
 		return nil, fmt.Errorf("no greeting from the workspace: %w", err)
 	}
-	var reply workspace.CacheReply
+	var reply cache.Reply
 	if err := json.Unmarshal([]byte(line), &reply); err != nil || reply.Hello == nil {
 		_ = stream.Close()
 		return nil, fmt.Errorf("this workspace does not serve delegated shares as a cache\n" +
 			"\tfix: update the workspace, or use the cached consistency")
 	}
-	if reply.Hello.Version != workspace.CacheVersion {
+	if reply.Hello.Version != cache.Version {
 		_ = stream.Close()
 		return nil, fmt.Errorf("the workspace speaks cache version %d, this client speaks %d",
-			reply.Hello.Version, workspace.CacheVersion)
+			reply.Hello.Version, cache.Version)
 	}
 	// Chosen from what the AGENT said it can read, never from what this client
 	// can produce: a workspace older than compression announces no codecs at
 	// all, and sending it one would be refused rather than negotiated.
-	if reply.Hello.Accepts(workspace.CodecZstd) {
-		c.codec = workspace.CodecZstd
+	if reply.Hello.Accepts(cache.CodecZstd) {
+		c.codec = cache.CodecZstd
 	}
 	return c, nil
 }
@@ -90,16 +90,16 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 // middle of a tar. A wedged workspace therefore costs this channel, which the
 // session opens again on the next connection, rather than costing every request
 // after it.
-func (c *cacheChannel) do(ctx context.Context, req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, error) {
+func (c *cacheChannel) do(ctx context.Context, req cache.Request, body io.Reader) (cache.Reply, error) {
 	if err := req.Validate(); err != nil {
-		return workspace.CacheReply{}, err
+		return cache.Reply{}, err
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	type answer struct {
-		reply workspace.CacheReply
+		reply cache.Reply
 		err   error
 	}
 	done := make(chan answer, 1)
@@ -113,39 +113,39 @@ func (c *cacheChannel) do(ctx context.Context, req workspace.CacheRequest, body 
 		return a.reply, a.err
 	case <-ctx.Done():
 		_ = c.stream.Close()
-		return workspace.CacheReply{}, fmt.Errorf("cache: %s for %s did not answer: %w",
+		return cache.Reply{}, fmt.Errorf("cache: %s for %s did not answer: %w",
 			req.Op, req.Export, ctx.Err())
 	}
 }
 
 // exchange is the request and its reply, on a stream the caller has locked.
-func (c *cacheChannel) exchange(req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, error) {
+func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply, error) {
 	encoded, err := json.Marshal(req)
 	if err != nil {
-		return workspace.CacheReply{}, err
+		return cache.Reply{}, err
 	}
-	if len(encoded)+1 > workspace.MaxCacheFrame {
-		return workspace.CacheReply{}, fmt.Errorf("cache: a %s request for %s is too long to send",
+	if len(encoded)+1 > cache.MaxFrame {
+		return cache.Reply{}, fmt.Errorf("cache: a %s request for %s is too long to send",
 			req.Op, req.Export)
 	}
 	if _, err := c.stream.Write(append(encoded, '\n')); err != nil {
-		return workspace.CacheReply{}, fmt.Errorf("cache: sending %s: %w", req.Op, err)
+		return cache.Reply{}, fmt.Errorf("cache: sending %s: %w", req.Op, err)
 	}
 	if body != nil && req.Bytes > 0 {
 		// Exactly the number of bytes the header promised. A short body would
 		// leave the agent reading the next request out of the middle of a tar.
 		if _, err := io.CopyN(c.stream, body, req.Bytes); err != nil {
-			return workspace.CacheReply{}, fmt.Errorf("cache: sending the batch for %s: %w", req.Export, err)
+			return cache.Reply{}, fmt.Errorf("cache: sending the batch for %s: %w", req.Export, err)
 		}
 	}
 
 	line, err := c.r.ReadString('\n')
 	if err != nil {
-		return workspace.CacheReply{}, fmt.Errorf("cache: the workspace stopped answering: %w", err)
+		return cache.Reply{}, fmt.Errorf("cache: the workspace stopped answering: %w", err)
 	}
-	var reply workspace.CacheReply
+	var reply cache.Reply
 	if err := json.Unmarshal([]byte(line), &reply); err != nil {
-		return workspace.CacheReply{}, fmt.Errorf("cache: reading the answer for %s: %w", req.Op, err)
+		return cache.Reply{}, fmt.Errorf("cache: reading the answer for %s: %w", req.Op, err)
 	}
 	// Whatever the outcome, a promised payload is read: it follows on the same
 	// stream, and leaving it there would put the next reply in the middle of a
@@ -153,7 +153,7 @@ func (c *cacheChannel) exchange(req workspace.CacheRequest, body io.Reader) (wor
 	if reply.Bytes > 0 {
 		reply.Payload = make([]byte, reply.Bytes)
 		if _, err := io.ReadFull(c.r, reply.Payload); err != nil {
-			return workspace.CacheReply{}, fmt.Errorf("cache: reading the payload for %s: %w", req.Op, err)
+			return cache.Reply{}, fmt.Errorf("cache: reading the payload for %s: %w", req.Op, err)
 		}
 	}
 	if reply.Err != "" {
@@ -163,8 +163,8 @@ func (c *cacheChannel) exchange(req workspace.CacheRequest, body io.Reader) (wor
 }
 
 // Changes asks what the container did to a share.
-func (c *cacheChannel) Changes(ctx context.Context, export string) ([]workspace.CacheChange, error) {
-	reply, err := c.do(ctx, workspace.CacheRequest{Op: workspace.OpChanges, Export: export}, nil)
+func (c *cacheChannel) Changes(ctx context.Context, export string) ([]cache.Change, error) {
+	reply, err := c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export}, nil)
 	if reply.Unknown {
 		return nil, dircache.ErrShareGone
 	}
@@ -180,8 +180,8 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]workspace.
 // this channel's own encoding: it built the one going the other way.
 func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(dircache.File) error) error {
 	for _, batch := range chunkPaths(paths) {
-		reply, err := c.do(ctx, workspace.CacheRequest{
-			Op:     workspace.OpPull,
+		reply, err := c.do(ctx, cache.Request{
+			Op:     cache.OpPull,
 			Export: export,
 			Paths:  batch,
 		}, nil)
@@ -226,7 +226,7 @@ func untar(body io.Reader, into func(dircache.File) error) error {
 
 // Mounted names the cache volumes the workspace has a union on.
 func (c *cacheChannel) Mounted(ctx context.Context) ([]string, error) {
-	reply, err := c.do(ctx, workspace.CacheRequest{Op: workspace.OpMounted}, nil)
+	reply, err := c.do(ctx, cache.Request{Op: cache.OpMounted}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -234,12 +234,12 @@ func (c *cacheChannel) Mounted(ctx context.Context) ([]string, error) {
 }
 
 // Prepare mounts a share's union and answers with the path a container binds.
-func (c *cacheChannel) Prepare(ctx context.Context, export, cache string, port int) (string, error) {
-	reply, err := c.do(ctx, workspace.CacheRequest{
-		Op:     workspace.OpPrepare,
+func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port int) (string, error) {
+	reply, err := c.do(ctx, cache.Request{
+		Op:     cache.OpPrepare,
 		Export: export,
 		Port:   port,
-		Cache:  cache,
+		Cache:  volume,
 	}, nil)
 	if err != nil {
 		return "", err
@@ -261,8 +261,8 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 	if err != nil {
 		return err
 	}
-	_, err = c.do(ctx, workspace.CacheRequest{
-		Op:     workspace.OpApply,
+	_, err = c.do(ctx, cache.Request{
+		Op:     cache.OpApply,
 		Export: export,
 		Bytes:  int64(len(body)),
 		Codec:  c.codec,
@@ -278,8 +278,8 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 // a fact about the wire and no caller has to know it.
 func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {
 	for _, batch := range chunkPaths(paths) {
-		if _, err := c.do(ctx, workspace.CacheRequest{
-			Op:     workspace.OpDrop,
+		if _, err := c.do(ctx, cache.Request{
+			Op:     cache.OpDrop,
 			Export: export,
 			Paths:  batch,
 		}, nil); err != nil {
@@ -342,12 +342,12 @@ func (c shareCache) Fill(export, localPath string) {
 // pathsPerFrame bounds how many paths one request names.
 //
 // The paths of a pull or a drop ride in the JSON header line, which the
-// protocol caps at workspace.MaxCacheFrame -- so a `git checkout` across a
+// protocol caps at cache.MaxFrame -- so a `git checkout` across a
 // large branch, or a build that wrote ten thousand files, is not a big request
 // but a REFUSED one, and the refusal is the whole operation rather than a part
 // of it. Half the frame, because the op, the export and JSON's own escaping
 // share the line.
-const pathsPerFrame = workspace.MaxCacheFrame / 2
+const pathsPerFrame = cache.MaxFrame / 2
 
 // tarOf builds the batch.
 //
@@ -361,10 +361,10 @@ func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) 
 	}
 
 	var buf bytes.Buffer
-	if codec != workspace.CodecZstd {
+	if codec != cache.CodecZstd {
 		// Written before the buffer is read: `return buf.Bytes(), WriteTar(...)`
 		// evaluates the bytes first and hands back an empty slice.
-		if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), &buf); err != nil {
+		if err := cache.WriteTar(cache.TarFilesFrom(root, names), &buf); err != nil {
 			return nil, err
 		}
 		return buf.Bytes(), nil
@@ -378,7 +378,7 @@ func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), zw); err != nil {
+	if err := cache.WriteTar(cache.TarFilesFrom(root, names), zw); err != nil {
 		_ = zw.Close()
 		return nil, err
 	}

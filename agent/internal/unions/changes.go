@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/core-agent/replay"
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/cache"
 )
 
 // What the container changed, read out of the cache layer (ADR 0044).
@@ -25,7 +25,7 @@ import (
 // says nothing against looking.
 
 // Changes lists what the container did to a share.
-func (m *Manager) Changes(ctx context.Context, account, export string) ([]workspace.CacheChange, error) {
+func (m *Manager) Changes(ctx context.Context, account, export string) ([]cache.Change, error) {
 	l, upper, err := m.upperRoot(ctx, account, export)
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 		return nil, fmt.Errorf("unions: the cache layer of %s cannot be read: %w", export, err)
 	}
 
-	var out []workspace.CacheChange
+	var out []cache.Change
 	err = filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == upper {
 			return nil //nolint:nilerr // an unreadable entry is one this pass does not report
@@ -61,7 +61,7 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 			// A character device 0:0 is how an overlay records a deletion, and
 			// it is the only way to tell a file the container removed from one
 			// that was never cached.
-			out = append(out, workspace.CacheChange{Path: name, Deleted: true})
+			out = append(out, cache.Change{Path: name, Deleted: true})
 			return nil
 		case info.IsDir():
 			// A directory in the upper is where a copy-up happened, not a
@@ -81,7 +81,7 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]worksp
 			return nil
 		}
 
-		out = append(out, workspace.CacheChange{
+		out = append(out, cache.Change{
 			Path:    name,
 			Size:    info.Size(),
 			ModTime: info.ModTime().UnixNano(),
@@ -105,20 +105,20 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 	// path comes from the client and `within` is what refuses one that leaves
 	// the share. A file that has gone since it was reported is skipped by
 	// WriteTar, which is ordinary here: the container is still running.
-	files := make([]workspace.TarFile, 0, len(paths))
+	files := make([]cache.TarFile, 0, len(paths))
 	for _, p := range paths {
 		target, err := within(upper, p)
 		if err != nil {
 			return nil, err
 		}
-		files = append(files, workspace.TarFile{
+		files = append(files, cache.TarFile{
 			Name: strings.TrimPrefix(p, "/"),
 			Path: target,
 		})
 	}
 
 	var buf bytes.Buffer
-	if err := workspace.WriteTar(files, &buf); err != nil {
+	if err := cache.WriteTar(files, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

@@ -15,6 +15,7 @@ import (
 
 	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core-agent/union"
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -143,10 +144,10 @@ func writeEntry(root string, header *tar.Header, body io.Reader) (os.FileInfo, e
 // bytes happened to look like.
 func decoded(codec string, body io.Reader) (io.Reader, func(), error) {
 	switch codec {
-	case workspace.CodecNone:
+	case cache.CodecNone:
 		return body, func() {}, nil
 
-	case workspace.CodecZstd:
+	case cache.CodecZstd:
 		zr, err := zstd.NewReader(body)
 		if err != nil {
 			return nil, nil, fmt.Errorf("unions: reading a %s batch: %w", codec, err)

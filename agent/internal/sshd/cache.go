@@ -14,7 +14,7 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 
 	"github.com/lhns/remote-docker/agent/internal/unions"
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/cache"
 )
 
 // releaseTimeout bounds asking the daemon which unions are still in use. The
@@ -34,7 +34,7 @@ const releaseTimeout = 30 * time.Second
 // daemon's namespace and writes into a volume the account cannot reach. Every
 // request is re-validated here rather than trusted, because this is a root
 // process being told which paths to write and which to remove. See
-// workspace.CacheRequest.Validate, which both sides call.
+// cache.Request.Validate, which both sides call.
 //
 // One request per line, each answered before the next is read. Deliberately
 // not pipelined: every op here changes a mount or a file, the client waits for
@@ -50,13 +50,13 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	// The greeting first and unconditionally, before anything is read. An
 	// agent too old for this command runs it as a shell and exits 127 with no
 	// output at all, so the client tells "too old" from "version mismatch" by
-	// whether a greeting arrived (see core/workspace.CacheCommand).
+	// whether a greeting arrived (see core/cache.Command).
 	enc := json.NewEncoder(session)
-	hello := &workspace.CacheHello{
-		Version: workspace.CacheVersion,
-		Codecs:  workspace.Codecs(),
+	hello := &cache.Hello{
+		Version: cache.Version,
+		Codecs:  cache.Codecs(),
 	}
-	if err := enc.Encode(workspace.CacheReply{Hello: hello}); err != nil {
+	if err := enc.Encode(cache.Reply{Hello: hello}); err != nil {
 		_ = session.Exit(1)
 		return
 	}
@@ -72,7 +72,7 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		s.cfg.Unions.ReleaseAccount(ctx, name)
 	}()
 
-	reader := bufio.NewReaderSize(session, workspace.MaxCacheFrame)
+	reader := bufio.NewReaderSize(session, cache.MaxFrame)
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
@@ -84,9 +84,9 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 			return
 		}
 
-		var req workspace.CacheRequest
+		var req cache.Request
 		if err := json.Unmarshal(line, &req); err != nil {
-			_ = enc.Encode(workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: %v", err)})
+			_ = enc.Encode(cache.Reply{Err: fmt.Sprintf("workspace-cache: %v", err)})
 			continue
 		}
 
@@ -119,51 +119,51 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 // The payload of an apply is read whatever the outcome: it follows the frame on
 // the same stream, so a request refused without draining it would leave a tar
 // where the next line is expected and desynchronise everything after it.
-func (s *Server) applyCache(session gssh.Session, account sessionAccount, req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, []byte) {
+func (s *Server) applyCache(session gssh.Session, account sessionAccount, req cache.Request, body io.Reader) (cache.Reply, []byte) {
 	if err := req.Validate(); err != nil {
-		if req.Op == workspace.OpApply {
+		if req.Op == cache.OpApply {
 			_, _ = io.CopyN(io.Discard, body, req.Bytes)
 		}
-		return workspace.CacheReply{Err: err.Error()}, nil
+		return cache.Reply{Err: err.Error()}, nil
 	}
 
 	name := account.Name()
 	ctx := session.Context()
 
 	switch req.Op {
-	case workspace.OpPrepare:
+	case cache.OpPrepare:
 		target, err := s.cfg.Daemons.Ensure(ctx, name)
 		if err != nil {
-			return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: %v", err)}, nil
+			return cache.Reply{Err: fmt.Sprintf("workspace-cache: %v", err)}, nil
 		}
 		merged, err := s.cfg.Unions.Prepare(ctx, name, account.Client(),
 			unions.Daemon{Host: target.Host, PID: target.PID}, req)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
-		return workspace.CacheReply{Merged: merged}, nil
+		return cache.Reply{Merged: merged}, nil
 
-	case workspace.OpApply:
+	case cache.OpApply:
 		err := s.cfg.Unions.Apply(ctx, name, req.Export, req.Codec, io.LimitReader(body, req.Bytes))
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
-		return workspace.CacheReply{}, nil
+		return cache.Reply{}, nil
 
-	case workspace.OpDrop:
+	case cache.OpDrop:
 		if err := s.cfg.Unions.Drop(ctx, name, req.Export, req.Paths); err != nil {
-			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
-		return workspace.CacheReply{}, nil
+		return cache.Reply{}, nil
 
-	case workspace.OpChanges:
+	case cache.OpChanges:
 		changes, err := s.cfg.Unions.Changes(ctx, name, req.Export)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
-		return workspace.CacheReply{Changes: changes}, nil
+		return cache.Reply{Changes: changes}, nil
 
-	case workspace.OpMounted:
+	case cache.OpMounted:
 		// Lookup rather than Ensure: this is housekeeping, and starting an
 		// account's daemon to answer a question about what may be deleted
 		// would be a side effect nobody asked for. A daemon that is not up has
@@ -172,18 +172,18 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req wo
 		if target, ok := s.cfg.Daemons.Lookup(ctx, name); ok {
 			d = unions.Daemon{Host: target.Host, PID: target.PID}
 		}
-		return workspace.CacheReply{Caches: s.cfg.Unions.MountedCaches(name, account.Client(), d)}, nil
+		return cache.Reply{Caches: s.cfg.Unions.MountedCaches(name, account.Client(), d)}, nil
 
-	case workspace.OpPull:
+	case cache.OpPull:
 		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)
 		if err != nil {
-			return workspace.CacheReply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
 		}
-		return workspace.CacheReply{Bytes: int64(len(pulled))}, pulled
+		return cache.Reply{Bytes: int64(len(pulled))}, pulled
 
 	}
 
 	// Validate has already refused every op this agent does not know, so
 	// reaching here would mean the two disagree.
-	return workspace.CacheReply{Err: fmt.Sprintf("workspace-cache: nothing handles %q", req.Op)}, nil
+	return cache.Reply{Err: fmt.Sprintf("workspace-cache: nothing handles %q", req.Op)}, nil
 }
