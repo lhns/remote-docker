@@ -24,25 +24,28 @@ import (
 // share flag so this never blocks a writer. No access rights are requested --
 // the identity is readable from a handle opened for nothing, which keeps this
 // from failing on a file the user may not read.
-func inodeOf(_ os.FileInfo, osPath string) (uint64, bool) {
+func inodeOf(_ os.FileInfo, osPath string) (uint64, uint64, bool) {
 	if osPath == "" {
-		return 0, false
+		return 0, 0, false
 	}
 	p, err := syscall.UTF16PtrFromString(osPath)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	h, err := syscall.CreateFile(p, 0,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
 		nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	defer func() { _ = syscall.CloseHandle(h) }()
 
 	var info syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(h, &info); err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	return uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), true
+	// The volume serial plays the part of a device number: a file index is
+	// unique within one volume and no further.
+	return uint64(info.VolumeSerialNumber),
+		uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), true
 }

@@ -213,10 +213,20 @@ func (i *attrInfo) Sys() any {
 // one GetFileInformationByHandle away. The hash survives only as the answer for
 // a platform that has neither, and nothing here is such a platform today.
 func fileIDOf(fi os.FileInfo, osPath, sharePath string) uint64 {
-	if id, ok := inodeOf(fi, osPath); ok {
-		return id
+	dev, ino, ok := inodeOf(fi, osPath)
+	if !ok {
+		return fileID(sharePath)
 	}
-	return fileID(sharePath)
+	// Mixed rather than concatenated: both halves are 64 bits and the wire
+	// field is 64, so something has to give. A hash spreads the loss instead of
+	// discarding the top of one of them, and the property that matters is not
+	// invertibility -- the client only ever compares these for equality.
+	h := fnv.New64()
+	var buf [16]byte
+	binary.LittleEndian.PutUint64(buf[:8], dev)
+	binary.LittleEndian.PutUint64(buf[8:], ino)
+	_, _ = h.Write(buf[:])
+	return h.Sum64()
 }
 
 // fileID is the fallback: a path hash, for platforms with no inode to report.
