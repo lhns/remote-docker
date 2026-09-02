@@ -12,10 +12,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
+	"github.com/lhns/remote-docker/core/logx"
+
 	nfs "github.com/willscott/go-nfs"
 	"github.com/willscott/go-nfs/helpers"
 )
@@ -34,8 +37,8 @@ type Server struct {
 	handler  nfs.Handler
 }
 
-// New builds a server over the given registry.
-func New(registry *Registry) *Server {
+// New builds a server over the given registry. A nil logger is silence.
+func New(registry *Registry, log *slog.Logger) *Server {
 	h := &mountHandler{registry: registry}
 	return &Server{
 		registry: registry,
@@ -46,6 +49,7 @@ func New(registry *Registry) *Server {
 		handler: &rootHandler{
 			Handler:  helpers.NewCachingHandler(h, handleCacheSize),
 			registry: registry,
+			log:      logx.Or(log),
 		},
 	}
 }

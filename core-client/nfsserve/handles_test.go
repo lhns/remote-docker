@@ -44,11 +44,11 @@ func TestRootHandleResolvesInAServerThatNeverIssuedIt(t *testing.T) {
 	}
 	r := registryFor(t, dir)
 
-	handle := rootHandleOf(t, New(r), "/cwd")
+	handle := rootHandleOf(t, New(r, nil), "/cwd")
 
 	// The client restarts: a second server, over a registry rebuilt the way a
 	// reconnect rebuilds it.
-	fresh := New(registryFor(t, dir))
+	fresh := New(registryFor(t, dir), nil)
 	fs, path, err := fresh.handler.FromHandle(handle)
 	if err != nil {
 		t.Fatalf("FromHandle in a new server: %v", err)
@@ -69,8 +69,8 @@ func TestTheDerivedPartOfARootHandleIsTheSameInEveryServer(t *testing.T) {
 	dir := t.TempDir()
 	r := registryFor(t, dir)
 
-	first := rootHandleOf(t, New(r), "/cwd")
-	second := rootHandleOf(t, New(registryFor(t, dir)), "/cwd")
+	first := rootHandleOf(t, New(r, nil), "/cwd")
+	second := rootHandleOf(t, New(registryFor(t, dir), nil), "/cwd")
 
 	if string(first[:exportKeySize]) != string(second[:exportKeySize]) {
 		t.Errorf("derived keys differ: %x vs %x", first[:exportKeySize], second[:exportKeySize])
@@ -84,9 +84,9 @@ func TestTheDerivedPartOfARootHandleIsTheSameInEveryServer(t *testing.T) {
 // (ADR 0027). A share that is no longer exported must not come back.
 func TestRootHandleForAnUnexportedShareIsStale(t *testing.T) {
 	dir := t.TempDir()
-	handle := rootHandleOf(t, New(registryFor(t, dir)), "/cwd")
+	handle := rootHandleOf(t, New(registryFor(t, dir), nil), "/cwd")
 
-	empty := New(NewRegistry(DefaultAttrs))
+	empty := New(NewRegistry(DefaultAttrs), nil)
 	if _, _, err := empty.handler.FromHandle(handle); err == nil {
 		t.Error("a handle resolved against a registry that exports nothing")
 	}
@@ -104,7 +104,7 @@ func TestRootHandlesDifferPerShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(r)
+	s := New(r, nil)
 
 	if string(rootHandleOf(t, s, "/cwd")) == string(rootHandleOf(t, s, other.ExportPath)) {
 		t.Error("two shares were given the same root handle")
@@ -120,7 +120,7 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := registryFor(t, dir)
-	s := New(r)
+	s := New(r, nil)
 
 	share, _, ok := r.Lookup("/cwd")
 	if !ok {
@@ -143,7 +143,7 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 // behind it, not a replacement for it.
 func TestALiveServerResolvesItsOwnRootThroughTheCache(t *testing.T) {
 	dir := t.TempDir()
-	s := New(registryFor(t, dir))
+	s := New(registryFor(t, dir), nil)
 	handle := rootHandleOf(t, s, "/cwd")
 
 	fs, path, err := s.handler.FromHandle(handle)
@@ -161,7 +161,7 @@ func TestALiveServerResolvesItsOwnRootThroughTheCache(t *testing.T) {
 // An unrecognised handle is stale rather than a panic or a wrong file: one
 // from an older build has to degrade to "look it up again".
 func TestAnUnknownHandleIsStale(t *testing.T) {
-	s := New(registryFor(t, t.TempDir()))
+	s := New(registryFor(t, t.TempDir()), nil)
 	for _, h := range [][]byte{nil, {}, {0xff, 1, 2, 3}, make([]byte, rootHandleSize)} {
 		if _, _, err := s.handler.FromHandle(h); err == nil {
 			t.Errorf("FromHandle(%x) succeeded, want an error", h)
@@ -179,7 +179,7 @@ func TestHandleSizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := registryFor(t, dir)
-	s := New(r)
+	s := New(r, nil)
 
 	if got := len(rootHandleOf(t, s, "/cwd")); got != rootHandleSize {
 		t.Errorf("root handle is %d bytes, want %d", got, rootHandleSize)

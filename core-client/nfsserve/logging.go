@@ -31,16 +31,8 @@ import (
 // Package-level because go-nfs's logger is package-level; there is nothing
 // per-server to attach it to.
 func SetLogger(log *slog.Logger) {
-	loggerOnce.Do(func() {
-		nfs.SetLogger(&nfsLogger{log: log})
-		handlerLog = log
-	})
+	loggerOnce.Do(func() { nfs.SetLogger(&nfsLogger{log: log}) })
 }
-
-// handlerLog is the same logger, reachable from the handler. go-nfs logs no
-// reason when a request fails, so an unresolvable handle left nothing behind
-// and the client saw only ESTALE.
-var handlerLog *slog.Logger
 
 var loggerOnce sync.Once
 

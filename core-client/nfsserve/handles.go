@@ -56,6 +56,7 @@ type rootHandler struct {
 	nfs.Handler // the caching handler: verifiers, and every handle but a root
 
 	registry *Registry
+	log      *slog.Logger
 }
 
 // errStaleExport is what a handle naming a share that is no longer exported
@@ -88,7 +89,7 @@ func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, err
 			// go-nfs answers ESTALE and logs nothing. A path lookup
 			// recovers on its own (ADR 0033); an already-open descriptor
 			// cannot, so it reaches the application.
-			logHandler().Warn("nfs: a file handle could not be resolved",
+			h.log.Warn("nfs: a file handle could not be resolved",
 				"bytes", len(handle), "err", err)
 		}
 		return fs, path, err
@@ -157,12 +158,4 @@ func (h *rootHandler) DataForVerifier(path string, id uint64) []fs.FileInfo {
 		return c.DataForVerifier(path, id)
 	}
 	return nil
-}
-
-// logHandler is the client's logger, or one that discards.
-func logHandler() *slog.Logger {
-	if handlerLog == nil {
-		return slog.New(slog.DiscardHandler)
-	}
-	return handlerLog
 }

@@ -30,7 +30,7 @@ func serve(t *testing.T, r *Registry) string {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	srv := New(r)
+	srv := New(r, nil)
 	go srv.Serve(l)
 	return l.Addr().String()
 }
@@ -374,7 +374,7 @@ func TestOneServerServesListenersInTurn(t *testing.T) {
 	if _, err := r.RegisterCWD(dir); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(r)
+	srv := New(r, nil)
 
 	read := func(t *testing.T, addr string) {
 		t.Helper()
