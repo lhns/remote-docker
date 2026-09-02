@@ -118,6 +118,16 @@ type Config struct {
 	// and every other Docker client pointed at it then fails with ENOENT and
 	// cannot recover.
 	DaemonIdle time.Duration
+
+	// DaemonStandby is how long a background session may sit with nothing to
+	// do before it lets go of the workspace: the connection is dropped and the
+	// file watches are released. Zero uses DefaultDaemonStandby; negative
+	// never stands by.
+	//
+	// The endpoint stays bound throughout, so this reclaims what a reclaim is
+	// for without breaking the Docker clients pointed at it. DaemonIdle is the
+	// tier above, and ends the process.
+	DaemonStandby time.Duration
 }
 
 // DefaultDaemonIdle is how long a background session outlives its last use.
@@ -135,6 +145,13 @@ const DefaultDaemonIdle = DaemonIdleNever
 // DaemonIdleNever is any non-positive duration; idleExpired treats <= 0 as
 // "no reclaim". Spelled once so the default and the config agree.
 const DaemonIdleNever = -1 * time.Second
+
+// DefaultDaemonStandby is how long a session holds the workspace unused.
+//
+// Half an hour, which is what DaemonIdle used to be: long enough that stepping
+// away and coming back finds it warm, short enough that a workspace opened once
+// last week is not still holding a connection and a few thousand watches.
+const DefaultDaemonStandby = 30 * time.Minute
 
 // File is the on-disk form, ~/.remote-docker.json.
 //
@@ -180,12 +197,13 @@ type Workspace struct {
 	// everything under it.
 	ConsistencyPaths map[string]string `json:"consistencyPaths,omitempty"`
 
-	WatchBudget  int      `json:"watchBudget,omitempty"`
-	CacheFiles   int      `json:"cacheFiles,omitempty"`
-	CacheBytes   int64    `json:"cacheBytes,omitempty"`
-	WatchExclude []string `json:"watchExclude,omitempty"`
-	IdleTimeout  string   `json:"idleTimeout,omitempty"`
-	DaemonIdle   string   `json:"daemonIdle,omitempty"`
+	WatchBudget   int      `json:"watchBudget,omitempty"`
+	CacheFiles    int      `json:"cacheFiles,omitempty"`
+	CacheBytes    int64    `json:"cacheBytes,omitempty"`
+	WatchExclude  []string `json:"watchExclude,omitempty"`
+	IdleTimeout   string   `json:"idleTimeout,omitempty"`
+	DaemonIdle    string   `json:"daemonIdle,omitempty"`
+	DaemonStandby string   `json:"daemonStandby,omitempty"`
 
 	// Machine is set when this program provisioned the Linux system the
 	// workspace runs on, rather than being pointed at one that already
@@ -302,14 +320,15 @@ const (
 	EnvCAFile   = "REMOTE_DOCKER_CA_FILE"
 	EnvInsecure = "REMOTE_DOCKER_INSECURE"
 
-	EnvConsistency  = "REMOTE_DOCKER_CONSISTENCY"
-	EnvWatch        = "REMOTE_DOCKER_WATCH"
-	EnvWatchBudget  = "REMOTE_DOCKER_WATCH_BUDGET"
-	EnvCacheFiles   = "REMOTE_DOCKER_CACHE_FILES"
-	EnvCacheBytes   = "REMOTE_DOCKER_CACHE_BYTES"
-	EnvWatchExclude = "REMOTE_DOCKER_WATCH_EXCLUDE"
-	EnvIdleTimeout  = "REMOTE_DOCKER_IDLE_TIMEOUT"
-	EnvDaemonIdle   = "REMOTE_DOCKER_DAEMON_IDLE"
+	EnvConsistency   = "REMOTE_DOCKER_CONSISTENCY"
+	EnvWatch         = "REMOTE_DOCKER_WATCH"
+	EnvWatchBudget   = "REMOTE_DOCKER_WATCH_BUDGET"
+	EnvCacheFiles    = "REMOTE_DOCKER_CACHE_FILES"
+	EnvCacheBytes    = "REMOTE_DOCKER_CACHE_BYTES"
+	EnvWatchExclude  = "REMOTE_DOCKER_WATCH_EXCLUDE"
+	EnvIdleTimeout   = "REMOTE_DOCKER_IDLE_TIMEOUT"
+	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
+	EnvDaemonStandby = "REMOTE_DOCKER_DAEMON_STANDBY"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -458,6 +477,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if d, ok := duration(ws.IdleTimeout); ok {
 		cfg.IdleTimeout = d
 	}
+	if d, ok := duration(ws.DaemonStandby); ok {
+		cfg.DaemonStandby = d
+	}
 	if d, ok := duration(ws.DaemonIdle); ok {
 		cfg.DaemonIdle = d
 	}
@@ -538,6 +560,9 @@ func applyEnv(cfg *Config) {
 	}
 	if d, ok := duration(os.Getenv(EnvDaemonIdle)); ok {
 		cfg.DaemonIdle = d
+	}
+	if d, ok := duration(os.Getenv(EnvDaemonStandby)); ok {
+		cfg.DaemonStandby = d
 	}
 }
 

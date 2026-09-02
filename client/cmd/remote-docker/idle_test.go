@@ -61,3 +61,20 @@ func TestTheDefaultSessionNeverReclaimsItself(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+// The two tiers have different defaults on purpose: letting go of the workspace
+// is safe to do unasked, ending the process is not.
+func TestTheTwoIdleTiersDefaultDifferently(t *testing.T) {
+	if got := daemonStandby(0); got != config.DefaultDaemonStandby {
+		t.Errorf("standby default = %v, want %v", got, config.DefaultDaemonStandby)
+	}
+	if daemonStandby(0) <= 0 {
+		t.Error("standby is disabled by default, so nothing is ever reclaimed")
+	}
+	if daemonIdle(0) > 0 {
+		t.Error("shutdown is enabled by default, which takes the endpoint with it")
+	}
+	if got := daemonStandby(-time.Second); got != -time.Second {
+		t.Errorf("negative standby = %v, want it preserved", got)
+	}
+}

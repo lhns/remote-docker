@@ -98,6 +98,12 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 			"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
 	}
 
+	// Letting go of the workspace is not the same as ending: standby drops the
+	// connection and the watches and keeps serving the endpoint, so the Docker
+	// clients pointed at it never notice. Shutdown is the tier above and is off
+	// unless asked for, because it takes the endpoint with it.
+	go standbyWhenIdle(ctx, s, daemonStandby(cfg.DaemonStandby))
+
 	// Three ways out: the terminal, `remote-docker stop`, and having nothing
 	// left to do. A background session has no terminal to press Ctrl-C in, so
 	// without the other two there would be no way to end one short of finding

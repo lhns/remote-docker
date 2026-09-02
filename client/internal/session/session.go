@@ -179,6 +179,11 @@ type Session struct {
 	stopped  chan struct{}
 	stopOnce sync.Once
 
+	// dormant is set once Standby has released the workspace, and cleared by
+	// the next request. The endpoint is served either way.
+	dormantMu sync.Mutex
+	dormant   bool
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -423,7 +428,56 @@ func (s *Session) Info(ctx context.Context) (workspace.Info, error) {
 
 // acquire returns the live connection, establishing one if needed.
 func (s *Session) acquire(ctx context.Context) (*liveConn, func(), error) {
+	s.wake()
 	return s.gate.acquire(ctx)
+}
+
+// Standby releases the workspace but keeps the endpoint.
+//
+// What a reclaim is actually for: the connection is dropped and the file
+// watches go, which on a large tree is the only local resource worth having
+// back. The listener stays bound, so a foreign Docker client -- compose,
+// buildx, Testcontainers, an IDE plugin -- connects and is served as before,
+// and the next request rebuilds what this let go of.
+func (s *Session) Standby() {
+	s.dormantMu.Lock()
+	already := s.dormant
+	s.dormant = true
+	s.dormantMu.Unlock()
+	if already {
+		return
+	}
+
+	if s.watch != nil {
+		// An empty set removes every root; the watcher itself stays, so waking
+		// is another Sync rather than a new watcher and a new observer.
+		s.watch.Sync(nil)
+	}
+	s.gate.sweep(s.ctx)
+	s.log().Info("standing by; the endpoint stays up")
+}
+
+// wake undoes Standby, and is called on the path every request takes.
+func (s *Session) wake() {
+	s.dormantMu.Lock()
+	was := s.dormant
+	s.dormant = false
+	s.dormantMu.Unlock()
+	if !was {
+		return
+	}
+
+	if s.watch != nil {
+		s.watch.Sync(sharesOf(s.registry))
+	}
+	s.log().Info("woken by a request")
+}
+
+// isDormant reports whether the workspace has been let go of.
+func (s *Session) isDormant() bool {
+	s.dormantMu.Lock()
+	defer s.dormantMu.Unlock()
+	return s.dormant
 }
 
 func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info, error) {
