@@ -13,7 +13,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/lhns/remote-docker/core-agent/notify"
+	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core-agent/union"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -26,7 +26,7 @@ import (
 // Going through the union is also what makes the container's own inotify fire
 // natively, which is how ADR 0014 closes for these shares.
 //
-// The agent writes through /proc/<pid>/root, as core-agent/notify does.
+// The agent writes through /proc/<pid>/root, as core-agent/replay does.
 
 // Apply extracts a tar into a share's union, decoding it first when the client
 // compressed it.
@@ -200,7 +200,7 @@ func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live
 		return nil, "", err
 	}
 
-	root, err := notify.Relocate(l.spec.Merged(), func() (string, error) { return l.spec.Root(), nil })
+	root, err := replay.Relocate(l.spec.Merged(), func() (string, error) { return l.spec.Root(), nil })
 	if err != nil {
 		return nil, "", fmt.Errorf("unions: locating the cache for %s: %w", export, err)
 	}

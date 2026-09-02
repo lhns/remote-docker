@@ -1,8 +1,17 @@
-package workspace
+// Package notify is the contract for the change-notification channel: the
+// client tells the workspace which paths changed, and the agent performs a real
+// VFS operation on each so a watcher inside a container sees it (ADR 0016).
+//
+// The channel's name, its version and its frames are all here, because they
+// are one agreement -- opening a name an agent does not know is how the version
+// is checked, so the two cannot be in different packages.
+package notify
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // The change-notification channel.
@@ -18,7 +27,7 @@ import (
 // and let the kernel emit the event as a side effect. So the client watches
 // its own filesystem, where the changes actually happen, and tells the agent
 // which paths to touch.
-// NotifyCommand carries the client's filesystem changes to be replayed inside
+// Command carries the client's filesystem changes to be replayed inside
 // the workspace, so watchers in containers see edits made on the user's machine
 // (ADR 0016).
 //
@@ -26,27 +35,27 @@ import (
 // That is the version check: the client offers, and an agent that cannot do it
 // fails in a way the client recognises rather than one it has to ask about
 // first.
-const NotifyCommand = "workspace-notify"
+const Command = "workspace-notify"
 
 const (
-	// NotifyVersion is the wire version. The agent announces it first: an
+	// Version is the wire version. The agent announces it first: an
 	// agent too old to know this command would otherwise fall through to the
 	// generic exec path, run `sh -c "workspace-notify"` and exit 127, which
 	// the client must be able to tell apart from a working channel.
-	NotifyVersion = 1
+	Version = 1
 
-	// MaxNotifyFrame bounds one line. Both ends must agree, because a scanner
+	// MaxFrame bounds one line. Both ends must agree, because a scanner
 	// with a smaller buffer than the writer's frame silently truncates the
 	// stream at the first large batch.
-	MaxNotifyFrame = 1 << 20
+	MaxFrame = 1 << 20
 )
 
-// FSOp is what happened to a path. One event may carry several: coalescing an
+// Op is what happened to a path. One event may carry several: coalescing an
 // editor's save-in-place yields OpCreate|OpWrite.
-type FSOp uint8
+type Op uint8
 
 const (
-	OpCreate FSOp = 1 << iota
+	OpCreate Op = 1 << iota
 	OpWrite
 	OpRemove
 	OpRename
@@ -57,13 +66,13 @@ const (
 	opAll = OpCreate | OpWrite | OpRemove | OpRename | OpAttrib
 )
 
-func (o FSOp) String() string {
+func (o Op) String() string {
 	if o == 0 {
 		return "none"
 	}
 	var names []string
 	for _, b := range []struct {
-		op   FSOp
+		op   Op
 		name string
 	}{
 		{OpCreate, "create"},
@@ -82,13 +91,13 @@ func (o FSOp) String() string {
 	return strings.Join(names, "|")
 }
 
-// FSEvent is one change to one path, as the client observed it.
+// Event is one change to one path, as the client observed it.
 //
 // It carries no content and never will. The bytes are already in the container
 // through the NFS mount; what is missing is only the kernel's notification.
 // Shipping data here would turn this into a sync, the thing ADR 0014 is
 // trying not to become.
-type FSEvent struct {
+type Event struct {
 	// Export is the share the path belongs to: "/cwd" or "/m/<id>".
 	Export string `json:"e"`
 
@@ -97,7 +106,7 @@ type FSEvent struct {
 	Path string `json:"p"`
 
 	// Op is the merged operation set. Zero is invalid.
-	Op FSOp `json:"o"`
+	Op Op `json:"o"`
 
 	// Dir says the path is, or was, a directory. The agent needs it because
 	// the operation that makes a watcher notice a directory is not the one
@@ -113,14 +122,14 @@ type FSEvent struct {
 // a bug in our own watcher; on the agent it is the only thing between a
 // malformed path and a privileged syscall. Neither end may assume the other
 // checked.
-func (e FSEvent) Validate() error {
+func (e Event) Validate() error {
 	// VolumeNameForExport accepts exactly /cwd and /m/<16 hex> and rejects
 	// everything else, which is the same set the agent can resolve to a
 	// volume. Reusing it means the two cannot drift apart.
-	if err := ValidExport(e.Export); err != nil {
+	if err := workspace.ValidExport(e.Export); err != nil {
 		return fmt.Errorf("workspace: notify event export: %w", err)
 	}
-	if err := validateSharePath(e.Path); err != nil {
+	if err := workspace.ValidSharePath(e.Path); err != nil {
 		return err
 	}
 	if e.Op == 0 {
@@ -132,44 +141,7 @@ func (e FSEvent) Validate() error {
 	return nil
 }
 
-// validateSharePath enforces the wire spelling of an in-share path.
-//
-// Deliberately a whitelist rather than a blacklist, and deliberately not
-// path.Clean: cleaning would *repair* a traversal into something plausible
-// instead of refusing it, so "/a/../../etc/shadow" would arrive as a path the
-// agent happily touches. A malformed path is a bug worth reporting, never one
-// worth guessing about.
-func ValidSharePath(p string) error { return validateSharePath(p) }
-
-func validateSharePath(p string) error {
-	switch {
-	case p == "":
-		return fmt.Errorf("workspace: notify path is empty")
-	case !strings.HasPrefix(p, "/"):
-		return fmt.Errorf("workspace: notify path %q is not absolute within its share", p)
-	case strings.Contains(p, `\`):
-		// A backslash is a path separator on the client and an ordinary
-		// filename character in the workspace, so letting one through would
-		// create a file whose name contains the rest of the path.
-		return fmt.Errorf("workspace: notify path %q contains a backslash; separators must be normalised", p)
-	case strings.ContainsRune(p, 0):
-		return fmt.Errorf("workspace: notify path %q contains a NUL", p)
-	}
-	if p == "/" {
-		return nil
-	}
-	for part := range strings.SplitSeq(strings.TrimPrefix(p, "/"), "/") {
-		switch part {
-		case "":
-			return fmt.Errorf("workspace: notify path %q has an empty component", p)
-		case ".", "..":
-			return fmt.Errorf("workspace: notify path %q has a %q component", p, part)
-		}
-	}
-	return nil
-}
-
-// FSNotice tells the receiver that the client's view is incomplete under Path,
+// Notice tells the receiver that the client's view is incomplete under Path,
 // so it should do something coarser than replaying events, or nothing, if
 // the tool being served rescans anyway.
 //
@@ -177,7 +149,7 @@ func validateSharePath(p string) error {
 // has seen everything is precisely the failure this whole channel exists to
 // remove, and reintroducing it one layer down would be worse than not having
 // the channel: the user would have been told it works.
-type FSNotice struct {
+type Notice struct {
 	Export string `json:"e"`
 
 	// Path is the deepest directory covering everything that was lost.
@@ -190,20 +162,20 @@ type FSNotice struct {
 	Reason string `json:"r"`
 }
 
-// NotifyHello is the agent's opening line, sent before anything else.
-type NotifyHello struct {
+// Hello is the agent's opening line, sent before anything else.
+type Hello struct {
 	Version int    `json:"v"`
 	Agent   string `json:"a,omitempty"`
 }
 
-// NotifyFrame is one line of the stream. Exactly one payload field is set.
+// Frame is one line of the stream. Exactly one payload field is set.
 //
 // Events are batched per frame rather than sent one per line: the flush
 // boundary is itself information the agent can dedupe within, and a save that
 // touches twelve files should not cost twelve round trips through the SSH
 // window.
-type NotifyFrame struct {
-	Hello  *NotifyHello `json:"h,omitempty"`
-	Events []FSEvent    `json:"v,omitempty"`
-	Notice *FSNotice    `json:"x,omitempty"`
+type Frame struct {
+	Hello  *Hello  `json:"h,omitempty"`
+	Events []Event `json:"v,omitempty"`
+	Notice *Notice `json:"x,omitempty"`
 }

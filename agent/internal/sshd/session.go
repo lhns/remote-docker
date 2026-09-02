@@ -22,7 +22,8 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/unions"
-	"github.com/lhns/remote-docker/core-agent/notify"
+	"github.com/lhns/remote-docker/core-agent/replay"
+	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -49,7 +50,7 @@ func (s *Server) handleSession(session gssh.Session) {
 		s.serveInfo(session, account)
 	case workspace.DialStdioCommand:
 		s.serveDockerSocket(session, account)
-	case workspace.NotifyCommand:
+	case notify.Command:
 		s.serveNotify(session, account)
 	case workspace.CacheCommand:
 		s.serveCache(session, account)
@@ -157,7 +158,7 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 // touches are volume mountpoints under /var/lib/docker, which the account
 // cannot reach. Every path is re-validated here rather than trusted, because
 // this is a root process being told which path to touch. See
-// workspace.FSEvent.Validate, which both sides call.
+// notify.Event.Validate, which both sides call.
 func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	// The volume being replayed into belongs to THIS account's daemon, and the
 	// mountpoint that daemon reports is a path in ITS filesystem. Both have to
@@ -176,9 +177,9 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 		Root: func() (string, error) { t, err := target(); return t.Root, err },
 	}
 
-	replayer := &notify.Replayer{
+	replayer := &replay.Replayer{
 		Volumes: volumes,
-		Poker:   notify.SyscallPoker{},
+		Poker:   replay.SyscallPoker{},
 		// The volume an export lives in belongs to the machine that created
 		// it, so a poke has to name the same one the client's rewriter did.
 		Client: account.Client(),

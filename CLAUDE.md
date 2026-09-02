@@ -82,7 +82,7 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   tunnelserver/          answering the tunnel: the forwarding protocol, given
                          who may bind what and which namespace it goes in.
   accounts/              one unix account per enrolled key, and the ports
-  notify/                replays the client's changes as real syscalls
+  replay/                replays the client's changes as real syscalls
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
 
@@ -681,7 +681,7 @@ premise of the project, and it applies to building it too. So:
 - **`shadow` must stay in the image.** The agent shells out to `useradd`, which
   handles the locking between passwd, group and gshadow that hand-editing gets
   wrong.
-- **Replay must never mutate.** `core-agent/notify` performs syscalls on
+- **Replay must never mutate.** `core-agent/replay` performs syscalls on
   the user's own files, through the export it is notifying about. `O_CREAT`,
   `O_TRUNC` and a non-identity `utimensat` are all forbidden, even where they
   would produce a better event: the file may have been deleted again between

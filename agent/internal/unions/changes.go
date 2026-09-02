@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lhns/remote-docker/core-agent/notify"
+	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -133,7 +133,7 @@ func (m *Manager) upperRoot(_ context.Context, account, export string) (*live, s
 	if !ok {
 		return nil, "", fmt.Errorf("unions: %s has no cache: %w", export, ErrNoShare)
 	}
-	root, err := notify.Relocate(l.spec.Upper(), func() (string, error) { return l.spec.Root(), nil })
+	root, err := replay.Relocate(l.spec.Upper(), func() (string, error) { return l.spec.Root(), nil })
 	if err != nil {
 		return nil, "", fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
 	}

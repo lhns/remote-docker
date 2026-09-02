@@ -1,4 +1,4 @@
-package notify
+package replay
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -79,7 +80,7 @@ func newReplayer(mounts map[string]string) (*Replayer, *fakePoker, *fakeVolumes)
 }
 
 // feed runs frames through Serve and returns what the agent wrote back.
-func feed(t *testing.T, r *Replayer, frames ...workspace.NotifyFrame) string {
+func feed(t *testing.T, r *Replayer, frames ...notify.Frame) string {
 	t.Helper()
 	var in strings.Builder
 	for _, f := range frames {
@@ -109,15 +110,15 @@ func TestServeGreetsFirst(t *testing.T) {
 	out := feed(t, r)
 
 	line, _, _ := strings.Cut(out, "\n")
-	var frame workspace.NotifyFrame
+	var frame notify.Frame
 	if err := json.Unmarshal([]byte(line), &frame); err != nil {
 		t.Fatalf("the first line is not a frame: %q (%v)", line, err)
 	}
 	if frame.Hello == nil {
 		t.Fatalf("the first frame is not a hello: %q", line)
 	}
-	if frame.Hello.Version != workspace.NotifyVersion {
-		t.Errorf("announced version %d, want %d", frame.Hello.Version, workspace.NotifyVersion)
+	if frame.Hello.Version != notify.Version {
+		t.Errorf("announced version %d, want %d", frame.Hello.Version, notify.Version)
 	}
 }
 
@@ -125,8 +126,8 @@ func TestReplaysAWrite(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
 
-	feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/src/a.go", Op: workspace.OpWrite},
+	feed(t, r, notify.Frame{Events: []notify.Event{
+		{Export: workspace.ExportCWD, Path: "/src/a.go", Op: notify.OpWrite},
 	}})
 
 	want := filepath.Join(root, "src", "a.go")
@@ -141,8 +142,8 @@ func TestCreatePokesTheFileAndItsParent(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
 
-	feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/src/new.go", Op: workspace.OpCreate},
+	feed(t, r, notify.Frame{Events: []notify.Event{
+		{Export: workspace.ExportCWD, Path: "/src/new.go", Op: notify.OpCreate},
 	}})
 
 	got := poker.sorted()
@@ -163,8 +164,8 @@ func TestRemovePokesOnlyTheParent(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
 
-	feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/src/gone.go", Op: workspace.OpRemove},
+	feed(t, r, notify.Frame{Events: []notify.Event{
+		{Export: workspace.ExportCWD, Path: "/src/gone.go", Op: notify.OpRemove},
 	}})
 
 	got := poker.sorted()
@@ -184,13 +185,13 @@ func TestParentDirectoryIsPokedOncePerFrame(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
 
-	var events []workspace.FSEvent
+	var events []notify.Event
 	for _, n := range []string{"a.go", "b.go", "c.go", "d.go"} {
-		events = append(events, workspace.FSEvent{
-			Export: workspace.ExportCWD, Path: "/src/" + n, Op: workspace.OpCreate,
+		events = append(events, notify.Event{
+			Export: workspace.ExportCWD, Path: "/src/" + n, Op: notify.OpCreate,
 		})
 	}
-	feed(t, r, workspace.NotifyFrame{Events: events})
+	feed(t, r, notify.Frame{Events: events})
 
 	if got := poker.count(filepath.Join(root, "src")); got != 1 {
 		t.Errorf("poked the parent %d times, want 1", got)
@@ -202,19 +203,19 @@ func TestParentDirectoryIsPokedOncePerFrame(t *testing.T) {
 func TestRefusesMalformedEvents(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 
-	bad := []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/../../etc/shadow", Op: workspace.OpWrite},
-		{Export: workspace.ExportCWD, Path: "/a/../../../etc/passwd", Op: workspace.OpWrite},
-		{Export: workspace.ExportCWD, Path: "relative", Op: workspace.OpWrite},
-		{Export: workspace.ExportCWD, Path: `/a\b`, Op: workspace.OpWrite},
-		{Export: "/etc", Path: "/a", Op: workspace.OpWrite},
+	bad := []notify.Event{
+		{Export: workspace.ExportCWD, Path: "/../../etc/shadow", Op: notify.OpWrite},
+		{Export: workspace.ExportCWD, Path: "/a/../../../etc/passwd", Op: notify.OpWrite},
+		{Export: workspace.ExportCWD, Path: "relative", Op: notify.OpWrite},
+		{Export: workspace.ExportCWD, Path: `/a\b`, Op: notify.OpWrite},
+		{Export: "/etc", Path: "/a", Op: notify.OpWrite},
 		{Export: workspace.ExportCWD, Path: "/a", Op: 0},
 		{Export: workspace.ExportCWD, Path: "/a", Op: 1 << 7},
 	}
 
 	for _, e := range bad {
 		r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
-		feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{e}})
+		feed(t, r, notify.Frame{Events: []notify.Event{e}})
 		if got := poker.sorted(); len(got) != 0 {
 			t.Errorf("event %+v was refused by neither end; it poked %v", e, got)
 		}
@@ -245,13 +246,13 @@ func TestResolveRefusesEscapes(t *testing.T) {
 func TestUnknownVolumeIsCachedAndSilent(t *testing.T) {
 	r, poker, vols := newReplayer(map[string]string{})
 
-	var events []workspace.FSEvent
+	var events []notify.Event
 	for range 20 {
-		events = append(events, workspace.FSEvent{
-			Export: workspace.ExportCWD, Path: "/a.go", Op: workspace.OpWrite,
+		events = append(events, notify.Event{
+			Export: workspace.ExportCWD, Path: "/a.go", Op: notify.OpWrite,
 		})
 	}
-	feed(t, r, workspace.NotifyFrame{Events: events})
+	feed(t, r, notify.Frame{Events: events})
 
 	if got := poker.sorted(); len(got) != 0 {
 		t.Errorf("poked %v with no volume mounted", got)
@@ -266,8 +267,8 @@ func TestMountpointIsCached(t *testing.T) {
 	r, _, vols := newReplayer(map[string]string{cwdVolume: root})
 
 	for range 10 {
-		feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{
-			{Export: workspace.ExportCWD, Path: "/a.go", Op: workspace.OpWrite},
+		feed(t, r, notify.Frame{Events: []notify.Event{
+			{Export: workspace.ExportCWD, Path: "/a.go", Op: notify.OpWrite},
 		}})
 	}
 	if vols.calls != 1 {
@@ -281,7 +282,7 @@ func TestNoticePokesTheNamedDirectory(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
 
-	feed(t, r, workspace.NotifyFrame{Notice: &workspace.FSNotice{
+	feed(t, r, notify.Frame{Notice: &notify.Notice{
 		Export: workspace.ExportCWD, Path: "/src/deep", Dropped: 900, Reason: "overflow",
 	}})
 
@@ -301,8 +302,8 @@ func TestMalformedFrameDoesNotEndTheStream(t *testing.T) {
 	root := filepath.FromSlash("/mnt/cwd")
 	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
 
-	good, _ := json.Marshal(workspace.NotifyFrame{Events: []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/after.go", Op: workspace.OpWrite},
+	good, _ := json.Marshal(notify.Frame{Events: []notify.Event{
+		{Export: workspace.ExportCWD, Path: "/after.go", Op: notify.OpWrite},
 	}})
 	in := "{not json\n\n" + string(good) + "\n"
 
@@ -330,9 +331,9 @@ func TestEventsSpanningExports(t *testing.T) {
 		"rd-0123456789abcdef": otherRoot,
 	})
 
-	feed(t, r, workspace.NotifyFrame{Events: []workspace.FSEvent{
-		{Export: workspace.ExportCWD, Path: "/a/one.go", Op: workspace.OpCreate},
-		{Export: otherExport, Path: "/b/two.go", Op: workspace.OpCreate},
+	feed(t, r, notify.Frame{Events: []notify.Event{
+		{Export: workspace.ExportCWD, Path: "/a/one.go", Op: notify.OpCreate},
+		{Export: otherExport, Path: "/b/two.go", Op: notify.OpCreate},
 	}})
 
 	got := poker.sorted()

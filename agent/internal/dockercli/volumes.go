@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lhns/remote-docker/core-agent/notify"
+	"github.com/lhns/remote-docker/core-agent/replay"
 )
 
 // Volumes resolves a managed volume to its mountpoint through the docker CLI,
@@ -15,7 +15,7 @@ import (
 //
 // It lives here rather than beside the replayer because it is the only part of
 // replaying that knows Docker exists. What the replayer needs is a name to a
-// directory, which notify.Volumes states and this answers.
+// directory, which replay.Volumes states and this answers.
 type Volumes struct {
 	// Host is the daemon to ask, as a -H value. Empty means the agent's own,
 	// which is the shared-daemon mode of ADR 0012.
@@ -62,7 +62,7 @@ func (v Volumes) Mountpoint(ctx context.Context, volume string) (string, error) 
 		return "", fmt.Errorf("notify: volume %s reported no mountpoint", volume)
 	}
 
-	return notify.Relocate(mp, v.Root)
+	return replay.Relocate(mp, v.Root)
 }
 
 // call reads a lazily-resolved setting. A nil func is the empty value, which

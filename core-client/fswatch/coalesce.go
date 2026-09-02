@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/notify"
 )
 
 // Defaults for coalescing. A single editor save produces three to five raw
@@ -34,7 +34,7 @@ type pendingKey struct {
 }
 
 type pendingEvent struct {
-	op  workspace.FSOp
+	op  notify.Op
 	dir bool
 
 	// seq is the arrival order of the FIRST event for this path, so a flush
@@ -90,7 +90,7 @@ func newCoalescer(debounce, maxDelay time.Duration, capacity int) *coalescer {
 }
 
 // add merges one observed event into the pending set.
-func (c *coalescer) add(now time.Time, e workspace.FSEvent) {
+func (c *coalescer) add(now time.Time, e notify.Event) {
 	key := pendingKey{e.Export, e.Path}
 	if p, ok := c.pending[key]; ok {
 		p.op = mergeOps(p.op, e.Op)
@@ -117,9 +117,9 @@ func (c *coalescer) add(now time.Time, e workspace.FSEvent) {
 // the atomic-save every editor performs, and the net truth is that it is
 // there. Merging them by OR would report both and the agent would have to
 // guess.
-func mergeOps(have, add workspace.FSOp) workspace.FSOp {
-	const gone = workspace.OpRemove | workspace.OpRename
-	const present = workspace.OpCreate | workspace.OpWrite
+func mergeOps(have, add notify.Op) notify.Op {
+	const gone = notify.OpRemove | notify.OpRename
+	const present = notify.OpCreate | notify.OpWrite
 
 	switch {
 	case add&gone != 0:
@@ -234,7 +234,7 @@ func (c *coalescer) nextDue(now time.Time) (time.Time, bool) {
 // Notices are emitted alongside the events rather than instead of them: what
 // survived is still worth replaying, and the notice says the picture is
 // incomplete.
-func (c *coalescer) flush(now time.Time) ([]workspace.FSEvent, []workspace.FSNotice) {
+func (c *coalescer) flush(now time.Time) ([]notify.Event, []notify.Notice) {
 	type ready struct {
 		key pendingKey
 		ev  *pendingEvent
@@ -247,10 +247,10 @@ func (c *coalescer) flush(now time.Time) ([]workspace.FSEvent, []workspace.FSNot
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ev.seq < out[j].ev.seq })
 
-	events := make([]workspace.FSEvent, 0, len(out))
+	events := make([]notify.Event, 0, len(out))
 	for _, r := range out {
 		delete(c.pending, r.key)
-		events = append(events, workspace.FSEvent{
+		events = append(events, notify.Event{
 			Export: r.key.export,
 			Path:   r.key.path,
 			Op:     r.ev.op,
@@ -258,7 +258,7 @@ func (c *coalescer) flush(now time.Time) ([]workspace.FSEvent, []workspace.FSNot
 		})
 	}
 
-	var notices []workspace.FSNotice
+	var notices []notify.Notice
 	if len(c.lost) > 0 {
 		exports := make([]string, 0, len(c.lost))
 		for export := range c.lost {
@@ -267,7 +267,7 @@ func (c *coalescer) flush(now time.Time) ([]workspace.FSEvent, []workspace.FSNot
 		sort.Strings(exports)
 		for _, export := range exports {
 			l := c.lost[export]
-			notices = append(notices, workspace.FSNotice{
+			notices = append(notices, notify.Notice{
 				Export:  export,
 				Path:    l.dir,
 				Dropped: l.count,

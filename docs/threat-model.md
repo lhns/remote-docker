@@ -580,7 +580,7 @@ cleaning *repairs* a traversal into something plausible instead of refusing it.
 Then `relocate` re-checks containment after joining onto the daemon's root,
 because `path.Join` cleans: `/proc/42/root` joined to `/../../etc/shadow` is
 `/proc/etc/shadow`, outside the root and looking correct. *Covered by*
-`core-agent/notify/relocate_test.go`.
+`core-agent/replay/relocate_test.go`.
 
 **T — replay mutating the user's data (7).** Replay may never create, truncate
 or change content: the file may have been deleted between the client observing

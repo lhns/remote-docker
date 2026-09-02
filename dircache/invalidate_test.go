@@ -3,7 +3,7 @@ package dircache
 import (
 	"testing"
 
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/notify"
 )
 
 // The cache may hold only what the watcher covers, so a path under an excluded
@@ -45,21 +45,21 @@ func TestInvalidatorBatchesByPath(t *testing.T) {
 	c.shares.set(share, "/home/alice/project", &fillState{})
 	defer c.Stop()
 
-	observe := func(p string, op workspace.FSOp) {
-		c.Observe(workspace.FSEvent{Export: share, Path: p, Op: op})
+	observe := func(p string, op notify.Op) {
+		c.Observe(notify.Event{Export: share, Path: p, Op: op})
 	}
 
-	observe("/a.go", workspace.OpWrite)
-	observe("/b.go", workspace.OpCreate)
-	observe("/gone.go", workspace.OpRemove)
+	observe("/a.go", notify.OpWrite)
+	observe("/b.go", notify.OpCreate)
+	observe("/gone.go", notify.OpRemove)
 
 	// A rename is a removal of the old name and a creation of the new one, and
 	// the last word about a path wins: a file written after being removed is a
 	// write, and one removed after being written is a removal.
-	observe("/rewritten.go", workspace.OpRemove)
-	observe("/rewritten.go", workspace.OpWrite)
-	observe("/finally-gone.go", workspace.OpWrite)
-	observe("/finally-gone.go", workspace.OpRemove)
+	observe("/rewritten.go", notify.OpRemove)
+	observe("/rewritten.go", notify.OpWrite)
+	observe("/finally-gone.go", notify.OpWrite)
+	observe("/finally-gone.go", notify.OpRemove)
 
 	c.inval.mu.Lock()
 	pending := c.inval.pending[share]
@@ -90,7 +90,7 @@ func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 	c.shares.set("/m/00112233445566ff", "/home/alice/project", &fillState{})
 	defer c.Stop()
 
-	c.Observe(workspace.FSEvent{Export: "/cwd", Path: "/other.go", Op: workspace.OpWrite})
+	c.Observe(notify.Event{Export: "/cwd", Path: "/other.go", Op: notify.OpWrite})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()
@@ -107,7 +107,7 @@ func TestInvalidatorIgnoresDirectories(t *testing.T) {
 	c.shares.set(share, "/home/alice/project", &fillState{})
 	defer c.Stop()
 
-	c.Observe(workspace.FSEvent{Export: share, Path: "/pkg", Op: workspace.OpCreate, Dir: true})
+	c.Observe(notify.Event{Export: share, Path: "/pkg", Op: notify.OpCreate, Dir: true})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()
@@ -124,7 +124,7 @@ func TestInvalidatorIgnoresExcludedPaths(t *testing.T) {
 	c.shares.set(share, "/home/alice/project", &fillState{})
 	defer c.Stop()
 
-	c.Observe(workspace.FSEvent{Export: share, Path: "/.git/index", Op: workspace.OpWrite})
+	c.Observe(notify.Event{Export: share, Path: "/.git/index", Op: notify.OpWrite})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()

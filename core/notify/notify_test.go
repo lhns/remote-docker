@@ -1,9 +1,11 @@
-package workspace
+package notify
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // The rejection table is the security-critical test in this package. Every row
@@ -14,27 +16,27 @@ func TestFSEventValidateRejects(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		event FSEvent
+		event Event
 		want  string // substring of the error, so a rejection for the WRONG
 		// reason still fails
 	}{
-		{"traversal", FSEvent{goodExport, "/a/../../etc/shadow", OpWrite, false}, `".."`},
-		{"bare traversal", FSEvent{goodExport, "/..", OpWrite, false}, `".."`},
-		{"dot component", FSEvent{goodExport, "/a/./b", OpWrite, false}, `"."`},
-		{"relative", FSEvent{goodExport, "a/b", OpWrite, false}, "not absolute"},
-		{"empty path", FSEvent{goodExport, "", OpWrite, false}, "empty"},
-		{"empty component", FSEvent{goodExport, "/a//b", OpWrite, false}, "empty component"},
-		{"backslash", FSEvent{goodExport, `/a\b`, OpWrite, false}, "backslash"},
-		{"windows spelling", FSEvent{goodExport, `\a\b`, OpWrite, false}, "not absolute"},
-		{"nul", FSEvent{goodExport, "/a\x00b", OpWrite, false}, "NUL"},
-		{"no op", FSEvent{goodExport, "/a", 0, false}, "no operation"},
-		{"unknown op", FSEvent{goodExport, "/a", 1 << 7, false}, "unknown operation"},
-		{"unknown op alongside known", FSEvent{goodExport, "/a", OpWrite | 1<<6, false}, "unknown operation"},
-		{"export not ours", FSEvent{"/etc", "/a", OpWrite, false}, "export"},
-		{"export empty", FSEvent{"", "/a", OpWrite, false}, "export"},
-		{"export absolute path", FSEvent{"/m/../../etc", "/a", OpWrite, false}, "export"},
-		{"export short id", FSEvent{"/m/0123", "/a", OpWrite, false}, "export"},
-		{"export non-hex id", FSEvent{"/m/zzzzzzzzzzzzzzzz", "/a", OpWrite, false}, "export"},
+		{"traversal", Event{goodExport, "/a/../../etc/shadow", OpWrite, false}, `".."`},
+		{"bare traversal", Event{goodExport, "/..", OpWrite, false}, `".."`},
+		{"dot component", Event{goodExport, "/a/./b", OpWrite, false}, `"."`},
+		{"relative", Event{goodExport, "a/b", OpWrite, false}, "not absolute"},
+		{"empty path", Event{goodExport, "", OpWrite, false}, "empty"},
+		{"empty component", Event{goodExport, "/a//b", OpWrite, false}, "empty component"},
+		{"backslash", Event{goodExport, `/a\b`, OpWrite, false}, "backslash"},
+		{"windows spelling", Event{goodExport, `\a\b`, OpWrite, false}, "not absolute"},
+		{"nul", Event{goodExport, "/a\x00b", OpWrite, false}, "NUL"},
+		{"no op", Event{goodExport, "/a", 0, false}, "no operation"},
+		{"unknown op", Event{goodExport, "/a", 1 << 7, false}, "unknown operation"},
+		{"unknown op alongside known", Event{goodExport, "/a", OpWrite | 1<<6, false}, "unknown operation"},
+		{"export not ours", Event{"/etc", "/a", OpWrite, false}, "export"},
+		{"export empty", Event{"", "/a", OpWrite, false}, "export"},
+		{"export absolute path", Event{"/m/../../etc", "/a", OpWrite, false}, "export"},
+		{"export short id", Event{"/m/0123", "/a", OpWrite, false}, "export"},
+		{"export non-hex id", Event{"/m/zzzzzzzzzzzzzzzz", "/a", OpWrite, false}, "export"},
 	}
 
 	for _, tt := range tests {
@@ -51,7 +53,7 @@ func TestFSEventValidateRejects(t *testing.T) {
 }
 
 func TestFSEventValidateAccepts(t *testing.T) {
-	tests := []FSEvent{
+	tests := []Event{
 		{"/cwd", "/", OpWrite, true},
 		{"/cwd", "/main.go", OpWrite, false},
 		{"/m/0123456789abcdef", "/src/app/index.ts", OpCreate | OpWrite, false},
@@ -80,8 +82,8 @@ func TestFSEventValidateAccepts(t *testing.T) {
 // The frame is the contract between two separately built binaries, so a change
 // to a json tag has to fail here rather than in CI three phases later.
 func TestNotifyFrameWireFormat(t *testing.T) {
-	frame := NotifyFrame{
-		Events: []FSEvent{
+	frame := Frame{
+		Events: []Event{
 			{Export: "/cwd", Path: "/main.go", Op: OpWrite},
 			{Export: "/m/0123456789abcdef", Path: "/src", Op: OpCreate, Dir: true},
 		},
@@ -97,7 +99,7 @@ func TestNotifyFrameWireFormat(t *testing.T) {
 		t.Errorf("frame encoded as\n  %s\nwant\n  %s", encoded, want)
 	}
 
-	var back NotifyFrame
+	var back Frame
 	if err := json.Unmarshal(encoded, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -112,9 +114,9 @@ func TestNotifyFrameWireFormat(t *testing.T) {
 // A frame must be one line: the stream is newline-delimited, so an encoder
 // that emitted a newline inside a frame would desynchronise both ends.
 func TestNotifyFrameIsSingleLine(t *testing.T) {
-	frame := NotifyFrame{
-		Events: []FSEvent{{Export: "/cwd", Path: "/a\nb", Op: OpWrite}},
-		Notice: &FSNotice{Export: "/cwd", Path: "/", Reason: "overflow", Dropped: 12},
+	frame := Frame{
+		Events: []Event{{Export: "/cwd", Path: "/a\nb", Op: OpWrite}},
+		Notice: &Notice{Export: "/cwd", Path: "/", Reason: "overflow", Dropped: 12},
 	}
 	encoded, err := json.Marshal(frame)
 	if err != nil {
@@ -126,7 +128,7 @@ func TestNotifyFrameIsSingleLine(t *testing.T) {
 }
 
 func TestNotifyHelloWireFormat(t *testing.T) {
-	encoded, err := json.Marshal(NotifyFrame{Hello: &NotifyHello{Version: NotifyVersion, Agent: "dev"}})
+	encoded, err := json.Marshal(Frame{Hello: &Hello{Version: Version, Agent: "dev"}})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -138,7 +140,7 @@ func TestNotifyHelloWireFormat(t *testing.T) {
 
 func TestFSOpString(t *testing.T) {
 	tests := []struct {
-		op   FSOp
+		op   Op
 		want string
 	}{
 		{0, "none"},
@@ -151,7 +153,7 @@ func TestFSOpString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := tt.op.String(); got != tt.want {
-			t.Errorf("FSOp(%#x).String() = %q, want %q", uint8(tt.op), got, tt.want)
+			t.Errorf("Op(%#x).String() = %q, want %q", uint8(tt.op), got, tt.want)
 		}
 	}
 }
@@ -162,10 +164,10 @@ func TestFSOpString(t *testing.T) {
 // mysteriously do not work for this one share".
 func TestValidateExportMatchesVolumeResolution(t *testing.T) {
 	for _, export := range []string{"/cwd", "/m/0123456789abcdef", "/m/zzz", "/etc", "", "/m/"} {
-		volErr := ValidExport(export)
-		evErr := FSEvent{Export: export, Path: "/a", Op: OpWrite}.Validate()
+		volErr := workspace.ValidExport(export)
+		evErr := Event{Export: export, Path: "/a", Op: OpWrite}.Validate()
 		if (volErr == nil) != (evErr == nil) {
-			t.Errorf("export %q: ValidExport err=%v but Validate err=%v", export, volErr, evErr)
+			t.Errorf("export %q: workspace.ValidExport err=%v but Validate err=%v", export, volErr, evErr)
 		}
 	}
 }

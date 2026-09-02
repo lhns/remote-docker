@@ -10,16 +10,17 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type fakeSink struct {
 	mu     sync.Mutex
-	frames []workspace.NotifyFrame
+	frames []notify.Frame
 	err    error
 }
 
-func (s *fakeSink) Send(_ context.Context, f workspace.NotifyFrame) error {
+func (s *fakeSink) Send(_ context.Context, f notify.Frame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
@@ -29,20 +30,20 @@ func (s *fakeSink) Send(_ context.Context, f workspace.NotifyFrame) error {
 	return nil
 }
 
-func (s *fakeSink) events() []workspace.FSEvent {
+func (s *fakeSink) events() []notify.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []workspace.FSEvent
+	var out []notify.Event
 	for _, f := range s.frames {
 		out = append(out, f.Events...)
 	}
 	return out
 }
 
-func (s *fakeSink) notices() []workspace.FSNotice {
+func (s *fakeSink) notices() []notify.Notice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []workspace.FSNotice
+	var out []notify.Notice
 	for _, f := range s.frames {
 		if f.Notice != nil {
 			out = append(out, *f.Notice)
@@ -99,7 +100,7 @@ func TestWatcherReportsAWrite(t *testing.T) {
 
 	waitFor(t, "the write to arrive", func() bool { return len(sink.events()) > 0 })
 	got := sink.events()[0]
-	if got.Export != workspace.ExportCWD || got.Path != "/src/a.go" || got.Op != workspace.OpWrite {
+	if got.Export != workspace.ExportCWD || got.Path != "/src/a.go" || got.Op != notify.OpWrite {
 		t.Errorf("reported %+v, want /src/a.go write on /cwd", got)
 	}
 	if w.Stats().Sent == 0 {
@@ -121,7 +122,7 @@ func TestPartialModeDropsRemovals(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	for _, e := range sink.events() {
-		if e.Op&(workspace.OpRemove|workspace.OpRename) != 0 {
+		if e.Op&(notify.OpRemove|notify.OpRename) != 0 {
 			t.Errorf("partial mode sent %+v; it cannot replay a removal faithfully", e)
 		}
 		if e.Path == "/src/gone.go" {
@@ -140,7 +141,7 @@ func TestCoarseModeSendsRemovals(t *testing.T) {
 
 	waitFor(t, "the removal to arrive", func() bool {
 		for _, e := range sink.events() {
-			if e.Path == "/src/gone.go" && e.Op&workspace.OpRemove != 0 {
+			if e.Path == "/src/gone.go" && e.Op&notify.OpRemove != 0 {
 				return true
 			}
 		}

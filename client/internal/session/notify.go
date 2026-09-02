@@ -12,7 +12,7 @@ import (
 	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/notify"
 )
 
 // notifySink writes change frames to the agent over the workspace-notify
@@ -33,7 +33,7 @@ type notifySink struct {
 // 127, indistinguishable from a working channel that has nothing to say.
 // Reading a greeting first is the only thing that tells them apart.
 func openNotify(client *tunnelclient.Client) (*notifySink, error) {
-	stream, err := client.OpenStream(workspace.NotifyCommand)
+	stream, err := client.OpenStream(notify.Command)
 	if err != nil {
 		return nil, err
 	}
@@ -45,32 +45,32 @@ func openNotify(client *tunnelclient.Client) (*notifySink, error) {
 		return nil, fmt.Errorf("no greeting from the workspace: %w", err)
 	}
 
-	var frame workspace.NotifyFrame
+	var frame notify.Frame
 	if err := json.Unmarshal([]byte(line), &frame); err != nil || frame.Hello == nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("the workspace did not answer %q", workspace.NotifyCommand)
+		return nil, fmt.Errorf("the workspace did not answer %q", notify.Command)
 	}
-	if frame.Hello.Version != workspace.NotifyVersion {
+	if frame.Hello.Version != notify.Version {
 		_ = stream.Close()
 		return nil, fmt.Errorf("the workspace speaks change-notification version %d, this client speaks %d",
-			frame.Hello.Version, workspace.NotifyVersion)
+			frame.Hello.Version, notify.Version)
 	}
 
 	return &notifySink{stream: stream, w: bufio.NewWriter(stream)}, nil
 }
 
 // Send writes one frame as a single line.
-func (s *notifySink) Send(_ context.Context, frame workspace.NotifyFrame) error {
+func (s *notifySink) Send(_ context.Context, frame notify.Frame) error {
 	encoded, err := json.Marshal(frame)
 	if err != nil {
 		return err
 	}
-	if len(encoded)+1 > workspace.MaxNotifyFrame {
+	if len(encoded)+1 > notify.MaxFrame {
 		// The far side's scanner would truncate at its buffer limit and then
 		// desynchronise on the remainder, which is a far worse failure than
 		// admitting one oversized frame was not sent.
 		return fmt.Errorf("change frame of %d bytes exceeds the %d byte limit",
-			len(encoded)+1, workspace.MaxNotifyFrame)
+			len(encoded)+1, notify.MaxFrame)
 	}
 
 	s.mu.Lock()

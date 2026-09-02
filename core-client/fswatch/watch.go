@@ -22,7 +22,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/lhns/remote-docker/core/logx"
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/notify"
 )
 
 // Mode is how much of what we observe is worth sending.
@@ -88,7 +88,7 @@ type Share struct {
 
 // Sink carries frames to the agent. Nil while no connection is established.
 type Sink interface {
-	Send(ctx context.Context, frame workspace.NotifyFrame) error
+	Send(ctx context.Context, frame notify.Frame) error
 }
 
 // DefaultQueueLen bounds the frames waiting to be sent. A full queue is an
@@ -202,7 +202,7 @@ func New(opts Options) (*Watcher, error) {
 	}
 	w.be = be
 
-	out := make(chan workspace.NotifyFrame, opts.QueueLen)
+	out := make(chan notify.Frame, opts.QueueLen)
 	w.wg.Add(3)
 	go func() { defer w.wg.Done(); w.drain() }()
 	go func() { defer w.wg.Done(); w.process(out) }()
@@ -243,14 +243,14 @@ func (w *Watcher) Sync(shares []Share) {
 // because a cached copy of a file that is gone would shadow its absence
 // (ADR 0044).
 type Observer interface {
-	Observe(event workspace.FSEvent)
+	Observe(event notify.Event)
 
 	// Lost says the watcher could not report everything, which for a cache is
 	// a different problem from a missed notification: the events it did not
 	// see may have been deletions, and a cached copy of a deleted file
 	// shadows its absence until something removes it. The observer's answer is
 	// to reconcile rather than to log a line.
-	Lost(notice workspace.FSNotice)
+	Lost(notice notify.Notice)
 }
 
 // SetObserver attaches one, replacing any before it. Nil detaches.
@@ -261,7 +261,7 @@ func (w *Watcher) SetObserver(o Observer) {
 }
 
 // lost tells the observer that something was missed, if there is one.
-func (w *Watcher) lost(notice workspace.FSNotice) {
+func (w *Watcher) lost(notice notify.Notice) {
 	w.mu.Lock()
 	o := w.observer
 	w.mu.Unlock()
@@ -271,7 +271,7 @@ func (w *Watcher) lost(notice workspace.FSNotice) {
 }
 
 // observe tells the observer, if there is one.
-func (w *Watcher) observe(event workspace.FSEvent) {
+func (w *Watcher) observe(event notify.Event) {
 	w.mu.Lock()
 	o := w.observer
 	w.mu.Unlock()
@@ -337,7 +337,7 @@ func (w *Watcher) drain() {
 }
 
 // process owns the tree and the coalescer exclusively, so neither needs a lock.
-func (w *Watcher) process(out chan<- workspace.NotifyFrame) {
+func (w *Watcher) process(out chan<- notify.Frame) {
 	defer close(out)
 
 	t := newTree(w.goos, w.be, w.opts.Budget, w.opts.Exclude, w.opts.Log)
@@ -407,9 +407,9 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 			if !t.isExcluded(filepath.Base(e.Name)) {
 				t.addTree(root, e.Name, func(p string, dir bool) {
 					if childRel, ok := relativeTo(w.goos, root.parts, p); ok {
-						c.add(time.Now(), workspace.FSEvent{
+						c.add(time.Now(), notify.Event{
 							Export: root.export, Path: childRel,
-							Op: workspace.OpCreate, Dir: dir,
+							Op: notify.OpCreate, Dir: dir,
 						})
 					}
 				})
@@ -442,45 +442,45 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 	// through an NFS mount, which is what ModePartial is about; it can be
 	// applied to a cache exactly (ADR 0044), where a stale entry would
 	// otherwise shadow a file that is gone.
-	w.observe(workspace.FSEvent{Export: root.export, Path: rel, Op: op, Dir: isDir})
+	w.observe(notify.Event{Export: root.export, Path: rel, Op: op, Dir: isDir})
 
 	if w.opts.Mode == ModePartial {
 		// Strip what this mode will not misrepresent. If nothing is left, the
 		// event is not worth a frame.
-		op &^= workspace.OpRemove | workspace.OpRename
+		op &^= notify.OpRemove | notify.OpRename
 		if op == 0 {
 			return
 		}
 	}
 
-	c.add(time.Now(), workspace.FSEvent{Export: root.export, Path: rel, Op: op, Dir: isDir})
+	c.add(time.Now(), notify.Event{Export: root.export, Path: rel, Op: op, Dir: isDir})
 }
 
-func opFor(e fsnotify.Event) workspace.FSOp {
-	var op workspace.FSOp
+func opFor(e fsnotify.Event) notify.Op {
+	var op notify.Op
 	if e.Has(fsnotify.Create) {
-		op |= workspace.OpCreate
+		op |= notify.OpCreate
 	}
 	if e.Has(fsnotify.Write) {
-		op |= workspace.OpWrite
+		op |= notify.OpWrite
 	}
 	if e.Has(fsnotify.Remove) {
-		op |= workspace.OpRemove
+		op |= notify.OpRemove
 	}
 	if e.Has(fsnotify.Rename) {
-		op |= workspace.OpRename
+		op |= notify.OpRename
 	}
 	if e.Has(fsnotify.Chmod) {
-		op |= workspace.OpAttrib
+		op |= notify.OpAttrib
 	}
 	return op
 }
 
 // emit queues a frame, dropping rather than blocking.
-func (w *Watcher) emit(out chan<- workspace.NotifyFrame, events []workspace.FSEvent, notices []workspace.FSNotice) {
+func (w *Watcher) emit(out chan<- notify.Frame, events []notify.Event, notices []notify.Notice) {
 	for _, n := range notices {
 		w.lost(n)
-		w.queue(out, workspace.NotifyFrame{Notice: &n})
+		w.queue(out, notify.Frame{Notice: &n})
 	}
 	if len(events) == 0 {
 		return
@@ -497,11 +497,11 @@ func (w *Watcher) emit(out chan<- workspace.NotifyFrame, events []workspace.FSEv
 		kept = append(kept, e)
 	}
 	if len(kept) > 0 {
-		w.queue(out, workspace.NotifyFrame{Events: kept})
+		w.queue(out, notify.Frame{Events: kept})
 	}
 }
 
-func (w *Watcher) queue(out chan<- workspace.NotifyFrame, frame workspace.NotifyFrame) {
+func (w *Watcher) queue(out chan<- notify.Frame, frame notify.Frame) {
 	select {
 	case out <- frame:
 	default:
@@ -511,7 +511,7 @@ func (w *Watcher) queue(out chan<- workspace.NotifyFrame, frame workspace.Notify
 
 // send is the only goroutine that touches the sink, so a stalled SSH channel
 // back-pressures into the bounded queue rather than into the kernel.
-func (w *Watcher) send(out <-chan workspace.NotifyFrame) {
+func (w *Watcher) send(out <-chan notify.Frame) {
 	for {
 		select {
 		case <-w.ctx.Done():
@@ -538,7 +538,7 @@ func (w *Watcher) send(out <-chan workspace.NotifyFrame) {
 			// picture for a complete one.
 			for _, n := range pending {
 				w.lost(n)
-				if err := sink.Send(w.ctx, workspace.NotifyFrame{Notice: &n}); err != nil {
+				if err := sink.Send(w.ctx, notify.Frame{Notice: &n}); err != nil {
 					w.log().Warn("reporting dropped changes", "err", err)
 				}
 			}
@@ -556,13 +556,13 @@ func (w *Watcher) send(out <-chan workspace.NotifyFrame) {
 
 // takeDisconnected drains the per-export tally accumulated with no sink. The
 // caller holds w.mu.
-func (w *Watcher) takeDisconnected() []workspace.FSNotice {
+func (w *Watcher) takeDisconnected() []notify.Notice {
 	if len(w.disconnected) == 0 {
 		return nil
 	}
-	notices := make([]workspace.FSNotice, 0, len(w.disconnected))
+	notices := make([]notify.Notice, 0, len(w.disconnected))
 	for export, n := range w.disconnected {
-		notices = append(notices, workspace.FSNotice{
+		notices = append(notices, notify.Notice{
 			Export: export, Path: "/", Dropped: n, Reason: "disconnected",
 		})
 	}

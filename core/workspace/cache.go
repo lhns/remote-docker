@@ -269,7 +269,7 @@ func (r CacheRequest) Validate() error {
 			return fmt.Errorf("workspace: cache drop for %s names no paths", r.Export)
 		}
 		for _, p := range r.Paths {
-			if err := validateSharePath(p); err != nil {
+			if err := ValidSharePath(p); err != nil {
 				return fmt.Errorf("workspace: cache drop: %w", err)
 			}
 			if strings.TrimSpace(p) == "/" {
@@ -284,7 +284,7 @@ func (r CacheRequest) Validate() error {
 			return fmt.Errorf("workspace: cache pull for %s names no paths", r.Export)
 		}
 		for _, p := range r.Paths {
-			if err := validateSharePath(p); err != nil {
+			if err := ValidSharePath(p); err != nil {
 				return fmt.Errorf("workspace: cache pull: %w", err)
 			}
 		}

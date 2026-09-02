@@ -1,5 +1,5 @@
-// Package notify replays the client's filesystem changes inside the workspace,
-// so that a watcher in a container sees them.
+// Package replay performs the client's filesystem changes inside the workspace,
+// so a watcher in a container sees them.
 //
 // NFS carries no change notification, so a container watching a bind-mounted
 // directory sees nothing at all when the user edits a file on their own
@@ -7,7 +7,7 @@
 // fanotify(7) says so outright, so the only mechanism, here or anywhere, is
 // to perform a real VFS operation and let the kernel emit the event as a side
 // effect. ADR 0016 records which operations produce which events, measured.
-package notify
+package replay
 
 import (
 	"bufio"
@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -84,8 +85,8 @@ type cachedMountpoint struct {
 // to tell a working channel from a missing one, and a greeting is the only
 // thing that distinguishes them.
 func (r *Replayer) Serve(ctx context.Context, rw io.ReadWriter) error {
-	hello, err := json.Marshal(workspace.NotifyFrame{
-		Hello: &workspace.NotifyHello{Version: workspace.NotifyVersion},
+	hello, err := json.Marshal(notify.Frame{
+		Hello: &notify.Hello{Version: notify.Version},
 	})
 	if err != nil {
 		return err
@@ -95,7 +96,7 @@ func (r *Replayer) Serve(ctx context.Context, rw io.ReadWriter) error {
 	}
 
 	scanner := bufio.NewScanner(rw)
-	scanner.Buffer(make([]byte, 0, 64*1024), workspace.MaxNotifyFrame)
+	scanner.Buffer(make([]byte, 0, 64*1024), notify.MaxFrame)
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -105,7 +106,7 @@ func (r *Replayer) Serve(ctx context.Context, rw io.ReadWriter) error {
 		if len(line) == 0 {
 			continue
 		}
-		var frame workspace.NotifyFrame
+		var frame notify.Frame
 		if err := json.Unmarshal(line, &frame); err != nil {
 			// A malformed frame is a bug on the client, not a reason to tear
 			// down a working session: the next frame is very likely fine.
@@ -118,7 +119,7 @@ func (r *Replayer) Serve(ctx context.Context, rw io.ReadWriter) error {
 }
 
 // apply replays one frame.
-func (r *Replayer) apply(ctx context.Context, frame workspace.NotifyFrame) {
+func (r *Replayer) apply(ctx context.Context, frame notify.Frame) {
 	if n := frame.Notice; n != nil {
 		// The client is telling us its own picture is incomplete. The best
 		// available answer is one coarse poke at the directory covering what
@@ -151,14 +152,14 @@ func (r *Replayer) apply(ctx context.Context, frame workspace.NotifyFrame) {
 		}
 
 		switch {
-		case e.Op&(workspace.OpRemove|workspace.OpRename) != 0:
+		case e.Op&(notify.OpRemove|notify.OpRename) != 0:
 			// Nothing to touch: the file is gone, and unlink of a name that is
 			// already gone fails with ENOENT before the kernel generates
 			// anything (measured; ADR 0014 stays open on exactly this). The
 			// parent directory is all that can be said.
 			note(e.Export, parentDir(e.Path))
 
-		case e.Op&workspace.OpCreate != 0:
+		case e.Op&notify.OpCreate != 0:
 			// The file itself, so a watcher keyed on the file sees it, and the
 			// parent, so one keyed on the directory rescans and finds it.
 			//
@@ -255,7 +256,7 @@ func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error
 // resolve joins an in-share path onto a root and confirms the result is still
 // under it.
 //
-// workspace.FSEvent.Validate has already refused "..", so this cannot fail for
+// notify.Event.Validate has already refused "..", so this cannot fail for
 // a validated event. It is here because the consequence of being wrong is a
 // root process touching an arbitrary path, and a check that can only ever be
 // redundant is the right price for that.
