@@ -10,21 +10,12 @@ import (
 	nfsclient "github.com/willscott/go-nfs-client/nfs"
 )
 
-// A mode set through the share has to reach the file.
+// A mode set through the share has to reach the file. It did not: every
+// attribute write was accepted and discarded, so a binary built on a share
+// linked and could not be run (integration.sh section 15d).
 //
-// It did not. `Change` type-asserts the filesystem it is handed to
-// billy.Change, and the filesystem it is handed is an *attrFS, which EMBEDS the
-// billy.Filesystem interface -- so the inner filesystem's Chmod is not
-// promoted, the assertion fails, and attrChange was built with a nil inner
-// that discards every call and reports success.
-//
-// The visible cost is that a binary built on a share cannot be run: the linker
-// writes it, asks for the executable bit, is told yes, and the bit never lands.
-// `test/integration.sh` section 15d found it once the ESTALE above it was gone.
-//
-// Asserted against the file on THIS machine rather than through the share,
-// because the share synthesises permissions: reading it back through NFS would
-// report the executable bit from Attrs and pass while the real file has none.
+// Asserted against the file on THIS machine, not through the share: the share
+// synthesises permissions, so reading it back would pass either way.
 func TestChmodThroughTheShareReachesTheFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod has no meaning here; the executable bit is a POSIX one")
@@ -64,17 +55,10 @@ func TestChmodThroughTheShareReachesTheFile(t *testing.T) {
 	}
 }
 
-// The same fault, on every platform: a timestamp written through the share.
-//
-// Chtimes went the same way as Chmod and its comment claimed otherwise --
-// "timestamps are read from the underlying filesystem, so a change here is
-// observable, and build tools depend on mtime". It was a no-op, so `touch`
-// through a share did nothing, make saw nothing rebuilt, and dircache's
-// write-back compares the mtimes this was failing to set.
-//
-// Windows has no executable bit to check but it has timestamps, which is why
-// this one carries the assertion everywhere.
-func TestChtimesThroughTheShareReachesTheFile(t *testing.T) {
+// A timestamp is accepted and deliberately dropped, which is the opposite of
+// what a reader expects, so it is pinned. Applying it loops with the agent's
+// replay -- 3063 events for one edit. See attrChange.Chtimes.
+func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 	if _, err := r.RegisterCWD(dir); err != nil {
@@ -88,20 +72,26 @@ func TestChtimesThroughTheShareReachesTheFile(t *testing.T) {
 	}
 	f.Close()
 
-	want := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	before, err := os.Stat(filepath.Join(dir, "stamped"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var sattr nfsclient.Sattr3
 	sattr.Mtime.SetIt = nfsclient.SetToClientTime
-	sattr.Mtime.Time.Seconds = uint32(want.Unix())
+	sattr.Mtime.Time.Seconds = uint32(time.Now().Add(-48 * time.Hour).Unix())
 
+	// Accepted: refusing reports a failure for something right to ask.
 	if err := target.Setattr("stamped", sattr); err != nil {
 		t.Fatalf("setting the time through the share: %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(dir, "stamped"))
+	after, err := os.Stat(filepath.Join(dir, "stamped"))
 	if err != nil {
-		t.Fatalf("stat on this machine: %v", err)
+		t.Fatal(err)
 	}
-	if got := info.ModTime().Truncate(time.Second); !got.Equal(want) {
-		t.Errorf("mtime on disk is %v, want %v; the write never landed", got, want)
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("the mtime moved from %v to %v; applying it closes a loop with "+
+			"the agent's replay", before.ModTime(), after.ModTime())
 	}
 }

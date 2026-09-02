@@ -191,25 +191,19 @@ func fileID(p string) uint64 {
 }
 
 // attrChange satisfies billy.Change so the workspace can issue SETATTR.
+// Returning nil instead makes go-nfs treat the export as read-only.
 //
-// Returning nil instead would make go-nfs treat the export as read-only, which
-// would defeat the entire purpose.
-//
-// It operates on the real path rather than delegating, because there is nothing
-// to delegate TO: go-billy's osfs does not implement billy.Change at all. The
-// first version asked it to and accepted a nil, which made every attribute
-// write a silent success -- a client was told its chmod landed and the file
-// never changed.
+// It works on the real path because there is nothing to delegate to: go-billy's
+// osfs implements no billy.Change. Asking it to, and accepting the nil, made
+// every attribute write a silent success.
 type attrChange struct {
 	// root is the share's directory on this machine, which share-relative
 	// names are resolved against.
 	root string
 }
 
-// Chmod sets the permissions, which is how a file becomes executable.
-//
-// Without it a binary built on a share links, is reported executable by the
-// synthesised attributes, and cannot be run: the bit was never written.
+// Chmod sets the permissions, which is how a file becomes executable. Without
+// it a binary built on a share links and cannot be run.
 func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 	target, err := c.resolve(name)
 	if err != nil {
@@ -229,22 +223,19 @@ func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 func (c *attrChange) Chown(string, int, int) error  { return nil }
 func (c *attrChange) Lchown(string, int, int) error { return nil }
 
-// Chtimes is real: timestamps are read from the underlying filesystem, so a
-// change here is observable, and build tools depend on mtime.
-func (c *attrChange) Chtimes(name string, atime, mtime time.Time) error {
-	target, err := c.resolve(name)
-	if err != nil {
-		return err
-	}
-	return os.Chtimes(target, atime, mtime)
-}
-
-// resolve turns a share-relative name into a path on this machine, refusing
-// anything that leaves the share.
+// Chtimes is accepted and NOT applied, deliberately.
 //
-// Checked on the RESULT, because filepath.Join cleans: "../.." looks like an
-// ordinary path afterwards. The name reaches here from the workspace, and the
-// workspace is not this machine's to trust with a path.
+// The agent replays changes by touching files through this export (ADR 0016).
+// Apply them and this machine's watcher sees the touch, reports it, and the
+// agent replays it again: one edit became 3063 events in integration.sh
+// section 11 when this was real. Breaking the loop needs the watcher to know
+// which changes this server caused, and it has no such mechanism.
+func (c *attrChange) Chtimes(string, time.Time, time.Time) error { return nil }
+
+// resolve turns a share-relative name into a path on this machine.
+//
+// Checked on the RESULT: filepath.Join cleans, so "../.." looks ordinary
+// afterwards, and the name came from the workspace.
 func (c *attrChange) resolve(name string) (string, error) {
 	if c.root == "" {
 		return "", fmt.Errorf("nfsserve: no share directory to write attributes in")
