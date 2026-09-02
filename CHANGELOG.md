@@ -100,6 +100,76 @@ and, for the first time, `IN_DELETE`.
 Still unsolved for `consistent` and `cached`, which are mounts and have no local
 filesystem in the path.
 
+### Building on a shared directory works
+
+A C++ build on a share died at the linker with `final close failed: Stale file
+handle`, having compiled every object file without complaint. Two bugs, one on
+top of the other.
+
+The first: a file's identity on the wire was a hash of its path, and one file
+has more than one spelling -- what a lookup joined, what a directory listing
+joined, what a chroot made relative. When the number moved under a live handle
+the kernel concluded the file had been replaced and every open descriptor on it
+went stale. `ld` sizes the output it has finished writing, and an ftruncate on a
+descriptor is the one thing the kernel cannot silently retry.
+
+Identity is now the real one the machine keeps: the device and inode on Unix,
+the volume serial and NTFS File Reference Number on Windows -- which is not on
+`os.FileInfo` but is one call away. The path hash was only ever the Windows
+fallback, applied everywhere.
+
+The second, found once the first was fixed: **every attribute written through a
+share was accepted and discarded**. The client was told its `chmod` had landed
+and nothing had changed, so a binary linked, reported itself executable, and
+could not be run.
+
+### A session lets go of the workspace without taking the endpoint
+
+An idle background session used to exit after 30 minutes, and the exit removed
+the Docker endpoint. `remote-docker`'s own commands start a session when they
+find none, so it looked self-healing -- but compose, buildx, Testcontainers and
+IDE plugins connect to a path, know nothing of sessions, and got
+`no such file or directory` with no way back. A CI runner idling between jobs
+lost its socket and failed every build afterwards while still reporting healthy.
+
+There are two tiers now, and they were previously one:
+
+- `daemonStandby`, **30 minutes by default**, drops the workspace connection and
+  releases the file watches -- what the reclaim was actually for. The endpoint
+  stays bound, and the next request through it wakes the session.
+- `daemonIdle` still ends the process, and is **off unless asked for**, because
+  ending is the part that takes the endpoint with it.
+
+Note that `0` means "the default" and not "never"; a negative duration is never.
+
+### Known: a timestamp set through a share is not applied
+
+`touch` on a shared file from inside a container does not move the file's mtime
+on your machine. It is accepted rather than refused, and dropped.
+
+Applying it closes a loop: the agent makes a container's watcher fire by
+touching files through that same share, so writing the timestamp through makes
+this machine's watcher see the touch, report it, and the agent replay it again.
+One edit became 3063 events when this was live. Breaking the loop needs the
+watcher to know which changes the file server itself caused, which it cannot
+currently tell.
+
+### The workspace chart can mount volumes you own
+
+`persistence.graph.existingClaim` and `persistence.state.existingClaim` mount a
+PersistentVolumeClaim you created instead of generating one from the
+StatefulSet's template. Unset changes nothing.
+
+Worth it because `volumeClaimTemplates` are immutable: `size` only ever applies
+to a claim that does not exist yet, so growing a volume means expanding the PVC
+by hand while the chart keeps saying the old number. That is harmless until the
+claim is recreated -- a restore, a rebuild, a new cluster -- when the template
+is what it comes back from.
+
+Expanding a volume needs none of this, and never did: a PVC's requested size is
+mutable wherever the StorageClass allows expansion, and the filesystem grows
+under a running pod.
+
 ### The numbers are reproducible now
 
 `test/bench.sh` walks, reads and writes a project-shaped tree through a real
