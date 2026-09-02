@@ -100,6 +100,54 @@ and, for the first time, `IN_DELETE`.
 Still unsolved for `consistent` and `cached`, which are mounts and have no local
 filesystem in the path.
 
+### Building on a shared directory works
+
+A C++ build died at the linker with `final close failed: Stale file handle`,
+having compiled every object file fine. Two bugs stacked.
+
+A file's identity on the wire was a hash of its path, and one file has several
+spellings, so the number moved under a live handle and the kernel decided the
+file had been replaced. It is now the real one the machine keeps: device and
+inode on Unix, volume and NTFS File Reference Number on Windows. The hash was
+only ever the Windows fallback, applied everywhere.
+
+Underneath it, every attribute written through a share was accepted and
+discarded, so a binary linked, reported itself executable, and would not run.
+
+### A session lets go of the workspace without taking the endpoint
+
+An idle session used to exit after 30 minutes and take the Docker endpoint with
+it. `remote-docker`'s own commands start a new one, so it looked self-healing,
+but compose, buildx, Testcontainers and IDE plugins connect to a path and got
+`no such file or directory` with no way back.
+
+Two tiers now:
+
+- `daemonStandby`, 30 minutes by default, drops the connection and the file
+  watches and keeps the endpoint. The next request wakes the session.
+- `daemonIdle` still ends the process, and is off unless asked for.
+
+`0` means the default, not never; a negative duration is never.
+
+### Known: a timestamp set through a share is not applied
+
+`touch` from inside a container does not move the file's mtime on your machine.
+Applying it loops: the agent makes a container's watcher fire by touching files
+through that same share, so the change comes back as an edit and is replayed
+again. One edit became 3063 events.
+
+### The workspace chart can mount volumes you own
+
+`persistence.graph.existingClaim` and `persistence.state.existingClaim` mount a
+claim you created instead of generating one. Unset changes nothing.
+
+`volumeClaimTemplates` are immutable, so `size` only applies to a claim that
+does not exist yet. Harmless until the claim is recreated -- a restore, a
+rebuild, a new cluster -- which is what the template is read for.
+
+Expanding a volume needs none of this: a PVC's size is mutable wherever the
+StorageClass allows it, and the filesystem grows under a running pod.
+
 ### The numbers are reproducible now
 
 `test/bench.sh` walks, reads and writes a project-shaped tree through a real
