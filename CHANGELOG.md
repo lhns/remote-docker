@@ -114,6 +114,12 @@ so a file created with an executable mode came back without it.
 Together they are what stopped a compiler and linker working on a shared
 directory.
 
+**Upgrading:** the identity a file reports changes with this, so a container
+holding a share across the upgrade sees its files as replaced. Restart
+containers that have one mounted. The protocol between client and agent is
+otherwise unchanged -- an older agent is refused the cache channel by name and
+reports no clock, both of which the client already expects.
+
 ### A session lets go of the workspace without taking the endpoint
 
 An idle session used to exit after 30 minutes and take the Docker endpoint with
