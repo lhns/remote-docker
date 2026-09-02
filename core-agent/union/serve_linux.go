@@ -11,23 +11,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Serve is what the re-executed child runs. It enters the daemon's mount
-// namespace, prepares the three layers, and becomes fuse-overlayfs.
+// Serve is what the re-executed child runs: enter the daemon's namespaces, make
+// the three layers, mount the lower, then run fuse-overlayfs. It does not return
+// while the union is up.
 //
-// It never returns on success, because the last thing it does is exec.
-//
-// The order is the whole of it, and each step is there for a measured reason:
-//
-//  1. unshare the filesystem state, because setns(CLONE_NEWNS) refuses a caller
-//     that shares it and every Go thread does. This also makes the following
-//     step's replacement of root and cwd private to this thread.
-//  2. enter the namespace, which sets root and cwd to the daemon's. From here
-//     an absolute path means what it means inside the daemon.
-//  3. make the directories and mount the lower. Done here rather than by the
-//     agent because the agent cannot see these paths at all.
-//  4. exec fuse-overlayfs, which mounts the union itself. It is resolved in
-//     the daemon's filesystem, which is why the image the daemon runs has to
-//     carry it (agent/internal/daemons/plan.go:38).
+// Why a separate process at all is in this package's doc; why the union is a
+// child rather than an exec is at that call. The order matters for one more
+// reason: steps 3 and 4 need the daemon's filesystem, which the agent cannot
+// see, and fuse-overlayfs is resolved there — which is why the image a daemon
+// runs has to carry it (agent/internal/daemons, DefaultImage).
 func Serve(spec Spec) error {
 	if err := spec.Validate(); err != nil {
 		return err
@@ -85,8 +77,7 @@ func enter(pid int) error {
 	// changes on purpose: afterwards /proc names the daemon's own procfs
 	// rather than the agent's.
 	//
-	// It moves nothing by itself -- setns(CLONE_NEWPID) decides where this
-	// process's CHILDREN are born, which is exactly why the union is a child.
+	// It moves nothing by itself; the union is the child born after it.
 	if err := setns(pid, "pid", unix.CLONE_NEWPID); err != nil {
 		return err
 	}

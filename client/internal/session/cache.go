@@ -17,10 +17,8 @@ import (
 // The client's end of the cache channel (ADR 0044).
 //
 // One connection per session, shared by every delegated share, and serialised:
-// each request is answered before the next is written. The agent reads them the
-// same way, and neither end is pipelined on purpose -- every op changes a mount
-// or a file, and a protocol that could reorder them would have to say what two
-// overlapping applies to one share mean.
+// each request is answered before the next is written, as the agent reads them
+// (agent/internal/sshd/cache.go, which has why).
 
 // cacheChannel is the session's link to the workspace's union mounts.
 type cacheChannel struct {
@@ -78,7 +76,14 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 // The lock spans the whole exchange rather than the write alone: the replies
 // are not tagged, so a second request written before the first was answered
 // would make every reply after it belong to the wrong caller.
-func (c *cacheChannel) do(req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, error) {
+//
+// The context bounds it, and the only honest way to end a timed-out exchange is
+// to CLOSE the channel. It is an SSH stream with no deadline to set, and a reply
+// abandoned half read leaves the next caller reading a JSON line out of the
+// middle of a tar. A wedged workspace therefore costs this channel, which the
+// session opens again on the next connection, rather than costing every request
+// after it.
+func (c *cacheChannel) do(ctx context.Context, req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, error) {
 	if err := req.Validate(); err != nil {
 		return workspace.CacheReply{}, err
 	}
@@ -86,6 +91,28 @@ func (c *cacheChannel) do(req workspace.CacheRequest, body io.Reader) (workspace
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	type answer struct {
+		reply workspace.CacheReply
+		err   error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		reply, err := c.exchange(req, body)
+		done <- answer{reply, err}
+	}()
+
+	select {
+	case a := <-done:
+		return a.reply, a.err
+	case <-ctx.Done():
+		_ = c.stream.Close()
+		return workspace.CacheReply{}, fmt.Errorf("cache: %s for %s did not answer: %w",
+			req.Op, req.Export, ctx.Err())
+	}
+}
+
+// exchange is the request and its reply, on a stream the caller has locked.
+func (c *cacheChannel) exchange(req workspace.CacheRequest, body io.Reader) (workspace.CacheReply, error) {
 	encoded, err := json.Marshal(req)
 	if err != nil {
 		return workspace.CacheReply{}, err
@@ -133,8 +160,8 @@ func (c *cacheChannel) do(req workspace.CacheRequest, body io.Reader) (workspace
 var errShareGone = errors.New("session: the workspace has no union for this share")
 
 // Changes asks what the container did to a share.
-func (c *cacheChannel) Changes(_ context.Context, export string) ([]workspace.CacheChange, error) {
-	reply, err := c.do(workspace.CacheRequest{Op: workspace.OpChanges, Export: export}, nil)
+func (c *cacheChannel) Changes(ctx context.Context, export string) ([]workspace.CacheChange, error) {
+	reply, err := c.do(ctx, workspace.CacheRequest{Op: workspace.OpChanges, Export: export}, nil)
 	if reply.Unknown {
 		return nil, errShareGone
 	}
@@ -145,8 +172,8 @@ func (c *cacheChannel) Changes(_ context.Context, export string) ([]workspace.Ca
 }
 
 // Pull fetches the named paths out of a share's cache layer, as a tar.
-func (c *cacheChannel) Pull(_ context.Context, export string, paths []string) ([]byte, error) {
-	reply, err := c.do(workspace.CacheRequest{
+func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string) ([]byte, error) {
+	reply, err := c.do(ctx, workspace.CacheRequest{
 		Op:     workspace.OpPull,
 		Export: export,
 		Paths:  paths,
@@ -158,8 +185,8 @@ func (c *cacheChannel) Pull(_ context.Context, export string, paths []string) ([
 }
 
 // Mounted names the cache volumes the workspace has a union on.
-func (c *cacheChannel) Mounted(_ context.Context) ([]string, error) {
-	reply, err := c.do(workspace.CacheRequest{Op: workspace.OpMounted}, nil)
+func (c *cacheChannel) Mounted(ctx context.Context) ([]string, error) {
+	reply, err := c.do(ctx, workspace.CacheRequest{Op: workspace.OpMounted}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -167,8 +194,8 @@ func (c *cacheChannel) Mounted(_ context.Context) ([]string, error) {
 }
 
 // Prepare mounts a share's union and answers with the path a container binds.
-func (c *cacheChannel) Prepare(_ context.Context, export, cache string, port int) (string, error) {
-	reply, err := c.do(workspace.CacheRequest{
+func (c *cacheChannel) Prepare(ctx context.Context, export, cache string, port int) (string, error) {
+	reply, err := c.do(ctx, workspace.CacheRequest{
 		Op:     workspace.OpPrepare,
 		Export: export,
 		Port:   port,
@@ -184,8 +211,8 @@ func (c *cacheChannel) Prepare(_ context.Context, export, cache string, port int
 }
 
 // Apply writes a tar into a share's cache.
-func (c *cacheChannel) Apply(_ context.Context, export string, size int64, body io.Reader) error {
-	_, err := c.do(workspace.CacheRequest{
+func (c *cacheChannel) Apply(ctx context.Context, export string, size int64, body io.Reader) error {
+	_, err := c.do(ctx, workspace.CacheRequest{
 		Op:     workspace.OpApply,
 		Export: export,
 		Bytes:  size,
@@ -201,8 +228,8 @@ func (c *cacheChannel) Codec() string { return c.codec }
 
 // Drop removes paths from a share's cache, which is what a deletion here
 // becomes.
-func (c *cacheChannel) Drop(_ context.Context, export string, paths []string) error {
-	_, err := c.do(workspace.CacheRequest{
+func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {
+	_, err := c.do(ctx, workspace.CacheRequest{
 		Op:     workspace.OpDrop,
 		Export: export,
 		Paths:  paths,

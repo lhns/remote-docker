@@ -1,10 +1,16 @@
 package session
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -57,5 +63,56 @@ func TestChunkPathsKeepsAnOversizedPath(t *testing.T) {
 	batches := chunkPaths([]string{long, "/b.go"})
 	if len(batches) != 2 || len(batches[0]) != 1 || batches[0][0] != long {
 		t.Errorf("chunkPaths split an oversized path wrongly: %v", len(batches))
+	}
+}
+
+// stalled is a stream whose peer never answers, which is what a wedged
+// workspace looks like from here.
+type stalled struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (s *stalled) Read([]byte) (int, error) {
+	<-s.closed // never answers, until Close releases it
+	return 0, io.EOF
+}
+
+func (s *stalled) Write(p []byte) (int, error) { return len(p), nil }
+
+func (s *stalled) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
+// Every timeout on this channel was inert: `do` took no context and blocked in
+// ReadString with no deadline, so fillBatchTimeout, invalidateTimeout and
+// writeBackTimeout bounded nothing and a wedged agent hung the write-back poll
+// for the life of the session.
+func TestCacheChannelHonoursItsContext(t *testing.T) {
+	stream := &stalled{closed: make(chan struct{})}
+	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, workspace.MaxCacheFrame)}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := c.Changes(ctx, workspace.ExportCWD)
+	if err == nil {
+		t.Fatal("a request against a workspace that never answers returned no error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to carry the deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("waited %s; the context was meant to bound it", elapsed)
+	}
+
+	// And the channel is CLOSED rather than left mid-exchange, because a reply
+	// abandoned half read would put the next caller in the middle of a tar.
+	select {
+	case <-stream.closed:
+	default:
+		t.Error("the timed-out exchange left the channel open")
 	}
 }

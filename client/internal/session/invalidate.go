@@ -63,8 +63,8 @@ func (i *invalidator) Lost(notice workspace.FSNotice) {
 	i.session.log().Warn("the watcher dropped changes; checking the caches against this machine",
 		"reason", notice.Reason, "dropped", notice.Dropped)
 
-	for _, export := range i.session.cachedShares() {
-		local, ok := i.session.cachedShare(export)
+	for _, export := range i.session.fills.exports() {
+		local, ok := i.session.fills.root(export)
 		if !ok {
 			continue
 		}
@@ -72,7 +72,7 @@ func (i *invalidator) Lost(notice workspace.FSNotice) {
 		// cache holds right now, where the record is what the last completed
 		// fill left. A share still filling has the more accurate of the two
 		// here.
-		go i.session.dropDeleted(export, local, i.session.manifestPaths(export))
+		go i.session.dropDeleted(export, local, i.session.fills.paths(export))
 	}
 }
 
@@ -81,7 +81,7 @@ func (i *invalidator) Lost(notice workspace.FSNotice) {
 // Cheap and non-blocking on purpose: it runs on the watcher's own path, and a
 // share with no cache -- which is most of them -- costs one map lookup.
 func (i *invalidator) Observe(event workspace.FSEvent) {
-	if _, ok := i.session.cachedShare(event.Export); !ok {
+	if _, ok := i.session.fills.root(event.Export); !ok {
 		return
 	}
 	if event.Dir {
@@ -140,7 +140,7 @@ func (i *invalidator) flush() {
 	i.mu.Unlock()
 
 	for export, paths := range pending {
-		local, ok := i.session.cachedShare(export)
+		local, ok := i.session.fills.root(export)
 		if !ok {
 			continue
 		}
@@ -202,9 +202,7 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 		// cache and in nobody's record: write-back cannot tell it from a
 		// container's own file, and a later deletion of it has nothing to
 		// reconcile against.
-		i.session.fills.mu.Lock()
-		i.session.noteSent(export, local, batch)
-		i.session.fills.mu.Unlock()
+		i.session.fills.noteSent(export, local, batch)
 	}
 }
 
@@ -212,15 +210,6 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 // what a person is waiting on: an edit that has not reached the container is
 // the thing they are watching for.
 const invalidateTimeout = 2 * time.Minute
-
-// cachedShare reports the local directory behind a delegated share, and whether
-// there is one.
-func (s *Session) cachedShare(export string) (string, bool) {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
-	local, ok := s.fills.roots[export]
-	return local, ok
-}
 
 // excludedPath reports whether any component of a share-relative path is a
 // directory the watcher does not cover.

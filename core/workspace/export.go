@@ -135,8 +135,12 @@ const CacheRole = "cache"
 
 // VolumeNameForCache is the volume holding a share's cache layer.
 func VolumeNameForCache(client, id string) string {
-	return VolumeNameForID(client, id) + "-" + CacheRole
+	return CacheVolumeName(VolumeNameForID(client, id))
 }
+
+// CacheVolumeName is the cache layer belonging to a share's own volume, for a
+// caller that already has that name and not the parts it was built from.
+func CacheVolumeName(share string) string { return share + "-" + CacheRole }
 
 // IsManagedVolume reports whether a volume name is one of ours. Used before
 // removing anything: a volume we did not create is never ours to delete.

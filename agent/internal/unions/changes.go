@@ -1,11 +1,9 @@
 package unions
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -103,52 +101,24 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+	// Resolved one at a time rather than through TarFilesFrom, because each
+	// path comes from the client and `within` is what refuses one that leaves
+	// the share. A file that has gone since it was reported is skipped by
+	// WriteTar, which is ordinary here: the container is still running.
+	files := make([]workspace.TarFile, 0, len(paths))
 	for _, p := range paths {
 		target, err := within(upper, p)
 		if err != nil {
 			return nil, err
 		}
-
-		f, err := os.Open(target)
-		if err != nil {
-			// Gone between being reported and being asked for, which is
-			// ordinary: the container is still running. The client sees it
-			// missing from the tar and leaves its own copy alone.
-			continue
-		}
-		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			_ = f.Close()
-			continue
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			_ = f.Close()
-			continue
-		}
-		header.Name = strings.TrimPrefix(p, "/")
-		header.Uid, header.Gid = 0, 0
-		header.Uname, header.Gname = "", ""
-
-		if err := tw.WriteHeader(header); err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		written, err := io.Copy(tw, io.LimitReader(f, header.Size))
-		_ = f.Close()
-		if err != nil {
-			return nil, err
-		}
-		if pad := header.Size - written; pad > 0 {
-			if _, err := tw.Write(make([]byte, pad)); err != nil {
-				return nil, err
-			}
-		}
+		files = append(files, workspace.TarFile{
+			Name: strings.TrimPrefix(p, "/"),
+			Path: target,
+		})
 	}
-	if err := tw.Close(); err != nil {
+
+	var buf bytes.Buffer
+	if err := workspace.WriteTar(files, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

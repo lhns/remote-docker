@@ -94,9 +94,7 @@ func (s Stats) Complete() bool { return s.Files == s.TotalFiles }
 // Walk finds what to cache and hands each entry over as it is found.
 //
 // Streaming rather than returning a list, so a caller can start sending before
-// the scan is done. Small files arrive in walk order and are worth sending
-// straight away; everything else the caller should hold back and sort, which is
-// what Plan does for callers that would rather have the whole answer.
+// the scan is done. Ordering what it yields is the Selector's job.
 //
 // The budget is deliberately NOT applied here. A walk that stopped at the
 // ceiling would let the DIRECTORY ORDER decide what a share caches: the first
@@ -202,9 +200,8 @@ const Sample = 100
 type Selector struct {
 	budget Budget
 
-	// entries is a max-heap by size: the largest is what eviction needs, and
-	// the smallest is what draining needs, so the heap serves the operation
-	// that happens per file and draining sorts, which happens per batch.
+	// entries is kept sorted by size, ascending: draining takes a prefix and
+	// eviction drops the tail, which is both operations in one invariant.
 	entries []Entry
 	bytes   int64
 
@@ -228,9 +225,16 @@ func (s *Selector) Add(e Entry) bool {
 		return false
 	}
 
-	s.push(e)
+	at := sort.Search(len(s.entries), func(i int) bool { return s.entries[i].Size > e.Size })
+	s.entries = append(s.entries, Entry{})
+	copy(s.entries[at+1:], s.entries[at:])
+	s.entries[at] = e
+	s.bytes += e.Size
+
 	for s.over() && len(s.entries) > 0 {
-		s.pop()
+		last := len(s.entries) - 1
+		s.bytes -= s.entries[last].Size
+		s.entries = s.entries[:last]
 	}
 	return true
 }
@@ -238,9 +242,9 @@ func (s *Selector) Add(e Entry) bool {
 // wouldExceed reports whether taking e as well would pass either bound, and
 // over reports whether what is held already has.
 //
-// Two questions, deliberately not one function: asking "would one more fit"
-// while evicting counts a file that is not there, and the first version did
-// exactly that -- it evicted the only entry it held, every time.
+// Two questions, deliberately not one function: while evicting, "would one more
+// fit" counts a file that is not there, so a buffer holding a single entry
+// evicts it every time.
 func (s *Selector) wouldExceed(e Entry) bool {
 	return s.sentFiles+len(s.entries)+1 > s.budget.files() ||
 		s.sentBytes+s.bytes+e.Size > s.budget.bytes()
@@ -252,14 +256,10 @@ func (s *Selector) over() bool {
 }
 
 // TakeSmallest removes and returns the cheapest files, up to a batch.
-//
-// Sorting here rather than keeping the buffer sorted: this happens once per
-// batch, where the heap operations happen once per file.
 func (s *Selector) TakeSmallest(maxBytes int64, maxFiles int) []Entry {
 	if len(s.entries) == 0 {
 		return nil
 	}
-	sort.SliceStable(s.entries, func(i, j int) bool { return s.entries[i].Size < s.entries[j].Size })
 
 	var (
 		took []Entry
@@ -277,7 +277,6 @@ func (s *Selector) TakeSmallest(maxBytes int64, maxFiles int) []Entry {
 	s.bytes -= size
 	s.sentBytes += size
 	s.sentFiles += len(took)
-	s.heapify()
 	return took
 }
 
@@ -287,54 +286,8 @@ func (s *Selector) Len() int { return len(s.entries) }
 // Sent is what has been handed out, which is what the share has cached.
 func (s *Selector) Sent() (files int, bytes int64) { return s.sentFiles, s.sentBytes }
 
-// The heap, kept small and explicit rather than through container/heap: the
-// interface's five methods on a named slice type are more code than this, for
-// one use.
-func (s *Selector) largest() int64 { return s.entries[0].Size }
-
-func (s *Selector) push(e Entry) {
-	s.entries = append(s.entries, e)
-	s.bytes += e.Size
-	for i := len(s.entries) - 1; i > 0; {
-		parent := (i - 1) / 2
-		if s.entries[parent].Size >= s.entries[i].Size {
-			break
-		}
-		s.entries[parent], s.entries[i] = s.entries[i], s.entries[parent]
-		i = parent
-	}
-}
-
-func (s *Selector) pop() {
-	last := len(s.entries) - 1
-	s.bytes -= s.entries[0].Size
-	s.entries[0] = s.entries[last]
-	s.entries = s.entries[:last]
-	s.sift(0)
-}
-
-func (s *Selector) heapify() {
-	for i := len(s.entries)/2 - 1; i >= 0; i-- {
-		s.sift(i)
-	}
-}
-
-func (s *Selector) sift(i int) {
-	for {
-		largest, l, r := i, 2*i+1, 2*i+2
-		if l < len(s.entries) && s.entries[l].Size > s.entries[largest].Size {
-			largest = l
-		}
-		if r < len(s.entries) && s.entries[r].Size > s.entries[largest].Size {
-			largest = r
-		}
-		if largest == i {
-			return
-		}
-		s.entries[i], s.entries[largest] = s.entries[largest], s.entries[i]
-		i = largest
-	}
-}
+// largest is the biggest file held, which is the tail of a sorted buffer.
+func (s *Selector) largest() int64 { return s.entries[len(s.entries)-1].Size }
 
 // MaxBatchFiles bounds a batch by count as well as by bytes.
 //

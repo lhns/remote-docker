@@ -148,8 +148,9 @@ type request struct {
 // unionAvailable turns the workspace's answer into a remedy.
 //
 // A reason rather than a boolean, because the remedies differ and "this
-// workspace cannot" sends somebody to the source. The empty answer is an agent
-// that predates the question, which reads as "cannot" and is the old behaviour.
+// workspace cannot" sends somebody to the source. An empty answer is an agent
+// predating workspace.Info.Union, and reads as "cannot": no workspace served a
+// union before that field existed.
 func unionAvailable(reported string) error {
 	switch reported {
 	case workspace.UnionReady:

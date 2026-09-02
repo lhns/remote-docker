@@ -17,9 +17,8 @@ import (
 // Carrying a delegated container's writes back to this machine (ADR 0044).
 //
 // The one part of this mode that writes into a user's own directory, so what it
-// does is decided in client/internal/writeback -- a pure function with the
-// rules and their tests -- and what happens here is only the fetching and the
-// writing.
+// does is decided in core-client/writeback, a pure function with the rules and
+// their tests, and what happens here is only the fetching and the writing.
 //
 // Two things it will not do, both because the cost of being wrong is somebody's
 // source tree:
@@ -50,29 +49,17 @@ func (s *Session) watchWriteBack(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, export := range s.cachedShares() {
+			for _, export := range s.fills.exports() {
 				s.writeBackShare(ctx, export)
 			}
 		}
 	}
 }
 
-// cachedShares is every delegated share this session holds.
-func (s *Session) cachedShares() []string {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
-
-	out := make([]string, 0, len(s.fills.roots))
-	for export := range s.fills.roots {
-		out = append(out, export)
-	}
-	return out
-}
-
 // writeBackShare collects one share's container writes and applies them here.
 func (s *Session) writeBackShare(ctx context.Context, export string) {
 	state, ok := s.fills.get(export)
-	local, hasRoot := s.cachedShare(export)
+	local, hasRoot := s.fills.root(export)
 	if !ok || !hasRoot {
 		return
 	}
@@ -111,14 +98,12 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 		return
 	}
 
-	actions := writeback.Decide(s.manifestOf(export), changes, s.localFile(local), s.skew(), state.Cached)
+	actions := writeback.Decide(s.fills.baselines(export), changes, s.localFile(local), s.skew(), state.Cached)
 	if len(actions) == 0 {
 		return
 	}
 
 	for _, conflict := range writeback.Conflicts(actions) {
-		// Reported whichever way it resolved. Choosing silently is the one
-		// thing this must not do.
 		s.log().Warn("a file changed in both places",
 			"path", strings.TrimPrefix(conflict.Path, "/"),
 			"kind", conflict.Kind, "outcome", conflict.Why)
@@ -146,7 +131,7 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 	// The manifest moves with the files: what was just written back is now what
 	// both sides agree on, so the next round starts from it rather than seeing
 	// the same change again.
-	s.rebaseManifest(export, local, actions)
+	s.fills.rebase(export, local, actions)
 }
 
 // localFile answers what this machine currently has at a share-relative path.
@@ -207,56 +192,17 @@ func extractInto(root string, body io.Reader) error {
 
 // manifestOf is a copy of what the fill sent for a share.
 //
-// Copied rather than handed out: the fill may still be adding to it while a
-// round of write-back is deciding, and a map read under one lock and used under
-// none is how a decision about somebody's files goes wrong at random.
-func (s *Session) manifestOf(export string) map[string]writeback.Baseline {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
-
-	out := make(map[string]writeback.Baseline, len(s.fills.manifests[export]))
-	for p, b := range s.fills.manifests[export] {
-		out[p] = b
-	}
-	return out
-}
 
 // rebaseManifest records what both sides now agree on.
 //
-// Without this the same change is decided again on the next round: the file
-// here would still differ from what the fill sent, so a write-back would look
-// like a conflict with itself.
-func (s *Session) rebaseManifest(export, local string, actions []writeback.Action) {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
-
-	manifest := s.fills.manifests[export]
-	if manifest == nil {
-		return
-	}
-	for _, a := range actions {
-		name := strings.TrimPrefix(a.Path, "/")
-		switch {
-		case a.Kind == writeback.Delete:
-			delete(manifest, a.Path)
-		case a.Kind == writeback.Write || (a.Kind == writeback.Conflict && a.Wins):
-			info, err := os.Stat(filepath.Join(local, filepath.FromSlash(name)))
-			if err != nil {
-				delete(manifest, a.Path)
-				continue
-			}
-			manifest[a.Path] = writeback.Baseline{Size: info.Size(), ModTime: info.ModTime()}
-		}
-	}
-}
 
 // skew is the workspace's clock minus this machine's, as measured when the
 // connection was made.
 //
 // Used for one comparison only: which side wrote last when both changed the
-// same file. Zero when the workspace does not report a clock, which is an agent
-// that predates the field and reads as "assume they agree" -- the old behaviour
-// and the best guess available.
+// same file. Zero when the workspace reports no clock, which is an agent
+// predating workspace.Info.Now: the two clocks are assumed to agree, as they
+// were before that field existed.
 func (s *Session) skew() time.Duration {
 	live, ok := s.gate.currentLive()
 	if !ok || live == nil || live.info.Now == 0 {

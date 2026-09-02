@@ -1,12 +1,11 @@
 package session
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +66,124 @@ func (f *fills) forget(export string) {
 	delete(f.manifests, export)
 }
 
+// noteSent records what a batch put in a share's cache.
+//
+// Read from disk again rather than taken from the walk: what matters is the
+// file as it was SENT, and one rewritten between the walk and the read would
+// otherwise be recorded as something it never was, which write-back would later
+// read as the container having changed it.
+func (f *fills) noteSent(export, localPath string, entries []cachefill.Entry) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	manifest := f.manifests[export]
+	if manifest == nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := os.Stat(filepath.Join(localPath, filepath.FromSlash(e.Path)))
+		if err != nil {
+			continue
+		}
+		manifest["/"+e.Path] = writeback.Baseline{Size: info.Size(), ModTime: info.ModTime()}
+	}
+}
+
+// paths is what this session put in a share's cache.
+func (f *fills) paths(export string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]string, 0, len(f.manifests[export]))
+	for p := range f.manifests[export] {
+		out = append(out, p)
+	}
+	return out
+}
+
+// baselines is a COPY of what the fill sent for a share.
+//
+// Copied rather than handed out: the fill may still be adding to it while a
+// round of write-back is deciding, and a map read under one lock and used under
+// none is how a decision about somebody's files goes wrong at random.
+func (f *fills) baselines(export string) map[string]writeback.Baseline {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[string]writeback.Baseline, len(f.manifests[export]))
+	for p, b := range f.manifests[export] {
+		out[p] = b
+	}
+	return out
+}
+
+// rebase records what both sides now agree on.
+//
+// Without it the same change is decided again on the next round: the file here
+// would still differ from what the fill sent, so a write-back would look like a
+// conflict with itself.
+func (f *fills) rebase(export, local string, actions []writeback.Action) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	manifest := f.manifests[export]
+	if manifest == nil {
+		return
+	}
+	for _, a := range actions {
+		name := strings.TrimPrefix(a.Path, "/")
+		switch {
+		case a.Kind == writeback.Delete:
+			delete(manifest, a.Path)
+		case a.Kind == writeback.Write || (a.Kind == writeback.Conflict && a.Wins):
+			info, err := os.Stat(filepath.Join(local, filepath.FromSlash(name)))
+			if err != nil {
+				delete(manifest, a.Path)
+				continue
+			}
+			manifest[a.Path] = writeback.Baseline{Size: info.Size(), ModTime: info.ModTime()}
+		}
+	}
+}
+
+// report is what each share has cached, for the status command.
+type report struct {
+	Local string
+	State fillState
+}
+
+// reports is one entry per delegated share this session holds.
+func (f *fills) reports() []report {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]report, 0, len(f.state))
+	for export, state := range f.state {
+		out = append(out, report{Local: f.roots[export], State: *state})
+	}
+	return out
+}
+
+// root is the local directory behind a share, and whether there is one.
+func (f *fills) root(export string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	local, ok := f.roots[export]
+	return local, ok
+}
+
+// exports is every delegated share this session holds.
+func (f *fills) exports() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]string, 0, len(f.roots))
+	for export := range f.roots {
+		out = append(out, export)
+	}
+	return out
+}
+
 func (f *fills) get(export string) (fillState, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -113,7 +230,7 @@ func (s *Session) Fill(export, localPath string) {
 		// partial fill, because it names what is in the cache, and what is in
 		// the cache is what a later deletion has to be able to remove.
 		if s.cached != nil {
-			s.cached.record(export, s.manifestPaths(export))
+			s.cached.record(export, s.fills.paths(export))
 		}
 	}()
 }
@@ -159,18 +276,6 @@ func (s *Session) dropDeleted(export, localPath string, filled []string) {
 		"export", export, "files", len(gone))
 }
 
-// manifestPaths is what this session's fill put in a share's cache.
-func (s *Session) manifestPaths(export string) []string {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
-
-	paths := make([]string, 0, len(s.fills.manifests[export]))
-	for p := range s.fills.manifests[export] {
-		paths = append(paths, p)
-	}
-	return paths
-}
-
 // fill scans the tree and uploads from it at the same time, cheapest first.
 //
 // The policy is cachefill.Stream's; this supplies what it cannot know: where
@@ -210,29 +315,9 @@ func (s *Session) sendBatch(export, localPath string, entries []cachefill.Entry,
 
 	s.fills.mu.Lock()
 	state.Sent += len(entries)
-	s.noteSent(export, localPath, entries)
 	s.fills.mu.Unlock()
+	s.fills.noteSent(export, localPath, entries)
 	return nil
-}
-
-// noteSent records what a batch put in the cache. The caller holds the lock.
-//
-// Read from disk again rather than taken from the walk: what matters is the
-// state of the file as it was SENT, and a file rewritten between the walk and
-// the read would otherwise be recorded as something it never was -- which
-// write-back would later read as the container having changed it.
-func (s *Session) noteSent(export, localPath string, entries []cachefill.Entry) {
-	manifest := s.fills.manifests[export]
-	if manifest == nil {
-		return
-	}
-	for _, e := range entries {
-		info, err := os.Stat(filepath.Join(localPath, filepath.FromSlash(e.Path)))
-		if err != nil {
-			continue
-		}
-		manifest["/"+e.Path] = writeback.Baseline{Size: info.Size(), ModTime: info.ModTime()}
-	}
 }
 
 // fillBatchTimeout bounds one send. Generous, because a batch is up to
@@ -246,89 +331,37 @@ const fillBatchTimeout = 10 * time.Minute
 // to be told how many bytes follow before they are sent. cachefill.Batches is
 // what keeps that bounded.
 func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error) {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Path)
+	}
+
 	var buf bytes.Buffer
+	if codec != workspace.CodecZstd {
+		// Written before the buffer is read: `return buf.Bytes(), WriteTar(...)`
+		// evaluates the bytes first and hands back an empty slice.
+		if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), &buf); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
 
 	// The compressor wraps the tar writer, so the tar is written once and the
-	// bytes that leave are the encoded ones -- which is what the frame's length
-	// has to describe.
-	var (
-		zw    *zstd.Encoder
-		sink  io.Writer = &buf
-		coded           = codec == workspace.CodecZstd
-	)
-	if coded {
-		var err error
-		// The default level, which is where zstd's ratio-per-second is: a
-		// source tree compresses hard enough that the link, not the CPU, is
-		// what the fill waits on.
-		zw, err = zstd.NewWriter(&buf)
-		if err != nil {
-			return nil, err
-		}
-		sink = zw
-	}
-
-	tw := tar.NewWriter(sink)
-
-	for _, e := range entries {
-		p := filepath.Join(root, filepath.FromSlash(e.Path))
-
-		// Opened before its header is written, so a file this machine cannot
-		// read -- no permission, or locked by another process, which is
-		// ordinary on Windows -- is simply absent from the batch rather than
-		// present and full of NULs.
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			_ = f.Close()
-			continue
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			_ = f.Close()
-			continue
-		}
-		header.Name = e.Path
-		// Ownership is this machine's and means nothing on the workspace,
-		// where the account's uid is what the files must belong to.
-		header.Uid, header.Gid = 0, 0
-		header.Uname, header.Gname = "", ""
-
-		if err := tw.WriteHeader(header); err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		written, err := io.Copy(tw, io.LimitReader(f, header.Size))
-		_ = f.Close()
-		if err != nil {
-			return nil, err
-		}
-		// A file that shrank while it was read leaves the entry short, which
-		// the writer reports on the next header. Pad rather than fail: one
-		// truncated file in the cache is still served correctly from the lower
-		// once it is invalidated, and a failed batch costs the whole share.
-		if pad := header.Size - written; pad > 0 {
-			if _, err := tw.Write(make([]byte, pad)); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err := tw.Close(); err != nil {
+	// bytes that leave are the encoded ones, which is what the frame's length
+	// has to describe. Default level: a source tree compresses hard enough that
+	// the link, not the CPU, is what the fill waits on.
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
 		return nil, err
 	}
-	// Both, in order: the tar's own trailer has to be inside the compressed
-	// stream, and the compressor's footer has to be written before the buffer
-	// is measured. Closing only one leaves a payload whose length is right and
-	// whose contents end early.
-	if coded {
-		if err := zw.Close(); err != nil {
-			return nil, err
-		}
+	if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), zw); err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+	// Closed before the buffer is measured, or the payload's length is right
+	// and its contents end early.
+	if err := zw.Close(); err != nil {
+		return nil, err
 	}
 	return buf.Bytes(), nil
 }
