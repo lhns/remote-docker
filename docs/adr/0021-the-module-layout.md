@@ -143,7 +143,9 @@ engine, which is the whole cost the split removes and the one `ports` never had.
 The measurable claim, and the reason this is not a matter of taste:
 
 ```bash
-(cd dircache && go list -deps ./... | grep -v lhns/remote-docker | grep -c '\.')  # 0
+# A dot in the FIRST path element is a domain, which is what a third party is.
+# Matching a dot anywhere counts crypto/internal/entropy/v1.0.0, and reports 1.
+(cd dircache && go list -deps ./... | grep -v lhns/remote-docker | grep -cE '^[^/]+\.[^/]+/')  # 0
 ```
 
 What it cost, honestly: a sixth module must be enumerated in `go.work`,
