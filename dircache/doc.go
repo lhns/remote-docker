@@ -12,7 +12,7 @@
 // own and need none of this module's answers changed.
 //
 // The one tie to this repository is core/workspace, for the change and event
-// types. They are plain structs with no dependencies, and duplicating them
-// would mean converting at every boundary; if this module is ever taken
-// elsewhere, that is the seam to cut.
+// types: plain structs with no dependencies, where duplicating them would mean
+// converting at every boundary. If this is ever taken elsewhere, that is the
+// seam to cut.
 package dircache

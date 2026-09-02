@@ -1,15 +1,8 @@
 // A cache of a directory tree, kept coherent in both directions.
 //
-// Fill a local copy from an authoritative tree in a bounded, useful order; keep
-// it coherent when either side changes; carry the consumer's writes back. That
-// sentence names no transport and no storage, which is the test for being here:
-// this module knows nothing of SSH, Docker, tar, zstd or overlayfs. Those reach
-// it through Store, and in this repository they are client/internal/session's
-// cache channel and the union the workspace mounts (ADR 0044).
-//
-// A module rather than a package so the engine can be taken WITHOUT the NFS
-// server, the file watcher and the SSH client that core-client carries. It has
-// no third-party requires at all, and that is the point of it.
+// Its own module rather than a package in core-client so the engine can be
+// taken without that module's seven third-party requires. It has none, and
+// keeping it so is the whole reason this file is separate (ADR 0021).
 module github.com/lhns/remote-docker/dircache
 
 go 1.26.3
