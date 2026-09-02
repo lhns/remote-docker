@@ -96,7 +96,7 @@ children are born rather than moving the caller.
   it, and after a hundred files the scan and the upload run together.
 - A file sent early may be larger than one found later. That is the price of not
   waiting, and eviction only ever discards files that were never going to be
-  sent. The mechanism is `client/internal/cachefill`.
+  sent. The mechanism is `core-client/cachefill`.
 
 **The budget bounds what is copied, never whether the mode runs.** "The budget
 ran out" is the same state as "the fill has not reached it yet", so there is no

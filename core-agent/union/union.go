@@ -14,21 +14,12 @@
 //
 // # Why a separate process does the work
 //
-// Everything here runs in a child rather than in the agent's own threads, and
-// that is forced twice over:
-//
-//   - `setns(CLONE_NEWNS)` refuses a caller that shares filesystem state, which
-//     every Go thread does, because entering a mount namespace also REPLACES
-//     the caller's root and working directory (the kernel's mntns_install does
-//     both). A thread could unshare its fs first, but it could then never be
-//     returned to the runtime's pool -- the same hazard core-agent/netns parks
-//     a thread for, and here it would apply to every mount.
-//   - fuse-overlayfs must live in that namespace anyway, since it performs the
-//     mount itself. Supervising it as an ordinary child is simpler than
-//     anything the agent could do from inside its own namespace.
-//
-// So the agent re-executes itself with Command as its argument, and the child
-// enters the namespace, prepares the layers and becomes fuse-overlayfs.
+// Two kernel facts force it, each stated on the code that meets it: setns
+// refuses a caller sharing filesystem state, and a thread that unshares its own
+// can never rejoin the runtime's pool (see enter, serve_linux.go); and libfuse
+// cannot read /proc/self across a pid namespace (see Serve). So the agent
+// re-executes itself with Command, and the child enters the namespace, prepares
+// the layers and becomes fuse-overlayfs.
 package union
 
 import (

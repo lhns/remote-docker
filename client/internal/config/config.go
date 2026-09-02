@@ -507,9 +507,6 @@ func applyEnv(cfg *Config) {
 			cfg.WatchBudget = n
 		}
 	}
-	// Same rule as the watch budget: a malformed number is ignored rather than
-	// fatal, because it would otherwise break every command including those
-	// that connect to nothing.
 	if v := os.Getenv(EnvCacheFiles); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.CacheFiles = n

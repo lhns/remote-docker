@@ -31,9 +31,7 @@ const (
 	// return.
 	ModeServe = "serve"
 
-	// ModeUnmount takes the union down. A separate run because umount(2), like
-	// mount(2), acts on the caller's own mount namespace, so it has to happen
-	// inside the daemon's.
+	// ModeUnmount takes the union down. A separate run; see Release.
 	ModeUnmount = "unmount"
 )
 
@@ -87,8 +85,7 @@ func FromEnv(getenv func(string) string) (Spec, string, error) {
 }
 
 // Root is the daemon's filesystem as the agent can read it, which is how the
-// agent inspects and writes into a mount it cannot enter. A zero PID means the
-// agent's own filesystem, which is the shared-daemon mode.
+// agent inspects and writes into a mount it cannot enter, as Spec.PID gives it.
 func (s Spec) Root() string {
 	if s.PID == 0 {
 		return "/"
@@ -166,8 +163,7 @@ func MountedShares(root string) []string {
 	return out
 }
 
-// Unmount takes a union down, through a child, because umount acts on the
-// caller's mount namespace.
+// Unmount takes a union down, through a child; see Release.
 func Unmount(ctx context.Context, self string, spec Spec) error {
 	cmd := exec.CommandContext(ctx, self, Command)
 	cmd.Env = append(os.Environ(), envFor(ModeUnmount, spec)...)

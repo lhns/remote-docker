@@ -17,10 +17,8 @@ import (
 // The client's end of the cache channel (ADR 0044).
 //
 // One connection per session, shared by every delegated share, and serialised:
-// each request is answered before the next is written. The agent reads them the
-// same way, and neither end is pipelined on purpose -- every op changes a mount
-// or a file, and a protocol that could reorder them would have to say what two
-// overlapping applies to one share mean.
+// each request is answered before the next is written, as the agent reads them
+// (agent/internal/sshd/cache.go, which has why).
 
 // cacheChannel is the session's link to the workspace's union mounts.
 type cacheChannel struct {

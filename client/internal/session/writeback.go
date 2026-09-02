@@ -17,9 +17,8 @@ import (
 // Carrying a delegated container's writes back to this machine (ADR 0044).
 //
 // The one part of this mode that writes into a user's own directory, so what it
-// does is decided in client/internal/writeback -- a pure function with the
-// rules and their tests -- and what happens here is only the fetching and the
-// writing.
+// does is decided in core-client/writeback, a pure function with the rules and
+// their tests, and what happens here is only the fetching and the writing.
 //
 // Two things it will not do, both because the cost of being wrong is somebody's
 // source tree:
@@ -117,8 +116,6 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 	}
 
 	for _, conflict := range writeback.Conflicts(actions) {
-		// Reported whichever way it resolved. Choosing silently is the one
-		// thing this must not do.
 		s.log().Warn("a file changed in both places",
 			"path", strings.TrimPrefix(conflict.Path, "/"),
 			"kind", conflict.Kind, "outcome", conflict.Why)
@@ -254,9 +251,9 @@ func (s *Session) rebaseManifest(export, local string, actions []writeback.Actio
 // connection was made.
 //
 // Used for one comparison only: which side wrote last when both changed the
-// same file. Zero when the workspace does not report a clock, which is an agent
-// that predates the field and reads as "assume they agree" -- the old behaviour
-// and the best guess available.
+// same file. Zero when the workspace reports no clock, which is an agent
+// predating workspace.Info.Now: the two clocks are assumed to agree, as they
+// were before that field existed.
 func (s *Session) skew() time.Duration {
 	live, ok := s.gate.currentLive()
 	if !ok || live == nil || live.info.Now == 0 {
