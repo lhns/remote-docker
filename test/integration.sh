@@ -1669,6 +1669,62 @@ else
     bad "no client is running, so the union could not be tested"
 fi
 
+echo
+echo "== 15d. a linker finishing its output on a share =="
+# The failure this exists for, verbatim from a build on a real workspace:
+#
+#   /usr/bin/ld: cmTC_438e8: final close failed: Stale file handle
+#
+# That is CMake's throwaway "does the compiler work" test, and its shape is the
+# whole diagnosis. COMPILING succeeds: the .o is created, written and closed on
+# the share. The LINK dies at close(). So writing to the export works and it is
+# specifically ld FINISHING an output file that does not, which makes it a
+# file-handle problem rather than a write problem.
+#
+# ESTALE means the server invalidated a handle the client still held. go-nfs
+# maps a handle to a PATH rather than an inode and drops it outright on REMOVE
+# and RENAME, where a real server keeps a handle valid for an open file. An
+# already-open descriptor cannot be re-resolved by the kernel the way a lookup
+# can, so it surfaces to the application.
+#
+# Nothing in this suite had ever built a binary on a share, which is how this
+# shipped. If this section PASSES, that is worth reading rather than
+# celebrating: CI runs a dind on the same machine, while the report came from a
+# workspace on another host, and the difference would then be the next thing to
+# chase.
+LINKDIR="$WORK/linkdir"
+mkdir -p "$LINKDIR"
+cat >"$LINKDIR/hello.c" <<'CEOF'
+int main(void) { return 0; }
+CEOF
+
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    # Exit codes rather than one boolean, so a failure names which of the two
+    # steps died. The reported bug passes the first and fails the second, and a
+    # section that could not tell them apart would not have caught it.
+    link_rc=0
+    dockert run --rm -v "$LINKDIR:/src" -w /src alpine:3 sh -c '
+        apk add --no-cache gcc musl-dev >/dev/null 2>&1 || exit 97
+        cc -c hello.c -o hello.o || exit 98
+        cc hello.o -o hello       || exit 99
+        test -x hello             || exit 96
+    ' >"$WORK/link.log" 2>&1 || link_rc=$?
+
+    case "$link_rc" in
+        0)  ok "a container compiles and links on a share" ;;
+        97) bad "no compiler in the container, so linking on a share was not tested"
+            sed 's/^/        /' "$WORK/link.log" ;;
+        98) bad "COMPILING on a share failed, which the report said worked"
+            sed 's/^/        /' "$WORK/link.log" ;;
+        99) bad "LINKING on a share failed, which is the reported bug"
+            sed 's/^/        /' "$WORK/link.log" ;;
+        *)  bad "linking on a share ended with $link_rc"
+            sed 's/^/        /' "$WORK/link.log" ;;
+    esac
+else
+    bad "no client is running, so linking on a share could not be tested"
+fi
+
 echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session the rest
 # of the suite used -- started detached, stopped by asking rather than by
