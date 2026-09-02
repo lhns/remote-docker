@@ -12,18 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Store is where a cache physically lives.
 //
-// Four operations, and none of them names a format: what a batch is encoded as,
-// how a path list is framed, and where the files actually sit are the
-// implementation's business. In this repository the implementation is an SSH
-// channel to a workspace holding a fuse-overlayfs union (ADR 0044), and none of
-// that appears here.
-//
-// The share id is opaque. Nothing in this module interprets it; it is what the
+// The share id is opaque: nothing here interprets it, and it is whatever the
 // Store and its far end already agree on.
 type Store interface {
 	// Apply puts one batch of files, read from root on this machine, into a
@@ -85,9 +80,10 @@ type Cache struct {
 	// Record persists what each fill sent. Nil records nothing.
 	Record Record
 
-	// Exclude are directory names never cached, which must be the same list
-	// the change source honours: the cache may only hold what can be
-	// invalidated.
+	// Exclude are directory names never cached. It MUST be the list the change
+	// source honours, and that is a rule rather than a convenience: a cache may
+	// only hold what can be invalidated, or a file changed here stays stale for
+	// the consumer until something else removes it.
 	Exclude []string
 
 	// Budget bounds what one share copies across.
@@ -101,11 +97,8 @@ type Cache struct {
 	// Log is where anything worth a person's attention goes. Nil discards.
 	Log *slog.Logger
 
-	// Quiet reports an error unless the work it belonged to was already being
-	// torn down. Nil falls back to Log at warning level.
-	Quiet func(ctx context.Context, msg string, args ...any)
-
-	// Ctx bounds the background work: fills outlive the calls that start them.
+	// Ctx bounds the background work, because fills outlive the calls that
+	// start them. quiet reads it too, to tell a shutdown from a fault.
 	Ctx context.Context
 
 	shares shares
@@ -241,16 +234,17 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *fillState)
 // leaves a share slower rather than broken.
 const fillBatchTimeout = 10 * time.Minute
 
-func (c *Cache) log() *slog.Logger {
-	if c.Log == nil {
-		return slog.New(slog.DiscardHandler)
-	}
-	return c.Log
-}
+func (c *Cache) log() *slog.Logger { return logx.Or(c.Log) }
 
+// quiet reports an error unless the work it belonged to was already being torn
+// down.
+//
+// A Store is usually one connection, so tearing that down makes every goroutine
+// still using it fail at once with EOF or a half-read stream. Those describe a
+// shutdown rather than anything wrong, and printing them after a one-shot
+// command finished is how a clean exit comes to look like a crash.
 func (c *Cache) quiet(ctx context.Context, msg string, args ...any) {
-	if c.Quiet != nil {
-		c.Quiet(ctx, msg, args...)
+	if ctx.Err() != nil || (c.Ctx != nil && c.Ctx.Err() != nil) {
 		return
 	}
 	c.log().Warn(msg, args...)

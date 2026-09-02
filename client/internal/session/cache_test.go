@@ -92,9 +92,9 @@ func (s *stalled) Close() error {
 }
 
 // Every timeout on this channel was inert: `do` took no context and blocked in
-// ReadString with no deadline, so fillBatchTimeout, invalidateTimeout and
-// writeBackTimeout bounded nothing and a wedged agent hung the write-back poll
-// for the life of the session.
+// ReadString with no deadline, so every deadline dircache puts around a call
+// bounded nothing, and a wedged agent hung the write-back poll for the life of
+// the session.
 func TestCacheChannelHonoursItsContext(t *testing.T) {
 	stream := &stalled{closed: make(chan struct{})}
 	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, workspace.MaxCacheFrame)}

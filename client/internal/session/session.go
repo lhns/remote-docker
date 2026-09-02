@@ -258,7 +258,6 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			Budget:  dircache.Budget{Files: opts.Config.CacheFiles, Bytes: opts.Config.CacheBytes},
 			Skew:    s.skew,
 			Log:     opts.Log,
-			Quiet:   s.logQuiet,
 			Ctx:     runCtx,
 		}
 		s.nfs = nfsserve.New(s.registry)

@@ -331,7 +331,14 @@ type shareCache struct {
 	session *Session
 }
 
-func (c shareCache) Fill(export, localPath string) { c.session.cache.Fill(export, localPath) }
+// Fill starts the background fill, and does nothing on a session that caches
+// nothing. The engine is a pointer where the state it replaced was a value, so
+// this is a check rather than the no-op it used to be for free.
+func (c shareCache) Fill(export, localPath string) {
+	if c.session.cache != nil {
+		c.session.cache.Fill(export, localPath)
+	}
+}
 
 // pathsPerFrame bounds how many paths one request names.
 //

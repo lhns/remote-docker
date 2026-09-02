@@ -84,7 +84,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 		// Released, because nothing is bound to it any more (ADR 0044). The
 		// cache went with it, so there is nothing to carry back and nothing to
 		// compare against: stop polling rather than ask again every five
-		// seconds for the life of the session.
+		// seconds for as long as this cache lives.
 		c.shares.forget(share)
 		return
 	}

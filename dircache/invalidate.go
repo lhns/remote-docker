@@ -193,19 +193,13 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 }
 
 // excludedPath reports whether any component of a share-relative path is a
-// directory the cache does not cover.
-//
-// The same list the fill honours, for the same reason: the cache may only hold
-// what can be invalidated, so a path nothing watches is served live and is
-// never cached in the first place.
+// directory the cache does not cover. The fill's own list, so the two cannot
+// disagree about what is cacheable.
 func excludedPath(p string, excludes []string) bool {
 	if len(excludes) == 0 {
 		return false
 	}
-	set := make(map[string]bool, len(excludes))
-	for _, e := range excludes {
-		set[strings.TrimSpace(e)] = true
-	}
+	set := excluded(excludes)
 	for _, part := range strings.Split(path.Clean(filepath.ToSlash(p)), "/") {
 		if part != "" && set[part] {
 			return true

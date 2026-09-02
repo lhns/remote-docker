@@ -21,9 +21,8 @@ import (
 
 // Budget bounds what a share will copy across.
 //
-// Not a refusal: over the ceiling the rest of the tree is simply served live.
-// "The budget ran out" and "the fill has not got there yet" are the same state,
-// so there is no size at which a delegated share stops working.
+// Not a refusal: over the ceiling the rest of the tree is simply served live,
+// so there is no size at which a share stops working.
 type Budget struct {
 	// Files is how many entries may be cached. Zero means DefaultFiles.
 	Files int
@@ -150,11 +149,7 @@ func walk(root string, excludes []string, yield func(Entry)) Stats {
 	return stats
 }
 
-// excluded is the set of directory names never cached.
-//
-// The same list the watcher uses, and that is a rule rather than a convenience:
-// the cache may only hold what the watcher can invalidate, or a file changed
-// here would stay stale in the container until something else removed it.
+// excluded is the set of directory names never cached; see Cache.Exclude.
 func excluded(names []string) map[string]bool {
 	set := make(map[string]bool, len(names))
 	for _, n := range names {

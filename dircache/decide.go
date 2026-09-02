@@ -15,7 +15,7 @@ package dircache
 // together:
 //
 //	local  != manifest  ->  you changed it
-//	cached != manifest  ->  the container changed it
+//	cached != manifest  ->  the consumer changed it
 //	cached == manifest  ->  nobody did; this is what the fill wrote
 //
 // A file only YOU changed produces no action at all: nothing has to come back,
@@ -42,10 +42,10 @@ type baseline struct {
 type kind int
 
 const (
-	// kindWrite copies the container's version onto this machine.
+	// kindWrite copies the consumer's version onto this machine.
 	kindWrite kind = iota
 
-	// kindDelete removes the file here, because the container removed it and you
+	// kindDelete removes the file here, because the consumer removed it and you
 	// did not touch it.
 	kindDelete
 
@@ -71,7 +71,7 @@ type action struct {
 	kind kind
 
 	// Wins says which side a conflict was resolved in favour of, and is only
-	// set when kind is kindConflict. True means the container's version is written
+	// set when kind is kindConflict. True means the consumer's version is written
 	// back, which is what last-writer-wins decided.
 	Wins bool
 
@@ -83,7 +83,7 @@ type action struct {
 // if it is not there.
 type localAt func(path string) (fs.FileInfo, bool)
 
-// decide works out what to do about everything the container changed.
+// decide works out what to do about everything the consumer changed.
 //
 // skew is the workspace's clock minus this machine's, measured once per
 // session. It is applied ONLY to a conflict, because every other case is
@@ -91,7 +91,7 @@ type localAt func(path string) (fs.FileInfo, bool)
 //
 // complete says whether the cache holds everything the fill chose. When it does
 // not, nothing is written back at all: a file the fill never sent looks exactly
-// like a file the container created, and the cost of that mistake is content
+// like a file the consumer created, and the cost of that mistake is content
 // appearing in somebody's source tree that they never wrote.
 func decide(
 	manifest map[string]baseline,
@@ -111,7 +111,7 @@ func decide(
 
 		// What the fill itself put there. The cache is written THROUGH the
 		// union (ADR 0044), so the filled copy of every file is in the layer
-		// this reads, beside whatever the container wrote -- and without this
+		// this reads, beside whatever the consumer wrote -- and without this
 		// every round asks for the whole tree back, which is a stream large
 		// enough to be refused rather than a small mistake.
 		//
@@ -124,7 +124,7 @@ func decide(
 			continue
 		}
 
-		// A path the fill never sent is not the container's doing as far as
+		// A path the fill never sent is not the consumer's doing as far as
 		// this can tell -- it may be a file it created, or one that was never
 		// cached. Only the first should come back, and nothing here can tell
 		// them apart, so neither does.
@@ -171,6 +171,10 @@ func decide(
 	return actions
 }
 
+// conflictReason is the one line a person reads, and it names a CONTAINER
+// rather than a consumer: this module's word is the general one, and the thing
+// on the other side of somebody's cache here is a container (ADR 0044). A
+// different Store would want different wording.
 func conflictReason(containerWins bool) string {
 	if containerWins {
 		return "both changed it; the container wrote last, so its version is kept"

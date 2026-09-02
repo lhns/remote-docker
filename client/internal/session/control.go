@@ -405,6 +405,10 @@ func humanBytes(n int64) string {
 // complete are all states a share works in, and the difference between them is
 // how much of it is local rather than whether it is right.
 func (s *Session) cacheStatus() []string {
+	if s.cache == nil {
+		return nil
+	}
+
 	var out []string
 	for _, r := range s.cache.Reports() {
 		local, stats := r.Local, r.Stats

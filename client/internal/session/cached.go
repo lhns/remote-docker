@@ -15,9 +15,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -116,23 +114,4 @@ func (s *cachedStore) warn(msg string, err error) {
 	if s.log != nil {
 		s.log.Warn(msg, "path", s.path, "err", err)
 	}
-}
-
-// deletedSince reports which of the recorded paths this machine no longer has.
-//
-// Local work only, one stat per path: the answer is about this machine's own
-// disk, and asking the workspace could not improve it.
-func deletedSince(root string, filled []string) []string {
-	var gone []string
-	for _, p := range filled {
-		name := strings.TrimPrefix(p, "/")
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				gone = append(gone, "/"+name)
-			}
-			// Any other error is this machine failing to answer about its own
-			// file, which is not evidence that the file is gone.
-		}
-	}
-	return gone
 }
