@@ -1717,7 +1717,15 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         98) bad "COMPILING on a share failed, which the report said worked"
             sed 's/^/        /' "$WORK/link.log" ;;
         99) bad "LINKING on a share failed, which is the reported bug"
-            sed 's/^/        /' "$WORK/link.log" ;;
+            sed 's/^/        /' "$WORK/link.log"
+            # The server sends no STALE for this -- every NFS3ERR_STALE in
+            # go-nfs comes from FromHandle, and instrumenting that logged
+            # nothing. So the CLIENT decided the file was gone, and the Linux
+            # NFS client says why in the kernel log when it does: an inode
+            # number that changed under a handle reads as the file having been
+            # replaced.
+            echo "        -- kernel, nfs client --"
+            sudo dmesg 2>/dev/null | grep -iE "nfs|stale|fileid|inode number" | tail -20 | sed 's/^/        /' ;;
         *)  bad "linking on a share ended with $link_rc"
             sed 's/^/        /' "$WORK/link.log" ;;
     esac
