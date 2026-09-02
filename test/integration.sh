@@ -1707,7 +1707,9 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         apk add --no-cache gcc musl-dev >/dev/null 2>&1 || exit 97
         cc -c hello.c -o hello.o || exit 98
         cc hello.o -o hello       || exit 99
-        test -x hello             || exit 96
+        # Not just that ld finished: a linker whose output cannot be run has
+        # not done its job, and a share reports SYNTHESISED permissions.
+        test -x hello || { echo "not executable:"; ls -l hello .; id; exit 96; }
     ' >"$WORK/link.log" 2>&1 || link_rc=$?
 
     case "$link_rc" in
