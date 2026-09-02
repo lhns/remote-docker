@@ -122,17 +122,14 @@ type Config struct {
 
 // DefaultDaemonIdle is how long a background session outlives its last use.
 //
-// NEVER, and it was half an hour until 2026-09-02. The reclaim removed the
-// ENDPOINT, which is what compose, buildx, Testcontainers and IDE plugins are
-// told to point at; they connect to a path, know nothing of sessions, and only
-// a remote-docker command could bring one back.
+// Never, because the reclaim takes the ENDPOINT with it, and the endpoint is
+// what compose, buildx, Testcontainers and IDE plugins connect to. They know
+// nothing of sessions, so only a remote-docker command can rebuild one.
 //
-// It reclaimed little. Session.sweepIdle already releases the connection on its
-// own timer and reopens it per request, invisibly, so exiting on top of that
-// saved an idle process and cost the integration surface.
+// It reclaims little in return: Session.sweepIdle already releases the
+// connection on its own timer and reopens it per request, invisibly.
 //
-// Still honoured when set: "let go of this workspace after an hour" is
-// reasonable on a laptop. It is now a choice rather than the default.
+// Still honoured when set, which is reasonable on a laptop.
 const DefaultDaemonIdle = DaemonIdleNever
 
 // DaemonIdleNever is any non-positive duration; idleExpired treats <= 0 as
