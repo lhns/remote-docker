@@ -235,7 +235,7 @@ echo "== 5. does a watcher inside the container see it? =="
 # If it does, ADR 0014 -- open since the beginning, because NFS carries no
 # change notification -- closes for these shares, and closes properly: the write
 # IS the event rather than a poke that approximates one.
-if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./probes/watchprobe); then
+if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./watchprobe); then
     # Through the merged mount, not into the lower: whether a directory created
     # in the lower shows up is section 6's question, and this section must not
     # depend on its answer.
@@ -417,7 +417,7 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     info "one file that misses and falls through to NFS: ${lower_via_fuse}s"
 
     # The ADR 0014 claim, asked of the union we would actually ship.
-    if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./probes/watchprobe); then
+    if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./watchprobe); then
         sudo mkdir -p "$FUSE_MERGED/fusewatch"
         echo "before" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
         if docker run -d --name union-probe-fusewatch -v "$FUSE_MERGED:/w"             -v "$WORK/watchprobe:/watchprobe" alpine:3             /watchprobe -timeout 25s /w/fusewatch >/dev/null 2>&1; then

@@ -85,7 +85,7 @@ but is not needed.
 ### Which syscalls, and why those
 
 The matrix, measured in CI against a real dind daemon and a real kernel NFS
-mount (`test/integration.sh` section 11d, `core/probes/pokeprobe`):
+mount (`test/integration.sh` section 11d, `test/probes/pokeprobe`):
 
 | poke | events the container's watcher saw |
 |---|---|
@@ -197,7 +197,7 @@ owning one end and a marker.
 - The agent gains a second thing it does with paths from the client, so
   `FSEvent.Validate` is checked on **both** sides — this stream tells a root
   process which path to touch, and neither end may assume the other checked.
-- `core/probes/watchprobe` reads raw inotify rather than using fsnotify, permanently.
+- `test/probes/watchprobe` reads raw inotify rather than using fsnotify, permanently.
   fsnotify's inotify mask omits `IN_OPEN` and `IN_CLOSE_WRITE`, so the library
   cannot observe the primitive this record is chiefly about. A probe that
   cannot see the thing under test reports "nothing happened" and is believed.

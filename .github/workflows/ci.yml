@@ -41,7 +41,7 @@ jobs:
       # The repo root is deliberately not a module (ADR 0021), so setup-go's
       # default key looks for a go.mod that is not there and restores nothing:
       # every job re-downloaded the whole graph, 250 `go: downloading` lines in
-      # this one. Key the cache on the five real modules instead.
+      # this one. Key the cache on the real modules instead.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
@@ -52,6 +52,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
 
       - name: gofmt
         run: |
@@ -69,7 +70,7 @@ jobs:
       - name: go vet
         run: |
           set -eux
-          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./test/probes; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -78,7 +79,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in core agent core-agent core-client client dircache; do
+          for mod in core agent core-agent core-client client dircache test/probes; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -119,7 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on the five modules because the root is not one. See ci.yml.
+      # Keyed on the modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
@@ -130,6 +131,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
 
       - name: go test
         shell: bash
@@ -144,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Keyed on the five modules because the root is not one. See ci.yml.
+      # Keyed on the modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
@@ -155,6 +157,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
       # Built from source with this project's own toolchain rather than taken
       # from the action, whose pinned binary is compiled against an older Go
       # and refuses to load a module targeting a newer one.
@@ -168,7 +171,7 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./test/probes; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
           # The agent and core-agent both carry Linux-only files (netns, the unix
@@ -208,7 +211,7 @@ jobs:
           # has no tags to describe against.
           fetch-depth: 0
 
-      # Keyed on the five modules because the root is not one. See ci.yml.
+      # Keyed on the modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
@@ -219,6 +222,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
 
       # Every package of every module, not just the binary: a dependency that
       # quietly needs cgo, or a build-tagged file with no counterpart for this

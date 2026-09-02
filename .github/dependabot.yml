@@ -71,6 +71,13 @@ updates:
     schedule:
       interval: weekly
 
+  # The integration suites' instruments. Not linked into anything and not
+  # shipped; it carries x/sys because it reads raw inotify.
+  - package-ecosystem: gomod
+    directory: /test/probes
+    schedule:
+      interval: weekly
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

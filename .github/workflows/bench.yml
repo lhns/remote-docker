@@ -68,6 +68,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
 
       - name: load the nfs client module
         run: sudo modprobe nfs

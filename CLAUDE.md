@@ -27,7 +27,10 @@ almost none of the repository.
 core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
                          NO third-party dependency at all; the one x/sys in
                          go.mod is the probes reading raw inotify.
-  workspace/             THE CONTRACT, imported by both binaries
+  workspace/             THE NAMES AND NUMBERS both ends derive: share ids,
+                         export paths, volume names, mount options, labels,
+                         uid<->port, this machine's id, and the workspace-info
+                         handshake. Imported by both binaries
   tunnel/                THE AGREEMENT (ADR 0021): the one bidirectional copy
                          and the one answer to what half-closing means, plus
                          the names both ends speak. Imports no SSH library --
@@ -36,7 +39,11 @@ core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
   logx/                  the one log handler, so both look the same. PUBLIC,
                          not internal/: every module imports it, and under
                          core/internal/ Go would let only core/ reach it.
-  probes/                watchprobe, pokeprobe -- Go, so they need a module
+  notify/                THE CHANGE CHANNEL: its name, its version, its frames
+  cache/                 THE CACHE CHANNEL: its name, its version, its frames,
+                         its codecs and the tar its payload carries. A protocol
+                         package holds the whole agreement -- the name and the
+                         version it negotiates cannot sit in two packages
 
 dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          local copy of a tree in a bounded order, invalidate
@@ -109,22 +116,27 @@ deploy/                  compose, swarm, and the systemd unit for a VM
 charts/                  the Helm chart, for the same agent on Kubernetes
                          (ADR 0035). One privileged pod, two volumes, an
                          ingress in front of the WebSocket port
+test/probes/go.mod       the integration suites' instruments (watchprobe,
+                         pokeprobe, udpecho). Its own module because in core/
+                         it was the ONLY reason that module -- the one every
+                         other module imports -- had a dependency at all.
+                         Linked into nothing and shipped in nothing.
 docs/adr/                architecture decision records
 ```
 
 ## Build and test
 
 ```bash
-# SIX MODULES (ADR 0021), and `./...` stops at a module boundary,
+# SEVEN MODULES (ADR 0021), and `./...` stops at a module boundary,
 # so the loop is the only thing that covers the repository. Running it at the
 # root fails outright, which is the point: there is no module there to build.
-for m in ./core ./dircache ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
+for m in ./core ./dircache ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && go build ./... && go test ./...); done
 
-# lint, eight passes: one per module, plus the agent AND core-agent under
+# lint, nine passes: one per module, plus the agent AND core-agent under
 # Linux. Both carry Linux-only files -- session handling, netns, the unix
 # provisioner, the inotify poker -- which a lint on the development machine
 # does not see at all. CI does, and will fail on what you did not lint.
-for m in ./core ./dircache ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
+for m in ./core ./dircache ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && golangci-lint run ./...); done
 for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
@@ -166,7 +178,7 @@ helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
-`go.work` ties the six together for editors and local commands. CI and the
+`go.work` ties the seven together for editors and local commands. CI and the
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
@@ -747,7 +759,7 @@ premise of the project, and it applies to building it too. So:
   changes on every redeploy, so adopting by it orphans every account's daemon
   on the first `compose up -d` -- still running, unadoptable, holding their
   users' work, while the agent starts a second set under names already taken.
-- **`core/probes/watchprobe` reads raw inotify, not fsnotify.** fsnotify's mask omits
+- **`test/probes/watchprobe` reads raw inotify, not fsnotify.** fsnotify's mask omits
   `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
   primitive under test and would report "nothing happened" convincingly.
 
