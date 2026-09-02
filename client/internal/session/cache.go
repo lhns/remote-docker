@@ -1,6 +1,7 @@
 package session
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
@@ -8,17 +9,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/lhns/remote-docker/core-client/cachefill"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/dircache"
 )
 
-// The client's end of the cache channel (ADR 0044).
+// The client's end of the cache channel (ADR 0044), which is this project's
+// dircache.Store: the wire format, the tar and its codec are all in here, and
+// none of them is visible to the policy that drives it.
 //
 // One connection per session, shared by every delegated share, and serialised:
 // each request is answered before the next is written, as the agent reads them
@@ -159,15 +163,11 @@ func (c *cacheChannel) exchange(req workspace.CacheRequest, body io.Reader) (wor
 	return reply, nil
 }
 
-// errShareGone is the workspace saying it has no union for a share, which is a
-// reason to stop asking rather than to retry.
-var errShareGone = errors.New("session: the workspace has no union for this share")
-
 // Changes asks what the container did to a share.
 func (c *cacheChannel) Changes(ctx context.Context, export string) ([]workspace.CacheChange, error) {
 	reply, err := c.do(ctx, workspace.CacheRequest{Op: workspace.OpChanges, Export: export}, nil)
 	if reply.Unknown {
-		return nil, errShareGone
+		return nil, dircache.ErrShareGone
 	}
 	if err != nil {
 		return nil, err
@@ -175,10 +175,11 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]workspace.
 	return reply.Changes, nil
 }
 
-// Pull fetches the named paths out of a share's cache layer, as a tar.
-// Pull fetches the named paths, calling into once per request it takes to ask
-// for them. Chunked here for the same reason Drop is.
-func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(io.Reader) error) error {
+// Pull fetches the named paths, calling into once per file.
+//
+// Chunked for the same reason Drop is, and unpacked here because the tar is
+// this channel's own encoding: it built the one going the other way.
+func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(dircache.File) error) error {
 	for _, batch := range chunkPaths(paths) {
 		reply, err := c.do(ctx, workspace.CacheRequest{
 			Op:     workspace.OpPull,
@@ -188,11 +189,40 @@ func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, 
 		if err != nil {
 			return err
 		}
-		if err := into(bytes.NewReader(reply.Payload)); err != nil {
+		if err := untar(bytes.NewReader(reply.Payload), into); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// untar hands each regular file in an archive over.
+//
+// Only regular files: a written-back directory is made by the writer as it
+// needs one, and nothing else in a cache layer can be carried to another
+// machine safely.
+func untar(body io.Reader, into func(dircache.File) error) error {
+	tr := tar.NewReader(body)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		if err := into(dircache.File{
+			Path:    "/" + strings.TrimPrefix(header.Name, "/"),
+			ModTime: header.ModTime,
+			Mode:    header.FileInfo().Mode(),
+			Body:    tr,
+		}); err != nil {
+			return err
+		}
+	}
 }
 
 // Mounted names the cache volumes the workspace has a union on.
@@ -227,7 +257,7 @@ func (c *cacheChannel) Prepare(ctx context.Context, export, cache string, port i
 // to describe what is ACTUALLY sent, which means whatever builds the tar has to
 // know how it was encoded. Handing the caller that fact made it the caller's
 // problem in two files.
-func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []cachefill.Entry) error {
+func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []dircache.Entry) error {
 	body, err := tarOf(root, entries, c.codec)
 	if err != nil {
 		return err
@@ -278,6 +308,17 @@ func (s *Session) liveCache() *cacheChannel {
 	return live.cacheChan
 }
 
+// liveStore is what dircache is given, and the nil check is why it is not
+// liveCache itself: a typed nil pointer in an interface is not a nil interface,
+// so handing one over would make every call a panic instead of a no-op.
+func (s *Session) liveStore() (dircache.Store, bool) {
+	live := s.liveCache()
+	if live == nil {
+		return nil, false
+	}
+	return live, true
+}
+
 // shareCache is what the rewriter is handed: the channel for the request the
 // container is waiting on, and the session for the fill it is not.
 //
@@ -290,7 +331,7 @@ type shareCache struct {
 	session *Session
 }
 
-func (c shareCache) Fill(export, localPath string) { c.session.Fill(export, localPath) }
+func (c shareCache) Fill(export, localPath string) { c.session.cache.Fill(export, localPath) }
 
 // pathsPerFrame bounds how many paths one request names.
 //
@@ -307,7 +348,7 @@ const pathsPerFrame = workspace.MaxCacheFrame / 2
 // In memory because the channel frames a payload by length: the workspace has
 // to be told how many bytes follow before they are sent. cachefill.Batches is
 // what keeps that bounded.
-func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error) {
+func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) {
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		names = append(names, e.Path)

@@ -279,3 +279,7 @@ replace github.com/lhns/remote-docker/core-client => ../core-client
 // nothing imports directly and MVS then picks this one back up from a
 // transitive dependency. Excluding it forces a post-split version.
 exclude google.golang.org/genproto v0.0.0-20230306155012-7f2fa6fef1f4
+
+require github.com/lhns/remote-docker/dircache v0.0.0
+
+replace github.com/lhns/remote-docker/dircache => ../dircache

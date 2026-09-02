@@ -29,6 +29,7 @@ import (
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/dircache"
 )
 
 // Options configure a session.
@@ -159,15 +160,11 @@ type Session struct {
 	// to restore nothing.
 	shares *shareStore
 
-	// invalidator drives the cache from the watcher, and is held so Close can
-	// stop its batching timer: a 150ms timer armed as a session ends would
-	// otherwise fire against a session that has gone.
-	invalidator *invalidator
-
-	// cached is what each delegated share's fill last sent, across sessions.
-	// It is what makes a deletion made while nothing was running removable
-	// from the cache (ADR 0044). Nil on a query session, which fills nothing.
-	cached *cachedStore
+	// cache fills, invalidates and writes back the caches of delegated shares
+	// (ADR 0044). The engine is dircache and knows nothing of this session;
+	// what is wired into it below is where the files are and how to reach a
+	// workspace. Nil on a query session, which caches nothing.
+	cache *dircache.Cache
 
 	// watch outlives any single connection too, and for the same reason the
 	// registry does: watches are a local resource, and re-walking a large
@@ -186,11 +183,6 @@ type Session struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	once   sync.Once
-
-	// fills tracks the background cache fills of delegated shares (ADR 0044).
-	// One per share, started when the share is first mounted and outliving the
-	// request that asked for it.
-	fills fills
 }
 
 // liveConn is everything that exists only while connected.
@@ -258,8 +250,17 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	// a directory.
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
-		s.cached = newCachedStore(config.CachedPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
+		s.cache = &dircache.Cache{
+			Store:   s.liveStore,
+			Record:  newCachedStore(config.CachedPath(opts.Config.Name), opts.Log),
+			Exclude: opts.WatchExclude,
+			Budget:  dircache.Budget{Files: opts.Config.CacheFiles, Bytes: opts.Config.CacheBytes},
+			Skew:    s.skew,
+			Log:     opts.Log,
+			Quiet:   s.logQuiet,
+			Ctx:     runCtx,
+		}
 		s.nfs = nfsserve.New(s.registry)
 	}
 
@@ -285,8 +286,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		// is what ModePartial is about, but it can be applied to a cache
 		// exactly, and a cached copy of a file that is gone is the one way
 		// this mode can be wrong rather than slow (ADR 0044).
-		s.invalidator = &invalidator{session: s}
-		s.watch.SetObserver(s.invalidator)
+		s.watch.SetObserver(s.cache)
 		s.watch.Sync(sharesOf(s.registry))
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}

@@ -1,4 +1,4 @@
-package session
+package dircache
 
 import (
 	"testing"
@@ -7,8 +7,8 @@ import (
 )
 
 // The cache may hold only what the watcher covers, so a path under an excluded
-// directory has nothing to invalidate: it was never cached, and asking the
-// workspace to drop it would be a round trip to say nothing.
+// directory has nothing to invalidate: it was never cached, and asking for it
+// to be dropped would be a round trip to say nothing.
 func TestExcludedPath(t *testing.T) {
 	excludes := []string{".git", "node_modules"}
 
@@ -31,24 +31,22 @@ func TestExcludedPath(t *testing.T) {
 		}
 	}
 
-	// No excludes means nothing is skipped, which is what a session with the
-	// list emptied deliberately asks for.
+	// No excludes means nothing is skipped, which is what an emptied list
+	// deliberately asks for.
 	if excludedPath("/.git/HEAD", nil) {
 		t.Error("an empty exclude list skipped something")
 	}
 }
 
-// What the invalidator decides to do with an event, without a workspace to send
-// it to: which paths it batches, and whether each is a removal or a rewrite.
+// What an event becomes, with no store to send it to: which paths it batches, and whether each is a removal or a rewrite.
 func TestInvalidatorBatchesByPath(t *testing.T) {
 	const share = "/m/00112233445566ff"
-	s := &Session{}
-	s.fills.set(share, "/home/alice/project", &fillState{})
+	c := &Cache{}
+	c.shares.set(share, "/home/alice/project", &fillState{})
+	defer c.Stop()
 
-	i := &invalidator{session: s}
-	defer i.stop()
 	observe := func(p string, op workspace.FSOp) {
-		i.Observe(workspace.FSEvent{Export: share, Path: p, Op: op})
+		c.Observe(workspace.FSEvent{Export: share, Path: p, Op: op})
 	}
 
 	observe("/a.go", workspace.OpWrite)
@@ -63,9 +61,9 @@ func TestInvalidatorBatchesByPath(t *testing.T) {
 	observe("/finally-gone.go", workspace.OpWrite)
 	observe("/finally-gone.go", workspace.OpRemove)
 
-	i.mu.Lock()
-	pending := i.pending[share]
-	i.mu.Unlock()
+	c.inval.mu.Lock()
+	pending := c.inval.pending[share]
+	c.inval.mu.Unlock()
 
 	for path, wantDeleted := range map[string]bool{
 		"/a.go":            false,
@@ -88,17 +86,16 @@ func TestInvalidatorBatchesByPath(t *testing.T) {
 // A share with no cache costs one map lookup and nothing else. Most shares are
 // not delegated, and this runs on the watcher's own path.
 func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
-	s := &Session{}
-	s.fills.set("/m/00112233445566ff", "/home/alice/project", &fillState{})
-	i := &invalidator{session: s}
-	defer i.stop()
+	c := &Cache{}
+	c.shares.set("/m/00112233445566ff", "/home/alice/project", &fillState{})
+	defer c.Stop()
 
-	i.Observe(workspace.FSEvent{Export: "/cwd", Path: "/other.go", Op: workspace.OpWrite})
+	c.Observe(workspace.FSEvent{Export: "/cwd", Path: "/other.go", Op: workspace.OpWrite})
 
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if len(i.pending) != 0 {
-		t.Errorf("batched %v for a share with no cache", i.pending)
+	c.inval.mu.Lock()
+	defer c.inval.mu.Unlock()
+	if len(c.inval.pending) != 0 {
+		t.Errorf("batched %v for a share with no cache", c.inval.pending)
 	}
 }
 
@@ -106,34 +103,32 @@ func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 // as its own event.
 func TestInvalidatorIgnoresDirectories(t *testing.T) {
 	const share = "/cwd"
-	s := &Session{}
-	s.fills.set(share, "/home/alice/project", &fillState{})
-	i := &invalidator{session: s}
-	defer i.stop()
+	c := &Cache{}
+	c.shares.set(share, "/home/alice/project", &fillState{})
+	defer c.Stop()
 
-	i.Observe(workspace.FSEvent{Export: share, Path: "/pkg", Op: workspace.OpCreate, Dir: true})
+	c.Observe(workspace.FSEvent{Export: share, Path: "/pkg", Op: workspace.OpCreate, Dir: true})
 
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if len(i.pending) != 0 {
-		t.Errorf("batched %v for a directory", i.pending)
+	c.inval.mu.Lock()
+	defer c.inval.mu.Unlock()
+	if len(c.inval.pending) != 0 {
+		t.Errorf("batched %v for a directory", c.inval.pending)
 	}
 }
 
-// A path the watcher does not cover is never cached, so there is nothing to
+// A path the change source does not cover is never cached, so there is nothing to
 // invalidate and no reason to spend a round trip saying so.
 func TestInvalidatorIgnoresExcludedPaths(t *testing.T) {
 	const share = "/cwd"
-	s := &Session{opts: Options{WatchExclude: []string{".git"}}}
-	s.fills.set(share, "/home/alice/project", &fillState{})
-	i := &invalidator{session: s}
-	defer i.stop()
+	c := &Cache{Exclude: []string{".git"}}
+	c.shares.set(share, "/home/alice/project", &fillState{})
+	defer c.Stop()
 
-	i.Observe(workspace.FSEvent{Export: share, Path: "/.git/index", Op: workspace.OpWrite})
+	c.Observe(workspace.FSEvent{Export: share, Path: "/.git/index", Op: workspace.OpWrite})
 
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if len(i.pending) != 0 {
-		t.Errorf("batched %v for an excluded path", i.pending)
+	c.inval.mu.Lock()
+	defer c.inval.mu.Unlock()
+	if len(c.inval.pending) != 0 {
+		t.Errorf("batched %v for an excluded path", c.inval.pending)
 	}
 }

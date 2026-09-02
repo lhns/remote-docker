@@ -15,8 +15,8 @@ import (
 
 	"archive/tar"
 	"github.com/klauspost/compress/zstd"
-	"github.com/lhns/remote-docker/core-client/cachefill"
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/dircache"
 	"os"
 	"path/filepath"
 )
@@ -135,7 +135,7 @@ func TestTarOfEncodesWhatItSays(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	entries := []cachefill.Entry{{Path: "main.go", Size: int64(len(body))}}
+	entries := []dircache.Entry{{Path: "main.go", Size: int64(len(body))}}
 
 	plain, err := tarOf(root, entries, workspace.CodecNone)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestTarOfClosesTheCompressor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	zipped, err := tarOf(root, []cachefill.Entry{{Path: "a.go", Size: 1}}, workspace.CodecZstd)
+	zipped, err := tarOf(root, []dircache.Entry{{Path: "a.go", Size: 1}}, workspace.CodecZstd)
 	if err != nil {
 		t.Fatalf("tarOf: %v", err)
 	}
@@ -202,31 +202,5 @@ func tarNames(t *testing.T, r io.Reader) []string {
 			t.Fatalf("reading the batch: %v", err)
 		}
 		names = append(names, header.Name)
-	}
-}
-
-// A share is released when nothing is bound to it (ADR 0044), and the cache
-// goes with it. A session that cannot tell "no union for that" from a transient
-// failure asks about it every five seconds for the rest of its life -- which
-// the benchmark showed as twelve refusals in the workspace's log for shares
-// whose containers had long gone.
-func TestFillsForget(t *testing.T) {
-	var f fills
-	f.set("/m/aaaa", "/home/me/a", &fillState{})
-	f.set("/m/bbbb", "/home/me/b", &fillState{})
-
-	f.forget("/m/aaaa")
-
-	if _, ok := f.get("/m/aaaa"); ok {
-		t.Error("a forgotten share is still tracked")
-	}
-	if _, ok := f.roots["/m/aaaa"]; ok {
-		t.Error("a forgotten share kept its root")
-	}
-	if _, ok := f.manifests["/m/aaaa"]; ok {
-		t.Error("a forgotten share kept its manifest")
-	}
-	if _, ok := f.get("/m/bbbb"); !ok {
-		t.Error("forgetting one share dropped another")
 	}
 }

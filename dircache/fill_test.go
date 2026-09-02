@@ -1,4 +1,4 @@
-package cachefill
+package dircache
 
 import (
 	"errors"
@@ -43,7 +43,7 @@ func TestWalkSkipsWhatTheWatcherDoesNot(t *testing.T) {
 	})
 
 	var found []Entry
-	stats := Walk(root, []string{".git", "node_modules"}, func(e Entry) { found = append(found, e) })
+	stats := walk(root, []string{".git", "node_modules"}, func(e Entry) { found = append(found, e) })
 
 	if got := paths(found); len(got) != 1 || got[0] != "main.go" {
 		t.Errorf("walked %v, want only main.go", got)
@@ -62,7 +62,7 @@ func TestWalkYieldsOnlyRegularFiles(t *testing.T) {
 	}
 
 	var found []Entry
-	Walk(root, nil, func(e Entry) { found = append(found, e) })
+	walk(root, nil, func(e Entry) { found = append(found, e) })
 	if got := paths(found); len(got) != 1 || got[0] != "pkg/deep/file.go" {
 		t.Errorf("walked %v, want the one file", got)
 	}
@@ -71,12 +71,12 @@ func TestWalkYieldsOnlyRegularFiles(t *testing.T) {
 // The walk does NOT apply the budget, and that is the point: one that stopped
 // at the ceiling would let the directory order decide what a share caches --
 // the first files it reached, however large, and never the small ones behind
-// them. Choosing needs to see the candidates, so the Selector holds the budget.
+// them. Choosing needs to see the candidates, so the selector holds the budget.
 func TestWalkYieldsEverythingAndLetsTheSelectorChoose(t *testing.T) {
 	root := tree(t, map[string]int{"a.bin": 900, "b.go": 10, "c.go": 10})
 
 	var found []Entry
-	stats := Walk(root, nil, func(e Entry) { found = append(found, e) })
+	stats := walk(root, nil, func(e Entry) { found = append(found, e) })
 
 	if len(found) != 3 || stats.TotalFiles != 3 {
 		t.Errorf("walked %v with stats %+v, want all three", paths(found), stats)
@@ -86,13 +86,13 @@ func TestWalkYieldsEverythingAndLetsTheSelectorChoose(t *testing.T) {
 // The buffer keeps the smallest files seen so far, so the upload can start
 // before the scan ends and still send the cheapest first.
 func TestSelectorKeepsTheSmallest(t *testing.T) {
-	s := NewSelector(Budget{Files: 3, Bytes: 1 << 20})
+	s := newSelector(Budget{Files: 3, Bytes: 1 << 20})
 
 	for _, size := range []int64{500, 10, 900, 20, 700, 30} {
-		s.Add(Entry{Path: "f", Size: size})
+		s.add(Entry{Path: "f", Size: size})
 	}
 
-	got := s.TakeSmallest(1<<20, 100)
+	got := s.takeSmallest(1<<20, 100)
 	if len(got) != 3 {
 		t.Fatalf("took %d entries, want the three that fit", len(got))
 	}
@@ -108,15 +108,15 @@ func TestSelectorKeepsTheSmallest(t *testing.T) {
 // room: a tree of tiny files must not put millions of entries in memory before
 // the byte ceiling is anywhere near.
 func TestSelectorEvictsTheLargest(t *testing.T) {
-	s := NewSelector(Budget{Files: 100, Bytes: 20})
+	s := newSelector(Budget{Files: 100, Bytes: 20})
 
 	// big fits when it arrives, so it is taken; the two that follow do not fit
 	// beside it, and it is what makes room for them.
-	s.Add(Entry{Path: "big", Size: 15})
-	s.Add(Entry{Path: "small", Size: 4})
-	s.Add(Entry{Path: "smaller", Size: 3})
+	s.add(Entry{Path: "big", Size: 15})
+	s.add(Entry{Path: "small", Size: 4})
+	s.add(Entry{Path: "smaller", Size: 3})
 
-	got := s.TakeSmallest(1000, 100)
+	got := s.takeSmallest(1000, 100)
 	if len(got) != 2 || got[0].Path != "smaller" || got[1].Path != "small" {
 		t.Errorf("kept %v, want the two small ones after evicting big", paths(got))
 	}
@@ -125,13 +125,13 @@ func TestSelectorEvictsTheLargest(t *testing.T) {
 // A file that cannot fit and is larger than everything held is refused rather
 // than evicting something smaller to make room for it.
 func TestSelectorRefusesAWorseCandidate(t *testing.T) {
-	s := NewSelector(Budget{Files: 1, Bytes: 1000})
-	s.Add(Entry{Path: "small", Size: 10})
+	s := newSelector(Budget{Files: 1, Bytes: 1000})
+	s.add(Entry{Path: "small", Size: 10})
 
-	if s.Add(Entry{Path: "huge", Size: 900}) {
+	if s.add(Entry{Path: "huge", Size: 900}) {
 		t.Error("a larger file displaced a smaller one")
 	}
-	if got := s.TakeSmallest(1000, 100); len(got) != 1 || got[0].Path != "small" {
+	if got := s.takeSmallest(1000, 100); len(got) != 1 || got[0].Path != "small" {
 		t.Errorf("kept %v, want the small one", paths(got))
 	}
 }
@@ -139,18 +139,18 @@ func TestSelectorRefusesAWorseCandidate(t *testing.T) {
 // What has already gone counts against the budget: the ceiling is on what a
 // share caches in total, not on what happens to be waiting.
 func TestSelectorCountsWhatItHasSent(t *testing.T) {
-	s := NewSelector(Budget{Files: 2, Bytes: 1000})
+	s := newSelector(Budget{Files: 2, Bytes: 1000})
 
-	s.Add(Entry{Path: "a", Size: 10})
-	if got := s.TakeSmallest(1000, 100); len(got) != 1 {
+	s.add(Entry{Path: "a", Size: 10})
+	if got := s.takeSmallest(1000, 100); len(got) != 1 {
 		t.Fatalf("took %v", paths(got))
 	}
-	if files, bytes := s.Sent(); files != 1 || bytes != 10 {
-		t.Errorf("Sent() = %d, %d; want 1, 10", files, bytes)
+	if files, bytes := s.totals(); files != 1 || bytes != 10 {
+		t.Errorf("sent() = %d, %d; want 1, 10", files, bytes)
 	}
 
-	s.Add(Entry{Path: "b", Size: 10})
-	if s.Add(Entry{Path: "c", Size: 10}) {
+	s.add(Entry{Path: "b", Size: 10})
+	if s.add(Entry{Path: "c", Size: 10}) {
 		t.Error("the budget was exceeded by counting only what is waiting")
 	}
 }
@@ -175,7 +175,7 @@ func collect(t *testing.T, root string, budget Budget) ([][]Entry, Stats) {
 	)
 	go func() {
 		defer close(done)
-		stats, err = Stream(root, nil, budget, func(b []Entry) error {
+		stats, err = stream(root, nil, budget, func(b []Entry) error {
 			batches = append(batches, append([]Entry(nil), b...))
 			return nil
 		})
@@ -187,7 +187,7 @@ func collect(t *testing.T, root string, budget Budget) ([][]Entry, Stats) {
 		t.Fatal("the fill never finished; a tree that never wakes the drain is a fill that never uploads")
 	}
 	if err != nil {
-		t.Fatalf("Stream: %v", err)
+		t.Fatalf("stream: %v", err)
 	}
 	return batches, stats
 }
@@ -206,7 +206,7 @@ func sent(batches [][]Entry) []string {
 // hang.
 func TestStreamUploadsATreeSmallerThanTheSample(t *testing.T) {
 	files := map[string]int{}
-	for i := range Sample / 4 {
+	for i := range sample / 4 {
 		files[fmt.Sprintf("f%d.go", i)] = 10
 	}
 	root := tree(t, files)
@@ -252,13 +252,13 @@ func TestStreamFinishesWithNothingToSend(t *testing.T) {
 // count for the first and only time.
 func TestStreamAtExactlyTheSample(t *testing.T) {
 	files := map[string]int{}
-	for i := range Sample {
+	for i := range sample {
 		files[fmt.Sprintf("f%d.go", i)] = 8
 	}
 
 	batches, stats := collect(t, tree(t, files), Budget{})
-	if got := len(sent(batches)); got != Sample {
-		t.Errorf("sent %d files, want %d", got, Sample)
+	if got := len(sent(batches)); got != sample {
+		t.Errorf("sent %d files, want %d", got, sample)
 	}
 	if !stats.Complete() {
 		t.Errorf("stats = %+v, want complete", stats)
@@ -294,12 +294,12 @@ func TestStreamStopsAtTheBudget(t *testing.T) {
 // from the live export meanwhile, and there is nothing useful left to do.
 func TestStreamStopsWhenSendingFails(t *testing.T) {
 	files := map[string]int{}
-	for i := range Sample * 3 {
+	for i := range sample * 3 {
 		files[fmt.Sprintf("f%04d.go", i)] = 10
 	}
 
 	calls := 0
-	_, err := Stream(tree(t, files), nil, Budget{}, func([]Entry) error {
+	_, err := stream(tree(t, files), nil, Budget{}, func([]Entry) error {
 		calls++
 		return errors.New("the workspace went away")
 	})
@@ -316,13 +316,13 @@ func TestStreamStopsWhenSendingFails(t *testing.T) {
 // one that costs the same bandwidth.
 //
 // What is promised is what the buffer can see, NOT a global sort: sending
-// starts once the scan has seen Sample files rather than waiting for all of
+// starts once the scan has seen sample files rather than waiting for all of
 // them, which is the other half of the policy. So the assertion is that a large
 // file never goes out while smaller ones are still waiting -- with more small
 // files than one batch holds, it cannot be in the first batch however the scan
 // and the drain interleave.
 func TestStreamSendsTheCheapestFirst(t *testing.T) {
-	// The walk visits these in name order, so an unsorted Stream would send
+	// The walk visits these in name order, so an unsorted stream would send
 	// the largest file first. Which is what this catches: the entries go out
 	// in the order the selector chose, not the order the tree was read in.
 	files := map[string]int{"huge.bin": 40000, "mid.txt": 4000}
@@ -339,7 +339,7 @@ func TestStreamSendsTheCheapestFirst(t *testing.T) {
 	}
 
 	// Ascending WITHIN a batch, which is all a batch can promise. Across
-	// batches it cannot: sending starts once the scan has seen Sample files
+	// batches it cannot: sending starts once the scan has seen sample files
 	// rather than waiting for the whole tree, so a later batch may hold
 	// something smaller than an earlier one that had not been found yet.
 	for i, b := range batches {
@@ -353,29 +353,29 @@ func TestStreamSendsTheCheapestFirst(t *testing.T) {
 	}
 }
 
-// An invalidation's paths arrive all at once rather than through the Selector,
+// An invalidation's paths arrive all at once rather than through the selector,
 // so they need the same bound a fill's sends have: one tar held whole in
 // memory, and lost entirely if anything about it fails.
 func TestBatchesBoundsByBytesAndByCount(t *testing.T) {
 	var big []Entry
 	for i := range 5 {
-		big = append(big, Entry{Path: fmt.Sprintf("big%d.bin", i), Size: DefaultBatchBytes / 2})
+		big = append(big, Entry{Path: fmt.Sprintf("big%d.bin", i), Size: batchBytes / 2})
 	}
-	if got := len(Batches(big)); got < 3 {
+	if got := len(batches(big)); got < 3 {
 		t.Errorf("%d entries of half a batch each went out in %d batches", len(big), got)
 	}
 
 	var many []Entry
-	for i := range MaxBatchFiles * 2 {
+	for i := range maxBatchFiles * 2 {
 		many = append(many, Entry{Path: fmt.Sprintf("f%05d.go", i)})
 	}
-	batches := Batches(many)
+	batches := batches(many)
 	if len(batches) != 2 {
 		t.Errorf("%d empty files went out in %d batches, want 2", len(many), len(batches))
 	}
 	for _, b := range batches {
-		if len(b) > MaxBatchFiles {
-			t.Errorf("a batch holds %d files, over the %d cap", len(b), MaxBatchFiles)
+		if len(b) > maxBatchFiles {
+			t.Errorf("a batch holds %d files, over the %d cap", len(b), maxBatchFiles)
 		}
 	}
 }
@@ -384,7 +384,7 @@ func TestBatchesBoundsByBytesAndByCount(t *testing.T) {
 // a file from the cache for being big, and the fill's own budget is what
 // decides whether a big file is worth caching at all.
 func TestBatchesKeepsAnOversizedEntry(t *testing.T) {
-	batches := Batches([]Entry{{Path: "huge.bin", Size: DefaultBatchBytes * 3}, {Path: "a.go", Size: 4}})
+	batches := batches([]Entry{{Path: "huge.bin", Size: batchBytes * 3}, {Path: "a.go", Size: 4}})
 	if len(batches) != 2 || len(batches[0]) != 1 {
 		t.Errorf("an oversized entry was batched wrongly: %d batches", len(batches))
 	}
@@ -392,7 +392,7 @@ func TestBatchesKeepsAnOversizedEntry(t *testing.T) {
 
 // Nothing to send is no batches, rather than one empty one.
 func TestBatchesOfNothing(t *testing.T) {
-	if got := Batches(nil); len(got) != 0 {
-		t.Errorf("Batches(nil) = %v, want none", got)
+	if got := batches(nil); len(got) != 0 {
+		t.Errorf("batches(nil) = %v, want none", got)
 	}
 }
