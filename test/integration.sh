@@ -1721,6 +1721,33 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         *)  bad "linking on a share ended with $link_rc"
             sed 's/^/        /' "$WORK/link.log" ;;
     esac
+
+    # Which operation, narrowed. ld finishes by sizing and permissioning the
+    # file it just wrote, so each step below is one part of that shape and the
+    # first to fail names the operation rather than the build. Numbered exits
+    # because "the container failed" would tell us nothing we do not know.
+    narrow_rc=0
+    dockert run --rm -v "$LINKDIR:/src" -w /src alpine:3 sh -c '
+        echo hi > p1                                    || exit 91
+        echo hi > p2 && truncate -s 4 p2                || exit 92
+        echo hi > p3 && chmod 755 p3                    || exit 93
+        echo hi > p4 && truncate -s 65536 p4            || exit 94
+        echo hi > p5 && dd if=/dev/zero of=p5 bs=1 count=2 conv=notrunc 2>/dev/null || exit 95
+        echo hi > p6 && truncate -s 65536 p6 && chmod 755 p6 && truncate -s 3 p6   || exit 96
+    ' >"$WORK/link-narrow.log" 2>&1 || narrow_rc=$?
+
+    case "$narrow_rc" in
+        0)  ok "create, truncate, chmod and rewrite-in-place all survive on a share" ;;
+        91) bad "a plain create-write-close failed on a share" ;;
+        92) bad "truncating a file DOWN failed on a share" ;;
+        93) bad "chmod after a write failed on a share" ;;
+        94) bad "truncating a file UP failed on a share" ;;
+        95) bad "rewriting bytes in place failed on a share" ;;
+        96) bad "grow-then-chmod-then-shrink, which is ld's shape, failed on a share" ;;
+        *)  bad "narrowing the linker failure ended with $narrow_rc" ;;
+    esac
+    [ "$narrow_rc" = 0 ] || sed 's/^/        /' "$WORK/link-narrow.log"
+
 else
     bad "no client is running, so linking on a share could not be tested"
 fi
