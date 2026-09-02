@@ -2,9 +2,25 @@
 // request and its reply look like, which codecs a payload may use, and the tar
 // the payload carries (ADR 0044).
 //
-// The channel's name, its version and its frames are all here, because they are
-// one agreement. The POLICY that drives it is the dircache module, which knows
-// nothing of this format; the union that serves it is core-agent/union.
+// A delegated share is not a copy of the client's tree but a UNION of two
+// layers the workspace mounts: the live NFS export underneath, and a local
+// cache on top. A read the cache has is local disk; a read it does not have
+// falls through and is correct. So the cache is allowed to be incomplete at
+// every moment, which is what lets it be filled in the background.
+//
+// Deliberately not core/notify, whose contract says it carries no content and
+// never will. That one makes a watcher fire and mutates nothing; this one ships
+// bytes and writes them. Separating the two is what keeps the first promise
+// true.
+//
+// Every op here is performed THROUGH the merged mount rather than into the
+// cache layer directly, which is a kernel constraint. The reasoning is in
+// agent/internal/unions/write.go, beside the code it binds.
+//
+// The channel's name, its version and its frames are all here because they are
+// one agreement (ADR 0021). The POLICY that drives it is the dircache module,
+// which knows nothing of this format; the union that serves it is
+// core-agent/union.
 package cache
 
 import (
@@ -14,28 +30,8 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// The cache channel: what a delegated share's union mount is told (ADR 0044).
-//
-// A delegated share is not a copy of the client's tree but a UNION of two
-// layers the workspace mounts: the live NFS export underneath, and a local
-// cache on top. A read the cache has is local disk; a read it does not have
-// falls through and is correct. So the cache is allowed to be incomplete at
-// every moment, which is what lets it be filled in the background.
-//
-// This channel is deliberately not core/workspace/notify.go, whose contract
-// says it carries no content and never will. That one makes a watcher fire and
-// mutates nothing. This one ships bytes and writes them, which is a different
-// promise, and separating the two is what keeps the first one true.
-//
-// Every op here is performed THROUGH the merged mount rather than into the
-// cache layer directly, which is a kernel constraint. The reasoning is in
-// agent/internal/unions/write.go, beside the code it binds.
 // Command carries a delegated share's cache: preparing its union mount,
 // filling it, and invalidating what changed on the client (ADR 0044).
-//
-// Deliberately not NotifyCommand, which promises to carry no content and to
-// mutate nothing. This one is a sync, and a channel of its own is what keeps
-// that promise true of the other.
 //
 // The same version check: an agent too old to know it runs
 // `sh -c "workspace-cache"` and exits 127, so the client refuses the mode

@@ -727,7 +727,7 @@ traversal into something plausible instead of refusing it. Then `within`
 re-checks containment after the join, because `path.Join` cleans. Every tar
 entry goes through the same `within` on its own name, so the archive is not a
 way around the check that the request went through. *Covered by*
-`core/workspace/cache_test.go`.
+`core/cache/cache_test.go`.
 
 **T — a drop removes files, which nothing else in this system may do (9).** The
 Docker API can write into a volume and can never remove from one, which is the

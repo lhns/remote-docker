@@ -1,20 +1,4 @@
-// Package notify is the contract for the change-notification channel: the
-// client tells the workspace which paths changed, and the agent performs a real
-// VFS operation on each so a watcher inside a container sees it (ADR 0016).
-//
-// The channel's name, its version and its frames are all here, because they
-// are one agreement -- opening a name an agent does not know is how the version
-// is checked, so the two cannot be in different packages.
-package notify
-
-import (
-	"fmt"
-	"strings"
-
-	"github.com/lhns/remote-docker/core/workspace"
-)
-
-// The change-notification channel.
+// Package notify is the contract for the change-notification channel.
 //
 // NFS carries no change notification, so a watcher inside a container sees
 // nothing at all when the user edits a file on their own machine. Measured,
@@ -24,9 +8,22 @@ import (
 // Linux offers no way to inject a synthetic event; fanotify(7) states plainly
 // that it "does not catch remote events that occur on network filesystems".
 // The only mechanism available to anyone is to perform a real VFS operation
-// and let the kernel emit the event as a side effect. So the client watches
-// its own filesystem, where the changes actually happen, and tells the agent
-// which paths to touch.
+// and let the kernel emit the event as a side effect. So the client watches its
+// own filesystem, where the changes actually happen, and tells the agent which
+// paths to touch.
+//
+// The channel's name, its version and its frames are all here because they are
+// one agreement: opening a name an agent does not know IS the version check
+// (ADR 0021).
+package notify
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/lhns/remote-docker/core/workspace"
+)
+
 // Command carries the client's filesystem changes to be replayed inside
 // the workspace, so watchers in containers see edits made on the user's machine
 // (ADR 0016).
