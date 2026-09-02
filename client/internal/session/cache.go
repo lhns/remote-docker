@@ -346,8 +346,8 @@ const pathsPerFrame = workspace.MaxCacheFrame / 2
 // tarOf builds the batch.
 //
 // In memory because the channel frames a payload by length: the workspace has
-// to be told how many bytes follow before they are sent. cachefill.Batches is
-// what keeps that bounded.
+// to be told how many bytes follow before they are sent. dircache bounds a
+// batch before it gets here.
 func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) {
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
