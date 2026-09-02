@@ -8,12 +8,11 @@ import (
 )
 
 // Zero and negative are different answers, and a deployment that wanted "never"
-// has already picked the wrong one: zero selects the thirty-minute default, so
+// picked the wrong one: zero takes the default, which was thirty minutes, so
 // the endpoint went away half an hour later.
 //
-// Both spellings are load-bearing in the field. A CI runner sets -1s so its
-// endpoint outlives an idle period no job arrives in; anything unset gets the
-// default so an interactive session still reclaims itself.
+// They still differ now the default is never -- an explicit duration reclaims
+// and an unset one does not -- which is the distinction the runner depends on.
 func TestDaemonIdle(t *testing.T) {
 	for _, c := range []struct {
 		name       string

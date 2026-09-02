@@ -8,11 +8,9 @@ import (
 
 // serve accepts and drops connections until the listener closes.
 //
-// Needed because a named pipe has no backlog: unlike a unix socket, nothing can
-// connect to it until an Accept is outstanding, so a listener nobody is serving
-// looks exactly like one that is not there. A real endpoint always has the
-// proxy behind it, so serving here is the faithful shape as well as the
-// portable one.
+// A named pipe has no backlog: nothing connects until an Accept is outstanding,
+// so an unserved listener looks exactly like an absent one. A real endpoint
+// always has the proxy behind it anyway.
 func serve(t *testing.T, l net.Listener) {
 	t.Helper()
 	var wg sync.WaitGroup
@@ -32,16 +30,9 @@ func serve(t *testing.T, l net.Listener) {
 
 // The endpoint is bound by the session process and goes when it goes.
 //
-// That is the whole of the reported bug, and it is worth an assertion because
-// of who it happens to. `remote-docker`'s own commands start a session when
-// they find none, so from them the endpoint looks self-healing. A foreign
-// client -- the stock Docker CLI, compose, buildx, Testcontainers, an IDE
-// plugin -- calls connect() and gets ENOENT, knows nothing about sessions, and
-// has no way to bring one back. The README presents exactly those tools as the
-// endpoint's consumers.
-//
-// This pins TODAY's behaviour so the fix has something to flip. When the
-// endpoint outlives its session, the second half of this test is what changes.
+// remote-docker's own commands start a session when they find none, so from
+// them it looks self-healing; a foreign client gets ENOENT and has no way back.
+// That asymmetry is the bug. Pinned so a fix has something to flip.
 func TestEndpointDiesWithItsListener(t *testing.T) {
 	endpoint := testEndpoint(t)
 

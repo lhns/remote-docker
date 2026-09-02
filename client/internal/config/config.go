@@ -114,33 +114,25 @@ type Config struct {
 	// a process that cannot come back on its own. It never fires while
 	// anything depends on the session.
 	//
-	// Setting it is a real choice rather than a tuning knob, which is why the
-	// default no longer does. The exit takes the ENDPOINT with it, and only a
-	// remote-docker command can rebuild one -- so every OTHER Docker client
-	// pointed at it (compose, buildx, Testcontainers, an IDE plugin) fails
-	// with ENOENT and has no way to recover.
+	// Setting it is a choice, not a tuning knob: the exit takes the ENDPOINT,
+	// and every other Docker client pointed at it then fails with ENOENT and
+	// cannot recover.
 	DaemonIdle time.Duration
 }
 
 // DefaultDaemonIdle is how long a background session outlives its last use.
 //
-// NEVER, and it was half an hour until 2026-09-02. The reclaim did not just end
-// a process, it removed the endpoint -- and the endpoint is what the README
-// tells people to point compose, buildx, Testcontainers and their IDE at. Those
-// tools connect to a path; none of them knows what a session is, so after the
-// reclaim each of them failed with "no such file or directory" and nothing
-// short of a remote-docker command brought it back. A CI runner idling between
-// jobs lost its socket half an hour in and failed every build afterwards while
-// still reporting healthy.
+// NEVER, and it was half an hour until 2026-09-02. The reclaim removed the
+// ENDPOINT, which is what compose, buildx, Testcontainers and IDE plugins are
+// told to point at; they connect to a path, know nothing of sessions, and only
+// a remote-docker command could bring one back.
 //
-// What it was reclaiming was small. The expensive half is the connection to the
-// workspace, and Session.sweepIdle already releases that on its own timer and
-// reopens it on the next request, invisibly. Exiting on top of that saved a
-// mostly idle local process and cost the integration surface.
+// It reclaimed little. Session.sweepIdle already releases the connection on its
+// own timer and reopens it per request, invisibly, so exiting on top of that
+// saved an idle process and cost the integration surface.
 //
-// Still honoured when asked for explicitly, because "let go of this workspace
-// after an hour" is a reasonable thing to want on a laptop. It is now a
-// decision with a documented consequence rather than the default nobody chose.
+// Still honoured when set: "let go of this workspace after an hour" is
+// reasonable on a laptop. It is now a choice rather than the default.
 const DefaultDaemonIdle = DaemonIdleNever
 
 // DaemonIdleNever is any non-positive duration; idleExpired treats <= 0 as

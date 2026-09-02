@@ -51,9 +51,9 @@ func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-
 
 // daemonIdle is how long a background session may sit with nothing to do.
 //
-// Zero means the DEFAULT and negative means NEVER, which is not the same thing
-// and has been mistaken for it: a deployment that wanted "never" set 0 and got
-// thirty minutes, then lost its endpoint half an hour later.
+// Zero means the DEFAULT and negative means NEVER, which have been mistaken for
+// each other: a deployment that wanted "never" set 0, got thirty minutes, and
+// lost its endpoint.
 func daemonIdle(configured time.Duration) time.Duration {
 	if configured == 0 {
 		return config.DefaultDaemonIdle
