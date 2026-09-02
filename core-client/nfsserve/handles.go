@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io/fs"
+	"log/slog"
 
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
@@ -55,6 +56,7 @@ type rootHandler struct {
 	nfs.Handler // the caching handler: verifiers, and every handle but a root
 
 	registry *Registry
+	log      *slog.Logger
 }
 
 // errStaleExport is what a handle naming a share that is no longer exported
@@ -82,7 +84,15 @@ func (h *rootHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 
 func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, error) {
 	if len(handle) != rootHandleSize {
-		return h.Handler.FromHandle(handle)
+		fs, path, err := h.Handler.FromHandle(handle)
+		if err != nil {
+			// go-nfs answers ESTALE and logs nothing. A path lookup
+			// recovers on its own (ADR 0033); an already-open descriptor
+			// cannot, so it reaches the application.
+			h.log.Warn("nfs: a file handle could not be resolved",
+				"bytes", len(handle), "err", err)
+		}
+		return fs, path, err
 	}
 	key, cached := handle[:exportKeySize], handle[exportKeySize:]
 

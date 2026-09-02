@@ -260,7 +260,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			Log:     opts.Log,
 			Ctx:     runCtx,
 		}
-		s.nfs = nfsserve.New(s.registry)
+		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
 
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {

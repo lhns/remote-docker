@@ -1669,6 +1669,100 @@ else
     bad "no client is running, so the union could not be tested"
 fi
 
+echo
+echo "== 15d. a linker finishing its output on a share =="
+# The failure this exists for, verbatim from a build on a real workspace:
+#
+#   /usr/bin/ld: cmTC_438e8: final close failed: Stale file handle
+#
+# That is CMake's throwaway "does the compiler work" test, and its shape is the
+# whole diagnosis. COMPILING succeeds: the .o is created, written and closed on
+# the share. The LINK dies at close(). So writing to the export works and it is
+# specifically ld FINISHING an output file that does not, which makes it a
+# file-handle problem rather than a write problem.
+#
+# ESTALE means the server invalidated a handle the client still held. go-nfs
+# maps a handle to a PATH rather than an inode and drops it outright on REMOVE
+# and RENAME, where a real server keeps a handle valid for an open file. An
+# already-open descriptor cannot be re-resolved by the kernel the way a lookup
+# can, so it surfaces to the application.
+#
+# Nothing in this suite had ever built a binary on a share, which is how this
+# shipped. If this section PASSES, that is worth reading rather than
+# celebrating: CI runs a dind on the same machine, while the report came from a
+# workspace on another host, and the difference would then be the next thing to
+# chase.
+LINKDIR="$WORK/linkdir"
+mkdir -p "$LINKDIR"
+cat >"$LINKDIR/hello.c" <<'CEOF'
+int main(void) { return 0; }
+CEOF
+
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    # Exit codes rather than one boolean, so a failure names which of the two
+    # steps died. The reported bug passes the first and fails the second, and a
+    # section that could not tell them apart would not have caught it.
+    link_rc=0
+    dockert run --rm -v "$LINKDIR:/src" -w /src alpine:3 sh -c '
+        apk add --no-cache gcc musl-dev >/dev/null 2>&1 || exit 97
+        cc -c hello.c -o hello.o || exit 98
+        cc hello.o -o hello       || exit 99
+        # Not just that ld finished: a linker whose output cannot be run has
+        # not done its job. The bit is written by a SETATTR, which the share
+        # used to accept and discard.
+        test -x hello || { echo "not executable:"; ls -l hello; exit 96; }
+    ' >"$WORK/link.log" 2>&1 || link_rc=$?
+
+    case "$link_rc" in
+        0)  ok "a container compiles and links on a share" ;;
+        97) bad "no compiler in the container, so linking on a share was not tested"
+            sed 's/^/        /' "$WORK/link.log" ;;
+        98) bad "COMPILING on a share failed, which the report said worked"
+            sed 's/^/        /' "$WORK/link.log" ;;
+        99) bad "LINKING on a share failed, which is the reported bug"
+            sed 's/^/        /' "$WORK/link.log"
+            # The server sends no STALE for this -- every NFS3ERR_STALE in
+            # go-nfs comes from FromHandle, and instrumenting that logged
+            # nothing. So the CLIENT decided the file was gone, and the Linux
+            # NFS client says why in the kernel log when it does: an inode
+            # number that changed under a handle reads as the file having been
+            # replaced.
+            echo "        -- kernel, nfs client --"
+            sudo dmesg 2>/dev/null | grep -iE "nfs|stale|fileid|inode number" | tail -20 | sed 's/^/        /' ;;
+        *)  bad "linking on a share ended with $link_rc"
+            sed 's/^/        /' "$WORK/link.log" ;;
+    esac
+
+    # Which operation, narrowed. ld finishes by sizing and permissioning the
+    # file it just wrote, so each step below is one part of that shape and the
+    # first to fail names the operation rather than the build. Numbered exits
+    # because "the container failed" would tell us nothing we do not know.
+    narrow_rc=0
+    dockert run --rm -v "$LINKDIR:/src" -w /src alpine:3 sh -c '
+        echo hi > p1                                    || exit 91
+        echo hi > p2 && truncate -s 4 p2                || exit 92
+        echo hi > p3 && chmod 755 p3                    || exit 93
+        echo hi > p4 && truncate -s 65536 p4            || exit 94
+        echo hi > p5 && dd if=/dev/zero of=p5 bs=1 count=2 conv=notrunc 2>/dev/null || exit 95
+        echo hi > p6 && truncate -s 65536 p6 && chmod 755 p6 && truncate -s 3 p6   || exit 96
+    ' >"$WORK/link-narrow.log" 2>&1 || narrow_rc=$?
+
+    case "$narrow_rc" in
+        0)  ok "create, truncate, chmod and rewrite-in-place all survive on a share" ;;
+        91) bad "a plain create-write-close failed on a share" ;;
+        92) bad "truncating a file DOWN failed on a share" ;;
+        93) bad "chmod after a write failed on a share" ;;
+        94) bad "truncating a file UP failed on a share" ;;
+        95) bad "rewriting bytes in place failed on a share" ;;
+        96) bad "grow-then-chmod-then-shrink, which is ld's shape, failed on a share" ;;
+        *)  bad "narrowing the linker failure ended with $narrow_rc" ;;
+    esac
+    [ "$narrow_rc" = 0 ] || sed 's/^/        /' "$WORK/link-narrow.log"
+
+else
+    bad "no client is running, so linking on a share could not be tested"
+fi
+
 echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session the rest
 # of the suite used -- started detached, stopped by asking rather than by

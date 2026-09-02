@@ -1,6 +1,7 @@
 package nfsserve
 
 import (
+	"encoding/binary"
 	"fmt"
 	"hash/fnv"
 	"io/fs"
@@ -135,14 +136,21 @@ func (a *attrFS) Chroot(p string) (billy.Filesystem, error) {
 }
 
 func (a *attrFS) wrap(fi os.FileInfo, fullPath string) os.FileInfo {
-	return &attrInfo{FileInfo: fi, attrs: a.attrs, path: fullPath}
+	// Resolved HERE, while the real FileInfo is in hand: attrInfo.Sys replaces
+	// it with the NFS one. The real path goes too, because Windows has to open
+	// the file to read an identity.
+	return &attrInfo{
+		FileInfo: fi,
+		attrs:    a.attrs,
+		fileid:   fileIDOf(fi, filepath.Join(a.Root(), fullPath), fullPath),
+	}
 }
 
 // attrInfo overrides the ownership and permission bits of a real FileInfo.
 type attrInfo struct {
 	os.FileInfo
-	attrs Attrs
-	path  string
+	attrs  Attrs
+	fileid uint64
 }
 
 // Mode keeps the type bits (directory, symlink, device) and replaces only
@@ -174,16 +182,45 @@ func (i *attrInfo) Sys() any {
 		Nlink:  1,
 		UID:    i.attrs.UID,
 		GID:    i.attrs.GID,
-		Fileid: fileID(i.path),
+		Fileid: i.fileid,
 	}
 }
 
-// fileID gives each path a stable identifier, standing in for an inode number.
+// fileIDOf is the file's identifier on the wire: the real one the platform
+// keeps, and a path hash only where there is none.
 //
-// NFS clients use it to tell files apart and to detect that two names are the
-// same file, so it must be stable for a given path and distinct between paths.
-// Windows exposes no inode through os.FileInfo, so it is derived from the path,
-// which is what go-nfs itself does when it cannot find a real one.
+// A fileid is how a client tells whether a handle still names the same file.
+// Change it under a live handle and Linux does not re-resolve; it marks the
+// inode stale and every open descriptor on it fails:
+//
+//	NFS: server error: fileid changed
+//	fsid 0:54: expected fileid 0x1548a05f1dee82e0, got 0xd8adad186b880beb
+//
+// A path hash cannot hold that, because one file has several spellings -- what
+// a lookup joined, what a listing joined, what a chroot made relative. It was
+// the Windows fallback applied everywhere, and it killed builds on a share:
+// `ld` sizes the output it has written, and ftruncate on a stale descriptor is
+// what the kernel cannot retry (ADR 0033).
+//
+// Every platform here has a real identity. Unix has the inode; Windows has
+// NTFS's File Reference Number, one GetFileInformationByHandle away.
+func fileIDOf(fi os.FileInfo, osPath, sharePath string) uint64 {
+	dev, ino, ok := inodeOf(fi, osPath)
+	if !ok {
+		return fileID(sharePath)
+	}
+	// Mixed rather than concatenated: both halves are 64 bits and the wire
+	// field is 64. The client only compares these for equality, so spreading
+	// the loss beats discarding the top of either.
+	h := fnv.New64()
+	var buf [16]byte
+	binary.LittleEndian.PutUint64(buf[:8], dev)
+	binary.LittleEndian.PutUint64(buf[8:], ino)
+	_, _ = h.Write(buf[:])
+	return h.Sum64()
+}
+
+// fileID is the fallback: a path hash, for platforms with no inode to report.
 func fileID(p string) uint64 {
 	h := fnv.New64()
 	_, _ = h.Write([]byte(p))
