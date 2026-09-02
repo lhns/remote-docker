@@ -7,7 +7,7 @@
 # vendoring it). A PR runs both modes end to end before anybody believes it.
 version: 2
 updates:
-  # Five modules, five entries (ADR 0021). Dependabot does not
+  # Six modules, six entries (ADR 0021). Dependabot does not
   # discover nested modules, so a directory missing here is a module whose
   # dependencies silently stop being updated -- which is the failure this file
   # exists to prevent, and which it failed to prevent once: core-client and
@@ -61,6 +61,13 @@ updates:
   # adds weight is worth reading closely.
   - package-ecosystem: gomod
     directory: /core
+    schedule:
+      interval: weekly
+
+  # The cache engine. It has no third-party requires at all, which is the whole
+  # reason it is its own module -- a PR here that adds one is worth refusing.
+  - package-ecosystem: gomod
+    directory: /dircache
     schedule:
       interval: weekly
 

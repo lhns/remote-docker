@@ -38,6 +38,16 @@ core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
                          core/internal/ Go would let only core/ reach it.
   probes/                watchprobe, pokeprobe -- Go, so they need a module
 
+dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
+                         local copy of a tree in a bounded order, invalidate
+                         what changes here, carry the consumer's writes back --
+                         naming no transport and no storage, which is the
+                         membership test. Its own module rather than a package
+                         so the engine can be taken WITHOUT core-client's seven
+                         third-party requires; it has none at all (ADR 0044).
+                         The union, the tar, the codec and the wire format are
+                         all on the other side of its Store interface.
+
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
                          claim this whole split was for, and it is measured.
@@ -111,16 +121,16 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# FIVE MODULES (ADR 0021), and `./...` stops at a module boundary,
+# SIX MODULES (ADR 0021), and `./...` stops at a module boundary,
 # so the loop is the only thing that covers the repository. Running it at the
 # root fails outright, which is the point: there is no module there to build.
-for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
+for m in ./core ./dircache ./agent ./core-agent ./core-client ./client; do (cd $m && go build ./... && go test ./...); done
 
-# lint, seven passes: one per module, plus the agent AND core-agent under
+# lint, eight passes: one per module, plus the agent AND core-agent under
 # Linux. Both carry Linux-only files -- session handling, netns, the unix
 # provisioner, the inotify poker -- which a lint on the development machine
 # does not see at all. CI does, and will fail on what you did not lint.
-for m in ./core ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
+for m in ./core ./dircache ./agent ./core-agent ./core-client ./client; do (cd $m && golangci-lint run ./...); done
 for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
@@ -162,7 +172,7 @@ helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
-`go.work` ties the five together for editors and local commands. CI and the
+`go.work` ties the six together for editors and local commands. CI and the
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
