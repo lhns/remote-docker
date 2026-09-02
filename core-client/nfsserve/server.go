@@ -109,9 +109,17 @@ func (h *mountHandler) Mount(_ context.Context, _ net.Conn, req nfs.MountRequest
 
 // Change enables SETATTR. Returning nil here would make go-nfs treat the
 // export as read-only.
+//
+// It used to assert the filesystem to billy.Change and got nil every time:
+// osfs implements no such interface, and an *attrFS could not satisfy it
+// anyway, embedding the billy.Filesystem INTERFACE and promoting none of the
+// inner methods. attrChange read the nil as "nothing to do" and reported
+// success, so a binary built on a share linked and could not be run.
+//
+// Root() is the share's directory, which the names reaching attrChange are
+// relative to.
 func (h *mountHandler) Change(fs billy.Filesystem) billy.Change {
-	inner, _ := fs.(billy.Change)
-	return &attrChange{inner: inner}
+	return &attrChange{root: fs.Root()}
 }
 
 // FSStat reports free space. Docker and ordinary tools query it; zeroes would
