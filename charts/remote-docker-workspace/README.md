@@ -54,7 +54,9 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 | `perUserDind` | `true` | a dockerd per account (ADR 0019), or one shared (ADR 0012) |
 | `dockerdArgs` | `--storage-driver=fuse-overlayfs` | see below |
 | `dindImage` | `""` | the image an account's daemon runs; empty means this chart's |
-| `persistence.graph.size` | `50Gi` | images and containers |
+| `persistence.graph.size` | `50Gi` | images and containers. Applies only when the claim is created; see Growing a volume |
+| `persistence.graph.existingClaim` | `""` | mount a claim you own instead of generating one |
+| `persistence.state.existingClaim` | `""` | the same, for the state volume |
 | `persistence.state.size` | `1Gi` | host keys and the uid map |
 | `ingress.enabled` | `true` | |
 | `ingress.host` | `""` | **required** when the ingress is enabled |
@@ -96,6 +98,47 @@ pod before starting the new one — which is what you want, since two pods must
 never hold the same graph — and a node failure needs the volume to detach before
 the pod can reschedule. Neither is a bug to report; both are consequences of one
 writer owning the storage.
+
+## Growing a volume
+
+**Expanding the volume itself needs nothing from this chart.** A PVC's requested
+size is mutable wherever the StorageClass sets `allowVolumeExpansion`, and with
+a CSI driver that supports it the filesystem grows while the pod keeps running:
+
+```bash
+kubectl -n <ns> patch pvc graph-<release>-0   -p '{"spec":{"resources":{"requests":{"storage":"100Gi"}}}}'
+```
+
+If `.status.capacity.storage` reaches the new size, it was online. If it parks
+with a `FileSystemResizePending` condition, the node-side resize is waiting for
+a remount and the pod has to restart.
+
+What that does NOT do is change `persistence.graph.size` here, and a
+StatefulSet's `volumeClaimTemplates` are immutable, so this chart cannot be
+updated to agree with it. **That matters on the day the claim is recreated** --
+a restore, a rebuild, a new cluster -- because the template is what it is
+recreated from, and it would silently come back at the old size.
+
+`existingClaim` is the way out. Create the PVC yourself, point the chart at it,
+and its size is an ordinary field you edit wherever you keep it:
+
+```yaml
+persistence:
+  graph:
+    existingClaim: workspace-graph
+```
+
+`size`, `storageClass` and `accessModes` are then ignored for that volume: they
+describe a claim this chart no longer makes. The two volumes are independent, so
+supplying one and generating the other is fine.
+
+**Adopting it on a running install costs one restart.** Removing a
+`volumeClaimTemplate` is as immutable as changing one, so the StatefulSet has to
+be recreated. Delete it with `--cascade=orphan` to keep the pod and the claims,
+let Helm rebuild it, and expect the pod to be replaced once as it converges.
+Claims made by the old template are named `graph-<release>-0` and
+`state-<release>-0`; naming those in `existingClaim` adopts them where they are,
+with no data movement.
 
 ## Uninstall
 

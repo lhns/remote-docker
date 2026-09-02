@@ -74,6 +74,17 @@ persistence:
   # corrupts the store rather than racing politely. Even on storage that offers
   # ReadWriteMany, this stays RWO.
   graph:
+    # A claim you created yourself, mounted by name instead of generated from
+    # the template below. Empty keeps the template.
+    #
+    # Worth it because a StatefulSet's volumeClaimTemplates are IMMUTABLE, so
+    # `size` here only applies to a claim that does not exist yet. A claim you
+    # own is an ordinary PVC whose size you can edit, given a StorageClass with
+    # allowVolumeExpansion.
+    #
+    # `size`, `storageClass` and `accessModes` are then ignored: they describe a
+    # claim this chart no longer makes.
+    existingClaim: ""
     size: 50Gi
     # "" uses the cluster's default StorageClass; "-" disables dynamic
     # provisioning.
@@ -93,6 +104,9 @@ persistence:
   # since the volume need not detach first -- but it buys nothing while there
   # is one replica.
   state:
+    # As above. These are independent -- supplying one claim and letting the
+    # other be generated is fine.
+    existingClaim: ""
     size: 1Gi
     storageClass: ""
     accessModes:

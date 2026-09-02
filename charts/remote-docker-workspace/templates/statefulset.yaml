@@ -121,6 +121,18 @@ spec:
           secret:
             secretName: {{ include "remote-docker-workspace.keysSecretName" . }}
             optional: true
+        {{- /* Either named here or generated below, never both: a duplicate
+              volume name and the pod is refused. */}}
+        {{- if .Values.persistence.state.existingClaim }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.state.existingClaim }}
+        {{- end }}
+        {{- if .Values.persistence.graph.existingClaim }}
+        - name: graph
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.graph.existingClaim }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -133,7 +145,11 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- /* Omitted when both claims are supplied: an empty
+        `volumeClaimTemplates:` is a null, and a null is not a list. */}}
+  {{- if or (not .Values.persistence.state.existingClaim) (not .Values.persistence.graph.existingClaim) }}
   volumeClaimTemplates:
+    {{- if not .Values.persistence.state.existingClaim }}
     - metadata:
         name: state
         labels:
@@ -151,6 +167,8 @@ spec:
         storageClassName: {{ .Values.persistence.state.storageClass }}
         {{- end }}
         {{- end }}
+    {{- end }}
+    {{- if not .Values.persistence.graph.existingClaim }}
     - metadata:
         name: graph
         labels:
@@ -168,3 +186,5 @@ spec:
         storageClassName: {{ .Values.persistence.graph.storageClass }}
         {{- end }}
         {{- end }}
+    {{- end }}
+  {{- end }}
