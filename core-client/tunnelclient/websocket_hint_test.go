@@ -1,4 +1,4 @@
-package wstunnel
+package tunnelclient
 
 import (
 	"net/http"

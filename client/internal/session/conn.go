@@ -24,7 +24,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
-	"github.com/lhns/remote-docker/core-client/wstunnel"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -219,7 +218,7 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 	if !t.WebSocket() {
 		return nil, nil
 	}
-	return wstunnel.Dialer(wstunnel.Options{
+	return tunnelclient.WebSocketDialer(tunnelclient.WebSocketOptions{
 		URL:      t.URL,
 		Addr:     net.JoinHostPort(t.Host, strconv.Itoa(t.Port)),
 		CAFile:   cfg.CAFile,
@@ -365,7 +364,7 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 		Forwarder: sshForwarder{live.ssh},
 		Log:       s.portsLogger(),
 		Owned: func(c ports.Container) bool {
-			return c.Labels[rewrite.OwnerLabel] == live.info.User
+			return c.Labels[workspace.OwnerLabel] == live.info.User
 		},
 
 		LocalPorts: func(c ports.Container, p ports.Published) []int {
@@ -464,8 +463,8 @@ func localPortFree(live *liveConn, port int) error {
 // (`-p 8080:80 -p 9090:80`): the workspace publishes it once and both numbers
 // are opened in front of that, because both front the same container port.
 func localPortsFor(c ports.Container, p ports.Published, clientID string) []int {
-	if c.Labels[rewrite.ClientLabel] != clientID {
+	if c.Labels[workspace.ClientLabel] != clientID {
 		return nil
 	}
-	return workspace.ParseRequestedPorts(c.Labels[rewrite.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
+	return workspace.ParseRequestedPorts(c.Labels[workspace.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
 }

@@ -1,4 +1,4 @@
-package workspace
+package cache
 
 import (
 	"archive/tar"

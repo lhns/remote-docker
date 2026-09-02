@@ -427,7 +427,7 @@ func (s *Session) acquire(ctx context.Context) (*liveConn, func(), error) {
 }
 
 func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info, error) {
-	out, err := client.Run(ctx, tunnel.InfoCommand)
+	out, err := client.Run(ctx, workspace.InfoCommand)
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("reading workspace info: %w", err)
 	}

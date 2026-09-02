@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/logx"
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Store is where a cache physically lives.
@@ -33,7 +33,7 @@ type Store interface {
 	// Changes reports what the consumer did to a share's cache since it was
 	// filled. ErrShareGone means the cache no longer exists, which is a reason
 	// to stop asking rather than to retry.
-	Changes(ctx context.Context, share string) ([]workspace.CacheChange, error)
+	Changes(ctx context.Context, share string) ([]cache.Change, error)
 
 	// Pull fetches the named paths, calling into once per file. The reader is
 	// valid only for that call.

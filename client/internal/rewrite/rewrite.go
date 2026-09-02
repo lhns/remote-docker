@@ -100,16 +100,6 @@ type Cache interface {
 	Fill(export, localPath string)
 }
 
-// The labels this package stamps. Defined in the contract, because the agent
-// reads them back (workspace.ClientLabel), so both ends must agree.
-const (
-	ManagedLabel = workspace.ManagedLabel
-	ManagedShare = workspace.ManagedShare
-	OwnerLabel   = workspace.OwnerLabel
-	ClientLabel  = workspace.ClientLabel
-	PortsLabel   = workspace.PortsLabel
-)
-
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
 type Rewriter struct {
 	Shares  Sharer
@@ -304,13 +294,13 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 func (r *Rewriter) ownerLabels() map[string]string {
 	labels := map[string]string{}
 	if r.Owner != "" {
-		labels[OwnerLabel] = r.Owner
+		labels[workspace.OwnerLabel] = r.Owner
 	}
 	// Independently of the owner: a volume marked with the machine and not the
 	// account is still attributable to a machine, which is what the collector
 	// asks about second.
 	if r.Client != "" {
-		labels[ClientLabel] = r.Client
+		labels[workspace.ClientLabel] = r.Client
 	}
 	return labels
 }
@@ -326,7 +316,7 @@ func (r *Rewriter) ownerLabels() map[string]string {
 func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace.RequestedPorts, changed *bool) error {
 	want := r.ownerLabels()
 	if ports := requested.String(); ports != "" {
-		want[PortsLabel] = ports
+		want[workspace.PortsLabel] = ports
 	}
 	if len(want) == 0 {
 		return nil
@@ -652,7 +642,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency 
 	}
 
 	labels := r.ownerLabels()
-	labels[ManagedLabel] = ManagedShare
+	labels[workspace.ManagedLabel] = workspace.ManagedShare
 
 	if consistency == workspace.Delegated {
 		// Not a volume the container mounts at all: a union the workspace

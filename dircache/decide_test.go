@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/cache"
 )
 
 var (
@@ -63,7 +63,7 @@ func TestDecide(t *testing.T) {
 		"/deleted-but-yours.go": {size: 99, mod: laterHere},
 	})
 
-	changes := []workspace.CacheChange{
+	changes := []cache.Change{
 		{Path: "/theirs.go", Size: 20, ModTime: laterHere.UnixNano()},
 		{Path: "/both.go", Size: 20, ModTime: laterYet.UnixNano()},
 		{Path: "/deleted.go", Deleted: true},
@@ -106,7 +106,7 @@ func TestDecide(t *testing.T) {
 // that mistake is content appearing in somebody's source tree that they never
 // wrote.
 func TestDecideRefusesAnIncompleteCache(t *testing.T) {
-	changes := []workspace.CacheChange{{Path: "/anything.go", Size: 1, ModTime: sentAt.UnixNano()}}
+	changes := []cache.Change{{Path: "/anything.go", Size: 1, ModTime: sentAt.UnixNano()}}
 
 	if got := decide(nil, changes, localFrom(nil), 0, false); len(got) != 0 {
 		t.Errorf("decided %v on an incomplete cache, want nothing", got)
@@ -122,7 +122,7 @@ func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
 	// The workspace's clock runs an hour ahead. Its file was written a minute
 	// BEFORE the local one, and only the correction reveals that.
 	const skew = time.Hour
-	changes := []workspace.CacheChange{
+	changes := []cache.Change{
 		{Path: "/both.go", Size: 20, ModTime: laterHere.Add(skew).UnixNano()},
 	}
 
@@ -144,7 +144,7 @@ func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
 // a file that exists here is left alone rather than overwritten by a guess.
 func TestDecideLeavesUnsentPathsAlone(t *testing.T) {
 	local := localFrom(map[string]stub{"/mine.go": {size: 7, mod: laterHere}})
-	changes := []workspace.CacheChange{
+	changes := []cache.Change{
 		{Path: "/mine.go", Size: 20, ModTime: laterYet.UnixNano()},
 		{Path: "/gone.go", Deleted: true},
 	}
@@ -193,7 +193,7 @@ func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
 
 	// Both are in the cache layer. Only the second differs from what the fill
 	// put there.
-	changes := []workspace.CacheChange{
+	changes := []cache.Change{
 		{Path: "/filled.go", Size: 10, ModTime: sentAt.UnixNano()},
 		{Path: "/written.go", Size: 20, ModTime: laterHere.UnixNano()},
 	}
@@ -214,7 +214,7 @@ func TestDecideCarriesBackASameSizedRewrite(t *testing.T) {
 	manifest := map[string]baseline{"/same-size.go": {Size: 10, ModTime: sentAt}}
 	local := localFrom(map[string]stub{"/same-size.go": {size: 10, mod: sentAt}})
 
-	changes := []workspace.CacheChange{
+	changes := []cache.Change{
 		{Path: "/same-size.go", Size: 10, ModTime: laterHere.UnixNano()},
 	}
 

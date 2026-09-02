@@ -1,6 +1,6 @@
 //go:build !linux
 
-package notify
+package replay
 
 import "errors"
 

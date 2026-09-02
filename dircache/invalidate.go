@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/notify"
 )
 
 // Keeping a cache honest when the tree under it changes (ADR 0044).
@@ -55,7 +55,7 @@ type invalidator struct {
 // is gone shadows its absence for as long as it sits there. Every share this
 // cache holds is checked against this machine's own disk, which is local work
 // and no round trips unless something really is missing.
-func (c *Cache) Lost(notice workspace.FSNotice) {
+func (c *Cache) Lost(notice notify.Notice) {
 	c.log().Warn("the watcher dropped changes; checking the caches against this machine",
 		"reason", notice.Reason, "dropped", notice.Dropped)
 
@@ -75,7 +75,7 @@ func (c *Cache) Lost(notice workspace.FSNotice) {
 //
 // Cheap and non-blocking on purpose: it runs on the change source's own path,
 // and a share with no cache -- which is most of them -- costs one map lookup.
-func (c *Cache) Observe(event workspace.FSEvent) {
+func (c *Cache) Observe(event notify.Event) {
 	if _, ok := c.shares.root(event.Export); !ok {
 		return
 	}
@@ -92,7 +92,7 @@ func (c *Cache) Observe(event workspace.FSEvent) {
 		return
 	}
 
-	deleted := event.Op&(workspace.OpRemove|workspace.OpRename) != 0
+	deleted := event.Op&(notify.OpRemove|notify.OpRename) != 0
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()

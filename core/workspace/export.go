@@ -148,8 +148,13 @@ func IsManagedVolume(name string) bool {
 	return strings.HasPrefix(name, VolumeNamePrefix)
 }
 
-// cwdSuffix names the volume backing the working-directory share.
-const cwdSuffix = "cwd"
+// CWDShareID names the working-directory share wherever an id is needed: the
+// volume backing it here, and the union's mountpoints in core-agent/union.
+// Exported because that second caller had its own copy of the literal, and a
+// drift between them makes the agent report a cache volume that does not exist
+// -- after which the collector believes no cache is in use and empties one
+// under a running container.
+const CWDShareID = "cwd"
 
 // VolumeNameForExport is the volume backing any export path.
 //
@@ -159,7 +164,7 @@ const cwdSuffix = "cwd"
 // commonest bind of all, `-v .:/app`, arrives here as "/cwd".
 func VolumeNameForExport(client, exportPath string) (string, error) {
 	if exportPath == ExportCWD {
-		return VolumeNameForID(client, cwdSuffix), nil
+		return VolumeNameForID(client, CWDShareID), nil
 	}
 	id, err := ParseID(exportPath)
 	if err != nil {
@@ -223,7 +228,7 @@ func IsCacheVolume(name string) bool {
 // copies drifted, and CLAUDE.md keeps that as a retired invariant precisely so
 // it is not done again.
 func validShare(share string) bool {
-	if share == cwdSuffix {
+	if share == CWDShareID {
 		return true
 	}
 	_, err := ParseID(VolumeNamePrefix + share)

@@ -52,7 +52,7 @@ const Root = "/run/rd-union"
 
 // Spec is one share's union, fully resolved. Everything in it is a path or a
 // number the agent worked out; nothing here is taken from the client except
-// through workspace.CacheRequest.Validate.
+// through cache.Request.Validate.
 type Spec struct {
 	// PID is the daemon whose mount namespace the union belongs in. Zero means
 	// this process's own, which is the shared-daemon mode (ADR 0012), where
@@ -76,7 +76,7 @@ type Spec struct {
 // id is the share's identifier, used to name its mountpoints.
 func (s Spec) id() string {
 	if s.Export == workspace.ExportCWD {
-		return "cwd"
+		return workspace.CWDShareID
 	}
 	return strings.TrimPrefix(s.Export, workspace.ExportMountPrefix)
 }

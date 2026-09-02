@@ -47,7 +47,7 @@ than trusted.
 
 | # | Title |
 |---|---|
-| [0021](0021-the-module-layout.md) | The module layout — six modules, and the three questions that place a package |
+| [0021](0021-the-module-layout.md) | The module layout — two axes: modules by side, packages by feature |
 
 ## Daemons
 

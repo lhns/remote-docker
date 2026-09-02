@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/core/cache"
 )
 
 // fakeStore is a Store that holds what it was given, so the policy can be
@@ -22,7 +22,7 @@ type fakeStore struct {
 	dropped []string
 	pulled  []string
 
-	changes    []workspace.CacheChange
+	changes    []cache.Change
 	changesErr error
 
 	// files is what Pull hands back, by share-relative path.
@@ -43,7 +43,7 @@ func (f *fakeStore) Drop(_ context.Context, _ string, paths []string) error {
 	return nil
 }
 
-func (f *fakeStore) Changes(_ context.Context, _ string) ([]workspace.CacheChange, error) {
+func (f *fakeStore) Changes(_ context.Context, _ string) ([]cache.Change, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.changes, f.changesErr
@@ -167,7 +167,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 
 	changedAt := info.ModTime().Add(time.Minute)
 	store := &fakeStore{
-		changes: []workspace.CacheChange{
+		changes: []cache.Change{
 			{Path: "/main.go", Size: 6, ModTime: changedAt.UnixNano()},
 		},
 		files: map[string]File{
@@ -220,7 +220,7 @@ func TestWriteBackShareStopsWhenTheShareIsGone(t *testing.T) {
 // missing file was never sent or was deleted.
 func TestWriteBackShareWaitsForTheFill(t *testing.T) {
 	store := &fakeStore{
-		changes: []workspace.CacheChange{{Path: "/main.go", Size: 1, ModTime: 1}},
+		changes: []cache.Change{{Path: "/main.go", Size: 1, ModTime: 1}},
 	}
 	c := cacheWith(t, store)
 	c.shares.set("/cwd", t.TempDir(), &fillState{Done: false})

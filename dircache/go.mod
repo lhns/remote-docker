@@ -1,8 +1,8 @@
 // A cache of a directory tree, kept coherent in both directions.
 //
-// Its own module rather than a package in core-client so the engine can be
-// taken without that module's seven third-party requires. It has none, and
-// keeping it so is the whole reason this file is separate (ADR 0021).
+// A module rather than a package because a module is the only thing Go lets
+// refuse a dependency. This one has none, and inside core-client it could not
+// keep that -- which is the whole reason this file exists (ADR 0021).
 module github.com/lhns/remote-docker/dircache
 
 go 1.26.3

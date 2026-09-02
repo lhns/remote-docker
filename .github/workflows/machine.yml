@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on the five modules because the root is not one. See ci.yml.
+      # Keyed on the modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
@@ -75,6 +75,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
 
       - uses: actions/download-artifact@v8
         with:

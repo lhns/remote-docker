@@ -1,8 +1,10 @@
-package workspace
+package cache
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // The client and the agent both call Validate, and the agent's call is the one
@@ -10,36 +12,36 @@ import (
 // to remove inside the workspace.
 func TestCacheRequestValidate(t *testing.T) {
 	const share = "/m/00112233445566ff"
-	cache := VolumeNameForID("aabbccdd", "00112233445566ff")
+	cache := workspace.VolumeNameForID("aabbccdd", "00112233445566ff")
 
 	for _, c := range []struct {
 		name string
-		req  CacheRequest
+		req  Request
 		want string // a substring of the refusal, or "" to accept
 	}{
 		{
 			name: "a prepare with a port and a managed volume",
-			req:  CacheRequest{Op: OpPrepare, Export: share, Port: 30001, Cache: cache},
+			req:  Request{Op: OpPrepare, Export: share, Port: 30001, Cache: cache},
 		},
 		{
 			name: "a prepare with no port has no address to mount from",
-			req:  CacheRequest{Op: OpPrepare, Export: share, Cache: cache},
+			req:  Request{Op: OpPrepare, Export: share, Cache: cache},
 			want: "port",
 		},
 		{
 			// The agent would otherwise mount whatever it was handed, inside
 			// the account's daemon, as root.
 			name: "a prepare naming a volume this client did not create",
-			req:  CacheRequest{Op: OpPrepare, Export: share, Port: 30001, Cache: "postgres-data"},
+			req:  Request{Op: OpPrepare, Export: share, Port: 30001, Cache: "postgres-data"},
 			want: "managed volume",
 		},
 		{
 			name: "an apply",
-			req:  CacheRequest{Op: OpApply, Export: share, Bytes: 4096},
+			req:  Request{Op: OpApply, Export: share, Bytes: 4096},
 		},
 		{
 			name: "an apply of nothing, which is how an empty batch looks",
-			req:  CacheRequest{Op: OpApply, Export: share},
+			req:  Request{Op: OpApply, Export: share},
 		},
 		{
 			// The field is what makes compression a negotiation rather than a
@@ -47,42 +49,42 @@ func TestCacheRequestValidate(t *testing.T) {
 			// be worse than refusing: the payload would reach the archive
 			// reader as whatever the bytes happened to be.
 			name: "an apply asking for a codec this version has not got",
-			req:  CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"},
+			req:  Request{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"},
 			want: "codec",
 		},
 		{
 			name: "an apply compressed with the codec this version has",
-			req:  CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd},
+			req:  Request{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd},
 		},
 		{
 			name: "a drop",
-			req:  CacheRequest{Op: OpDrop, Export: share, Paths: []string{"/pkg/lib.go"}},
+			req:  Request{Op: OpDrop, Export: share, Paths: []string{"/pkg/lib.go"}},
 		},
 		{
 			name: "a drop that names nothing",
-			req:  CacheRequest{Op: OpDrop, Export: share},
+			req:  Request{Op: OpDrop, Export: share},
 			want: "no paths",
 		},
 		{
 			name: "a drop that walks out of the share",
-			req:  CacheRequest{Op: OpDrop, Export: share, Paths: []string{"/../../etc/shadow"}},
+			req:  Request{Op: OpDrop, Export: share, Paths: []string{"/../../etc/shadow"}},
 			want: "component",
 		},
 		{
 			// Removing the share root is unmounting it, and the mount goes
 			// when the channel does rather than on request.
 			name: "a drop that names the share root",
-			req:  CacheRequest{Op: OpDrop, Export: share, Paths: []string{"/"}},
+			req:  Request{Op: OpDrop, Export: share, Paths: []string{"/"}},
 			want: "root",
 		},
 		{
 			name: "an export that is not one this program serves",
-			req:  CacheRequest{Op: OpChanges, Export: "/etc"},
+			req:  Request{Op: OpChanges, Export: "/etc"},
 			want: "export",
 		},
 		{
 			name: "an op from a client newer than this agent",
-			req:  CacheRequest{Op: "promote", Export: share},
+			req:  Request{Op: "promote", Export: share},
 			want: "unknown op",
 		},
 	} {
@@ -103,11 +105,11 @@ func TestCacheRequestValidate(t *testing.T) {
 // The cwd share is a share like any other, and the commonest one of all: it is
 // what `-v .:/app` becomes.
 func TestCacheRequestAcceptsTheWorkingDirectoryShare(t *testing.T) {
-	req := CacheRequest{
+	req := Request{
 		Op:     OpPrepare,
-		Export: ExportCWD,
+		Export: workspace.ExportCWD,
 		Port:   30001,
-		Cache:  VolumeNameForID("aabbccdd", "cwd"),
+		Cache:  workspace.VolumeNameForID("aabbccdd", "cwd"),
 	}
 	if err := req.Validate(); err != nil {
 		t.Errorf("Validate() = %v", err)
@@ -121,13 +123,13 @@ func TestCacheRequestAcceptsTheWorkingDirectoryShare(t *testing.T) {
 func TestCacheCodecNegotiation(t *testing.T) {
 	for _, c := range []struct {
 		name  string
-		hello CacheHello
+		hello Hello
 		codec string
 		want  bool
 	}{
 		{
 			name:  "an agent that announces zstd",
-			hello: CacheHello{Version: CacheVersion, Codecs: Codecs()},
+			hello: Hello{Version: Version, Codecs: Codecs()},
 			codec: CodecZstd,
 			want:  true,
 		},
@@ -135,19 +137,19 @@ func TestCacheCodecNegotiation(t *testing.T) {
 			// The whole reason the client picks from the greeting rather than
 			// from what it can produce.
 			name:  "an agent from before compression",
-			hello: CacheHello{Version: CacheVersion},
+			hello: Hello{Version: Version},
 			codec: CodecZstd,
 			want:  false,
 		},
 		{
 			name:  "a plain tar, which every version reads",
-			hello: CacheHello{Version: CacheVersion},
+			hello: Hello{Version: Version},
 			codec: CodecNone,
 			want:  true,
 		},
 		{
 			name:  "a codec nobody has",
-			hello: CacheHello{Version: CacheVersion, Codecs: Codecs()},
+			hello: Hello{Version: Version, Codecs: Codecs()},
 			codec: "brotli",
 			want:  false,
 		},
@@ -165,10 +167,10 @@ func TestCacheCodecNegotiation(t *testing.T) {
 func TestCacheRequestCodecs(t *testing.T) {
 	const share = "/m/00112233445566ff"
 
-	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd}).Validate(); err != nil {
+	if err := (Request{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd}).Validate(); err != nil {
 		t.Errorf("a zstd batch was refused: %v", err)
 	}
-	if err := (CacheRequest{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"}).Validate(); err == nil {
+	if err := (Request{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"}).Validate(); err == nil {
 		t.Error("a batch named an encoding this version has not got and was accepted")
 	}
 	if !SupportsCodec(CodecNone) {

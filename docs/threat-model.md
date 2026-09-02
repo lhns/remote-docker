@@ -208,12 +208,12 @@ sequenceDiagram
 workspace is authenticated by its SSH host key, inside the tunnel, and the
 machine by its client key. So `insecure` and a plain `ws://` URL give up knowing
 which proxy answered and give up nothing about whether the session itself is
-authenticated and encrypted. `core-client/wstunnel` states this at the top of
+authenticated and encrypted. `core-client/tunnelclient/websocket.go` states this at the top of
 the package; `client/internal/config/transport.go` is where a scheme becomes a
 dialler.
 
 **I — the agent holds no certificate (3).** It serves `ws` and never `wss`
-(`agent/internal/wslisten`). TLS is the proxy's job, so the workspace has no
+(`core-agent/wslisten`). TLS is the proxy's job, so the workspace has no
 private key to protect, rotate or leak, and a deployment that wants TLS end to
 end runs the proxy on the same host.
 
@@ -574,13 +574,13 @@ sequenceDiagram
 ```
 
 **T/E — a root process told which path to touch (2–7).** Two independent
-checks. `workspace.FSEvent.Validate` (`core/workspace/notify.go`) whitelists the
+checks. `notify.Event.Validate` (`core/notify/notify.go`) whitelists the
 export and the path spelling, deliberately without `path.Clean`, because
 cleaning *repairs* a traversal into something plausible instead of refusing it.
 Then `relocate` re-checks containment after joining onto the daemon's root,
 because `path.Join` cleans: `/proc/42/root` joined to `/../../etc/shadow` is
 `/proc/etc/shadow`, outside the root and looking correct. *Covered by*
-`core-agent/notify/relocate_test.go`.
+`core-agent/replay/relocate_test.go`.
 
 **T — replay mutating the user's data (7).** Replay may never create, truncate
 or change content: the file may have been deleted between the client observing
@@ -721,13 +721,13 @@ sequenceDiagram
 ```
 
 **T/E — a root process told which paths to write (3, 6).** Two independent
-checks, exactly as flow 6. `workspace.CacheRequest.Validate` whitelists the
+checks, exactly as flow 6. `cache.Request.Validate` whitelists the
 export and every path without `path.Clean`, because cleaning *repairs* a
 traversal into something plausible instead of refusing it. Then `within`
 re-checks containment after the join, because `path.Join` cleans. Every tar
 entry goes through the same `within` on its own name, so the archive is not a
 way around the check that the request went through. *Covered by*
-`core/workspace/cache_test.go`.
+`core/cache/cache_test.go`.
 
 **T — a drop removes files, which nothing else in this system may do (9).** The
 Docker API can write into a volume and can never remove from one, which is the

@@ -1,15 +1,18 @@
-// Package wstunnel opens a WebSocket to a workspace and returns it as a
-// net.Conn, for tunnelclient to run SSH over.
+package tunnelclient
+
+// Reaching a workspace through an HTTP reverse proxy: a WebSocket returned as
+// a net.Conn, which is what Config.Dial takes.
 //
-// It is used when the workspace is behind an HTTP reverse proxy, which is how a
-// workspace is reached without an SSH port open to it.
+// In this package rather than beside it, because dialling the tunnel over TCP
+// and dialling it through a proxy are one subject, and the seam between them
+// was a single function. Used when the workspace is behind an HTTP reverse
+// proxy, which is how one is reached without an SSH port open to it.
 //
 // TLS on this connection authenticates the proxy. It does not authenticate the
 // workspace: the SSH host key does that, inside the tunnel, and the client key
 // identifies the machine. This is why Insecure and ws:// are offered -- both
 // give up checking which proxy answered, and neither affects whether the SSH
 // session itself is authenticated and encrypted. See ADR 0034.
-package wstunnel
 
 import (
 	"context"
@@ -24,8 +27,8 @@ import (
 	"github.com/coder/websocket"
 )
 
-// Options describe one workspace's WebSocket endpoint.
-type Options struct {
+// WebSocketOptions describe one workspace's WebSocket endpoint.
+type WebSocketOptions struct {
 	// URL is the endpoint, ws:// or wss://.
 	URL string
 
@@ -52,10 +55,8 @@ type Options struct {
 	Timeout time.Duration
 }
 
-const defaultTimeout = 30 * time.Second
-
-// Dialer returns a function tunnelclient.Config.Dial can use.
-func Dialer(opts Options) (func(ctx context.Context) (net.Conn, error), error) {
+// WebSocketDialer returns a function tunnelclient.Config.Dial can use.
+func WebSocketDialer(opts WebSocketOptions) (func(ctx context.Context) (net.Conn, error), error) {
 	if opts.Timeout == 0 {
 		opts.Timeout = defaultTimeout
 	}
@@ -66,7 +67,7 @@ func Dialer(opts Options) (func(ctx context.Context) (net.Conn, error), error) {
 	}
 
 	if opts.Addr == "" {
-		return nil, fmt.Errorf("wstunnel: Options.Addr is required, or no host key can be checked")
+		return nil, fmt.Errorf("wstunnel: WebSocketOptions.Addr is required, or no host key can be checked")
 	}
 
 	// One client, and therefore one connection pool, for every dial to this
@@ -144,7 +145,7 @@ func hint(resp *http.Response) string {
 	return ""
 }
 
-func tlsConfig(opts Options) (*tls.Config, error) {
+func tlsConfig(opts WebSocketOptions) (*tls.Config, error) {
 	if opts.Insecure {
 		// #nosec G402 -- deliberate and per workspace. SSH inside still
 		// authenticates both ends; see the package comment.

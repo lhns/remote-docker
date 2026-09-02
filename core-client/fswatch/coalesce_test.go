@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -12,8 +13,8 @@ import (
 // no sleeps, no synctest, and nothing that can go flaky on a loaded runner.
 var base = time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 
-func ev(p string, op workspace.FSOp) workspace.FSEvent {
-	return workspace.FSEvent{Export: workspace.ExportCWD, Path: p, Op: op}
+func ev(p string, op notify.Op) notify.Event {
+	return notify.Event{Export: workspace.ExportCWD, Path: p, Op: op}
 }
 
 // One editor save produces three to five raw events for the same file. They
@@ -22,9 +23,9 @@ func ev(p string, op workspace.FSOp) workspace.FSEvent {
 func TestCoalescesRepeatedEventsForOnePath(t *testing.T) {
 	c := newCoalescer(40*time.Millisecond, 250*time.Millisecond, 0)
 
-	c.add(base, ev("/main.go", workspace.OpWrite))
-	c.add(base.Add(5*time.Millisecond), ev("/main.go", workspace.OpWrite))
-	c.add(base.Add(10*time.Millisecond), ev("/main.go", workspace.OpAttrib))
+	c.add(base, ev("/main.go", notify.OpWrite))
+	c.add(base.Add(5*time.Millisecond), ev("/main.go", notify.OpWrite))
+	c.add(base.Add(10*time.Millisecond), ev("/main.go", notify.OpAttrib))
 
 	if events, _ := c.flush(base.Add(20 * time.Millisecond)); len(events) != 0 {
 		t.Fatalf("flushed %d events while still inside the debounce window", len(events))
@@ -37,7 +38,7 @@ func TestCoalescesRepeatedEventsForOnePath(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("flushed %d events, want 1: %+v", len(events), events)
 	}
-	if got, want := events[0].Op, workspace.OpWrite|workspace.OpAttrib; got != want {
+	if got, want := events[0].Op, notify.OpWrite|notify.OpAttrib; got != want {
 		t.Errorf("merged op = %v, want %v", got, want)
 	}
 }
@@ -50,7 +51,7 @@ func TestMaxDelayForcesAFlush(t *testing.T) {
 
 	at := base
 	for range 20 {
-		c.add(at, ev("/build.log", workspace.OpWrite))
+		c.add(at, ev("/build.log", notify.OpWrite))
 		at = at.Add(20 * time.Millisecond) // always inside the debounce window
 	}
 
@@ -65,27 +66,27 @@ func TestMaxDelayForcesAFlush(t *testing.T) {
 func TestMergeOps(t *testing.T) {
 	tests := []struct {
 		name string
-		seq  []workspace.FSOp
-		want workspace.FSOp
+		seq  []notify.Op
+		want notify.Op
 	}{
-		{"write then write", []workspace.FSOp{workspace.OpWrite, workspace.OpWrite}, workspace.OpWrite},
-		{"create then write", []workspace.FSOp{workspace.OpCreate, workspace.OpWrite}, workspace.OpCreate | workspace.OpWrite},
+		{"write then write", []notify.Op{notify.OpWrite, notify.OpWrite}, notify.OpWrite},
+		{"create then write", []notify.Op{notify.OpCreate, notify.OpWrite}, notify.OpCreate | notify.OpWrite},
 		// A temporary file: it was made and it is gone, and the net truth is
 		// that it is gone.
-		{"create then remove", []workspace.FSOp{workspace.OpCreate, workspace.OpRemove}, workspace.OpRemove},
-		{"write then remove", []workspace.FSOp{workspace.OpWrite, workspace.OpRemove}, workspace.OpRemove},
+		{"create then remove", []notify.Op{notify.OpCreate, notify.OpRemove}, notify.OpRemove},
+		{"write then remove", []notify.Op{notify.OpWrite, notify.OpRemove}, notify.OpRemove},
 		// The atomic save every editor performs: the original is unlinked and
 		// a new file takes its place. The net truth is that it is there.
-		{"remove then create", []workspace.FSOp{workspace.OpRemove, workspace.OpCreate}, workspace.OpCreate},
-		{"rename then create", []workspace.FSOp{workspace.OpRename, workspace.OpCreate}, workspace.OpCreate},
-		{"remove then create then write", []workspace.FSOp{workspace.OpRemove, workspace.OpCreate, workspace.OpWrite}, workspace.OpCreate | workspace.OpWrite},
-		{"write then rename", []workspace.FSOp{workspace.OpWrite, workspace.OpRename}, workspace.OpRename},
-		{"attrib is additive", []workspace.FSOp{workspace.OpWrite, workspace.OpAttrib}, workspace.OpWrite | workspace.OpAttrib},
+		{"remove then create", []notify.Op{notify.OpRemove, notify.OpCreate}, notify.OpCreate},
+		{"rename then create", []notify.Op{notify.OpRename, notify.OpCreate}, notify.OpCreate},
+		{"remove then create then write", []notify.Op{notify.OpRemove, notify.OpCreate, notify.OpWrite}, notify.OpCreate | notify.OpWrite},
+		{"write then rename", []notify.Op{notify.OpWrite, notify.OpRename}, notify.OpRename},
+		{"attrib is additive", []notify.Op{notify.OpWrite, notify.OpAttrib}, notify.OpWrite | notify.OpAttrib},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var have workspace.FSOp
+			var have notify.Op
 			for i, op := range tt.seq {
 				if i == 0 {
 					have = op
@@ -107,11 +108,11 @@ func TestMergeOps(t *testing.T) {
 func TestFlushIsInArrivalOrder(t *testing.T) {
 	c := newCoalescer(10*time.Millisecond, time.Second, 0)
 
-	c.add(base, ev("/src", workspace.OpCreate))
-	c.add(base.Add(time.Millisecond), ev("/src/a.go", workspace.OpCreate))
-	c.add(base.Add(2*time.Millisecond), ev("/src/b.go", workspace.OpCreate))
+	c.add(base, ev("/src", notify.OpCreate))
+	c.add(base.Add(time.Millisecond), ev("/src/a.go", notify.OpCreate))
+	c.add(base.Add(2*time.Millisecond), ev("/src/b.go", notify.OpCreate))
 	// A later touch of the FIRST path must not move it to the back.
-	c.add(base.Add(3*time.Millisecond), ev("/src", workspace.OpAttrib))
+	c.add(base.Add(3*time.Millisecond), ev("/src", notify.OpAttrib))
 
 	events, _ := c.flush(base.Add(time.Second))
 	var got []string
@@ -134,10 +135,10 @@ func TestFlushIsInArrivalOrder(t *testing.T) {
 func TestPendingCapProducesANotice(t *testing.T) {
 	c := newCoalescer(10*time.Millisecond, time.Second, 2)
 
-	c.add(base, ev("/a/one.go", workspace.OpWrite))
-	c.add(base, ev("/a/two.go", workspace.OpWrite))
-	c.add(base, ev("/a/b/three.go", workspace.OpWrite)) // dropped
-	c.add(base, ev("/a/c/four.go", workspace.OpWrite))  // dropped
+	c.add(base, ev("/a/one.go", notify.OpWrite))
+	c.add(base, ev("/a/two.go", notify.OpWrite))
+	c.add(base, ev("/a/b/three.go", notify.OpWrite)) // dropped
+	c.add(base, ev("/a/c/four.go", notify.OpWrite))  // dropped
 
 	events, notices := c.flush(base.Add(time.Second))
 	if len(events) != 2 {
@@ -164,14 +165,14 @@ func TestPendingCapProducesANotice(t *testing.T) {
 func TestCapDoesNotRejectAnAlreadyPendingPath(t *testing.T) {
 	c := newCoalescer(10*time.Millisecond, time.Second, 1)
 
-	c.add(base, ev("/a.go", workspace.OpWrite))
-	c.add(base.Add(time.Millisecond), ev("/a.go", workspace.OpAttrib))
+	c.add(base, ev("/a.go", notify.OpWrite))
+	c.add(base.Add(time.Millisecond), ev("/a.go", notify.OpAttrib))
 
 	events, notices := c.flush(base.Add(time.Second))
 	if len(notices) != 0 {
 		t.Errorf("merging into a pending path counted as a loss: %+v", notices)
 	}
-	if len(events) != 1 || events[0].Op != workspace.OpWrite|workspace.OpAttrib {
+	if len(events) != 1 || events[0].Op != notify.OpWrite|notify.OpAttrib {
 		t.Errorf("got %+v, want one merged event", events)
 	}
 }
@@ -216,7 +217,7 @@ func TestNextDue(t *testing.T) {
 		t.Error("nextDue reported work with nothing pending")
 	}
 
-	c.add(base, ev("/a.go", workspace.OpWrite))
+	c.add(base, ev("/a.go", notify.OpWrite))
 	at, ok := c.nextDue(base)
 	if !ok {
 		t.Fatal("nextDue reported nothing with an event pending")
@@ -226,7 +227,7 @@ func TestNextDue(t *testing.T) {
 	}
 
 	// Once the max delay is nearer than the debounce, it governs.
-	c.add(base.Add(240*time.Millisecond), ev("/a.go", workspace.OpWrite))
+	c.add(base.Add(240*time.Millisecond), ev("/a.go", notify.OpWrite))
 	at, _ = c.nextDue(base.Add(240 * time.Millisecond))
 	if want := base.Add(250 * time.Millisecond); !at.Equal(want) {
 		t.Errorf("nextDue = %v, want %v (max delay)", at, want)
@@ -239,7 +240,7 @@ func TestNextDue(t *testing.T) {
 func TestFlushedEventsAreValid(t *testing.T) {
 	c := newCoalescer(time.Millisecond, time.Second, 0)
 	for _, p := range []string{"/", "/a.go", "/src/deep/nested/file.ts", "/.env", "/café.txt"} {
-		c.add(base, ev(p, workspace.OpWrite))
+		c.add(base, ev(p, notify.OpWrite))
 	}
 	events, _ := c.flush(base.Add(time.Second))
 	if len(events) != 5 {
@@ -263,7 +264,7 @@ func TestNoticesArePerExport(t *testing.T) {
 	if len(notices) != 2 {
 		t.Fatalf("got %d notices, want one per export", len(notices))
 	}
-	byExport := map[string]workspace.FSNotice{}
+	byExport := map[string]notify.Notice{}
 	for _, n := range notices {
 		byExport[n.Export] = n
 	}

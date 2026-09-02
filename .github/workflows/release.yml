@@ -282,7 +282,7 @@ jobs:
           # clone does not have.
           fetch-depth: 0
 
-      # Keyed on the five modules because the root is not one. See ci.yml.
+      # Keyed on the modules because the root is not one. See ci.yml.
       - uses: actions/setup-go@v7
         with:
           go-version-file: core/go.mod
@@ -293,6 +293,7 @@ jobs:
             core-client/go.sum
             agent/go.sum
             client/go.sum
+            test/probes/go.sum
 
       # What the embedded Compose reports as its version. Read from the module
       # graph so it cannot drift from go.mod.

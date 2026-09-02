@@ -515,7 +515,7 @@ echo "== 10b. a published UDP port answers here =="
 # The probe is both ends deliberately. Nothing in alpine echoes UDP, and the
 # two netcats disagree about -u and -w, so a test built on whichever one a
 # runner has fails for a reason it is not about.
-if ! (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/udpecho" ./probes/udpecho); then
+if ! (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/udpecho" ./udpecho); then
     bad "could not build the udp echo probe"
 elif ! dockert run -d --name itest-udp -p 15353:5353/udp     -v "$PROJECT:/probe:ro" alpine:3 /probe/udpecho :5353 >"$WORK/udp-run.log" 2>&1; then
     bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '
@@ -588,7 +588,7 @@ mkdir -p "$WATCHDIR"
 # alpine. That keeps this test about file watching rather than about whether
 # `docker build` works through the proxy, and avoids shipping $WORK -- which
 # holds the private key and a live socket -- as a build context.
-if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./probes/watchprobe); then
+if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe); then
     # The error is NOT swallowed. The first run of this test produced an
     # empty log and no explanation, which cost a CI round trip to diagnose:
     # the binary was on the share with a synthesised mode 0644 and could not
@@ -657,8 +657,8 @@ echo "== 11d. which syscall makes a container's watcher fire? (ADR 0014 spike) =
 POKEDIR="$WORK/poked"
 mkdir -p "$POKEDIR"
 
-if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./probes/watchprobe &&
-        CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/pokeprobe" ./probes/pokeprobe); then
+if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe &&
+        CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/pokeprobe" ./pokeprobe); then
 
     # The files each primitive acts on. Pre-created on the client where the
     # primitive needs an existing file; 'create' and 'unlink' are handled
@@ -1366,7 +1366,7 @@ REPLAYDIR="$WORK/replayed"
 mkdir -p "$REPLAYDIR"
 echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
-if (cd "$REPO/core" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./probes/watchprobe); then
+if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe); then
     REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 

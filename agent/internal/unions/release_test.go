@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/core-agent/union"
+	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -136,8 +137,8 @@ func TestPrepareRefusesAnotherMachinesCache(t *testing.T) {
 	}
 
 	m := &Manager{Volumes: fakeVolumes{}, shares: map[string]*live{}}
-	req := workspace.CacheRequest{
-		Op: workspace.OpPrepare, Export: export, Port: 30001, Cache: notOurs,
+	req := cache.Request{
+		Op: cache.OpPrepare, Export: export, Port: 30001, Cache: notOurs,
 	}
 
 	// It is a managed volume, so Validate accepts it: this refusal is the only

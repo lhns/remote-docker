@@ -22,7 +22,9 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/unions"
-	"github.com/lhns/remote-docker/core-agent/notify"
+	"github.com/lhns/remote-docker/core-agent/replay"
+	"github.com/lhns/remote-docker/core/cache"
+	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -45,13 +47,13 @@ func (s *Server) handleSession(session gssh.Session) {
 	command := strings.Join(session.Command(), " ")
 
 	switch command {
-	case tunnel.InfoCommand:
+	case workspace.InfoCommand:
 		s.serveInfo(session, account)
-	case tunnel.DialStdioCommand:
+	case workspace.DialStdioCommand:
 		s.serveDockerSocket(session, account)
-	case tunnel.NotifyCommand:
+	case notify.Command:
 		s.serveNotify(session, account)
-	case tunnel.CacheCommand:
+	case cache.Command:
 		s.serveCache(session, account)
 	default:
 		s.serveExec(session, account, command)
@@ -157,7 +159,7 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 // touches are volume mountpoints under /var/lib/docker, which the account
 // cannot reach. Every path is re-validated here rather than trusted, because
 // this is a root process being told which path to touch. See
-// workspace.FSEvent.Validate, which both sides call.
+// notify.Event.Validate, which both sides call.
 func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	// The volume being replayed into belongs to THIS account's daemon, and the
 	// mountpoint that daemon reports is a path in ITS filesystem. Both have to
@@ -176,9 +178,9 @@ func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 		Root: func() (string, error) { t, err := target(); return t.Root, err },
 	}
 
-	replayer := &notify.Replayer{
+	replayer := &replay.Replayer{
 		Volumes: volumes,
-		Poker:   notify.SyscallPoker{},
+		Poker:   replay.SyscallPoker{},
 		// The volume an export lives in belongs to the machine that created
 		// it, so a poke has to name the same one the client's rewriter did.
 		Client: account.Client(),
