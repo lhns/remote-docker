@@ -9,6 +9,26 @@ import (
 	"strings"
 )
 
+// InfoCommand asks the workspace for the parameters this client must agree
+// with: its account, its reverse-tunnel port, the daemon it will reach.
+//
+// Answered from core/workspace, in the same type the client parses with, so the
+// two cannot disagree about the format either.
+const InfoCommand = "workspace-info"
+
+// DialStdioCommand opens a stream to the workspace's Docker socket.
+//
+// `docker system dial-stdio` connects stdin and stdout to /var/run/docker.sock,
+// so a session running it IS a connection to the daemon. That is what lets the
+// client proxy the Docker API without a CLI in the path and without exposing a
+// TCP port anywhere (ADR 0010).
+//
+// The agent does not run the docker CLI to serve this; it dials the socket
+// itself. The command is the NAME of a request, not an instruction to execute
+// something, and the spelling is docker's so that a stock `ssh` reaches the
+// daemon the same way.
+const DialStdioCommand = "docker system dial-stdio"
+
 // Info is what the workspace reports about the calling account.
 //
 // The wire format is the KEY=VALUE text the original shell implementation
@@ -109,6 +129,19 @@ const (
 	// UnionNoDevice means /dev/fuse is not usable there, which is a kernel
 	// module or a container without the device rather than an image.
 	UnionNoDevice = "no-dev-fuse"
+)
+
+// What Mode says: how this workspace serves daemons. Here rather than beside
+// the implementation in agent/internal/daemons, for the reason UnionReady above
+// is here -- the client compares against these, so a value spelled in only one
+// module is a string the other can never recognise. Nothing fails to compile
+// when such a pair drifts.
+const (
+	// ModeShared is one dockerd for every account (ADR 0012).
+	ModeShared = "shared"
+
+	// ModePerAccount is a dockerd per enrolled account (ADR 0019), the default.
+	ModePerAccount = "per-account"
 )
 
 // DockerUnavailable is what the workspace reports when it cannot reach its own

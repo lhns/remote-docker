@@ -76,7 +76,7 @@ type Spec struct {
 // id is the share's identifier, used to name its mountpoints.
 func (s Spec) id() string {
 	if s.Export == workspace.ExportCWD {
-		return "cwd"
+		return workspace.CWDShareID
 	}
 	return strings.TrimPrefix(s.Export, workspace.ExportMountPrefix)
 }

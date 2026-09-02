@@ -1,6 +1,10 @@
 package daemons
 
-import "context"
+import (
+	"context"
+
+	"github.com/lhns/remote-docker/core/workspace"
+)
 
 // Target is where one account's Docker daemon is, in the four ways the agent
 // needs to address it.
@@ -105,14 +109,7 @@ func (m *Manager) Lookup(ctx context.Context, account string) (Target, bool) {
 }
 
 // Mode names this arrangement in workspace-info.
-func (m *Manager) Mode() string { return ModePerAccount }
-
-// The two modes, named once. They travel to the client in workspace-info and
-// are printed by `remote-docker status`.
-const (
-	ModeShared     = "shared"
-	ModePerAccount = "per-account"
-)
+func (m *Manager) Mode() string { return workspace.ModePerAccount }
 
 // shared is the workspace's own dockerd, serving every account (ADR 0012).
 //
@@ -145,7 +142,7 @@ func (s shared) Lookup(_ context.Context, _ string) (Target, bool) {
 // itself uses.
 func (shared) Warm(string) {}
 
-func (shared) Mode() string { return ModeShared }
+func (shared) Mode() string { return workspace.ModeShared }
 
 // Host and NetNSPath are deliberately empty, not filled in with the values
 // that would be equivalent. Empty is the statement that no redirection is

@@ -189,12 +189,12 @@ func (c *Collector) ours(v Volume) bool {
 	if !workspace.IsManagedVolume(v.Name) {
 		return false
 	}
-	if v.Labels[ManagedLabel] != ManagedShare {
+	if v.Labels[workspace.ManagedLabel] != workspace.ManagedShare {
 		return false
 	}
 	// On a shared daemon, another account's share volumes are not ours to
 	// remove even though they carry the same prefix and label.
-	if c.Owner != "" && v.Labels[OwnerLabel] != c.Owner {
+	if c.Owner != "" && v.Labels[workspace.OwnerLabel] != c.Owner {
 		return false
 	}
 	// Nor are another MACHINE's, which carry this account's label as well.
@@ -204,7 +204,7 @@ func (c *Collector) ours(v Volume) bool {
 	// label" is not "mine": an older session of the other machine may still be
 	// using it. `remote gc --orphans` is how those go, deliberately by asking.
 	if c.Client != "" {
-		client := v.Labels[ClientLabel]
+		client := v.Labels[workspace.ClientLabel]
 		unnamed := client == "" && c.Orphans
 		if client != c.Client && !unnamed {
 			return false

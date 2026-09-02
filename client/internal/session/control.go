@@ -73,8 +73,8 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 		//
 		// A container with no client label was started before machines were
 		// named, and counts: it may well be this one's.
-		if c.Labels[rewrite.OwnerLabel] == live.info.User {
-			if client := c.Labels[rewrite.ClientLabel]; client == "" || client == s.clientID {
+		if c.Labels[workspace.OwnerLabel] == live.info.User {
+			if client := c.Labels[workspace.ClientLabel]; client == "" || client == s.clientID {
 				return true, nil
 			}
 		}

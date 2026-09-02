@@ -50,7 +50,7 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	// The greeting first and unconditionally, before anything is read. An
 	// agent too old for this command runs it as a shell and exits 127 with no
 	// output at all, so the client tells "too old" from "version mismatch" by
-	// whether a greeting arrived (see core/tunnel.CacheCommand).
+	// whether a greeting arrived (see core/workspace.CacheCommand).
 	enc := json.NewEncoder(session)
 	hello := &workspace.CacheHello{
 		Version: workspace.CacheVersion,

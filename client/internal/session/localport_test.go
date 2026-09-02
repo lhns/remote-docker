@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/client/internal/ports"
-	"github.com/lhns/remote-docker/client/internal/rewrite"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // container is one the daemon reports, labelled as a machine created it.
@@ -14,7 +14,7 @@ func container(client, label string, published ...ports.Published) ports.Contain
 		ID:     "c1",
 		Name:   "web",
 		Ports:  published,
-		Labels: map[string]string{rewrite.ClientLabel: client, rewrite.PortsLabel: label},
+		Labels: map[string]string{workspace.ClientLabel: client, workspace.PortsLabel: label},
 	}
 }
 

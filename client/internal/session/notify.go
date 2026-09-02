@@ -12,7 +12,6 @@ import (
 	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
-	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -34,7 +33,7 @@ type notifySink struct {
 // 127, indistinguishable from a working channel that has nothing to say.
 // Reading a greeting first is the only thing that tells them apart.
 func openNotify(client *tunnelclient.Client) (*notifySink, error) {
-	stream, err := client.OpenStream(tunnel.NotifyCommand)
+	stream, err := client.OpenStream(workspace.NotifyCommand)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +48,7 @@ func openNotify(client *tunnelclient.Client) (*notifySink, error) {
 	var frame workspace.NotifyFrame
 	if err := json.Unmarshal([]byte(line), &frame); err != nil || frame.Hello == nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("the workspace did not answer %q", tunnel.NotifyCommand)
+		return nil, fmt.Errorf("the workspace did not answer %q", workspace.NotifyCommand)
 	}
 	if frame.Hello.Version != workspace.NotifyVersion {
 		_ = stream.Close()

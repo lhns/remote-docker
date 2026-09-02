@@ -21,6 +21,18 @@ import (
 // Every op here is performed THROUGH the merged mount rather than into the
 // cache layer directly, which is a kernel constraint. The reasoning is in
 // agent/internal/unions/write.go, beside the code it binds.
+// CacheCommand carries a delegated share's cache: preparing its union mount,
+// filling it, and invalidating what changed on the client (ADR 0044).
+//
+// Deliberately not NotifyCommand, which promises to carry no content and to
+// mutate nothing. This one is a sync, and a channel of its own is what keeps
+// that promise true of the other.
+//
+// The same version check: an agent too old to know it runs
+// `sh -c "workspace-cache"` and exits 127, so the client refuses the mode
+// naming the workspace rather than discovering it half way through a mount.
+const CacheCommand = "workspace-cache"
+
 const (
 	// CacheVersion is the wire version, announced by the agent before anything
 	// else so a mismatch is a refusal rather than a stall.

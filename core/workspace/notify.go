@@ -18,6 +18,16 @@ import (
 // and let the kernel emit the event as a side effect. So the client watches
 // its own filesystem, where the changes actually happen, and tells the agent
 // which paths to touch.
+// NotifyCommand carries the client's filesystem changes to be replayed inside
+// the workspace, so watchers in containers see edits made on the user's machine
+// (ADR 0016).
+//
+// An agent too old to know it runs `sh -c "workspace-notify"`, which exits 127.
+// That is the version check: the client offers, and an agent that cannot do it
+// fails in a way the client recognises rather than one it has to ask about
+// first.
+const NotifyCommand = "workspace-notify"
+
 const (
 	// NotifyVersion is the wire version. The agent announces it first: an
 	// agent too old to know this command would otherwise fall through to the

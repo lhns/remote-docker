@@ -15,7 +15,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
-	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
 	"github.com/lhns/remote-docker/dircache"
 )
@@ -47,7 +46,7 @@ type cacheChannel struct {
 // one runs `sh -c "workspace-cache"` and exits 127 with nothing to say. Reading
 // a greeting first is the only thing that separates them.
 func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
-	stream, err := client.OpenStream(tunnel.CacheCommand)
+	stream, err := client.OpenStream(workspace.CacheCommand)
 	if err != nil {
 		return nil, err
 	}

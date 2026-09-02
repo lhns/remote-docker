@@ -45,13 +45,13 @@ func (s *Server) handleSession(session gssh.Session) {
 	command := strings.Join(session.Command(), " ")
 
 	switch command {
-	case tunnel.InfoCommand:
+	case workspace.InfoCommand:
 		s.serveInfo(session, account)
-	case tunnel.DialStdioCommand:
+	case workspace.DialStdioCommand:
 		s.serveDockerSocket(session, account)
-	case tunnel.NotifyCommand:
+	case workspace.NotifyCommand:
 		s.serveNotify(session, account)
-	case tunnel.CacheCommand:
+	case workspace.CacheCommand:
 		s.serveCache(session, account)
 	default:
 		s.serveExec(session, account, command)

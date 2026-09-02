@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/client/internal/rewrite"
+	"github.com/lhns/remote-docker/core/workspace"
 
 	"maps"
 )
@@ -118,7 +119,7 @@ func (c *APIClient) replaceIfStale(ctx context.Context, name string, want map[st
 		// Not there, or not answerable. Create will say what is wrong.
 		return nil
 	}
-	if existing.Labels[rewrite.ManagedLabel] != rewrite.ManagedShare {
+	if existing.Labels[workspace.ManagedLabel] != workspace.ManagedShare {
 		return nil
 	}
 	if maps.Equal(existing.Options, want) {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type fakeVolumeStore struct {
@@ -32,7 +34,7 @@ func (f *fakeVolumeStore) RemoveVolume(_ context.Context, name string) error {
 }
 
 func managed(name, owner string) Volume {
-	return Volume{Name: name, Labels: map[string]string{ManagedLabel: "share", OwnerLabel: owner}}
+	return Volume{Name: name, Labels: map[string]string{workspace.ManagedLabel: "share", workspace.OwnerLabel: owner}}
 }
 
 func newCollector(store *fakeVolumeStore, owner string) *Collector {
@@ -63,8 +65,8 @@ func TestCollectNeverTouchesVolumesWeDidNotCreate(t *testing.T) {
 		{Name: "pgdata"},
 		{Name: "rd-backups"},          // our prefix, not our volume
 		{Name: "rd-0011223344556677"}, // prefix, no label
-		{Name: "node_modules", Labels: map[string]string{ManagedLabel: "share"}}, // label, no prefix
-		managed("rd-aabbccddeeff0011", "alice"),                                  // genuinely ours
+		{Name: "node_modules", Labels: map[string]string{workspace.ManagedLabel: "share"}}, // label, no prefix
+		managed("rd-aabbccddeeff0011", "alice"),                                            // genuinely ours
 	}}
 	c := newCollector(store, "alice")
 
@@ -167,15 +169,15 @@ func TestCollectWithoutOwner(t *testing.T) {
 func TestCollectorLeavesAnotherMachineAlone(t *testing.T) {
 	mine := Volume{
 		Name:   "rd-aabbccdd-0123456789abcdef",
-		Labels: map[string]string{ManagedLabel: "share", OwnerLabel: "alice", ClientLabel: "aabbccdd"},
+		Labels: map[string]string{workspace.ManagedLabel: "share", workspace.OwnerLabel: "alice", workspace.ClientLabel: "aabbccdd"},
 	}
 	theirs := Volume{
 		Name:   "rd-11223344-0123456789abcdef",
-		Labels: map[string]string{ManagedLabel: "share", OwnerLabel: "alice", ClientLabel: "11223344"},
+		Labels: map[string]string{workspace.ManagedLabel: "share", workspace.OwnerLabel: "alice", workspace.ClientLabel: "11223344"},
 	}
 	unnamed := Volume{
 		Name:   "rd-0123456789abcdef",
-		Labels: map[string]string{ManagedLabel: "share", OwnerLabel: "alice"},
+		Labels: map[string]string{workspace.ManagedLabel: "share", workspace.OwnerLabel: "alice"},
 	}
 
 	c := &Collector{Owner: "alice", Client: "aabbccdd"}

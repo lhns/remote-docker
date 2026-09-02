@@ -321,8 +321,8 @@ func TestRewriteLabelsOurContainers(t *testing.T) {
 		t.Fatal(err)
 	}
 	labels, _ := payload["Labels"].(map[string]any)
-	if labels[OwnerLabel] != "alice" {
-		t.Errorf("labels = %v, want %s=alice", labels, OwnerLabel)
+	if labels[workspace.OwnerLabel] != "alice" {
+		t.Errorf("labels = %v, want %s=alice", labels, workspace.OwnerLabel)
 	}
 	// The user's own labels are not ours to discard.
 	if labels["mine"] != "kept" {
@@ -338,7 +338,7 @@ func TestRewriteLabelsWithNoExistingLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContainerCreate: %v", err)
 	}
-	if !strings.Contains(string(out), OwnerLabel) {
+	if !strings.Contains(string(out), workspace.OwnerLabel) {
 		t.Errorf("out = %s, want the owner label", out)
 	}
 }

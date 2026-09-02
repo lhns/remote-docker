@@ -65,7 +65,7 @@ func TestAPublishedPortIsLeftToTheDaemon(t *testing.T) {
 	if got := hostPorts(t, hostConfig, "80/tcp"); len(got) != 1 || got[0] != "" {
 		t.Errorf("HostPort = %+v, want it left to the daemon", got)
 	}
-	if got := labels[PortsLabel]; got != "80/tcp=8080" {
+	if got := labels[workspace.PortsLabel]; got != "80/tcp=8080" {
 		t.Errorf("the ports label is %q, so nothing knows the user asked for 8080", got)
 	}
 }
@@ -94,8 +94,8 @@ func TestAnAlreadyEmptyPortIsLeftAlone(t *testing.T) {
 	if got := hostPorts(t, hostConfig, "80/tcp"); len(got) != 1 || got[0] != "" {
 		t.Errorf("HostPort = %+v, want it untouched", got)
 	}
-	if labels[PortsLabel] != "" {
-		t.Errorf("it was recorded as remapped: %q", labels[PortsLabel])
+	if labels[workspace.PortsLabel] != "" {
+		t.Errorf("it was recorded as remapped: %q", labels[workspace.PortsLabel])
 	}
 }
 
@@ -111,8 +111,8 @@ func TestUDPIsRemappedThoughItIsNotForwarded(t *testing.T) {
 	if got := hostPorts(t, hostConfig, "53/udp"); len(got) != 1 || got[0] != "" {
 		t.Errorf("HostPort = %+v, want it left to the daemon", got)
 	}
-	if labels[PortsLabel] != "53/udp=5353" {
-		t.Errorf("the label is %q, want the number recorded", labels[PortsLabel])
+	if labels[workspace.PortsLabel] != "53/udp=5353" {
+		t.Errorf("the label is %q, want the number recorded", labels[workspace.PortsLabel])
 	}
 }
 
@@ -147,8 +147,8 @@ func TestOnePortPublishedTwiceIsPublishedOnce(t *testing.T) {
 	if len(got) != 1 || got[0] != "" {
 		t.Errorf("HostPort = %+v, want one binding left to the daemon", got)
 	}
-	if labels[PortsLabel] != "80/tcp=8080;9090" {
-		t.Errorf("the label is %q, want both numbers", labels[PortsLabel])
+	if labels[workspace.PortsLabel] != "80/tcp=8080;9090" {
+		t.Errorf("the label is %q, want both numbers", labels[workspace.PortsLabel])
 	}
 }
 
@@ -160,8 +160,8 @@ func TestAMixOfFixedAndAnyIsRecordedOnce(t *testing.T) {
 	_, labels := create(t, r,
 		`{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":""},{"HostPort":"8080"}]}}}`)
 
-	if labels[PortsLabel] != "80/tcp=8080" {
-		t.Errorf("the label is %q, want only the number that was asked for", labels[PortsLabel])
+	if labels[workspace.PortsLabel] != "80/tcp=8080" {
+		t.Errorf("the label is %q, want only the number that was asked for", labels[workspace.PortsLabel])
 	}
 }
 
@@ -189,7 +189,7 @@ func TestTheLabelSurvivesTheRoundTrip(t *testing.T) {
 	_, labels := create(t, r,
 		`{"HostConfig":{"PortBindings":{"80/tcp":[{"HostPort":"8080"}],"443/tcp":[{"HostPort":"8443"}]}}}`)
 
-	got := workspace.ParseRequestedPorts(labels[PortsLabel])
+	got := workspace.ParseRequestedPorts(labels[workspace.PortsLabel])
 	if got.At(workspace.ContainerPort(80, "tcp"), 0) != 8080 ||
 		got.At(workspace.ContainerPort(443, "tcp"), 0) != 8443 {
 		t.Errorf("the label reads back as %+v", got)
@@ -206,7 +206,7 @@ func TestRemappingKeepsTheCallersLabels(t *testing.T) {
 	if labels["com.docker.compose.project"] != "demo" {
 		t.Errorf("a label the caller set was lost: %+v", labels)
 	}
-	if labels[PortsLabel] == "" {
+	if labels[workspace.PortsLabel] == "" {
 		t.Error("the ports label was not added")
 	}
 }

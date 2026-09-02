@@ -146,8 +146,8 @@ func TestSharedAnswersForEveryAccount(t *testing.T) {
 	if alice.Root != "/" {
 		t.Errorf("Root = %q, want /: its mountpoints are already ours", alice.Root)
 	}
-	if shared.Mode() != daemons.ModeShared {
-		t.Errorf("Mode = %q, want %q", shared.Mode(), daemons.ModeShared)
+	if shared.Mode() != workspace.ModeShared {
+		t.Errorf("Mode = %q, want %q", shared.Mode(), workspace.ModeShared)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestNewDefaultsToTheSharedDaemon(t *testing.T) {
 	if s.cfg.Daemons == nil {
 		t.Fatal("Daemons is nil; a session would panic")
 	}
-	if s.cfg.Daemons.Mode() != daemons.ModeShared {
-		t.Errorf("mode = %q, want %q", s.cfg.Daemons.Mode(), daemons.ModeShared)
+	if s.cfg.Daemons.Mode() != workspace.ModeShared {
+		t.Errorf("mode = %q, want %q", s.cfg.Daemons.Mode(), workspace.ModeShared)
 	}
 }
