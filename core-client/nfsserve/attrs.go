@@ -136,13 +136,9 @@ func (a *attrFS) Chroot(p string) (billy.Filesystem, error) {
 }
 
 func (a *attrFS) wrap(fi os.FileInfo, fullPath string) os.FileInfo {
-	// Resolved HERE, while the real FileInfo is still in hand: attrInfo.Sys
-	// replaces it with the NFS one, so the identity is unreachable afterwards.
-	//
-	// The real path on disk goes with it, because Windows has no identity on
-	// the FileInfo and has to open the file to read one. Root() is the share's
-	// own directory, or the chrooted one below it, which is what fullPath is
-	// already relative to.
+	// Resolved HERE, while the real FileInfo is in hand: attrInfo.Sys replaces
+	// it with the NFS one. The real path goes too, because Windows has to open
+	// the file to read an identity.
 	return &attrInfo{
 		FileInfo: fi,
 		attrs:    a.attrs,
@@ -190,37 +186,32 @@ func (i *attrInfo) Sys() any {
 	}
 }
 
-// fileIDOf is the file's identifier on the wire: the REAL inode wherever the
-// platform has one, and a hash of the path only where it does not.
+// fileIDOf is the file's identifier on the wire: the real one the platform
+// keeps, and a path hash only where there is none.
 //
-// A fileid is how an NFS client tells whether a handle still names the file it
-// named before. Change it under a live handle and Linux does not re-resolve --
-// it concludes the file was replaced, marks the inode stale, and every open
-// descriptor on it fails with ESTALE. The kernel says so outright:
+// A fileid is how a client tells whether a handle still names the same file.
+// Change it under a live handle and Linux does not re-resolve; it marks the
+// inode stale and every open descriptor on it fails:
 //
 //	NFS: server error: fileid changed
 //	fsid 0:54: expected fileid 0x1548a05f1dee82e0, got 0xd8adad186b880beb
 //
-// Hashing the path cannot promise that, because one file has more than one
-// spelling: what a lookup joined, what a directory listing joined, and what a
-// chroot made relative are all the same file and different strings. Applying
-// that hash everywhere is what made a build on a share die at the linker --
-// `ld` sizes the output it has finished writing, and an ftruncate on a stale
-// descriptor is the one operation the kernel cannot retry (ADR 0033).
+// A path hash cannot hold that, because one file has several spellings -- what
+// a lookup joined, what a listing joined, what a chroot made relative. It was
+// the Windows fallback applied everywhere, and it killed builds on a share:
+// `ld` sizes the output it has written, and ftruncate on a stale descriptor is
+// what the kernel cannot retry (ADR 0033).
 //
-// EVERY platform this ships on has a real identity to give. Unix has the inode;
-// Windows has NTFS's File Reference Number, which is not on os.FileInfo but is
-// one GetFileInformationByHandle away. The hash survives only as the answer for
-// a platform that has neither, and nothing here is such a platform today.
+// Every platform here has a real identity. Unix has the inode; Windows has
+// NTFS's File Reference Number, one GetFileInformationByHandle away.
 func fileIDOf(fi os.FileInfo, osPath, sharePath string) uint64 {
 	dev, ino, ok := inodeOf(fi, osPath)
 	if !ok {
 		return fileID(sharePath)
 	}
 	// Mixed rather than concatenated: both halves are 64 bits and the wire
-	// field is 64, so something has to give. A hash spreads the loss instead of
-	// discarding the top of one of them, and the property that matters is not
-	// invertibility -- the client only ever compares these for equality.
+	// field is 64. The client only compares these for equality, so spreading
+	// the loss beats discarding the top of either.
 	h := fnv.New64()
 	var buf [16]byte
 	binary.LittleEndian.PutUint64(buf[:8], dev)

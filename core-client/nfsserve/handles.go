@@ -85,11 +85,9 @@ func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, err
 	if len(handle) != rootHandleSize {
 		fs, path, err := h.Handler.FromHandle(handle)
 		if err != nil {
-			// The client is holding a handle this server cannot resolve, and
-			// go-nfs answers ESTALE without saying so. A path lookup recovers
-			// from that on its own (ADR 0033); an operation on an already-open
-			// descriptor cannot, so it reaches the application -- which is what
-			// "ld: final link failed: Stale file handle" is.
+			// go-nfs answers ESTALE and logs nothing. A path lookup
+			// recovers on its own (ADR 0033); an already-open descriptor
+			// cannot, so it reaches the application.
 			logHandler().Warn("nfs: a file handle could not be resolved",
 				"bytes", len(handle), "err", err)
 		}

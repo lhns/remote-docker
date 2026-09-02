@@ -7,23 +7,17 @@ import (
 	"syscall"
 )
 
-// inodeOf is the file's identity on Windows, which exists and simply is not on
+// inodeOf is the file's identity on Windows, which exists and is simply not on
 // os.FileInfo.
 //
-// NTFS gives every file a File Reference Number -- its MFT record plus a
-// sequence number -- and GetFileInformationByHandle returns it as
-// nFileIndexHigh/nFileIndexLow. It is what os.SameFile compares, and it is as
-// stable as an inode: unchanged by renaming, and reused only after the record
-// is freed.
+// NTFS gives every file a File Reference Number, and GetFileInformationByHandle
+// returns it as nFileIndexHigh/nFileIndexLow. It is what os.SameFile compares
+// and it is as stable as an inode. os.Stat does not carry it because reading it
+// costs an open, which is the price paid here.
 //
-// Go's os.Stat does not carry it because reading it costs an open, which is the
-// cost paid here. Correctness is worth it: without a stable number the client
-// concludes a file was replaced and every open descriptor on it goes stale.
-//
-// FILE_FLAG_BACKUP_SEMANTICS so a directory can be opened at all, and every
-// share flag so this never blocks a writer. No access rights are requested --
-// the identity is readable from a handle opened for nothing, which keeps this
-// from failing on a file the user may not read.
+// FILE_FLAG_BACKUP_SEMANTICS so a directory opens at all, every share flag so
+// this never blocks a writer, and no access rights, so it works on a file the
+// user cannot read.
 func inodeOf(_ os.FileInfo, osPath string) (uint64, uint64, bool) {
 	if osPath == "" {
 		return 0, 0, false

@@ -37,12 +37,9 @@ func SetLogger(log *slog.Logger) {
 	})
 }
 
-// handlerLog is the same logger, reachable from the handler.
-//
-// go-nfs logs no reason when a request fails -- conn.err writes the status and
-// says nothing -- so a handle this server cannot resolve leaves NOTHING behind
-// and the client sees only ESTALE. That is the whole diagnosis of the reported
-// linker failure, and it was invisible from here.
+// handlerLog is the same logger, reachable from the handler. go-nfs logs no
+// reason when a request fails, so an unresolvable handle left nothing behind
+// and the client saw only ESTALE.
 var handlerLog *slog.Logger
 
 var loggerOnce sync.Once
