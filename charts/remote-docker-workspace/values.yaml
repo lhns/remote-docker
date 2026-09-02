@@ -77,15 +77,13 @@ persistence:
     # A claim you created yourself, mounted by name instead of generated from
     # the template below. Empty keeps the template.
     #
-    # Worth it for one reason: a StatefulSet's volumeClaimTemplates are
-    # IMMUTABLE, so `size` here only ever applies to a claim that does not exist
-    # yet, and growing a volume means expanding the PVC by hand and recreating
-    # the StatefulSet around it. A claim you own is an ordinary PVC whose
-    # requested size can be edited wherever you keep it, on any StorageClass
-    # with allowVolumeExpansion.
+    # Worth it because a StatefulSet's volumeClaimTemplates are IMMUTABLE, so
+    # `size` here only applies to a claim that does not exist yet. A claim you
+    # own is an ordinary PVC whose size you can edit, given a StorageClass with
+    # allowVolumeExpansion.
     #
-    # `size`, `storageClass` and `accessModes` are ignored when this is set:
-    # they describe a claim this chart is no longer making.
+    # `size`, `storageClass` and `accessModes` are then ignored: they describe a
+    # claim this chart no longer makes.
     existingClaim: ""
     size: 50Gi
     # "" uses the cluster's default StorageClass; "-" disables dynamic
