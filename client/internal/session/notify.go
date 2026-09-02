@@ -134,6 +134,11 @@ func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Nothing to reconcile while dormant, and re-syncing the real set
+			// would put back the watches Standby just dropped.
+			if s.isDormant() {
+				continue
+			}
 			s.watch.Sync(sharesOf(s.registry))
 		}
 	}

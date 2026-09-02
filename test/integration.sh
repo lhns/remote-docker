@@ -1995,6 +1995,47 @@ else
     bad "could not build a second client for the version test"
 fi
 
+# Standby is the tier that does NOT end the session: it drops the workspace
+# connection and the file watches and keeps serving the endpoint, so every
+# Docker client pointed at it goes on working.
+#
+# The whole point is what does NOT happen, which is why this asserts through
+# the endpoint rather than at the log: a run after standby proves the socket
+# survived AND that the next request woke the session and rebuilt what it let
+# go of. Watching for "standing by" alone would pass with the endpoint dead.
+if REMOTE_DOCKER_DAEMON_STANDBY=5s "$WORK/remote-docker" remote start >/dev/null 2>&1; then
+    # Longer than the standby and its poll, which runs at a quarter of it.
+    sleep 12
+
+    if outputs "already running" "$WORK/remote-docker" remote start; then
+        ok "a session on standby is still running"
+    else
+        bad "the session exited when it should only have stood by"
+    fi
+
+    if dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-standby.txt" 2>&1 &&
+        grep -q "from the project directory" "$WORK/after-standby.txt"; then
+        ok "the endpoint still serves after standby, and the request woke it"
+    else
+        bad "a container run after standby failed: $(tail -2 "$WORK/after-standby.txt" 2>/dev/null | tr '
+' ' ')"
+    fi
+
+    # Standing by and waking must be repeatable, not a one-shot.
+    sleep 12
+    if dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-standby2.txt" 2>&1 &&
+        grep -q "from the project directory" "$WORK/after-standby2.txt"; then
+        ok "it stands by and wakes again"
+    else
+        bad "a second standby did not wake: $(tail -2 "$WORK/after-standby2.txt" 2>/dev/null | tr '
+' ' ')"
+    fi
+
+    "$WORK/remote-docker" remote stop >/dev/null 2>&1
+else
+    bad "could not start a session for the standby test"
+fi
+
 # It reclaims itself. A session that has never been used is the case that
 # should go soonest, and the one that used to be unable to: with no last-use
 # time, it reported zero idle and could never expire.

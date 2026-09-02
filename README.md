@@ -263,7 +263,8 @@ default.**
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, for a `delegated` share's cache |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, for a `delegated` share's cache |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
-| `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | `30m` before an unused session exits; negative never |
+| `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | `30m` | how long before an unused session lets go of the workspace, keeping its endpoint |
+| `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
 
@@ -895,9 +896,23 @@ inside the workspace daemon's own namespace.
 
 Not in a terminal you are watching, but running: it is the endpoint and the
 file server, so stopping it takes running containers' mounts with it. Any
-command that needs one starts it. A background session reclaims itself after
-30 minutes with nothing to do, and never while a container of yours is running
-or a stream is open.
+command that needs one starts it, and does not close it afterwards: a one-shot
+`docker run` leaves the session up for whatever comes next.
+
+**It reclaims in two stages, and only one of them is on by default.**
+
+After `daemonStandby` (30 minutes) with nothing to do, the session **stands
+by**: it drops the workspace connection and releases its file watches, which is
+what a reclaim is actually for. The endpoint stays bound, so compose, buildx,
+Testcontainers and your IDE keep working — the next request through it wakes the
+session and rebuilds what it let go of.
+
+`daemonIdle` is the tier above and **ends the process**. It is off unless you
+ask for it, because ending takes the endpoint with it: those tools connect to a
+path, know nothing of sessions, and only a `remote-docker` command can rebuild
+one. Set it if you want a session gone rather than idle — reasonable on a
+laptop — and know that when it fires, every other client pointed at the endpoint
+stops working until something starts a session again.
 
 ### File watching in detail
 

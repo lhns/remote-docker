@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
 )
 
@@ -46,4 +47,51 @@ func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-
 		}
 	}()
 	return expired
+}
+
+// daemonIdle is how long a background session may sit with nothing to do.
+//
+// Zero means the DEFAULT and negative means NEVER, which have been mistaken for
+// each other: a deployment that wanted "never" set 0, got thirty minutes, and
+// lost its endpoint.
+func daemonIdle(configured time.Duration) time.Duration {
+	if configured == 0 {
+		return config.DefaultDaemonIdle
+	}
+	return configured
+}
+
+// daemonStandby is how long a session holds the workspace with nothing to do.
+//
+// Zero means the default and negative means never, as with daemonIdle.
+func daemonStandby(configured time.Duration) time.Duration {
+	if configured == 0 {
+		return config.DefaultDaemonStandby
+	}
+	return configured
+}
+
+// standbyWhenIdle lets go of the workspace once nothing has needed it.
+//
+// Unlike the shutdown tier this does not end anything, so it keeps watching:
+// a session may stand by, be woken by a request, and stand by again any number
+// of times. Session.Standby is idempotent, which is what lets this stay a
+// plain poll.
+func standbyWhenIdle(ctx context.Context, s *session.Session, standby time.Duration) {
+	if standby <= 0 {
+		return
+	}
+	ticker := time.NewTicker(max(standby/4, time.Second))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if quiet, safe := s.IdleFor(ctx); safe && quiet >= standby {
+				s.Standby()
+			}
+		}
+	}
 }
