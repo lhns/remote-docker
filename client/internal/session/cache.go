@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,9 @@ import (
 	"io"
 	"sync"
 
+	"github.com/klauspost/compress/zstd"
+
+	"github.com/lhns/remote-docker/core-client/cachefill"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -172,16 +176,23 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]workspace.
 }
 
 // Pull fetches the named paths out of a share's cache layer, as a tar.
-func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string) ([]byte, error) {
-	reply, err := c.do(ctx, workspace.CacheRequest{
-		Op:     workspace.OpPull,
-		Export: export,
-		Paths:  paths,
-	}, nil)
-	if err != nil {
-		return nil, err
+// Pull fetches the named paths, calling into once per request it takes to ask
+// for them. Chunked here for the same reason Drop is.
+func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(io.Reader) error) error {
+	for _, batch := range chunkPaths(paths) {
+		reply, err := c.do(ctx, workspace.CacheRequest{
+			Op:     workspace.OpPull,
+			Export: export,
+			Paths:  batch,
+		}, nil)
+		if err != nil {
+			return err
+		}
+		if err := into(bytes.NewReader(reply.Payload)); err != nil {
+			return err
+		}
 	}
-	return reply.Payload, nil
+	return nil
 }
 
 // Mounted names the cache volumes the workspace has a union on.
@@ -210,31 +221,43 @@ func (c *cacheChannel) Prepare(ctx context.Context, export, cache string, port i
 	return reply.Merged, nil
 }
 
-// Apply writes a tar into a share's cache.
-func (c *cacheChannel) Apply(ctx context.Context, export string, size int64, body io.Reader) error {
-	_, err := c.do(ctx, workspace.CacheRequest{
+// Apply puts one batch of files, read from root, into a share's cache.
+//
+// Entries rather than bytes, so the codec stays in here: the frame's length has
+// to describe what is ACTUALLY sent, which means whatever builds the tar has to
+// know how it was encoded. Handing the caller that fact made it the caller's
+// problem in two files.
+func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []cachefill.Entry) error {
+	body, err := tarOf(root, entries, c.codec)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, workspace.CacheRequest{
 		Op:     workspace.OpApply,
 		Export: export,
-		Bytes:  size,
+		Bytes:  int64(len(body)),
 		Codec:  c.codec,
-	}, body)
+	}, bytes.NewReader(body))
 	return err
 }
 
-// Codec is the payload encoding this channel negotiated, empty for none. The
-// caller encodes: the length in the frame is of what is actually sent, so
-// whatever produces the bytes has to know how they were made.
-func (c *cacheChannel) Codec() string { return c.codec }
-
 // Drop removes paths from a share's cache, which is what a deletion here
 // becomes.
+//
+// However many: the paths ride in the JSON header line, which the protocol
+// caps, so a `git checkout` across a large branch is several requests. That is
+// a fact about the wire and no caller has to know it.
 func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {
-	_, err := c.do(ctx, workspace.CacheRequest{
-		Op:     workspace.OpDrop,
-		Export: export,
-		Paths:  paths,
-	}, nil)
-	return err
+	for _, batch := range chunkPaths(paths) {
+		if _, err := c.do(ctx, workspace.CacheRequest{
+			Op:     workspace.OpDrop,
+			Export: export,
+			Paths:  batch,
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close ends the channel, which releases every union this session prepared.
@@ -278,6 +301,47 @@ func (c shareCache) Fill(export, localPath string) { c.session.Fill(export, loca
 // of it. Half the frame, because the op, the export and JSON's own escaping
 // share the line.
 const pathsPerFrame = workspace.MaxCacheFrame / 2
+
+// tarOf builds the batch.
+//
+// In memory because the channel frames a payload by length: the workspace has
+// to be told how many bytes follow before they are sent. cachefill.Batches is
+// what keeps that bounded.
+func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error) {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Path)
+	}
+
+	var buf bytes.Buffer
+	if codec != workspace.CodecZstd {
+		// Written before the buffer is read: `return buf.Bytes(), WriteTar(...)`
+		// evaluates the bytes first and hands back an empty slice.
+		if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), &buf); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	// The compressor wraps the tar writer, so the tar is written once and the
+	// bytes that leave are the encoded ones, which is what the frame's length
+	// has to describe. Default level: a source tree compresses hard enough that
+	// the link, not the CPU, is what the fill waits on.
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		return nil, err
+	}
+	if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), zw); err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+	// Closed before the buffer is measured, or the payload's length is right
+	// and its contents end early.
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 // chunkPaths splits a path list into requests that each fit one frame.
 func chunkPaths(paths []string) [][]string {

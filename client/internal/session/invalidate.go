@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path"
@@ -182,18 +181,13 @@ func (i *invalidator) apply(export, local string, paths map[string]bool) {
 	ctx, cancel := context.WithTimeout(i.session.ctx, invalidateTimeout)
 	defer cancel()
 
-	for _, paths := range chunkPaths(dropped) {
-		if err := live.Drop(ctx, export, paths); err != nil {
+	if len(dropped) > 0 {
+		if err := live.Drop(ctx, export, dropped); err != nil {
 			i.session.logQuiet(ctx, "dropping from a cache", "export", export, "err", err)
 		}
 	}
 	for _, batch := range cachefill.Batches(changed) {
-		body, err := tarOf(local, batch, live.Codec())
-		if err != nil {
-			i.session.logQuiet(ctx, "reading a change for a cache", "export", export, "err", err)
-			return
-		}
-		if err := live.Apply(ctx, export, int64(len(body)), bytes.NewReader(body)); err != nil {
+		if err := live.Apply(ctx, export, local, batch); err != nil {
 			i.session.logQuiet(ctx, "updating a cache", "export", export, "err", err)
 			continue
 		}

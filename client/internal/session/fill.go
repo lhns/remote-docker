@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -9,11 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
-
 	"github.com/lhns/remote-docker/core-client/cachefill"
 	"github.com/lhns/remote-docker/core-client/writeback"
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Filling a delegated share's cache, in the background (ADR 0044).
@@ -230,7 +226,7 @@ func (s *Session) Fill(export, localPath string) {
 		// partial fill, because it names what is in the cache, and what is in
 		// the cache is what a later deletion has to be able to remove.
 		if s.cached != nil {
-			s.cached.record(export, s.fills.paths(export))
+			s.cached.Record(export, s.fills.paths(export))
 		}
 	}()
 }
@@ -241,7 +237,7 @@ func (s *Session) reconcileDeletions(export, localPath string) {
 	if s.cached == nil {
 		return
 	}
-	filled, ok := s.cached.filled(export)
+	filled, ok := s.cached.Filled(export)
 	if !ok {
 		return
 	}
@@ -265,12 +261,10 @@ func (s *Session) dropDeleted(export, localPath string, filled []string) {
 	ctx, cancel := context.WithTimeout(s.ctx, invalidateTimeout)
 	defer cancel()
 
-	for _, paths := range chunkPaths(gone) {
-		if err := live.Drop(ctx, export, paths); err != nil {
-			s.logQuiet(ctx, "removing from a cache what this machine no longer has",
-				"export", export, "err", err)
-			return
-		}
+	if err := live.Drop(ctx, export, gone); err != nil {
+		s.logQuiet(ctx, "removing from a cache what this machine no longer has",
+			"export", export, "err", err)
+		return
 	}
 	s.log().Info("took deleted files out of a share's cache",
 		"export", export, "files", len(gone))
@@ -302,14 +296,9 @@ func (s *Session) sendBatch(export, localPath string, entries []cachefill.Entry,
 		return nil
 	}
 
-	body, err := tarOf(localPath, entries, live.Codec())
-	if err != nil {
-		return err
-	}
-
 	ctx, cancel := context.WithTimeout(s.ctx, fillBatchTimeout)
 	defer cancel()
-	if err := live.Apply(ctx, export, int64(len(body)), bytes.NewReader(body)); err != nil {
+	if err := live.Apply(ctx, export, localPath, entries); err != nil {
 		return err
 	}
 
@@ -324,44 +313,3 @@ func (s *Session) sendBatch(export, localPath string, entries []cachefill.Entry,
 // DefaultBatchBytes over whatever link the workspace is on, and a fill that
 // gives up early leaves a share slower rather than broken.
 const fillBatchTimeout = 10 * time.Minute
-
-// tarOf builds the batch.
-//
-// In memory because the channel frames a payload by length: the workspace has
-// to be told how many bytes follow before they are sent. cachefill.Batches is
-// what keeps that bounded.
-func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error) {
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Path)
-	}
-
-	var buf bytes.Buffer
-	if codec != workspace.CodecZstd {
-		// Written before the buffer is read: `return buf.Bytes(), WriteTar(...)`
-		// evaluates the bytes first and hands back an empty slice.
-		if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), &buf); err != nil {
-			return nil, err
-		}
-		return buf.Bytes(), nil
-	}
-
-	// The compressor wraps the tar writer, so the tar is written once and the
-	// bytes that leave are the encoded ones, which is what the frame's length
-	// has to describe. Default level: a source tree compresses hard enough that
-	// the link, not the CPU, is what the fill waits on.
-	zw, err := zstd.NewWriter(&buf)
-	if err != nil {
-		return nil, err
-	}
-	if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), zw); err != nil {
-		_ = zw.Close()
-		return nil, err
-	}
-	// Closed before the buffer is measured, or the payload's length is right
-	// and its contents end early.
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}

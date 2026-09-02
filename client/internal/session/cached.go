@@ -79,16 +79,16 @@ func newCachedStore(path string, log *slog.Logger) *cachedStore {
 	return s
 }
 
-// filled is what the last fill of a share sent, and whether anything is known.
-func (s *cachedStore) filled(export string) ([]string, bool) {
+// Filled is what the last fill of a share sent, and whether anything is known.
+func (s *cachedStore) Filled(export string) ([]string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	paths, ok := s.shares[export]
 	return paths, ok
 }
 
-// record replaces what is known about a share and writes the file.
-func (s *cachedStore) record(export string, paths []string) {
+// Record replaces what is known about a share and writes the file.
+func (s *cachedStore) Record(export string, paths []string) {
 	s.mu.Lock()
 	sort.Strings(paths)
 	s.shares[export] = paths

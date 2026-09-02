@@ -37,14 +37,14 @@ func TestCachedStoreRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "caches", "ws.json")
 	store := newCachedStore(path, nil)
 
-	if _, ok := store.filled("/m/aaaa"); ok {
+	if _, ok := store.Filled("/m/aaaa"); ok {
 		t.Error("an empty store claimed to know a share")
 	}
 
-	store.record("/m/aaaa", []string{"/b.go", "/a.go"})
+	store.Record("/m/aaaa", []string{"/b.go", "/a.go"})
 	again := newCachedStore(path, nil)
 
-	got, ok := again.filled("/m/aaaa")
+	got, ok := again.Filled("/m/aaaa")
 	if !ok {
 		t.Fatal("the record did not survive being written and read")
 	}
@@ -76,7 +76,7 @@ func TestCachedStoreIgnoresARecordFromElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok := newCachedStore(path, nil).filled("/m/aaaa"); ok {
+	if _, ok := newCachedStore(path, nil).Filled("/m/aaaa"); ok {
 		t.Error("a record written on another machine was believed")
 	}
 }

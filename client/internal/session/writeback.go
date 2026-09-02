@@ -2,7 +2,6 @@ package session
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -109,13 +108,11 @@ func (s *Session) writeBackShare(ctx context.Context, export string) {
 			"kind", conflict.Kind, "outcome", conflict.Why)
 	}
 
-	for _, paths := range chunkPaths(writeback.Writes(actions)) {
-		body, err := live.Pull(ctx, export, paths)
+	if writes := writeback.Writes(actions); len(writes) > 0 {
+		err := live.Pull(ctx, export, writes, func(body io.Reader) error {
+			return extractInto(local, body)
+		})
 		if err != nil {
-			s.logQuiet(ctx, "fetching what a container wrote", "export", export, "err", err)
-			return
-		}
-		if err := extractInto(local, bytes.NewReader(body)); err != nil {
 			s.logQuiet(ctx, "writing back what a container wrote", "export", export, "err", err)
 			return
 		}
