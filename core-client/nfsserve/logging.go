@@ -31,8 +31,19 @@ import (
 // Package-level because go-nfs's logger is package-level; there is nothing
 // per-server to attach it to.
 func SetLogger(log *slog.Logger) {
-	loggerOnce.Do(func() { nfs.SetLogger(&nfsLogger{log: log}) })
+	loggerOnce.Do(func() {
+		nfs.SetLogger(&nfsLogger{log: log})
+		handlerLog = log
+	})
 }
+
+// handlerLog is the same logger, reachable from the handler.
+//
+// go-nfs logs no reason when a request fails -- conn.err writes the status and
+// says nothing -- so a handle this server cannot resolve leaves NOTHING behind
+// and the client sees only ESTALE. That is the whole diagnosis of the reported
+// linker failure, and it was invisible from here.
+var handlerLog *slog.Logger
 
 var loggerOnce sync.Once
 

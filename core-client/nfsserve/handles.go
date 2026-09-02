@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io/fs"
+	"log/slog"
 
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
@@ -82,7 +83,17 @@ func (h *rootHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 
 func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, error) {
 	if len(handle) != rootHandleSize {
-		return h.Handler.FromHandle(handle)
+		fs, path, err := h.Handler.FromHandle(handle)
+		if err != nil {
+			// The client is holding a handle this server cannot resolve, and
+			// go-nfs answers ESTALE without saying so. A path lookup recovers
+			// from that on its own (ADR 0033); an operation on an already-open
+			// descriptor cannot, so it reaches the application -- which is what
+			// "ld: final link failed: Stale file handle" is.
+			logHandler().Warn("nfs: a file handle could not be resolved",
+				"bytes", len(handle), "err", err)
+		}
+		return fs, path, err
 	}
 	key, cached := handle[:exportKeySize], handle[exportKeySize:]
 
@@ -148,4 +159,12 @@ func (h *rootHandler) DataForVerifier(path string, id uint64) []fs.FileInfo {
 		return c.DataForVerifier(path, id)
 	}
 	return nil
+}
+
+// logHandler is the client's logger, or one that discards.
+func logHandler() *slog.Logger {
+	if handlerLog == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return handlerLog
 }
