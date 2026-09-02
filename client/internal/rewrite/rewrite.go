@@ -682,7 +682,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency 
 // workspace's own disk; a read it does not have falls through and is right,
 // which is what lets the cache be filled without the container waiting for it.
 func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string) (string, error) {
-	cache := share + "-" + workspace.CacheRole
+	cache := workspace.CacheVolumeName(share)
 
 	// An empty map rather than nil: the body is JSON, and a null where the
 	// daemon expects an object is a different thing to send it.

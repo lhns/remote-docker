@@ -366,6 +366,10 @@ func (s *Session) Close() error {
 	if s.watch != nil {
 		_ = s.watch.Close()
 	}
+	// After the watcher, so no event can arm the timer again.
+	if s.invalidator != nil {
+		s.invalidator.stop()
+	}
 	s.once.Do(func() {
 		s.cancel()
 		if s.listener != nil {
@@ -401,12 +405,9 @@ func humanBytes(n int64) string {
 // complete are all states a share works in, and the difference between them is
 // how much of it is local rather than whether it is right.
 func (s *Session) cacheStatus() []string {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
-
 	var out []string
-	for export, state := range s.fills.state {
-		local := s.fills.roots[export]
+	for _, r := range s.fills.reports() {
+		local, state := r.Local, r.State
 		stats := state.Stats
 
 		what := "filling"
@@ -428,9 +429,15 @@ func (s *Session) cacheStatus() []string {
 		// files" -- a number that looks like a bug in the thing it is
 		// reporting on.
 		if state.Done {
-			out = append(out, fmt.Sprintf("%s: %d of %d files, %s of %s, %s",
+			line := fmt.Sprintf("%s: %d of %d files, %s of %s, %s",
 				local, state.Sent, stats.TotalFiles,
-				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), what))
+				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), what)
+			// A cache that mysteriously omits .git is worth being able to
+			// explain, which is the only reason the walk counts these.
+			if stats.Excluded > 0 {
+				line += fmt.Sprintf(" (%d excluded)", stats.Excluded)
+			}
+			out = append(out, line)
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s: %d files so far, %s", local, state.Sent, what))

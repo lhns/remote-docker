@@ -159,6 +159,11 @@ type Session struct {
 	// to restore nothing.
 	shares *shareStore
 
+	// invalidator drives the cache from the watcher, and is held so Close can
+	// stop its batching timer: a 150ms timer armed as a session ends would
+	// otherwise fire against a session that has gone.
+	invalidator *invalidator
+
 	// cached is what each delegated share's fill last sent, across sessions.
 	// It is what makes a deletion made while nothing was running removable
 	// from the cache (ADR 0044). Nil on a query session, which fills nothing.
@@ -280,7 +285,8 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		// is what ModePartial is about, but it can be applied to a cache
 		// exactly, and a cached copy of a file that is gone is the one way
 		// this mode can be wrong rather than slow (ADR 0044).
-		s.watch.SetObserver(&invalidator{session: s})
+		s.invalidator = &invalidator{session: s}
+		s.watch.SetObserver(s.invalidator)
 		s.watch.Sync(sharesOf(s.registry))
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}
