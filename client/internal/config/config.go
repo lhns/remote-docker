@@ -74,7 +74,7 @@ type Config struct {
 	WatchBudget int
 
 	// CacheFiles and CacheBytes cap what a delegated share's cache is filled
-	// with. Zero means cachefill's defaults.
+	// with. Zero means dircache's defaults.
 	//
 	// A ceiling rather than a refusal: what the fill does not copy is served
 	// from the live export underneath, so a project over it is cached in part

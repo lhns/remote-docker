@@ -15,9 +15,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -79,16 +77,16 @@ func newCachedStore(path string, log *slog.Logger) *cachedStore {
 	return s
 }
 
-// filled is what the last fill of a share sent, and whether anything is known.
-func (s *cachedStore) filled(export string) ([]string, bool) {
+// Filled is what the last fill of a share sent, and whether anything is known.
+func (s *cachedStore) Filled(export string) ([]string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	paths, ok := s.shares[export]
 	return paths, ok
 }
 
-// record replaces what is known about a share and writes the file.
-func (s *cachedStore) record(export string, paths []string) {
+// Record replaces what is known about a share and writes the file.
+func (s *cachedStore) Record(export string, paths []string) {
 	s.mu.Lock()
 	sort.Strings(paths)
 	s.shares[export] = paths
@@ -116,23 +114,4 @@ func (s *cachedStore) warn(msg string, err error) {
 	if s.log != nil {
 		s.log.Warn(msg, "path", s.path, "err", err)
 	}
-}
-
-// deletedSince reports which of the recorded paths this machine no longer has.
-//
-// Local work only, one stat per path: the answer is about this machine's own
-// disk, and asking the workspace could not improve it.
-func deletedSince(root string, filled []string) []string {
-	var gone []string
-	for _, p := range filled {
-		name := strings.TrimPrefix(p, "/")
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				gone = append(gone, "/"+name)
-			}
-			// Any other error is this machine failing to answer about its own
-			// file, which is not evidence that the file is gone.
-		}
-	}
-	return gone
 }

@@ -69,7 +69,7 @@ jobs:
       - name: go vet
         run: |
           set -eux
-          for mod in ./core ./agent ./core-agent ./core-client ./client; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -78,7 +78,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in core agent core-agent core-client client; do
+          for mod in core agent core-agent core-client client dircache; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -135,7 +135,7 @@ jobs:
         shell: bash
         run: |
           set -eux
-          for mod in core core-client client; do
+          for mod in core core-client client dircache; do
             (cd "$mod" && go test ./...)
           done
 
@@ -168,7 +168,7 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in ./core ./agent ./core-agent ./core-client ./client; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
           # The agent and core-agent both carry Linux-only files (netns, the unix
@@ -243,7 +243,7 @@ jobs:
           if [ -n "${NDK_CC:-}" ]; then
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$NDK_CC"
           fi
-          for mod in ./core ./agent ./core-agent ./core-client ./client; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache; do
             (cd "$mod" && go build ./...)
           done
 

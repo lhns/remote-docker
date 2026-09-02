@@ -47,7 +47,7 @@ than trusted.
 
 | # | Title |
 |---|---|
-| [0021](0021-the-module-layout.md) | The module layout — five modules, and the two questions that place a package |
+| [0021](0021-the-module-layout.md) | The module layout — six modules, and the three questions that place a package |
 
 ## Daemons
 

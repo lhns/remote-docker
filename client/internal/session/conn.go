@@ -193,7 +193,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		// Carrying container writes back, for delegated shares (ADR 0044).
 		// Per connection, because it needs one; it does nothing at all until a
 		// share has a cache and that cache is complete.
-		live.wg.Go(func() { s.watchWriteBack(liveCtx) })
+		live.wg.Go(func() { s.cache.WriteBack(liveCtx) })
 
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {
@@ -249,6 +249,21 @@ func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
 		return nil
 	}
 	return shareCache{cacheChannel: l.cacheChan, session: s}
+}
+
+// skew is the workspace's clock minus this machine's, as measured when the
+// connection was made.
+//
+// Used for one comparison only: which side wrote last when both changed the
+// same file. Zero when the workspace reports no clock, which is an agent
+// predating workspace.Info.Now -- the two clocks are assumed to agree, as they
+// were before that field existed.
+func (s *Session) skew() time.Duration {
+	live, ok := s.gate.currentLive()
+	if !ok || live == nil || live.info.Now == 0 {
+		return 0
+	}
+	return live.clockSkew
 }
 
 // shareReconcileInterval matches the port manager's: the same reasoning

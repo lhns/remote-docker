@@ -1,4 +1,4 @@
-package writeback
+package dircache
 
 import (
 	"io/fs"
@@ -27,17 +27,17 @@ func (s stub) ModTime() time.Time { return s.mod }
 func (s stub) IsDir() bool        { return false }
 func (s stub) Sys() any           { return nil }
 
-func localFrom(files map[string]stub) Local {
+func localFrom(files map[string]stub) localAt {
 	return func(p string) (fs.FileInfo, bool) {
 		f, ok := files[p]
 		return f, ok
 	}
 }
 
-func kindOf(actions []Action, path string) (Kind, bool) {
+func kindOf(actions []action, path string) (kind, bool) {
 	for _, a := range actions {
 		if a.Path == path {
-			return a.Kind, true
+			return a.kind, true
 		}
 	}
 	return 0, false
@@ -46,7 +46,7 @@ func kindOf(actions []Action, path string) (Kind, bool) {
 // The table this whole mode's safety rests on. Each side is compared against
 // its own baseline, so only one case needs a clock at all.
 func TestDecide(t *testing.T) {
-	manifest := map[string]Baseline{
+	manifest := map[string]baseline{
 		"/untouched.go":         {Size: 10, ModTime: sentAt},
 		"/yours.go":             {Size: 10, ModTime: sentAt},
 		"/theirs.go":            {Size: 10, ModTime: sentAt},
@@ -71,14 +71,14 @@ func TestDecide(t *testing.T) {
 		{Path: "/created.go", Size: 5, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := Decide(manifest, changes, local, 0, true)
+	actions := decide(manifest, changes, local, 0, true)
 
-	for path, want := range map[string]Kind{
-		"/theirs.go":            Write,
-		"/both.go":              Conflict,
-		"/deleted.go":           Delete,
-		"/deleted-but-yours.go": Conflict,
-		"/created.go":           Write,
+	for path, want := range map[string]kind{
+		"/theirs.go":            kindWrite,
+		"/both.go":              kindConflict,
+		"/deleted.go":           kindDelete,
+		"/deleted-but-yours.go": kindConflict,
+		"/created.go":           kindWrite,
 	} {
 		got, ok := kindOf(actions, path)
 		if !ok {
@@ -108,7 +108,7 @@ func TestDecide(t *testing.T) {
 func TestDecideRefusesAnIncompleteCache(t *testing.T) {
 	changes := []workspace.CacheChange{{Path: "/anything.go", Size: 1, ModTime: sentAt.UnixNano()}}
 
-	if got := Decide(nil, changes, localFrom(nil), 0, false); len(got) != 0 {
+	if got := decide(nil, changes, localFrom(nil), 0, false); len(got) != 0 {
 		t.Errorf("decided %v on an incomplete cache, want nothing", got)
 	}
 }
@@ -116,7 +116,7 @@ func TestDecideRefusesAnIncompleteCache(t *testing.T) {
 // The one place a clock is used, and the offset between the two machines is
 // applied rather than assumed away.
 func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
-	manifest := map[string]Baseline{"/both.go": {Size: 10, ModTime: sentAt}}
+	manifest := map[string]baseline{"/both.go": {Size: 10, ModTime: sentAt}}
 	local := localFrom(map[string]stub{"/both.go": {size: 99, mod: laterYet}})
 
 	// The workspace's clock runs an hour ahead. Its file was written a minute
@@ -126,12 +126,12 @@ func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
 		{Path: "/both.go", Size: 20, ModTime: laterHere.Add(skew).UnixNano()},
 	}
 
-	uncorrected := Decide(manifest, changes, local, 0, true)
+	uncorrected := decide(manifest, changes, local, 0, true)
 	if len(uncorrected) != 1 || !uncorrected[0].Wins {
 		t.Fatalf("without the offset the container should look newer: %+v", uncorrected)
 	}
 
-	corrected := Decide(manifest, changes, local, skew, true)
+	corrected := decide(manifest, changes, local, skew, true)
 	if len(corrected) != 1 || corrected[0].Wins {
 		t.Errorf("with the offset applied this machine wrote last: %+v", corrected)
 	}
@@ -149,30 +149,30 @@ func TestDecideLeavesUnsentPathsAlone(t *testing.T) {
 		{Path: "/gone.go", Deleted: true},
 	}
 
-	if got := Decide(map[string]Baseline{}, changes, local, 0, true); len(got) != 0 {
+	if got := decide(map[string]baseline{}, changes, local, 0, true); len(got) != 0 {
 		t.Errorf("decided %v, want nothing for paths the fill never sent", got)
 	}
 }
 
 // What the caller has to fetch, remove and report.
 func TestPartitionsForTheCaller(t *testing.T) {
-	actions := []Action{
-		{Path: "/a", Kind: Write},
-		{Path: "/b", Kind: Delete},
-		{Path: "/c", Kind: Conflict, Wins: true},
-		{Path: "/d", Kind: Conflict, Wins: false},
+	actions := []action{
+		{Path: "/a", kind: kindWrite},
+		{Path: "/b", kind: kindDelete},
+		{Path: "/c", kind: kindConflict, Wins: true},
+		{Path: "/d", kind: kindConflict, Wins: false},
 	}
 
 	// A conflict the container won is fetched like any other write; one it lost
 	// is only reported.
-	if got := Writes(actions); len(got) != 2 || got[0] != "/a" || got[1] != "/c" {
-		t.Errorf("Writes = %v", got)
+	if got := writes(actions); len(got) != 2 || got[0] != "/a" || got[1] != "/c" {
+		t.Errorf("writes = %v", got)
 	}
-	if got := Deletes(actions); len(got) != 1 || got[0] != "/b" {
-		t.Errorf("Deletes = %v", got)
+	if got := deletes(actions); len(got) != 1 || got[0] != "/b" {
+		t.Errorf("deletes = %v", got)
 	}
-	if got := Conflicts(actions); len(got) != 2 {
-		t.Errorf("Conflicts = %v, want both reported whichever way they resolved", got)
+	if got := conflicts(actions); len(got) != 2 {
+		t.Errorf("conflicts = %v, want both reported whichever way they resolved", got)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestPartitionsForTheCaller(t *testing.T) {
 // small waste but a stream large enough to be refused, so nothing is ever
 // written back at all.
 func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
-	manifest := map[string]Baseline{
+	manifest := map[string]baseline{
 		"/filled.go":  {Size: 10, ModTime: sentAt},
 		"/written.go": {Size: 10, ModTime: sentAt},
 	}
@@ -198,12 +198,12 @@ func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
 		{Path: "/written.go", Size: 20, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := Decide(manifest, changes, local, 0, true)
+	actions := decide(manifest, changes, local, 0, true)
 
 	if _, ok := kindOf(actions, "/filled.go"); ok {
 		t.Error("the fill's own copy was decided to be a container write")
 	}
-	if got, ok := kindOf(actions, "/written.go"); !ok || got != Write {
+	if got, ok := kindOf(actions, "/written.go"); !ok || got != kindWrite {
 		t.Errorf("/written.go = %v %v, want a write", got, ok)
 	}
 }
@@ -211,14 +211,14 @@ func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
 // Same size, different content, and the container's write lands within the
 // same timestamp: the filter must key on the pair rather than on either half.
 func TestDecideCarriesBackASameSizedRewrite(t *testing.T) {
-	manifest := map[string]Baseline{"/same-size.go": {Size: 10, ModTime: sentAt}}
+	manifest := map[string]baseline{"/same-size.go": {Size: 10, ModTime: sentAt}}
 	local := localFrom(map[string]stub{"/same-size.go": {size: 10, mod: sentAt}})
 
 	changes := []workspace.CacheChange{
 		{Path: "/same-size.go", Size: 10, ModTime: laterHere.UnixNano()},
 	}
 
-	if got, ok := kindOf(Decide(manifest, changes, local, 0, true), "/same-size.go"); !ok || got != Write {
+	if got, ok := kindOf(decide(manifest, changes, local, 0, true), "/same-size.go"); !ok || got != kindWrite {
 		t.Errorf("/same-size.go = %v %v, want a write", got, ok)
 	}
 }

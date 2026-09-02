@@ -1,16 +1,15 @@
-// Package cachefill decides what goes into a delegated share's cache, and in
-// what order (ADR 0044).
+package dircache
+
+// What goes into a cache, and in what order (ADR 0044).
 //
 // The cache is allowed to be incomplete at every moment: a file it does not
-// hold is served from the live export underneath, correctly, just slowly. That
-// single property is what this package rests on, and it turns every hard
-// question into a cheap one -- a budget that runs out, a walk that is still
-// running, a file skipped for being excluded, are all the same state as a file
-// the fill has not reached yet.
+// hold is served from the authoritative tree underneath, correctly, just
+// slowly. That single property turns every hard question into a cheap one -- a
+// budget that ran out, a walk still running, a file skipped for being excluded,
+// are all the same state as a file the fill has not reached yet.
 //
 // So nothing here can fail in a way that makes a share wrong. It can only make
 // one slower.
-package cachefill
 
 import (
 	"io/fs"
@@ -22,9 +21,8 @@ import (
 
 // Budget bounds what a share will copy across.
 //
-// Not a refusal: over the ceiling the rest of the tree is simply served live.
-// "The budget ran out" and "the fill has not got there yet" are the same state,
-// so there is no size at which a delegated share stops working.
+// Not a refusal: over the ceiling the rest of the tree is simply served live,
+// so there is no size at which a share stops working.
 type Budget struct {
 	// Files is how many entries may be cached. Zero means DefaultFiles.
 	Files int
@@ -91,22 +89,22 @@ type Stats struct {
 // deleted by the container or simply never sent.
 func (s Stats) Complete() bool { return s.Files == s.TotalFiles }
 
-// Walk finds what to cache and hands each entry over as it is found.
+// walk finds what to cache and hands each entry over as it is found.
 //
 // Streaming rather than returning a list, so a caller can start sending before
-// the scan is done. Ordering what it yields is the Selector's job.
+// the scan is done. Ordering what it yields is the selector's job.
 //
 // The budget is deliberately NOT applied here. A walk that stopped at the
 // ceiling would let the DIRECTORY ORDER decide what a share caches: the first
 // files it happened to reach, however large, and never the small ones behind
-// them. The Selector holds the budget, because choosing needs to see the
+// them. The selector holds the budget, because choosing needs to see the
 // candidates.
 //
 // Errors are skipped rather than returned. A directory that cannot be read is a
 // part of the tree that stays live, which is the same outcome as a budget that
 // ran out, and refusing the whole share over one unreadable path would be worse
 // than the thing it protects against.
-func Walk(root string, excludes []string, yield func(Entry)) Stats {
+func walk(root string, excludes []string, yield func(Entry)) Stats {
 	var stats Stats
 	skip := excluded(excludes)
 
@@ -151,11 +149,7 @@ func Walk(root string, excludes []string, yield func(Entry)) Stats {
 	return stats
 }
 
-// excluded is the set of directory names never cached.
-//
-// The same list the watcher uses, and that is a rule rather than a convenience:
-// the cache may only hold what the watcher can invalidate, or a file changed
-// here would stay stale in the container until something else removed it.
+// excluded is the set of directory names never cached; see Cache.Exclude.
 func excluded(names []string) map[string]bool {
 	set := make(map[string]bool, len(names))
 	for _, n := range names {
@@ -166,22 +160,22 @@ func excluded(names []string) map[string]bool {
 	return set
 }
 
-// DefaultBatchBytes is how much one send carries.
+// batchBytes is how much one send carries.
 //
 // 16 MiB: large enough that a source tree is a handful of sends rather than
 // thousands, small enough to hold in memory while it is framed, and small
 // enough that a share becomes useful in pieces rather than all at once.
-const DefaultBatchBytes = 16 << 20
+const batchBytes = 16 << 20
 
-// Sample is how many files are seen before the first batch is chosen.
+// sample is how many files are seen before the first batch is chosen.
 //
 // The number is not important and any low hundreds would do. What it is for is
 // avoiding a first batch picked from whatever handful the walk reached first,
 // which on an unlucky directory order would be the largest files in the tree.
 // The scan reaches this in milliseconds, so it costs nothing to wait for.
-const Sample = 100
+const sample = 100
 
-// Selector holds the candidates a fill has found and hands out the smallest.
+// selector holds the candidates a fill has found and hands out the smallest.
 //
 // This is what lets the scan and the upload run at once while still sending the
 // cheapest files first. A sorted list of the whole tree would be exact and
@@ -197,7 +191,7 @@ const Sample = 100
 // Bounded by BOTH bytes and count. Bytes alone would let a tree of tiny files
 // put twenty million entries in memory before the byte ceiling was anywhere
 // near.
-type Selector struct {
+type selector struct {
 	budget Budget
 
 	// entries is kept sorted by size, ascending: draining takes a prefix and
@@ -212,15 +206,15 @@ type Selector struct {
 	sentFiles int
 }
 
-// NewSelector returns one bounded by the budget.
-func NewSelector(b Budget) *Selector { return &Selector{budget: b} }
+// newSelector returns one bounded by the budget.
+func newSelector(b Budget) *selector { return &selector{budget: b} }
 
-// Add offers a file, and reports whether the buffer kept it.
+// add offers a file, and reports whether the buffer kept it.
 //
 // A file larger than everything held, with no room left, is refused rather than
 // evicting something smaller -- which is the same decision as the eviction
 // below, made without the pointless work of inserting it first.
-func (s *Selector) Add(e Entry) bool {
+func (s *selector) add(e Entry) bool {
 	if s.wouldExceed(e) && (len(s.entries) == 0 || e.Size >= s.largest()) {
 		return false
 	}
@@ -245,18 +239,18 @@ func (s *Selector) Add(e Entry) bool {
 // Two questions, deliberately not one function: while evicting, "would one more
 // fit" counts a file that is not there, so a buffer holding a single entry
 // evicts it every time.
-func (s *Selector) wouldExceed(e Entry) bool {
+func (s *selector) wouldExceed(e Entry) bool {
 	return s.sentFiles+len(s.entries)+1 > s.budget.files() ||
 		s.sentBytes+s.bytes+e.Size > s.budget.bytes()
 }
 
-func (s *Selector) over() bool {
+func (s *selector) over() bool {
 	return s.sentFiles+len(s.entries) > s.budget.files() ||
 		s.sentBytes+s.bytes > s.budget.bytes()
 }
 
-// TakeSmallest removes and returns the cheapest files, up to a batch.
-func (s *Selector) TakeSmallest(maxBytes int64, maxFiles int) []Entry {
+// takeSmallest removes and returns the cheapest files, up to a batch.
+func (s *selector) takeSmallest(maxBytes int64, maxFiles int) []Entry {
 	if len(s.entries) == 0 {
 		return nil
 	}
@@ -280,26 +274,26 @@ func (s *Selector) TakeSmallest(maxBytes int64, maxFiles int) []Entry {
 	return took
 }
 
-// Len is how many candidates are waiting.
-func (s *Selector) Len() int { return len(s.entries) }
+// waiting is how many candidates are waiting.
+func (s *selector) waiting() int { return len(s.entries) }
 
-// Sent is what has been handed out, which is what the share has cached.
-func (s *Selector) Sent() (files int, bytes int64) { return s.sentFiles, s.sentBytes }
+// sent is what has been handed out, which is what the share has cached.
+func (s *selector) totals() (files int, bytes int64) { return s.sentFiles, s.sentBytes }
 
 // largest is the biggest file held, which is the tail of a sorted buffer.
-func (s *Selector) largest() int64 { return s.entries[len(s.entries)-1].Size }
+func (s *selector) largest() int64 { return s.entries[len(s.entries)-1].Size }
 
-// MaxBatchFiles bounds a batch by count as well as by bytes.
+// maxBatchFiles bounds a batch by count as well as by bytes.
 //
 // A batch of a hundred thousand empty files is small in bytes and slow in every
 // other way: it is built in memory, framed, extracted entry by entry, and its
 // failure costs all of it. Two thousand keeps a batch a few seconds of work.
-const MaxBatchFiles = 2000
+const maxBatchFiles = 2000
 
-// Stream scans a tree and sends it at the same time, cheapest first.
+// stream scans a tree and sends it at the same time, cheapest first.
 //
-// The scan feeds a Selector; the send loop drains it. They run together after
-// the first Sample files, so the scan keeps improving the candidates while the
+// The scan feeds a selector; the send loop drains it. They run together after
+// the first sample files, so the scan keeps improving the candidates while the
 // upload works through them.
 //
 // send is called with batches in ascending size and must not be called
@@ -307,13 +301,13 @@ const MaxBatchFiles = 2000
 // that cannot reach the workspace has nothing useful left to do, and the share
 // is served from the lower meanwhile.
 //
-// It always terminates, including for a tree smaller than Sample, one that is
+// It always terminates, including for a tree smaller than sample, one that is
 // empty, and one that cannot be read at all: the scan ending wakes the drain
 // whether or not the sample was ever reached.
-func Stream(root string, excludes []string, budget Budget, send func([]Entry) error) (Stats, error) {
+func stream(root string, excludes []string, budget Budget, send func([]Entry) error) (Stats, error) {
 	var (
 		mu       sync.Mutex
-		selector = NewSelector(budget)
+		sel      = newSelector(budget)
 		scanning = true
 		stats    Stats
 		ready    = make(chan struct{}, 1)
@@ -328,14 +322,14 @@ func Stream(root string, excludes []string, budget Budget, send func([]Entry) er
 
 	go func() {
 		seen := 0
-		found := Walk(root, excludes, func(e Entry) {
+		found := walk(root, excludes, func(e Entry) {
 			mu.Lock()
-			selector.Add(e)
+			sel.add(e)
 			mu.Unlock()
 
 			// Nothing goes until the buffer has seen enough of the tree to be
 			// choosing rather than guessing.
-			if seen++; seen >= Sample {
+			if seen++; seen >= sample {
 				wake()
 			}
 		})
@@ -344,7 +338,7 @@ func Stream(root string, excludes []string, budget Budget, send func([]Entry) er
 		stats, scanning = found, false
 		mu.Unlock()
 		// Unconditional, and this is what makes a small tree work: one with
-		// fewer than Sample files never woke the drain while scanning, so the
+		// fewer than sample files never woke the drain while scanning, so the
 		// end of the scan is its first and only wake-up.
 		wake()
 	}()
@@ -352,52 +346,52 @@ func Stream(root string, excludes []string, budget Budget, send func([]Entry) er
 	for range ready {
 		for {
 			mu.Lock()
-			batch := selector.TakeSmallest(DefaultBatchBytes, MaxBatchFiles)
-			done := !scanning && selector.Len() == 0
+			batch := sel.takeSmallest(batchBytes, maxBatchFiles)
+			done := !scanning && sel.waiting() == 0
 			result := stats
 			mu.Unlock()
 
 			if len(batch) > 0 {
 				if err := send(batch); err != nil {
-					return withSent(result, selector), err
+					return withSent(result, sel), err
 				}
 				continue
 			}
 			if done {
-				return withSent(result, selector), nil
+				return withSent(result, sel), nil
 			}
 			break
 		}
 	}
-	return withSent(stats, selector), nil
+	return withSent(stats, sel), nil
 }
 
-// withSent fills in what was actually cached, which only the Selector knows:
+// withSent fills in what was actually cached, which only the selector knows:
 // the walk counts what the tree HOLDS, and the budget decides how much of that
 // is sent.
-func withSent(stats Stats, s *Selector) Stats {
-	stats.Files, stats.Bytes = s.Sent()
+func withSent(stats Stats, s *selector) Stats {
+	stats.Files, stats.Bytes = s.totals()
 	return stats
 }
 
-// Batches splits entries into sends bounded the same way a fill's are.
+// batches splits entries into sends bounded the same way a fill's are.
 //
 // For the paths an invalidation carries, which arrive all at once rather than
-// through the Selector: a `git checkout` across a branch, or a build that
-// rewrote a generated directory, is thousands of files in one event. Sent as
+// through the selector: a `git checkout` across a branch, or a build that
+// rewrote a generated directory, is thousands of files in one event. sent as
 // one batch it is one tar held whole in memory, framed as one payload, and
 // lost entirely if anything about it fails.
 //
 // An entry with no Size counts as nothing against the byte budget, so a caller
-// that has not stat'ed its paths is still bounded by MaxBatchFiles.
-func Batches(entries []Entry) [][]Entry {
+// that has not stat'ed its paths is still bounded by maxBatchFiles.
+func batches(entries []Entry) [][]Entry {
 	var (
 		out   [][]Entry
 		batch []Entry
 		size  int64
 	)
 	for _, e := range entries {
-		if len(batch) > 0 && (size+e.Size > DefaultBatchBytes || len(batch) >= MaxBatchFiles) {
+		if len(batch) > 0 && (size+e.Size > batchBytes || len(batch) >= maxBatchFiles) {
 			out = append(out, batch)
 			batch, size = nil, 0
 		}

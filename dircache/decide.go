@@ -1,10 +1,11 @@
-// Package writeback decides what a delegated share's container changes mean
-// for the files on this machine (ADR 0044).
+package dircache
+
+// What a consumer's changes mean for the files on this machine (ADR 0044).
 //
-// This is the only part of the cache mode that writes into a user's own
-// directory, so the rules are here, alone, and pure: given what the fill sent,
-// what the container changed, and what the local file looks like now, it says
-// what to do and nothing else does it.
+// This is the only part of the cache that writes into a user's own directory,
+// so the rules are here, alone, and pure: given what the fill sent, what
+// changed in the cache, and what the local file looks like now, it says what to
+// do and nothing else does it.
 //
 // # Baselines, not clocks
 //
@@ -14,18 +15,16 @@
 // together:
 //
 //	local  != manifest  ->  you changed it
-//	cached != manifest  ->  the container changed it
+//	cached != manifest  ->  the consumer changed it
 //	cached == manifest  ->  nobody did; this is what the fill wrote
 //
 // A file only YOU changed produces no action at all: nothing has to come back,
-// and bringing the cache up to date is the invalidator's job rather than this
-// one's (client/internal/session/invalidate.go).
+// and bringing the cache up to date is invalidate.go's job rather than this
+// one's.
 //
 // Which leaves exactly one case where a clock is needed at all -- both sides
 // changed -- and that is the only place the measured offset between the two
 // machines is used.
-package writeback
-
 import (
 	"io/fs"
 	"time"
@@ -33,46 +32,46 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Baseline is what the fill sent, for one path.
-type Baseline struct {
+// baseline is what the fill sent, for one path.
+type baseline struct {
 	Size    int64
 	ModTime time.Time
 }
 
-// Kind is what to do about one path.
-type Kind int
+// kind is what to do about one path.
+type kind int
 
 const (
-	// Write copies the container's version onto this machine.
-	Write Kind = iota
+	// kindWrite copies the consumer's version onto this machine.
+	kindWrite kind = iota
 
-	// Delete removes the file here, because the container removed it and you
+	// kindDelete removes the file here, because the consumer removed it and you
 	// did not touch it.
-	Delete
+	kindDelete
 
-	// Conflict means both sides changed it. Reported whichever way it
+	// kindConflict means both sides changed it. Reported whichever way it
 	// resolves, because silently choosing is the one thing this must not do.
-	Conflict
+	kindConflict
 )
 
-func (k Kind) String() string {
+func (k kind) String() string {
 	switch k {
-	case Write:
+	case kindWrite:
 		return "write"
-	case Delete:
+	case kindDelete:
 		return "delete"
 	default:
 		return "conflict"
 	}
 }
 
-// Action is one decision.
-type Action struct {
+// action is one decision.
+type action struct {
 	Path string
-	Kind Kind
+	kind kind
 
 	// Wins says which side a conflict was resolved in favour of, and is only
-	// set when Kind is Conflict. True means the container's version is written
+	// set when kind is kindConflict. True means the consumer's version is written
 	// back, which is what last-writer-wins decided.
 	Wins bool
 
@@ -80,11 +79,11 @@ type Action struct {
 	Why string
 }
 
-// Local is what this machine knows about a path: its current state, or nothing
+// localAt is what this machine knows about a path: its current state, or nothing
 // if it is not there.
-type Local func(path string) (fs.FileInfo, bool)
+type localAt func(path string) (fs.FileInfo, bool)
 
-// Decide works out what to do about everything the container changed.
+// decide works out what to do about everything the consumer changed.
 //
 // skew is the workspace's clock minus this machine's, measured once per
 // session. It is applied ONLY to a conflict, because every other case is
@@ -92,27 +91,27 @@ type Local func(path string) (fs.FileInfo, bool)
 //
 // complete says whether the cache holds everything the fill chose. When it does
 // not, nothing is written back at all: a file the fill never sent looks exactly
-// like a file the container created, and the cost of that mistake is content
+// like a file the consumer created, and the cost of that mistake is content
 // appearing in somebody's source tree that they never wrote.
-func Decide(
-	manifest map[string]Baseline,
+func decide(
+	manifest map[string]baseline,
 	changes []workspace.CacheChange,
-	local Local,
+	local localAt,
 	skew time.Duration,
 	complete bool,
-) []Action {
+) []action {
 	if !complete {
 		return nil
 	}
 
-	var actions []Action
+	var actions []action
 	for _, change := range changes {
 		base, sent := manifest[change.Path]
 		info, here := local(change.Path)
 
 		// What the fill itself put there. The cache is written THROUGH the
 		// union (ADR 0044), so the filled copy of every file is in the layer
-		// this reads, beside whatever the container wrote -- and without this
+		// this reads, beside whatever the consumer wrote -- and without this
 		// every round asks for the whole tree back, which is a stream large
 		// enough to be refused rather than a small mistake.
 		//
@@ -125,7 +124,7 @@ func Decide(
 			continue
 		}
 
-		// A path the fill never sent is not the container's doing as far as
+		// A path the fill never sent is not the consumer's doing as far as
 		// this can tell -- it may be a file it created, or one that was never
 		// cached. Only the first should come back, and nothing here can tell
 		// them apart, so neither does.
@@ -133,7 +132,7 @@ func Decide(
 			if change.Deleted || here {
 				continue
 			}
-			actions = append(actions, Action{Path: change.Path, Kind: Write})
+			actions = append(actions, action{Path: change.Path, kind: kindWrite})
 			continue
 		}
 
@@ -144,18 +143,18 @@ func Decide(
 			case !here:
 				// Already gone on both sides.
 			case youChanged:
-				actions = append(actions, Action{
-					Path: change.Path, Kind: Conflict,
+				actions = append(actions, action{
+					Path: change.Path, kind: kindConflict,
 					Why: "the container deleted it and you changed it; your file is kept",
 				})
 			default:
-				actions = append(actions, Action{Path: change.Path, Kind: Delete})
+				actions = append(actions, action{Path: change.Path, kind: kindDelete})
 			}
 			continue
 		}
 
 		if !youChanged {
-			actions = append(actions, Action{Path: change.Path, Kind: Write})
+			actions = append(actions, action{Path: change.Path, kind: kindWrite})
 			continue
 		}
 
@@ -164,14 +163,18 @@ func Decide(
 		// applied rather than pretending the two clocks agree.
 		containerAt := time.Unix(0, change.ModTime).Add(-skew)
 		wins := containerAt.After(info.ModTime())
-		actions = append(actions, Action{
-			Path: change.Path, Kind: Conflict, Wins: wins,
+		actions = append(actions, action{
+			Path: change.Path, kind: kindConflict, Wins: wins,
 			Why: conflictReason(wins),
 		})
 	}
 	return actions
 }
 
+// conflictReason is the one line a person reads, and it names a CONTAINER
+// rather than a consumer: this module's word is the general one, and the thing
+// on the other side of somebody's cache here is a container (ADR 0044). A
+// different Store would want different wording.
 func conflictReason(containerWins bool) string {
 	if containerWins {
 		return "both changed it; the container wrote last, so its version is kept"
@@ -179,33 +182,33 @@ func conflictReason(containerWins bool) string {
 	return "both changed it; you wrote last, so your version is kept"
 }
 
-// Writes are the paths whose contents have to be fetched.
-func Writes(actions []Action) []string {
+// writes are the paths whose contents have to be fetched.
+func writes(actions []action) []string {
 	var out []string
 	for _, a := range actions {
-		if a.Kind == Write || (a.Kind == Conflict && a.Wins) {
+		if a.kind == kindWrite || (a.kind == kindConflict && a.Wins) {
 			out = append(out, a.Path)
 		}
 	}
 	return out
 }
 
-// Deletes are the paths to remove from this machine.
-func Deletes(actions []Action) []string {
+// deletes are the paths to remove from this machine.
+func deletes(actions []action) []string {
 	var out []string
 	for _, a := range actions {
-		if a.Kind == Delete {
+		if a.kind == kindDelete {
 			out = append(out, a.Path)
 		}
 	}
 	return out
 }
 
-// Conflicts are what a person is told about, whichever way each resolved.
-func Conflicts(actions []Action) []Action {
-	var out []Action
+// conflicts are what a person is told about, whichever way each resolved.
+func conflicts(actions []action) []action {
+	var out []action
 	for _, a := range actions {
-		if a.Kind == Conflict {
+		if a.kind == kindConflict {
 			out = append(out, a)
 		}
 	}

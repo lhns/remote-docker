@@ -1,7 +1,7 @@
 # 0044 — A delegated share is a cache, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01
+- Date: 2026-09-01, last amended 2026-09-02
 - Supersedes the retired 0043, whose answer — that `delegated` is a copy —
   stands only in the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for delegated
@@ -43,6 +43,29 @@ state, and all correct:
 - the scan has not reached that directory
 
 **Nothing here can make a share wrong; it can only make one slower.**
+
+### Where the policy lives
+
+The policy is `dircache`, a module of its own with **no third-party requires at
+all** (ADR 0021). What to copy and in what order, what a local change means for
+a cache, what a cached change means for somebody's source tree: none of it names
+a transport or a storage.
+
+| | where | knows |
+|---|---|---|
+| policy | `dircache` | nothing of SSH, Docker, tar, zstd, overlayfs |
+| the wire | `core/workspace`, `client/internal/session/cache.go` | the frame, the codec, the tar |
+| the mount | `core-agent/union`, `agent/internal/unions` | fuse-overlayfs, the namespaces, the volume |
+
+`dircache.Store` is the seam, and it is four operations: apply a batch, drop
+paths, ask what changed, fetch files. It hands FILES rather than an archive in
+both directions, which is what keeps the encoding on the transport's side of the
+line: the channel builds the tar going out and unpacks the one coming back, and
+the policy has never seen one.
+
+The consequence worth stating, because it is what the split was for: the engine
+can be taken without `core-client`'s websocket, fsnotify, go-nfs, go-billy,
+gliderlabs/ssh and x/crypto. A package inside that module could not offer this.
 
 ### The union is fuse-overlayfs, and that was measured
 
@@ -96,7 +119,7 @@ children are born rather than moving the caller.
   it, and after a hundred files the scan and the upload run together.
 - A file sent early may be larger than one found later. That is the price of not
   waiting, and eviction only ever discards files that were never going to be
-  sent. The mechanism is `core-client/cachefill`.
+  sent. The mechanism is `dircache/fill.go`.
 
 **The budget bounds what is copied, never whether the mode runs.** "The budget
 ran out" is the same state as "the fill has not reached it yet", so there is no

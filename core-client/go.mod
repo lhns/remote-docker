@@ -2,7 +2,7 @@
 //
 // Serving files over NFSv3 from a virtual export namespace, watching
 // directories for changes on three platforms, and this machine's SSH identity.
-// None of it knows Docker exists, which is the test for being here (ADR 0031);
+// None of it knows Docker exists, which is the test for being here (ADR 0021);
 // the client binary is the glue that does.
 //
 // Named for the place rather than a role, because the roles invert: for the

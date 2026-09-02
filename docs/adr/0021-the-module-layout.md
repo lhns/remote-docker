@@ -3,13 +3,14 @@
 - Status: Accepted. Consolidates ADR 0011 (shared contract), ADR 0030 (tunnel in
   `core`) and ADR 0031 (the glue rule): stages of one decision, no longer
   separate records.
-- Date: 2026-08-07, last decided 2026-08-12, consolidated 2026-08-19
-- Current answer: **five modules**; placement is decided by two questions.
+- Date: 2026-08-07, last decided 2026-09-02, consolidated 2026-08-19
+- Current answer: **six modules**; placement is decided by three questions.
 
 ## The decision
 
 ```
 github.com/lhns/remote-docker/core          SHARED: what both ends must agree on
+github.com/lhns/remote-docker/dircache      A CACHE ENGINE, usable on its own
 github.com/lhns/remote-docker/core-client   THE USER'S MACHINE, minus Docker
 github.com/lhns/remote-docker/core-agent    THE WORKSPACE, minus Docker
 github.com/lhns/remote-docker/client        the client binary: glue
@@ -24,13 +25,18 @@ Two rules place everything:
    forwards, file watching, unix accounts: wanted without Docker existing.
    Bind→volume rewriting, hijack detection, supervising dockerd, resolving an
    account to its daemon: not.
+3. **Its own module only if it is worth taking WITHOUT the rest of the one it
+   would otherwise sit in.** This is a claim about the dependency graph, not
+   about tidiness, and there is exactly one thing that meets it. See
+   "The third question" below.
 
 Contents:
 
 | module | packages |
 |---|---|
 | `core` | `workspace` (contract), `tunnel` (stream semantics + protocol names), `logx`, test probes |
-| `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient`, `wstunnel`, `cachefill`, `writeback` |
+| `dircache` | the cache policy: fill order, invalidation, write-back |
+| `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient`, `wstunnel` |
 | `core-agent` | `accounts`, `notify`, `netns`, `tunnelserver`, `union` |
 | `client`, `agent` | everything that names Docker |
 
@@ -114,6 +120,42 @@ of which fail by *succeeding*:
   WebSocket transport passes its own (ADR 0034). What the package does with the
   connection is identical either way.
 
+## The third question, and why `ports` does not answer it
+
+`ports` was expected to split and did not: *"splitting further invents an
+abstraction with one user."* That precedent reaches every candidate here except
+one, and the difference is not size or elegance.
+
+| | `ports` | `dircache` |
+|---|---|---|
+| what a second user would supply | a forward, which `tunnelclient` already is | a `Store`: somewhere files live |
+| what it would avoid taking | nothing; the caller is in `client` regardless | `core-client`'s seven third-party requires |
+| third-party requires of its own | n/a | **0** |
+
+The cache engine decides what to copy, in what order, what a local change means
+for a cache, and what a cached change means for somebody's source tree. None of
+that names a transport or a storage, and in this repository both are exotic --
+an SSH channel, and the upper layer of a fuse-overlayfs union across a network
+(ADR 0044). A package inside `core-client` would carry that module's websocket,
+fsnotify, go-nfs, go-billy, gliderlabs/ssh and x/crypto to anyone who wanted the
+engine, which is the whole cost the split removes and the one `ports` never had.
+
+The measurable claim, and the reason this is not a matter of taste:
+
+```bash
+# A dot in the FIRST path element is a domain, which is what a third party is.
+# Matching a dot anywhere counts crypto/internal/entropy/v1.0.0, and reports 1.
+(cd dircache && go list -deps ./... | grep -v lhns/remote-docker | grep -cE '^[^/]+\.[^/]+/')  # 0
+```
+
+What it cost, honestly: a sixth module must be enumerated in `go.work`,
+`.github/dependabot.yml`, `.goreleaser.yaml`, four workflow files, this record,
+`docs/adr/README.md` and CLAUDE.md's layout and two loops. Two of those fail
+SILENTLY -- `integration.yml`'s change-detection regex, where a miss means the
+suite quietly stops running on changes to it, and the `cache-dependency-path`
+lists, where a miss is a cache miss nobody sees. `dircache` has no `go.sum` to
+list, because it has nothing to cache.
+
 ## What could not be moved
 
 The test is AGREEMENT, not "looks like infrastructure".
@@ -171,7 +213,7 @@ that passes without proving anything.
   than that it never happens.
 - **`core`'s library packages have no third-party dependency at all.** The one
   `x/sys` in `core/go.mod` is the probes reading raw inotify.
-- **`./...` stops at every module boundary**, so the five-module loop is the only
+- **`./...` stops at every module boundary**, so the six-module loop is the only
   thing that covers the repository. With no root module the naive command fails
   rather than passing.
 - **`golangci-lint` runs seven times**: one per module, plus `GOOS=linux` for
