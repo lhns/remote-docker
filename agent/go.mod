@@ -9,7 +9,6 @@ module github.com/lhns/remote-docker/agent
 go 1.26.3
 
 require (
-	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/klauspost/compress v1.19.2
@@ -21,6 +20,7 @@ require (
 
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect

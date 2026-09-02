@@ -208,12 +208,12 @@ sequenceDiagram
 workspace is authenticated by its SSH host key, inside the tunnel, and the
 machine by its client key. So `insecure` and a plain `ws://` URL give up knowing
 which proxy answered and give up nothing about whether the session itself is
-authenticated and encrypted. `core-client/wstunnel` states this at the top of
+authenticated and encrypted. `core-client/tunnelclient/websocket.go` states this at the top of
 the package; `client/internal/config/transport.go` is where a scheme becomes a
 dialler.
 
 **I — the agent holds no certificate (3).** It serves `ws` and never `wss`
-(`agent/internal/wslisten`). TLS is the proxy's job, so the workspace has no
+(`core-agent/wslisten`). TLS is the proxy's job, so the workspace has no
 private key to protect, rotate or leak, and a deployment that wants TLS end to
 end runs the proxy on the same host.
 

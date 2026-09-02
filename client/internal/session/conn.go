@@ -24,7 +24,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
-	"github.com/lhns/remote-docker/core-client/wstunnel"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -219,7 +218,7 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 	if !t.WebSocket() {
 		return nil, nil
 	}
-	return wstunnel.Dialer(wstunnel.Options{
+	return tunnelclient.WebSocketDialer(tunnelclient.WebSocketOptions{
 		URL:      t.URL,
 		Addr:     net.JoinHostPort(t.Host, strconv.Itoa(t.Port)),
 		CAFile:   cfg.CAFile,

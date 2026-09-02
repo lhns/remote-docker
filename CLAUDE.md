@@ -58,10 +58,11 @@ dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
                          claim this whole split was for, and it is measured.
-  tunnelclient/          dialling the tunnel: sessions, streams, both forwards.
-                         Given a signer and a host key rule; decides neither.
+  tunnelclient/          dialling the tunnel: sessions, streams, both forwards,
+                         and the WebSocket transport for reaching a workspace
+                         behind a reverse proxy (ADR 0034). Given a signer and a
+                         host key rule; decides neither.
   nfsserve/              in-process NFSv3 server, virtual export namespace
-  wstunnel/              dialling a workspace through a reverse proxy (ADR 0034)
   fswatch/               watches shared dirs on three platforms, budget,
                          excludes, overflow
   keys/                  the keypair and known_hosts: this machine's identity
@@ -92,14 +93,14 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   replay/                replays the client's changes as real syscalls
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
+  wslisten/              the same SSH server, reached over a WebSocket. Serves
+                         ws and NEVER TLS: the proxy terminates that
 
 agent/go.mod             the agent module: THE GLUE. 6 direct third-party
                          requires, 28 go.sum lines (2026-09-02; re-check with
                          `wc -l agent/go.sum`)
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
-    wslisten/            the same SSH server, reached over a WebSocket. Serves
-                         ws and NEVER TLS: the proxy terminates that
     sshd/                the SSH server: auth, sessions, and the forwarding
                          POLICY core-agent/tunnelserver asks. Its session
                          handling is docker all the way down and stays here.
