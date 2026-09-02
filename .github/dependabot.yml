@@ -7,7 +7,7 @@
 # vendoring it). A PR runs both modes end to end before anybody believes it.
 version: 2
 updates:
-  # Six modules, six entries (ADR 0021). Dependabot does not
+  # One entry per module (ADR 0021). Dependabot does not
   # discover nested modules, so a directory missing here is a module whose
   # dependencies silently stop being updated -- which is the failure this file
   # exists to prevent, and which it failed to prevent once: core-client and

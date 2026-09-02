@@ -4,7 +4,8 @@
   `core`) and ADR 0031 (the glue rule): stages of one decision, no longer
   separate records.
 - Date: 2026-08-07, last decided 2026-09-02, consolidated 2026-08-19
-- Current answer: **six modules**; placement is decided by three questions.
+- Current answer: **two axes**. Modules split by SIDE; packages inside `core`
+  split by FEATURE. Seven modules, of which one is test-only.
 
 ## The decision
 
@@ -15,9 +16,44 @@ github.com/lhns/remote-docker/core-client   THE USER'S MACHINE, minus Docker
 github.com/lhns/remote-docker/core-agent    THE WORKSPACE, minus Docker
 github.com/lhns/remote-docker/client        the client binary: glue
 github.com/lhns/remote-docker/agent         the agent binary: glue
+github.com/lhns/remote-docker/test/probes   instruments; linked into nothing
 ```
 
-Two rules place everything:
+## The two axes, and why naming only one was a bug
+
+**Modules split by SIDE**: what may link what. **Packages inside `core` split by
+FEATURE**: what must change together. Both are needed and only the first was
+ever written down here, which is how the same defect happened five times before
+anyone saw it (2026-09-02).
+
+What it looked like: `core/tunnel` held each channel's NAME while
+`core/workspace` held its version and message types. `NotifyCommand` in one
+package, `NotifyVersion` in another -- though opening a name an agent does not
+know IS how the version is checked, as `NotifyCommand`'s own comment said. Both
+packages stated the same membership test, "spoken by one binary and understood
+by the other", so what actually separated them was *is it a string constant or a
+struct*. That is not an axis.
+
+The controlled experiment was already in the tree. `protocol.go` held six
+declarations; the three with a payload type of ours were all split from it, and
+the three without -- `DialStdioCommand` (the payload is raw Docker HTTP),
+`KeepAliveRequest`, and `UDPChannelType` with `ForwardPayload` and the datagram
+framing -- were all cohesive. UDP is the shape to copy.
+
+The same shape was found four more times, in descending severity:
+
+| agreement | halves were | how it failed |
+|---|---|---|
+| the `"cwd"` share id | unexported in `core/workspace`, hardcoded in `core-agent/union` | silently: a cache volume reported that does not exist, so the collector empties one under a running container |
+| `Info.Mode`'s values | the field in `core`, `"shared"`/`"per-account"` in `agent/internal/daemons` | silently: the client only prints the string, so a rename compiles and passes |
+| the five container labels | defined in `core`, re-exported by `client/internal/rewrite`, read from there by six sites | loudly, but it made `session` import the WRITER for a constant |
+| info / notify / cache names | `core/tunnel` vs `core/workspace` | an unknown command exits 127, so loudly-ish; the pairing with the version was unforced |
+
+**The rule that follows: a protocol package holds the whole agreement.** Its
+channel name, its version, its frames and its payload format. If any of those
+lives elsewhere, nothing makes them change together.
+
+Three rules place everything:
 
 1. **`core` if both binaries must AGREE on it** — on a format, `core/workspace`;
    on behaviour, `core/tunnel`. Not merely if both use it.
@@ -34,11 +70,22 @@ Contents:
 
 | module | packages |
 |---|---|
-| `core` | `workspace` (contract), `tunnel` (stream semantics + protocol names), `logx`, test probes |
+| `core` | `workspace` (the names and numbers both ends derive, and the handshake), `notify` and `cache` (one protocol each, whole), `tunnel` (how bytes and datagrams cross a connection), `logx` |
 | `dircache` | the cache policy: fill order, invalidation, write-back |
-| `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient`, `wstunnel` |
-| `core-agent` | `accounts`, `notify`, `netns`, `tunnelserver`, `union` |
+| `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient` |
+| `core-agent` | `accounts`, `replay`, `netns`, `tunnelserver`, `union`, `wslisten` |
 | `client`, `agent` | everything that names Docker |
+| `test/probes` | `watchprobe`, `pokeprobe`, `udpecho` |
+
+Two things did NOT become feature packages, and the reasons are the useful part:
+
+- **`info.go` stays in `workspace`.** `workspace.Info` is what the type is
+  called and `info.Info` would be a stutter. A package is worth it when it
+  removes a prefix, not when it adds one.
+- **`ports.go` and `mapping.go` stay together.** They are two different port
+  concepts -- the published port and the reverse-tunnel port -- and splitting
+  one out would put two similar names in two packages. `client/internal/ports`
+  also already owns the name.
 
 Structural rules:
 
@@ -129,18 +176,21 @@ one, and the difference is not size or elegance.
 | | `ports` | `dircache` |
 |---|---|---|
 | what a second user would supply | a forward, which `tunnelclient` already is | a `Store`: somewhere files live |
-| what it would avoid taking | nothing; the caller is in `client` regardless | `core-client`'s seven third-party requires |
+| what a package inside `core-client` would drag along | nothing; the caller is in `client` regardless | that module's seven third-party requires |
 | third-party requires of its own | n/a | **0** |
 
 The cache engine decides what to copy, in what order, what a local change means
 for a cache, and what a cached change means for somebody's source tree. None of
 that names a transport or a storage, and in this repository both are exotic --
 an SSH channel, and the upper layer of a fuse-overlayfs union across a network
-(ADR 0044). A package inside `core-client` would carry that module's websocket,
-fsnotify, go-nfs, go-billy, gliderlabs/ssh and x/crypto to anyone who wanted the
-engine, which is the whole cost the split removes and the one `ports` never had.
+(ADR 0044).
 
-The measurable claim, and the reason this is not a matter of taste:
+**No external consumer is expected, and that is not the argument.** Decided
+2026-09-02: these boundaries exist as discipline inside this repository, and an
+earlier version of this record claimed a reuse benefit that nobody wants. The
+honest reason is that a module boundary is the only thing Go enforces -- a
+package inside `core-client` cannot refuse that module's dependencies, and a
+module can. The property is checked rather than trusted:
 
 ```bash
 # A dot in the FIRST path element is a domain, which is what a third party is.
@@ -148,7 +198,19 @@ The measurable claim, and the reason this is not a matter of taste:
 (cd dircache && go list -deps ./... | grep -v lhns/remote-docker | grep -cE '^[^/]+\.[^/]+/')  # 0
 ```
 
-What it cost, honestly: a sixth module must be enumerated in `go.work`,
+**The two side-boundaries do not buy the same thing**, and it is worth saying
+which is which. `core-client` isolates real weight: 54 `go.sum` lines against
+`client`'s 861, which is `docker/cli` plus buildx plus compose. `core-agent`
+isolates none -- `agent` has 28 lines in total -- so what that boundary enforces
+is LAYERING, not weight. Both are worth keeping; only one is worth keeping for
+the reason above.
+
+**`core` requires nothing at all** since 2026-09-02, when the test-only probes
+moved to `test/probes`. They were the only thing that ever put a dependency into
+the module every other module imports, and they were imported by no Go file,
+linked into neither binary and shipped in nothing.
+
+What it cost, honestly: a module must be enumerated in `go.work`,
 `.github/dependabot.yml`, `.goreleaser.yaml`, four workflow files, this record,
 `docs/adr/README.md` and CLAUDE.md's layout and two loops. Two of those fail
 SILENTLY -- `integration.yml`'s change-detection regex, where a miss means the

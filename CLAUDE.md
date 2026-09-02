@@ -49,9 +49,10 @@ dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          local copy of a tree in a bounded order, invalidate
                          what changes here, carry the consumer's writes back --
                          naming no transport and no storage, which is the
-                         membership test. Its own module rather than a package
-                         so the engine can be taken WITHOUT core-client's seven
-                         third-party requires; it has none at all (ADR 0044).
+                         membership test. A module rather than a package
+                         because a module is the only thing that can REFUSE a
+                         dependency: it has none at all, and inside core-client
+                         it could not keep that (ADR 0021, ADR 0044).
                          The union, the tar, the codec and the wire format are
                          all on the other side of its Store interface.
 
@@ -207,13 +208,19 @@ premise of the project, and it applies to building it too. So:
 
 ## Invariants — break these and things fail quietly
 
-- **`core/workspace` is the contract, and only the contract.** A type goes in
-  it if both binaries must *agree* on it, not merely if both use it. The
-  shared module around it (ADR 0021) is one step wider and no wider: something
-  goes there if both binaries must behave the *same way*, which is true of the
-  log handler and of half-closing a stream, and not of an env-var helper. The
-  uid→port formula lives there because it used to live in two shell scripts
-  and drifting copies presented as a network fault.
+- **`core` is the contract, and only the contract.** A type goes in it if both
+  binaries must *agree* on it, not merely if both use it. The module is one step
+  wider and no wider: something goes there if both binaries must behave the
+  *same way*, which is true of the log handler and of half-closing a stream, and
+  not of an env-var helper. The uid→port formula lives there because it used to
+  live in two shell scripts and drifting copies presented as a network fault.
+- **A protocol package holds the WHOLE agreement** (ADR 0021): its channel name,
+  its version, its frames and its payload format. `core/notify` and `core/cache`
+  are each one protocol entire. This is a rule because it was broken five times
+  -- a channel name sat in `core/tunnel` while the version it negotiates sat in
+  `core/workspace`, and nothing made them change together. Splitting on "is it
+  a string constant or a struct" is not an axis. `core/workspace` keeps what is
+  left, which is one subject: the names and numbers both ends derive.
 - **The proxy must be transparent to hijacked and streamed connections — and
   must not over-detect them.** Both directions of this are load-bearing and
   both have been got wrong:

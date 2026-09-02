@@ -574,7 +574,7 @@ sequenceDiagram
 ```
 
 **T/E — a root process told which path to touch (2–7).** Two independent
-checks. `workspace.FSEvent.Validate` (`core/workspace/notify.go`) whitelists the
+checks. `notify.Event.Validate` (`core/notify/notify.go`) whitelists the
 export and the path spelling, deliberately without `path.Clean`, because
 cleaning *repairs* a traversal into something plausible instead of refusing it.
 Then `relocate` re-checks containment after joining onto the daemon's root,
@@ -721,7 +721,7 @@ sequenceDiagram
 ```
 
 **T/E — a root process told which paths to write (3, 6).** Two independent
-checks, exactly as flow 6. `workspace.CacheRequest.Validate` whitelists the
+checks, exactly as flow 6. `cache.Request.Validate` whitelists the
 export and every path without `path.Clean`, because cleaning *repairs* a
 traversal into something plausible instead of refusing it. Then `within`
 re-checks containment after the join, because `path.Join` cleans. Every tar
