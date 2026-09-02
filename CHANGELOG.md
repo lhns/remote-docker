@@ -100,19 +100,19 @@ and, for the first time, `IN_DELETE`.
 Still unsolved for `consistent` and `cached`, which are mounts and have no local
 filesystem in the path.
 
-### Building on a shared directory works
-
-A C++ build died at the linker with `final close failed: Stale file handle`,
-having compiled every object file fine. Two bugs stacked.
+### A share no longer goes stale, and chmod reaches the file
 
 A file's identity on the wire was a hash of its path, and one file has several
-spellings, so the number moved under a live handle and the kernel decided the
-file had been replaced. It is now the real one the machine keeps: device and
-inode on Unix, volume and NTFS File Reference Number on Windows. The hash was
-only ever the Windows fallback, applied everywhere.
+spellings, so the number moved under a live handle and the client treated the
+file as replaced: `Stale file handle` against a mount that was working. It is
+now the identity the machine keeps -- device and inode on Unix, volume and NTFS
+File Reference Number on Windows.
 
-Underneath it, every attribute written through a share was accepted and
-discarded, so a binary linked, reported itself executable, and would not run.
+Separately, every attribute written through a share was accepted and discarded,
+so a file created with an executable mode came back without it.
+
+Together they are what stopped a compiler and linker working on a shared
+directory.
 
 ### A session lets go of the workspace without taking the endpoint
 
@@ -134,7 +134,7 @@ Two tiers now:
 `touch` from inside a container does not move the file's mtime on your machine.
 Applying it loops: the agent makes a container's watcher fire by touching files
 through that same share, so the change comes back as an edit and is replayed
-again. One edit became 3063 events.
+again.
 
 ### The workspace chart can mount volumes you own
 
