@@ -338,33 +338,38 @@ is the reason a workspace should be as trusted as the registries you use from
 it. Docker works this way everywhere; it is only worth stating because here the
 daemon is somebody else's.
 
-**T — the workspace writing permissions onto this machine's files (10, 11).**
-SETATTR is a real write now: a mode set through a share reaches the file, which
-is what makes a binary built there runnable. So the workspace can change the
-permission bits of any file in a share, including making one executable or
-removing an owner's access. That is the point of the feature and inside the
-share it is the account's own data, so no boundary is crossed.
+**T — the workspace writes to this machine's files, attributes included (10,
+11).** Content writes have always been real; that is the product. What is new is
+that ATTRIBUTE writes land too -- a mode set through a share now reaches the
+file, which is what makes a binary built there runnable. They used to be
+accepted and discarded, so the client was told a chmod had succeeded and nothing
+had changed.
 
-The boundary that matters is the share's edge. `attrChange.resolve` joins the
-name onto the share root and re-checks containment on the RESULT, because
-`filepath.Join` cleans and `"../.."` looks ordinary afterwards. Ownership is
-not writable at all: `Chown` and `Lchown` are accepted and discarded, since
-ownership is synthesised, so no chmod/chown pair can hand a file to another
-uid. *Covered by* `nfsserve/chmod_test.go` and `integration.sh` section 15d.
+Ownership stays unwritable: `Chown` and `Lchown` are accepted and dropped
+because ownership is synthesised, so no chmod/chown pair hands a file to another
+uid. *Covered by* `nfsserve/chmod_test.go`.
 
-**Known gap: `os.Chmod` follows symlinks.** A symlink inside a share pointing
-outside it is followed, so the workspace can set the mode of a file the share
-does not contain — the containment check is lexical and sees only the link's own
-path. Bounded by the client's own uid, so it reaches nothing the user cannot
-already chmod, and it changes permissions rather than content. `core-agent/replay`
-solved the same problem with `O_NOFOLLOW`; this path has no equivalent yet.
+**T — a symlink in a share cannot name a path on this machine (10, 11).** The
+server stores link text and never resolves it: NFSv3 leaves that to the client,
+which resolves in ITS OWN namespace. A link the workspace creates pointing at
+`/etc/shadow` therefore reaches the container's, not the user's -- which is why
+go-billy validating only where a link is placed, and never where it points, does
+not become an escape. *Covered by* `nfsserve/symlink_test.go`, which creates one
+through the export and writes through it.
+
+**Known gap: `attrChange` resolves paths server-side and follows links.** The
+one place that reasoning does not reach. `os.Chmod` follows a symlink and the
+containment check is lexical, so a client asking to chmod a link inside a share
+-- rather than resolving it first, as a kernel does -- changes the mode of
+whatever it points at. It needs a crafted NFS client rather than an ordinary
+mount, is bounded by the client's own uid, and reaches permission bits rather
+than content. `core-agent/replay` solved the same shape with `O_NOFOLLOW`.
 
 **I — the fileid is the real inode now (11).** A share reports device and inode
-(volume and file reference on Windows) instead of a hash of the path, because a
+(volume and file reference on Windows) rather than a hash of the path, because a
 number that moves under a live handle makes the client treat the file as
-replaced. It tells the workspace which files are hard links of each other and
-roughly how the client's filesystem is laid out. Both were already inferable
-from the share's contents.
+replaced. It tells the workspace which files are hard links of each other, which
+the share's contents already implied.
 
 **T — a path outside the shares (10, 11).** The export namespace is virtual:
 only `/cwd` and `/m/<16 hex>` resolve, and lookups that climb out of a share
@@ -933,12 +938,14 @@ Stated here rather than buried, because each is a deliberate trade.
   own union and write into it through its own container. The agent now derives
   the name from the key digest and compares, rather than trusting the one it was
   handed. Inside one account either way, and a narrowing worth having.
-- **`os.Chmod` through a share follows symlinks.** Found writing the SETATTR
-  entry in flow 3, and NOT fixed: the containment check is lexical, so a link
-  inside a share pointing out of it is followed. Bounded by the client's own
-  uid and limited to permission bits, where `core-agent/replay` solved the same
-  problem with `O_NOFOLLOW`. Recorded rather than closed because the fix wants
-  an openat-based path this package does not have yet.
+- **A symlink cannot escape a share, and it is measured now.** Writing flow 3
+  raised it, because go-billy validates where a link is placed and never where
+  it points. It holds anyway: the server never resolves a link, NFSv3 leaving
+  that to the client in its own namespace. `symlink_test.go` asserts it rather
+  than leaving it to reasoning.
+- **`attrChange` follows links server-side**, the one path that reasoning does
+  not cover. Recorded rather than fixed: it needs a crafted client, is bounded
+  by the user's own uid, and reaches permission bits only.
 - **The limit of `AllowDial`, written down and tested.** A shell reaches what a
   forwarding rule cannot gate. The default mode's namespace is what actually
   prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export
