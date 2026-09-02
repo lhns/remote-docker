@@ -21,6 +21,7 @@ func TestDaemonIdle(t *testing.T) {
 		want       time.Duration
 	}{
 		{"unset means the default", 0, config.DefaultDaemonIdle},
+		{"and the default is never", 0, config.DaemonIdleNever},
 		{"a value means itself", 5 * time.Minute, 5 * time.Minute},
 		{"negative means never, and is preserved", -time.Second, -time.Second},
 	} {
@@ -44,5 +45,20 @@ func TestIdleNeverExpiresWhenDisabled(t *testing.T) {
 			t.Errorf("idle=%v reported the session expired", idle)
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+}
+
+// The fix, asserted where it matters: an unconfigured session must not reclaim
+// itself, because the reclaim takes the endpoint and every foreign Docker
+// client pointed at it.
+//
+// Set deliberately it still works, which is the other half -- the option did
+// not go away, it stopped being what nobody chose.
+func TestTheDefaultSessionNeverReclaimsItself(t *testing.T) {
+	expired := idleExpired(t.Context(), nil, daemonIdle(0))
+	select {
+	case <-expired:
+		t.Fatal("an unconfigured session reclaimed itself, taking the endpoint with it")
+	case <-time.After(50 * time.Millisecond):
 	}
 }

@@ -263,7 +263,7 @@ default.**
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, for a `delegated` share's cache |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, for a `delegated` share's cache |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
-| `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | `30m` before an unused session exits; negative never |
+| `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session exits. Unset never exits, because the exit takes the endpoint other Docker clients use |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
 
@@ -895,9 +895,21 @@ inside the workspace daemon's own namespace.
 
 Not in a terminal you are watching, but running: it is the endpoint and the
 file server, so stopping it takes running containers' mounts with it. Any
-command that needs one starts it. A background session reclaims itself after
-30 minutes with nothing to do, and never while a container of yours is running
-or a stream is open.
+command that needs one starts it, and does not close it afterwards: a one-shot
+`docker run` leaves the session up for whatever comes next.
+
+**It does not reclaim itself by default**, and that is deliberate. It used to,
+after 30 minutes — but the reclaim removed the endpoint, and the endpoint is
+what this README tells you to point compose, buildx, Testcontainers and your
+IDE at. Those tools connect to a path; none of them knows what a session is, so
+they failed with "no such file or directory" and only a `remote-docker` command
+could bring one back. What the reclaim actually saved was small: the connection
+to the workspace is released on its own timer and reopened on the next request,
+invisibly, whether or not the session ever exits.
+
+Set `daemonIdle` if you want the old behaviour — reasonable on a laptop — and
+know that when it fires, every non-`remote-docker` client pointed at the
+endpoint stops working until you run something that starts a session.
 
 ### File watching in detail
 
