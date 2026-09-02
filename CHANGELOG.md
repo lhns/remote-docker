@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.6.0 — 2026-09-03
 
 ### A shared directory can stop revalidating every attribute
 
