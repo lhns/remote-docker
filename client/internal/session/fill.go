@@ -1,10 +1,8 @@
 package session
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -246,89 +244,37 @@ const fillBatchTimeout = 10 * time.Minute
 // to be told how many bytes follow before they are sent. cachefill.Batches is
 // what keeps that bounded.
 func tarOf(root string, entries []cachefill.Entry, codec string) ([]byte, error) {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Path)
+	}
+
 	var buf bytes.Buffer
+	if codec != workspace.CodecZstd {
+		// Written before the buffer is read: `return buf.Bytes(), WriteTar(...)`
+		// evaluates the bytes first and hands back an empty slice.
+		if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), &buf); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
 
 	// The compressor wraps the tar writer, so the tar is written once and the
-	// bytes that leave are the encoded ones -- which is what the frame's length
-	// has to describe.
-	var (
-		zw    *zstd.Encoder
-		sink  io.Writer = &buf
-		coded           = codec == workspace.CodecZstd
-	)
-	if coded {
-		var err error
-		// The default level, which is where zstd's ratio-per-second is: a
-		// source tree compresses hard enough that the link, not the CPU, is
-		// what the fill waits on.
-		zw, err = zstd.NewWriter(&buf)
-		if err != nil {
-			return nil, err
-		}
-		sink = zw
-	}
-
-	tw := tar.NewWriter(sink)
-
-	for _, e := range entries {
-		p := filepath.Join(root, filepath.FromSlash(e.Path))
-
-		// Opened before its header is written, so a file this machine cannot
-		// read -- no permission, or locked by another process, which is
-		// ordinary on Windows -- is simply absent from the batch rather than
-		// present and full of NULs.
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			_ = f.Close()
-			continue
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			_ = f.Close()
-			continue
-		}
-		header.Name = e.Path
-		// Ownership is this machine's and means nothing on the workspace,
-		// where the account's uid is what the files must belong to.
-		header.Uid, header.Gid = 0, 0
-		header.Uname, header.Gname = "", ""
-
-		if err := tw.WriteHeader(header); err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		written, err := io.Copy(tw, io.LimitReader(f, header.Size))
-		_ = f.Close()
-		if err != nil {
-			return nil, err
-		}
-		// A file that shrank while it was read leaves the entry short, which
-		// the writer reports on the next header. Pad rather than fail: one
-		// truncated file in the cache is still served correctly from the lower
-		// once it is invalidated, and a failed batch costs the whole share.
-		if pad := header.Size - written; pad > 0 {
-			if _, err := tw.Write(make([]byte, pad)); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err := tw.Close(); err != nil {
+	// bytes that leave are the encoded ones, which is what the frame's length
+	// has to describe. Default level: a source tree compresses hard enough that
+	// the link, not the CPU, is what the fill waits on.
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
 		return nil, err
 	}
-	// Both, in order: the tar's own trailer has to be inside the compressed
-	// stream, and the compressor's footer has to be written before the buffer
-	// is measured. Closing only one leaves a payload whose length is right and
-	// whose contents end early.
-	if coded {
-		if err := zw.Close(); err != nil {
-			return nil, err
-		}
+	if err := workspace.WriteTar(workspace.TarFilesFrom(root, names), zw); err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+	// Closed before the buffer is measured, or the payload's length is right
+	// and its contents end early.
+	if err := zw.Close(); err != nil {
+		return nil, err
 	}
 	return buf.Bytes(), nil
 }
