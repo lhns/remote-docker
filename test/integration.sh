@@ -1707,13 +1707,10 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         apk add --no-cache gcc musl-dev >/dev/null 2>&1 || exit 97
         cc -c hello.c -o hello.o || exit 98
         cc hello.o -o hello       || exit 99
-        # That the output exists and has content. Whether it is EXECUTABLE is
-        # a SEPARATE bug this reproduction found once the ESTALE was gone: a
-        # file created on a share with an exec mode comes back -rw-r--r--, so
-        # a binary built here cannot be run. It is asserted by the change that
-        # fixes it rather than here, because it has a different cause and
-        # mixing the two makes both harder to read.
-        test -s hello             || exit 96
+        # Not just that ld finished: a linker whose output cannot be run has
+        # not done its job. The bit is written by a SETATTR, which the share
+        # used to accept and discard.
+        test -x hello || { echo "not executable:"; ls -l hello; exit 96; }
     ' >"$WORK/link.log" 2>&1 || link_rc=$?
 
     case "$link_rc" in
