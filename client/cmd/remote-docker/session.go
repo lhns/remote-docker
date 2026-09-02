@@ -102,10 +102,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	// left to do. A background session has no terminal to press Ctrl-C in, so
 	// without the other two there would be no way to end one short of finding
 	// its pid.
-	idle := cfg.DaemonIdle
-	if idle == 0 {
-		idle = config.DefaultDaemonIdle
-	}
+	idle := daemonIdle(cfg.DaemonIdle)
 	select {
 	case <-ctx.Done():
 	case <-s.Stopped():
