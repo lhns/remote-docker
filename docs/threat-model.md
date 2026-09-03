@@ -287,6 +287,21 @@ path the user can read. The control is the endpoint itself: `0600` on unix
 named pipe (`listen_windows.go`), and never a TCP port. *Covered by*
 `proxy` lock and listen tests.
 
+**E — the endpoint now outlives idleness (1).** A session used to exit after 30
+minutes unused, closing the endpoint with it. It now STANDS BY instead: the
+workspace connection and the file watches are released, the endpoint stays
+bound, and the next request rebuilds the session. So the window in which a
+local process can reach that authority is no longer bounded by time — it lasts
+until the session is stopped.
+
+That is the intended behaviour, since the endpoint is what compose, buildx and
+IDE plugins are told to use, and it is why the control above is the file
+permissions rather than the lifetime. A deployment that wants the old bound
+sets `daemonIdle`, which still ends the process. Note what standby does NOT
+release: the endpoint answers while dormant, so reaching it wakes a session and
+reopens the connection. Nothing is re-authorised at that point; waking is not
+an authentication step.
+
 **I — the export is unauthenticated (9, 10).** The NFS server answers
 `AuthFlavorNull` (`core-client/nfsserve/server.go`): anything that can
 reach the port can read and write every registered share. There is no second
@@ -322,6 +337,39 @@ the far end to whoever runs the workspace. Nothing here mitigates that, and it
 is the reason a workspace should be as trusted as the registries you use from
 it. Docker works this way everywhere; it is only worth stating because here the
 daemon is somebody else's.
+
+**T — the workspace writes to this machine's files, attributes included (10,
+11).** Content writes have always been real; that is the product. What is new is
+that ATTRIBUTE writes land too -- a mode set through a share now reaches the
+file, which is what makes a binary built there runnable. They used to be
+accepted and discarded, so the client was told a chmod had succeeded and nothing
+had changed.
+
+Ownership stays unwritable: `Chown` and `Lchown` are accepted and dropped
+because ownership is synthesised, so no chmod/chown pair hands a file to another
+uid. *Covered by* `nfsserve/chmod_test.go`.
+
+**T — a symlink in a share cannot name a path on this machine (10, 11).** The
+server stores link text and never resolves it: NFSv3 leaves that to the client,
+which resolves in ITS OWN namespace. A link the workspace creates pointing at
+`/etc/shadow` therefore reaches the container's, not the user's -- which is why
+go-billy validating only where a link is placed, and never where it points, does
+not become an escape. *Covered by* `nfsserve/symlink_test.go`, which creates one
+through the export and writes through it.
+
+**Known gap: `attrChange` resolves paths server-side and follows links.** The
+one place that reasoning does not reach. `os.Chmod` follows a symlink and the
+containment check is lexical, so a client asking to chmod a link inside a share
+-- rather than resolving it first, as a kernel does -- changes the mode of
+whatever it points at. It needs a crafted NFS client rather than an ordinary
+mount, is bounded by the client's own uid, and reaches permission bits rather
+than content. `core-agent/replay` solved the same shape with `O_NOFOLLOW`.
+
+**I — the fileid is the real inode now (11).** A share reports device and inode
+(volume and file reference on Windows) rather than a hash of the path, because a
+number that moves under a live handle makes the client treat the file as
+replaced. It tells the workspace which files are hard links of each other, which
+the share's contents already implied.
 
 **T — a path outside the shares (10, 11).** The export namespace is virtual:
 only `/cwd` and `/m/<16 hex>` resolve, and lookups that climb out of a share
@@ -890,6 +938,14 @@ Stated here rather than buried, because each is a deliberate trade.
   own union and write into it through its own container. The agent now derives
   the name from the key digest and compares, rather than trusting the one it was
   handed. Inside one account either way, and a narrowing worth having.
+- **A symlink cannot escape a share, and it is measured now.** Writing flow 3
+  raised it, because go-billy validates where a link is placed and never where
+  it points. It holds anyway: the server never resolves a link, NFSv3 leaving
+  that to the client in its own namespace. `symlink_test.go` asserts it rather
+  than leaving it to reasoning.
+- **`attrChange` follows links server-side**, the one path that reasoning does
+  not cover. Recorded rather than fixed: it needs a crafted client, is bounded
+  by the user's own uid, and reaches permission bits only.
 - **The limit of `AllowDial`, written down and tested.** A shell reaches what a
   forwarding rule cannot gate. The default mode's namespace is what actually
   prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export
