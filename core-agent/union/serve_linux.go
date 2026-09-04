@@ -41,6 +41,11 @@ func Serve(spec Spec) error {
 			return fmt.Errorf("union: creating %s: %w", dir, err)
 		}
 	}
+	// The merged root takes the upper's mode, and this process is root; wide,
+	// so any uid can create at the top of its share (ADR 0046).
+	if err := os.Chmod(spec.Upper(), 0o777); err != nil {
+		return fmt.Errorf("union: opening %s to every uid: %w", spec.Upper(), err)
+	}
 
 	if err := mountLower(spec); err != nil {
 		return err

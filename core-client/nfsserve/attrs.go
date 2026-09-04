@@ -139,10 +139,20 @@ func (a *attrFS) wrap(fi os.FileInfo, fullPath string) os.FileInfo {
 	// Resolved HERE, while the real FileInfo is in hand: attrInfo.Sys replaces
 	// it with the NFS one. The real path goes too, because Windows has to open
 	// the file to read an identity.
+	// go-nfs stats a just-created file by the absolute OS path osfs returns
+	// (nfs_oncreate.go), everything else by the share-relative one. The fileid
+	// must come from one spelling, or the CREATE reply carries a number no
+	// later reply repeats and the client marks the inode stale.
+	sharePath := fullPath
+	if filepath.IsAbs(fullPath) {
+		if rel, err := filepath.Rel(a.Root(), fullPath); err == nil && !leavesRoot(rel) {
+			sharePath = filepath.ToSlash(rel)
+		}
+	}
 	return &attrInfo{
 		FileInfo: fi,
 		attrs:    a.attrs,
-		fileid:   fileIDOf(fi, filepath.Join(a.Root(), fullPath), fullPath),
+		fileid:   fileIDOf(fi, filepath.Join(a.Root(), sharePath), sharePath),
 	}
 }
 
@@ -272,15 +282,23 @@ func (c *attrChange) Chtimes(string, time.Time, time.Time) error { return nil }
 // resolve turns a share-relative name into a path on this machine.
 //
 // Checked on the RESULT: filepath.Join cleans, so "../.." looks ordinary
-// afterwards, and the name came from the workspace.
+// afterwards, and the name came from the workspace. The root is cleaned too:
+// it arrives spelled as the bind was written, forward slashes on Windows,
+// and Join returns the OS spelling.
 func (c *attrChange) resolve(name string) (string, error) {
 	if c.root == "" {
 		return "", fmt.Errorf("nfsserve: no share directory to write attributes in")
 	}
-	target := filepath.Join(c.root, filepath.FromSlash(name))
-	prefix := strings.TrimSuffix(c.root, string(filepath.Separator)) + string(filepath.Separator)
-	if target != c.root && !strings.HasPrefix(target, prefix) {
+	root := filepath.Clean(c.root)
+	target := filepath.Join(root, filepath.FromSlash(name))
+	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
+	if target != root && !strings.HasPrefix(target, prefix) {
 		return "", fmt.Errorf("nfsserve: %q leaves the share", name)
 	}
 	return target, nil
+}
+
+// leavesRoot reports whether a relative path from filepath.Rel climbs out.
+func leavesRoot(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

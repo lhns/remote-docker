@@ -809,6 +809,14 @@ to separate.
 
 ## Caveats
 
+### A container that is not root
+
+Every file in a share is reported as owned by the workspace account (uid
+10000 and up) with mode 0666, every directory 0777, so an image that runs as
+its own user can read and write the share without matching any number. A
+`chown` inside the container is accepted and does nothing, and a read-only
+bind (`ro`) is still read-only. ADR 0046 has the reasoning.
+
 ### What not to put on the share
 
 - **Build artifacts.** `node_modules`, `.git`, `target/`, package caches.

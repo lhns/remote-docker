@@ -8,6 +8,24 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### A share works for tar and for a container that is not root
+
+- From a Windows client, a file a container had just created went stale on
+  its first attribute change: GNU tar wrote every file and then failed every
+  utime, chown and chmod with `Stale file handle`. The CREATE reply carried a
+  fileid no later reply repeated.
+- Also from a Windows client, a create carrying a mode (tar as root, `cp -p`,
+  `install`) failed with EIO: the share root, spelled with forward slashes,
+  was compared raw against a backslash target and every name "left the
+  share".
+- A container running as a uid of the image's choosing could not write into a
+  `delegated` share: the union's root was the agent's `0:0 0755`. Every file
+  in a share now reports mode 0666 and every directory 0777, owned by the
+  workspace account as before, and the union's upper is created 0777
+  (ADR 0046).
+
 ## 0.6.0 — 2026-09-03
 
 ### A shared directory can stop revalidating every attribute

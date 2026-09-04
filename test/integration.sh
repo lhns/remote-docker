@@ -1763,6 +1763,58 @@ else
     bad "no client is running, so linking on a share could not be tested"
 fi
 
+echo "== 15f. a container that is not root, and a tar that sets attributes =="
+# A share reports the account as owner with wide bits, and a union's upper is
+# wide too (ADR 0046): a plain mount is granted by ACCESS whatever the mode,
+# a union checks the copied mode locally. GNU tar sets utime, owner and mode
+# on the descriptor it just wrote, which the kernel cannot retry; the two
+# defects behind that showed only from a Windows client and are pinned by
+# fileid_abs_test.go, resolve_test.go and machine.yml.
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    USERDIR="$WORK/non-root"
+    mkdir -p "$USERDIR/sub"
+    echo "x" >"$USERDIR/sub/a"
+
+    if outputs '^10000 10000 777$' dockert run --rm --user 1000 -v "$USERDIR:/w" alpine:3 stat -c '%u %g %a' /w; then
+        ok "a share reports the account as owner with wide bits"
+    else
+        bad "a share reports [$LAST_OUTPUT], want the account uid and 777"
+    fi
+    if outputs 'MKDIR-OK' dockert run --rm --user 1000 -v "$USERDIR:/w" alpine:3 sh -c 'mkdir /w/made && echo MKDIR-OK'; then
+        ok "a uid the image chose can create a directory on a plain mount"
+    else
+        bad "uid 1000 could not mkdir on a plain mount: [$LAST_OUTPUT]"
+    fi
+    if outputs 'TOP-OK SUB-OK' dockert run --rm --user 1000 -v "$USERDIR:/w:delegated" alpine:3 sh -c 'mkdir /w/top && printf "TOP-OK " && mkdir /w/sub/inner && echo SUB-OK'; then
+        ok "a uid the image chose can create directories at the top and inside a union"
+    else
+        bad "uid 1000 could not create directories in a union: [$LAST_OUTPUT]"
+        deleg_diagnostics
+    fi
+
+    # GNU tar as an ordinary uid; debian ships it, and a non-root uid cannot
+    # install one. One numbered exit per step.
+    if outputs 'TAR-OK' dockert run --rm --user 1001 -v "$USERDIR:/w" debian:stable-slim sh -c '
+        cd /w || exit 91
+        mkdir -p src && echo x >src/b || exit 92
+        tar -cf t.tar src || exit 93
+        rm -r src || exit 94
+        tar -xf t.tar || exit 95
+        touch src/b && chmod 600 src/b || exit 96
+        echo TAR-OK'; then
+        ok "GNU tar extracts into a share as uid 1001, attributes included"
+    else
+        case $LAST_STATUS in
+            95) bad "tar -xf failed on a share: [$LAST_OUTPUT]" ;;
+            96) bad "attributes could not be set after the extraction: [$LAST_OUTPUT]" ;;
+            *) bad "the tar probe failed at step $LAST_STATUS: [$LAST_OUTPUT]" ;;
+        esac
+    fi
+else
+    bad "no client is running, so the non-root cases could not be tested"
+fi
+
+echo
 echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session the rest
 # of the suite used -- started detached, stopped by asking rather than by
