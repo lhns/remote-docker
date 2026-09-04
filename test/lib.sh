@@ -53,10 +53,13 @@ info() { echo "  ....  $*"; }
 # shellcheck disable=SC2034  # read by the suites that source this, not here.
 LAST_OUTPUT=""
 
+# LAST_STATUS is the command's exit status, for a probe that numbers its steps.
 outputs() {
     local re=$1
     shift
     LAST_OUTPUT=$("$@" 2>&1)
+    # shellcheck disable=SC2034  # read by the suites
+    LAST_STATUS=$?
     grep -qE "$re" <<<"$LAST_OUTPUT"
 }
 

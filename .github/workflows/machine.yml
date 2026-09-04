@@ -116,6 +116,22 @@ jobs:
           $out
           if ($out -notmatch 'from the runner') { throw "the bind mount did not resolve" }
 
+      - name: GNU tar sets attributes on files it wrote, and a non-root uid can mkdir
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        # The one Windows client in CI. GNU tar sets attributes on the
+        # descriptor it just wrote, which the kernel cannot retry after ESTALE;
+        # both defects that broke it showed only from a Windows client.
+        run: |
+          $probe = 'apk add -q tar >/dev/null 2>&1 && cd /w && mkdir -p src && echo x >src/a && tar -cf t.tar src && rm -r src && tar -xf t.tar && chmod 600 src/a && echo TAR-OK'
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 sh -c $probe) -join "`n"
+          $out
+          if ($out -notmatch 'TAR-OK') { throw "GNU tar could not set attributes on a share" }
+          $out = (.\client\rd.exe run --rm --user 1000 -v "${PWD}:/w" alpine:3 sh -c 'mkdir /w/made && echo MKDIR-OK') -join "`n"
+          $out
+          if ($out -notmatch 'MKDIR-OK') { throw "a non-root uid could not mkdir on a share" }
+
       - name: creating it again changes nothing
         shell: pwsh
         env:

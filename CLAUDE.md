@@ -530,6 +530,17 @@ premise of the project, and it applies to building it too. So:
   round asks for the whole tree back and an idle session is told about every
   cached file every five seconds.
 
+- **A fileid comes from ONE spelling of a path, and a containment check
+  compares CLEANED paths.** go-nfs stats a just-created file by the absolute
+  OS path and everything else by the share-relative one, and the share root
+  arrives spelled as the bind was written. Either mismatch shows only from
+  a Windows client: a CREATE reply whose fileid no later reply repeats (the
+  kernel marks the inode stale; GNU tar fails every utime/chown/chmod), or
+  a create carrying a mode refused as leaving the share (EIO).
+  `fileid_abs_test.go`, `resolve_test.go` and `machine.yml` pin them.
+- **A share reports 0666/0777 owned by the account, and a union's upper is
+  0777** (ADR 0046). A plain mount is granted by ACCESS whatever the mode; a
+  union checks the copied mode locally and refused every uid but root.
 - **The share ROOT handle must survive this process; nothing below it needs
   to.** MOUNT issues the root handle once and the kernel never mounts again, so
   a root that stops resolving leaves every lookup starting from something dead

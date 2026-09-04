@@ -42,6 +42,7 @@ than trusted.
 | [0041](0041-the-workspaces-own-paths.md) | The workspace's own paths are the ones it mounted into the daemon | |
 | [0042](0042-mount-consistency-modes.md) | Docker's mount consistency, applied to the NFS mount | |
 | [0044](0044-a-delegated-share-is-a-cache.md) | A delegated share is a cache, not a snapshot | |
+| [0046](0046-a-share-reports-wide-mode-bits.md) | A share reports wide mode bits, owned by the account | |
 
 ## Code layout
 

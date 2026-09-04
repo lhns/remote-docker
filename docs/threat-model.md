@@ -347,7 +347,9 @@ had changed.
 
 Ownership stays unwritable: `Chown` and `Lchown` are accepted and dropped
 because ownership is synthesised, so no chmod/chown pair hands a file to another
-uid. *Covered by* `nfsserve/chmod_test.go`.
+uid. Mode bits are reported wide (0666/0777, ADR 0046): the boundary is the
+tunnel and the account, and a plain mount was already granted every request by
+ACCESS, so nothing changes at the boundary. *Covered by* `nfsserve/chmod_test.go`.
 
 **T — a symlink in a share cannot name a path on this machine (10, 11).** The
 server stores link text and never resolves it: NFSv3 leaves that to the client,

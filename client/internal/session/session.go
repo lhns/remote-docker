@@ -488,10 +488,12 @@ func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info,
 	return workspace.ParseInfo(bytes.NewReader(out))
 }
 
+// defaultAttrs is what every file in a share reports: the account as owner,
+// wide bits so any uid a container runs as can write (ADR 0046).
 func defaultAttrs() nfsserve.Attrs {
 	return nfsserve.Attrs{
-		FileMode: 0o644,
-		DirMode:  0o755,
+		FileMode: 0o666,
+		DirMode:  0o777,
 		// Windows has no execute bit to preserve, so without this nothing on
 		// the share could be run. Elsewhere the real bits are used.
 		AlwaysExecutable: runtime.GOOS == "windows",
