@@ -885,6 +885,26 @@ which Git Bash has never mangled:
 docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
 ```
 
+### What differs from a bind mount
+
+Measured, not assumed: `test/probes/fsprobe` runs one fixed sequence of
+filesystem operations inside a container against a plain bind mount on the
+runner and against a share from a Linux and from a Windows client, and CI
+fails on any difference not listed with a reason in
+`test/fs-conformance/deviations-*.txt`. What is listed today:
+
+| behaviour | on a share | why |
+|---|---|---|
+| owner and mode | every file is the workspace account's, `0666`/`0777` | ADR 0046 |
+| `chown` | accepted, changes nothing | ownership is synthesised |
+| `utime`, `touch -d` | accepted, changes nothing; `tar` and `cp -p` leave files with the current time | the watcher replays a SETATTR to invalidate, and applying one looped |
+| `chmod` | applied on this machine with the owner's read and write kept | the share is served as that owner |
+| unlink of an open file | a `.nfs*` entry until the last close | NFS silly-rename |
+| a directory listing | a snapshot; entries created or removed during a scan appear next scan | NFSv3 READDIR cookies |
+| Windows host: case | `a` and `A` are one file | NTFS is case-insensitive |
+| Windows host: names | `< > : " \| ? *`, a trailing dot or space, and `CON`, `NUL`, `AUX`, `COMn`, `LPTn` are refused with EINVAL | NTFS cannot spell them; native Docker refuses them too |
+| Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
+
 ### What cannot be bind mounted
 
 A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.
@@ -996,9 +1016,10 @@ milliseconds. If that matters more than surviving a node move, put
 
 The integration suites run the Linux client against a real workspace on every
 push. **macOS has never been executed at all**, in CI or anywhere else.
-**Windows is unit tested**, including the named-pipe endpoint, but no Windows
-machine has taken a session end to end, because the suite needs a Linux
-kernel's NFS client. Swarm itself needs a real cluster and CI cannot cover it.
+**A Windows client is exercised end to end on every pull request**
+(`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
+non-root mkdir and the conformance probe), on one runner image; nobody
+working on this has WSL on their own machine. Swarm itself needs a real cluster and CI cannot cover it.
 **Android is built and inspected, and CI runs nothing on it**: it checks that
 the binary is loadable on a phone and links the system libc, which is what makes
 DNS work there. A session and a container were confirmed by hand from Termux on

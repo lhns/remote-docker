@@ -962,12 +962,14 @@ function was.
   arm64 has ever been on a device. Say what was actually done, which is that a
   phone reached a workspace over wss and ran a container, by hand, on
   2026-08-14. `android_amd64` has never been executed by anyone.
-- **Windows, beyond the unit tests.** `test (windows)` runs the client and
-  shared modules' tests on every pull request, which covers the named-pipe
-  endpoint and `processAlive`. What has never run there is the client itself:
-  the integration suite needs a Linux kernel's NFS client, so no Windows
-  machine has taken a session end to end in CI. Say "unit tested on Windows",
-  never "the Windows client is tested".
+- **Windows, beyond one runner image.** `machine.yml` runs the client on
+  windows-latest against a WSL workspace on every pull request: a bind mount,
+  GNU tar with attributes, a non-root mkdir and the conformance probe
+  (`test/probes/fsprobe`, diffed against a native bind mount). That is one
+  Windows version on one image; nobody working on this has WSL on their own
+  machine. `test (windows)` runs the client and shared modules' unit tests,
+  which is where the NFS server's model, spelling and paging tests run
+  against NTFS.
 - **Installing a release.** The pipeline itself now HAS run: `v0.1.0` is tagged
   and published with ten archives, client and agent, for every target the
   matrix builds. What has never happened is somebody downloading one and

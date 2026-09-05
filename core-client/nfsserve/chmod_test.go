@@ -95,3 +95,56 @@ func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 			"the agent's replay", before.ModTime(), after.ModTime())
 	}
 }
+
+// A chmod that drops the owner's write bit must not take the share's own
+// ability to write with it. The file server runs as the file's owner, so a
+// chmod 0111 applied literally made every later WRITE fail with EACCES, where
+// the same chmod against a bind mount served by root changes nothing. The
+// owner's rw bits are kept on the host; what the container sees is
+// synthesised either way.
+func TestChmodThroughTheShareKeepsTheFileWritable(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRegistry(DefaultAttrs)
+	if _, err := r.RegisterCWD(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := mustMount(t, serve(t, r), "/cwd")
+
+	f, err := target.OpenFile("locked", 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.Write([]byte("first\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f.Close()
+
+	var sattr nfsclient.Sattr3
+	sattr.Mode.SetIt = true
+	sattr.Mode.Mode = 0o111
+	if err := target.Setattr("locked", sattr); err != nil {
+		t.Fatalf("setting the mode through the share: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "locked"))
+	if err != nil {
+		t.Fatalf("stat on this machine: %v", err)
+	}
+	if info.Mode().Perm()&0o600 != 0o600 {
+		t.Errorf("the file is %v on disk after chmod 0111; the owner's rw bits "+
+			"were dropped and the share can no longer write it", info.Mode().Perm())
+	}
+
+	f, err = target.OpenFile("locked", 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile after chmod: %v", err)
+	}
+	_, werr := f.Write([]byte("second\n"))
+	f.Close()
+	if werr != nil {
+		t.Fatalf("a write through the share after chmod 0111 failed: %v", werr)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "locked")); err != nil || string(got) != "second\n" {
+		t.Errorf("after the write the file holds %q, err %v", got, err)
+	}
+}

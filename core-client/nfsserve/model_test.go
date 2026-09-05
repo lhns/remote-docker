@@ -27,7 +27,7 @@ var (
 // defaultSteps is how many operations one run makes: enough to reach every
 // pairing below several times. Windows gets a fifth: an RPC there costs
 // 4-10 ms (go-billy's BoundOS runs EvalSymlinks on every operation, and
-// inodeOf opens the file), which is 100 ms a step, and the budget is ten
+// identityOf opens the file), which is 100 ms a step, and the budget is ten
 // seconds. Measured 2026-09-05 on this project's development machine; the
 // step count and the time are in the log line either way.
 func defaultSteps() int {
@@ -284,7 +284,7 @@ func (m *model) chooseOp() modelOp {
 	}
 	if runtime.GOOS == "windows" {
 		// os.Symlink needs a privilege an ordinary account does not hold, and
-		// inodeOf opens the path without FILE_FLAG_OPEN_REPARSE_POINT, so a
+		// identityOf opens the path without FILE_FLAG_OPEN_REPARSE_POINT, so a
 		// link's identity there would be its target's: not a corner this test
 		// can hold to the rule it checks.
 		weights[opSymlink] = 0
@@ -383,7 +383,7 @@ func (m *model) freshName(dir string) string {
 		names = append(names, "A", "con", "nul", "a:b")
 	}
 	// The long name stays close to the root: a Windows path is limited to
-	// 260 bytes where inodeOf opens it, and a temp dir already spends 70.
+	// 260 bytes where identityOf opens it, and a temp dir already spends 70.
 	if len(dir) < 60 {
 		names = append(names, strings.Repeat("n", 100))
 	}
@@ -709,11 +709,34 @@ func (m *model) link() {
 		m.t.Errorf("step %d: LOOKUP %q before LINK: %v", m.step, dir, err)
 		return
 	}
-	if status := rawLink(m.t, m.client, fileFH, dirFH, name); status != uint32(nfs.NFSStatusInval) {
-		m.t.Errorf("step %d: LINK %q -> %q/%q returned %s, want NFS3ERR_INVAL", m.step, file, dir, name, statusName(status))
+	// A hard link is a second name for the same file. The shadow keeps one
+	// name per file, so the link is checked and removed again in the same
+	// step: same fileid, same content, and the original untouched by the
+	// removal.
+	if status := rawLink(m.t, m.client, fileFH, dirFH, name); status != uint32(nfs.NFSStatusOk) {
+		m.t.Errorf("step %d: LINK %q -> %q/%q returned %s, want NFS3_OK", m.step, file, dir, name, statusName(status))
+		return
 	}
-	if _, _, err := m.target.Lookup(joinPath(dir, name)); err == nil {
-		m.t.Errorf("step %d: after a refused LINK, %q exists", m.step, joinPath(dir, name))
+	linked := joinPath(dir, name)
+	orig, err := m.target.GetAttr(fileFH)
+	if err != nil {
+		m.t.Errorf("step %d: GETATTR %q after LINK: %v", m.step, file, err)
+		return
+	}
+	via, _, err := m.target.Lookup(wire(linked))
+	if err != nil {
+		m.t.Errorf("step %d: LOOKUP the new name %q: %v", m.step, linked, err)
+		return
+	}
+	if got := via.(*nfsclient.Fattr); got.Fileid != orig.Fileid || got.Nlink != 2 {
+		m.t.Errorf("step %d: LINK %q -> %q: fileid %#x/%#x nlink=%d, want one file with two names", m.step, file, linked, orig.Fileid, got.Fileid, got.Nlink)
+	}
+	if err := m.target.Remove(wire(linked)); err != nil {
+		m.t.Errorf("step %d: REMOVE the link %q: %v", m.step, linked, err)
+		return
+	}
+	if _, _, err := m.target.Lookup(file); err != nil {
+		m.t.Errorf("step %d: removing the link took the original %q with it: %v", m.step, file, err)
 	}
 }
 

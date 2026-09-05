@@ -109,7 +109,7 @@ func TestFileIDSurvivesADifferentSpellingOfThePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := inodeOf(probe, osPath); !ok {
+	if _, ok := identityOf(probe, osPath); !ok {
 		t.Fatalf("no file identity on %s, so the fileid falls back to hashing "+
 			"the path and cannot be stable across spellings", runtime.GOOS)
 	}
