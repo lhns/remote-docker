@@ -10,6 +10,30 @@ software.
 
 ## Unreleased
 
+### A mount has two settings, `read=` and `write=`
+
+```bash
+docker run -v ./project:/app:read=cached img
+docker run -v ./target:/app/target:write=ephemeral img
+docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,write=back"' img
+```
+
+What each word does is the table under
+[Faster access to a shared directory](README.md#faster-access-to-a-shared-directory).
+A mount names one or both; the rest comes from `consistencyPaths`, then
+`consistency`, then the default. `ephemeral` is new: a build directory's
+writes stay in the workspace and go with it. `remote status` reports bytes
+sent per share.
+
+### Prefetch, off by default
+
+`prefetch: eager` or `tree` (`REMOTE_DOCKER_PREFETCH`) fills a `read=cached`
+union ahead of reads: the whole tree smallest first, or what the container
+reads and its neighbourhood. Off because, measured on a shaped link, landing a
+file in the union costs more round trips than reading it: a cold union reads
+in the plain mount's time at every latency, and a sparse read is slower. The
+table is in ADR 0045.
+
 ### A share works for tar and for a container that is not root
 
 - From a Windows client, a file a container had just created went stale on
@@ -25,6 +49,16 @@ software.
   in a share now reports mode 0666 and every directory 0777, owned by the
   workspace account as before, and the union's upper is created 0777
   (ADR 0046).
+### Upgrading
+
+- Docker's own words still work, as aliases: `consistent` and `default` are
+  `read=direct,write=through`, `cached` is `read=cached,write=through`,
+  `delegated` is `read=cached,write=back`.
+- **A union revalidates every 60 seconds rather than every second.** Its lower
+  carries the share's read mode now instead of a fixed `actimeo=1`. An edit to
+  an existing file still arrives at once through the watcher; a file created
+  or deleted here can take up to a minute to appear in a listing unless
+  watching is `coarse`, as under `read=cached`.
 
 ## 0.6.0 — 2026-09-03
 

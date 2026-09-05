@@ -17,6 +17,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -58,11 +59,11 @@ type Options struct {
 	WatchBudget  int
 	WatchExclude []string
 
-	// Consistency is the mount consistency a share gets when the mount named
-	// none, and ConsistencyPaths overrides it per directory (ADR 0042).
-	// Parsed by the command layer, which is where a bad value is reported.
-	Consistency      workspace.Consistency
-	ConsistencyPaths map[string]workspace.Consistency
+	// Mode is what a share gets on each axis the mount left unset, and
+	// ModePaths overrides it per directory (ADR 0042). Parsed by the command
+	// layer, which is where a bad value is reported.
+	Mode      workspace.Mode
+	ModePaths map[string]workspace.Mode
 
 	// PosixSource reports the POSIX path a shell may have rewritten a bind
 	// source into. Supplied by the command layer, which is where the shell is
@@ -166,6 +167,10 @@ type Session struct {
 	// workspace. Nil on a query session, which caches nothing.
 	cache *dircache.Cache
 
+	// rtt is the tunnel's round trip as last measured, in nanoseconds, for
+	// the prefetch policy. Zero until a connection has been made.
+	rtt atomic.Int64
+
 	// watch outlives any single connection too, and for the same reason the
 	// registry does: watches are a local resource, and re-walking a large
 	// tree on every idle reconnect would cost more than the connection. Only
@@ -256,6 +261,10 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
+		policy, err := dircache.ParsePolicy(opts.Config.Prefetch)
+		if err != nil {
+			return nil, fmt.Errorf("prefetch: %w", err)
+		}
 		s.cache = &dircache.Cache{
 			Store:   s.liveStore,
 			Record:  newCachedStore(config.CachedPath(opts.Config.Name), opts.Log),
@@ -264,7 +273,12 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			Skew:    s.skew,
 			Log:     opts.Log,
 			Ctx:     runCtx,
+			Policy:  policy,
+			Link:    s.link,
 		}
+		// Set before the first share is registered: a share's filesystem is
+		// built with it.
+		s.registry.OnRead = s.cache.Touch
 		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
 
@@ -290,7 +304,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		// is what ModePartial is about, but it can be applied to a cache
 		// exactly, and a cached copy of a file that is gone is the one way
 		// this mode can be wrong rather than slow (ADR 0044).
-		s.watch.SetObserver(s.cache)
+		s.watch.SetObserver(cacheObserver{cache: s.cache})
 		s.watch.Sync(sharesOf(s.registry))
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}
@@ -510,4 +524,11 @@ func attrsFor(info workspace.Info) nfsserve.Attrs {
 // log is the session's logger, or silence. See logx.Or.
 func (s *Session) log() *slog.Logger {
 	return logx.Or(s.opts.Log)
+}
+
+// link is what the prefetch policy decides against: the round trip as last
+// measured on this session. Bandwidth is left to the cache, which measures it
+// from its own batches; nothing else here sends enough to know.
+func (s *Session) link() dircache.Link {
+	return dircache.Link{RTT: time.Duration(s.rtt.Load())}
 }

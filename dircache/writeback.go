@@ -47,10 +47,21 @@ func (c *Cache) WriteBack(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, share := range c.shares.all() {
-				c.writeBackShare(ctx, share)
-			}
+			c.writeBackRound(ctx)
 		}
+	}
+}
+
+// writeBackRound asks every share what the consumer changed and carries it
+// back, except an ephemeral one: its writes die with it, and it is not even
+// asked, because a build directory would otherwise be reported in full to an
+// idle session every few seconds.
+func (c *Cache) writeBackRound(ctx context.Context) {
+	for _, share := range c.shares.all() {
+		if c.shares.ephemeral(share) {
+			continue
+		}
+		c.writeBackShare(ctx, share)
 	}
 }
 
@@ -116,7 +127,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	}
 
 	for _, p := range deletes(actions) {
-		target := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(p, "/")))
+		target := localPath(root, p)
 		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.quiet(ctx, "removing what a consumer deleted", "path", target, "err", err)
 		}
@@ -138,7 +149,7 @@ func (c *Cache) skew() time.Duration {
 // localAtRoot answers what this machine currently has at a share-relative path.
 func localAtRoot(root string) localAt {
 	return func(p string) (os.FileInfo, bool) {
-		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(p, "/"))))
+		info, err := os.Stat(localPath(root, p))
 		if err != nil {
 			return nil, false
 		}
@@ -155,7 +166,7 @@ var errEscapes = errors.New("dircache: a written-back path leaves the share")
 // one. Checked on the RESULT, because filepath.Join cleans and "../.." looks
 // like an ordinary path afterwards.
 func writeUnder(root string, file File) error {
-	target := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(file.Path, "/")))
+	target := localPath(root, file.Path)
 	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
 	if !strings.HasPrefix(target, prefix) {
 		return errEscapes

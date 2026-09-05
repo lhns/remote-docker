@@ -29,7 +29,8 @@ How the thing works at all.
 
 Bind mounts become NFS-backed volumes; the export namespace is virtual, its
 handles are derived, and what the workspace remembers of it is checked rather
-than trusted.
+than trusted. A mount has a read mode and a write mode, and a share whose
+writes are not synchronous is a union over the live export.
 
 | # | Title | Status |
 |---|---|---|
@@ -41,7 +42,8 @@ than trusted.
 | [0039](0039-a-single-file-is-a-one-file-export.md) | A single file is a one-file export | |
 | [0041](0041-the-workspaces-own-paths.md) | The workspace's own paths are the ones it mounted into the daemon | |
 | [0042](0042-mount-consistency-modes.md) | Docker's mount consistency, applied to the NFS mount | |
-| [0044](0044-a-delegated-share-is-a-cache.md) | A delegated share is a cache, not a snapshot | |
+| [0044](0044-a-delegated-share-is-a-cache.md) | A share with `write != through` is a union, not a snapshot | |
+| [0045](0045-prefetch-follows-the-reads.md) | Prefetch follows the reads: an escalating tree over small files | |
 | [0046](0046-a-share-reports-wide-mode-bits.md) | A share reports wide mode bits, owned by the account | |
 
 ## Code layout
@@ -91,7 +93,7 @@ What the binary is, what it answers to, and where it can run.
 
 | # | Title | Status |
 |---|---|---|
-| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open** for a mount; closed for `delegated` (0044) |
+| [0014](0014-inotify-does-not-see-client-changes.md) | inotify does not see client-side changes | **Open** for a mount; closed for a union (`write != through`, 0044) |
 | [0016](0016-replaying-change-events-as-real-syscalls.md) | Replaying change events as real syscalls | |
 
 ## The agent, and where a workspace runs

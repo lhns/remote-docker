@@ -92,6 +92,10 @@ var settingSources = map[string]struct {
 		env: EnvCacheBytes, override: false, sample: "1048576",
 		want: func(c Config) string { return strconv.FormatInt(c.CacheBytes, 10) },
 	},
+	"Prefetch": {
+		env: EnvPrefetch, override: false, sample: "eager",
+		want: func(c Config) string { return c.Prefetch },
+	},
 	"WatchExclude": {
 		env: EnvWatchExclude, override: false, sample: "node_modules",
 		want: func(c Config) string {

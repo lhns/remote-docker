@@ -203,6 +203,41 @@ dump_workspace_log() {
     hostdocker logs "$CONTAINER" 2>&1 | tail -"${1:-60}" | sed 's/^/        /'
 }
 
+# union_is_fuse asks whether a container's /w is a fuse mount (ADR 0044); the
+# caller reports, and LAST_OUTPUT holds what /proc/mounts said.
+union_is_fuse() {
+    local exec_fn=$1 container=$2
+    outputs 'fuse' "$exec_fn" exec "$container" sh -c 'grep " /w " /proc/mounts'
+}
+
+# wait_for_content polls a local file for exact content for up to <secs>,
+# prints what it last saw (empty for no file), and returns 0 once it matched.
+wait_for_content() {
+    local path=$1 want=$2 secs=$3 seen="" _
+    for _ in $(seq 1 "$secs"); do
+        [ -f "$path" ] && seen=$(cat "$path") && [ "$seen" = "$want" ] && break
+        sleep 1
+    done
+    printf '%s' "$seen"
+    [ "$seen" = "$want" ]
+}
+
+# wait_gone polls for up to <secs> until <path> no longer exists inside a
+# container, asked through <exec-fn>; returns 0 once it is gone.
+wait_gone() {
+    local exec_fn=$1 container=$2 path=$3 secs=$4 _
+    for _ in $(seq 1 "$secs"); do
+        "$exec_fn" exec "$container" test -e "$path" >/dev/null 2>&1 || return 0
+        sleep 1
+    done
+    return 1
+}
+
+# union_diagnostics prints what the workspace logged about its unions.
+union_diagnostics() {
+    hostdocker logs "$CONTAINER" 2>&1 | grep -iE "union|fuse" | tail -8 | sed 's/^/        /'
+}
+
 # summary prints the totals and sets the exit status.
 summary() {
     echo

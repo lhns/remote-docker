@@ -135,7 +135,7 @@ mkdir -p "$WORK/project-$A" "$WORK/project-$B"
 echo "alice's file" >"$WORK/project-$A/marker"
 echo "bob's file"   >"$WORK/project-$B/marker"
 
-# Watching is on because a delegated share requires it: its cache holds actual
+# Watching is on because a read=cached share requires it: its cache holds actual
 # copies, and the watcher is what keeps them honest (ADR 0044). Section 7b would
 # otherwise be refused on a rule rather than tested on its mechanism.
 start_session() {
@@ -275,7 +275,7 @@ else
 fi
 
 echo
-echo "== 7b. a delegated share, which is a union mounted inside the dind =="
+echo "== 7b. a read=cached,write=back share, which is a union mounted inside the dind =="
 # The ONLY place the mount-namespace entry is exercised. In shared mode the
 # agent and the daemon are one filesystem and nothing has to be entered; here
 # the union lives inside this account's dind, and the agent has to get in there
@@ -283,23 +283,15 @@ echo "== 7b. a delegated share, which is a union mounted inside the dind =="
 #
 # It also proves the two accounts stay separate at this layer: each union is
 # mounted in its own daemon's namespace, so alice's cache cannot be bob's.
-if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:delegated"     alpine:3 sleep 120 2>&1); then
+if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=back"     alpine:3 sleep 120 2>&1); then
     ok "a container starts against a union inside alice's own daemon"
 
-    # That it IS a union, which nothing else here can show: every assertion
-    # below passes just as well against an ordinary directory the agent wrote
-    # the cache into, and a union whose lower could not mount leaves exactly
-    # that. A bind of a real union reports fuse-overlayfs; a bind of a
-    # directory reports the daemon's own disk.
-    if out=$(da exec pud-deleg sh -c 'grep " /w " /proc/mounts' 2>&1); then
-        case "$out" in
-            *fuse*) ok "alice's share is a union, not a directory that resembles one" ;;
-            *)      bad "/w is not a fuse mount: [$out]"
-                    hostdocker logs "$CONTAINER" 2>&1 |
-                        grep -iE "union|fuse" | tail -8 | sed 's/^/        /' ;;
-        esac
+    # a bare directory passes every other check here (ADR 0044)
+    if union_is_fuse da pud-deleg; then
+        ok "alice's share is a union, not a directory that resembles one"
     else
-        bad "could not read the container's mounts: $(echo "$out" | tail -3)"
+        bad "/w is not a fuse mount: [$LAST_OUTPUT]"
+        union_diagnostics
     fi
 
     if out=$(da exec pud-deleg cat /w/marker 2>&1); then
@@ -339,8 +331,54 @@ if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:delegated"     alpin
     da rm -f pud-deleg >/dev/null 2>&1
 else
     bad "a container would not start against a union: $(echo "$out" | tail -3)"
-    hostdocker logs "$CONTAINER" 2>&1 | grep -iE "union|fuse" | tail -5 | sed 's/^/        /'
+    union_diagnostics
 fi
+
+echo
+echo "== 7c. the other union corners, inside the same dind =="
+# the two direct corners (ADR 0042); 7b covered read=cached,write=back
+for corner in "read=direct,write=back" "read=direct,write=ephemeral"; do
+    case "$corner" in
+        *back) name=pud-direct-back ;;
+        *) name=pud-direct-eph ;;
+    esac
+    dir="$WORK/project-$A-$name"
+    mkdir -p "$dir"
+    echo "alice's file" >"$dir/marker"
+    if ! out=$(da run -d --name "$name" -v "$dir:/w:$corner" alpine:3 sleep 120 2>&1); then
+        bad "$corner: a container would not start against a union: $(echo "$out" | tail -3)"
+        union_diagnostics
+        continue
+    fi
+    if union_is_fuse da "$name"; then
+        ok "$corner: the share is a union inside alice's daemon"
+    else
+        bad "$corner: /w is not a fuse mount: [$LAST_OUTPUT]"
+    fi
+    if [ "$(da exec "$name" cat /w/marker 2>&1)" = "alice's file" ]; then
+        ok "$corner: it reads alice's file through the union"
+    else
+        bad "$corner: the union did not serve the file"
+    fi
+    da exec "$name" sh -c 'echo "written there" >/w/out.txt' >/dev/null 2>&1
+    case "$corner" in
+        *back)
+            back=$(wait_for_content "$dir/out.txt" "written there" 30)
+            if [ "$back" = "written there" ]; then
+                ok "$corner: the container's write came back to alice's directory"
+            else
+                bad "$corner: the write never came back: [$back]"
+            fi ;;
+        *ephemeral)
+            back=$(wait_for_content "$dir/out.txt" "" 30)
+            if [ -z "$back" ]; then
+                ok "$corner: the container's write stayed in the workspace, 30s on"
+            else
+                bad "$corner: an ephemeral write came back: [$back]"
+            fi ;;
+    esac
+    da rm -f "$name" >/dev/null 2>&1
+done
 
 echo
 echo "== 8. two accounts publish, and the limit is this machine =="

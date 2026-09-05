@@ -71,6 +71,11 @@ type Spec struct {
 	// It must be on a real filesystem: the kernel refuses a union upper on
 	// overlayfs, and a dind's own root is overlayfs.
 	CacheDir string
+
+	// Read is the share's read mode, which decides the attribute cache on the
+	// LOWER. A read the union's upper does not hold falls through to it, so
+	// this is what such a read costs.
+	Read workspace.Read
 }
 
 // id is the share's identifier, used to name its mountpoints.
@@ -104,9 +109,9 @@ func (s Spec) Dirs() []string {
 //
 // The same options a share's volume would have been given, because it is the
 // same mount: workspace.NFSVolumeOptions is asked rather than copied, so the
-// two cannot drift. Consistent rather than cached, deliberately -- the cache
-// above it is what makes reads fast, and a long attribute cache underneath
-// would only add staleness the union cannot see.
+// two cannot drift. The lower carries the share's read mode: a read the upper
+// does not hold falls through, and a direct lower under a cached share
+// revalidates every file every second (ADR 0044).
 //
 // Split, because that option list is written for DOCKER, which separates the
 // two before it calls mount(2) and we have to as well. `noatime` is a kernel
@@ -115,7 +120,7 @@ func (s Spec) Dirs() []string {
 // EINVAL, which surfaces as `invalid argument` against a mount whose options
 // are, one at a time, all valid.
 func (s Spec) LowerMount() (source, fstype, data string, flags []string) {
-	opts := workspace.NFSVolumeOptions(s.Port, s.Export, workspace.Consistent)
+	opts := workspace.NFSVolumeOptions(s.Port, s.Export, s.Read)
 
 	var kept []string
 	for _, opt := range strings.Split(opts["o"], ",") {
@@ -176,6 +181,11 @@ func (s Spec) Validate() error {
 	}
 	if s.PID < 0 {
 		return fmt.Errorf("union: %s names pid %d", s.Export, s.PID)
+	}
+	switch s.Read {
+	case workspace.ReadDirect, workspace.ReadCached:
+	default:
+		return fmt.Errorf("union: %s has read mode %q, which is not one", s.Export, s.Read)
 	}
 	return nil
 }

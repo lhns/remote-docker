@@ -9,6 +9,8 @@ import (
 	"path"
 	"sort"
 	"strconv"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // How the agent hands a spec to the child it re-executes.
@@ -23,6 +25,7 @@ const (
 	envExport = "RD_UNION_EXPORT"
 	envPort   = "RD_UNION_PORT"
 	envCache  = "RD_UNION_CACHE"
+	envRead   = "RD_UNION_READ"
 )
 
 // What the child is being asked to do.
@@ -47,6 +50,7 @@ func envFor(mode string, spec Spec) []string {
 		envExport + "=" + spec.Export,
 		envPort + "=" + strconv.Itoa(spec.Port),
 		envCache + "=" + spec.CacheDir,
+		envRead + "=" + string(spec.Read),
 	}
 }
 
@@ -70,6 +74,7 @@ func FromEnv(getenv func(string) string) (Spec, string, error) {
 		Export:   getenv(envExport),
 		Port:     port,
 		CacheDir: getenv(envCache),
+		Read:     workspace.Read(getenv(envRead)),
 	}
 	if err := spec.Validate(); err != nil {
 		return Spec{}, "", err

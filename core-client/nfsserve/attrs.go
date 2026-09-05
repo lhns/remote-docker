@@ -72,6 +72,14 @@ type attrFS struct {
 	// SetAttrs rebuilds every share's filesystem on each connect.
 	export string
 
+	// prefix is where this filesystem sits inside the share: "" for the root,
+	// and the chrooted directory otherwise, so a read reported from inside a
+	// chroot still names the path from the share root.
+	prefix string
+
+	// onRead is told what is read, or nil for a share nobody is watching.
+	onRead ReadObserver
+
 	// isRoot distinguishes the share itself from a Chroot into a subdirectory
 	// of it. Both carry the same export, and only the first may be given the
 	// derived root handle -- handing it to a subdirectory mount would resolve
@@ -82,8 +90,8 @@ type attrFS struct {
 
 // withAttrs wraps fs so every FileInfo it returns carries the given ownership
 // and permissions, and so it can say which share it is.
-func withAttrs(inner billy.Filesystem, attrs Attrs, export string) billy.Filesystem {
-	return &attrFS{Filesystem: inner, attrs: attrs, export: export, isRoot: true}
+func withAttrs(inner billy.Filesystem, attrs Attrs, export string, onRead ReadObserver) billy.Filesystem {
+	return &attrFS{Filesystem: inner, attrs: attrs, export: export, isRoot: true, onRead: onRead}
 }
 
 // exportRootOf reports the share a filesystem is the ROOT of, and "" for a
@@ -132,7 +140,13 @@ func (a *attrFS) Chroot(p string) (billy.Filesystem, error) {
 	}
 	// The same share and the same attributes, but NOT the share's root: this
 	// is a directory inside it, and a mount of it resolves against itself.
-	return &attrFS{Filesystem: inner, attrs: a.attrs, export: a.export}, nil
+	return &attrFS{
+		Filesystem: inner,
+		attrs:      a.attrs,
+		export:     a.export,
+		prefix:     path.Join(a.prefix, filepath.ToSlash(p)),
+		onRead:     a.onRead,
+	}, nil
 }
 
 func (a *attrFS) wrap(fi os.FileInfo, fullPath string) os.FileInfo {

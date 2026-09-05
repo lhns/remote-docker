@@ -256,12 +256,13 @@ default.**
 | `REMOTE_DOCKER_USER` | `user` | `--user` | your local username |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
-| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `consistent`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
-| `REMOTE_DOCKER_WATCH` | `watch` | `workspace create --watch` | `off` |
+| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
+| `REMOTE_DOCKER_WATCH` | `watch` | `remote create --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |
-| `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, for a `delegated` share's cache |
-| `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, for a `delegated` share's cache |
+| `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
+| `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
+| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | `30m` | how long before an unused session lets go of the workspace, keeping its endpoint |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
@@ -338,18 +339,17 @@ revalidates any attribute older than a second. Over a link with real latency
 that is the whole cost. Measured over 300 files by `test/bench.sh`, with the
 workspace's loopback shaped, reading them all:
 
-| RTT | default | `cached` | `delegated` |
-|---|---|---|---|
-| 0.1ms | 0.41s | 0.30s | 0.33s |
-| 40ms | 32.5s | 24.5s | 0.09s |
-| 160ms | 164.5s | 98.1s | 0.08s |
-| 0.3ms, 10mbit | 0.31s | 0.62s | 0.08s |
+| RTT | `read=direct,write=through` (default) | `read=cached` |
+|---|---|---|
+| 0.1ms | 0.41s | 0.38s |
+| 20ms | 21.4s | 13.8s |
+| 40ms | 44.1s | 27.2s |
+| 160ms | 213.9s | 108.8s |
+| 0.3ms, 10mbit | 0.87s | 0.74s |
 
-One run, 2026-09-01, so the three columns are comparable with each other rather
+One run, 2026-09-04, so the two columns are comparable with each other rather
 than assembled from separate ones. Re-check with the `bench` label on a pull
-request. With no latency to hide, `delegated` is no faster than `cached` and
-costs a little: the union is worth having for the round trips it removes, and
-where there are none it removes nothing.
+request.
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
@@ -361,35 +361,54 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 #  compose:  volumes: [{type: bind, source: ./project, target: /app, consistency: cached}]
 ```
 
-| word | what it means here |
-|---|---|
-| `consistent`, `default` *(the default)* | the mount revalidates every second |
-| `cached` | the container may cache reads and directory structure; this machine is authoritative |
-| `delegated` | a cache on the workspace over the live mount: what it holds is local disk, what it does not falls through |
+| `read=` | | `write=` | |
+|---|---|---|---|
+| `direct` *(default)* | revalidates every second | `through` *(default)* | on this machine as it happens |
+| `cached` | trusts attributes for a minute | `back` | in a union on the workspace, carried back within seconds |
+| | | `ephemeral` | in a union on the workspace, never carried back |
 
-Note the comma: a `-v` has three fields and the third is a LIST, so
-`ro,cached` and never `:cached:ro`.
-
-Set it for a whole workspace, or for one tree:
-
-```json
-{"consistency": "cached", "consistencyPaths": {"/home/me/live": "consistent"}}
+```bash
+docker run -v ./project:/app:read=cached img                       # the one to reach for
+docker run -v ./project:/app:ro,read=cached img                    # beside ro, comma-joined
+docker run -v ./target:/app/target:write=ephemeral img             # a build directory
+docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,write=back"' img
 ```
 
-`delegated` is the one to reach for when reads dominate. The workspace keeps a
-cache beside the live mount and fills it in the background, so a file it has
-costs its own disk and a file it does not is read over the mount as usual --
-correct either way, which is why nothing waits for the copy and why a project
-larger than the cache budget still works, just partly cached.
+A mount names one axis or both; what it does not name comes from the
+per-directory rule, then the workspace setting, then the default. A `-v` has
+three fields and the third is a list, so `ro,read=cached` and never
+`:read=cached:ro`. `--mount` is itself split on commas by the CLI, so both
+axes go in one csv-quoted field, the way Docker documents `volume-opt`.
+Compose passes `consistency:` through as a string; whether it accepts these
+has not been verified. Docker's own values for the field are accepted and
+mean what Docker says they mean: `consistent` and `default` are
+`read=direct,write=through`, `cached` is `read=cached,write=through`,
+`delegated` is `read=cached,write=back`.
 
-It is a two-way cache, not a snapshot: an edit here reaches a running container,
-a file you delete disappears from it, and what the container writes comes back
-to you within a few seconds. That last delay is the one thing a plain mount has
-and this does not. When a file changed in both places, the newer write wins and
-the conflict is reported by path.
+```json
+{"consistency": "read=cached", "consistencyPaths": {"/home/me/app/target": "write=ephemeral"}}
+```
 
-**`cached` and `delegated` both need [file watching](#file-watching) on**, and
-refuse to run without it, for related but not identical reasons.
+**`read=cached` is the one to reach for on a slow link.** It halves the time
+in the table above and needs only the watcher.
+
+**`write=back` and `write=ephemeral` are write capture.** The share becomes
+a union on the workspace: the live mount underneath, a local layer on top
+that the container writes into. `back` carries those writes here within
+seconds and reports a conflict by path when a file changed in both places;
+`ephemeral` never carries them anywhere, which keeps a build directory off
+this machine. Both are proven correct end to end. Neither is faster today: a
+cold union reads no faster than a plain mount, and a name the union has not
+seen is looked up on the live mount, so a burst of small files costs the
+plain mount's round trips ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md)).
+Large writes are local.
+
+**Prefetch is off by default.** `prefetch: eager` or `prefetch: tree`
+(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union, and
+[ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off.
+
+**`read=cached` and every union need [file watching](#file-watching) on**, and
+refuse to run without it.
 
 `cached` keeps a long attribute cache, which is safe only because an edit here
 is replayed into the workspace and refreshes exactly the file that changed. So
@@ -397,29 +416,25 @@ an edit to an existing file arrives at once, and a file you CREATE or DELETE can
 take up to a minute to appear in a listing unless watching is `coarse`, which
 pokes the directory too.
 
-`delegated` holds actual copies, so the watcher is what keeps them honest: a
-cached copy of a file you changed is the one way this mode could be wrong rather
-than merely slow. Which is also why it only caches what the watcher covers --
-anything under an excluded directory is read over the mount instead, slower and
-right.
+A union holds copies, so it only caches what the watcher covers; anything
+under an excluded directory is read over the mount instead
+([ADR 0044](docs/adr/0044-a-delegated-share-is-a-cache.md)).
 
-How much of a share gets cached is capped by `cacheFiles` and `cacheBytes`
-(20,000 files and 2 GiB by default). That is a ceiling on the COPY, never on the
-mode: what does not fit is read over the live mount, so a repository bigger than
+How much of a share prefetch copies is capped by `cacheFiles` and
+`cacheBytes` (20,000 files and 2 GiB by default). That is a ceiling on the
+COPY, never on the mode: what does not fit is read over the live mount, so a repository bigger than
 the ceiling is cached in part and works. Raise them for a large project whose
 reads are worth the copy, lower them on a metered link, and watch which you are
 getting with `remote status`:
 
 ```
-cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, cached in part; the rest is read live
+cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, 181.0MB sent, cached in part; the rest is read live
 ```
 
-`delegated` also needs **`fuse-overlayfs` in the image the account's daemon
-runs**, because the cache is a union mounted there. The workspace's own image
+A union also needs **`fuse-overlayfs` in the image the account's daemon
+runs**, because that is what it is mounted with. The workspace's own image
 carries it, which is what a per-account daemon should be running anyway (see
-[the storage driver](#the-storage-driver-worth-getting-right-once)). The
-workspace reports whether it can serve a union, and the mode is refused by name
-with the remedy rather than failing part-way through a container start.
+[the storage driver](#the-storage-driver-worth-getting-right-once)).
 
 A mount outranks a per-directory rule, which outranks the workspace setting,
 and switching costs a volume rebuild rather than a migration.

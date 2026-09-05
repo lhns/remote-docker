@@ -159,6 +159,11 @@ type Request struct {
 	// overlayfs.
 	Cache string `json:"c,omitempty"`
 
+	// Read is the share's read mode, for OpPrepare: it decides the attribute
+	// cache on the union's LOWER (ADR 0044). Empty means cached, from clients
+	// before the field.
+	Read string `json:"r,omitempty"`
+
 	// Paths are what OpDrop removes, each within the share and spelled the way
 	// FSEvent spells one: leading slash, forward slashes, no "." or "..".
 	Paths []string `json:"d,omitempty"`

@@ -28,8 +28,6 @@ package dircache
 import (
 	"io/fs"
 	"time"
-
-	"github.com/lhns/remote-docker/core/cache"
 )
 
 // baseline is what the fill sent, for one path.
@@ -95,7 +93,7 @@ type localAt func(path string) (fs.FileInfo, bool)
 // appearing in somebody's source tree that they never wrote.
 func decide(
 	manifest map[string]baseline,
-	changes []cache.Change,
+	changes []Change,
 	local localAt,
 	skew time.Duration,
 	complete bool,

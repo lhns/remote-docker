@@ -1367,7 +1367,9 @@ mkdir -p "$REPLAYDIR"
 echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
 if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe); then
-    REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
+    # Prefetch is off by default (ADR 0045); this client turns the tree on so
+    # 15c and 15e keep covering it. The other suites run the default.
+    REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 
     ready=false
@@ -1437,9 +1439,6 @@ echo "== 15b. the cached consistency =="
 # attribute (ADR 0042). What makes that safe is the watcher, which is why this
 # section runs against the watching client section 15 started and why asking
 # for it without one is refused.
-#
-# The claim being tested is the pair: a long attribute cache AND an edit here
-# still arriving. Either alone is easy and neither alone is the feature.
 CACHEDIR="$WORK/cachedir"
 mkdir -p "$CACHEDIR"
 echo "first" >"$CACHEDIR/marker"
@@ -1488,10 +1487,10 @@ else
 fi
 
 echo
-echo "== 15c. the delegated consistency, which is a union =="
-# Docker's word for a container-authoritative mount, and here it is a UNION the
-# workspace mounts: this share's live NFS export underneath, a local cache on
-# top, and the merged view the container binds (ADR 0044).
+echo "== 15c. read=cached,write=back, which is a union =="
+# Docker's `delegated`, and here it is a UNION the workspace mounts: this
+# share's live NFS export underneath, a local cache on top, and the merged view
+# the container binds (ADR 0044).
 #
 # The assertion that matters is the fallthrough. A file created here AFTER the
 # cache was filled is not in the cache, and the container must still see it --
@@ -1500,12 +1499,11 @@ echo "== 15c. the delegated consistency, which is a union =="
 # Run against the WATCHING client section 15 started: invalidation rides the
 # watcher, because a cached copy of a file that changed here is the one way this
 # mode can be wrong rather than merely slow.
-# Everything worth seeing when a union assertion fails, in one place because
-# three of them want the same thing: what the session thinks it has cached,
-# what the client logged, and what the WORKSPACE logged -- which the workflow's
-# own log step cannot show, because the suite has torn the container down by
-# the time it runs.
-deleg_diagnostics() {
+# Everything worth seeing when a union assertion fails: what the session thinks
+# it has cached, what the client logged, and what the WORKSPACE logged, which
+# the workflow's own log step cannot show because the suite has torn the
+# container down by the time it runs.
+share_diagnostics() {
     "$WORK/remote-docker" remote status 2>&1 |
         grep -iE "cache|watch" | sed 's/^/        client: /'
     grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
@@ -1517,17 +1515,17 @@ deleg_diagnostics() {
     dump_workspace_log 25
 }
 
-DELEGDIR="$WORK/delegated"
-mkdir -p "$DELEGDIR"
-echo "first" >"$DELEGDIR/marker"
+UNIONDIR="$WORK/write-back"
+mkdir -p "$UNIONDIR"
+echo "first" >"$UNIONDIR/marker"
 # Deleted in section 16 while no client is running, which is the one deletion
 # nothing can observe: no watcher sees it, so the fill cannot carry it and only
 # the record of what the last fill sent can explain it.
-echo "here before the fill" >"$DELEGDIR/while-down.txt"
+echo "here before the fill" >"$UNIONDIR/while-down.txt"
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
-    if dockert run -d --name itest-deleg -v "$DELEGDIR:/w:delegated"         alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
-        ok "a container starts against a delegated union"
+    if dockert run -d --name itest-deleg -v "$UNIONDIR:/w:read=cached,write=back"         alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
+        ok "a container starts against a write=back union"
 
         if outputs '^first$' docker exec itest-deleg cat /w/marker; then
             ok "it reads a file the cache was filled with"
@@ -1535,18 +1533,12 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "reading the cache: [$LAST_OUTPUT]"
         fi
 
-        # THE assertion this section was missing, and its absence hid a union
-        # that never mounted at all for as long as the mode has existed. Every
-        # check below passes against an ordinary directory: the agent writes
-        # the cache into it, the container reads it, an edit here is written
-        # into it and a deletion removes from it. What cannot pass is this --
-        # a bind of a real union reports fuse-overlayfs as its filesystem, and
-        # a bind of a directory reports whatever the daemon's own disk is.
-        if outputs 'fuse' docker exec itest-deleg sh -c 'grep " /w " /proc/mounts'; then
+        # a bare directory passes every other check here (ADR 0044)
+        if union_is_fuse docker itest-deleg; then
             ok "the container's share is a union, not a directory that resembles one"
         else
             bad "/w is not a fuse mount: [$LAST_OUTPUT]"
-            deleg_diagnostics
+            share_diagnostics
         fi
 
         # And the cache really was filled, which the read above does NOT show:
@@ -1556,7 +1548,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # would otherwise present much later as a write that never arrived.
         filled=""
         for _ in $(seq 1 20); do
-            if outputs "delegated: .*, cached\$"                 "$WORK/remote-docker" remote status; then
+            if outputs "$UNIONDIR: .*, cached\$" "$WORK/remote-docker" remote status; then
                 filled=yes
                 break
             fi
@@ -1575,7 +1567,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # about a second -- so reading once measures those rather than the
         # fallthrough. The time it took is the answer to "when does a new file
         # appear", so it is reported.
-        echo "arrived after the fill" >"$DELEGDIR/late.txt"
+        echo "arrived after the fill" >"$UNIONDIR/late.txt"
         fell=""
         for i in $(seq 1 15); do
             if outputs '^arrived after the fill$' docker exec itest-deleg cat /w/late.txt; then
@@ -1611,54 +1603,46 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # cache layer of an overlay IS the record of what it changed (ADR 0044).
         # Polled, so it takes a few seconds rather than being instant, which is
         # the cost of the mode and is stated as such.
-        back=""
-        for _ in $(seq 1 30); do
-            [ -f "$DELEGDIR/written-there" ] && back=$(cat "$DELEGDIR/written-there") && break
-            sleep 1
-        done
-        if [ "$back" = "from the container" ]; then
+        if back=$(wait_for_content "$UNIONDIR/written-there" "from the container" 30); then
             ok "a container's write reaches this machine"
         else
             bad "the container's write never arrived here: [$back]"
-            deleg_diagnostics
+            share_diagnostics
         fi
 
         # An edit here reaches the container, because the workspace writes it
         # THROUGH the union rather than into the layer underneath (ADR 0044).
-        echo "edited here" >"$DELEGDIR/marker"
+        echo "edited here" >"$UNIONDIR/marker"
         seen=""
-        for _ in $(seq 1 20); do
+        for edit_i in $(seq 1 20); do
             seen=$(docker exec itest-deleg cat /w/marker 2>&1)
             [ "$seen" = "edited here" ] && break
             sleep 1
         done
+        # The lower is now mounted with the share's read mode -- cached, so
+        # actimeo=60 -- and this is the assertion that the watcher's replayed
+        # SETATTR still refreshes the changed inode under it: the edit must
+        # arrive in seconds, not in a minute. The time is printed so a pass at
+        # nineteen seconds is visible for what it is.
         if [ "$seen" = "edited here" ]; then
-            ok "an edit here reaches a running delegated container"
+            ok "an edit here reaches a running write=back container (${edit_i}s, under actimeo=60)"
         else
             bad "the cache stayed stale after an edit: [$seen]"
-            deleg_diagnostics
+            share_diagnostics
         fi
 
         # And a DELETION, which no mode in this project has managed before: a
         # cached copy of a file that is gone would shadow its absence, and the
         # Docker API cannot remove a path from a volume at all.
-        rm -f "$DELEGDIR/marker"
-        gone=false
-        for _ in $(seq 1 20); do
-            if ! docker exec itest-deleg test -e /w/marker 2>/dev/null; then
-                gone=true
-                break
-            fi
-            sleep 1
-        done
-        if [ "$gone" = true ]; then
+        rm -f "$UNIONDIR/marker"
+        if wait_gone docker itest-deleg /w/marker 20; then
             ok "a file deleted here disappears from the container"
         else
             bad "a deleted file is still visible through the union"
-            deleg_diagnostics
+            share_diagnostics
         fi
     else
-        bad "a container would not start against a delegated union"
+        bad "a container would not start against a write=back union"
         sed 's/^/        /' "$WORK/deleg-run.log"
         dump_workspace_log 40
     fi
@@ -1763,6 +1747,158 @@ else
     bad "no client is running, so linking on a share could not be tested"
 fi
 
+echo "== 15e. the other corners of the mode grid =="
+# Two read modes by three write modes (ADR 0042); 15b and 15c covered
+# read=cached with write=through and write=back. union_corner asks every corner
+# the same things before its own write assertion, so a corner cannot pass by
+# resembling another. Section 16 asserts the client restart for the container
+# left running here.
+union_corner() {
+    local name=$1 dir=$2 mode=$3
+    mkdir -p "$dir"
+    echo "first" >"$dir/marker"
+    if ! dockert run -d --name "$name" -v "$dir:/w:$mode" alpine:3 sleep 900 >"$WORK/$name-run.log" 2>&1; then
+        bad "$mode: a container would not start against the union"
+        sed 's/^/        /' "$WORK/$name-run.log"
+        dump_workspace_log 40
+        return 1
+    fi
+    ok "$mode: a container starts"
+
+    if union_is_fuse docker "$name"; then
+        ok "$mode: the share is a union, not a directory that resembles one"
+    else
+        bad "$mode: /w is not a fuse mount: [$LAST_OUTPUT]"
+        share_diagnostics
+    fi
+    if outputs '^first$' docker exec "$name" cat /w/marker; then
+        ok "$mode: it reads a file through the union"
+    else
+        bad "$mode: reading through the union: [$LAST_OUTPUT]"
+    fi
+    if outputs '/run/rd-union/' docker inspect -f '{{range .Mounts}}{{.Source}}{{end}}' "$name"; then
+        ok "$mode: the container binds the union the workspace mounted"
+    else
+        bad "$mode: the mount source is [$LAST_OUTPUT], want a union"
+    fi
+
+    echo "edited here" >"$dir/marker"
+    local seen="" i
+    for i in $(seq 1 20); do
+        seen=$(docker exec "$name" cat /w/marker 2>&1)
+        [ "$seen" = "edited here" ] && break
+        sleep 1
+    done
+    if [ "$seen" = "edited here" ]; then
+        ok "$mode: an edit here reaches the container (${i}s)"
+    else
+        bad "$mode: the union stayed stale after an edit: [$seen]"
+        share_diagnostics
+    fi
+
+    rm -f "$dir/marker"
+    if wait_gone docker "$name" /w/marker 20; then
+        ok "$mode: a file deleted here disappears from the container"
+    else
+        bad "$mode: a deleted file is still visible through the union"
+        share_diagnostics
+    fi
+    return 0
+}
+
+# A container's write, and whether it comes back here. `want` is the content
+# expected here, or "" for "must never arrive".
+write_comes_back() {
+    local name=$1 dir=$2 mode=$3 want=$4
+    docker exec "$name" sh -c 'echo "from the container" >/w/written-there' >/dev/null 2>&1
+    if ! outputs '^from the container$' docker exec "$name" cat /w/written-there; then
+        bad "$mode: the container could not write into its own view: [$LAST_OUTPUT]"
+        return
+    fi
+    local back
+    back=$(wait_for_content "$dir/written-there" "$want" 30)
+    if [ -n "$want" ]; then
+        if [ "$back" = "$want" ]; then
+            ok "$mode: a container's write reaches this machine"
+        else
+            bad "$mode: the container's write never arrived here: [$back]"
+            share_diagnostics
+        fi
+    else
+        if [ -z "$back" ]; then
+            ok "$mode: a container's write stays in the workspace, 30s on"
+        else
+            bad "$mode: an ephemeral write arrived here: [$back]"
+            share_diagnostics
+        fi
+    fi
+}
+
+# nothing_prefetched asserts the status line for a share reports nothing sent.
+nothing_prefetched() {
+    local label=$1 dir=$2
+    if outputs "$dir: .* 0B sent" "$WORK/remote-docker" remote status; then
+        ok "$label: nothing was prefetched into the union"
+    else
+        bad "$label: the status says something was sent: [$LAST_OUTPUT]"
+    fi
+}
+
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    # read=direct,write=back: writes come back, reads are live, nothing is
+    # prefetched.
+    DIRECTBACK="$WORK/direct-back"
+    if union_corner itest-direct-back "$DIRECTBACK" "read=direct,write=back"; then
+        write_comes_back itest-direct-back "$DIRECTBACK" "read=direct,write=back" "from the container"
+        nothing_prefetched "read=direct,write=back" "$DIRECTBACK"
+        dockert rm -f itest-direct-back >/dev/null 2>&1
+    fi
+
+    # read=direct,write=ephemeral: a build directory. The container's writes
+    # never come back, including after the container is gone and the union
+    # released.
+    EPHDIR="$WORK/direct-ephemeral"
+    if union_corner itest-direct-eph "$EPHDIR" "read=direct,write=ephemeral"; then
+        write_comes_back itest-direct-eph "$EPHDIR" "read=direct,write=ephemeral" ""
+        nothing_prefetched "read=direct,write=ephemeral" "$EPHDIR"
+        dockert rm -f itest-direct-eph >/dev/null 2>&1
+        sleep 10
+        if [ ! -f "$EPHDIR/written-there" ]; then
+            ok "read=direct,write=ephemeral: nothing arrived after the container was gone either"
+        else
+            bad "read=direct,write=ephemeral: a write arrived once the union was released: [$(cat "$EPHDIR/written-there")]"
+            share_diagnostics
+        fi
+    fi
+
+    # read=cached,write=ephemeral: prefetch on (this client runs
+    # REMOTE_DOCKER_PREFETCH=tree), writes dropped. Left running for section
+    # 16, which asserts it survives a client restart.
+    CEPHDIR="$WORK/cached-ephemeral"
+    if union_corner itest-cached-eph "$CEPHDIR" "read=cached,write=ephemeral"; then
+        write_comes_back itest-cached-eph "$CEPHDIR" "read=cached,write=ephemeral" ""
+        # Polled: the walk yields to reads for a couple of seconds before it
+        # fills the rest (ADR 0045).
+        sent=""
+        for _ in $(seq 1 20); do
+            if outputs "$CEPHDIR: .* [1-9][0-9.]*[KMG]?B sent" "$WORK/remote-docker" remote status; then
+                sent=yes
+                break
+            fi
+            sleep 1
+        done
+        if [ -n "$sent" ]; then
+            ok "read=cached,write=ephemeral: the union was prefetched"
+        else
+            bad "read=cached,write=ephemeral: nothing was ever sent: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+    fi
+else
+    bad "no client is running, so the other corners could not be tested"
+fi
+
+echo
 echo "== 15f. a container that is not root, and a tar that sets attributes =="
 # A share reports the account as owner with wide bits, and a union's upper is
 # wide too (ADR 0046): a plain mount is granted by ACCESS whatever the mode,
@@ -1785,11 +1921,11 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     else
         bad "uid 1000 could not mkdir on a plain mount: [$LAST_OUTPUT]"
     fi
-    if outputs 'TOP-OK SUB-OK' dockert run --rm --user 1000 -v "$USERDIR:/w:delegated" alpine:3 sh -c 'mkdir /w/top && printf "TOP-OK " && mkdir /w/sub/inner && echo SUB-OK'; then
+    if outputs 'TOP-OK SUB-OK' dockert run --rm --user 1000 -v "$USERDIR:/w:write=back" alpine:3 sh -c 'mkdir /w/top && printf "TOP-OK " && mkdir /w/sub/inner && echo SUB-OK'; then
         ok "a uid the image chose can create directories at the top and inside a union"
     else
         bad "uid 1000 could not create directories in a union: [$LAST_OUTPUT]"
-        deleg_diagnostics
+        share_diagnostics
     fi
 
     # GNU tar as an ordinary uid; debian ships it, and a non-root uid cannot
@@ -1831,9 +1967,9 @@ sleep 2
 # no invalidation carries it, and the fill that comes next only overwrites and
 # adds. The cache still holds the file, and the container still sees it, until
 # the record of what the last fill sent says it may go (ADR 0044).
-rm -f "$DELEGDIR/while-down.txt"
+rm -f "$UNIONDIR/while-down.txt"
 
-# Watching on, because this session has to serve the delegated share section
+# Watching on, because this session has to serve the write=back share section
 # 15c left running and start a container against another. The mode refuses to
 # run without it, by design: its cache holds copies, and the watcher is the
 # only thing that keeps them honest (ADR 0044).
@@ -1860,9 +1996,18 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
             ok "a container's union survives the client restarting"
         else
             bad "the union did not survive a client restart: [$LAST_OUTPUT]"
-            deleg_diagnostics
+            share_diagnostics
         fi
         docker rm -f itest-deleg >/dev/null 2>&1
+        # And the ephemeral one section 15e left running, whose upper holds
+        # only what the container wrote: that write must still be there.
+        if outputs '^from the container$' docker exec itest-cached-eph cat /w/written-there; then
+            ok "an ephemeral union survives the client restarting"
+        else
+            bad "the ephemeral union did not survive a client restart: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        docker rm -f itest-cached-eph >/dev/null 2>&1
 
         # And the deletion made while nothing was running. A NEW container,
         # because the reconcile happens when a share is next filled: one that
@@ -1872,20 +2017,12 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         # Polled, because the fill and the reconcile it starts with are
         # asynchronous by design -- the container does not wait for either, and
         # what the cache does not hold yet is served from the live export.
-        if dockert run -d --name itest-reconcile -v "$DELEGDIR:/w:delegated"             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
-            gone=""
-            for _ in $(seq 1 20); do
-                if ! docker exec itest-reconcile test -e /w/while-down.txt 2>/dev/null; then
-                    gone=yes
-                    break
-                fi
-                sleep 1
-            done
-            if [ -n "$gone" ]; then
+        if dockert run -d --name itest-reconcile -v "$UNIONDIR:/w:read=cached,write=back"             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
+            if wait_gone docker itest-reconcile /w/while-down.txt 20; then
                 ok "a file deleted while the session was down is gone from the cache"
             else
                 bad "a file deleted while the session was down is still in the cache"
-                deleg_diagnostics
+                share_diagnostics
             fi
             docker rm -f itest-reconcile >/dev/null 2>&1
         else

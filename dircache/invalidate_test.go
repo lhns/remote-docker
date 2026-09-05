@@ -2,8 +2,6 @@ package dircache
 
 import (
 	"testing"
-
-	"github.com/lhns/remote-docker/core/notify"
 )
 
 // The cache may hold only what the watcher covers, so a path under an excluded
@@ -38,28 +36,29 @@ func TestExcludedPath(t *testing.T) {
 	}
 }
 
-// What an event becomes, with no store to send it to: which paths it batches, and whether each is a removal or a rewrite.
+// What an event becomes, with no store to send it to: which paths it batches,
+// and whether each is a removal or a rewrite.
 func TestInvalidatorBatchesByPath(t *testing.T) {
 	const share = "/m/00112233445566ff"
 	c := &Cache{}
-	c.shares.set(share, "/home/alice/project", &fillState{})
+	c.shares.set(share, "/home/alice/project", &shareState{})
 	defer c.Stop()
 
-	observe := func(p string, op notify.Op) {
-		c.Observe(notify.Event{Export: share, Path: p, Op: op})
+	observe := func(p string, op Op) {
+		c.Observe(Event{Share: share, Path: p, Op: op})
 	}
 
-	observe("/a.go", notify.OpWrite)
-	observe("/b.go", notify.OpCreate)
-	observe("/gone.go", notify.OpRemove)
+	observe("/a.go", OpWrite)
+	observe("/b.go", OpCreate)
+	observe("/gone.go", OpRemove)
 
 	// A rename is a removal of the old name and a creation of the new one, and
 	// the last word about a path wins: a file written after being removed is a
 	// write, and one removed after being written is a removal.
-	observe("/rewritten.go", notify.OpRemove)
-	observe("/rewritten.go", notify.OpWrite)
-	observe("/finally-gone.go", notify.OpWrite)
-	observe("/finally-gone.go", notify.OpRemove)
+	observe("/rewritten.go", OpRemove)
+	observe("/rewritten.go", OpWrite)
+	observe("/finally-gone.go", OpWrite)
+	observe("/finally-gone.go", OpRemove)
 
 	c.inval.mu.Lock()
 	pending := c.inval.pending[share]
@@ -87,10 +86,10 @@ func TestInvalidatorBatchesByPath(t *testing.T) {
 // not delegated, and this runs on the watcher's own path.
 func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 	c := &Cache{}
-	c.shares.set("/m/00112233445566ff", "/home/alice/project", &fillState{})
+	c.shares.set("/m/00112233445566ff", "/home/alice/project", &shareState{})
 	defer c.Stop()
 
-	c.Observe(notify.Event{Export: "/cwd", Path: "/other.go", Op: notify.OpWrite})
+	c.Observe(Event{Share: "/cwd", Path: "/other.go", Op: OpWrite})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()
@@ -104,10 +103,10 @@ func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 func TestInvalidatorIgnoresDirectories(t *testing.T) {
 	const share = "/cwd"
 	c := &Cache{}
-	c.shares.set(share, "/home/alice/project", &fillState{})
+	c.shares.set(share, "/home/alice/project", &shareState{})
 	defer c.Stop()
 
-	c.Observe(notify.Event{Export: share, Path: "/pkg", Op: notify.OpCreate, Dir: true})
+	c.Observe(Event{Share: share, Path: "/pkg", Op: OpCreate, Dir: true})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()
@@ -121,10 +120,10 @@ func TestInvalidatorIgnoresDirectories(t *testing.T) {
 func TestInvalidatorIgnoresExcludedPaths(t *testing.T) {
 	const share = "/cwd"
 	c := &Cache{Exclude: []string{".git"}}
-	c.shares.set(share, "/home/alice/project", &fillState{})
+	c.shares.set(share, "/home/alice/project", &shareState{})
 	defer c.Stop()
 
-	c.Observe(notify.Event{Export: share, Path: "/.git/index", Op: notify.OpWrite})
+	c.Observe(Event{Share: share, Path: "/.git/index", Op: OpWrite})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()

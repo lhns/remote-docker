@@ -61,7 +61,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 
 			// Parsed before it is written, so a word nothing understands is
 			// refused here rather than on the first container.
-			if _, err := workspace.ParseConsistency(consistency); err != nil {
+			if _, err := workspace.ParseMode(consistency); err != nil {
 				return err
 			}
 
@@ -115,7 +115,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "override where the local Docker API is served")
 	cmd.Flags().StringVar(&watch, "watch", "", "replay file changes: off, partial or coarse")
 	cmd.Flags().StringVar(&consistency, "consistency", "",
-		"how shares are mounted: consistent, cached or delegated")
+		"how shares are mounted: read=<direct|cached>,write=<through|back|ephemeral>")
 	cmd.Flags().BoolVar(&makeDefault, "default", false, "make this the default workspace")
 	cmd.Flags().BoolVar(&noContext, "no-context", false, "do not create a docker context")
 	return cmd

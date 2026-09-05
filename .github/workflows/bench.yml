@@ -15,20 +15,23 @@ on:
   workflow_dispatch:
     inputs:
       shapes:
-        description: "netem shapes, delay:rate, space separated"
-        default: "0ms:0 20ms:0 80ms:0 0ms:10mbit"
+        description: "netem shapes, delay:rate, as a JSON list; one job each"
+        default: '["0ms:0", "10ms:0", "20ms:0", "80ms:0", "0ms:10mbit"]'
       files:
         description: "files in the tree"
         default: "300"
       modes:
-        description: "consistency modes to compare"
-        default: "consistent cached delegated"
+        description: "mount modes to compare"
+        default: "read=direct,write=through read=cached,write=through read=cached,write=back read=cached,write=ephemeral"
+      prefetch:
+        description: "prefetch settings to compare: off, eager, tree"
+        default: "off eager tree"
+      workloads:
+        description: "workloads, from dense subtree sparse dense3 parallel write"
+        default: "dense subtree sparse dense3 parallel write"
 
-# Never cancelled by a newer run, and each run is its own group. A bench takes
-# half an hour and reports numbers rather than passing: losing one to a push
-# that happened while it ran costs the whole measurement and leaves the table it
-# was for unfilled. Observed on 2026-09-01, when four benches in a row died to
-# commits on the branch being measured.
+# Never cancelled by a newer run, and each run is its own group: a bench cut
+# off by a push loses the whole measurement.
 concurrency:
   group: bench-${{ github.sha }}
   cancel-in-progress: false
@@ -38,15 +41,20 @@ permissions:
 
 jobs:
   mounted-directory:
-    name: how fast is a mounted directory
+    name: how fast is a mounted directory at ${{ matrix.shape }}
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'bench'
     runs-on: ubuntu-latest
-    # Two hours. The cache table fills a tree per shape over a shaped link, and
-    # at 60 the job was cut off after two of four shapes -- reported as
-    # "cancelled", which reads as somebody having stopped it. Measured
-    # 2026-09-01.
+    strategy:
+      fail-fast: false
+      # One job per shape, in parallel, since all shapes in one job would not
+      # fit its six hours. The rows of one shape are still measured in ONE
+      # job, which is what makes a policy comparable with another (ADR 0044).
+      matrix:
+        shape: ${{ fromJSON(inputs.shapes || '["0ms:0", "10ms:0", "20ms:0", "80ms:0", "0ms:10mbit"]') }}
+    # Two hours for a shape; 60 minutes was cut off partway and reported as
+    # "cancelled".
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -75,11 +83,14 @@ jobs:
 
       - name: measure
         env:
-          BENCH_SHAPES: ${{ inputs.shapes || '0ms:0 20ms:0 80ms:0 0ms:10mbit' }}
+          BENCH_SHAPES: ${{ matrix.shape }}
           BENCH_FILES: ${{ inputs.files || '300' }}
-          BENCH_MODES: ${{ inputs.modes || 'consistent cached delegated' }}
+          # Empty on a label run, which falls through to bench.sh's defaults.
+          BENCH_MODES: ${{ inputs.modes }}
+          BENCH_PREFETCH: ${{ inputs.prefetch }}
+          BENCH_WORKLOADS: ${{ inputs.workloads }}
         run: bash test/bench.sh
 
-      - name: workspace logs on failure
-        if: failure()
+      - name: workspace logs
+        if: always()
         run: docker logs remote-docker-bench 2>&1 | tail -100 || true

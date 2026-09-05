@@ -83,13 +83,19 @@ type Config struct {
 	CacheFiles int
 	CacheBytes int64
 
+	// Prefetch is whether a union with read=cached is filled ahead of reads,
+	// and how: "off" (the default), "eager" (the whole tree smallest first)
+	// or "tree" (what is read, and its neighbourhood) (ADR 0045).
+	Prefetch string
+
 	// WatchExclude replaces the default list of directory names never
 	// watched. Empty means the default.
 	WatchExclude []string
 
-	// Consistency is what a share's mount gets when the mount itself named
-	// nothing: "consistent" (the default), "cached" or "delegated". Docker's
-	// own vocabulary, applied to the NFS mount (ADR 0042).
+	// Consistency is what a share's mount gets on each axis the mount itself
+	// left unset: `read=<direct|cached>,write=<through|back|ephemeral>`, with
+	// Docker's `consistent`, `cached` and `delegated` accepted as aliases
+	// (ADR 0042). Unset is read=direct,write=through.
 	//
 	// ConsistencyPaths overrides it for one directory and everything under it,
 	// which is the common case of one slow tree among fast ones.
@@ -200,6 +206,7 @@ type Workspace struct {
 	WatchBudget   int      `json:"watchBudget,omitempty"`
 	CacheFiles    int      `json:"cacheFiles,omitempty"`
 	CacheBytes    int64    `json:"cacheBytes,omitempty"`
+	Prefetch      string   `json:"prefetch,omitempty"`
 	WatchExclude  []string `json:"watchExclude,omitempty"`
 	IdleTimeout   string   `json:"idleTimeout,omitempty"`
 	DaemonIdle    string   `json:"daemonIdle,omitempty"`
@@ -325,6 +332,7 @@ const (
 	EnvWatchBudget   = "REMOTE_DOCKER_WATCH_BUDGET"
 	EnvCacheFiles    = "REMOTE_DOCKER_CACHE_FILES"
 	EnvCacheBytes    = "REMOTE_DOCKER_CACHE_BYTES"
+	EnvPrefetch      = "REMOTE_DOCKER_PREFETCH"
 	EnvWatchExclude  = "REMOTE_DOCKER_WATCH_EXCLUDE"
 	EnvIdleTimeout   = "REMOTE_DOCKER_IDLE_TIMEOUT"
 	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
@@ -468,6 +476,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.CacheBytes != 0 {
 		cfg.CacheBytes = ws.CacheBytes
 	}
+	if ws.Prefetch != "" {
+		cfg.Prefetch = ws.Prefetch
+	}
 	if ws.WatchBudget != 0 {
 		cfg.WatchBudget = ws.WatchBudget
 	}
@@ -551,6 +562,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			cfg.CacheBytes = n
 		}
+	}
+	if v := os.Getenv(EnvPrefetch); v != "" {
+		cfg.Prefetch = v
 	}
 	if v := os.Getenv(EnvWatchExclude); v != "" {
 		cfg.WatchExclude = splitList(v)

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/lhns/remote-docker/core/notify"
 )
 
 // Keeping a cache honest when the tree under it changes (ADR 0044).
@@ -55,7 +53,7 @@ type invalidator struct {
 // is gone shadows its absence for as long as it sits there. Every share this
 // cache holds is checked against this machine's own disk, which is local work
 // and no round trips unless something really is missing.
-func (c *Cache) Lost(notice notify.Notice) {
+func (c *Cache) Lost(notice Notice) {
 	c.log().Warn("the watcher dropped changes; checking the caches against this machine",
 		"reason", notice.Reason, "dropped", notice.Dropped)
 
@@ -75,8 +73,8 @@ func (c *Cache) Lost(notice notify.Notice) {
 //
 // Cheap and non-blocking on purpose: it runs on the change source's own path,
 // and a share with no cache -- which is most of them -- costs one map lookup.
-func (c *Cache) Observe(event notify.Event) {
-	if _, ok := c.shares.root(event.Export); !ok {
+func (c *Cache) Observe(event Event) {
+	if _, ok := c.shares.root(event.Share); !ok {
 		return
 	}
 	if event.Dir {
@@ -92,20 +90,20 @@ func (c *Cache) Observe(event notify.Event) {
 		return
 	}
 
-	deleted := event.Op&(notify.OpRemove|notify.OpRename) != 0
+	deleted := event.Op.Gone()
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()
 	if c.inval.pending == nil {
 		c.inval.pending = map[string]map[string]bool{}
 	}
-	if c.inval.pending[event.Export] == nil {
-		c.inval.pending[event.Export] = map[string]bool{}
+	if c.inval.pending[event.Share] == nil {
+		c.inval.pending[event.Share] = map[string]bool{}
 	}
-	// A rename looks like a removal of the old name and a creation of the new
-	// one, so the last word about a path wins: a file written after being
-	// removed is a write, and one removed after being written is a removal.
-	c.inval.pending[event.Export][event.Path] = deleted
+	// The last word about a path wins: a file written after being removed is a
+	// write, and one removed after being written is a removal. Which ops count
+	// as removal is Op.Gone.
+	c.inval.pending[event.Share][event.Path] = deleted
 
 	if c.inval.timer == nil {
 		c.inval.timer = time.AfterFunc(invalidateDelay, c.flush)
@@ -164,7 +162,7 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 		// goes: it may have been deleted again since the event, and a Store
 		// leaves out what it cannot open.
 		entry := Entry{Path: strings.TrimPrefix(p, "/")}
-		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(entry.Path))); err == nil {
+		if info, err := os.Stat(localPath(root, entry.Path)); err == nil {
 			entry.Size = info.Size()
 		}
 		changed = append(changed, entry)

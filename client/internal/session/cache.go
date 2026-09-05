@@ -16,6 +16,7 @@ import (
 
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/cache"
+	"github.com/lhns/remote-docker/core/workspace"
 	"github.com/lhns/remote-docker/dircache"
 )
 
@@ -62,7 +63,7 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 	if err := json.Unmarshal([]byte(line), &reply); err != nil || reply.Hello == nil {
 		_ = stream.Close()
 		return nil, fmt.Errorf("this workspace does not serve delegated shares as a cache\n" +
-			"\tfix: update the workspace, or use the cached consistency")
+			"\tfix: update the workspace, or use write=through")
 	}
 	if reply.Hello.Version != cache.Version {
 		_ = stream.Close()
@@ -163,7 +164,11 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 }
 
 // Changes asks what the container did to a share.
-func (c *cacheChannel) Changes(ctx context.Context, export string) ([]cache.Change, error) {
+//
+// The wire type and dircache's are converted here rather than shared, because
+// dircache depends on nothing at all and this is the boundary that costs
+// (ADR 0021). Field for field, and a compile error if either side gains one.
+func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.Change, error) {
 	reply, err := c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export}, nil)
 	if reply.Unknown {
 		return nil, dircache.ErrShareGone
@@ -171,7 +176,16 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]cache.Chan
 	if err != nil {
 		return nil, err
 	}
-	return reply.Changes, nil
+	changes := make([]dircache.Change, 0, len(reply.Changes))
+	for _, ch := range reply.Changes {
+		changes = append(changes, dircache.Change{
+			Path:    ch.Path,
+			Size:    ch.Size,
+			ModTime: ch.ModTime,
+			Deleted: ch.Deleted,
+		})
+	}
+	return changes, nil
 }
 
 // Pull fetches the named paths, calling into once per file.
@@ -234,12 +248,13 @@ func (c *cacheChannel) Mounted(ctx context.Context) ([]string, error) {
 }
 
 // Prepare mounts a share's union and answers with the path a container binds.
-func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port int) (string, error) {
+func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port int, mode workspace.Mode) (string, error) {
 	reply, err := c.do(ctx, cache.Request{
 		Op:     cache.OpPrepare,
 		Export: export,
 		Port:   port,
 		Cache:  volume,
+		Read:   string(mode.Read),
 	}, nil)
 	if err != nil {
 		return "", err
@@ -303,8 +318,7 @@ func (s *Session) liveCache() *cacheChannel {
 	if !ok || live == nil {
 		return nil
 	}
-	s.shareCacheFor(live)
-	return live.cacheChan
+	return s.ensureCacheChan(live)
 }
 
 // liveStore is what dircache is given, and the nil check is why it is not
@@ -330,12 +344,20 @@ type shareCache struct {
 	session *Session
 }
 
-// Fill starts the background fill, and does nothing on a session that caches
-// nothing. The engine is a pointer where the state it replaced was a value, so
-// this is a check rather than the no-op it used to be for free.
-func (c shareCache) Fill(export, localPath string) {
+// Attach hands the share to the engine in the engine's own terms, and does
+// nothing on a session that caches nothing. The engine is a pointer where the
+// state it replaced was a value, so this is a check rather than the no-op it
+// used to be for free.
+//
+// The translation from the mode is here and nowhere else: dircache depends on
+// nothing and cannot name workspace.Mode, so what it is told is what the mode
+// MEANS for it -- fill ahead, or not; carry writes back, or not.
+func (c shareCache) Attach(export, localPath string, mode workspace.Mode) {
 	if c.session.cache != nil {
-		c.session.cache.Fill(export, localPath)
+		c.session.cache.Attach(export, localPath, dircache.ShareOptions{
+			Prefetch:  mode.Prefetch(),
+			Ephemeral: mode.Write == workspace.WriteEphemeral,
+		})
 	}
 }
 

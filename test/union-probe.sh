@@ -416,6 +416,26 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     lower_via_fuse=$( { time -p sh -c "cat $FUSE_MERGED/pkg/f1 >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
     info "one file that misses and falls through to NFS: ${lower_via_fuse}s"
 
+    # The floor for landing a batch: files applied THROUGH the union, with no
+    # network in it, against the same files straight to disk. Reported, not
+    # asserted.
+    APPLY_SRC=$WORK/apply-src
+    rm -rf "$APPLY_SRC"
+    for d in $(seq 1 30); do
+        mkdir -p "$APPLY_SRC/pkg$d"
+        for f in $(seq 1 100); do
+            head -c 2048 /dev/zero >"$APPLY_SRC/pkg$d/file$f.go"
+        done
+    done
+    tar -cf "$WORK/apply.tar" -C "$APPLY_SRC" .
+    sudo mkdir -p "$FUSE_MERGED/applied"
+    apply_t=$( { time -p sudo tar -xf "$WORK/apply.tar" -C "$FUSE_MERGED/applied"; } 2>&1 | awk '/^real/ {print $2}')
+    mkdir -p "$WORK/apply-disk-$$"
+    disk_t=$( { time -p tar -xf "$WORK/apply.tar" -C "$WORK/apply-disk-$$"; } 2>&1 | awk '/^real/ {print $2}')
+    rate=$(awk -v t="$apply_t" 'BEGIN { if (t > 0) printf "%.0f", 3000 / t; else print "?" }')
+    info "3,000 files applied through the union: ${apply_t}s ($rate files/s); straight to disk: ${disk_t}s"
+    rm -rf "$WORK/apply-disk-$$"
+
     # The ADR 0014 claim, asked of the union we would actually ship.
     if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./watchprobe); then
         sudo mkdir -p "$FUSE_MERGED/fusewatch"

@@ -1,12 +1,16 @@
-# 0044 — A delegated share is a cache, not a snapshot
+# 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-09-02
+- Date: 2026-09-01, last amended 2026-09-04
 - Supersedes the retired 0043, whose answer — that `delegated` is a copy —
   stands only in the sense that a cache contains one
-- Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for delegated
-  shares**, and for the first time as the event rather than an approximation of
+- Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
+  union**, and for the first time as the event rather than an approximation of
   one
+- Current answer: a share with `write != through` ([ADR 0042](0042-mount-consistency-modes.md))
+  is a union whose lower is the live export, mounted with the share's read
+  mode, and whose upper is a local layer the agent alone writes; the page
+  cache is the cache and the union is where a batch lands ([ADR 0045](0045-prefetch-follows-the-reads.md)).
 
 ## What forced it
 
@@ -41,8 +45,6 @@ state, and all correct:
 - the budget stopped it short
 - the path is excluded, so it is never cached
 - the scan has not reached that directory
-
-**Nothing here can make a share wrong; it can only make one slower.**
 
 ### Where the policy lives
 
@@ -108,22 +110,28 @@ directory. The child enters the **pid** namespace as well and runs
 fuse-overlayfs as its own child, since `setns(CLONE_NEWPID)` decides where
 children are born rather than moving the caller.
 
-### Filling it: cheapest first, without waiting for the scan
+### The union is a landing zone, not a cache (amended 2026-09-04)
 
-- The win is a round trip saved per file, so a thousand small files are worth
-  far more than one large one that costs the same bandwidth.
-- Sorting the whole tree first makes the first byte wait for a stat of every
-  file, which on a large project takes longer than the upload it was to speed up.
-- So: a candidate buffer bounded by the share's own budget, which **evicts its
-  largest** as more of the tree is seen; the upload takes the smallest out of
-  it, and after a hundred files the scan and the upload run together.
-- A file sent early may be larger than one found later. That is the price of not
-  waiting, and eviction only ever discards files that were never going to be
-  sent. The mechanism is `dircache/fill.go`.
+- Coherent caching of what HAS been read is `cached`'s: page cache for the
+  bytes, `actimeo=60` for the attributes, the watcher's replayed SETATTR to
+  refresh the one inode that changed. A union adds nothing to a re-read.
+- What it adds is a place a file can be put BEFORE it is read, that merges
+  with the live view. The first read of a small file is two serial round
+  trips no server can merge; a batch over the cache channel is one.
+- The fill is opt-in (`prefetch: eager|tree`, off by default since
+  2026-09-04) and follows the reads under `tree`; the policy, the rules and
+  the walk that yields are [ADR 0045](0045-prefetch-follows-the-reads.md).
+  The smallest-first walk this record used to describe is `eager`.
+- **The lower carries the share's read mode.** It was mounted `consistent`,
+  `actimeo=1`, from the first version of this record to 2026-09-04, so every
+  file the fill had not reached revalidated every second under a mode whose
+  point was not to. `Spec.Read` now names it, the child round-trips it as
+  `RD_UNION_READ`, and `union_test.go` pins the option string. A
+  `read=cached` union therefore revalidates every 60s.
 
 **The budget bounds what is copied, never whether the mode runs.** "The budget
 ran out" is the same state as "the fill has not reached it yet", so there is no
-project size at which `delegated` stops working.
+project size at which a union stops working.
 
 ### Compression is a negotiation, not a format
 
@@ -179,7 +187,7 @@ the NFS client parses — makes the parser refuse the entire list. It reports
 EINVAL, printed as `invalid argument`, about a list whose every word is valid on
 its own. `Spec.LowerMount` returns the two halves, and the error prints both.
 
-This is what kept the union from ever mounting, for the whole life of the mode.
+This is what kept the union from ever mounting until 2026-09-04.
 
 ### "Up" means MOUNTED, not that the path exists
 
@@ -300,51 +308,34 @@ within a table, never across the two.
 
 | RTT | mode | start | walk | read 300 | write | nfs_ops during the read |
 |---|---|---|---|---|---|---|
-| 0.1ms | `consistent` | 0.14 | 0.09 | 0.41 | 0.75 | READ=300 ACCESS=535 GETATTR=437 |
-| 0.1ms | `cached` | 0.14 | 0.09 | 0.30 | 0.19 | READ=300 ACCESS=422 |
-| 0.1ms | `delegated` | 0.28 | 0.44 | 0.33 | 0.14 | READ=349 ACCESS=300 |
-| 40ms | `consistent` | 0.38 | 18.91 | 32.49 | 12.68 | GETATTR=3552 |
-| 40ms | `cached` | 0.38 | 2.99 | 24.46 | 12.28 | READ=300 ACCESS=422 |
-| 40ms | `delegated` | 0.14 | **0.06** | **0.09** | **0.08** | **none** |
-| 160ms | `consistent` | 1.10 | 96.98 | 164.47 | 74.00 | GETATTR=4220 |
-| 160ms | `cached` | 1.10 | 11.64 | 98.12 | 49.43 | READ=300 ACCESS=422 |
-| 160ms | `delegated` | **0.15** | **0.06** | **0.08** | **0.08** | **none** |
-| 10mbit | `delegated` | 0.14 | 0.06 | 0.08 | 0.08 | none |
+| 0.1ms | `read=direct,write=through` | 0.14 | 0.09 | 0.41 | 0.75 | READ=300 ACCESS=535 GETATTR=437 |
+| 0.1ms | `read=cached,write=through` | 0.14 | 0.09 | 0.30 | 0.19 | READ=300 ACCESS=422 |
+| 0.1ms | `read=cached,write=back` | 0.28 | 0.44 | 0.33 | 0.14 | READ=349 ACCESS=300 |
+| 40ms | `read=direct,write=through` | 0.38 | 18.91 | 32.49 | 12.68 | GETATTR=3552 |
+| 40ms | `read=cached,write=through` | 0.38 | 2.99 | 24.46 | 12.28 | READ=300 ACCESS=422 |
+| 40ms | `read=cached,write=back` | 0.14 | **0.06** | **0.09** | **0.08** | **none** |
+| 160ms | `read=direct,write=through` | 1.10 | 96.98 | 164.47 | 74.00 | GETATTR=4220 |
+| 160ms | `read=cached,write=through` | 1.10 | 11.64 | 98.12 | 49.43 | READ=300 ACCESS=422 |
+| 160ms | `read=cached,write=back` | **0.15** | **0.06** | **0.08** | **0.08** | **none** |
+| 10mbit | `read=cached,write=back` | 0.14 | 0.06 | 0.08 | 0.08 | none |
 
-The claim was that the wall clock stops tracking the latency knob, and it does:
-`delegated` reads in 0.08s at 160ms RTT where `cached` takes 98.12s and
-`consistent` 164.47s, and it does so while remaining a live mount. The
-`nfs_ops` column is the reason and the proof: nothing is asked of the mount at
-all, where `cached` still pays 300 READs and 422 ACCESSes it cannot avoid.
+The union rows are a union AFTER its fill has landed. What they show is that
+once the upper holds the tree the wall clock stops tracking the latency knob:
+0.08s at 160ms RTT against 98.12s and 164.47s for the two mounted modes, while
+remaining a live mount, and the `nfs_ops` column is the proof, since nothing
+is asked of the mount at all where `read=cached` still pays 300 READs and 422
+ACCESSes. Start does not grow either, 0.15s at 160ms against 1.10s, because a
+container never waits for the fill. What a COLD union costs, and how long the
+fill takes to land, is ADR 0045's table.
 
-Start does not grow, which is the other half of the claim: 0.15s at 160ms
-against 1.10s for both mounted modes, because a container never waits for the
-fill.
-
-The cache's own table, same run. `cold` is a read straight after the container
-starts, `warm` the same read once the fill has settled. This run used a
-3000-file tree per shape; it is 1000 now, for the reason below:
-
-| RTT | cold | settle | warm | invalidate | write-back |
-|---|---|---|---|---|---|
-| 0.1ms | 3.61 | 7.91 | **0.09** | 1.13 | 2.01 |
-| 40ms | 377.18 | did not settle in 300s | 7.17 | 1.25 | did not arrive in 60s |
-
-Cold to warm at no latency is 3.61s to 0.09s, which is the feature stated as a
-number: the same read, before and after the cache holds the tree.
-
-**The 40ms row is a measurement of the bench, not of the mode.** The cold read
-races the fill for the link, so it reports the two competing rather than what a
-miss costs; and the tree did not finish settling inside the 300s the script
-waits, which is why write-back had nothing to report either. The tree was cut
-from 3000 to 1000 files and the job's timeout raised from 60 to 120 minutes
-afterwards. Both remaining shapes, 80ms
-and 10mbit, ran out of job time before starting. Do not quote this table for
-anything but the 0.1ms row until it has run whole.
+The cache's own `cold`/`settle`/`warm` table is retired: `settle` is
+meaningless for a fill driven by reads. `test/bench.sh` now runs policies x
+shapes x modes x workloads; its table and pass criteria are in ADR 0045, run
+2026-09-04; it failed them (ADR 0045).
 
 ## Consequences
 
-- **`delegated` requires the watcher**, exactly as `cached` does, and for a
+- **A union requires the watcher**, exactly as `read=cached` does, and for a
   stronger reason: without it the cache goes stale rather than merely lagging.
 - **It requires `fuse-overlayfs` where the account's daemon runs.** In
   per-account mode that is the dind's image, which is why the workspace's own

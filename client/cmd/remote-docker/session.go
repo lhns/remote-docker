@@ -17,25 +17,26 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// consistencyOf parses this workspace's mount consistency settings.
+// modeOf parses this workspace's mount mode settings.
 //
 // Here rather than in config, for the same reason the watch mode is: config is
 // the lowest layer, and a value nobody can serve should be refused by name
-// before anything connects.
-func consistencyOf(cfg config.Config) (workspace.Consistency, map[string]workspace.Consistency, error) {
-	def, err := workspace.ParseConsistency(cfg.Consistency)
+// before anything connects. An axis left unset falls through to Docker's
+// default in the rewriter.
+func modeOf(cfg config.Config) (workspace.Mode, map[string]workspace.Mode, error) {
+	def, err := workspace.ParseMode(cfg.Consistency)
 	if err != nil {
-		return workspace.Unset, nil, fmt.Errorf("consistency: %w", err)
+		return workspace.ModeUnset, nil, fmt.Errorf("consistency: %w", err)
 	}
 	if len(cfg.ConsistencyPaths) == 0 {
 		return def, nil, nil
 	}
 
-	paths := make(map[string]workspace.Consistency, len(cfg.ConsistencyPaths))
+	paths := make(map[string]workspace.Mode, len(cfg.ConsistencyPaths))
 	for path, value := range cfg.ConsistencyPaths {
-		parsed, err := workspace.ParseConsistency(value)
+		parsed, err := workspace.ParseMode(value)
 		if err != nil {
-			return workspace.Unset, nil, fmt.Errorf("consistencyPaths[%s]: %w", path, err)
+			return workspace.ModeUnset, nil, fmt.Errorf("consistencyPaths[%s]: %w", path, err)
 		}
 		paths[path] = parsed
 	}
@@ -60,7 +61,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	consistency, consistencyPaths, err := consistencyOf(cfg)
+	mode, modePaths, err := modeOf(cfg)
 	if err != nil {
 		return err
 	}
@@ -73,15 +74,15 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 		// The only session that hosts: it binds the endpoint, takes the
 		// account's one export port, and narrates. Every other command either
 		// talks to whoever is serving, or only asks the workspace a question.
-		Role:             session.Host,
-		Version:          version,
-		PosixSource:      msysFrom(os.Getenv).posixSource,
-		Consistency:      consistency,
-		ConsistencyPaths: consistencyPaths,
-		Watch:            watch,
-		WatchBudget:      cfg.WatchBudget,
-		WatchExclude:     cfg.WatchExclude,
-		Log:              logger(),
+		Role:         session.Host,
+		Version:      version,
+		PosixSource:  msysFrom(os.Getenv).posixSource,
+		Mode:         mode,
+		ModePaths:    modePaths,
+		Watch:        watch,
+		WatchBudget:  cfg.WatchBudget,
+		WatchExclude: cfg.WatchExclude,
+		Log:          logger(),
 	})
 	if err != nil {
 		return err

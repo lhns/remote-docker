@@ -51,10 +51,17 @@ dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          naming no transport and no storage, which is the
                          membership test. A module rather than a package
                          because a module is the only thing that can REFUSE a
-                         dependency: it has none at all, and inside core-client
-                         it could not keep that (ADR 0021, ADR 0044).
-                         The union, the tar, the codec and the wire format are
-                         all on the other side of its Store interface.
+                         dependency, and this one has NONE: no third party, and
+                         not this repository either. Its go.mod has no require
+                         at all. The change and event types live in types.go
+                         rather than being imported, and the caller converts
+                         (client/internal/session/cacheobserver.go), which
+                         costs two field-for-field copies and is the whole
+                         price (ADR 0021, ADR 0044). Checkable in one command:
+                           go list -deps ./... | grep -v '^github.com/lhns/remote-docker/dircache' | grep -E '\.[^/]+/'
+                         must print nothing. The union, the tar, the codec and
+                         the wire format are all on the other side of Store.
+                         docs/caching.md is what it is FOR.
 
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
@@ -298,27 +305,40 @@ premise of the project, and it applies to building it too. So:
   A SOCKET is refused with the reason, not with "not a directory": what crosses
   a file share is the name and not the kernel object behind it, which is equally
   true of a socket inside a shared directory.
-- **A consistency word is consumed, never forwarded** (ADR 0042). Docker's
-  `cached`/`delegated`/`consistent` arrive in a `-v` option list or as a
-  `--mount` field, and describe the mount THIS program makes: once the bind is
-  a volume the word means nothing the daemon can act on, so it is taken out.
-  `cached` is `actimeo=60,nocto` and rests entirely on the watcher poking what
-  changed, which is why asking for it with watching off is refused rather than
-  served. One directory is one share, one volume and one consistency: two
-  mounts of it disagreeing are refused, because the second EnsureVolume would
-  silently recreate the first's volume.
-- **A delegated share is a UNION, and the agent is its only writer** (ADR
-  0044). The live export is the lower layer and a local cache is the upper, so a
-  read the cache holds is the workspace's own disk and one it does not FALLS
-  THROUGH and is correct -- which is what lets the cache be filled in the
-  background, bounded by a budget, and still never be wrong. Two things about it
-  are measured rather than chosen: the kernel's overlay cannot be used at all
+- **A mode word is `read=X` or `write=Y`, nothing else, and it is consumed,
+  never forwarded** (ADR 0042). It arrives in a `-v` option list or in
+  `--mount consistency=` and describes the mount THIS program makes; the
+  daemon REJECTS what it does not know, so it is taken out whether or not the
+  bind is rewritten. Docker's own `default`/`consistent`/`cached`/`delegated`
+  (`api/types/mount.Consistency`) are aliases for whole modes; any other
+  bare word is refused: a word that is neither namespaced nor Docker's is not
+  ours. `--mount` is split on
+  commas by the CLI, so both axes reach it as one csv-quoted field. `read=cached`
+  is `actimeo=60,nocto` and rests on the watcher poking what changed, which
+  is why asking for it with watching off is refused. One directory is one share, one volume
+  and one mode: two mounts of it disagreeing are refused, because the second
+  EnsureVolume would silently recreate the first's volume.
+- **A share with `write != through` is a UNION, its lower carries the share's
+  READ mode, and the agent is its only writer** (ADR 0042, ADR 0044). The live
+  export is the lower layer and a local cache is the upper, so a read the
+  cache holds is the workspace's own disk and one it does not FALLS THROUGH
+  and is correct, which is what lets the cache be filled in the background,
+  bounded by a budget, and still never be wrong. `Spec.Read` names the
+  lower's mode and `union_test.go` pins the option string; mounted
+  `consistent` instead, every file the fill had not reached revalidated every
+  second under a mode whose point was not to. Two things about the union are
+  measured rather than chosen: the kernel's overlay cannot be used at all
   here, because an overlay whose lower is NFS is readable only from the mount
   namespace that created it (a container gets EOPNOTSUPP, and so does the host
   under `unshare --mount`); and a file written into the cache LAYER rather than
   through the union stays invisible to a container that already missed on it, so
   the obvious way to fill it is a silent bug. `test/union-probe.sh` asserts both
-  and runs on every pull request.
+  and runs on every pull request. Prefetch runs only when `read=cached` AND a
+  union exists: in a `direct` corner the upper holds only what the container
+  wrote, because a file in the upper is served with no revalidation and the
+  user asked for live reads. An `ephemeral` share is never asked for its
+  changes and nothing is carried back from it, INCLUDING on release; an edit
+  here still invalidates it.
 - **Writing through the union is what closes ADR 0014.** The write is a real
   operation in the container's own view, so its inotify fires natively --
   IN_MODIFY, IN_CLOSE_WRITE and IN_DELETE, the last of which nothing here had
@@ -465,9 +485,8 @@ premise of the project, and it applies to building it too. So:
   directory there with nothing mounted on it and all of that still works -- the
   cache is a directory, the container reads it, and the only thing missing is
   the lower, so a read that should fall through returns nothing and the
-  container's writes land where nobody looks. It ran that way in CI for the
-  whole life of the mode, behind a green section, while the child crash-looped
-  every two seconds. Two things follow, and neither is optional: `union.Alive`
+  container's writes land where nobody looks. Two things follow, and neither
+  is optional: `union.Alive`
   asks whether the path is a MOUNT (st_dev against its parent, which works from
   outside the namespace too -- `test/union-probe.sh` section 12), and the
   suites assert that a container's share reports fuse-overlayfs rather than the
@@ -488,6 +507,19 @@ premise of the project, and it applies to building it too. So:
   `invalid argument`, about a list whose every word is individually valid. That
   is what kept the union from ever mounting. `Spec.LowerMount` does the split,
   and the error now prints the two halves so the next one names itself.
+- **Prefetch is OFF unless `prefetch: eager|tree` says otherwise, and large
+  files are never in it** (ADR 0045). Under `tree`, every NFS READ on a share
+  with a cache is a miss, reported by `nfsserve`'s observer to
+  `dircache.Cache.Touch`; the tree ships the neighbourhood in batches that
+  double as evidence grows, capped at `4 x BDP` per read; the walk is the tail
+  and YIELDS (nothing within 2s of a miss, 1 MiB batches). `eager` is the
+  same sender with the quiet rule off and `Touch` ignored: one sender, not
+  two fills. A file over 1 MiB is NFS's with the page cache for re-reads. The
+  observer's paths carry a leading slash and `Entry.Path` does not; `Touch`
+  strips it, and a mismatch there presents as a tree that never promotes.
+- **A batch lands through the merged mount, and the apply is SERIAL and
+  COPIES UP**, so landing a file costs more round trips than reading it and a
+  cold union is no faster than a plain mount (ADR 0045, 2026-09-04).
 - **A fill cannot carry a deletion, so the client records what it sent** (ADR
   0044). A fill overwrites and adds; a file deleted here while nothing was
   running leaves no event for anyone to replay, so it stays in the cache and
@@ -511,7 +543,7 @@ premise of the project, and it applies to building it too. So:
   mounted" then deletes the cache under a running container. The share ids come
   from the mounts and the client digest from the key that authenticated, so the
   names are the asking machine's own.
-- **A delegated share's union outlives the channel that asked for it, and is
+- **A union outlives the channel that asked for it, and is
   released only when no container is bound to it** (ADR 0044). The cache
   channel rides the connection, which ADR 0015 releases the moment a session
   goes idle; tying the mount to that unmounts a union under a running
@@ -818,17 +850,23 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
-Since consistency modes (ADR 0042, ADR 0044): a `cached` mount reading a file
-and still seeing an edit made here despite a 60s attribute cache; and a
-`delegated` share being a UNION -- asserted to report fuse-overlayfs rather
-than a directory that resembles one, which is the only assertion a share whose
-lower never mounted cannot fake. Through it: a read the cache does not hold
-falling through to the live export, an edit here reaching a running container,
-a file deleted here disappearing from one, a container's write arriving on this
-machine, a file deleted while NO client was running being gone from the cache on
-the next fill, and the union surviving a client restart with a container still
-bound to it. Both daemon modes, since `per-user-dind.sh` asserts the same union
-inside an account's own dind.
+Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
+(ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
+still seeing an edit made here despite a 60s attribute cache, in 2s
+(`integration.sh` 15c), which is the watcher's SETATTR doing what the mode
+rests on; and every union corner end to end, asserted to report
+fuse-overlayfs rather than a directory that resembles one, which is the only
+assertion a share whose lower never mounted cannot fake. Through each union:
+a read the cache does not hold falling through to the live export, an edit
+here reaching a running container, a file deleted here disappearing from one,
+a container's write arriving on this machine or, for `ephemeral`, never
+arriving, including after the container is gone, a file deleted while NO
+client was running being gone from the cache on the next fill, and the union
+surviving a client restart with a container still bound to it. The three
+corners Docker has no word for are `integration.sh` 15e, `per-user-dind.sh`
+7c (inside an account's own dind) and `two-clients.sh` 9 (an ephemeral share
+on one machine beside a write-back share on another). The bench ran the same
+day and failed its criteria: see the invariant on the serial apply.
 
 Since the root became the Docker CLI (ADR 0024): the binary working under the
 name `docker` as a symlink AND as a copy with `remote` still reachable through
@@ -939,11 +977,21 @@ function was.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
-- **The cache mode's own benchmark table.** `test/bench.sh`'s second table --
-  cold, settle, warm, invalidate, write-back -- has never produced a complete
-  set of rows: two shapes of four, and only the 0.1ms one measures the mode
-  rather than the bench (ADR 0044 has both rows and says which is which). The
-  first table, which is what every speed claim rests on, IS complete.
+- **The prefetch policy against a real link.** `dircache/sim_test.go` is a
+  MODEL: two round trips per file, a batch available after RTT plus transfer.
+  The bench ran on 2026-09-04 and the model was wrong about the apply, which
+  costs several round trips per file rather than one per batch; every pass
+  criterion failed at latency for that reason. The policy itself is
+  therefore still unmeasured: the table in ADR 0045 measures the apply, and
+  a table that can tell `tree` from `eager` needs the apply fixed first.
+  `integration.sh`'s watching client runs `REMOTE_DOCKER_PREFETCH=tree`;
+  every other suite runs the default, off.
+- **Page-cache warming as the landing zone** (ADR 0045, step 0.5). Written
+  down as a probe and not run; it rests on the container's mount sharing a
+  superblock with the agent's, which nothing has checked.
+- **Compose carrying our mode words.** `consistency: read=cached,write=back` in a compose
+  file may or may not survive compose-go's validation; the README says it is
+  unverified, and nothing tests it.
 - **Write-back's conflict resolution, and the measured clock offset.** All six
   rows of the baseline table are unit tested and the skew correction has its own
   test; no integration suite has ever made a file change in both places at once.
@@ -985,18 +1033,18 @@ function was.
   part of the work rather than something to be asked for.** Read the whole diff
   once more and cut: logic that now exists twice, complexity that arrived while
   trying things and stayed, and comments that repeat the code, repeat each
-  other, or restate what an ADR already says. The reasoning lives in ONE place,
-  usually a record, with a line pointing at it from the code.
+  other, or restate what an ADR already says.
 - **A comment is read by somebody with no context, and must still land.** "The
   other mode", "the old behaviour", "as discussed" name nothing to a reader who
   was not there; name the mode, the flag, the file or the record. The test is
   whether a developer seeing this file for the first time can act on it.
-- Comments are written for somebody reading the code, not for whoever debugged
-  it. Keep the finding and the way it fails silently; drop the transcript, the
-  re-derivation and what was tried first. Several findings here cost real
-  debugging (the hijack rules, the half-close, the genproto exclusion, the
-  go-nfs refusal panic, mount propagation) and must survive the edit that
-  shortens them. The long version belongs in an ADR, which the comment links to.
+- **Comments are written for somebody reading the code, not for whoever
+  debugged it, and the reasoning lives in ONE place, an ADR, with a line
+  pointing at it from the code.** Keep the finding and the way it fails
+  silently; drop the transcript, the re-derivation and what was tried first.
+  Several findings here cost real debugging (the hijack rules, the half-close,
+  the genproto exclusion, the go-nfs refusal panic, mount propagation) and
+  must survive the edit that shortens them.
 
 - **Commit and pull request titles name the change, plainly.** "Add ws/wss
   transport for the SSH tunnel", not "Reach the workspace over a WebSocket".

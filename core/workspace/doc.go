@@ -1,6 +1,6 @@
 // Package workspace is the names and numbers the remote-docker client and the
 // remote-dockerd agent both derive: share ids, export paths, volume names, NFS
-// mount options, ownership labels, mount consistency, the uid<->port mapping,
+// mount options, ownership labels, mount modes, the uid<->port mapping,
 // this machine's id, and the workspace-info handshake.
 //
 // Everything in here is imported by both binaries, and that is the point. The

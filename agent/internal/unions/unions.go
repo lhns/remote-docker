@@ -178,10 +178,17 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 		return "", fmt.Errorf("unions: finding the cache volume for %s: %w", req.Export, err)
 	}
 
+	// Empty is an older client: ReadCached (core/cache.Request.Read).
+	read := workspace.Read(req.Read)
+	if read == workspace.ReadUnset {
+		read = workspace.ReadCached
+	}
+
 	spec := union.Spec{
 		PID:      d.PID,
 		Export:   req.Export,
 		Port:     req.Port,
+		Read:     read,
 		CacheDir: cacheDir,
 	}
 	if err := spec.Validate(); err != nil {
