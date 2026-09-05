@@ -212,15 +212,13 @@ func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live
 //
 // The client validated it too, and that is not a reason to skip this: the
 // stream tells a root process which files to write and which to remove. The
-// check is on the RESULT rather than on the input, because path.Join CLEANS --
-// "/a/../../etc" becomes "/etc" and looks like an ordinary path by the time
-// anything opens it. Exactly the reasoning in notify.relocate.
+// containment rule is replay.Under's.
 func within(root, name string) (string, error) {
 	if err := workspace.ValidSharePath("/" + strings.TrimPrefix(name, "/")); err != nil {
 		return "", fmt.Errorf("unions: %w", err)
 	}
 	target := path.Join(root, name)
-	if target != root && !strings.HasPrefix(target, strings.TrimSuffix(root, "/")+"/") {
+	if !replay.Under(root, target, "/") {
 		return "", fmt.Errorf("unions: %q leaves the share", name)
 	}
 	return target, nil

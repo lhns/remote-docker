@@ -13,10 +13,7 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// The workspaces in ~/.remote-docker.json, which until now could only be
-// listed. Adding one meant writing JSON by hand, and the "no workspaces
-// configured" message said so, which is not a thing a CLI should ever have to
-// admit.
+// The workspaces in ~/.remote-docker.json.
 //
 // Docker contexts are written as a side effect rather than by a separate
 // command. There is no case where you want a workspace configured and not
@@ -273,8 +270,6 @@ func newWorkspaceListCommand() *cobra.Command {
 						where(config.Config{User: file.User, Host: file.Host, Port: file.Port}))
 					return nil
 				}
-				// Previously this printed the JSON to write by hand. There is
-				// a command for it now.
 				_, _ = fmt.Fprintf(out,
 					"no workspaces configured. Add one:\n\n"+
 						"    %s\n", ourCommand("create dev --host dev.example --user alice"))

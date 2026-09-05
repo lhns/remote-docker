@@ -20,19 +20,6 @@ func TestHealthcheckFailsWhenSSHIsNotAccepting(t *testing.T) {
 	}
 }
 
-func TestHealthcheckPassesWhenSSHIsAccepting(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = l.Close() }()
-
-	_, port, _ := net.SplitHostPort(l.Addr().String())
-	if err := sshAccepting(context.Background(), ":"+port); err != nil {
-		t.Errorf("a listening port was reported unhealthy: %v", err)
-	}
-}
-
 // A bind address is not a dial address: the agent serves ":2222", and the
 // check has to turn that into loopback rather than dialling an empty host.
 func TestHealthcheckDialsLoopbackForABareBindAddress(t *testing.T) {

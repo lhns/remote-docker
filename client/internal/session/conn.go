@@ -141,34 +141,21 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:  s.clientID,
 		Guard:   live.guard,
 
-		// What a share gets on each axis the mount left unset (ADR 0042).
-		// Watching is asked of the
-		// session rather than of the setting: `cached` rests on the watcher
-		// poking what changed, and only a hosting session has one.
 		Mode:      s.opts.Mode,
 		ModePaths: s.opts.ModePaths,
-		Watching:  s.watch != nil,
+		// Asked of the session rather than of the setting: only a hosting
+		// session has a watcher.
+		Watching: s.watch != nil,
 
-		// A delegated share is a union the WORKSPACE mounts, so the client
-		// asks for it rather than building it (ADR 0044). Opened lazily: a
-		// session that never mounts one never opens the channel, and an older
-		// workspace refusing the command must not stop the session.
+		// Opened lazily: a session that never mounts a union never opens the
+		// channel, and an older workspace refusing the command must not stop
+		// the session.
 		Cache:      s.shareCacheFor(live),
 		UnionReady: info.Union,
 
-		// Read for one question: whether this workspace can mount a single
-		// file, which needs a volume subpath (ADR 0039).
 		DockerVersion: info.Docker,
-
-		// Paths the workspace's daemon resolves for itself, so a bind naming
-		// one is left alone (ADR 0041), and the other spelling a shell may have
-		// left a source in (ADR 0040).
-		DaemonPaths: info.DaemonPaths,
-		PosixSource: s.opts.PosixSource,
-
-		// The published port moves to whatever the daemon picks, so the number
-		// the user typed is claimed on THIS machine and a clash has to be
-		// reported here (ADR 0008).
+		DaemonPaths:   info.DaemonPaths,
+		PosixSource:   s.opts.PosixSource,
 		LocalPortFree: func(port int) error { return localPortFree(live, port) },
 	}
 	if s.opts.Role.hosting() {
@@ -340,12 +327,12 @@ func (s *Session) refusalReason(live *liveConn) string {
 	defer cancel()
 
 	if info, err := readInfo(ctx, live.ssh); err == nil && info.Docker == workspace.DockerUnavailable {
-		return "\n\tyour docker daemon on the workspace is not running, and the tunnel is bound inside it" +
-			"\n\tfix: try again in a moment; if it persists, the workspace operator can see why with " +
+		return "\n  your docker daemon on the workspace is not running, and the tunnel is bound inside it" +
+			"\n  fix: try again in a moment; if it persists, the workspace operator can see why with " +
 			"`remote-dockerd daemons ls`"
 	}
-	return "\n\tanother session for this account may still hold that port" +
-		"\n\tfix: close it, or wait about a minute for the workspace to notice it is gone"
+	return "\n  another session for this account may still hold that port" +
+		"\n  fix: close it, or wait about a minute for the workspace to notice it is gone"
 }
 
 func (s *Session) startNFS(live *liveConn) error {

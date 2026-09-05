@@ -91,13 +91,10 @@ func sshAccepting(ctx context.Context, addr string) error {
 	return conn.Close()
 }
 
-// dockerAnswering asks the daemon for its version.
-//
-// A request rather than a socket file, because a socket file is what a daemon
-// that died during startup leaves behind, the same distinction that made
-// per-account daemons look ready when they were not.
+// dockerAnswering asks the daemon for its version; see ServerVersionArgs for
+// why a request rather than a socket file.
 func dockerAnswering(ctx context.Context) error {
-	if _, err := (dockercli.CLI{}).Line(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
+	if _, err := (dockercli.CLI{}).Line(ctx, dockercli.ServerVersionArgs()...); err != nil {
 		return fmt.Errorf("the workspace's docker daemon is not answering: %w", err)
 	}
 	return nil

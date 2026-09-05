@@ -25,15 +25,8 @@ func Serve(spec Spec) error {
 		return err
 	}
 
-	// Pinned for the rest of this process's life. Nothing unlocks it: the
-	// thread's filesystem state and namespace are deliberately not the ones
-	// the runtime handed out, and it is about to be replaced by exec anyway.
-	runtime.LockOSThread()
-
-	if spec.PID > 0 {
-		if err := enter(spec.PID); err != nil {
-			return err
-		}
+	if err := enterFor(spec); err != nil {
+		return err
 	}
 
 	for _, dir := range spec.Dirs() {
@@ -68,6 +61,20 @@ func Serve(spec Spec) error {
 		return fmt.Errorf("union: serving %s: %w", spec.Export, err)
 	}
 	return nil
+}
+
+// enterFor pins this thread and joins the daemon's namespaces, if the spec
+// names one. Pid 0 is the shared daemon, already in this process's own.
+//
+// Pinned for the rest of this process's life. Nothing unlocks it: the thread's
+// filesystem state and namespace are deliberately not the ones the runtime
+// handed out, and it is about to be replaced by exec anyway.
+func enterFor(spec Spec) error {
+	runtime.LockOSThread()
+	if spec.PID == 0 {
+		return nil
+	}
+	return enter(spec.PID)
 }
 
 // enter joins the pid, network and mount namespaces of pid, in that order.
@@ -178,11 +185,8 @@ func Release(spec Spec) error {
 		return err
 	}
 
-	runtime.LockOSThread()
-	if spec.PID > 0 {
-		if err := enter(spec.PID); err != nil {
-			return err
-		}
+	if err := enterFor(spec); err != nil {
+		return err
 	}
 
 	var failed error

@@ -1,0 +1,24 @@
+name: setup go
+description: >-
+  actions/setup-go with the module cache keyed on this repository's modules.
+
+# THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default cache key
+# looks for a go.mod there. Without the paths below it reports "Dependencies
+# file is not found" and restores nothing, so every job in every workflow
+# re-downloads the whole graph: 250 modules in `test` alone, measured
+# 2026-09-01, and two jobs failed outright that day on proxy.golang.org
+# stream errors a cache hit would never have made.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: core/go.mod
+        cache: true
+        cache-dependency-path: |
+          core/go.sum
+          core-agent/go.sum
+          core-client/go.sum
+          agent/go.sum
+          client/go.sum
+          test/probes/go.sum

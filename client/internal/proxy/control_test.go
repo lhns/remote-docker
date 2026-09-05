@@ -48,7 +48,7 @@ func TestControlIsAnsweredLocally(t *testing.T) {
 	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
 		respondJSON(conn, http.StatusOK, `{"reached":"workspace"}`)
 	})
-	ctrl := &fakeControl{status: Status{Workspace: "dev", Connected: true}}
+	ctrl := &fakeControl{status: Status{PID: 4242, Connected: true}}
 	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: daemon.listener.Addr().String()}, Control: ctrl})
 
 	resp, err := http.Get("http://" + addr + ControlPrefix + "status")
@@ -65,7 +65,7 @@ func TestControlIsAnsweredLocally(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("decoding %s: %v", body, err)
 	}
-	if got.Workspace != "dev" || !got.Connected {
+	if got.PID != 4242 || !got.Connected {
 		t.Errorf("status = %+v, want the session's own report", got)
 	}
 }
@@ -158,7 +158,7 @@ func mustURL(t *testing.T, path string) *url.URL {
 // is talking to an older build. Without it a stale daemon makes a new binary
 // behave like the old one, silently.
 func TestStatusCarriesTheVersion(t *testing.T) {
-	ctrl := &fakeControl{status: Status{Version: "sha-abc1234", Workspace: "dev"}}
+	ctrl := &fakeControl{status: Status{Version: "sha-abc1234"}}
 	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: "127.0.0.1:1"}, Control: ctrl})
 
 	resp, err := http.Get("http://" + addr + ControlPrefix + "status")

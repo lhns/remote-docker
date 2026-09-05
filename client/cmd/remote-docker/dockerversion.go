@@ -40,8 +40,8 @@ func embeddedCLIVersion() string {
 // stops saying "unknown-version" and says who is carrying it.
 //
 // PlatformName is the line docker prints as "Client: Docker Engine -
-// Community". Ours is not that, and saying so is the honest answer to somebody
-// wondering why their docker has no compose.
+// Community". Ours is not that, and saying so tells somebody reading `docker
+// version` which program they are holding.
 func nameTheEmbeddedCLI() {
 	if v := embeddedCLIVersion(); v != "" {
 		dockerversion.Version = v

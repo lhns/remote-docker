@@ -33,8 +33,8 @@ PIN=bench-workload
 SSH_PORT=22224
 ACCOUNT=bench
 
+# Read by lib.sh's dockert: a shaped link makes every command slow.
 DOCKER_TIMEOUT=600
-dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
 
 # Sized for CI. Every operation on every file costs a round trip, so at 80ms a
 # tree ten times this size is an hour rather than a table.

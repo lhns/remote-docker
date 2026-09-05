@@ -45,16 +45,7 @@ func Do(path string, fn func() error) error {
 // the bind has to happen inside it: socket(2) reads the calling thread's
 // namespace, and nothing afterwards does.
 func Listen(path, network, address string) (net.Listener, error) {
-	var l net.Listener
-	err := Do(path, func() error {
-		var err error
-		l, err = net.Listen(network, address)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return l, nil
+	return do(path, func() (net.Listener, error) { return net.Listen(network, address) })
 }
 
 // Dial connects from inside another network namespace.
@@ -62,25 +53,38 @@ func Listen(path, network, address string) (net.Listener, error) {
 // The connection outlives the switch for the same reason a listener does: the
 // namespace is decided when the socket is created.
 func Dial(path, network, address string) (net.Conn, error) {
-	var c net.Conn
+	return do(path, func() (net.Conn, error) { return net.Dial(network, address) })
+}
+
+// do is Do for a call that creates something.
+func do[T any](path string, create func() (T, error)) (T, error) {
+	var out T
 	err := Do(path, func() error {
 		var err error
-		c, err = net.Dial(network, address)
+		out, err = create()
 		return err
 	})
 	if err != nil {
-		return nil, err
+		var zero T
+		return zero, err
 	}
-	return c, nil
+	return out, nil
 }
 
 // Path is where a process's network namespace can be opened.
 //
-// Untagged, unlike the rest of this package: it is string formatting, not a
-// system call, and it is needed by callers that only want to NAME a namespace
-// rather than enter one. It was declared once per build tag and a third time
-// in agent/internal/daemons: three copies of one path format that have to
-// agree for anything here to work.
+// Untagged: it is string formatting, not a system call, and callers that only
+// NAME a namespace need it too.
 func Path(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)
+}
+
+// Root is a process's filesystem as seen from this one, which is how the agent
+// reaches a path inside a daemon's mount namespace without entering it. Pid 0
+// is this process's own, "/", for the shared daemon (ADR 0012).
+func Root(pid int) string {
+	if pid == 0 {
+		return "/"
+	}
+	return fmt.Sprintf("/proc/%d/root", pid)
 }

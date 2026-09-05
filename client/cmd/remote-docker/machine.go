@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 
 	"github.com/spf13/cobra"
 
@@ -81,7 +80,15 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // The port and the account come from `remote`'s own flags, which is where they
 // already live, falling back to the same defaults the resolver uses so that a
 // machine and a hand-written workspace agree about what "unset" means.
-func (o *machineOptions) spec(name string) machine.Spec {
+//
+// A flag left unset falls back to what the machine was RECORDED as built from,
+// when there is a record. Without that a rebuild of a machine created with
+// `--cpus 4` builds one with the backend's default, whose generation then never
+// matches the record, so `status` reports it out of date forever. The rootfs
+// is taken from the record only for the same image: the record holds the path
+// the published image was fetched to, and a client on a new version must fetch
+// the new one rather than build the old image under the new name.
+func (o *machineOptions) spec(name string, recorded *config.Machine) machine.Spec {
 	account := overrides.User
 	if account == "" {
 		account = config.DefaultUser()
@@ -90,7 +97,7 @@ func (o *machineOptions) spec(name string) machine.Spec {
 	if port == 0 {
 		port = config.DefaultSSHPort
 	}
-	return machine.Spec{
+	spec := machine.Spec{
 		Name:    name,
 		Backend: o.backend,
 		// The image is what a machine IS (ADR 0026), and it is named here so it
@@ -104,6 +111,29 @@ func (o *machineOptions) spec(name string) machine.Spec {
 		MemoryMB: o.memoryMB,
 		Account:  account,
 	}
+	if recorded == nil {
+		return spec
+	}
+	if spec.CPUs == 0 {
+		spec.CPUs = recorded.CPUs
+	}
+	if spec.MemoryMB == 0 {
+		spec.MemoryMB = recorded.MemoryMB
+	}
+	if spec.Rootfs == "" && recorded.Image == spec.Image {
+		spec.Rootfs = recorded.Rootfs
+	}
+	return spec
+}
+
+// recordedMachine is what the config says a workspace's machine was built
+// from, or nil when it names none.
+func recordedMachine(name string) *config.Machine {
+	file, err := config.Load("")
+	if err != nil {
+		return nil
+	}
+	return file.Workspaces[name].Machine
 }
 
 func newMachineCreateCommand() *cobra.Command {
@@ -121,7 +151,7 @@ rather than acting on it, because recreating discards what is inside and that
 is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0]), false)
+			return createMachine(cmd, args[0], opts.spec(args[0], recordedMachine(args[0])), false)
 		},
 	}
 	opts.install(cmd)
@@ -144,7 +174,7 @@ Images, containers and volumes INSIDE the machine are lost. Your files are not:
 they are on this machine and are served to it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0]), true)
+			return createMachine(cmd, args[0], opts.spec(args[0], recordedMachine(args[0])), true)
 		},
 	}
 	opts.install(cmd)
@@ -154,57 +184,47 @@ they are on this machine and are served to it.`,
 // stopSessionFor shuts down the background session for a workspace, if one is
 // serving.
 //
-// Best effort by design: this runs before stopping a machine, and every way it
-// can fail -- no config, nothing listening, a session that will not answer --
-// means the same thing to the caller, which is that there is nothing to shut
-// down first. A machine that would not stop is what the caller is told about,
-// and that error comes from the stop itself.
+// Best effort by design: this runs before stopping a machine, and a session
+// that cannot be stopped is not a reason to leave the machine running. But
+// every failure is reported, because a session that survived stop and start
+// is otherwise invisible: the next docker command finds the endpoint
+// reachable, uses it, and gets EOF from a session serving over a dead
+// connection.
 func stopSessionFor(cmd *cobra.Command, name string) {
-	// Every failure below is reported, not swallowed. Best effort meant silent,
-	// and silent meant three CI rounds spent asking whether this ran at all --
-	// while the answer, that a session survived both stop and start, was
-	// visible only in an unrelated status command.
 	warn := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
 	}
 
-	cfg, err := config.Resolve(overrides, name)
+	endpoint, err := sessionEndpointFor(name)
 	if err != nil {
 		warn("cannot tell which endpoint %q uses, so a session may still be serving it: %v", name, err)
 		return
 	}
-	// Asked unconditionally rather than after a Reachable check. A session
-	// that is starting up holds the endpoint before it answers questions about
-	// itself, so a check can say "nothing there" about a process that is very
-	// much there -- and then the machine is stopped underneath it.
-	endpoint := endpointOf(cfg)
-
-	// Asked for first, because after the shutdown there is nothing left to ask.
-	var st proxy.Status
-	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
-		st.PID = proxy.Owner(endpoint)
-	}
-
-	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
-		// Nothing serving is the ordinary case and not worth a line; anything
-		// else means a session is about to lose its machine underneath it.
-		if proxy.Reachable(endpoint) {
-			warn("a session is serving %s and would not stop: %v", endpoint, err)
-		}
+	// Nothing serving is the ordinary case and not worth a line. A session
+	// still starting has bound the endpoint before it answers for itself, so
+	// reachable is the question and answering is not.
+	if !proxy.Reachable(endpoint) {
 		return
 	}
-	_ = waitForEndpoint(endpoint, false, stopTimeout)
-
-	// And then for the PROCESS, which is the part that matters here. The
-	// endpoint going quiet is the START of the teardown: only afterwards does
-	// the session drop its SSH connection, its reverse tunnel and its NFS
-	// export. An account has exactly ONE reverse-tunnel port (ADR 0003) and a
-	// session fails hard when it cannot take it -- so returning at the listener
-	// let the next session start against a port the workspace had not released,
-	// which killed its NFS server ("the nfs server stopped err=EOF") and took
-	// the session down with it. What the user saw was EOF on a local pipe.
-	_ = waitForExit(st.PID, stopTimeout)
+	if err := stopSession(endpoint); err != nil {
+		warn("a session is serving %s and would not stop: %v", endpoint, err)
+		return
+	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
+}
+
+// sessionEndpointFor is where the session for a NAMED workspace serves.
+//
+// The name selects the workspace and is never the config path: Resolve's
+// second argument is a file, and a name passed there resolves the DEFAULT
+// workspace's endpoint, so `machine stop dev` would shut down whichever
+// session happened to be the default.
+func sessionEndpointFor(name string) (string, error) {
+	cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+	if err != nil {
+		return "", err
+	}
+	return endpointOf(cfg), nil
 }
 
 // unproven names the backends that have never been executed.
@@ -486,7 +506,7 @@ func newMachineStatusCommand() *cobra.Command {
 
 // reportGeneration says whether the machine matches the settings it would be
 // built from now, which is the question `status` is really asked.
-func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
+func reportGeneration(out io.Writer, m *config.Machine, observed machine.Observed) {
 	switch observed.Generation {
 	case "":
 		row(out, "settings", "cannot be read from the machine")
@@ -497,10 +517,6 @@ func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
 			ourCommand("machine rebuild "+m.Name))
 	}
 }
-
-// mObserved is machine.Observed, aliased so the signature above reads without
-// a package qualifier in every line.
-type mObserved = machine.Observed
 
 // withMachine looks up a workspace's machine and hands it to fn.
 func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, config.Workspace) error) error {

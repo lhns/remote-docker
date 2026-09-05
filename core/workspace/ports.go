@@ -88,11 +88,11 @@ func (r RequestedPorts) String() string {
 	return strings.Join(parts, ",")
 }
 
-// MaxRequestedPorts bounds how many local listeners one label can ask for. The
+// maxRequestedPorts bounds how many local listeners one label can ask for. The
 // label is read off a container and with one daemon for everybody anybody
 // enrolled can write one, so it is somebody else's number of sockets. Past any
 // published range; see flow 5 of docs/threat-model.md.
-const MaxRequestedPorts = 1024
+const maxRequestedPorts = 1024
 
 // ParseRequestedPorts reads the label back.
 //
@@ -100,7 +100,7 @@ const MaxRequestedPorts = 1024
 // read while deciding which local port to open, and one malformed entry must
 // not cost a container every forward it has. A label written by a newer client
 // with a form this one does not know reads as the entries it does know. Ports
-// past MaxRequestedPorts are dropped the same way.
+// past maxRequestedPorts are dropped the same way.
 func ParseRequestedPorts(label string) RequestedPorts {
 	out := RequestedPorts{}
 	count := 0
@@ -116,7 +116,7 @@ func ParseRequestedPorts(label string) RequestedPorts {
 		key = strings.TrimSpace(key)
 
 		for _, number := range strings.Split(value, ";") {
-			if count >= MaxRequestedPorts {
+			if count >= maxRequestedPorts {
 				break
 			}
 			port, err := strconv.Atoi(strings.TrimSpace(number))

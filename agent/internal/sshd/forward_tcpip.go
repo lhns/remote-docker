@@ -142,11 +142,7 @@ func (p localPolicy) Dial(ctx gssh.Context, dest string) (net.Conn, error) {
 	if !ok {
 		return nil, errNoAccount
 	}
-	return p.s.dialFor(ctx, account, dest)
-}
-
-func (s *Server) dialFor(ctx context.Context, account sessionAccount, dest string) (net.Conn, error) {
-	return s.dialForNetwork(ctx, account, "tcp", dest)
+	return p.s.dialForNetwork(ctx, account, "tcp", dest)
 }
 
 // DialUDP is Dial for datagrams, which reach a published UDP port (ADR 0038).

@@ -4,14 +4,10 @@
 // There is no Go Docker client here on purpose: adding one to ask "what is
 // this volume's mountpoint" or "what is this container's pid" would be a large
 // dependency for a `--format` string, and the image already carries the CLI.
-// That trade is recorded in agent/internal/elevate, which made it first.
 //
-// This package exists because four callers then made it separately, and each
-// re-decided the same four things: which binary, how to name the daemon, how
-// to trim the output, and how to wrap the error. Two of them spelled the host
-// flag differently (`--host` in one, `-H` in another) and the fourth
-// hardcoded the binary with no seam at all, which is why the agent's version
-// lookup could not be tested.
+// One place decides which binary, how to name the daemon, how to trim the
+// output and how to wrap the error: spelled per caller, the host flag was
+// `--host` in one and `-H` in another.
 package dockercli
 
 import (
@@ -31,12 +27,16 @@ type CLI struct {
 	Host string
 }
 
-// binary is not configurable, and that is a deliberate narrowing.
-//
-// Three separate "empty means docker on PATH" fields existed across the agent
-// and no caller ever set any of them, so each was a knob that only ever had
-// one setting, while making every call site carry a branch to honour it.
+// binary is not configurable: no caller ever set it to anything else, and a
+// knob with one setting costs every call site a branch.
 const binary = "docker"
+
+// ServerVersionArgs asks a daemon for its version, which is the one request
+// that says a daemon ANSWERS: a socket file alone is what a daemon that died
+// during startup leaves behind.
+func ServerVersionArgs() []string {
+	return []string{"version", "--format", "{{.Server.Version}}"}
+}
 
 // Cmd builds a command against this daemon, for callers that need to own the
 // process: streaming its output, forwarding signals to it.

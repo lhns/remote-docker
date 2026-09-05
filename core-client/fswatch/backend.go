@@ -1,6 +1,7 @@
 package fswatch
 
 import (
+	"errors"
 	"runtime"
 
 	"github.com/fsnotify/fsnotify"
@@ -39,7 +40,7 @@ func (b *fsnotifyBackend) Add(path string) error { return b.w.Add(path) }
 // the ordinary case, not an error.
 func (b *fsnotifyBackend) Remove(path string) error {
 	err := b.w.Remove(path)
-	if err != nil && errorsIsNonExistentWatch(err) {
+	if errors.Is(err, fsnotify.ErrNonExistentWatch) {
 		return nil
 	}
 	return err
@@ -48,10 +49,6 @@ func (b *fsnotifyBackend) Remove(path string) error {
 func (b *fsnotifyBackend) Events() <-chan fsnotify.Event { return b.w.Events }
 func (b *fsnotifyBackend) Errors() <-chan error          { return b.w.Errors }
 func (b *fsnotifyBackend) Close() error                  { return b.w.Close() }
-
-func errorsIsNonExistentWatch(err error) bool {
-	return err == fsnotify.ErrNonExistentWatch
-}
 
 // DefaultBudget caps how many directories are watched at once.
 //
@@ -95,6 +92,17 @@ func DefaultBudget() int {
 // engine with nested files and negations, it means nothing outside a git
 // checkout, and dist/ is both commonly ignored and commonly the thing being
 // served.
+// ExcludesOr is the list a watcher actually applies: DefaultExcludes for nil,
+// and an explicit list as it stands, an empty one included. The cache and the
+// watcher both resolve through it so the two never disagree about what is
+// excluded.
+func ExcludesOr(list []string) []string {
+	if list == nil {
+		return DefaultExcludes
+	}
+	return list
+}
+
 var DefaultExcludes = []string{
 	".git",
 	"node_modules",

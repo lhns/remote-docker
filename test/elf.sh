@@ -30,14 +30,11 @@ if [ ! -f "$BIN" ]; then
     exit 2
 fi
 
-PASS=0
-FAIL=0
-ok()  { PASS=$((PASS + 1)); echo "  PASS  $*"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
+# For the counters and the summary. Nothing else in it is called.
+# shellcheck source=test/lib.sh
+. "$(dirname "$0")/lib.sh"
 
-# Captured once and matched here, rather than piped into grep -q: grep exits at
-# the first match and the writer gets EPIPE, which under `set -o pipefail` can
-# fail an assertion BECAUSE it matched.
+# Captured once and matched here, never `cmd | grep -q` (why: lib.sh).
 headers=$(readelf -lWh "$BIN")
 dynamic=$(readelf -dW "$BIN" 2>/dev/null || true)
 
@@ -108,5 +105,4 @@ linux)
     ;;
 esac
 
-echo "  passed: $PASS   failed: $FAIL"
-[ "$FAIL" -eq 0 ]
+summary

@@ -4,48 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 )
-
-func TestSplitArgs(t *testing.T) {
-	tests := []struct {
-		in   string
-		want []string
-	}{
-		{"", nil},
-		{"   ", nil},
-		{"--storage-driver=fuse-overlayfs", []string{"--storage-driver=fuse-overlayfs"}},
-		{"--debug --storage-driver=vfs", []string{"--debug", "--storage-driver=vfs"}},
-		{"  --debug   --iptables=false  ", []string{"--debug", "--iptables=false"}},
-	}
-	for _, tt := range tests {
-		if got := SplitArgs(tt.in); !slices.Equal(got, tt.want) {
-			t.Errorf("SplitArgs(%q) = %v, want %v", tt.in, got, tt.want)
-		}
-	}
-}
-
-// Readiness is the socket's presence, which is what the shell entrypoint
-// waited on too, and getting it wrong means the first `docker ps` after a
-// login fails for no reason the user can act on.
-func TestReady(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "docker.sock")
-	d := &Dockerd{Socket: socket}
-
-	if d.Ready() {
-		t.Error("reported ready with no socket present")
-	}
-
-	if err := os.WriteFile(socket, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !d.Ready() {
-		t.Error("reported not ready with the socket present")
-	}
-}
 
 func TestWaitReady(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "docker.sock")
@@ -109,20 +71,17 @@ func TestDefaults(t *testing.T) {
 	d := &Dockerd{}
 	d.applyDefaults()
 
-	if d.Command != DefaultCommand {
-		t.Errorf("Command = %q, want %q", d.Command, DefaultCommand)
-	}
 	if d.Socket != DefaultSocket {
 		t.Errorf("Socket = %q, want %q", d.Socket, DefaultSocket)
 	}
-	if d.StartTimeout == 0 || d.RestartDelay == 0 {
-		t.Error("timeouts were left at zero, which would spin or never wait")
+	if d.StartTimeout == 0 {
+		t.Error("the start timeout was left at zero, which would never wait")
 	}
 
 	// Explicit values are not overwritten.
-	custom := &Dockerd{Command: "mine", Socket: "/tmp/x.sock", StartTimeout: time.Second, RestartDelay: time.Second}
+	custom := &Dockerd{Socket: "/tmp/x.sock", StartTimeout: time.Second}
 	custom.applyDefaults()
-	if custom.Command != "mine" || custom.Socket != "/tmp/x.sock" {
+	if custom.Socket != "/tmp/x.sock" || custom.StartTimeout != time.Second {
 		t.Errorf("defaults overwrote explicit values: %+v", custom)
 	}
 }

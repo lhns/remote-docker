@@ -255,6 +255,15 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		registry: nfsserve.NewRegistry(defaultAttrs()),
 	}
 
+	// One list for the cache and the watcher. The cache walks what the
+	// watcher invalidates, so a directory the watcher does not see is one the
+	// cache would fill and then serve stale for good; fswatch substitutes its
+	// defaults for nil, and the cache is handed that same substitution.
+	exclude := opts.WatchExclude
+	if exclude == nil {
+		exclude = fswatch.DefaultExcludes
+	}
+
 	// Only a session that serves may restore a share. A query session exports
 	// nothing, and giving it the record would let asking a question re-export
 	// a directory.
@@ -268,7 +277,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		s.cache = &dircache.Cache{
 			Store:   s.liveStore,
 			Record:  newCachedStore(config.CachedPath(opts.Config.Name), opts.Log),
-			Exclude: opts.WatchExclude,
+			Exclude: exclude,
 			Budget:  dircache.Budget{Files: opts.Config.CacheFiles, Bytes: opts.Config.CacheBytes},
 			Skew:    s.skew,
 			Log:     opts.Log,
@@ -291,7 +300,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		watcher, err := fswatch.New(fswatch.Options{
 			Mode:    opts.Watch,
 			Budget:  opts.WatchBudget,
-			Exclude: opts.WatchExclude,
+			Exclude: exclude,
 			Log:     opts.Log,
 		})
 		if err != nil {
@@ -376,7 +385,7 @@ func (s *Session) DialDocker(ctx context.Context) (io.ReadWriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	stream, err := live.ssh.OpenStream(proxy.DialStdioCommand)
+	stream, err := live.ssh.OpenStream(workspace.DialStdioCommand)
 	if err != nil {
 		done()
 		return nil, err

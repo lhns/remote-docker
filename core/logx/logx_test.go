@@ -58,14 +58,16 @@ func TestAttributesFollowTheMessage(t *testing.T) {
 	}
 }
 
-// Discard is what replaced eleven nil checks, so it must genuinely write
-// nothing rather than merely not crashing.
-func TestDiscardWritesNothing(t *testing.T) {
-	log := Discard()
-	log.Info("this must not appear", "anywhere", true)
-	log.Error("nor this")
-	// Reaching here without a panic is most of the claim; the rest is that
-	// nothing has anywhere to go, which slog.DiscardHandler guarantees.
+// Or is what stands in for a nil logger, so a nil must write nothing and a real
+// one must keep writing.
+func TestOrWritesOnlyThroughARealLogger(t *testing.T) {
+	var out bytes.Buffer
+	Or(nil).Info("this must not appear", "anywhere", true)
+	Or(slog.New(New(&out, "", false))).Info("this must")
+
+	if got, want := out.String(), "this must\n"; got != want {
+		t.Errorf("rendered %q, want %q", got, want)
+	}
 }
 
 // Every level renders the same way, because filtering is not this handler's

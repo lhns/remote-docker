@@ -2,30 +2,19 @@ package proxy
 
 import (
 	"context"
-	"github.com/lhns/remote-docker/core/workspace"
 	"io"
 
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
+	"github.com/lhns/remote-docker/core/workspace"
 )
-
-// DialStdioCommand reaches the workspace daemon's socket through its own CLI.
-//
-// `docker system dial-stdio` connects stdin/stdout to /var/run/docker.sock,
-// which is exactly what an SSH exec channel provides. It is also what
-// DOCKER_HOST=ssh:// uses, so it needs nothing installed and no sshd
-// configuration, because the dind image already ships the CLI.
-//
-// The Go workspace agent will eventually offer a direct channel to the socket
-// with no CLI in the path (ADR 0010). Using dial-stdio is what lets the client
-// be built and proven against stock sshd first.
-const DialStdioCommand = workspace.DialStdioCommand
 
 // SSHDialer opens Docker connections over an SSH client.
 type SSHDialer struct {
 	Client *tunnelclient.Client
 }
 
-// DialDocker opens one stream to the workspace daemon.
+// DialDocker opens one stream to the workspace daemon, through the command
+// both ends agree on (ADR 0010 has why it is a command).
 func (d *SSHDialer) DialDocker(context.Context) (io.ReadWriteCloser, error) {
-	return d.Client.OpenStream(DialStdioCommand)
+	return d.Client.OpenStream(workspace.DialStdioCommand)
 }

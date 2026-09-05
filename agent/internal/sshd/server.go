@@ -1,9 +1,6 @@
-// Package sshd is the workspace's SSH server.
-//
-// It replaces OpenSSH in the workspace image, along with the sudoers file and
-// the mount helpers that existed only to work around being a shell (ADR 0010).
-// Authentication, port ownership and the workspace's own RPCs all happen in
-// this process, so policy is code rather than generated configuration.
+// Package sshd is the workspace's SSH server. Authentication, port ownership
+// and the workspace's own RPCs all happen in this process, so policy is code
+// rather than generated configuration (ADR 0010).
 package sshd
 
 import (
@@ -267,10 +264,6 @@ func (s *Server) Close() error {
 	s.closed = true
 	return s.ssh.Close()
 }
-
-// Addr reports the address actually bound, which matters when the configured
-// port is 0.
-func (s *Server) Addr() string { return s.cfg.Addr }
 
 func isClosed(err error) bool {
 	return err == gssh.ErrServerClosed || err == net.ErrClosed

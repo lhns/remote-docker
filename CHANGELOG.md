@@ -49,6 +49,16 @@ table is in ADR 0045.
   in a share now reports mode 0666 and every directory 0777, owned by the
   workspace account as before, and the union's upper is created 0777
   (ADR 0046).
+### Fixed on the way through a cleanup
+
+- `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's
+  session, whichever machine was named.
+- `remote machine rebuild` and `status` ignored the CPU count, memory and
+  rootfs a machine was created with; unset flags now take the recorded ones.
+- With no `watchExclude` set, prefetch walked `.git` and `node_modules`,
+  which the watcher never invalidates; the cache now takes the watcher's
+  default list.
+
 ### Upgrading
 
 - Docker's own words still work, as aliases: `consistent` and `default` are

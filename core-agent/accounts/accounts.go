@@ -1,14 +1,10 @@
 // Package accounts provisions one workspace account per enrolled public key.
 //
-// It replaces the key-watcher shell script. The model is unchanged, because it
-// is a good one and deployments depend on it: a file named alice.pub becomes
-// the unix account "alice", uids are allocated once and persisted so an
-// account keeps the same uid, and therefore the same reverse-tunnel port and
-// the same file ownership, across container recreations.
-//
-// What changes is that authentication happens in this process rather than
-// through authorized_keys files, so port ownership can be enforced by a
-// comparison rather than by a generated option string. See docs/adr/0010.
+// A file named alice.pub becomes the account "alice"; uids are allocated once
+// and persisted, so an account keeps the same uid, and therefore the same
+// reverse-tunnel port and the same file ownership, across container
+// recreations. Authentication happens in this process, so port ownership is a
+// comparison rather than a generated authorized_keys option (ADR 0010).
 package accounts
 
 import (
@@ -309,33 +305,19 @@ func nextUID(uids map[string]int, base int) int {
 
 func (s *Store) loadUIDs() (map[string]int, error) {
 	uids := map[string]int{}
-
-	f, err := os.Open(s.uidmapPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return uids, nil
-		}
-		return nil, fmt.Errorf("accounts: reading uidmap: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	err := ReadRecord(s.uidmapPath(), func(line string) {
 		name, value, ok := strings.Cut(line, ":")
 		if !ok {
-			continue
+			return
 		}
-		uid, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			continue
+		if uid, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			uids[strings.TrimSpace(name)] = uid
 		}
-		uids[strings.TrimSpace(name)] = uid
+	})
+	if err != nil {
+		return nil, fmt.Errorf("accounts: reading uidmap: %w", err)
 	}
-	return uids, scanner.Err()
+	return uids, nil
 }
 
 func (s *Store) saveUIDs(uids map[string]int) error {
@@ -343,26 +325,12 @@ func (s *Store) saveUIDs(uids map[string]int) error {
 		return fmt.Errorf("accounts: creating state directory: %w", err)
 	}
 
-	names := make([]string, 0, len(uids))
-	for name := range uids {
-		names = append(names, name)
+	lines := make([]string, 0, len(uids))
+	for _, name := range slices.Sorted(maps.Keys(uids)) {
+		lines = append(lines, fmt.Sprintf("%s:%d", name, uids[name]))
 	}
-	sort.Strings(names)
-
-	var b strings.Builder
-	for _, name := range names {
-		fmt.Fprintf(&b, "%s:%d\n", name, uids[name])
-	}
-
-	// Written via a temporary file: a truncated uidmap would reallocate uids
-	// on the next start, changing every account's port and orphaning the
-	// ownership of everything already on disk.
-	tmp := s.uidmapPath() + ".tmp"
-	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
+	if err := WriteRecord(s.uidmapPath(), lines, 0o644); err != nil {
 		return fmt.Errorf("accounts: writing uidmap: %w", err)
-	}
-	if err := os.Rename(tmp, s.uidmapPath()); err != nil {
-		return fmt.Errorf("accounts: replacing uidmap: %w", err)
 	}
 	return nil
 }

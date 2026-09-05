@@ -30,16 +30,7 @@ DOCKER_TIMEOUT=180
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-cleanup() {
-    echo
-    echo "== cleanup =="
-    for pid in ${CLIENT_A_PID:-} ${CLIENT_B_PID:-}; do
-        kill "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
-    done
-    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    rm -rf "$WORK"
-}
+cleanup() { cleanup_suite "${CLIENT_A_PID:-}" "${CLIENT_B_PID:-}"; }
 trap cleanup EXIT
 
 echo "== 1. build =="
@@ -135,23 +126,11 @@ mkdir -p "$WORK/project-$A" "$WORK/project-$B"
 echo "alice's file" >"$WORK/project-$A/marker"
 echo "bob's file"   >"$WORK/project-$B/marker"
 
-# Watching is on because a read=cached share requires it: its cache holds actual
-# copies, and the watcher is what keeps them honest (ADR 0044). Section 7b would
-# otherwise be refused on a rule rather than tested on its mechanism.
-start_session() {
+# One session per account, on lib.sh's start_session with a short idle timeout.
+session() {
     local account=$1 endpoint=$2 log=$3 dir=$4
-    (
-        cd "$dir" || exit 1
-        REMOTE_DOCKER_STATE_DIR="$WORK/state-$account" \
-        REMOTE_DOCKER_HOST=127.0.0.1 \
-        REMOTE_DOCKER_PORT=$SSH_PORT \
-        REMOTE_DOCKER_USER="$account" \
-        REMOTE_DOCKER_ENDPOINT="$endpoint" \
-        REMOTE_DOCKER_IDLE_TIMEOUT=8s \
-        REMOTE_DOCKER_WATCH=partial \
-        "$WORK/remote-docker" remote start --foreground
-    ) >"$log" 2>&1 &
-    echo $!
+    start_session "$WORK/state-$account" "$account" "$endpoint" "$log" "$dir" \
+        REMOTE_DOCKER_IDLE_TIMEOUT=8s
 }
 
 # Each account's CURRENT endpoint, tracked rather than written out at each use.
@@ -163,8 +142,8 @@ start_session() {
 A_SOCK="$WORK/a.sock"
 B_SOCK="$WORK/b.sock"
 
-CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a.log" "$WORK/project-$A")
-CLIENT_B_PID=$(start_session "$B" "$B_SOCK" "$WORK/b.log" "$WORK/project-$B")
+CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a.log" "$WORK/project-$A")
+CLIENT_B_PID=$(session "$B" "$B_SOCK" "$WORK/b.log" "$WORK/project-$B")
 
 # A cold dind has to be pulled and booted, which is the slowest thing here.
 #
@@ -181,8 +160,8 @@ else
     exit 1
 fi
 
-da() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$A_SOCK" "$@"; }
-db() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$B_SOCK" "$@"; }
+da() { dockerat "$A_SOCK" "$@"; }
+db() { dockerat "$B_SOCK" "$@"; }
 
 # Pulled per account, because a daemon per account means a layer cache per
 # account -- which is the cost this design accepts, and it shows up here first:
@@ -523,7 +502,7 @@ else
 fi
 
 A_SOCK="$WORK/a2.sock"
-CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a2.log" "$WORK/project-$A")
+CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a2.log" "$WORK/project-$A")
 if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
     bad "alice's endpoint never came back after the restart"
     # The client's own log, which is where the reason is. Without it this
@@ -555,7 +534,8 @@ echo "== 11. the account's storage outlives its daemon container =="
 # labelled so the container in front of it is disposable. An upgrade removes
 # and recreates that container; if the storage were anonymous, every account's
 # work would go with it.
-if hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$A-lib"         --format '{{index .Labels "remote-docker.daemon"}}' 2>/dev/null | grep -qx 1; then
+if outputs '^1$' hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$A-lib" \
+        --format '{{index .Labels "remote-docker.daemon"}}'; then
     ok "the graph volume is labelled, so an operator can see what must not be pruned"
 else
     bad "the graph volume carries no label; a prune would take it with nothing naming it"
@@ -570,7 +550,7 @@ kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID
 hostdocker exec "$CONTAINER" docker rm -f "rd-dind-$A" >/dev/null 2>&1
 
 A_SOCK="$WORK/a3.sock"
-CLIENT_A_PID=$(start_session "$A" "$A_SOCK" "$WORK/a3.log" "$WORK/project-$A")
+CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a3.log" "$WORK/project-$A")
 wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || bad "alice's endpoint never came back after her daemon was destroyed"
 
 images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '

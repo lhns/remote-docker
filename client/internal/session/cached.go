@@ -12,23 +12,18 @@ package session
 
 import (
 	"encoding/json"
-	"errors"
 	"log/slog"
-	"os"
 	"sort"
 	"sync"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 )
 
-// cachedFile is bound to the machine and account that wrote it, exactly as the
-// share record is: a configuration directory is a thing people sync between
-// machines, and this one decides what to REMOVE from a cache.
+// cachedFile is the fill record on disk, bound to its writer exactly as the
+// share record is (boundRecord): this one decides what to REMOVE from a cache.
 type cachedFile struct {
-	Version int                 `json:"version"`
-	Machine string              `json:"machine"`
-	User    string              `json:"user"`
-	Shares  map[string][]string `json:"shares"` // export -> paths, share-relative
+	boundRecord
+	Shares map[string][]string `json:"shares"` // export -> paths, share-relative
 }
 
 const cachedFileVersion = 1
@@ -51,26 +46,10 @@ type cachedStore struct {
 func newCachedStore(path string, log *slog.Logger) *cachedStore {
 	s := &cachedStore{path: path, log: log, shares: map[string][]string{}}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) && log != nil {
-			log.Debug("no record of what a cache was filled with", "path", path, "err", err)
-		}
-		return s
-	}
-
 	var file cachedFile
-	if err := json.Unmarshal(data, &file); err != nil || file.Version != cachedFileVersion {
+	if !readBound(path, "what a cache was filled with", cachedFileVersion, log, &file) {
 		return s
 	}
-	if machine, account := thisMachine(); file.Machine != machine || file.User != account {
-		if log != nil {
-			log.Warn("ignoring a cache record written elsewhere",
-				"path", path, "wrote", file.Machine+"/"+file.User)
-		}
-		return s
-	}
-
 	for export, paths := range file.Shares {
 		s.shares[export] = paths
 	}
@@ -90,8 +69,7 @@ func (s *cachedStore) Record(export string, paths []string) {
 	s.mu.Lock()
 	sort.Strings(paths)
 	s.shares[export] = paths
-	file := cachedFile{Version: cachedFileVersion, Shares: map[string][]string{}}
-	file.Machine, file.User = thisMachine()
+	file := cachedFile{boundRecord: bindRecord(cachedFileVersion), Shares: map[string][]string{}}
 	for e, p := range s.shares {
 		file.Shares[e] = p
 	}

@@ -66,6 +66,15 @@ func takeMode(mount map[string]json.RawMessage) (workspace.Mode, error) {
 	return mode, nil
 }
 
+// The remedies named more than once, so two spellings cannot drift.
+const (
+	fixWatchOn = "\n  fix: set watch to partial or coarse for this workspace"
+
+	// FixUpdateWorkspace is the remedy for a workspace that cannot serve a
+	// union at all, shared with the session that opens the cache channel.
+	FixUpdateWorkspace = "\n  fix: update the workspace, or use write=through"
+)
+
 // modeFor is what a share gets when the mount named nothing on an axis: the
 // rule for the deepest configured path containing it, and the workspace
 // default otherwise.
@@ -105,7 +114,7 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 		if r.Cache == nil {
 			return workspace.ModeUnset, fmt.Errorf(
 				"rewrite: %s asks for write=%s, which needs a session that can reach the workspace's cache\n"+
-					"\tfix: use write=%s, which is served by the mount itself",
+					"  fix: use write=%s, which is served by the mount itself",
 				source, got.Write, workspace.WriteThrough)
 		}
 		if !r.Watching {
@@ -114,8 +123,7 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 			// COPY of a file that changed here is stale until something
 			// removes it, and the watcher is what removes it (ADR 0044).
 			return workspace.ModeUnset, fmt.Errorf(
-				"rewrite: %s asks for write=%s, whose cache is kept honest by the watcher, and watching is off\n"+
-					"\tfix: set watch to partial or coarse for this workspace",
+				"rewrite: %s asks for write=%s, whose cache is kept honest by the watcher, and watching is off"+fixWatchOn,
 				source, got.Write)
 		}
 		if err := unionAvailable(r.UnionReady); err != nil {
@@ -125,8 +133,7 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 	}
 	if got.Read == workspace.ReadCached && !r.Watching {
 		return workspace.ModeUnset, fmt.Errorf(
-			"rewrite: %s asks for read=%s, which needs the watcher to stay coherent, and watching is off\n"+
-				"\tfix: set watch to partial or coarse for this workspace",
+			"rewrite: %s asks for read=%s, which needs the watcher to stay coherent, and watching is off"+fixWatchOn,
 			source, got.Read)
 	}
 
@@ -152,13 +159,12 @@ func unionAvailable(reported string) error {
 		return nil
 	case workspace.UnionNoBinary:
 		return fmt.Errorf("the daemon serving it has no %s\n"+
-			"\tfix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE",
+			"  fix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE",
 			"fuse-overlayfs")
 	case workspace.UnionNoDevice:
 		return fmt.Errorf("the daemon serving it has no /dev/fuse\n" +
-			"\tfix: load the fuse module on the host, and run the daemon with the device")
+			"  fix: load the fuse module on the host, and run the daemon with the device")
 	default:
-		return fmt.Errorf("this workspace does not serve it\n" +
-			"\tfix: update the workspace, or use write=through")
+		return fmt.Errorf("this workspace does not serve it" + FixUpdateWorkspace)
 	}
 }

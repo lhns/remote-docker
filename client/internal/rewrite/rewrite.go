@@ -162,7 +162,8 @@ type Rewriter struct {
 	// which is what lets kind mount /lib/modules.
 	DaemonPaths []string
 
-	// LocalExists reports whether a path is on THIS machine. Nil means os.Stat.
+	// LocalExists reports whether a path is on THIS machine. Nil means
+	// os.Stat; it is the seam a test sets.
 	LocalExists func(path string) bool
 
 	// PosixSource reports the POSIX path a shell may have rewritten a bind
@@ -192,6 +193,10 @@ func (r *Rewriter) ownedByDaemon(source string) bool {
 }
 
 // declared reports whether the workspace named this path, or one above it.
+//
+// Not workspace.CanonicalKey, which follows THIS host's rules: the declared
+// paths are the workspace's, always POSIX and case-sensitive, and the source
+// may be in either spelling on either host.
 func (r *Rewriter) declared(source string) bool {
 	if source == "" {
 		return false
@@ -603,7 +608,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace
 
 // fixMountTheDirectory is the remedy for every way a single file can be
 // refused, so the wording lives in one place.
-const fixMountTheDirectory = "\n\tfix: mount the directory containing it instead"
+const fixMountTheDirectory = "\n  fix: mount the directory containing it instead"
 
 // minSubpathMajor is the first Docker release carrying VolumeOptions.Subpath,
 // which is API v1.45. Without it a single-file bind cannot be expressed at all

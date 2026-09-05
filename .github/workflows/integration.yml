@@ -10,18 +10,8 @@ on:
 permissions:
   contents: read
 
-# Every commit gets its own run, and nothing is ever cancelled by a later push.
-#
-# This used to cancel an in-flight run when a branch was pushed again, on the
-# reasoning that the older run tests code nobody will merge. What that costs is
-# the answer you were actually waiting for: a push that fixes one suite kills
-# the run that was still telling you about another, and a cancelled job's
-# conclusion is not "success", so it reads as a failure in anything scanning
-# results.
-#
-# The group is per SHA rather than per ref, which keeps the one thing
-# cancellation was really for -- the same commit triggered twice does not run
-# twice -- without a new commit destroying an old commit's answer.
+# Never cancelled by a newer run, and each commit is its own group: a later
+# push must not destroy an earlier commit's answer (why: ci.yml).
 concurrency:
   group: integration-${{ github.sha }}
   cancel-in-progress: false
@@ -157,24 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          # THE REPO ROOT IS NOT A MODULE (ADR 0021), and setup-go's default
-          # cache key looks for a go.mod there. Without this it reports
-          # "Dependencies file is not found" and restores nothing, so every job
-          # in every workflow re-downloads the whole graph: 250 modules in `test`
-          # alone, measured 2026-09-01. It also made two jobs fail outright that
-          # day, when proxy.golang.org was returning stream errors for downloads
-          # a cache hit would never have made.
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       - name: load the nfs and fuse modules
         run: sudo modprobe nfs && sudo modprobe fuse
@@ -182,179 +155,70 @@ jobs:
       - name: probe
         run: bash test/union-probe.sh
 
-  # The whole thing, together: a real workspace container, the real client
-  # binary, and a real kernel NFS mount inside the dind daemon.
-  end-to-end:
-    name: end to end
-    runs-on: ubuntu-latest
-    needs: nfs-capability
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
-
-      - name: load the nfs and fuse modules
-        run: sudo modprobe nfs && sudo modprobe fuse
-
-      - name: run the suite
-        run: bash test/integration.sh
-
-      - name: workspace logs on failure
-        if: failure()
-        run: docker logs remote-docker-itest 2>&1 | tail -100 || true
-
-  # The agent on the runner itself, with no container around it (ADR 0025).
+  # The suites, one job each, all on the same runner recipe. The names are
+  # what the checks are known by and stay as they were; the matrix is only
+  # what runs and how long it may take.
   #
-  # The runner IS the machine, which is what makes the VM deployment testable
-  # when macOS and Android are not. It needs an NFS client of its own for the
-  # shared-daemon half -- the per-account half mounts inside docker:dind, which
-  # ships one -- so nfs-common is installed here and nowhere else.
-  vm:
-    name: the agent on a machine
+  #   integration     the whole thing together: a real workspace container,
+  #                   the real client binary, a real kernel NFS mount.
+  #   vm              the agent on the runner itself, with no container around
+  #                   it (ADR 0025). The only suite that needs an NFS client
+  #                   and fuse-overlayfs on the runner: everywhere else the
+  #                   mount happens inside a container that carries its own.
+  #   per-user-dind   a daemon per account (ADR 0019), with two accounts. Its
+  #                   own suite because the two modes need differently
+  #                   configured workspaces, and integration.sh passing
+  #                   UNCHANGED is the evidence the shared mode still works.
+  #   two-clients     one account from TWO machines at once (ADR 0029): two
+  #                   state directories, two keys, sessions held at the same
+  #                   time rather than one after the other.
+  #   nfs-resilience  what a mount does when the session drops. It reports
+  #                   what it measured whether it passes or fails, because the
+  #                   point is the numbers and a green tick hides them.
+  suite:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     needs: nfs-capability
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: integration
+            name: end to end
+            container: remote-docker-itest
+            timeout: 30
+          - suite: vm
+            name: the agent on a machine
+            timeout: 30
+          - suite: per-user-dind
+            name: a daemon per account
+            container: remote-docker-peruser
+            timeout: 40
+          - suite: two-clients
+            name: two machines, one account
+            container: remote-docker-twoclients
+            timeout: 40
+          - suite: nfs-resilience
+            name: what a mount does when the session drops
+            container: remote-docker-nfsres
+            timeout: 40
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       - name: load the nfs and fuse modules
         run: sudo modprobe nfs && sudo modprobe fuse
 
-      # Only this job needs it. In every other suite the mount happens inside a
-      # container that carries its own client.
       - name: install an NFS client and fuse-overlayfs on the runner
+        if: matrix.suite == 'vm'
         run: sudo apt-get update && sudo apt-get install -y nfs-common fuse-overlayfs
 
       - name: run the suite
-        run: bash test/vm.sh
+        run: bash test/${{ matrix.suite }}.sh
 
-  # A daemon per account (ADR 0019), with two accounts, which is the only way
-  # to test the claim at all.
-  #
-  # A separate job rather than more of the suite above: the two modes need
-  # differently configured workspaces, and integration.sh passing UNCHANGED is
-  # itself the evidence that the shared mode still works. One script with a
-  # flag would only ever prove whichever branch it took.
-  per-user-dind:
-    name: a daemon per account
-    runs-on: ubuntu-latest
-    needs: nfs-capability
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
-
-      - name: load the nfs and fuse modules
-        run: sudo modprobe nfs && sudo modprobe fuse
-
-      - name: run the suite
-        run: bash test/per-user-dind.sh
-
+      # vm.sh runs the agent on the runner and has no container to ask.
       - name: workspace logs on failure
-        if: failure()
-        run: docker logs remote-docker-peruser 2>&1 | tail -100 || true
-
-  # One account from TWO machines at once (ADR 0029), which is the only way to
-  # test the claim at all: the two clients need separate state directories and
-  # separate keys, and the thing being proven is that they hold sessions at the
-  # same time rather than one after the other.
-  two-clients:
-    name: two machines, one account
-    runs-on: ubuntu-latest
-    needs: nfs-capability
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
-
-      - name: load the nfs and fuse modules
-        run: sudo modprobe nfs && sudo modprobe fuse
-
-      - name: run the suite
-        run: bash test/two-clients.sh
-
-      - name: workspace logs on failure
-        if: failure()
-        run: docker logs remote-docker-twoclients 2>&1 | tail -100 || true
-
-  nfs-resilience:
-    name: what a mount does when the session drops
-    runs-on: ubuntu-latest
-    needs: nfs-capability
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
-
-      - name: load the nfs and fuse modules
-        run: sudo modprobe nfs && sudo modprobe fuse
-
-      # Reports what it measured whether it passes or fails: the point of this
-      # suite is the numbers, and a green tick hides them.
-      - name: run the suite
-        run: bash test/nfs-resilience.sh
-
-      - name: workspace logs on failure
-        if: failure()
-        run: docker logs remote-docker-nfsres 2>&1 | tail -100 || true
+        if: failure() && matrix.container
+        run: docker logs ${{ matrix.container }} 2>&1 | tail -100 || true

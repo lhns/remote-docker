@@ -216,6 +216,13 @@ func (f *Forwards) serve(conn *gossh.ServerConn, ln net.Listener, bindAddr strin
 // HandleChannel answers direct-tcpip, which is `ssh -L`. Register it as the
 // handler for that channel type.
 func (f *Forwards) HandleChannel(_ *gssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx gssh.Context) {
+	f.handleForward(newChan, ctx, f.Local.Dial, bridge)
+}
+
+// handleForward is the local forward for either protocol: the same payload and
+// the same AllowDial, then the protocol's dial and the protocol's bridge.
+func (f *Forwards) handleForward(newChan gossh.NewChannel, ctx gssh.Context,
+	dial func(gssh.Context, string) (net.Conn, error), bridge func(gossh.Channel, net.Conn)) {
 	var d tunnel.ForwardPayload
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		_ = newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
@@ -228,7 +235,7 @@ func (f *Forwards) HandleChannel(_ *gssh.Server, _ *gossh.ServerConn, newChan go
 	}
 
 	dest := net.JoinHostPort(d.DestAddr, strconv.FormatInt(int64(d.DestPort), 10))
-	conn, err := f.Local.Dial(ctx, dest)
+	conn, err := dial(ctx, dest)
 	if err != nil {
 		_ = newChan.Reject(gossh.ConnectionFailed, err.Error())
 		return

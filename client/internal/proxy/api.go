@@ -170,7 +170,6 @@ type Container struct {
 	ID    string `json:"Id"`
 	Names []string
 	Ports []struct {
-		IP          string
 		PrivatePort int
 		PublicPort  int
 		Type        string
@@ -211,12 +210,7 @@ func (c *APIClient) ListContainers(ctx context.Context) ([]Container, error) {
 
 // Event is the subset of a Docker event the port forwarder needs.
 type Event struct {
-	Type   string `json:"Type"`
 	Action string `json:"Action"`
-	Actor  struct {
-		ID         string            `json:"ID"`
-		Attributes map[string]string `json:"Attributes"`
-	} `json:"Actor"`
 }
 
 // Events streams container lifecycle events until ctx is cancelled or the

@@ -48,9 +48,7 @@
 #
 # TWO RULES FOR EDITING THIS FILE, both of which cost a day when broken:
 #
-#   Never `cmd | grep -q`. grep exits at the first match, the producer's next
-#   write gets EPIPE, and Go turns that into a fatal SIGPIPE -- so under
-#   pipefail the assertion fails BECAUSE it matched. Use `outputs`.
+#   Never `cmd | grep -q`; use `outputs` (why: test/lib.sh).
 #
 #   Never observe a mount with `docker exec` or any other docker command. Every
 #   one reaches the daemon through the client, which reopens the connection and
@@ -69,8 +67,7 @@ CONTAINER=remote-docker-nfsres
 SSH_PORT=22224
 ACCOUNT=nfsres
 
-DOCKER_TIMEOUT=120
-dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
+# The docker timeout is lib.sh's default, 120s.
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"

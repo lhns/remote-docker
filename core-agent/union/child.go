@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/lhns/remote-docker/core-agent/netns"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -38,11 +39,7 @@ const (
 	ModeUnmount = "unmount"
 )
 
-// Env encodes a spec for the child.
-func Env(spec Spec) []string {
-	return envFor(ModeServe, spec)
-}
-
+// envFor encodes a spec, and what to do with it, for the child.
 func envFor(mode string, spec Spec) []string {
 	return []string{
 		envMode + "=" + mode,
@@ -90,13 +87,8 @@ func FromEnv(getenv func(string) string) (Spec, string, error) {
 }
 
 // Root is the daemon's filesystem as the agent can read it, which is how the
-// agent inspects and writes into a mount it cannot enter, as Spec.PID gives it.
-func (s Spec) Root() string {
-	if s.PID == 0 {
-		return "/"
-	}
-	return fmt.Sprintf("/proc/%d/root", s.PID)
-}
+// agent inspects and writes into a mount it cannot enter. See netns.Root.
+func (s Spec) Root() string { return netns.Root(s.PID) }
 
 // errNotAMount is what a path that exists and is not a mount reports. Named
 // rather than an os error, because "no such file or directory" about a
@@ -112,8 +104,9 @@ var errNotAMount = errors.New("nothing is mounted there")
 // why it is not a stat, is on mountedAt. Read through /proc/<pid>/root, which
 // resolves in the daemon's namespace without entering it.
 //
-// A context because a wedged server answers nothing at all, and every caller
-// asking would otherwise wait with it.
+// A context because a wedged server answers nothing at all: mountedAt's Lstat
+// of the merged path blocks on the FUSE server behind it, so it runs on a
+// goroutine of its own and every caller asking does not wait with it.
 func Alive(ctx context.Context, spec Spec) error {
 	merged := path.Join(spec.Root(), spec.Merged())
 
@@ -168,11 +161,18 @@ func MountedShares(root string) []string {
 	return out
 }
 
+// Reexec is the agent run again as the child that does the work: self is the
+// agent's own binary, and mode is what the child is asked to do. The caller
+// decides what happens to its output and how long it is supervised.
+func Reexec(ctx context.Context, self, mode string, spec Spec) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, self, Command)
+	cmd.Env = append(os.Environ(), envFor(mode, spec)...)
+	return cmd
+}
+
 // Unmount takes a union down, through a child; see Release.
 func Unmount(ctx context.Context, self string, spec Spec) error {
-	cmd := exec.CommandContext(ctx, self, Command)
-	cmd.Env = append(os.Environ(), envFor(ModeUnmount, spec)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := Reexec(ctx, self, ModeUnmount, spec).CombinedOutput(); err != nil {
 		return fmt.Errorf("union: unmounting %s: %w: %s", spec.Export, err, out)
 	}
 	return nil

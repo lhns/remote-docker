@@ -39,7 +39,9 @@ const defaultName = "remote-docker"
 //
 // Never a literal "remote-docker ..." in a message. The file may be named
 // `docker`, which is the documented installation, and a fix line naming a
-// program the reader does not have is worse than no fix line.
+// program the reader does not have is worse than no fix line. The deliberate
+// exception is internal/machine, which cannot reach this and spells `remote
+// machine rebuild` literally.
 func ourCommand(command string) string {
 	return programName() + " remote " + command
 }

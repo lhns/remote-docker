@@ -7,11 +7,9 @@ import (
 	"testing"
 )
 
-// This is verbatim what image/bin/workspace-info prints today. The Go client
-// is built and proven against the existing sshd-based server before the Go
-// agent replaces it, so if this test ever needs changing, the agent has
-// stopped being a drop-in substitution and the sequencing is broken.
-const shellScriptOutput = `WORKSPACE_USER=alice
+// An older agent's reply, which must still parse: a client is upgraded
+// independently of the workspaces it reaches.
+const oldAgentOutput = `WORKSPACE_USER=alice
 WORKSPACE_UID=10000
 WORKSPACE_GID=10000
 WORKSPACE_NFS_PORT=30000
@@ -20,8 +18,8 @@ WORKSPACE_MOUNTED=false
 WORKSPACE_DOCKER=28.0.1
 `
 
-func TestParseInfoAcceptsShellScriptOutput(t *testing.T) {
-	got, err := ParseInfo(strings.NewReader(shellScriptOutput))
+func TestParseInfoAcceptsAnOlderAgentsReply(t *testing.T) {
+	got, err := ParseInfo(strings.NewReader(oldAgentOutput))
 	if err != nil {
 		t.Fatalf("ParseInfo: %v", err)
 	}
@@ -48,7 +46,7 @@ func TestParseInfoAcceptsShellScriptOutput(t *testing.T) {
 // the port the server derived from the uid. Asserting it against the shared
 // mapping is what stops the two sides drifting.
 func TestParsedPortAgreesWithMapping(t *testing.T) {
-	info, err := ParseInfo(strings.NewReader(shellScriptOutput))
+	info, err := ParseInfo(strings.NewReader(oldAgentOutput))
 	if err != nil {
 		t.Fatalf("ParseInfo: %v", err)
 	}
@@ -75,7 +73,7 @@ func TestParseInfoDockerUnavailable(t *testing.T) {
 // An older client must stay usable against a newer server, so an unrecognised
 // key is data to carry, not an error.
 func TestParseInfoKeepsUnknownKeys(t *testing.T) {
-	in := shellScriptOutput + "WORKSPACE_FUTURE_THING=42\n"
+	in := oldAgentOutput + "WORKSPACE_FUTURE_THING=42\n"
 	got, err := ParseInfo(strings.NewReader(in))
 	if err != nil {
 		t.Fatalf("ParseInfo: %v", err)
@@ -86,7 +84,7 @@ func TestParseInfoKeepsUnknownKeys(t *testing.T) {
 }
 
 func TestParseInfoIgnoresBlankAndComment(t *testing.T) {
-	in := "\n# a comment\n" + shellScriptOutput + "\n"
+	in := "\n# a comment\n" + oldAgentOutput + "\n"
 	if _, err := ParseInfo(strings.NewReader(in)); err != nil {
 		t.Fatalf("ParseInfo: %v", err)
 	}

@@ -1,9 +1,6 @@
-// Command remote-dockerd runs inside the workspace container.
-//
-// Today it does one job: elevate itself to a privileged container under Docker
-// Swarm, which cannot run privileged tasks. It will grow into the workspace
-// agent proper, replacing sshd, the key watcher and the mount helpers
-// (docs/adr/0010).
+// Command remote-dockerd is the workspace agent: it supervises dockerd,
+// provisions an account per enrolled key, serves the SSH tunnel and the
+// per-account daemons, and relaunches itself privileged under Swarm (ADR 0010).
 package main
 
 import (

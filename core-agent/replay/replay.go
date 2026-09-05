@@ -263,25 +263,26 @@ func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error
 func resolve(root, share string) (string, bool) {
 	rel := strings.TrimPrefix(path.Clean("/"+share), "/")
 	abs := filepath.Join(root, filepath.FromSlash(rel))
-	if !under(root, abs, string(filepath.Separator)) {
+	if !Under(root, abs, string(filepath.Separator)) {
 		return "", false
 	}
 	return abs, true
 }
 
-// under reports whether p is root itself or something inside it.
+// Under reports whether p is root itself or something inside it.
 //
-// The check both callers need, in one place, because it is the one that must
-// not be got wrong: JOINING IS NOT CONTAINMENT. path.Join and filepath.Join
-// both CLEAN, so joining "/proc/42/root" to "/../../etc/shadow" yields
-// "/proc/etc/shadow": outside the root, with no error, looking correct.
+// The one containment check, for every root process here that is told which
+// path to touch: JOINING IS NOT CONTAINMENT. path.Join and filepath.Join both
+// CLEAN, so joining "/proc/42/root" to "/../../etc/shadow" yields
+// "/proc/etc/shadow": outside the root, with no error, looking correct. So the
+// RESULT of a join is checked, never its input.
 //
-// The separator is a parameter because the two callers genuinely differ:
-// resolve works in the agent's own filesystem and uses filepath so its tests
-// mean something on the development machine, while relocate works on paths a
-// Linux daemon reported and uses path. The prefix must include the separator
-// or "/proc/42/rootkit" passes as being under "/proc/42/root".
-func under(root, p, sep string) bool {
+// The separator is a parameter because the callers differ: resolve works in the
+// agent's own filesystem and uses filepath so its tests mean something on the
+// development machine, while Relocate and the union writer work on paths a
+// Linux daemon reported and use path. The prefix must include the separator or
+// "/proc/42/rootkit" passes as being under "/proc/42/root".
+func Under(root, p, sep string) bool {
 	return p == root || strings.HasPrefix(p, root+sep)
 }
 

@@ -38,25 +38,19 @@ func Relocate(mp string, root func() (string, error)) (string, error) {
 	// true statement and a resolver is entitled to make it.
 	//
 	// Letting "/" fall through to the join below does not merely look wrong, it
-	// refuses everything: under("/", p, "/") asks whether p starts with "//",
+	// refuses everything: Under("/", p, "/") asks whether p starts with "//",
 	// which is never true, so every replay on a shared daemon reads as an
 	// escape attempt.
 	if prefix == "" || prefix == "/" {
 		return mp, nil
 	}
 
-	// Joining is not containment, and assuming it was is a mistake this very
-	// test caught: path.Join CLEANS, so joining "/proc/42/root" to
-	// "/../../etc/shadow" yields "/proc/etc/shadow", outside the root, with
-	// no error, having looked correct.
-	//
-	// That matters here and did not before. The mountpoint is whatever the
-	// account's daemon says it is, and in per-account mode the account is root
-	// inside that daemon's container: this is attacker-controlled input to a
-	// root process deciding which path to touch. So the result is checked
-	// rather than trusted.
+	// The mountpoint is whatever the account's daemon says it is, and in
+	// per-account mode the account is root inside that daemon's container:
+	// attacker-controlled input to a root process deciding which path to
+	// touch. Checked on the result, for the reason on Under.
 	joined := path.Join(prefix, mp)
-	if !under(prefix, joined, "/") {
+	if !Under(prefix, joined, "/") {
 		return "", fmt.Errorf(
 			"notify: the daemon reported a mountpoint that leaves its own filesystem (%q)", mp)
 	}

@@ -168,9 +168,7 @@ func New(opts Options) (*Watcher, error) {
 	if opts.Budget <= 0 {
 		opts.Budget = DefaultBudget()
 	}
-	if opts.Exclude == nil {
-		opts.Exclude = DefaultExcludes
-	}
+	opts.Exclude = ExcludesOr(opts.Exclude)
 	if opts.QueueLen <= 0 {
 		opts.QueueLen = DefaultQueueLen
 	}
@@ -280,8 +278,9 @@ func (w *Watcher) observe(event notify.Event) {
 	}
 }
 
-// SetSink attaches a connection. Anything dropped while there was none is
-// reported first, so the agent knows its picture starts incomplete.
+// SetSink attaches a connection; nil detaches it without disturbing the
+// watches. Anything dropped while there was none is reported first, so the
+// agent knows its picture starts incomplete.
 func (w *Watcher) SetSink(s Sink) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -289,7 +288,7 @@ func (w *Watcher) SetSink(s Sink) {
 	w.stats.Connected = s != nil
 }
 
-// ClearSink detaches the connection without disturbing the watches.
+// ClearSink is SetSink(nil).
 func (w *Watcher) ClearSink() { w.SetSink(nil) }
 
 func (w *Watcher) Stats() Stats {

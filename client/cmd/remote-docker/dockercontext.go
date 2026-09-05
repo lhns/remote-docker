@@ -46,35 +46,28 @@ const contextMarker = "remote-docker workspace"
 // would open an SSH connection, an NFS server and a reverse tunnel in order to
 // write a file on this machine. A real docker CLI ignores the variable.
 func dockerCmd(args ...string) *exec.Cmd {
-	name, argv := dockerInvocation(exec.LookPath, os.Executable, args)
-	cmd := exec.Command(name, argv...)
+	cmd := exec.Command(dockerProgram(exec.LookPath, os.Executable), args...)
 	cmd.Env = append(os.Environ(), NoSessionEnv+"=1")
 	return cmd
 }
 
-// dockerInvocation decides what to run and with which arguments.
+// dockerProgram decides which docker to run.
 //
-// Separated from the exec so the fallback can be tested without one.
-//
-// The arguments are the same either way: this binary's root IS the Docker CLI
+// Separated from the exec so the fallback can be tested without one. The
+// arguments are the same either way: this binary's root IS the Docker CLI
 // (ADR 0024), so `context inspect x` means the same thing to us as to a docker
-// on PATH. One function answers "how do I invoke docker" so that no caller has
-// to remember whether its arguments need shifting.
-func dockerInvocation(
-	lookPath func(string) (string, error),
-	executable func() (string, error),
-	args []string,
-) (string, []string) {
+// on PATH.
+func dockerProgram(lookPath func(string) (string, error), executable func() (string, error)) string {
 	if path, err := lookPath("docker"); err == nil {
-		return path, args
+		return path
 	}
 	self, err := executable()
 	if err != nil {
 		// Nothing better to try. The command will fail and say so, which is
 		// more useful than deciding here that there is no docker.
-		return "docker", args
+		return "docker"
 	}
-	return self, args
+	return self
 }
 
 type installedContext struct {

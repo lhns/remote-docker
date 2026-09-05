@@ -19,11 +19,7 @@ SSH_PORT=22222
 WS_PORT=22280
 ACCOUNT=itest
 
-# Every docker command that crosses the proxy is wrapped in a timeout. A
-# container whose volume mount never completes would otherwise block forever,
-# burning the whole CI budget and reporting nothing about where it stopped.
-DOCKER_TIMEOUT=120
-dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
+# The docker timeout is lib.sh's default, 120s.
 
 # PIN_SH keeps a container alive only while its mount still works, so the
 # container's own survival IS the assertion. Used by three sections, all of
@@ -66,16 +62,7 @@ expect_output() {
     ok "$what"
 }
 
-cleanup() {
-    echo
-    echo "== cleanup =="
-    if [ -n "${CLIENT_PID:-}" ]; then
-        kill "$CLIENT_PID" 2>/dev/null
-        wait "$CLIENT_PID" 2>/dev/null
-    fi
-    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    rm -rf "$WORK"
-}
+cleanup() { cleanup_suite "${CLIENT_PID:-}"; }
 trap cleanup EXIT
 
 echo "== 1. build the workspace image =="
@@ -200,16 +187,7 @@ echo "== 6. open a session =="
 "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 
-ready=false
-for _ in $(seq 1 60); do
-    if [ -S "$REMOTE_DOCKER_ENDPOINT" ] && docker -H "unix://$REMOTE_DOCKER_ENDPOINT" info >/dev/null 2>&1; then
-        ready=true
-        break
-    fi
-    kill -0 "$CLIENT_PID" 2>/dev/null || break
-    sleep 1
-done
-if [ "$ready" = true ]; then
+if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     ok "the local Docker endpoint answers"
 else
     bad "the Docker endpoint never came up"
@@ -424,15 +402,7 @@ echo "== 10. a published port is reachable here =="
 dockert run -d --name itest-web -p 18080:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
 echo "<h1>served from the client</h1>" >"$PROJECT/index.html"
 
-reachable=false
-for _ in $(seq 1 45); do
-    if curl -fsS --max-time 3 http://127.0.0.1:18080/ 2>/dev/null | grep -q "served from the client"; then
-        reachable=true
-        break
-    fi
-    sleep 1
-done
-if [ "$reachable" = true ]; then
+if wait_url http://127.0.0.1:18080/ "served from the client" 45; then
     ok "the published port was forwarded automatically and served this machine's file"
 else
     bad "the published port never became reachable"
@@ -483,15 +453,7 @@ if ! twice=$(dockert run -d --name itest-twice -p 18082:80 -p 18083:80     -v "$
 fi
 
 for port in 18082 18083; do
-    reachable=false
-    for _ in $(seq 1 45); do
-        if curl -fsS --max-time 3 "http://127.0.0.1:$port/" 2>/dev/null | grep -q "served from the client"; then
-            reachable=true
-            break
-        fi
-        sleep 1
-    done
-    if [ "$reachable" = true ]; then
+    if wait_url "http://127.0.0.1:$port/" "served from the client" 45; then
         ok "one container port published twice is reachable at $port"
     else
         bad "$port never became reachable"
@@ -515,7 +477,7 @@ echo "== 10b. a published UDP port answers here =="
 # The probe is both ends deliberately. Nothing in alpine echoes UDP, and the
 # two netcats disagree about -u and -w, so a test built on whichever one a
 # runner has fails for a reason it is not about.
-if ! (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/udpecho" ./udpecho); then
+if ! build_probe udpecho "$PROJECT/udpecho"; then
     bad "could not build the udp echo probe"
 elif ! dockert run -d --name itest-udp -p 15353:5353/udp     -v "$PROJECT:/probe:ro" alpine:3 /probe/udpecho :5353 >"$WORK/udp-run.log" 2>&1; then
     bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '
@@ -588,7 +550,9 @@ mkdir -p "$WATCHDIR"
 # alpine. That keeps this test about file watching rather than about whether
 # `docker build` works through the proxy, and avoids shipping $WORK -- which
 # holds the private key and a live socket -- as a build context.
-if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe); then
+# Built once, here, and copied onto the share by every section that runs it.
+WATCHPROBE="$WORK/watchprobe"
+if build_probe watchprobe "$WATCHPROBE" && cp "$WATCHPROBE" "$PROJECT/watchprobe"; then
     # The error is NOT swallowed. The first run of this test produced an
     # empty log and no explanation, which cost a CI round trip to diagnose:
     # the binary was on the share with a synthesised mode 0644 and could not
@@ -598,15 +562,7 @@ if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/wat
         sed 's/^/        /' "$WORK/watch-run.log"
         probe=""
     else
-        # Wait for READY rather than sleeping. watchprobe prints it so that a
-        # caller does not have to guess how long registering a watch takes,
-        # and a change made before the watch lands proves nothing either way.
-        # The two probe sections below already do this; this one slept five
-        # seconds and hoped, which is a flake on a loaded runner.
-        for _ in $(seq 1 30); do
-            outputs '^READY' docker logs itest-watch && break
-            sleep 1
-        done
+        wait_ready itest-watch 30
 
         echo "written on the client" >"$WATCHDIR/created-after-watch.txt"
 
@@ -657,8 +613,7 @@ echo "== 11d. which syscall makes a container's watcher fire? (ADR 0014 spike) =
 POKEDIR="$WORK/poked"
 mkdir -p "$POKEDIR"
 
-if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe &&
-        CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/pokeprobe" ./pokeprobe); then
+if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe pokeprobe "$PROJECT/pokeprobe"; then
 
     # The files each primitive acts on. Pre-created on the client where the
     # primitive needs an existing file; 'create' and 'unlink' are handled
@@ -676,18 +631,7 @@ if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/wat
         bad "the poke probe container would not start"
         sed 's/^/        /' "$WORK/poke-run.log"
     else
-        # Wait for READY rather than sleeping. A poke delivered before the
-        # watch lands proves nothing, and is an easy way to record a false
-        # negative and believe it.
-        watching=false
-        for _ in $(seq 1 30); do
-            if outputs '^READY' docker logs itest-poke; then
-                watching=true
-                break
-            fi
-            sleep 1
-        done
-        if [ "$watching" = true ]; then
+        if wait_ready itest-poke 30; then
             ok "the watcher is established"
         else
             bad "the watcher never reported READY"
@@ -846,16 +790,7 @@ echo "== 11d. one account cannot bind another's NFS port =="
 OTHER=itest2
 cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$OTHER.pub"
 
-provisioned2=false
-for _ in $(seq 1 90); do
-    if hostdocker exec "$CONTAINER" id "rd-$OTHER" >/dev/null 2>&1; then
-        provisioned2=true
-        break
-    fi
-    sleep 1
-done
-
-if [ "$provisioned2" != true ]; then
+if ! wait_provisioned "$OTHER"; then
     bad "the second account was never provisioned"
     hostdocker logs "$CONTAINER" 2>&1 | tail -15 | sed 's/^/        /' 
 else
@@ -957,15 +892,7 @@ COMPOSE
 if timeout 180 docker compose -f "$PROJECT/compose.yaml" up -d >"$WORK/compose.log" 2>&1; then
     ok "compose brought the stack up through the proxy"
 
-    composed=false
-    for _ in $(seq 1 45); do
-        if curl -fsS --max-time 3 http://127.0.0.1:18081/ 2>/dev/null | grep -q "served by compose"; then
-            composed=true
-            break
-        fi
-        sleep 1
-    done
-    if [ "$composed" = true ]; then
+    if wait_url http://127.0.0.1:18081/ "served by compose" 45; then
         ok "a compose relative bind resolved and its port was forwarded"
     else
         bad "the compose service never served this machine's file"
@@ -1083,15 +1010,7 @@ if timeout 180 "$WORK/remote-docker" compose -f "$PROJECT/embedded/compose.yaml"
     >"$WORK/compose-embedded.log" 2>&1; then
     ok "the embedded compose brought a stack up"
 
-    embedded=false
-    for _ in $(seq 1 45); do
-        if curl -fsS --max-time 3 http://127.0.0.1:18083/ 2>/dev/null | grep -q "served by the embedded compose"; then
-            embedded=true
-            break
-        fi
-        sleep 1
-    done
-    if [ "$embedded" = true ]; then
+    if wait_url http://127.0.0.1:18083/ "served by the embedded compose" 45; then
         ok "its relative bind resolved and its port was forwarded"
     else
         bad "the embedded compose service never served this machine's file"
@@ -1304,7 +1223,7 @@ if hostdocker run -d --name "$ELEV"         -v /var/run/docker.sock:/var/run/hos
             elevated=true
             break
         fi
-        hostdocker inspect -f '{{.State.Running}}' "$ELEV" 2>/dev/null | grep -q true || break
+        outputs true hostdocker inspect -f '{{.State.Running}}' "$ELEV" || break
         sleep 1
     done
 
@@ -1366,23 +1285,13 @@ REPLAYDIR="$WORK/replayed"
 mkdir -p "$REPLAYDIR"
 echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
-if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/watchprobe" ./watchprobe); then
+if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe"; then
     # Prefetch is off by default (ADR 0045); this client turns the tree on so
     # 15c and 15e keep covering it. The other suites run the default.
     REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 
-    ready=false
-    for _ in $(seq 1 60); do
-        if [ -S "$REMOTE_DOCKER_ENDPOINT" ] && docker info >/dev/null 2>&1; then
-            ready=true
-            break
-        fi
-        kill -0 "$CLIENT_PID" 2>/dev/null || break
-        sleep 1
-    done
-
-    if [ "$ready" != true ]; then
+    if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
         bad "the watching client never came up"
         sed 's/^/        /' "$WORK/watch-up.log"
     elif ! dockert run -d --name itest-replay             -v "$PROJECT:/probe:ro"             -v "$REPLAYDIR:/data"             alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/replay-run.log" 2>&1; then
@@ -1391,10 +1300,7 @@ if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$PROJECT/wat
     else
         ok "the watching client is serving"
 
-        for _ in $(seq 1 30); do
-            outputs '^READY' docker logs itest-replay && break
-            sleep 1
-        done
+        wait_ready itest-replay 30
 
         # The edit an editor would make: rewrite an existing file in place.
         sleep 2
@@ -2122,18 +2028,12 @@ fi
 
 "$WORK/remote-docker" remote stop >/dev/null 2>&1
 
-# A session built from a different build is replaced when that costs nothing,
-# and reported when it does not. A stale session serves the endpoint, so an
-# updated client talks to the OLD build and behaves like it -- silently, until
-# something it should have fixed does not work.
+# A session from a different build is replaced when nothing depends on it and
+# reported when something does: a stale session serves the endpoint, so an
+# updated client would otherwise talk to the OLD build, silently.
 #
-# Two binaries, same source, different stamps: the versions cannot be ordered
-# and nothing here tries to.
-#
-# Named for what it is rather than "-old". It is not an older build, it is THIS
-# build wearing another version, and the name saying otherwise is what made a
-# rename of the whole command shape skip straight past it -- it does not match
-# "remote-docker", so it kept calling commands that had moved.
+# Two binaries, same source, different stamps: the versions cannot be ordered.
+# The name says what it is, THIS build wearing another version, not "-old".
 if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-otherbuild"         -o "$WORK/remote-docker-otherbuild" ./cmd/remote-docker); then
 
     "$WORK/remote-docker-otherbuild" remote start >/dev/null 2>&1
@@ -2157,9 +2057,7 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ot
             *"different version"*) ok "a session in use from another commit is reported, not restarted" ;;
             *) bad "no version warning while a container depended on the old session" ;;
         esac
-        # Captured rather than piped, so a failure can show what status said.
-        # Which build is serving is exactly the question here, and "it did not
-        # match" without the output leaves nothing to reason from.
+        # Captured, so a failure can show which build status says is serving.
         insitu=$("$WORK/remote-docker" remote status 2>&1)
         if echo "$insitu" | grep -q "sha-otherbuild"; then
             ok "the in-use session was left running"
@@ -2569,7 +2467,7 @@ NGINX
     hostdocker pause itest-proxy >/dev/null 2>&1
     info "the proxy is paused; waiting for the agent to notice"
     sleep 75
-    if hostdocker logs "$CONTAINER" 2>&1 | grep -q "stopped answering"; then
+    if outputs "stopped answering" hostdocker logs "$CONTAINER"; then
         ok "the agent dropped the silent websocket, so its port is free again"
     else
         bad "the agent did not notice a websocket that stopped answering"

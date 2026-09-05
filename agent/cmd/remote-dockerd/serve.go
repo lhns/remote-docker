@@ -141,7 +141,7 @@ func serve(addr, wsAddr string) error {
 	// dockerd first: an account can be provisioned without it, but the
 	// workspace is not much use until the daemon is up, and starting it early
 	// overlaps its boot with everything else.
-	dockerdArgs := supervise.SplitArgs(os.Getenv(envDockerd))
+	dockerdArgs := strings.Fields(os.Getenv(envDockerd))
 	daemon := &supervise.Dockerd{
 		Args: dockerdArgs,
 		Log:  logger("dockerd"),
@@ -164,15 +164,11 @@ func serve(addr, wsAddr string) error {
 	// a socket that reaches the PARENT daemon, which holds every account's
 	// dind. Revoke covers the accounts that already exist, which on an
 	// upgraded workspace is all of them.
-	// Stated in both modes, because membership is reconciled to it on every
-	// pass. An empty list would mean "reconcile to nothing" rather than
-	// "leave alone".
 	provisioner := &accounts.UnixProvisioner{
-		Groups: []string{"docker", "workspace"},
+		Groups: groupsFor(perUserDind),
 		Prefix: envOr(envAccountPrefix, accounts.DefaultPrefix),
 	}
 	if perUserDind {
-		provisioner.Groups = []string{"workspace"}
 		provisioner.Revoke = []string{"docker"}
 	}
 
@@ -326,10 +322,6 @@ func serve(addr, wsAddr string) error {
 	// One port per MACHINE rather than per account (ADR 0029). The uid still
 	// decides the first, so a workspace reached from one computer is on the
 	// port it always was and allocates nothing.
-	//
-	// preferredPortTimeout bounds asking a machine's volumes which port they
-	// need. Generous, because it may include a cold daemon's boot, and paid
-	// only by a machine this workspace has no record of.
 	ports := &accounts.Ports{
 		Dir:     stateDir,
 		Mapping: mapping,
@@ -371,6 +363,8 @@ func serve(addr, wsAddr string) error {
 	// Union mounts for delegated shares (ADR 0044). Self is how the agent runs
 	// itself again: the union is served by a child, because a mount namespace
 	// cannot be entered from inside a Go process that has to keep running.
+	// os.Executable is right here; CLAUDE.md's self.go rule is the client's,
+	// for Termux, and the agent runs in a container.
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locating this binary, which serves union mounts: %w", err)
@@ -437,17 +431,25 @@ func serve(addr, wsAddr string) error {
 	return nil
 }
 
+// groupsFor is the groups an account is in, and the groups the workspace
+// creates. Stated in both modes, because membership is reconciled to it on
+// every pass: an empty list would mean "reconcile to nothing" rather than
+// "leave alone".
+//
+// With a daemon per account, `docker` is neither: nothing should be in it. It
+// may still EXIST on an upgraded workspace, since the image or an earlier run
+// made it, which is why accounts are revoked from it rather than the group
+// being assumed absent.
+func groupsFor(perUserDind bool) []string {
+	if perUserDind {
+		return []string{"workspace"}
+	}
+	return []string{"docker", "workspace"}
+}
+
 // ensureGroups creates the groups accounts are added to.
 func ensureGroups(perUserDind bool) error {
-	groups := []string{"docker", "workspace"}
-	if perUserDind {
-		// The `docker` group is not created, because nothing should be in it.
-		// It may still EXIST on an upgraded workspace, since the image or an
-		// earlier run made it, which is why accounts are revoked from it
-		// rather than the group being assumed absent.
-		groups = []string{"workspace"}
-	}
-	for _, group := range groups {
+	for _, group := range groupsFor(perUserDind) {
 		if err := addGroup(group); err != nil {
 			return fmt.Errorf("creating group %s: %w", group, err)
 		}

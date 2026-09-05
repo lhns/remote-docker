@@ -138,7 +138,7 @@ type CollectOptions struct {
 }
 
 // Collect removes share volumes this account is no longer using.
-func (s *Session) Collect(ctx context.Context, opts ...CollectOptions) (int, error) {
+func (s *Session) Collect(ctx context.Context, opts CollectOptions) (int, error) {
 	live, done, err := s.acquire(ctx)
 	if err != nil {
 		return 0, err
@@ -146,12 +146,10 @@ func (s *Session) Collect(ctx context.Context, opts ...CollectOptions) (int, err
 	defer done()
 
 	collector := s.collector(live)
-	if len(opts) > 0 && opts[0].Orphans {
-		// Widened to volumes naming no machine, and NOT to every machine's:
-		// clearing Client entirely would collect the other computer's, which
-		// is the failure the scoping exists to prevent.
-		collector.Orphans = true
-	}
+	// Widened to volumes naming no machine, and NOT to every machine's:
+	// clearing Client entirely would collect the other computer's, which is
+	// the failure the scoping exists to prevent.
+	collector.Orphans = opts.Orphans
 
 	n, err := collector.Collect(ctx)
 	if err == nil {
@@ -191,8 +189,6 @@ func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
 func (s *Session) collector(live *liveConn) *rewrite.Collector {
 	return &rewrite.Collector{
 		Volumes: live.api,
-		Remover: live.api,
-		InUse:   live.api,
 		Owner:   live.info.User,
 		Client:  s.clientID,
 		Guard:   live.guard,
@@ -257,10 +253,6 @@ func (s *Session) Status() any {
 	live, connected := s.gate.currentLive()
 	st := proxy.Status{
 		Version:   s.opts.Version,
-		Workspace: s.opts.Config.Name,
-		Host:      s.opts.Config.Host,
-		User:      s.opts.Config.User,
-		Endpoint:  s.Endpoint,
 		PID:       os.Getpid(),
 		Connected: connected,
 		Since:     s.started.Format(time.RFC3339),
@@ -271,15 +263,7 @@ func (s *Session) Status() any {
 		st.LastDrop = last.Format(time.RFC3339)
 	}
 	if connected {
-		st.User = live.info.User
 		st.Storage = live.info.Storage
-		st.Ports = s.Ports()
-	}
-	if s.watch != nil {
-		st.Watching = s.watch.Stats().Mode.String()
-	}
-	for _, share := range s.registry.Shares() {
-		st.Shares = append(st.Shares, share.LocalPath)
 	}
 	st.Caches = s.cacheStatus()
 	return st
@@ -351,15 +335,6 @@ func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 // Stopped is closed when something has asked this session to stop. `up` waits
 // on it alongside its signal context.
 func (s *Session) Stopped() <-chan struct{} { return s.stopped }
-
-// Ports lists the ports currently forwarded, if connected.
-func (s *Session) Ports() []int {
-	live, ok := s.gate.current()
-	if !ok || live.ports == nil {
-		return nil
-	}
-	return live.ports.Active()
-}
 
 // Close tears the session down.
 func (s *Session) Close() error {

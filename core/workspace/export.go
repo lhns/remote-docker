@@ -125,13 +125,13 @@ func VolumeNameForID(client, id string) string {
 	return VolumeNamePrefix + client + "-" + id
 }
 
-// CacheRole is the suffix on the volume holding a delegated share's cache
+// cacheRole is the suffix on the volume holding a delegated share's cache
 // layer, as distinct from the volume backing the share itself (ADR 0044).
 //
 // A suffix rather than a second prefix, so IsManagedVolume, the collector and
 // ADR 0029's per-client naming all keep working on it unchanged: it is one more
 // managed volume, and the only thing that differs is which layer it holds.
-const CacheRole = "cache"
+const cacheRole = "cache"
 
 // VolumeNameForCache is the volume holding a share's cache layer.
 func VolumeNameForCache(client, id string) string {
@@ -140,7 +140,7 @@ func VolumeNameForCache(client, id string) string {
 
 // CacheVolumeName is the cache layer belonging to a share's own volume, for a
 // caller that already has that name and not the parts it was built from.
-func CacheVolumeName(share string) string { return share + "-" + CacheRole }
+func CacheVolumeName(share string) string { return share + "-" + cacheRole }
 
 // IsManagedVolume reports whether a volume name is one of ours. Used before
 // removing anything: a volume we did not create is never ours to delete.
@@ -166,7 +166,7 @@ func VolumeNameForExport(client, exportPath string) (string, error) {
 	if exportPath == ExportCWD {
 		return VolumeNameForID(client, CWDShareID), nil
 	}
-	id, err := ParseID(exportPath)
+	id, err := parseID(exportPath)
 	if err != nil {
 		return "", err
 	}
@@ -183,7 +183,7 @@ func CacheVolumeForExport(client, exportPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return name + "-" + CacheRole, nil
+	return name + "-" + cacheRole, nil
 }
 
 // ParseVolumeName splits a managed volume name into the client that created it
@@ -201,7 +201,7 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 	// A cache volume is the same share wearing a role, and the collector must
 	// see it as that share's -- otherwise it is a volume nothing claims and
 	// everything leaves alone, which is how disk disappears quietly.
-	rest = strings.TrimSuffix(rest, "-"+CacheRole)
+	rest = strings.TrimSuffix(rest, "-"+cacheRole)
 
 	client, share, found := strings.Cut(rest, "-")
 	if !found {
@@ -217,13 +217,13 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 // IsCacheVolume reports whether a name is a share's cache layer rather than the
 // share itself.
 func IsCacheVolume(name string) bool {
-	return IsManagedVolume(name) && strings.HasSuffix(name, "-"+CacheRole)
+	return IsManagedVolume(name) && strings.HasSuffix(name, "-"+cacheRole)
 }
 
 // validShare reports whether a volume name suffix names a share this program
 // could have created.
 //
-// Asked of ParseID rather than re-derived. What a share id looks like is a rule
+// Asked of parseID rather than re-derived. What a share id looks like is a rule
 // that has to exist once: the uid to port formula lived in two places, the
 // copies drifted, and CLAUDE.md keeps that as a retired invariant precisely so
 // it is not done again.
@@ -231,7 +231,7 @@ func validShare(share string) bool {
 	if share == CWDShareID {
 		return true
 	}
-	_, err := ParseID(VolumeNamePrefix + share)
+	_, err := parseID(VolumeNamePrefix + share)
 	return err == nil
 }
 
@@ -253,12 +253,12 @@ func ValidExport(exportPath string) error {
 	if exportPath == ExportCWD {
 		return nil
 	}
-	_, err := ParseID(exportPath)
+	_, err := parseID(exportPath)
 	return err
 }
 
-// ParseID extracts the share id from an export path or a managed volume name.
-func ParseID(s string) (string, error) {
+// parseID extracts the share id from an export path or a managed volume name.
+func parseID(s string) (string, error) {
 	var id string
 	switch {
 	case strings.HasPrefix(s, ExportMountPrefix):

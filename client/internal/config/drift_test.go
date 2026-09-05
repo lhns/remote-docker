@@ -56,11 +56,11 @@ var settingSources = map[string]struct {
 		want: func(c Config) string { return itoa(c.Port) },
 	},
 	"CAFile": {
-		env: EnvCAFile, override: true, sample: "/etc/ca.pem",
+		env: EnvCAFile, override: false, sample: "/etc/ca.pem",
 		want: func(c Config) string { return c.CAFile },
 	},
 	"Insecure": {
-		env: EnvInsecure, override: true, sample: "true",
+		env: EnvInsecure, override: false, sample: "true",
 		want: func(c Config) string {
 			if c.Insecure {
 				return "true"
@@ -77,7 +77,7 @@ var settingSources = map[string]struct {
 		want: func(c Config) string { return c.Endpoint },
 	},
 	"Watch": {
-		env: EnvWatch, override: true, sample: "partial",
+		env: EnvWatch, override: false, sample: "partial",
 		want: func(c Config) string { return c.Watch },
 	},
 	"WatchBudget": {
@@ -239,13 +239,12 @@ func TestOverridesAreHonouredAndComplete(t *testing.T) {
 		Port:     2244,
 		User:     "carol",
 		Endpoint: "/tmp/flag.sock",
-		Watch:    "coarse",
 	}
 	// Everything the file says, so a missing override clause shows as the
 	// file's value surviving rather than as an empty one.
 	path := writeConfigJSON(t, map[string]any{
 		"host": "file.example", "port": 22, "user": "alice",
-		"endpoint": "/tmp/file.sock", "watch": "off",
+		"endpoint": "/tmp/file.sock",
 	})
 
 	cfg, err := Resolve(o, path)
@@ -257,7 +256,6 @@ func TestOverridesAreHonouredAndComplete(t *testing.T) {
 		{"Port", itoa(cfg.Port), "2244"},
 		{"User", cfg.User, o.User},
 		{"Endpoint", cfg.Endpoint, o.Endpoint},
-		{"Watch", cfg.Watch, o.Watch},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want the override %q", tc.name, tc.got, tc.want)

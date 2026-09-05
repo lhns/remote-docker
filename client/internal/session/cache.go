@@ -14,6 +14,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -41,35 +42,22 @@ type cacheChannel struct {
 }
 
 // openCache establishes the channel and completes the version handshake.
-//
-// The handshake is what tells an agent too old for this command from a working
-// one: the agent dispatches on exact strings and runs anything else, so an old
-// one runs `sh -c "workspace-cache"` and exits 127 with nothing to say. Reading
-// a greeting first is the only thing that separates them.
 func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
-	stream, err := client.OpenStream(cache.Command)
+	stream, r, reply, err := greet(client, cache.Command, cache.MaxFrame, cache.Version,
+		func(reply cache.Reply) (int, bool) {
+			if reply.Hello == nil {
+				return 0, false
+			}
+			return reply.Hello.Version, true
+		})
+	if errors.Is(err, errNotServed) {
+		return nil, errors.New("this workspace does not serve delegated shares as a cache" + rewrite.FixUpdateWorkspace)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, cache.MaxFrame)}
-
-	line, err := c.r.ReadString('\n')
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("no greeting from the workspace: %w", err)
-	}
-	var reply cache.Reply
-	if err := json.Unmarshal([]byte(line), &reply); err != nil || reply.Hello == nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("this workspace does not serve delegated shares as a cache\n" +
-			"\tfix: update the workspace, or use write=through")
-	}
-	if reply.Hello.Version != cache.Version {
-		_ = stream.Close()
-		return nil, fmt.Errorf("the workspace speaks cache version %d, this client speaks %d",
-			reply.Hello.Version, cache.Version)
-	}
+	c := &cacheChannel{stream: stream, r: r}
 	// Chosen from what the AGENT said it can read, never from what this client
 	// can produce: a workspace older than compression announces no codecs at
 	// all, and sending it one would be refused rather than negotiated.
@@ -77,6 +65,47 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 		c.codec = cache.CodecZstd
 	}
 	return c, nil
+}
+
+// errNotServed is a channel the workspace answered with something other than
+// a greeting: an agent too old for the command.
+var errNotServed = errors.New("the workspace does not serve this channel")
+
+// greet opens a channel and completes its version handshake.
+//
+// The agent dispatches session commands on exact strings and runs anything
+// else, so an agent too old for a command runs `sh -c "<command>"` and exits
+// 127 with nothing to say, indistinguishable from a working channel that has
+// nothing to say. Reading a greeting first is the only thing that tells them
+// apart. hello reads the version out of a decoded greeting, and false means
+// the line was not one.
+func greet[T any](client *tunnelclient.Client, command string, frame, want int, hello func(T) (int, bool)) (io.ReadWriteCloser, *bufio.Reader, T, error) {
+	var greeting T
+	stream, err := client.OpenStream(command)
+	if err != nil {
+		return nil, nil, greeting, err
+	}
+
+	r := bufio.NewReaderSize(stream, frame)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		_ = stream.Close()
+		return nil, nil, greeting, fmt.Errorf("no greeting from the workspace: %w", err)
+	}
+	version, ok := 0, false
+	if json.Unmarshal([]byte(line), &greeting) == nil {
+		version, ok = hello(greeting)
+	}
+	if !ok {
+		_ = stream.Close()
+		return nil, nil, greeting, fmt.Errorf("%w: %s", errNotServed, command)
+	}
+	if version != want {
+		_ = stream.Close()
+		return nil, nil, greeting, fmt.Errorf("the workspace speaks %s version %d, this client speaks %d",
+			command, version, want)
+	}
+	return stream, r, greeting, nil
 }
 
 // do sends one request, with its payload if it has one, and returns the answer.
@@ -345,9 +374,7 @@ type shareCache struct {
 }
 
 // Attach hands the share to the engine in the engine's own terms, and does
-// nothing on a session that caches nothing. The engine is a pointer where the
-// state it replaced was a value, so this is a check rather than the no-op it
-// used to be for free.
+// nothing on a session that caches nothing (the engine is nil there).
 //
 // The translation from the mode is here and nowhere else: dircache depends on
 // nothing and cannot name workspace.Mode, so what it is told is what the mode

@@ -154,9 +154,9 @@ const DaemonIdleNever = -1 * time.Second
 
 // DefaultDaemonStandby is how long a session holds the workspace unused.
 //
-// Half an hour, which is what DaemonIdle used to be: long enough that stepping
-// away and coming back finds it warm, short enough that a workspace opened once
-// last week is not still holding a connection and a few thousand watches.
+// Half an hour: long enough that stepping away and coming back finds it warm,
+// short enough that a workspace opened once last week is not still holding a
+// connection and a few thousand watches.
 const DefaultDaemonStandby = 30 * time.Minute
 
 // File is the on-disk form, ~/.remote-docker.json.
@@ -172,11 +172,8 @@ const DefaultDaemonStandby = 30 * time.Minute
 // The flat form is not deprecated. Most people have one workspace, and making
 // them nest it under a name to say so would be a poor trade.
 type File struct {
-	// The flat form IS a workspace, so it is one. Embedded rather than
-	// repeated: these seven fields were declared identically in both types,
-	// and two appliers walked them separately, so adding a setting meant
-	// remembering four places. encoding/json inlines an embedded struct's
-	// fields, tags and all, so the file format is unchanged.
+	// Embedded so the flat form IS a workspace, and encoding/json inlines an
+	// embedded struct's fields, tags and all, so the file format is the same.
 	Workspace
 
 	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
@@ -311,9 +308,6 @@ type Overrides struct {
 	Port      int
 	User      string
 	Endpoint  string
-	Watch     string
-	CAFile    string
-	Insecure  bool
 }
 
 // Environment variable names.
@@ -609,15 +603,6 @@ func applyOverrides(cfg *Config, o Overrides) {
 	}
 	if o.Endpoint != "" {
 		cfg.Endpoint = o.Endpoint
-	}
-	if o.CAFile != "" {
-		cfg.CAFile = o.CAFile
-	}
-	if o.Insecure {
-		cfg.Insecure = true
-	}
-	if o.Watch != "" {
-		cfg.Watch = o.Watch
 	}
 }
 

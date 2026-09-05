@@ -87,13 +87,12 @@ func (f facts) verdict() string {
 		return "no session (run `" + ourCommand("start") + "`)"
 	case !f.answering:
 		return "a session is serving the endpoint but will not answer"
-	case f.local.Version != version:
-		return fmt.Sprintf("the running session is a different build, %s (run `"+ourCommand("restart")+"`)",
-			orUnknown(f.local.Version))
+	case versionDiffers(f.local):
+		return fmt.Sprintf("the running session is %s; run `%s`", differentBuild(f.local), ourCommand("restart"))
 	}
 
 	if f.info.Storage == "vfs" {
-		return "ready, but the workspace daemon is on vfs, so containers start slowly"
+		return "ready, but " + slowStorage
 	}
 	return "ready"
 }
@@ -216,7 +215,7 @@ func daemonLine(info workspace.Info) string {
 	switch info.Storage {
 	case "":
 	case "vfs":
-		parts = append(parts, "vfs (SLOW: every container create copies the whole image)")
+		parts = append(parts, "vfs (slow)")
 	default:
 		parts = append(parts, info.Storage)
 	}
@@ -238,7 +237,7 @@ func versionsLine(f facts) string {
 		}
 		parts = append(parts, "agent "+agent)
 	}
-	if f.answering && f.local.Version != version {
+	if f.answering && versionDiffers(f.local) {
 		parts = append(parts, "session "+orUnknown(f.local.Version)+" (DIFFERENT)")
 	}
 	return strings.Join(parts, ", ")
@@ -287,8 +286,7 @@ somebody is most likely to be running it.`,
 // row prints one aligned "key    value" line.
 //
 // `status` and `workspace inspect` print one table each and share this width,
-// so a row added to one lines up in the other. It was a bare %-20s at thirteen
-// call sites.
+// so a row added to one lines up in the other.
 func row(out io.Writer, key, value string) {
 	if value != "" {
 		_, _ = fmt.Fprintf(out, "%-20s %s\n", key, value)

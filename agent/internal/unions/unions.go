@@ -14,13 +14,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/core-agent/netns"
 	"github.com/lhns/remote-docker/core-agent/union"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/logx"
@@ -38,6 +38,10 @@ const restartDelay = 2 * time.Second
 // ENOTCONN immediately; one whose server is wedged answers nothing at all, and
 // waiting on it would make every request that asks wait too.
 const aliveTimeout = 2 * time.Second
+
+// stopTimeout bounds waiting for a stopped union's supervisor to finish, so one
+// wedged child cannot hold up every other share.
+const stopTimeout = 2 * time.Second
 
 // readyTimeout is how long Prepare waits for a new union to answer.
 //
@@ -290,8 +294,7 @@ func (m *Manager) awaitGone(ctx context.Context, spec union.Spec) bool {
 // run is one attempt: the agent re-executed as the child that enters the
 // daemon's namespace and becomes fuse-overlayfs.
 func (m *Manager) run(ctx context.Context, spec union.Spec) error {
-	cmd := exec.CommandContext(ctx, m.Self, union.Command)
-	cmd.Env = append(os.Environ(), union.Env(spec)...)
+	cmd := union.Reexec(ctx, m.Self, union.ModeServe, spec)
 	// Both to stderr, as supervise.Dockerd does: what fuse-overlayfs says is
 	// the only account of why a union failed, and losing it would leave a
 	// share that does not work and says nothing.
@@ -440,11 +443,7 @@ func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 	m.mu.Unlock()
 
 	if client != "" {
-		root := "/"
-		if d.PID > 0 {
-			root = fmt.Sprintf("/proc/%d/root", d.PID)
-		}
-		for _, id := range union.MountedShares(root) {
+		for _, id := range union.MountedShares(netns.Root(d.PID)) {
 			names[workspace.VolumeNameForCache(client, id)] = true
 		}
 	}
@@ -463,9 +462,7 @@ func (m *Manager) stop(k string, l *live) {
 	delete(m.shares, k)
 	select {
 	case <-l.done:
-	case <-time.After(aliveTimeout):
-		// The child is being killed by its context; not waiting further keeps
-		// one wedged process from holding up every other share.
+	case <-time.After(stopTimeout):
 	}
 }
 
@@ -476,7 +473,7 @@ func (m *Manager) stop(k string, l *live) {
 // differs: in per-account mode the binary has to be in the image that daemon
 // runs (agent/internal/daemons/plan.go:38), and the agent's own filesystem
 // says nothing about it.
-func Capability(ctx context.Context, root string) string {
+func Capability(root string) string {
 	if root == "" {
 		root = "/"
 	}

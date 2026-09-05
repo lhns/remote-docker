@@ -82,6 +82,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # The composite action pins setup-go itself, and the root entry does not
+  # look inside .github/actions.
+  - package-ecosystem: github-actions
+    directory: /.github/actions/setup-go
+    schedule:
+      interval: weekly
     # Stated, because the default is FIVE and that is not a rounding error: it
     # silently withheld the download-artifact bump while five action PRs sat
     # open, so upload-artifact went to v7 while download stayed on v4.

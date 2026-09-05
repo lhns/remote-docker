@@ -53,16 +53,24 @@ func (v Volumes) Mountpoint(ctx context.Context, volume string) (string, error) 
 		return "", fmt.Errorf("notify: locating the daemon holding volume %s: %w", volume, err)
 	}
 
-	mp, err := CLI{Host: host}.Line(ctx,
-		"volume", "inspect", volume, "--format", "{{.Mountpoint}}")
+	mp, err := mountpoint(ctx, host, volume)
 	if err != nil {
-		return "", fmt.Errorf("notify: inspecting volume %s: %w", volume, err)
+		return "", err
+	}
+	return replay.Relocate(mp, v.Root)
+}
+
+// mountpoint asks the daemon at host where a volume's data is, in the daemon's
+// own filesystem.
+func mountpoint(ctx context.Context, host, volume string) (string, error) {
+	mp, err := CLI{Host: host}.Line(ctx, "volume", "inspect", volume, "--format", "{{.Mountpoint}}")
+	if err != nil {
+		return "", fmt.Errorf("dockercli: inspecting volume %s: %w", volume, err)
 	}
 	if mp == "" {
-		return "", fmt.Errorf("notify: volume %s reported no mountpoint", volume)
+		return "", fmt.Errorf("dockercli: volume %s reported no mountpoint", volume)
 	}
-
-	return replay.Relocate(mp, v.Root)
+	return mp, nil
 }
 
 // call reads a lazily-resolved setting. A nil func is the empty value, which
@@ -86,14 +94,7 @@ type RawVolumes struct{}
 
 // RawMountpoint asks the daemon at host where a volume's data is.
 func (RawVolumes) RawMountpoint(ctx context.Context, host, volume string) (string, error) {
-	mp, err := CLI{Host: host}.Line(ctx, "volume", "inspect", volume, "--format", "{{.Mountpoint}}")
-	if err != nil {
-		return "", fmt.Errorf("dockercli: inspecting volume %s: %w", volume, err)
-	}
-	if mp == "" {
-		return "", fmt.Errorf("dockercli: volume %s reported no mountpoint", volume)
-	}
-	return mp, nil
+	return mountpoint(ctx, host, volume)
 }
 
 // MountSources is every host path a running container has bound, on the daemon

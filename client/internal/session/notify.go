@@ -25,37 +25,18 @@ type notifySink struct {
 }
 
 // openNotify establishes the change-notification channel and completes the
-// version handshake.
-//
-// The handshake is not optional. The agent dispatches session commands on
-// exact strings and falls through to running whatever it does not recognise,
-// so an agent too old for this one runs `sh -c "workspace-notify"` and exits
-// 127, indistinguishable from a working channel that has nothing to say.
-// Reading a greeting first is the only thing that tells them apart.
+// version handshake (see greet).
 func openNotify(client *tunnelclient.Client) (*notifySink, error) {
-	stream, err := client.OpenStream(notify.Command)
+	stream, _, _, err := greet(client, notify.Command, notify.MaxFrame, notify.Version,
+		func(frame notify.Frame) (int, bool) {
+			if frame.Hello == nil {
+				return 0, false
+			}
+			return frame.Hello.Version, true
+		})
 	if err != nil {
 		return nil, err
 	}
-
-	reader := bufio.NewReader(stream)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("no greeting from the workspace: %w", err)
-	}
-
-	var frame notify.Frame
-	if err := json.Unmarshal([]byte(line), &frame); err != nil || frame.Hello == nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("the workspace did not answer %q", notify.Command)
-	}
-	if frame.Hello.Version != notify.Version {
-		_ = stream.Close()
-		return nil, fmt.Errorf("the workspace speaks change-notification version %d, this client speaks %d",
-			frame.Hello.Version, notify.Version)
-	}
-
 	return &notifySink{stream: stream, w: bufio.NewWriter(stream)}, nil
 }
 

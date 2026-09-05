@@ -21,14 +21,12 @@ func plan(t *testing.T, account string, opts Options) Spec {
 // volumes. `--rm` would delete all of it the moment the daemon stopped: on a
 // restart, on an OOM kill, on a redeploy, and the user would have no idea
 // why their work evaporated. elevate's child DOES take --rm because it is a
-// singleton whose state is worthless; copying that here would be the single
-// worst mistake available in this package.
+// singleton whose state is worthless, and the two now share one renderer.
+//
+// A tripwire, like TestADaemonCarriesNoRestartPolicy: nothing in Spec can ask
+// for the flag, so this fails only if somebody adds a way.
 func TestADaemonIsNeverRemovedOnExit(t *testing.T) {
-	spec := plan(t, "alice", Options{})
-	if spec.Remove {
-		t.Error("Remove is set; a user's daemon would be deleted when it stopped")
-	}
-	if args := spec.Args(); slices.Contains(args, "--rm") {
+	if args := plan(t, "alice", Options{}).Args(); slices.Contains(args, "--rm") {
 		t.Errorf("--rm rendered: %v", args)
 	}
 }

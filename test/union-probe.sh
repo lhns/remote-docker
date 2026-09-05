@@ -44,23 +44,10 @@
 #   a dead union cannot be told from its leftover dir  12
 #   an agent restart cannot adopt a live mount         12
 #
-# THE VERDICT, measured 2026-09-01 on ubuntu-latest:
-#
-#   The KERNEL union is out. An overlay whose lower is NFS is readable only from
-#   the mount namespace that created it -- a container gets EOPNOTSUPP on any
-#   lower-backed file while upper-backed files work, and so does the HOST in a
-#   plain `unshare --mount` with no container involved. Binding the lower in
-#   beside it does not help, so it is namespace identity rather than visibility,
-#   and a volume of type overlay fails the same way whoever mounts it. docker's
-#   own overlay2 is unaffected because its lower is ext4.
-#
-#   fuse-overlayfs is in, and the workspace image already carries it. A
-#   container reads both layers through it; a write through it fires IN_MODIFY,
-#   IN_CLOSE_WRITE and IN_DELETE inside the container; a deletion leaves the
-#   same char-device whiteout write-back needs; and 200 cached reads cost 0.01s
-#   against 0.00s for the kernel union, which is nothing beside one 160ms round
-#   trip. Its new failure mode is loud: kill the daemon and the container gets
-#   ENOTCONN rather than silence.
+# THE VERDICT (ADR 0044): the kernel union is out, because an overlay whose
+# lower is NFS is readable only from the mount namespace that created it;
+# fuse-overlayfs is in, and the workspace image carries it. Sections 6 and 6d
+# are where both are measured, and the record is where they are reasoned about.
 #
 # The risks NOT here are the ones that are about our code rather than the
 # kernel -- write-back conflicts, the collector taking a cache volume, the
@@ -235,7 +222,7 @@ echo "== 5. does a watcher inside the container see it? =="
 # If it does, ADR 0014 -- open since the beginning, because NFS carries no
 # change notification -- closes for these shares, and closes properly: the write
 # IS the event rather than a poke that approximates one.
-if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./watchprobe); then
+if build_probe watchprobe "$WORK/watchprobe"; then
     # Through the merged mount, not into the lower: whether a directory created
     # in the lower shows up is section 6's question, and this section must not
     # depend on its answer.
@@ -245,10 +232,7 @@ if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchp
 
     if docker run -d --name union-probe-watch -v "$MERGED:/w" -v "$WORK/watchprobe:/watchprobe" \
         alpine:3 /watchprobe -timeout 30s /w/watched >/dev/null 2>&1; then
-        for _ in $(seq 1 20); do
-            outputs '^READY' docker logs union-probe-watch && break
-            sleep 1
-        done
+        wait_ready union-probe-watch 20
 
         sleep 1
         echo "edited through the union" | sudo tee "$MERGED/watched/reloaded.txt" >/dev/null
@@ -295,17 +279,13 @@ report "container, nested" docker exec "$HOLDER" cat /w/pkg/pristine-nested.txt
 report "container, listing a lower directory" docker exec "$HOLDER" ls -la /w/pkg
 report "container, listing the root" docker exec "$HOLDER" ls -la /w
 
-# MEASURED, 2026-09-01, and the reason the kernel union is not what ships: this
-# fails with EOPNOTSUPP. Not a container problem -- the same open fails from the
-# host in a plain `unshare --mount` and succeeds in the original namespace, so an
-# overlay whose lower is NFS is readable only from the mount namespace that
-# created it. docker's own overlay2 is unaffected because its lower is ext4.
-#
-# Recorded rather than asserted, because a job that is permanently red is a job
-# nobody reads. If a kernel ever fixes this, this line starts passing and the
-# cheaper union becomes available again.
+# Fails with EOPNOTSUPP: an overlay whose lower is NFS is readable only from
+# the mount namespace that created it, which is why the kernel union is not
+# what ships (ADR 0044). Recorded rather than asserted, because a job that is
+# permanently red is a job nobody reads; if a kernel ever fixes this, this line
+# starts passing and the cheaper union becomes available again.
 if outputs '^pristine and nested$' docker exec "$HOLDER" cat /w/pkg/pristine-nested.txt; then
-    ok "the KERNEL union can now be read from a container; it could not on 2026-09-01"
+    ok "the KERNEL union can now be read from a container, which ADR 0044 says it cannot"
 else
     info "as expected: a container cannot read an NFS lower through the kernel union"
     info "  [$LAST_OUTPUT]"
@@ -437,14 +417,11 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     rm -rf "$WORK/apply-disk-$$"
 
     # The ADR 0014 claim, asked of the union we would actually ship.
-    if (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$WORK/watchprobe" ./watchprobe); then
+    if build_probe watchprobe "$WORK/watchprobe"; then
         sudo mkdir -p "$FUSE_MERGED/fusewatch"
         echo "before" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
         if docker run -d --name union-probe-fusewatch -v "$FUSE_MERGED:/w"             -v "$WORK/watchprobe:/watchprobe" alpine:3             /watchprobe -timeout 25s /w/fusewatch >/dev/null 2>&1; then
-            for _ in $(seq 1 15); do
-                outputs '^READY' docker logs union-probe-fusewatch && break
-                sleep 1
-            done
+            wait_ready union-probe-fusewatch 15
             sleep 1
             echo "edited through the userspace union" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
             sleep 1

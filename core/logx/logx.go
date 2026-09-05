@@ -7,10 +7,6 @@
 // `remote-docker start --foreground`, and the agent's are read by whoever runs
 // `docker logs` on a workspace that is misbehaving. So the structure is
 // internal (attributes, levels, With) and the rendering stays what it was.
-//
-// Ten packages each declared their own `Logger interface { Printf(...) }`,
-// with a nil check and a logf shim apiece, and one of them spelled it as a func
-// field instead. This is what replaced them.
 package logx
 
 import (

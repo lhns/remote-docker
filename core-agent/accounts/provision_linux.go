@@ -94,12 +94,11 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, st
 	return name, u.HomeDir, nil
 }
 
-// revoke removes an existing account from groups it must no longer be in.
+// reconcileGroups brings an existing account's membership into line: out of
+// Revoke, into Groups.
 //
-// Best effort and deliberately quiet about the ordinary case: `gpasswd -d`
-// fails when the account was never a member, which is what it looks like every
-// time after the first. A failure that matters shows up as the group still
-// being there, which the integration suite asserts rather than trusting this.
+// Best effort: a failure that matters shows up as the membership being wrong,
+// which the integration suite asserts rather than trusting this.
 func (p *UnixProvisioner) reconcileGroups(name string) {
 	for _, group := range p.Revoke {
 		if !inGroup(name, group) {
@@ -110,19 +109,12 @@ func (p *UnixProvisioner) reconcileGroups(name string) {
 		}
 	}
 
-	// And BACK IN, which was missing and stranded people.
-	//
-	// Revoking was added so that switching to a daemon per account took the
-	// `docker` group away from accounts that already existed, or they
-	// kept a socket reaching the parent daemon and the separation was a claim
-	// rather than a fact. It was written in one direction only, so switching
-	// BACK to the shared daemon left every existing account out of the group
-	// and unable to reach any daemon at all: `docker ps` in a shell answering
-	// "permission denied while trying to connect to the Docker daemon socket".
-	//
-	// Membership is reconciled both ways now. An account that already exists
-	// is the normal case on any workspace that has been used, so anything only
-	// applied at creation is, in practice, applied to nobody.
+	// Both directions. An account that already exists is the normal case on
+	// any workspace that has been used, so anything only applied at creation
+	// is applied to nobody: revoking alone left every existing account out of
+	// `docker` after a switch BACK to the shared daemon, with `docker ps` in a
+	// shell answering "permission denied while trying to connect to the
+	// Docker daemon socket".
 	for _, group := range p.Groups {
 		if inGroup(name, group) {
 			continue

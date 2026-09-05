@@ -313,3 +313,14 @@ func TestModeString(t *testing.T) {
 		}
 	}
 }
+
+// A nil exclude list means the defaults; an explicit list, empty included, is
+// applied as it stands.
+func TestExcludesOr(t *testing.T) {
+	if got := ExcludesOr(nil); len(got) != len(DefaultExcludes) {
+		t.Errorf("ExcludesOr(nil) = %v, want DefaultExcludes", got)
+	}
+	if got := ExcludesOr([]string{}); len(got) != 0 {
+		t.Errorf("ExcludesOr([]) = %v, want an empty list", got)
+	}
+}

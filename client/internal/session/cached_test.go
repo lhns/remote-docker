@@ -38,10 +38,8 @@ func TestCachedStoreRoundTrip(t *testing.T) {
 func TestCachedStoreIgnoresARecordFromElsewhere(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "caches", "ws.json")
 	data, err := json.Marshal(cachedFile{
-		Version: cachedFileVersion,
-		Machine: "some-other-laptop",
-		User:    "someone-else",
-		Shares:  map[string][]string{"/m/aaaa": {"/a.go"}},
+		boundRecord: boundRecord{Version: cachedFileVersion, Machine: "some-other-laptop", User: "someone-else"},
+		Shares:      map[string][]string{"/m/aaaa": {"/a.go"}},
 	})
 	if err != nil {
 		t.Fatal(err)

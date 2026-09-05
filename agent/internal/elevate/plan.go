@@ -47,12 +47,8 @@ type Mount struct {
 	ReadOnly    bool
 }
 
-// Arg renders the mount as a -v value.
-//
-// Exported because agent/internal/daemons renders mounts for its own
-// containers and had a byte-identical copy of this, down to the reasoning
-// below, which is exactly the kind of duplication that survives until the
-// two copies disagree about something load-bearing.
+// Arg renders the mount as a -v value. Exported because agent/internal/daemons
+// mounts into its own containers too.
 func (m Mount) Arg() string {
 	source := m.Source
 	if m.Type == "volume" && m.Name != "" {
@@ -74,15 +70,31 @@ type ContainerInfo struct {
 	Env    []string
 }
 
-// RunSpec describes the privileged container to launch.
+// RunSpec describes a container to `docker run`: the privileged child here,
+// and an account's daemon in agent/internal/daemons, which renders through
+// this so there is one command line to get right.
 type RunSpec struct {
 	Name       string
 	Image      string
 	Network    string
+	Entrypoint string
 	Privileged bool
-	Remove     bool
-	Mounts     []Mount
-	Env        []string
+
+	// Detach runs the container with -d and leaves it; otherwise -i, attached
+	// and waited on, which is what a supervisor forwarding signals wants.
+	Detach bool
+
+	// Remove is --rm. Right for a singleton whose state is worthless, and it
+	// deletes everything a per-account daemon holds the moment it stops, so it
+	// is read from the field and never assumed.
+	Remove bool
+
+	Labels []string
+	Mounts []Mount
+	Env    []string
+
+	// Command follows the image.
+	Command []string
 }
 
 // Args renders the spec as arguments to `docker run`.
@@ -92,12 +104,9 @@ type RunSpec struct {
 // visible in a test rather than buried in a command line.
 func (s RunSpec) Args() []string {
 	args := []string{"run", "-i"}
-
-	// From the field, never unconditionally. Today's only caller wants --rm,
-	// because elevate's child is a singleton whose state is worthless, so
-	// hardcoding it would look harmless. The next caller is a per-account
-	// daemon holding somebody's running containers, and for that one --rm
-	// discards their work.
+	if s.Detach {
+		args[1] = "-d"
+	}
 	if s.Remove {
 		args = append(args, "--rm")
 	}
@@ -107,8 +116,14 @@ func (s RunSpec) Args() []string {
 	if s.Network != "" {
 		args = append(args, "--network", s.Network)
 	}
+	if s.Entrypoint != "" {
+		args = append(args, "--entrypoint", s.Entrypoint)
+	}
 	if s.Name != "" {
 		args = append(args, "--name", s.Name)
+	}
+	for _, l := range s.Labels {
+		args = append(args, "--label", l)
 	}
 	for _, e := range s.Env {
 		args = append(args, "-e", e)
@@ -116,7 +131,8 @@ func (s RunSpec) Args() []string {
 	for _, m := range s.Mounts {
 		args = append(args, "-v", m.Arg())
 	}
-	return append(args, s.Image)
+	args = append(args, s.Image)
+	return append(args, s.Command...)
 }
 
 // Options tune the plan.
