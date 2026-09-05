@@ -14,5 +14,195 @@
 #       <group>/<step>: <op> -> <result> [<stat>]
 #   - every other non-comment line is such a transcript line
 #
-# Empty until the first run of machine.yml has produced a transcript. A line
-# is added here only with a reason; a deviation nobody can explain is a bug.
+# A deviation nobody can explain is a bug: it stays out of here and fails the
+# job until somebody names it. What the Linux file lists and also happens here
+# is repeated here; NTFS's own differences follow.
+#
+# mode, uid and gid appear on the attrs group's lines and on create/create
+# only (step.format in test/probes/fsprobe/stat.go), so the one ownership
+# policy is compared once per run instead of on every stat line.
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+create/create: open(O_CREAT|O_EXCL) f -> ok [file ino#1 nlink=1 size=0 mode=0777 uid=10000 gid=10000 mtime=new]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/create: create m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=new]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/chmod-644.chmod: chmod 0644 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/chmod-600.chmod: chmod 0600 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/chmod-755.chmod: chmod 0755 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/chmod-000.chmod: chmod 0000 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/chmod-x.chmod: chmod 0111 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/chown-self: chown m to own uid:gid -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046); chown is accepted and dropped
+attrs/chown-other: chown m to 1234:1234 -> ok:uid=10000 [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016)
+attrs/utime-path: utimensat m to epoch 1000000000 -> ok:ignored [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016)
+attrs/futimens-fd: touch m to now, futimes fd to epoch 1000000000 -> ok:ignored [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/mtime-on-write.stat: stat m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046)
+attrs/mtime-on-write.write: sleep 1.1s, write m, stat (reports bumped/not-bumped) -> ok:bumped [file ino#1 nlink=1 size=2 mode=0777 uid=10000 gid=10000 mtime=not-older]
+
+# NFS silly-rename: the client keeps a .nfs* name for a file unlinked while open
+remove/unlink-open.readdir-open: readdir for .nfs* while open -> ok:sillyrename
+
+# NFS silly-rename: the .nfs* name is still in the directory just after the last close
+remove/unlink-open.readdir-closed: readdir for .nfs* after close -> ok:sillyrename
+
+# Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016); touch(1) sets the time and nothing else, so nothing is bumped
+workload/tar.touch: sleep 1.1s, touch src/f00 (reports bumped/not-bumped) -> ok:not-bumped [file ino#1 nlink=1 size=100 mtime=not-older]
+
+# a share reports the workspace account as owner with wide bits (ADR 0046), so git's safe.directory check sees a foreign owner
+workload/git.owner: owner of the directory -> ok:foreign
+
+# NTFS is case-insensitive: `a` and `A` are one file
+names/case.create: create a and A -> EEXIST
+
+# NTFS is case-insensitive: `a` and `A` are one file
+names/case.readdir: readdir count of a/A -> ok:1 entry
+
+# NTFS is case-insensitive: `a` and `A` are one file
+names/case.write: write a, write A, read a -> ok:aliased
+
+# NTFS is case-insensitive: `a` and `A` are one file, so the second unlink finds nothing
+names/case.unlink: unlink a and A -> ENOENT
+
+# nul is deliberately not listed here, and must keep failing as unexplained:
+# it reports create -> EEXIST and unlink -> EIO because the name still
+# resolves to the DOS device on lookup, which is a bug in attrFS rather than
+# something NTFS forces.
+#
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/con.create: create "con" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/con.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/con.unlink: unlink "con" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/aux.create: create "aux" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/aux.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/aux.unlink: unlink "aux" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/com1.create: create "com1" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/com1.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/com1.unlink: unlink "com1" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/trailing-dot.create: create "trailing." -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/trailing-dot.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/trailing-dot.unlink: unlink "trailing." -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/trailing-space.create: create "trailing " -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/trailing-space.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/trailing-space.unlink: unlink "trailing " -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/colon.create: create "colon:name" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/colon.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/colon.unlink: unlink "colon:name" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/star.create: create "star*" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/star.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/star.unlink: unlink "star*" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/question.create: create "question?" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/question.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/question.unlink: unlink "question?" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/quote.create: create "quote\"" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/quote.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/quote.unlink: unlink "quote\"" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/pipe.create: create "pipe|" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/pipe.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/pipe.unlink: unlink "pipe|" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/ltgt.create: create "lt<gt>" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/ltgt.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/ltgt.unlink: unlink "lt<gt>" -> ENOENT
+
+# NTFS gives a recreated name a new file reference number; ext4 reuses the inode
+remove/recreate-same-name: create r, unlink, create again -> ok:different-ino [file ino#1 nlink=1 size=0 mtime=new]
+
+# a symlink is a reparse point, whose size NTFS reports as 0 where ext4 reports the target path's length
+links/symlink: create target.txt, symlink target.txt -> link, readlink -> ok:target.txt [symlink ino#2 nlink=1 size=0 mtime=new]
+
+# a symlink is a reparse point, whose size NTFS reports as 0 where ext4 reports the target path's length
+links/dangling.lstat: lstat dang -> ok [symlink ino#3 nlink=1 size=0 mtime=new]
+
+# NTFS counts no link per subdirectory and reports no size for a directory, where ext4 reports two links and one block
+rename/over-empty-dir: mkdir e1 e2, rename e1 -> e2 -> ok [dir ino#4 nlink=1 size=0 mtime=new]
+
+# NTFS counts no link per subdirectory and reports no size for a directory, where ext4 reports two links and one block
+links/symlink-to-dir: mkdir sd sd/f, symlink sd -> sdl, readdir sdl -> ok:1 entries [dir ino#4 nlink=1 size=0 mtime=new]
+
+# NTFS counts no link per subdirectory and reports no size for a directory, where ext4 reports two links and one block
+dirs/mkdir-chain-50: 50 nested dirs, stat leaf -> ok [dir ino#1 nlink=1 size=0 mtime=new]

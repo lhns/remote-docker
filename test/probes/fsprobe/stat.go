@@ -28,18 +28,25 @@ type probe struct {
 	mtimes map[string]unix.Timespec
 }
 
-// group is one running group: its directory and name.
+// group is one running group: its directory, its name and the two things its
+// steps print differently. owner is the whole group opting into the mode, uid
+// and gid fields; noIno is it opting out of the inode label. Both come from the
+// groups table, so nothing reads a group's name to decide what to print.
 type group struct {
-	p    *probe
-	name string
-	dir  string
+	p     *probe
+	name  string
+	dir   string
+	owner bool
+	noIno bool
 }
 
 // step is the context handed to one step function: it collects the optional
-// stat suffix and knows which group it prints under.
+// stat suffix and knows which group it prints under. owner is whether its stat
+// prints mode, uid and gid; see format.
 type step struct {
-	g    *group
-	stat string
+	g     *group
+	stat  string
+	owner bool
 }
 
 // resultOf turns an error into the transcript's <result> field.
@@ -86,6 +93,16 @@ func (g *group) run(name, op string, f func(s *step) (value string, err error)) 
 	_, _ = fmt.Fprintln(g.p.out, line)
 }
 
+// runOwner is run for a step whose stat prints mode, uid and gid where its
+// group otherwise would not. One step does: create/create, so that a fresh
+// file's ownership and mode are in the transcript once outside the attrs group.
+func (g *group) runOwner(name, op string, f func(s *step) (value string, err error)) {
+	g.run(name, op, func(s *step) (string, error) {
+		s.owner = true
+		return f(s)
+	})
+}
+
 // path resolves a name relative to the group directory.
 func (g *group) path(name string) string { return filepath.Join(g.dir, name) }
 
@@ -114,32 +131,55 @@ func (s *step) record(name string, err error, st *unix.Stat_t) {
 		s.stat = "[stat:" + resultOf(err) + "]"
 		return
 	}
-	s.stat = s.g.p.format(s.g.name+"/"+name, st)
+	s.stat = s.format(s.g.name+"/"+name, st)
 }
 
 // format normalises a stat: no device, the inode as a label assigned on first
 // sight in this group, and the mtime relative to the previous stat of the same
 // path in the same group.
-func (p *probe) format(key string, st *unix.Stat_t) string {
-	label := p.label(st)
+//
+// mode, uid and gid are printed only where the step asked for them, which is
+// the attrs group and create/create. A share reports the workspace account as
+// owner with wide bits (ADR 0046), so printing them everywhere puts one
+// deliberate policy on most lines of the transcript and buries every other
+// finding under it; printed once per group that is about them, it is still
+// compared. The inode label is dropped where the group's steps are independent
+// of one another (names), because there it numbers nothing a reader can use and
+// drifts as soon as one host refuses a name another accepts.
+//
+// The mtime is reported as new, older or not-older, and NOT as same/advanced.
+// A filesystem's timestamp granularity is coarse (ext4 stamps with a jiffy),
+// so two mutations a few hundred microseconds apart may or may not land in the
+// same tick: `same` and `advanced` are then the same run twice giving different
+// transcripts. Where a write bumping the mtime is the thing being measured, the
+// step separates the two by more than a second itself and reports the answer as
+// its own value (`attrs/mtime-on-write.write`, `workload/tar.touch`).
+func (s *step) format(key string, st *unix.Stat_t) string {
+	p := s.g.p
+
+	var b strings.Builder
+	b.WriteString("[" + fileType(st.Mode))
+	if !s.g.noIno {
+		fmt.Fprintf(&b, " ino#%d", p.label(st))
+	}
+	fmt.Fprintf(&b, " nlink=%d size=%d", uint64(st.Nlink), st.Size) //nolint:unconvert // Nlink's width differs per arch
+	if s.owner {
+		fmt.Fprintf(&b, " mode=%04o uid=%d gid=%d", st.Mode&0o7777, st.Uid, st.Gid)
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	mtime := "new"
 	if prev, ok := p.mtimes[key]; ok {
-		switch {
-		case st.Mtim == prev:
-			mtime = "same"
-		case st.Mtim.Sec > prev.Sec || (st.Mtim.Sec == prev.Sec && st.Mtim.Nsec > prev.Nsec):
-			mtime = "advanced"
-		default:
+		mtime = "not-older"
+		if st.Mtim.Sec < prev.Sec || (st.Mtim.Sec == prev.Sec && st.Mtim.Nsec < prev.Nsec) {
 			mtime = "older"
 		}
 	}
 	p.mtimes[key] = st.Mtim
 
-	return fmt.Sprintf("[%s ino#%d nlink=%d size=%d mode=%04o uid=%d gid=%d mtime=%s]",
-		fileType(st.Mode), label, uint64(st.Nlink), st.Size, st.Mode&0o7777, st.Uid, st.Gid, mtime) //nolint:unconvert // Nlink's width differs per arch
+	fmt.Fprintf(&b, " mtime=%s]", mtime)
+	return b.String()
 }
 
 // label returns the inode label of a stat, assigning one on first sight, for
@@ -207,7 +247,7 @@ func run(dir string, names []string, large bool, out io.Writer) error {
 				continue
 			}
 			found = true
-			g := &group{p: p, name: name, dir: filepath.Join(p.root, name)}
+			g := &group{p: p, name: name, dir: filepath.Join(p.root, name), owner: gr.owner, noIno: gr.noIno}
 			p.inos = map[[2]uint64]int{} // labels are per group; see probe
 			_ = os.RemoveAll(g.dir)
 			if err := os.MkdirAll(g.dir, 0o755); err != nil {

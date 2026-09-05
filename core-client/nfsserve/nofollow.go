@@ -32,6 +32,35 @@ type noFollowFS struct {
 	billy.Filesystem // a bound osfs, whose Root is the share directory
 }
 
+// Stat and Lstat refuse a name the host cannot spell, so a lookup of `nul`
+// finds the DOS device rather than nothing: without this the probe's create of
+// `nul` answers EEXIST from a device that then cannot be unlinked (EIO), where
+// the same name is refused on the create path.
+func (n *noFollowFS) Stat(name string) (os.FileInfo, error) {
+	if n.unspellable(name) {
+		return nil, os.ErrNotExist
+	}
+	return n.Filesystem.Stat(name)
+}
+
+func (n *noFollowFS) Lstat(name string) (os.FileInfo, error) {
+	if n.unspellable(name) {
+		return nil, os.ErrNotExist
+	}
+	return n.Filesystem.Lstat(name)
+}
+
+// unspellable reports whether a lookup names something the host cannot spell.
+// The share root and the two directory names have no base of their own and are
+// always spellable; everything else is the create-side rule.
+func (n *noFollowFS) unspellable(name string) bool {
+	base := n.base(name)
+	if base == "" || base == "." || base == ".." || base == string(filepath.Separator) {
+		return false
+	}
+	return checkNewName(base) != nil
+}
+
 func (n *noFollowFS) Create(name string) (billy.File, error) {
 	if err := checkNewName(n.base(name)); err != nil {
 		return nil, err

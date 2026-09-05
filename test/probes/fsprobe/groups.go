@@ -18,21 +18,25 @@ import (
 // on; keep them stable, and unique within a run: a step printing several
 // lines carries a `.<sub>` suffix per line (`case.create`, `case.readdir`),
 // which fsprobe_test.go asserts.
+// owner and noIno are what a group prints differently; see step.format in
+// stat.go for why they are a group's property and not a rule about its name.
 var groups = []struct {
-	name string
-	run  func(g *group)
+	name  string
+	owner bool // print mode, uid and gid on every stat: the attrs group is about them
+	noIno bool // print no inode label: the names group's steps share no inode
+	run   func(g *group)
 }{
-	{"create", groupCreate},
-	{"names", groupNames},
-	{"rename", groupRename},
-	{"remove", groupRemove},
-	{"links", groupLinks},
-	{"attrs", groupAttrs},
-	{"dirs", groupDirs},
-	{"mmap", groupMmap},
-	{"locks", groupLocks},
-	{"concurrency", groupConcurrency},
-	{"workload", groupWorkload},
+	{name: "create", run: groupCreate},
+	{name: "names", noIno: true, run: groupNames},
+	{name: "rename", run: groupRename},
+	{name: "remove", run: groupRemove},
+	{name: "links", run: groupLinks},
+	{name: "attrs", owner: true, run: groupAttrs},
+	{name: "dirs", run: groupDirs},
+	{name: "mmap", run: groupMmap},
+	{name: "locks", run: groupLocks},
+	{name: "concurrency", run: groupConcurrency},
+	{name: "workload", run: groupWorkload},
 }
 
 const (
@@ -57,6 +61,50 @@ func match(got, want []byte) string {
 	return "mismatch"
 }
 
+// band reports n as ~want when it is within tol of it, and exactly otherwise.
+// A count that is inherently approximate is reported approximately, so that two
+// runs of the same probe against the same filesystem cannot differ on it while
+// a filesystem that is out by thousands still shows up.
+func band(n, want, tol int) string {
+	if n >= want-tol && n <= want+tol {
+		return fmt.Sprintf("~%d", want)
+	}
+	return fmt.Sprint(n)
+}
+
+// exactly reports whether n is the number the step asked for, without printing
+// a number that a partial failure would make vary between runs.
+func exactly(n, want int) string {
+	if n == want {
+		return fmt.Sprint(want)
+	}
+	return fmt.Sprintf("not-%d", want)
+}
+
+// some buckets a count of anomalies to none/some: how MANY torn lines or
+// duplicated names a filesystem produces is timing, whether it produces any is
+// the property.
+func some(n int) string {
+	if n == 0 {
+		return "none"
+	}
+	return "some"
+}
+
+// bumped answers whether name's mtime is later than before. Only meaningful
+// where the caller has waited longer than the filesystem's timestamp
+// granularity; see probe.format in stat.go.
+func bumped(g *group, name string, before unix.Timespec) (string, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(g.path(name), &st); err != nil {
+		return "", err
+	}
+	if st.Mtim.Sec > before.Sec || (st.Mtim.Sec == before.Sec && st.Mtim.Nsec > before.Nsec) {
+		return "bumped", nil
+	}
+	return "not-bumped", nil
+}
+
 // createExcl is open(O_CREAT|O_EXCL), closed again.
 func createExcl(path string) error {
 	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL, 0o644)
@@ -79,7 +127,9 @@ func countLines(data []byte, ok func(string) bool) (n, torn int) {
 }
 
 func groupCreate(g *group) {
-	g.run("create", "open(O_CREAT|O_EXCL) f", func(s *step) (string, error) {
+	// runOwner, not run: this is the one line outside the attrs group that
+	// shows what a freshly created file's mode and ownership are.
+	g.runOwner("create", "open(O_CREAT|O_EXCL) f", func(s *step) (string, error) {
 		err := createExcl(g.path("f"))
 		s.Stat("f")
 		return "", err
@@ -146,13 +196,19 @@ func groupCreate(g *group) {
 		s.Fstat(fd, "f")
 		return "", err
 	})
-	g.run("sparse", "pwrite 1 byte at 1 GiB", func(*step) (string, error) {
+	g.run("sparse", "pwrite 1 byte at 1 GiB, fsync (blocks bucketed to 0 or some, never counted)", func(*step) (string, error) {
 		fd, err := unix.Open(g.path("sparse"), unix.O_RDWR|unix.O_CREAT|unix.O_EXCL, 0o644)
 		if err != nil {
 			return "", err
 		}
 		defer closeFd(fd)
 		if _, err := unix.Pwrite(fd, []byte{1}, gib); err != nil {
+			return "", err
+		}
+		// Without this the answer is a race rather than a property of the
+		// filesystem: under delayed allocation st_blocks stays 0 until
+		// writeback, so the same run twice reports 0 and then some.
+		if err := unix.Fsync(fd); err != nil {
 			return "", err
 		}
 		var st unix.Stat_t
@@ -193,6 +249,10 @@ func groupCreate(g *group) {
 }
 
 func groupNames(g *group) {
+	// This group prints no inode label (noIno in the groups table): every name
+	// is created, listed and unlinked on its own, so a label relates nothing to
+	// anything, and a host that refuses one name renumbers every name after it.
+	//
 	// listed says whether one ReadDir of the group directory shows name.
 	listed := func(dir, name string) (string, error) {
 		entries, err := os.ReadDir(g.path(dir))
@@ -675,15 +735,27 @@ func groupAttrs(g *group) {
 		}
 		return applied()
 	})
+	var beforeWrite unix.Timespec
 	g.run("mtime-on-write.stat", "stat m", func(s *step) (string, error) {
+		var st unix.Stat_t
+		if err := unix.Stat(g.path("m"), &st); err != nil {
+			return "", err
+		}
+		beforeWrite = st.Mtim
 		s.Stat("m")
 		return "", nil
 	})
-	g.run("mtime-on-write.write", "sleep 1.1s, write m, stat", func(s *step) (string, error) {
+	g.run("mtime-on-write.write", "sleep 1.1s, write m, stat (reports bumped/not-bumped)", func(s *step) (string, error) {
+		// The sleep is longer than any filesystem's timestamp granularity, so
+		// bumped/not-bumped is a property of the filesystem rather than of when
+		// the two operations happened to fall. The stat suffix cannot answer it:
+		// see probe.format in stat.go.
 		time.Sleep(1100 * time.Millisecond)
-		err := os.WriteFile(g.path("m"), []byte("mm"), 0o644)
+		if err := os.WriteFile(g.path("m"), []byte("mm"), 0o644); err != nil {
+			return "", err
+		}
 		s.Stat("m")
-		return "", err
+		return bumped(g, "m", beforeWrite)
 	})
 }
 
@@ -730,7 +802,7 @@ func groupDirs(g *group) {
 		}
 		return fmt.Sprint(len(entries)), nil
 	})
-	g.run("readdir-modified-midscan", "getdents; after 1st buffer create 10, remove 10 listed", func(*step) (string, error) {
+	g.run("readdir-modified-midscan", "getdents; after 1st buffer create 10, remove 10 listed (count banded, dups bucketed)", func(*step) (string, error) {
 		var modifyErr error
 		names, err := getdents(g.path(many), func(first []string) {
 			for i := range 10 {
@@ -760,7 +832,12 @@ func groupDirs(g *group) {
 				dups++
 			}
 		}
-		return fmt.Sprintf("entries=%d dups=%d", len(names), dups), nil
+		// How many entries a scan interrupted by a mutation returns is not a
+		// constant: it depends on where the created and removed names fall
+		// relative to the buffer already read, which is the kernel's business
+		// and not the filesystem's. What the two transcripts have to agree on
+		// is that the scan finished near 5000 and whether it repeated a name.
+		return fmt.Sprintf("entries=%s dups=%s", band(len(names), 5000, 20), some(dups)), nil
 	})
 	g.run("order-stable", "two getdents listings compared", func(*step) (string, error) {
 		a, err := getdents(g.path(many), nil)
@@ -894,7 +971,7 @@ func waitAll(cmds []*exec.Cmd) error {
 }
 
 func groupConcurrency(g *group) {
-	g.run("append-2x1000", "2 children append 1000 lines each with O_APPEND", func(*step) (string, error) {
+	g.run("append-2x1000", "2 children append 1000 lines each with O_APPEND (reports whether all 2000 arrived and whether any line is torn)", func(*step) (string, error) {
 		if err := createExcl(g.path("app")); err != nil {
 			return "", err
 		}
@@ -916,9 +993,9 @@ func groupConcurrency(g *group) {
 		n, torn := countLines(data, func(l string) bool {
 			return len(l) == 8 && (l[0] == 'x' || l[0] == 'y') && l[1] == ' '
 		})
-		return fmt.Sprintf("%d lines torn=%d", n, torn), nil
+		return fmt.Sprintf("lines=%s torn=%s", exactly(n, 2000), some(torn)), nil
 	})
-	g.run("create-8x200", "8 children create 200 files each in one dir", func(*step) (string, error) {
+	g.run("create-8x200", "8 children create 200 files each in one dir (reports whether all 1600 are there)", func(*step) (string, error) {
 		if err := unix.Mkdir(g.path("cr"), 0o755); err != nil {
 			return "", err
 		}
@@ -937,7 +1014,7 @@ func groupConcurrency(g *group) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprint(len(entries)), nil
+		return "entries=" + exactly(len(entries), 1600), nil
 	})
 }
 
@@ -997,11 +1074,19 @@ func groupWorkload(g *group) {
 			}
 			return fmt.Sprintf("%d files", n), nil
 		})
-		g.run("tar.touch", "touch src/f00", func(s *step) (string, error) {
+		g.run("tar.touch", "sleep 1.1s, touch src/f00 (reports bumped/not-bumped)", func(s *step) (string, error) {
+			var st unix.Stat_t
+			if err := unix.Stat(g.path("src/f00"), &st); err != nil {
+				return "", err
+			}
+			// As in attrs/mtime-on-write.write: the sleep is what makes the
+			// answer the filesystem's rather than the scheduler's.
 			time.Sleep(1100 * time.Millisecond)
-			err := g.sh(nil, "touch", "src/f00")
+			if err := g.sh(nil, "touch", "src/f00"); err != nil {
+				return "", err
+			}
 			s.Stat("src/f00")
-			return "", err
+			return bumped(g, "src/f00", st.Mtim)
 		})
 		g.run("tar.chmod", "chmod 600 src/f00", func(s *step) (string, error) {
 			err := g.sh(nil, "chmod", "600", "src/f00")
@@ -1014,12 +1099,50 @@ func groupWorkload(g *group) {
 		g.run("git.lookup", "git in PATH", func(*step) (string, error) { return "no-git", nil })
 		return
 	}
+	// git is pinned so that what it does here is a function of the filesystem
+	// and of nothing else. Every input that varies run to run is fixed: the two
+	// commit timestamps, the identity, the locale and the timezone, so 200
+	// commits produce byte-identical objects twice; the config files, so the
+	// machine's own git config cannot reach in; and auto gc, which otherwise
+	// fires from inside `git commit` at a threshold nothing here controls and
+	// detaches a second process that outlives the step. HOME is the probe root
+	// rather than the repository, so anything git writes to it cannot arrive as
+	// an untracked file in `git status`.
+	//
 	// A repository owned by another uid (root_squash) is refused by git's
 	// safe.directory check, which would hide everything after it; the
 	// ownership is reported on its own line instead and the check waived.
-	env := []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "HOME=" + g.dir}
+	const gitDate = "@1000000000 +0000" // git's raw format; the epoch attrs uses
+	env := []string{
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"HOME=" + g.p.root,
+		"XDG_CONFIG_HOME=" + g.p.root,
+		"GIT_AUTHOR_DATE=" + gitDate,
+		"GIT_COMMITTER_DATE=" + gitDate,
+		"GIT_AUTHOR_NAME=fsprobe",
+		"GIT_AUTHOR_EMAIL=fsprobe@example",
+		"GIT_COMMITTER_NAME=fsprobe",
+		"GIT_COMMITTER_EMAIL=fsprobe@example",
+		"GIT_TERMINAL_PROMPT=0",
+		"TZ=UTC",
+		"LC_ALL=C",
+		"LANG=C",
+	}
+	gitArgs := func(args []string) []string {
+		return append([]string{
+			"-c", "safe.directory=*",
+			"-c", "commit.gpgsign=false",
+			"-c", "gc.auto=0",
+			"-c", "gc.autoDetach=false",
+			"-c", "core.fsmonitor=false",
+			"-c", "advice.detachedHead=false",
+			"-c", "init.defaultBranch=main",
+		}, args...)
+	}
 	git := func(args ...string) error {
-		return g.sh(env, "git", append([]string{"-c", "safe.directory=*", "-c", "commit.gpgsign=false"}, args...)...)
+		return g.sh(env, "git", gitArgs(args)...)
 	}
 	g.run("git.owner", "owner of the directory", func(*step) (string, error) {
 		var st unix.Stat_t
@@ -1058,7 +1181,7 @@ func groupWorkload(g *group) {
 	g.run("git.status", "git status --porcelain, twice", func(*step) (string, error) {
 		dirty := 0
 		for range 2 {
-			cmd := exec.Command("git", "-c", "safe.directory=*", "status", "--porcelain")
+			cmd := exec.Command("git", gitArgs([]string{"status", "--porcelain"})...)
 			cmd.Dir = g.dir
 			cmd.Env = append(os.Environ(), env...)
 			out, err := cmd.Output()

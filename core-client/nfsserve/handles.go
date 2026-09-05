@@ -142,6 +142,21 @@ func exportKey(export string) []byte {
 	return sum[:exportKeySize]
 }
 
+// Rename re-points a cached handle at the file's new path instead of forgetting
+// it, so a client that renames a file it holds open keeps its handle. Forwarded
+// for the same reason as the verifier pair below: embedding does not carry an
+// optional interface, and without it every rename costs the opener an ESTALE,
+// including the silly-rename the kernel does for an unlinked open file.
+func (h *rootHandler) Rename(sourceFS billy.Filesystem, source []string, destFS billy.Filesystem, dest []string) error {
+	type mover interface {
+		Rename(billy.Filesystem, []string, billy.Filesystem, []string) error
+	}
+	if m, ok := h.Handler.(mover); ok {
+		return m.Rename(sourceFS, source, destFS, dest)
+	}
+	return nil
+}
+
 // VerifierFor and DataForVerifier are READDIR cookie business, which go-nfs
 // asks for through a separate optional interface (nfs.CachingHandler). They are
 // forwarded explicitly because embedding nfs.Handler does not carry them, and
