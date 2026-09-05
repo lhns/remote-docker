@@ -101,7 +101,11 @@ jobs:
     name: a machine on wsl
     runs-on: windows-latest
     needs: [rootfs, probe]
-    timeout-minutes: 30
+    # Fifty, not thirty: creating a machine, importing the rootfs, an idle
+    # disconnect with its three-minute wait and the conformance probe's five
+    # thousand files over the share do not fit, and the job was cancelled
+    # mid-run (2026-09-05).
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
 
