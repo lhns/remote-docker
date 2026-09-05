@@ -41,6 +41,23 @@ func dialWithRetry(host string, port int) (*rpc.Client, error) {
 
 func mountAt(t *testing.T, addr, export string) (*nfsclient.Target, error) {
 	t.Helper()
+	client, fh, err := mountRaw(t, addr, export)
+	if err != nil {
+		return nil, err
+	}
+	// The same connection serves the NFS program, so no second dial.
+	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, fh, export, 0)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("opening target: %w", err)
+	}
+	return target, nil
+}
+
+// mountRaw is the MOUNT call alone: the connection and the root handle, for a
+// test that has to speak an NFS procedure the client library hides.
+func mountRaw(t *testing.T, addr, export string) (*rpc.Client, []byte, error) {
+	t.Helper()
 
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -73,33 +90,26 @@ func mountAt(t *testing.T, addr, export string) (*nfsclient.Target, error) {
 	})
 	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("mount call: %w", err)
+		return nil, nil, fmt.Errorf("mount call: %w", err)
 	}
 
 	status, err := xdr.ReadUint32(res)
 	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("reading mount status: %w", err)
+		return nil, nil, fmt.Errorf("reading mount status: %w", err)
 	}
 	if status != nfsclient.MNT3Ok {
 		client.Close()
-		return nil, fmt.Errorf("mount of %q refused with status %d", export, status)
+		return nil, nil, fmt.Errorf("mount of %q refused with status %d", export, status)
 	}
 
 	fh, err := xdr.ReadOpaque(res)
 	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("reading file handle: %w", err)
+		return nil, nil, fmt.Errorf("reading file handle: %w", err)
 	}
 	_, _ = xdr.ReadUint32List(res)
-
-	// The same connection serves the NFS program, so no second dial.
-	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, fh, export, 0)
-	if err != nil {
-		client.Close()
-		return nil, fmt.Errorf("opening target: %w", err)
-	}
-	return target, nil
+	return client, fh, nil
 }
 
 // mustMount fails the test if the mount is refused.
