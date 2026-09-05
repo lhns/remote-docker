@@ -120,17 +120,14 @@ type Spec struct {
 	Entrypoint string
 	Privileged bool
 
-	// Remove is always false and the field is here to say so out loud. A
-	// user's daemon holds their running containers, their images and their
-	// volumes; `--rm` on it would delete all of that the moment it stopped.
-	Remove bool
-
-	// No restart policy, and this is where somebody will look for one. It
+	// No --rm and no restart policy, and this is where somebody will look for
+	// them. A user's daemon holds their running containers, images and
+	// volumes, and `--rm` deletes all of it the moment the daemon stops. It
 	// carried `unless-stopped` until the agent became the only thing that
-	// starts a daemon (ADR 0019). The parent dockerd was otherwise a
-	// second supervisor beside the agent: a daemon that would not start
-	// crash-looped with nothing of ours watching. Ensure starts one when its
-	// account connects, and that is the whole lifecycle.
+	// starts a daemon (ADR 0019); the parent dockerd was otherwise a second
+	// supervisor, and a daemon that would not start crash-looped with nothing
+	// of ours watching. Ensure starts one when its account connects, and that
+	// is the whole lifecycle. plan_test.go pins both flags absent.
 
 	Labels []string
 	Mounts []elevate.Mount
@@ -192,8 +189,7 @@ func SocketPathFor(account string) string {
 	return SocketDir + "/" + account + "/" + SocketName
 }
 
-// HostFor is that same socket as a DOCKER_HOST value. It was written out as
-// "unix://" + SocketPathFor(account) at three call sites.
+// HostFor is that same socket as a DOCKER_HOST value.
 func HostFor(account string) string {
 	return "unix://" + SocketPathFor(account)
 }
@@ -240,7 +236,6 @@ func Plan(account string, opts Options) (Spec, error) {
 		Image:      image,
 		Entrypoint: Entrypoint,
 		Privileged: true,
-		Remove:     false,
 		Labels:     labels,
 		Mounts: append([]elevate.Mount{
 			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
@@ -263,32 +258,20 @@ func Plan(account string, opts Options) (Spec, error) {
 	return spec, nil
 }
 
-// Args renders the spec as arguments to `docker run`.
+// Args renders the spec as arguments to `docker run`, through the one renderer
+// in elevate. Detached, and never removed: see the note on Spec.
 func (s Spec) Args() []string {
-	args := []string{"run", "-d"}
-	if s.Remove {
-		args = append(args, "--rm")
-	}
-	if s.Privileged {
-		args = append(args, "--privileged")
-	}
-	if s.Entrypoint != "" {
-		args = append(args, "--entrypoint", s.Entrypoint)
-	}
-	if s.Name != "" {
-		args = append(args, "--name", s.Name)
-	}
-	for _, l := range s.Labels {
-		args = append(args, "--label", l)
-	}
-	for _, e := range s.Env {
-		args = append(args, "-e", e)
-	}
-	for _, m := range s.Mounts {
-		args = append(args, "-v", m.Arg())
-	}
-	args = append(args, s.Image)
-	return append(args, s.Command...)
+	return elevate.RunSpec{
+		Name:       s.Name,
+		Image:      s.Image,
+		Entrypoint: s.Entrypoint,
+		Privileged: s.Privileged,
+		Detach:     true,
+		Labels:     s.Labels,
+		Mounts:     s.Mounts,
+		Env:        s.Env,
+		Command:    s.Command,
+	}.Args()
 }
 
 // StorageDriverFrom picks a per-account storage driver out of the workspace's

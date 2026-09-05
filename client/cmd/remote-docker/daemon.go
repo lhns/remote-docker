@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,10 +24,6 @@ import (
 // step with the first, and `start --help` describes both.
 
 // How long to wait for an endpoint to start or stop answering.
-//
-// Together, and named, because they were three anonymous literals in three
-// copies of the same loop, and two of them waited for the SAME event with
-// different patience (10s and 15s) for no stated reason.
 //
 // startTimeout is the generous one: the first thing a spawned daemon does is
 // bind the endpoint, but on a cold start it may also be loading a key and
@@ -138,48 +135,63 @@ func newStopCommand() *cobra.Command {
 				_, _ = fmt.Fprintln(out, "not running")
 				return nil
 			}
-
-			// Asked for first, because after the shutdown there is nothing left
-			// to ask. Advisory: a pid we cannot read only costs the second wait
-			// below, never correctness.
-			var st proxy.Status
-			if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
-				st.PID = proxy.Owner(endpoint)
+			if err := stopSession(endpoint); err != nil {
+				return err
 			}
-
-			if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
-				return fmt.Errorf("stopping the session: %w", err)
-			}
-
-			// Confirmed rather than assumed: the daemon acknowledges before it
-			// acts, so a successful reply only means it agreed to stop.
-			if !waitForEndpoint(endpoint, false, stopTimeout) {
-				return fmt.Errorf("the session acknowledged the stop but is still serving %s",
-					proxy.DockerHost(endpoint))
-			}
-
-			// And then for the PROCESS, which is the part that matters to
-			// whatever runs next.
-			//
-			// The endpoint going quiet is not the end of the teardown, it is
-			// the START of it: Session.Close shuts the listener first, so no
-			// new request can arrive mid-teardown, and only then drops the
-			// SSH connection, the reverse tunnel and the NFS export. An account
-			// has exactly ONE reverse-tunnel port (ADR 0003) and a host session
-			// fails hard when it cannot take it, so a `stop` that returned at
-			// the listener left `stop && start` racing a port the workspace had
-			// not released yet.
-			if !waitForExit(st.PID, stopTimeout) {
-				return fmt.Errorf(
-					"the session stopped serving %s but process %d is still running, "+
-						"so its workspace resources may not be free yet",
-					proxy.DockerHost(endpoint), st.PID)
-			}
-
 			_, _ = fmt.Fprintln(out, "stopped")
 			return nil
 		},
 	}
+}
+
+// stopSession asks the session serving an endpoint to stop, and returns once
+// its process has gone.
+//
+// The PROCESS, not the endpoint. The endpoint going quiet is the START of the
+// teardown: Session.Close shuts the listener first, so no request can arrive
+// mid-teardown, and only then drops the SSH connection, the reverse tunnel and
+// the NFS export. An account has exactly ONE reverse-tunnel port (ADR 0003) and
+// a host session fails hard when it cannot take it, so returning at the
+// listener lets the next session start against a port the workspace has not
+// released, which kills its NFS server and takes the session down with it.
+func stopSession(endpoint string) error {
+	// Asked for first, because after the shutdown there is nothing left to
+	// ask. Advisory: a pid we cannot read only costs the second wait below,
+	// never correctness.
+	var st proxy.Status
+	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
+		st.PID = proxy.Owner(endpoint)
+	}
+
+	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
+		return fmt.Errorf("stopping the session: %w", err)
+	}
+
+	// Confirmed rather than assumed: the daemon acknowledges before it acts,
+	// so a successful reply only means it agreed to stop.
+	if !waitForEndpoint(endpoint, false, stopTimeout) {
+		return fmt.Errorf("the session acknowledged the stop but is still serving %s",
+			proxy.DockerHost(endpoint))
+	}
+	if !waitForExit(st.PID, stopTimeout) {
+		return &lingeringError{endpoint: endpoint, pid: st.PID}
+	}
+	return nil
+}
+
+// lingeringError is a session that acknowledged the stop, stopped serving,
+// and whose process is still there. Its own type so restartDaemon can tell it
+// from a refusal: the endpoint is free, so a start can go ahead, and the
+// lingering process is a warning and not a reason to leave the old build
+// serving.
+type lingeringError struct {
+	endpoint string
+	pid      int
+}
+
+func (e *lingeringError) Error() string {
+	return fmt.Sprintf("the session stopped serving %s but process %d is still running, "+
+		"so its workspace resources may not be free yet", proxy.DockerHost(e.endpoint), e.pid)
 }
 
 // startDaemon spawns a foreground session, detached, and waits for it to answer.
@@ -323,7 +335,7 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 	warnSlowStorage(os.Stderr, st)
 	warnTraceGoesNowhere(os.Stderr, st)
 
-	if st.Version == version {
+	if !versionDiffers(st) {
 		return nil
 	}
 
@@ -345,19 +357,27 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 	return nil
 }
 
-// warnVersionMismatch reports a difference without claiming an order.
+// versionDiffers reports whether a session was built from a different commit
+// than this binary.
+func versionDiffers(st proxy.Status) bool { return st.Version != version }
+
+// differentBuild names both builds without claiming an order.
 //
 // "different", never "outdated": a sha build names a commit and says nothing
 // about when, so sha-a7634c0 and sha-95e42ac cannot be sequenced and neither
 // can be compared with a release version. Saying which is newer would be
 // inventing information.
+func differentBuild(st proxy.Status) string {
+	return fmt.Sprintf("a different build (session %s, this binary %s)",
+		orUnknown(st.Version), orUnknown(version))
+}
+
+// warnVersionMismatch reports a session left running because it is in use.
 func warnVersionMismatch(st proxy.Status) {
 	fmt.Fprintf(os.Stderr,
-		"\nwarning: the running session is a different version, and is in use, so it was left alone.\n"+
-			"  session: %s (pid %d)\n"+
-			"  this:    %s\n"+
+		"\nwarning: the running session (pid %d) is %s, and is in use, so it was left alone.\n"+
 			"  fix: `%s` once nothing needs it, or `restart --force` now\n",
-		orUnknown(st.Version), st.PID, orUnknown(version), ourCommand("restart"))
+		st.PID, differentBuild(st), ourCommand("restart"))
 }
 
 func orUnknown(v string) string {
@@ -368,12 +388,18 @@ func orUnknown(v string) string {
 }
 
 // restartDaemon stops a running session and starts one from this binary.
+//
+// A process still exiting after its endpoint went quiet is warned about and
+// not waited for: the endpoint is free and the start binds it, while aborting
+// would leave the old build serving nothing and the new one never started. Any
+// other failure to stop leaves the running session alone.
 func restartDaemon(cfg config.Config, endpoint string) error {
-	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
-		return fmt.Errorf("stopping the running session: %w", err)
-	}
-	if !waitForEndpoint(endpoint, false, stopTimeout) {
-		return fmt.Errorf("the running session did not stop")
+	if err := stopSession(endpoint); err != nil {
+		var lingering *lingeringError
+		if !errors.As(err, &lingering) {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 	return startDaemon(cfg, endpoint)
 }
@@ -446,14 +472,13 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 		return
 	}
 
-	// Reported as a difference, never as an ordering. A sha build names a
-	// commit and says nothing about when.
-	if f.local.Version == version {
+	if !versionDiffers(f.local) {
 		row(out, "session version", orUnknown(f.local.Version))
 		return
 	}
-	rowf(out, "session version", "%s  (this binary: %s, DIFFERENT)",
-		orUnknown(f.local.Version), orUnknown(version))
+	// The marker is what a reader scanning the rows catches; versionsLine
+	// carries the same one so the two views of a session agree.
+	rowf(out, "session version", "%s (DIFFERENT)", differentBuild(f.local))
 }
 
 // warnTraceGoesNowhere says so when this process is tracing and the process
@@ -503,7 +528,12 @@ func warnSlowStorage(w io.Writer, st proxy.Status) {
 	if st.Storage != "vfs" {
 		return
 	}
-	_, _ = fmt.Fprintf(w,
-		"\nwarning: the workspace daemon is on the vfs storage driver, so containers start slowly.\n"+
-			"  fix: set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs, then rebuild the daemon\n")
+	_, _ = fmt.Fprintf(w, "\nwarning: %s.\n  fix: %s\n", slowStorage, fixSlowStorage)
 }
+
+// slowStorage is the one verdict on a daemon using vfs, and fixSlowStorage
+// its remedy. `status` prints the verdict; the warning adds the fix.
+const (
+	slowStorage    = "the workspace daemon is on vfs, so containers start slowly"
+	fixSlowStorage = "set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs, then rebuild the daemon"
+)

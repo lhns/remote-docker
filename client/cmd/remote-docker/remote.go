@@ -129,10 +129,6 @@ account there.`,
 	}
 }
 
-// withQuerySession opens a session that only ASKS the workspace things, runs
-// fn against it, and closes it.
-//
-
 func newGCCommand() *cobra.Command {
 	var orphans bool
 

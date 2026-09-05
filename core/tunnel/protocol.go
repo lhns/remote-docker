@@ -7,8 +7,7 @@ package tunnel
 // belongs beside that payload, so the name and the version it negotiates change
 // together. UDPChannelType is the shape to copy: its name, its payload struct
 // and its framing (datagram.go) are all in this package, because SSH is what
-// defines them. The three workspace commands used to be here and are now in
-// core/workspace, each in its protocol's own file.
+// defines them.
 
 // KeepAliveRequest probes a connection that is otherwise idle.
 //

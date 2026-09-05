@@ -4,6 +4,8 @@ import (
 	"net"
 	"sync"
 	"testing"
+
+	"github.com/lhns/remote-docker/client/internal/endpointtest"
 )
 
 // serve accepts and drops connections until the listener closes.
@@ -34,7 +36,7 @@ func serve(t *testing.T, l net.Listener) {
 // them it looks self-healing; a foreign client gets ENOENT and has no way back.
 // That asymmetry is the bug. Pinned so a fix has something to flip.
 func TestEndpointDiesWithItsListener(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	l, err := Listen(endpoint)
 	if err != nil {
@@ -61,7 +63,7 @@ func TestEndpointDiesWithItsListener(t *testing.T) {
 // session, and it is the asymmetry: the same endpoint that is dead for
 // everybody else comes back for us.
 func TestEndpointComesBackWhenSomethingBindsItAgain(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	first, err := Listen(endpoint)
 	if err != nil {

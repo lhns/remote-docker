@@ -2,12 +2,13 @@ package session
 
 import (
 	"context"
-	"path/filepath"
-	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/client/internal/endpointtest"
 	"github.com/lhns/remote-docker/client/internal/proxy"
+	"github.com/lhns/remote-docker/core-client/fswatch"
 )
 
 // A Query session must not bind the local Docker endpoint.
@@ -19,7 +20,7 @@ import (
 // named pipe genuinely excludes, so `status` could not run at all while a
 // session was running. Which is exactly when a person runs `status`.
 func TestQueryDoesNotBindTheEndpoint(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	s, err := Open(context.Background(), Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
@@ -45,7 +46,7 @@ func TestQueryDoesNotBindTheEndpoint(t *testing.T) {
 
 // A Host session binds it, because being the endpoint is what it is for.
 func TestHostBindsTheEndpoint(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	s, err := Open(context.Background(), Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
@@ -69,7 +70,7 @@ func TestHostBindsTheEndpoint(t *testing.T) {
 // process unlink a RUNNING one's socket and take its place, leaving the first
 // accepting on an inode nobody can reach (ADR 0017). Binding is not a lock.
 func TestASecondHostIsRefused(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 	opts := Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
 		WorkDir:  t.TempDir(),
@@ -104,15 +105,26 @@ func TestRoleIsOneBit(t *testing.T) {
 	}
 }
 
-// testEndpoint names an endpoint this test may bind, in the platform's own
-// spelling, which is the whole point of running these two tests here rather
-// than trusting the integration suite. A socket under the test's own directory
-// on Unix; a uniquely named pipe on Windows, where there is no filesystem path
-// to put one at, and where the bind genuinely excludes.
-func testEndpoint(t *testing.T) string {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		return `\\.\pipe\remote-docker-test-` + t.Name()
+// The cache excludes what the watcher excludes. fswatch substitutes its
+// defaults for a nil list, and a cache handed the raw nil walks .git and
+// node_modules, which the watcher then never invalidates, so a cached copy
+// of them is stale for good.
+func TestTheCacheExcludesWhatTheWatcherExcludes(t *testing.T) {
+	s, err := Open(context.Background(), Options{
+		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
+		WorkDir:  t.TempDir(),
+		Endpoint: endpointtest.Endpoint(t),
+		Role:     Host,
+	})
+	if err != nil {
+		t.Fatalf("opening a host session: %v", err)
 	}
-	return filepath.Join(t.TempDir(), "docker.sock")
+	defer func() { _ = s.Close() }()
+
+	if s.cache == nil {
+		t.Fatal("a host session has no cache")
+	}
+	if !slices.Equal(s.cache.Exclude, fswatch.DefaultExcludes) {
+		t.Errorf("cache excludes = %v, want the watcher's defaults %v", s.cache.Exclude, fswatch.DefaultExcludes)
+	}
 }

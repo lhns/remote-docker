@@ -1,12 +1,8 @@
 package accounts
 
-// The type lives here, untagged, and only its Ensure method is
-// platform-specific.
-//
-// It was declared twice (once per build tag) field for field. Both copies
-// were edited on the same day, which is exactly how a pair like that comes to
-// disagree: a field added to the Linux one and forgotten on the stub compiles
-// everywhere except the machine nobody builds on.
+// The type is untagged and only its Ensure method is per platform: a copy per
+// build tag can gain a field on one side and compile everywhere except the
+// machine nobody builds on.
 
 // UnixProvisioner creates real unix accounts.
 //
@@ -15,9 +11,8 @@ package accounts
 // locking between them; reimplementing that to avoid one dependency would be
 // trading a well-understood tool for a novel source of corruption.
 type UnixProvisioner struct {
-	// Groups the account joins. Empty means the shared-daemon default,
-	// {"docker", "workspace"}: "docker" is what gives access to the shared
-	// inner daemon, and "workspace" marks the account as ours.
+	// Groups the account joins, and is reconciled INTO if it already exists.
+	// Empty means no --groups; the caller states them in both modes.
 	Groups []string
 
 	// Prefix goes in front of the unix user name. Empty means DefaultPrefix;

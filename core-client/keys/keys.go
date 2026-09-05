@@ -1,14 +1,6 @@
 // Package keys is this client's identity to a workspace: the keypair it
 // authenticates with and the host keys it will accept, wired to the transport
-// in core-client/tunnelclient.
-//
-// It exists because the previous clients shelled out to ssh(1). That cost a
-// layer of quoting on every remote command, turned errors into exit codes and
-// stderr text, and split the two clients' capabilities permanently: connection
-// multiplexing is an OpenSSH client feature that Win32-OpenSSH does not
-// implement, so the POSIX client was fast and the Windows client was not. One
-// ssh.Client carrying many channels makes that difference disappear rather
-// than working around it.
+// in core-client/tunnelclient (ADR 0004).
 package keys
 
 import (

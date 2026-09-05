@@ -36,21 +36,59 @@ type shareRecord struct {
 	LastUsed time.Time `json:"lastUsed"`
 }
 
-// shareFile is bound to the machine and the account that wrote it.
+// shareFile is the share record on disk.
+type shareFile struct {
+	boundRecord
+	Shares []shareRecord `json:"shares"`
+}
+
+const shareFileVersion = 1
+
+// boundRecord binds a record to the machine and the account that wrote it.
 //
 // A configuration directory is a thing people sync between machines. The same
 // file elsewhere names paths that either do not exist, which is harmless, or
 // exist and are a different directory, which is not. Refused wholesale rather
 // than entry by entry, because a partial match is exactly the case most likely
 // to be the wrong directory with the right spelling.
-type shareFile struct {
-	Version int           `json:"version"`
-	Machine string        `json:"machine"`
-	User    string        `json:"user"`
-	Shares  []shareRecord `json:"shares"`
+type boundRecord struct {
+	Version int    `json:"version"`
+	Machine string `json:"machine"`
+	User    string `json:"user"`
 }
 
-const shareFileVersion = 1
+func (b boundRecord) bound() boundRecord { return b }
+
+// bindRecord is the header for a record this machine writes now.
+func bindRecord(version int) boundRecord {
+	b := boundRecord{Version: version}
+	b.Machine, b.User = thisMachine()
+	return b
+}
+
+// readBound reads a record into `into` and reports whether it may be
+// believed: readable, at the version wanted, and written by this machine and
+// account. `what` names the record in the log.
+func readBound(path, what string, version int, log *slog.Logger, into interface{ bound() boundRecord }) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) && log != nil {
+			log.Debug("no record of "+what, "path", path, "err", err)
+		}
+		return false
+	}
+	if err := json.Unmarshal(data, into); err != nil || into.bound().Version != version {
+		return false
+	}
+	if machine, account := thisMachine(); into.bound().Machine != machine || into.bound().User != account {
+		if log != nil {
+			log.Warn("ignoring "+what+": written on another machine or by another account",
+				"path", path, "wrote", into.bound().Machine+"/"+into.bound().User)
+		}
+		return false
+	}
+	return true
+}
 
 // shareUnused is how long a record survives without being wanted. Long enough
 // to cover a project somebody comes back to, short enough that the file does
@@ -77,26 +115,10 @@ type shareStore struct {
 func newShareStore(path string, log *slog.Logger) *shareStore {
 	s := &shareStore{path: path, log: log, records: map[string]shareRecord{}}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) && log != nil {
-			log.Debug("no record of what this workspace exports", "path", path, "err", err)
-		}
-		return s
-	}
-
 	var file shareFile
-	if err := json.Unmarshal(data, &file); err != nil || file.Version != shareFileVersion {
+	if !readBound(path, "what this workspace exports", shareFileVersion, log, &file) {
 		return s
 	}
-	if machine, account := thisMachine(); file.Machine != machine || file.User != account {
-		if log != nil {
-			log.Warn("ignoring a share record written elsewhere",
-				"path", path, "wrote", file.Machine+"/"+file.User)
-		}
-		return s
-	}
-
 	for _, rec := range file.Shares {
 		if s.usable(rec) {
 			s.records[rec.Export] = rec
@@ -208,8 +230,7 @@ func (s *shareStore) forget(keep map[string]bool) {
 // save writes the record, and never fails a command over it.
 func (s *shareStore) save() {
 	s.mu.Lock()
-	file := shareFile{Version: shareFileVersion, Shares: make([]shareRecord, 0, len(s.records))}
-	file.Machine, file.User = thisMachine()
+	file := shareFile{boundRecord: bindRecord(shareFileVersion), Shares: make([]shareRecord, 0, len(s.records))}
 	for _, rec := range s.records {
 		file.Shares = append(file.Shares, rec)
 	}

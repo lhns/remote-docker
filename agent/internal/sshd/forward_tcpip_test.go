@@ -33,9 +33,9 @@ func TestForwardsUseThisNamespaceForTheSharedDaemon(t *testing.T) {
 	_ = conn.Close()
 
 	// And a local forward dials from here too.
-	out, err := s.dialFor(context.Background(), account, ln.Addr().String())
+	out, err := s.dialForNetwork(context.Background(), account, "tcp", ln.Addr().String())
 	if err != nil {
-		t.Fatalf("dialFor: %v", err)
+		t.Fatalf("dialForNetwork: %v", err)
 	}
 	_ = out.Close()
 }
@@ -57,7 +57,7 @@ func TestForwardsUseTheAskingAccountsNamespace(t *testing.T) {
 	// Linux-only and those pids do not exist, and it does not need to. What
 	// is under test is WHICH namespace was asked for.
 	_, _ = s.listenFor(context.Background(), sessionAccount{name: "alice"}, "127.0.0.1:0")
-	_, _ = s.dialFor(context.Background(), sessionAccount{name: "bob"}, "127.0.0.1:1")
+	_, _ = s.dialForNetwork(context.Background(), sessionAccount{name: "bob"}, "tcp", "127.0.0.1:1")
 
 	if got := targets.asked; len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
 		t.Fatalf("the resolver was asked for %v, want [alice bob]", got)

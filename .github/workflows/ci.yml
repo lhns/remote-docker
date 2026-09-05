@@ -38,21 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The repo root is deliberately not a module (ADR 0021), so setup-go's
-      # default key looks for a go.mod that is not there and restores nothing:
-      # every job re-downloaded the whole graph, 250 `go: downloading` lines in
-      # this one. Key the cache on the real modules instead.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       - name: gofmt
         run: |
@@ -83,13 +69,13 @@ jobs:
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
+      # One profile per module, where the loop above wrote them.
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: |
-            coverage.out
-            agent/coverage.out
-            client/coverage.out
+            */coverage.out
+            test/probes/coverage.out
 
   # The client, on the platform whose code has no counterpart anywhere else.
   #
@@ -120,18 +106,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       - name: go test
         shell: bash
@@ -146,18 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
       # Built from source with this project's own toolchain rather than taken
       # from the action, whose pinned binary is compiled against an older Go
       # and refuses to load a module targeting a newer one.
@@ -211,18 +175,7 @@ jobs:
           # has no tags to describe against.
           fetch-depth: 0
 
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       # Every package of every module, not just the binary: a dependency that
       # quietly needs cgo, or a build-tagged file with no counterpart for this
@@ -256,14 +209,9 @@ jobs:
       - name: compose version
         run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
 
-      # The shippable binary, from .goreleaser.yaml -- the same file, flags and
+      # The shippable binary, from .goreleaser.yaml: the same file, flags and
       # naming a tagged release uses, so only the version string differs.
-      #
-      # --single-target builds just this matrix leg, which shares the build
-      # cache with the step above instead of compiling the dependency tree
-      # again. This used to be a separate job building all six targets while
-      # the matrix compiled all six as well: the same work twice, and the
-      # slowest job in the workflow by a factor of two.
+      # `--single-target` shares the build cache with the step above.
       # CC is not set here: .goreleaser.yaml builds it from ANDROID_NDK_HOME
       # itself, so a release and this build cannot disagree about the compiler.
       - uses: goreleaser/goreleaser-action@v7

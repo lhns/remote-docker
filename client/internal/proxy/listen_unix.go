@@ -23,8 +23,8 @@ func DefaultEndpoint() string { return defaultSocketPath() }
 // Deliberately NOT /var/run/docker.sock, the path the official CLI uses by
 // default. It is root-owned, so serving it would need privileges this client
 // otherwise never asks for, and it would collide with any local daemon. The
-// docker context written by `remote-docker context install` needs none and
-// behaves the same on every platform.
+// docker context `remote create` writes needs none and behaves the same on
+// every platform.
 
 // Listen binds the local Docker endpoint on a unix socket.
 func Listen(endpoint string) (net.Listener, error) {
@@ -39,11 +39,10 @@ func Listen(endpoint string) (net.Listener, error) {
 	//
 	// A socket left by a process that did not shut down cleanly must be
 	// removed, or every later run fails with "address already in use". But
-	// removing it unconditionally (which is what this did) silently
-	// unlinks a RUNNING process's socket and takes its place: the first keeps
-	// accepting on an inode nobody can reach, and when the second exits the
-	// path is bound to nothing while the first still looks healthy. Holding
-	// the lock means the only socket we can be clearing is a dead one.
+	// removing it unconditionally silently unlinks a RUNNING process's socket
+	// and takes its place: the first keeps accepting on an inode nobody can
+	// reach, and looks healthy. Holding the lock means the only socket we can
+	// be clearing is a dead one (ADR 0017).
 	lock, err := acquireLock(endpoint)
 	if err != nil {
 		return nil, err

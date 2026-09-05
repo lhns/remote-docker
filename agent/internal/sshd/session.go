@@ -3,7 +3,6 @@
 package sshd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +20,6 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
-	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/notify"
@@ -59,15 +57,6 @@ func (s *Server) handleSession(session gssh.Session) {
 		s.serveExec(session, account, command)
 	}
 }
-
-// infoQueryTimeout bounds the daemon queries that go into an info reply.
-//
-// workspace-info is the client's FIRST round trip, and two of its fields come
-// from running the docker CLI. Neither is worth waiting on: the version and
-// the storage driver are displayed, not acted upon, and a daemon slow enough
-// to sit on `docker info` is exactly the daemon whose client should not be
-// blocked introducing itself.
-const infoQueryTimeout = 5 * time.Second
 
 // serveInfo answers the client's parameters from the shared contract.
 func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
@@ -240,18 +229,12 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 		// rather than a redirection.
 		cmd.Env = append(cmd.Env, "DOCKER_HOST="+target.Host)
 	}
-	// Supplementary groups have to be listed, or they are REMOVED.
-	//
-	// Go calls setgroups() with Credential.Groups whenever a Credential is
-	// set, so leaving it nil clears every supplementary group rather than
-	// inheriting one. An account correctly listed in `docker` in /etc/group
-	// therefore got a shell that was not in it, and `docker ps` answered
-	// "permission denied while trying to connect to the Docker daemon socket",
-	// which reads exactly like a broken socket and is not one.
-	//
-	// It cost most of an evening: the group membership was checked, found
-	// correct, and believed, because nothing suggested the shell might have a
-	// different view of it than /etc/group did.
+	// Supplementary groups have to be listed, or they are REMOVED: Go calls
+	// setgroups() with Credential.Groups whenever a Credential is set, so nil
+	// clears every group rather than inheriting them. An account correctly in
+	// `docker` in /etc/group then gets a shell that is not, and `docker ps`
+	// answers "permission denied while trying to connect to the Docker daemon
+	// socket", which reads exactly like a broken socket and is not one.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid:    uint32(stored.UID),
@@ -306,92 +289,12 @@ func (s *Server) servePTY(session gssh.Session, cmd *exec.Cmd, winCh <-chan gssh
 	_ = session.Exit(0)
 }
 
-// dockerVersion asks the account's daemon what it is, for the info reply.
-//
-// Non-blocking on purpose. In per-account mode this runs while the daemon may
-// still be booting: Warm fires at authentication and workspace-info is the
-// very next thing the client asks. Waiting would turn every first connection
-// into a hang, in exchange for a version string the client only
-// displays. An unstarted daemon reports unavailable, exactly like a broken
-// one, and the next command starts it.
-func (s *Server) dockerVersion(ctx context.Context, account string) string {
-	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
-	defer cancel()
-
-	// Lookup, never Ensure: see above. A daemon that is not up yet is reported
-	// as unavailable rather than started and waited for.
-	target, ok := s.cfg.Daemons.Lookup(ctx, account)
-	if !ok {
-		return workspace.DockerUnavailable
-	}
-
-	out, err := dockercli.CLI{Host: target.Host}.Line(ctx, "version", "--format", "{{.Server.Version}}")
-	if err != nil {
-		// A normal answer, not a failure: the client shows it rather than
-		// refusing to start.
-		return workspace.DockerUnavailable
-	}
-	return out
-}
-
 func exitCode(err error) int {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		return exit.ExitCode()
 	}
 	return 1
-}
-
-// storageDriver reports the graph driver of the daemon serving this account.
-//
-// Non-blocking, exactly like dockerVersion and for the same reason: this
-// answers the client's first round trip, and a cold daemon must not turn that
-// into a wait.
-//
-// Worth carrying at all because the difference between overlay2 and vfs is the
-// difference between `docker run` taking a second and taking minutes, nothing
-// about it fails, and the account cannot look for itself: reaching the
-// daemon's own host is precisely what it may not do.
-func (s *Server) storageDriver(ctx context.Context, account string) string {
-	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
-	defer cancel()
-
-	target, ok := s.cfg.Daemons.Lookup(ctx, account)
-	if !ok {
-		return ""
-	}
-
-	out, err := dockercli.CLI{Host: target.Host}.Line(ctx, "info", "--format", "{{.Driver}}")
-	if err != nil {
-		return ""
-	}
-	return out
-}
-
-// unionCapability reports whether this workspace can serve a delegated share as
-// a cache, for the account asking.
-//
-// Asked of the daemon that would serve it rather than of the agent, because
-// that is where the answer differs: in per-account mode fuse-overlayfs has to
-// be in the image THAT daemon runs, and the agent's own filesystem says nothing
-// about it. Lookup rather than Ensure, for the same reason the version and the
-// storage driver use it: this is the client's first round trip and must not
-// wait for a daemon to boot.
-func (s *Server) unionCapability(ctx context.Context, account string) string {
-	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
-	defer cancel()
-
-	if s.cfg.Unions == nil {
-		return ""
-	}
-	target, ok := s.cfg.Daemons.Lookup(ctx, account)
-	if !ok {
-		// A daemon that has not started yet cannot be asked, and guessing
-		// would be worse than saying nothing: an empty answer reads as "not
-		// available", which is what an older agent's answer reads as too.
-		return ""
-	}
-	return unions.Capability(ctx, target.Root)
 }
 
 // supplementaryGroups is the account's group membership as /etc/group has it.

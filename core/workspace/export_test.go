@@ -108,12 +108,12 @@ func TestExportAndVolumeNamesRoundTrip(t *testing.T) {
 	}
 
 	for _, s := range []string{export, volume} {
-		got, err := ParseID(s)
+		got, err := parseID(s)
 		if err != nil {
-			t.Fatalf("ParseID(%q): %v", s, err)
+			t.Fatalf("parseID(%q): %v", s, err)
 		}
 		if got != id {
-			t.Errorf("ParseID(%q) = %q, want %q", s, got, id)
+			t.Errorf("parseID(%q) = %q, want %q", s, got, id)
 		}
 	}
 }
@@ -145,8 +145,8 @@ func TestParseIDRejects(t *testing.T) {
 		"postgres-data",
 		"",
 	} {
-		if _, err := ParseID(name); err == nil {
-			t.Errorf("ParseID(%q) = nil error, want an error", name)
+		if _, err := parseID(name); err == nil {
+			t.Errorf("parseID(%q) = nil error, want an error", name)
 		}
 	}
 }
@@ -341,7 +341,7 @@ func TestCacheVolumesBelongToTheirShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := ParseVolumeName(cwd + "-" + CacheRole); !ok {
-		t.Errorf("the cwd share's cache is not recognised: %q", cwd+"-"+CacheRole)
+	if _, _, ok := ParseVolumeName(cwd + "-" + cacheRole); !ok {
+		t.Errorf("the cwd share's cache is not recognised: %q", cwd+"-"+cacheRole)
 	}
 }

@@ -103,11 +103,6 @@ type Status struct {
 	// cannot know would be worse than saying nothing.
 	Version string `json:"version"`
 
-	Workspace string `json:"workspace"`
-	Host      string `json:"host"`
-	User      string `json:"user"`
-	Endpoint  string `json:"endpoint"`
-
 	// Storage is the graph driver of the daemon this session is talking to.
 	//
 	// Carried here so an ordinary `docker` command can warn about it. The
@@ -124,12 +119,9 @@ type Status struct {
 	// why setting the variable printed nothing.
 	Tracing bool `json:"tracing,omitempty"`
 
-	PID       int      `json:"pid"`
-	Connected bool     `json:"connected"`
-	Ports     []int    `json:"ports,omitempty"`
-	Since     string   `json:"since"`
-	Watching  string   `json:"watching,omitempty"`
-	Shares    []string `json:"shares,omitempty"`
+	PID       int    `json:"pid"`
+	Connected bool   `json:"connected"`
+	Since     string `json:"since"`
 
 	// Caches is one line per delegated share saying how much of it is cached
 	// (ADR 0044).

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lhns/remote-docker/client/internal/endpointtest"
 )
 
 // Binding an endpoint twice must be refused, not silently taken over.
@@ -17,7 +19,7 @@ import (
 // could reach, and when the second exited the path was bound to nothing while
 // the first still looked healthy. Nothing reported anything.
 func TestListenRefusesASecondOwner(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	first, err := Listen(endpoint)
 	if err != nil {
@@ -39,7 +41,7 @@ func TestListenRefusesASecondOwner(t *testing.T) {
 
 // Releasing must hand the endpoint on, or a restart could never rebind.
 func TestListenAgainAfterClose(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	first, err := Listen(endpoint)
 	if err != nil {
@@ -59,7 +61,7 @@ func TestListenAgainAfterClose(t *testing.T) {
 // The pid is what lets `start` and `stop` name the process holding a
 // workspace, rather than reporting a bare "Access is denied".
 func TestOwnerReportsTheHoldingProcess(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	l, err := Listen(endpoint)
 	if err != nil {
@@ -101,7 +103,7 @@ func TestLockPathIsAFilename(t *testing.T) {
 // left alone rather than on which pid it holds: a sentinel stands in for the
 // owner, and a failed attempt must not disturb it.
 func TestARefusedListenDoesNotClaimTheRecord(t *testing.T) {
-	endpoint := testEndpoint(t)
+	endpoint := endpointtest.Endpoint(t)
 
 	first, err := Listen(endpoint)
 	if err != nil {

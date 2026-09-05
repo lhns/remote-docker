@@ -20,18 +20,8 @@ on:
 permissions:
   contents: read
 
-# Every commit gets its own run, and nothing is ever cancelled by a later push.
-#
-# This used to cancel an in-flight run when a branch was pushed again, on the
-# reasoning that the older run tests code nobody will merge. What that costs is
-# the answer you were actually waiting for: a push that fixes one suite kills
-# the run that was still telling you about another, and a cancelled job's
-# conclusion is not "success", so it reads as a failure in anything scanning
-# results.
-#
-# The group is per SHA rather than per ref, which keeps the one thing
-# cancellation was really for -- the same commit triggered twice does not run
-# twice -- without a new commit destroying an old commit's answer.
+# Never cancelled by a newer run, and each commit is its own group: a later
+# push must not destroy an earlier commit's answer (why: ci.yml).
 concurrency:
   group: kubernetes-${{ github.sha }}
   cancel-in-progress: false
@@ -145,18 +135,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       - name: load the nfs client module
         run: sudo modprobe nfs

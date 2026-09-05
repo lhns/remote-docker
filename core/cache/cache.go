@@ -25,6 +25,7 @@ package cache
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/lhns/remote-docker/core/workspace"
@@ -66,19 +67,9 @@ const (
 // never sends one the agent would refuse.
 func Codecs() []string { return []string{CodecZstd} }
 
-// SupportsCodec reports whether a codec is one this version can read. The empty
-// codec is always readable: it is a plain tar.
-func SupportsCodec(codec string) bool {
-	if codec == CodecNone {
-		return true
-	}
-	for _, c := range Codecs() {
-		if c == codec {
-			return true
-		}
-	}
-	return false
-}
+// supportsCodec reports whether a codec is one this version can read: what
+// this agent's own greeting would accept.
+func supportsCodec(codec string) bool { return Hello{Codecs: Codecs()}.Accepts(codec) }
 
 // Op is what one frame asks for.
 type Op string
@@ -228,16 +219,9 @@ type Hello struct {
 }
 
 // Accepts reports whether the agent that sent this greeting can read a codec.
+// The empty codec is always readable: it is a plain tar.
 func (h Hello) Accepts(codec string) bool {
-	if codec == CodecNone {
-		return true
-	}
-	for _, c := range h.Codecs {
-		if c == codec {
-			return true
-		}
-	}
-	return false
+	return codec == CodecNone || slices.Contains(h.Codecs, codec)
 }
 
 // Validate rejects a request the agent should not act on.
@@ -270,7 +254,7 @@ func (r Request) Validate() error {
 		if r.Bytes < 0 {
 			return fmt.Errorf("workspace: cache apply for %s has %d bytes", r.Export, r.Bytes)
 		}
-		if !SupportsCodec(r.Codec) {
+		if !supportsCodec(r.Codec) {
 			return fmt.Errorf("workspace: cache apply for %s asks for codec %q, which this version does not have",
 				r.Export, r.Codec)
 		}

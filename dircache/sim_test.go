@@ -30,6 +30,9 @@ import (
 //   - a cache fetch costs ONE round trip per batch, whatever it holds, and the
 //     batch is not available until that round trip and its transfer are
 //     over. Charging it as instantly available flattered every cache policy.
+//     Optimistic even so: the real apply (test/bench.sh, ADR 0045) costs more
+//     than one round trip per batch. Every policy pays the same optimism, so
+//     the comparison between them holds where the absolute numbers do not.
 //   - bytes cost bytes/bandwidth on either path.
 
 // transfer is how long the link takes to carry bytes.

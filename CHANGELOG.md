@@ -49,6 +49,29 @@ table is in ADR 0045.
   in a share now reports mode 0666 and every directory 0777, owned by the
   workspace account as before, and the union's upper is created 0777
   (ADR 0046).
+
+### Fixed on the way through a cleanup
+
+- `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's
+  session, whichever machine was named.
+- `remote machine rebuild` and `status` ignored the CPU count, memory,
+  rootfs, port and account a machine was created with; unset flags now take
+  the recorded ones. `create` no longer inherits a stale record, while
+  `rebuild` and `status` use it.
+- With no `watchExclude` set, prefetch walked `.git` and `node_modules`,
+  which the watcher never invalidates; the cache now takes the watcher's
+  default list.
+
+### Changed
+
+- `remote status`'s daemon row and the different-build warning now read
+  `a different build (session X, this binary Y)`.
+- `remote machine stop`, `start` and `rebuild` warn when a session
+  acknowledged the stop but its process lingers.
+- The session's status report, the JSON `remote status` reads, no longer
+  carries `workspace`, `host`, `user`, `endpoint`, `ports`, `watching` and
+  `shares`; nothing read them.
+
 ### Upgrading
 
 - Docker's own words still work, as aliases: `consistent` and `default` are

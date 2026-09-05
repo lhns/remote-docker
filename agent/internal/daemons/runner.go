@@ -52,7 +52,7 @@ func (d Daemon) NetNSPath() string { return netns.Path(d.PID) }
 
 // Root is the daemon's filesystem as seen from the agent, which is where a
 // volume mountpoint reported by that daemon actually lives.
-func (d Daemon) Root() string { return fmt.Sprintf("/proc/%d/root", d.PID) }
+func (d Daemon) Root() string { return netns.Root(d.PID) }
 
 // Manager starts, adopts and hands out per-account daemons.
 type Manager struct {
@@ -77,10 +77,8 @@ type Manager struct {
 	IDs func(account string) (uid, gid int, err error)
 
 	// docker builds the client for a daemon: the workspace's own when the host
-	// is empty, an account's when it is not. Nil is the real docker command.
-	//
-	// Injected so this file can be tested at all. Every path through it built a
-	// dockercli.CLI where it stood, so none of them had a test.
+	// is empty, an account's when it is not. Nil is the real docker command,
+	// and injecting it is what lets this file be tested without one.
 	docker func(host string) docker
 
 	mu      sync.Mutex
@@ -233,26 +231,18 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		return nil, err
 	}
 
-	// The socket directory is ours, not the daemon's: it is bind-mounted in,
-	// so it has to exist before the container starts or docker creates it
-	// root-owned with the wrong mode.
-	// Two directories, two modes, and the difference is the whole point.
-	//
-	// SocketDir must be TRAVERSABLE by every account (0755): it holds one
-	// subdirectory per account, and a shell has to walk through it to reach
-	// its own socket. MkdirAll made both levels 0750 root:root and only the
-	// leaf was ever chowned, so every account's DOCKER_HOST pointed at a path
-	// it could not enter: "permission denied while trying to connect to the
-	// Docker daemon socket", with the variable set correctly.
-	//
-	// The per-account directory below it is 0750 root:<account>, which is what
-	// actually keeps one account out of another's daemon. Traversing the
-	// parent reveals only the names of directories nobody else may enter.
+	// The socket directory is bind-mounted into the daemon, so it has to
+	// exist before the container starts or docker creates it root-owned with
+	// the wrong mode. Two directories, two modes: SocketDir is 0755 so every
+	// account can TRAVERSE it to its own subdirectory, and that subdirectory
+	// is 0750 root:<account>, which is what keeps one account out of
+	// another's daemon. A parent that is not traversable fails as "permission
+	// denied while trying to connect to the Docker daemon socket" with
+	// DOCKER_HOST set correctly. MkdirAll honours the umask; the Chmod does
+	// not, and is the one that grants access.
 	if err := os.MkdirAll(SocketDir, 0o755); err != nil {
 		return nil, fmt.Errorf("daemons: preparing %s: %w", SocketDir, err)
 	}
-	// MkdirAll honours the umask; this does not, and this is the one that
-	// grants access.
 	if err := os.Chmod(SocketDir, 0o755); err != nil {
 		return nil, fmt.Errorf("daemons: preparing %s: %w", SocketDir, err)
 	}
@@ -262,14 +252,11 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		return nil, fmt.Errorf("daemons: preparing %s: %w", dir, err)
 	}
 
-	// Created explicitly rather than implicitly by `-v name:/path`, so it
-	// carries labels. A volume docker creates as a side effect has none, and
-	// this is the one object in the whole design that must never be deleted by
-	// mistake: it holds everything the account owns. `docker volume ls
-	// --filter label=remote-docker.daemon` is the difference between an
-	// operator being able to see that and having to know it.
-	//
-	// Idempotent: creating an existing volume is a no-op that returns its name.
+	// Created explicitly rather than as a side effect of `-v name:/path`, so
+	// it carries labels: this volume holds everything the account owns, and
+	// `docker volume ls --filter label=remote-docker.daemon` is how an
+	// operator sees which volumes must never be pruned. Creating an existing
+	// volume is a no-op.
 	if err := m.parent().Run(ctx, "daemons: preparing "+account+"'s storage",
 		"volume", "create",
 		"--label", ManagedLabel+"=1",
@@ -278,9 +265,8 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		return nil, err
 	}
 
-	// A daemon created from older settings is brought up to date HERE, before
-	// anything decides to start it, so an upgrade is a redeploy rather than a
-	// list of commands somebody has to be told.
+	// Before anything decides to start it, so an upgrade is a redeploy rather
+	// than a list of commands somebody has to be told.
 	m.reconcile(ctx, account, spec)
 
 	switch state := m.state(ctx, spec.Name); state {
@@ -293,8 +279,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		}
 	default:
 		// Stopped, exited, created. START it rather than running a new one:
-		// the container holds this user's containers and images, and
-		// replacing it would silently discard them.
+		// replacing the container would silently discard what it holds.
 		m.log().Info("restarting an existing daemon", "account", account, "was", state)
 		if err := m.parent().Run(ctx, "daemons: restarting "+spec.Name, "start", spec.Name); err != nil {
 			return nil, err
@@ -382,7 +367,7 @@ func (m *Manager) answers(ctx context.Context, d *Daemon) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := m.client(d.Host()).Line(ctx, "version", "--format", "{{.Server.Version}}")
+	_, err := m.client(d.Host()).Line(ctx, dockercli.ServerVersionArgs()...)
 	return err == nil
 }
 
@@ -408,16 +393,16 @@ func (m *Manager) lastWords(ctx context.Context, name string) string {
 // away underneath us (an OOM kill, an operator, a crash) and handing back a
 // dead socket produces a connection error that names nothing.
 //
-// THE PID IS PART OF "usable". A daemon that restarts, which it does on its
-// own because it carries a restart policy, comes back as the same container
+// THE PID IS PART OF "usable". A daemon restarted by an operator, or by
+// Ensure's `docker start` after it stopped, comes back as the same container
 // with the same name, the same socket path and the same "running" status, and
-// a DIFFERENT pid. Everything here that
-// crosses into it goes through /proc/<pid>: the reverse tunnel carrying the
-// client's NFS export (netns), and the volume mountpoints replay writes into
-// (root). Against a stale pid those name a namespace that no longer exists, so
-// the daemon answers Docker API calls perfectly while no container it starts
-// can mount anything, and a client that requires its file server refuses to
-// start at all, with nothing pointing at the daemon having restarted.
+// a DIFFERENT pid. Everything here that crosses into it goes through
+// /proc/<pid>: the reverse tunnel carrying the client's NFS export (netns), and
+// the volume mountpoints replay writes into (root). Against a stale pid those
+// name a namespace that no longer exists, so the daemon answers Docker API
+// calls perfectly while no container it starts can mount anything, and a
+// client that requires its file server refuses to start at all, with nothing
+// pointing at the daemon having restarted.
 //
 // Reported as not-alive rather than repaired in place: Ensure then goes through
 // start, which finds the container already running and re-reads the pid, so the
@@ -860,30 +845,13 @@ func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 
 // Accounts lists the accounts that currently have a daemon, running or not.
 func (m *Manager) Accounts(ctx context.Context) ([]string, error) {
-	args := []string{"ps", "--all", "--no-trunc",
-		"--filter", "label=" + ManagedLabel,
-		"--format", "{{json .}}"}
-	if m.Options.Workspace != "" {
-		args = append(args, "--filter", "label="+WorkspaceLabel+"="+m.Options.Workspace)
-	}
-
-	out, err := m.parent().Line(ctx, args...)
+	rows, err := m.managed(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("daemons: listing daemons: %w", err)
 	}
 
 	var accounts []string
-	for _, line := range strings.Split(out, "\n") {
-		if line == "" {
-			continue
-		}
-		var row struct {
-			Labels string `json:"Labels"`
-			Status string `json:"Status"`
-		}
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			continue
-		}
+	for _, row := range rows {
 		if a := labelValue(row.Labels, AccountLabel); a != "" {
 			accounts = append(accounts, a)
 		}

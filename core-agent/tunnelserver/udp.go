@@ -2,7 +2,6 @@ package tunnelserver
 
 import (
 	"net"
-	"strconv"
 
 	gssh "github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -17,31 +16,7 @@ import (
 // reach which loopback port does not change with the protocol, so AllowDial
 // answers both and there is no second rule to keep in step.
 func (f *Forwards) HandleUDPChannel(_ *gssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx gssh.Context) {
-	var d tunnel.ForwardPayload
-	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
-		_ = newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
-		return
-	}
-
-	if !f.Local.AllowDial(ctx, d.DestAddr, d.DestPort) {
-		_ = newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
-		return
-	}
-
-	dest := net.JoinHostPort(d.DestAddr, strconv.FormatInt(int64(d.DestPort), 10))
-	conn, err := f.Local.DialUDP(ctx, dest)
-	if err != nil {
-		_ = newChan.Reject(gossh.ConnectionFailed, err.Error())
-		return
-	}
-
-	ch, reqs, err := newChan.Accept()
-	if err != nil {
-		_ = conn.Close()
-		return
-	}
-	go gossh.DiscardRequests(reqs)
-	bridgeDatagrams(ch, conn)
+	f.handleForward(newChan, ctx, f.Local.DialUDP, bridgeDatagrams)
 }
 
 // bridgeDatagrams copies datagrams both ways, framed on the channel and bare on

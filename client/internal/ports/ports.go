@@ -63,11 +63,9 @@ type Docker interface {
 
 // bindAddr is the local interface a forward binds.
 //
-// Loopback, and not configurable. A published port becoming reachable from the
+// Loopback, and not configurable: a published port becoming reachable from the
 // network because a container started on somebody else's machine would be a
-// surprise, and a nasty one. This was a field once; nothing ever set it, and
-// two log lines hardcoded the value anyway, so a knob that appeared to work
-// would have made them lie.
+// surprise, and a nasty one.
 const bindAddr = "127.0.0.1"
 
 // Manager keeps local forwards in step with the containers that are running.
@@ -259,12 +257,14 @@ func (m *Manager) Active() []int {
 	return out
 }
 
-// publishedTCP returns the TCP ports a container publishes to the host.
+// published returns the ports a container publishes to the host, one entry
+// per protocol and port.
 //
-// A port with no PublicPort is exposed but not published: it has no host
-// side to forward. UDP is skipped because the SSH transport carries TCP only,
-// and pretending otherwise would produce a listener that silently drops
-// everything.
+// A port with no PublicPort is exposed but not published: it has no host side
+// to forward. The daemon reports one entry per address family, so a port
+// published on both IPv4 and IPv6 arrives twice and is forwarded once. The
+// protocol stays in the key, because 53/tcp and 53/udp are different ports
+// that happen to share a number (ADR 0038).
 func published(c Container) []Published {
 	var out []Published
 	seen := map[string]bool{}
@@ -272,9 +272,6 @@ func published(c Container) []Published {
 		if p.PublicPort == 0 {
 			continue
 		}
-		// One entry per address family, so a port published on both IPv4 and
-		// IPv6 appears twice. Keyed on the protocol as well, because 53/tcp and
-		// 53/udp are different ports that happen to share a number.
 		key := network(p) + "/" + strconv.Itoa(p.PublicPort)
 		if seen[key] {
 			continue

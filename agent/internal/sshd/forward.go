@@ -8,16 +8,6 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Account is what the forward policy needs to know about a session.
-type Account interface {
-	Name() string
-	UID() int
-
-	// Client names the machine the session came from. Empty means a client
-	// too old to be named, which gets the uid-derived port.
-	Client() string
-}
-
 // PortOwner answers which reverse-tunnel ports an account has been given.
 //
 // An interface rather than the allocator itself, so the policy can be tested
@@ -27,15 +17,9 @@ type PortOwner interface {
 	Owns(account string, uid, port int) bool
 }
 
-// ForwardPolicy decides which loopback ports an account may bind.
-//
-// This is the whole of ADR 0010's central claim. Under sshd the equivalent
-// rule was a permitlisten="127.0.0.1:<port>" option generated into every key's
-// authorized_keys entry: a policy of one comparison, implemented as string
-// generation into a file format with no schema, and enforced by a component
-// that had no idea why the number was what it was.
-//
-// Here it is the comparison.
+// ForwardPolicy decides which loopback ports an account may bind: ADR 0010's
+// central claim, one comparison in code rather than a permitlisten option
+// generated into every key's authorized_keys entry.
 type ForwardPolicy struct {
 	Mapping workspace.Mapping
 
@@ -89,7 +73,7 @@ func NewForwardPolicy(mapping workspace.Mapping) *ForwardPolicy {
 //     tunnel and silently take over its mounts. Enforced by Bind rather than
 //     here: this rule refuses another ACCOUNT, and Bind refuses anybody at all,
 //     including a second session of this one.
-func (p *ForwardPolicy) Allow(account Account, host string, port uint32) (bool, string) {
+func (p *ForwardPolicy) Allow(account sessionAccount, host string, port uint32) (bool, string) {
 	if !isLoopback(host) {
 		return false, "only loopback addresses may be forwarded: the NFS export is unauthenticated"
 	}
@@ -134,7 +118,7 @@ func (p *ForwardPolicy) Allow(account Account, host string, port uint32) (bool, 
 // maps onto PortBase and upwards, docker publishes host ports from 32768, and
 // refusing that range would break the forwarding this exists for. A port
 // nobody holds has nothing of ours listening on it anyway.
-func (p *ForwardPolicy) AllowDial(account Account, host string, port uint32) (bool, string) {
+func (p *ForwardPolicy) AllowDial(account sessionAccount, host string, port uint32) (bool, string) {
 	if !isLoopback(host) {
 		return false, "only loopback addresses may be reached"
 	}
@@ -145,7 +129,7 @@ func (p *ForwardPolicy) AllowDial(account Account, host string, port uint32) (bo
 }
 
 // owns reports whether this account is entitled to a port.
-func (p *ForwardPolicy) owns(account Account, port int) bool {
+func (p *ForwardPolicy) owns(account sessionAccount, port int) bool {
 	if p.Ports != nil {
 		return p.Ports.Owns(account.Name(), account.UID(), port)
 	}
@@ -163,7 +147,7 @@ func (p *ForwardPolicy) owns(account Account, port int) bool {
 // succeeded. A client whose previous connection is still being torn down is
 // refused here rather than allowed to take a port its own live listener is
 // using.
-func (p *ForwardPolicy) Bind(account Account, host string, port uint32) (uint64, bool) {
+func (p *ForwardPolicy) Bind(account sessionAccount, host string, port uint32) (uint64, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

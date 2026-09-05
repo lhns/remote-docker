@@ -31,9 +31,9 @@ const DialStdioCommand = "docker system dial-stdio"
 
 // Info is what the workspace reports about the calling account.
 //
-// The wire format is the KEY=VALUE text the original shell implementation
-// emitted, kept so the Go agent could be a drop-in substitution for it. It
-// can be revisited now that the agent is the only server.
+// The wire format is KEY=VALUE text and stays that way: a client and the
+// workspaces it reaches are upgraded independently, and ParseInfo keeps a key
+// it does not know in Extra, so either side can be older than the other.
 type Info struct {
 	User    string
 	UID     int

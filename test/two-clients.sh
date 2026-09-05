@@ -34,16 +34,7 @@ DOCKER_TIMEOUT=180
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-cleanup() {
-    echo
-    echo "== cleanup =="
-    for pid in ${PC_PID:-} ${PHONE_PID:-}; do
-        kill "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
-    done
-    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    rm -rf "$WORK"
-}
+cleanup() { cleanup_suite "${PC_PID:-}" "${PHONE_PID:-}"; }
 trap cleanup EXIT
 
 echo "== 1. build =="
@@ -106,33 +97,22 @@ mkdir -p "$WORK/project-$PC" "$WORK/project-$PHONE"
 echo "from the pc" >"$WORK/project-$PC/marker"
 echo "from the phone" >"$WORK/project-$PHONE/marker"
 
-# Watching is on because section 9 mounts a union on each machine, and a
-# union requires it (ADR 0042): its cache is invalidated by what the watcher
-# sees.
-start_session() {
+# One session per machine, both as $ACCOUNT: the state directory is the only
+# thing that differs.
+session() {
     local machine=$1 endpoint=$2 log=$3 dir=$4
-    (
-        cd "$dir" || exit 1
-        REMOTE_DOCKER_STATE_DIR="$WORK/state-$machine" \
-        REMOTE_DOCKER_HOST=127.0.0.1 \
-        REMOTE_DOCKER_PORT=$SSH_PORT \
-        REMOTE_DOCKER_USER="$ACCOUNT" \
-        REMOTE_DOCKER_ENDPOINT="$endpoint" \
-        REMOTE_DOCKER_WATCH=partial \
-        exec "$WORK/remote-docker" remote start --foreground
-    ) >"$log" 2>&1 &
-    echo $!
+    start_session "$WORK/state-$machine" "$ACCOUNT" "$endpoint" "$log" "$dir"
 }
 
 PC_SOCK="$WORK/pc.sock"
 PHONE_SOCK="$WORK/phone.sock"
 
-PC_PID=$(start_session "$PC" "$PC_SOCK" "$WORK/pc.log" "$WORK/project-$PC")
-PHONE_PID=$(start_session "$PHONE" "$PHONE_SOCK" "$WORK/phone.log" "$WORK/project-$PHONE")
+PC_PID=$(session "$PC" "$PC_SOCK" "$WORK/pc.log" "$WORK/project-$PC")
+PHONE_PID=$(session "$PHONE" "$PHONE_SOCK" "$WORK/phone.log" "$WORK/project-$PHONE")
 
 # One command per machine, each against that machine's own endpoint.
-dpc() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$PC_SOCK" "$@"; }
-dphone() { timeout "$DOCKER_TIMEOUT" docker -H "unix://$PHONE_SOCK" "$@"; }
+dpc() { dockerat "$PC_SOCK" "$@"; }
+dphone() { dockerat "$PHONE_SOCK" "$@"; }
 
 # The pids are passed so a client that dies at startup ends the wait at once,
 # rather than spending the full patience and reporting the symptom.
@@ -230,15 +210,7 @@ dphone run -d --name phone-web -p 18096:80 -v "$WORK/project-$PHONE:/usr/share/n
 
 for probe in "18095 pc" "18096 phone"; do
     set -- $probe
-    reached=false
-    for _ in $(seq 1 45); do
-        if curl -fsS --max-time 3 "http://127.0.0.1:$1/" 2>/dev/null | grep -q "<h1>$2</h1>"; then
-            reached=true
-            break
-        fi
-        sleep 1
-    done
-    if [ "$reached" = true ]; then
+    if wait_url "http://127.0.0.1:$1/" "<h1>$2</h1>" 45; then
         ok "$2 reached its own container on the port it asked for"
     else
         bad "$2 never reached 127.0.0.1:$1"
@@ -247,7 +219,7 @@ done
 
 # And the workspace bound neither number, which is what stops the two from
 # colliding there in the first place.
-if dpc port pc-web 80/tcp 2>/dev/null | grep -q ":18095$"; then
+if outputs ':18095$' dpc port pc-web 80/tcp; then
     bad "the workspace bound 18095 itself"
 else
     ok "the workspace published on ports of its own choosing"

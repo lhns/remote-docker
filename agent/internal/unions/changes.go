@@ -26,7 +26,7 @@ import (
 
 // Changes lists what the container did to a share.
 func (m *Manager) Changes(ctx context.Context, account, export string) ([]cache.Change, error) {
-	l, upper, err := m.upperRoot(ctx, account, export)
+	l, upper, err := m.upperRoot(account, export)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]cache.
 
 // Pull streams the named paths out of the cache layer as a tar.
 func (m *Manager) Pull(ctx context.Context, account, export string, paths []string) ([]byte, error) {
-	_, upper, err := m.upperRoot(ctx, account, export)
+	_, upper, err := m.upperRoot(account, export)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 }
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.
-func (m *Manager) upperRoot(_ context.Context, account, export string) (*live, string, error) {
+func (m *Manager) upperRoot(account, export string) (*live, string, error) {
 	m.mu.Lock()
 	l, ok := m.shares[key(account, export)]
 	m.mu.Unlock()

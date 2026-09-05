@@ -1,6 +1,7 @@
 package fswatch
 
 import (
+	"errors"
 	"runtime"
 
 	"github.com/fsnotify/fsnotify"
@@ -39,7 +40,7 @@ func (b *fsnotifyBackend) Add(path string) error { return b.w.Add(path) }
 // the ordinary case, not an error.
 func (b *fsnotifyBackend) Remove(path string) error {
 	err := b.w.Remove(path)
-	if err != nil && errorsIsNonExistentWatch(err) {
+	if errors.Is(err, fsnotify.ErrNonExistentWatch) {
 		return nil
 	}
 	return err
@@ -48,10 +49,6 @@ func (b *fsnotifyBackend) Remove(path string) error {
 func (b *fsnotifyBackend) Events() <-chan fsnotify.Event { return b.w.Events }
 func (b *fsnotifyBackend) Errors() <-chan error          { return b.w.Errors }
 func (b *fsnotifyBackend) Close() error                  { return b.w.Close() }
-
-func errorsIsNonExistentWatch(err error) bool {
-	return err == fsnotify.ErrNonExistentWatch
-}
 
 // DefaultBudget caps how many directories are watched at once.
 //
@@ -105,4 +102,15 @@ var DefaultExcludes = []string{
 	".pytest_cache",
 	".gradle",
 	".terraform",
+}
+
+// ExcludesOr is the exclude list actually applied: DefaultExcludes for nil, an
+// explicit list as it stands, an empty one included. The cache and the watcher
+// both resolve through it; a cache deciding for itself prefetches a directory
+// the watcher never invalidates.
+func ExcludesOr(list []string) []string {
+	if list == nil {
+		return DefaultExcludes
+	}
+	return list
 }

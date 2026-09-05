@@ -11,8 +11,6 @@ import (
 
 func lockDir() string { return filepath.Dir(defaultSocketPath()) }
 
-func defaultEndpoint() string { return defaultSocketPath() }
-
 // acquireLock takes an exclusive, non-blocking flock.
 //
 // flock rather than a pid file with a liveness check, because the kernel

@@ -165,7 +165,7 @@ func TestSpecValidate(t *testing.T) {
 func TestEnvRoundTrip(t *testing.T) {
 	spec := testSpec()
 	env := map[string]string{}
-	for _, kv := range Env(spec) {
+	for _, kv := range envFor(ModeServe, spec) {
 		k, v, _ := strings.Cut(kv, "=")
 		env[k] = v
 	}
@@ -185,7 +185,7 @@ func TestEnvRoundTrip(t *testing.T) {
 
 func TestFromEnvRefusesWhatItCannotUse(t *testing.T) {
 	base := map[string]string{}
-	for _, kv := range Env(testSpec()) {
+	for _, kv := range envFor(ModeServe, testSpec()) {
 		k, v, _ := strings.Cut(kv, "=")
 		base[k] = v
 	}

@@ -64,18 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Keyed on the modules because the root is not one. See ci.yml.
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: core/go.mod
-          cache: true
-          cache-dependency-path: |
-            core/go.sum
-            core-agent/go.sum
-            core-client/go.sum
-            agent/go.sum
-            client/go.sum
-            test/probes/go.sum
+      - uses: ./.github/actions/setup-go
 
       - uses: actions/download-artifact@v8
         with:

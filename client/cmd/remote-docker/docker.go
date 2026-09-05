@@ -77,9 +77,6 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	// PersistentFlags(). The last part is not a style choice -- `--context`
 	// has the shorthand -c, which `build` already uses for --cpu-shares, so
 	// installing them persistently panics on `docker build --help`.
-	//
-	// Hand-rolled here until now, which meant cobra's default help: one flat
-	// list of sixty commands where docker's own groups them.
 	opts, _ := cli.SetupRootCommand(cmd)
 
 	// Held rather than raised: nothing may fail while the tree is being built.
@@ -235,10 +232,8 @@ func invokingDocker() bool {
 // for when it is not, so adding a parallel `buildx` and leaving `build` on
 // the old path would be a shape docker does not have.
 //
-// The classic builder is what we shipped until now, and it was not a choice:
-// buildx is a separate plugin binary, so embedding docker/cli alone got the
-// pre-BuildKit path silently, even with DOCKER_BUILDKIT=1. ADR 0009 recorded
-// the opposite and was wrong.
+// buildx is a separate plugin binary, so embedding docker/cli alone gets the
+// pre-BuildKit path silently, even with DOCKER_BUILDKIT=1 (ADR 0009).
 //
 // `buildx` is registered too, because it is a real command with subcommands
 // docker exposes (bake, imagetools, du) and hiding them would be a
@@ -266,7 +261,6 @@ func installModernBuilder(cmd *cobra.Command, dockerCli *command.DockerCli) {
 	// the plugin harness to have run, and `docker buildx version` panics on a
 	// nil dereference without it, and `build` is what docker's own tree
 	// exposes anyway.
-	_ = root
 }
 
 // newRootCommand is the whole command line: the Docker CLI, plus ours.

@@ -71,14 +71,14 @@ func TestParseRequestedPortsSkipsWhatItCannotRead(t *testing.T) {
 
 // A label asking for more listeners than the bound gets the bound.
 func TestParseRequestedPortsIsBounded(t *testing.T) {
-	numbers := make([]string, 0, MaxRequestedPorts+100)
-	for i := range MaxRequestedPorts + 100 {
+	numbers := make([]string, 0, maxRequestedPorts+100)
+	for i := range maxRequestedPorts + 100 {
 		numbers = append(numbers, strconv.Itoa(1+i))
 	}
 	label := "80/tcp=" + strings.Join(numbers, ";")
 
 	got := ParseRequestedPorts(label)
-	if len(got["80/tcp"]) != MaxRequestedPorts {
+	if len(got["80/tcp"]) != maxRequestedPorts {
 		t.Errorf("a label asking for %d ports produced %d", len(numbers), len(got["80/tcp"]))
 	}
 }

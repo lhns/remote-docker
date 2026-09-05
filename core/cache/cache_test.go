@@ -173,7 +173,7 @@ func TestCacheRequestCodecs(t *testing.T) {
 	if err := (Request{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"}).Validate(); err == nil {
 		t.Error("a batch named an encoding this version has not got and was accepted")
 	}
-	if !SupportsCodec(CodecNone) {
+	if !supportsCodec(CodecNone) {
 		t.Error("a plain tar was not supported")
 	}
 }

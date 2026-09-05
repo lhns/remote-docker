@@ -13,7 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -81,16 +81,20 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // The port and the account come from `remote`'s own flags, which is where they
 // already live, falling back to the same defaults the resolver uses so that a
 // machine and a hand-written workspace agree about what "unset" means.
-func (o *machineOptions) spec(name string) machine.Spec {
-	account := overrides.User
-	if account == "" {
-		account = config.DefaultUser()
-	}
-	port := overrides.Port
-	if port == 0 {
-		port = config.DefaultSSHPort
-	}
-	return machine.Spec{
+//
+// A setting left unset falls back to what the machine was RECORDED as built
+// from, when there is a record. Spec.Generation hashes every one of them, so
+// without the fallback a rebuild of a machine created with `--cpus 4` or
+// `--port 2222` builds one with the defaults, whose generation never matches
+// the record: `status` reports it out of date forever, and `rebuild` destroys
+// a machine on 2222 to build one on 22. The rootfs is taken from the record
+// only for the same image and only while the file is still there: the record
+// holds the path the published image was fetched to, a client on a new version
+// must fetch the new one rather than build the old image under the new name,
+// and a cache that has been pruned leaves a path naming nothing, where
+// EnsureRootfs fetching again is the repair rather than a failure to open it.
+func (o *machineOptions) spec(name string, recorded *config.Workspace) machine.Spec {
+	spec := machine.Spec{
 		Name:    name,
 		Backend: o.backend,
 		// The image is what a machine IS (ADR 0026), and it is named here so it
@@ -99,11 +103,53 @@ func (o *machineOptions) spec(name string) machine.Spec {
 		// than adopting one made from an older image.
 		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
-		Port:     port,
+		Port:     overrides.Port,
 		CPUs:     o.cpus,
 		MemoryMB: o.memoryMB,
-		Account:  account,
+		Account:  overrides.User,
 	}
+	if recorded != nil && recorded.Machine != nil {
+		m := recorded.Machine
+		if spec.Port == 0 {
+			spec.Port = recorded.Port
+		}
+		if spec.Account == "" {
+			spec.Account = recorded.User
+		}
+		if spec.CPUs == 0 {
+			spec.CPUs = m.CPUs
+		}
+		if spec.MemoryMB == 0 {
+			spec.MemoryMB = m.MemoryMB
+		}
+		if spec.Rootfs == "" && m.Image == spec.Image && m.Rootfs != "" {
+			if _, err := os.Stat(m.Rootfs); err == nil {
+				spec.Rootfs = m.Rootfs
+			}
+		}
+	}
+	if spec.Port == 0 {
+		spec.Port = config.DefaultSSHPort
+	}
+	if spec.Account == "" {
+		spec.Account = config.DefaultUser()
+	}
+	return spec
+}
+
+// recordedWorkspace is the workspace entry a machine was registered under,
+// which holds the settings it was built from, or nil when there is no entry or
+// it names no machine.
+func recordedWorkspace(name string) *config.Workspace {
+	file, err := config.Load("")
+	if err != nil {
+		return nil
+	}
+	ws, ok := file.Workspaces[name]
+	if !ok || ws.Machine == nil {
+		return nil
+	}
+	return &ws
 }
 
 func newMachineCreateCommand() *cobra.Command {
@@ -120,8 +166,11 @@ nothing. Run against one built from different settings, it reports the mismatch
 rather than acting on it, because recreating discards what is inside and that
 is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
+		// Built from the flags alone. Create is where the settings are SAID,
+		// and one that read the record would keep whatever an earlier create
+		// chose, so the mismatch it exists to report never shows.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0]), false)
+			return createMachine(cmd, args[0], opts.spec(args[0], nil), false)
 		},
 	}
 	opts.install(cmd)
@@ -144,7 +193,7 @@ Images, containers and volumes INSIDE the machine are lost. Your files are not:
 they are on this machine and are served to it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0]), true)
+			return createMachine(cmd, args[0], opts.spec(args[0], recordedWorkspace(args[0])), true)
 		},
 	}
 	opts.install(cmd)
@@ -154,57 +203,53 @@ they are on this machine and are served to it.`,
 // stopSessionFor shuts down the background session for a workspace, if one is
 // serving.
 //
-// Best effort by design: this runs before stopping a machine, and every way it
-// can fail -- no config, nothing listening, a session that will not answer --
-// means the same thing to the caller, which is that there is nothing to shut
-// down first. A machine that would not stop is what the caller is told about,
-// and that error comes from the stop itself.
+// Best effort by design: this runs before stopping a machine, and a session
+// that cannot be stopped is not a reason to leave the machine running. But
+// every failure is reported, because a session that survived stop and start
+// is otherwise invisible: the next docker command finds the endpoint
+// reachable, uses it, and gets EOF from a session serving over a dead
+// connection.
 func stopSessionFor(cmd *cobra.Command, name string) {
-	// Every failure below is reported, not swallowed. Best effort meant silent,
-	// and silent meant three CI rounds spent asking whether this ran at all --
-	// while the answer, that a session survived both stop and start, was
-	// visible only in an unrelated status command.
 	warn := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
 	}
 
-	cfg, err := config.Resolve(overrides, name)
+	endpoint, err := sessionEndpointFor(name)
 	if err != nil {
 		warn("cannot tell which endpoint %q uses, so a session may still be serving it: %v", name, err)
 		return
 	}
-	// Asked unconditionally rather than after a Reachable check. A session
-	// that is starting up holds the endpoint before it answers questions about
-	// itself, so a check can say "nothing there" about a process that is very
-	// much there -- and then the machine is stopped underneath it.
-	endpoint := endpointOf(cfg)
-
-	// Asked for first, because after the shutdown there is nothing left to ask.
-	var st proxy.Status
-	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
-		st.PID = proxy.Owner(endpoint)
-	}
-
-	if err := control(endpoint, http.MethodPost, "shutdown", nil); err != nil {
-		// Nothing serving is the ordinary case and not worth a line; anything
-		// else means a session is about to lose its machine underneath it.
-		if proxy.Reachable(endpoint) {
-			warn("a session is serving %s and would not stop: %v", endpoint, err)
-		}
+	// Nothing serving is the ordinary case and not worth a line. Reachable is
+	// a plain dial, so a session that has bound its endpoint answers it before
+	// it answers for itself; the window before the bind is the same whether
+	// the check is a dial or a request, so asking first loses nothing, which is
+	// what `machine start`'s comment on the race relies on.
+	if !proxy.Reachable(endpoint) {
 		return
 	}
-	_ = waitForEndpoint(endpoint, false, stopTimeout)
-
-	// And then for the PROCESS, which is the part that matters here. The
-	// endpoint going quiet is the START of the teardown: only afterwards does
-	// the session drop its SSH connection, its reverse tunnel and its NFS
-	// export. An account has exactly ONE reverse-tunnel port (ADR 0003) and a
-	// session fails hard when it cannot take it -- so returning at the listener
-	// let the next session start against a port the workspace had not released,
-	// which killed its NFS server ("the nfs server stopped err=EOF") and took
-	// the session down with it. What the user saw was EOF on a local pipe.
-	_ = waitForExit(st.PID, stopTimeout)
+	if err := stopSession(endpoint); err != nil {
+		warn("%v", err)
+		return
+	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
+}
+
+// sessionEndpointFor is where the session for a NAMED workspace serves.
+//
+// The name selects the workspace and is never the config path: Resolve's
+// second argument is a file, and a name passed there resolves the DEFAULT
+// workspace's endpoint, so `machine stop dev` would shut down whichever
+// session happened to be the default. The process-wide overrides stay, with
+// only the workspace replaced: a `--endpoint` on the command line names where
+// the session serves, and dropping it asks about an endpoint nobody bound.
+func sessionEndpointFor(name string) (string, error) {
+	o := overrides
+	o.Workspace = name
+	cfg, err := config.Resolve(o, "")
+	if err != nil {
+		return "", err
+	}
+	return endpointOf(cfg), nil
 }
 
 // unproven names the backends that have never been executed.
@@ -486,7 +531,7 @@ func newMachineStatusCommand() *cobra.Command {
 
 // reportGeneration says whether the machine matches the settings it would be
 // built from now, which is the question `status` is really asked.
-func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
+func reportGeneration(out io.Writer, m *config.Machine, observed machine.Observed) {
 	switch observed.Generation {
 	case "":
 		row(out, "settings", "cannot be read from the machine")
@@ -497,10 +542,6 @@ func reportGeneration(out io.Writer, m *config.Machine, observed mObserved) {
 			ourCommand("machine rebuild "+m.Name))
 	}
 }
-
-// mObserved is machine.Observed, aliased so the signature above reads without
-// a package qualifier in every line.
-type mObserved = machine.Observed
 
 // withMachine looks up a workspace's machine and hands it to fn.
 func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, config.Workspace) error) error {

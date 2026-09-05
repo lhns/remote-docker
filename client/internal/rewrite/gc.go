@@ -16,20 +16,15 @@ type Volume struct {
 	Labels map[string]string
 }
 
-// VolumeLister and VolumeRemover are the daemon operations garbage collection
-// needs, kept separate from VolumeEnsurer so a caller that only creates
-// volumes need not implement removal.
-type VolumeLister interface {
+// VolumeStore is what garbage collection asks of the daemon, kept separate
+// from VolumeEnsurer so a caller that only creates volumes need not implement
+// removal.
+type VolumeStore interface {
 	ListVolumes(ctx context.Context) ([]Volume, error)
-}
-
-// VolumeRemover deletes a volume by name.
-type VolumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
-}
 
-// InUse reports the volume names currently referenced by a container.
-type InUse interface {
+	// VolumesInUse reports the volume names currently referenced by a
+	// container.
 	VolumesInUse(ctx context.Context) (map[string]bool, error)
 }
 
@@ -41,9 +36,7 @@ type InUse interface {
 // records this as a consequence of per-bind volumes, and it is one that has to
 // be handled rather than only noted.
 type Collector struct {
-	Volumes VolumeLister
-	Remover VolumeRemover
-	InUse   InUse
+	Volumes VolumeStore
 
 	// Caches names the cache volumes the WORKSPACE has a union on, which is
 	// the one question about them the daemon cannot answer. Nil means it
@@ -101,7 +94,7 @@ func (c *Collector) Collect(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("rewrite: listing volumes: %w", err)
 	}
 
-	inUse, err := c.InUse.VolumesInUse(ctx)
+	inUse, err := c.Volumes.VolumesInUse(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("rewrite: finding volumes in use: %w", err)
 	}
@@ -178,7 +171,7 @@ func (c *Collector) remove(ctx context.Context, name string) (bool, error) {
 	if c.Guard.exported(name) {
 		return false, nil
 	}
-	if err := c.Remover.RemoveVolume(ctx, name); err != nil {
+	if err := c.Volumes.RemoveVolume(ctx, name); err != nil {
 		return false, err
 	}
 	return true, nil

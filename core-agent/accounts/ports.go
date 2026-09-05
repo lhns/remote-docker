@@ -15,7 +15,6 @@ package accounts
 // with this file.
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -228,36 +227,25 @@ func (p *Ports) load() error {
 	p.assigned = map[assignment]int{}
 	p.loaded = true
 
-	f, err := os.Open(p.path())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("accounts: reading clientports: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	err := ReadRecord(p.path(), func(line string) {
 		// account:client:port
 		parts := strings.Split(line, ":")
 		if len(parts) != 3 {
-			continue
+			return
 		}
 		port, err := strconv.Atoi(parts[2])
 		if err != nil || port < 1 || port > workspace.MaxPort {
-			continue
+			return
 		}
 		p.assigned[assignment{account: parts[0], client: parts[1]}] = port
+	})
+	if err != nil {
+		return fmt.Errorf("accounts: reading clientports: %w", err)
 	}
-	return scanner.Err()
+	return nil
 }
 
-// save replaces the record atomically.
+// save replaces the record.
 //
 // Sorted, because a map's order is not one: the file is read by people as well
 // as by this, and a record that shuffles on every write hides what changed.
@@ -271,28 +259,5 @@ func (p *Ports) save() error {
 		lines = append(lines, fmt.Sprintf("%s:%s:%d", k.account, k.client, v))
 	}
 	sort.Strings(lines)
-
-	body := strings.Join(lines, "\n")
-	if body != "" {
-		body += "\n"
-	}
-
-	tmp, err := os.CreateTemp(p.Dir, ".clientports-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-
-	if _, err := tmp.WriteString(body); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(name, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(name, p.path())
+	return WriteRecord(p.path(), lines, 0o600)
 }

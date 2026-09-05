@@ -38,7 +38,7 @@ func managed(name, owner string) Volume {
 }
 
 func newCollector(store *fakeVolumeStore, owner string) *Collector {
-	return &Collector{Volumes: store, Remover: store, InUse: store, Owner: owner}
+	return &Collector{Volumes: store, Owner: owner}
 }
 
 func TestCollectRemovesUnusedManagedVolumes(t *testing.T) {

@@ -14,8 +14,6 @@ func lockDir() string {
 	return filepath.Join(os.TempDir(), "remote-docker")
 }
 
-func defaultEndpoint() string { return defaultPipe }
-
 // acquireLock opens the pid record. The real exclusion is the pipe bind
 // itself, which winio takes with FILE_FLAG_FIRST_PIPE_INSTANCE and the kernel
 // releases when the process dies, so unlike Unix there is nothing to recover

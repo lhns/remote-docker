@@ -114,8 +114,8 @@ dump_agent_log() {
 # exec, so the subshell BECOMES the client rather than waiting for it. Without
 # it `$!` is the subshell's pid, killing that leaves the client running, and the
 # next session finds the endpoint held by a process this suite thinks it stopped:
-# "another remote-docker is already serving ... (pid N)". The other suites do
-# not need it because they have no directory to change into first.
+# "another remote-docker is already serving ... (pid N)". lib.sh's start_session
+# does the same for the other suites.
 session() {
     local log=$1
     # Watching on, because a delegated share refuses to run without it: its

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,16 +16,10 @@ import (
 
 // Dockerd runs the workspace's Docker daemon and restarts it if it dies.
 //
-// The entrypoint script started dockerd and never looked at it again. A daemon
-// that crashed left the container running and looking healthy, with sshd still
-// answering, so the workspace accepted connections and then failed every
-// Docker call, and the Swarm deployment had no healthcheck at all to notice.
+// Supervised rather than started and forgotten: a daemon that crashes leaves
+// the container running and looking healthy, still accepting SSH, while every
+// Docker call fails.
 type Dockerd struct {
-	// Command is the entrypoint to run. The dind image ships
-	// dockerd-entrypoint.sh, which prepends `dockerd` when the first argument
-	// starts with a dash and sets up the storage driver and iptables.
-	Command string
-
 	// Args are passed through, typically from WORKSPACE_DOCKERD_ARGS.
 	Args []string
 
@@ -37,9 +30,6 @@ type Dockerd struct {
 	// that the daemon did not come up.
 	StartTimeout time.Duration
 
-	// RestartDelay is how long to wait before restarting a daemon that died.
-	RestartDelay time.Duration
-
 	// Log receives progress. defaults() fills it with logx.Discard(), so it is
 	// never nil by the time anything logs; nil is not silence, that is.
 	Log *slog.Logger
@@ -48,12 +38,17 @@ type Dockerd struct {
 	current *exec.Cmd
 }
 
-// Defaults.
 const (
-	DefaultCommand      = "dockerd-entrypoint.sh"
+	// command is the entrypoint to run. The dind image ships
+	// dockerd-entrypoint.sh, which prepends `dockerd` when the first argument
+	// starts with a dash and sets up the storage driver and iptables.
+	command = "dockerd-entrypoint.sh"
+
+	// restartDelay is how long to wait before restarting a daemon that died.
+	restartDelay = 2 * time.Second
+
 	DefaultSocket       = "/var/run/docker.sock"
 	DefaultStartTimeout = 90 * time.Second
-	DefaultRestartDelay = 2 * time.Second
 )
 
 // Run starts the daemon and keeps it running until ctx is done.
@@ -67,32 +62,32 @@ func (d *Dockerd) Run(ctx context.Context) error {
 
 	for ctx.Err() == nil {
 		if err := d.runOnce(ctx); err != nil && ctx.Err() == nil {
-			d.Log.Warn("dockerd exited; restarting", "err", err, "in", d.RestartDelay)
+			d.Log.Warn("dockerd exited; restarting", "err", err, "in", restartDelay)
 		}
 
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(d.RestartDelay):
+		case <-time.After(restartDelay):
 		}
 	}
 	return nil
 }
 
 func (d *Dockerd) runOnce(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, d.Command, d.Args...)
+	cmd := exec.CommandContext(ctx, command, d.Args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting %s: %w", d.Command, err)
+		return fmt.Errorf("starting %s: %w", command, err)
 	}
 
 	d.mu.Lock()
 	d.current = cmd
 	d.mu.Unlock()
 
-	d.Log.Info("started " + d.Command)
+	d.Log.Info("started " + command)
 	return cmd.Wait()
 }
 
@@ -119,13 +114,6 @@ func (d *Dockerd) WaitReady(ctx context.Context) error {
 	return fmt.Errorf("supervise: %s did not appear within %s", d.Socket, d.StartTimeout)
 }
 
-// Ready reports whether the daemon's socket is present.
-func (d *Dockerd) Ready() bool {
-	d.applyDefaults()
-	_, err := os.Stat(d.Socket)
-	return err == nil
-}
-
 // Stop asks the daemon to shut down.
 func (d *Dockerd) Stop() error {
 	d.mu.Lock()
@@ -144,33 +132,13 @@ func (d *Dockerd) Stop() error {
 }
 
 func (d *Dockerd) applyDefaults() {
-	if d.Command == "" {
-		d.Command = DefaultCommand
-	}
 	if d.Socket == "" {
 		d.Socket = DefaultSocket
 	}
 	if d.StartTimeout == 0 {
 		d.StartTimeout = DefaultStartTimeout
 	}
-	if d.RestartDelay == 0 {
-		d.RestartDelay = DefaultRestartDelay
-	}
 	if d.Log == nil {
 		d.Log = logx.Discard()
 	}
-}
-
-// SplitArgs splits WORKSPACE_DOCKERD_ARGS the way a shell would, well enough
-// for the flags a deployment actually passes.
-//
-// Deliberately not a full shell parser: the value is a list of flags such as
-// --storage-driver=fuse-overlayfs, and pretending to handle quoting we do not
-// handle would be worse than not handling it.
-func SplitArgs(s string) []string {
-	fields := strings.Fields(s)
-	if len(fields) == 0 {
-		return nil
-	}
-	return fields
 }

@@ -170,21 +170,6 @@ const (
 	Recreate
 )
 
-func (a Action) String() string {
-	switch a {
-	case Nothing:
-		return "nothing"
-	case Create:
-		return "create"
-	case Start:
-		return "start"
-	case Recreate:
-		return "recreate"
-	default:
-		return "unknown"
-	}
-}
-
 // Plan says what to do to make the machine match the spec.
 //
 // Pure, and the only place the rules live. Whether a mismatch is acted on is

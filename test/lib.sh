@@ -1,4 +1,4 @@
-# Shared mechanics for the two integration suites.
+# Shared mechanics for the integration suites.
 #
 # The suites stay separate on purpose -- one per WORKSPACE_PER_USER_DIND mode,
 # each stating its own mode -- and this file is deliberately only the
@@ -10,8 +10,8 @@
 # when the client died and the other waited six minutes. Those are the lines
 # worth sharing; the assertions are not.
 #
-# Sourced, not executed: it needs the caller's WORK, IMAGE, CONTAINER and
-# SSH_PORT.
+# Sourced, not executed. The counters and `outputs` need nothing; the rest
+# needs the caller's REPO, WORK, IMAGE, CONTAINER and SSH_PORT.
 
 PASS=0
 FAIL=0
@@ -24,29 +24,15 @@ info() { echo "  ....  $*"; }
 #
 #   outputs <regex> <cmd...>
 #
-# Never `cmd | grep -q`, which is what this replaces everywhere. grep -q exits
-# the instant it matches, so whatever the command still had to write gets
-# EPIPE, and Go's runtime turns EPIPE on fd 1 or 2 into a fatal SIGPIPE: exit
-# 141. Under `set -o pipefail` the pipeline reports that 141 even though the
-# match succeeded, so the assertion fails precisely when it should pass,
-# depending only on whether grep was scheduled before the command finished
-# writing. A matching line with nothing after it is safe; one with a trailing
-# summary line, another row or a log tail is not.
+# Never `cmd | grep -q` on a live command. grep -q exits at the first match,
+# the producer's next write gets EPIPE, and Go turns EPIPE on fd 1 or 2 into a
+# fatal SIGPIPE (exit 141), so under `set -o pipefail` the assertion fails
+# BECAUSE it matched, depending only on scheduling. Measured 2026-08-13: a
+# producer still writing when grep exits gives 141 every time; Windows ignores
+# the failed write. It has not been seen to fire here, and section 17's
+# intermittent failures are NOT explained by it. The command substitution reads
+# to EOF, so there is no reader to close early.
 #
-# The mechanism is Linux-only and measured: a producer that is still writing
-# when grep exits dies with 141 every time, and on Windows the failed write is
-# silently ignored and the producer exits 0. What is NOT established is that it
-# has ever fired here. `remote ls` writes its whole table faster than grep can
-# match and exit, and the real binary run this way survived 5,067 runs under
-# CPU contention without one failure, so section 17's intermittent failures are
-# NOT explained by this. They remain unexplained; the assertions print what
-# they saw so the next occurrence says something.
-#
-# This is hardening on a hazard that is real, cheap to remove and impossible to
-# see when it strikes, not a fix for a known bug.
-#
-# The command substitution reads to EOF, so there is no reader to close early
-# and no pipeline for pipefail to inspect.
 # Empty rather than unset, because the suites run under `set -u` and a failure
 # message may name it on a path where outputs never ran.
 #
@@ -61,6 +47,22 @@ outputs() {
     # shellcheck disable=SC2034  # read by the suites
     LAST_STATUS=$?
     grep -qE "$re" <<<"$LAST_OUTPUT"
+}
+
+# Every docker command that crosses the proxy is wrapped in a timeout. A
+# container whose volume mount never completes would otherwise block forever,
+# burning the whole CI budget and reporting nothing about where it stopped.
+# A suite sets DOCKER_TIMEOUT before sourcing this to change the budget.
+DOCKER_TIMEOUT=${DOCKER_TIMEOUT:-120}
+dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
+
+# dockerat runs a docker command against one endpoint, with the same timeout.
+#
+#   dockerat <socket> <args...>
+dockerat() {
+    local sock=$1
+    shift
+    timeout "$DOCKER_TIMEOUT" docker -H "unix://$sock" "$@"
 }
 
 # The workspace container lives on the RUNNER's daemon. Once DOCKER_HOST points
@@ -88,6 +90,33 @@ build_image() {
 # build_client builds the client binary into $WORK.
 build_client() {
     (cd "$REPO/client" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker)
+}
+
+# build_probe builds one of test/probes into <dest>: static and for Linux, so
+# it runs under plain alpine straight off a share, with no image build.
+#
+#   build_probe <name> <dest>
+build_probe() {
+    local name=$1 dest=$2
+    (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$dest" "./$name")
+}
+
+# cleanup_suite is the EXIT trap of a suite that runs one workspace container:
+# it ends the client pids it is given (empty ones are skipped), removes the
+# container and the work directory.
+#
+#   cleanup_suite <pid...>
+cleanup_suite() {
+    local pid
+    echo
+    echo "== cleanup =="
+    for pid in "$@"; do
+        [ -n "$pid" ] || continue
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    done
+    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
+    rm -rf "$WORK"
 }
 
 # enrol generates a keypair for one account and stages its public half where
@@ -177,6 +206,26 @@ wait_parent_dockerd() {
     return 1
 }
 
+# start_session runs a client session in the background, from inside <dir>,
+# and prints its pid. Extra VAR=value arguments are added to its environment.
+# Watching is on because a read=cached share refuses to run without it (ADR
+# 0044); harmless to a section that mounts none.
+#
+#   start_session <statedir> <user> <endpoint> <log> <dir> [VAR=value...]
+#
+# exec, so the subshell BECOMES the client. Without it $! is the subshell's
+# pid, killing that leaves the client running, and the next session finds the
+# endpoint held by a process the suite thinks it stopped.
+start_session() {
+    local statedir=$1 user=$2 endpoint=$3 log=$4 dir=$5
+    shift 5
+    (
+        cd "$dir" || exit 1
+        exec env             REMOTE_DOCKER_STATE_DIR="$statedir"             REMOTE_DOCKER_HOST=127.0.0.1             REMOTE_DOCKER_PORT="$SSH_PORT"             REMOTE_DOCKER_USER="$user"             REMOTE_DOCKER_ENDPOINT="$endpoint"             REMOTE_DOCKER_WATCH=partial             "$@"             "$WORK/remote-docker" remote start --foreground
+    ) >"$log" 2>&1 &
+    echo $!
+}
+
 # wait_endpoint waits for a client endpoint to answer.
 #
 # The optional second argument is a client pid: if that process dies, the wait
@@ -193,6 +242,33 @@ wait_endpoint() {
             return 1
         fi
         sleep 2
+    done
+    return 1
+}
+
+# wait_ready polls a probe container's log for up to <secs> for the READY line
+# watchprobe prints once its watch is registered. A change made before that
+# proves nothing either way.
+#
+#   wait_ready <container> <secs>
+wait_ready() {
+    local container=$1 secs=$2 _
+    for _ in $(seq 1 "$secs"); do
+        outputs '^READY' docker logs "$container" && return 0
+        sleep 1
+    done
+    return 1
+}
+
+# wait_url polls <url> for up to <secs> until its body matches <regex>;
+# LAST_OUTPUT holds the last answer.
+#
+#   wait_url <url> <regex> <secs>
+wait_url() {
+    local url=$1 re=$2 secs=$3 _
+    for _ in $(seq 1 "$secs"); do
+        outputs "$re" curl -fsS --max-time 3 "$url" && return 0
+        sleep 1
     done
     return 1
 }

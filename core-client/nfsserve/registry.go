@@ -238,11 +238,9 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 
 	r.attrs = attrs
 	for _, share := range r.shares {
-		// Rebuilt the same way it was registered. This used to root a new
-		// osfs at share.LocalPath with no wrapper, which for a single-file
-		// share is the FILE: the wrapper hiding its siblings was dropped and
-		// the filesystem was rooted at something that is not a directory,
-		// on every connect. Released that way (ADR 0039).
+		// Rebuilt the same way it was registered: a single-file share must
+		// be rooted at its directory (ADR 0039), and rooting it at the file
+		// leaves a share nothing can mount.
 		base := share.LocalPath
 		if share.File != "" {
 			base = filepath.Dir(share.LocalPath)

@@ -41,11 +41,10 @@ var loggerOnce sync.Once
 // Everything below Warn is dropped: go-nfs logs per-request detail at Info,
 // which is useful when debugging the NFS server and noise in every other
 // circumstance. Warn and above are forwarded, so a real server fault still
-// surfaces.
+// surfaces. The level is fixed: SetLevel and ParseLevel exist because the
+// interface asks for them, and neither changes what is forwarded.
 type nfsLogger struct {
-	log   *slog.Logger
-	mu    sync.Mutex
-	level nfs.LogLevel
+	log *slog.Logger
 }
 
 // benign are messages that describe correct behaviour in alarming words.
@@ -72,21 +71,12 @@ func (l *nfsLogger) forward(level nfs.LogLevel, msg string) {
 	}
 }
 
-func (l *nfsLogger) SetLevel(level nfs.LogLevel) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.level = level
-}
+func (l *nfsLogger) SetLevel(nfs.LogLevel) {}
 
-func (l *nfsLogger) GetLevel() nfs.LogLevel {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.level
-}
+func (l *nfsLogger) GetLevel() nfs.LogLevel { return nfs.WarnLevel }
 
-// ParseLevel exists because go-nfs's init reads LOG_LEVEL from the
-// environment and calls it. Returning an error for anything unrecognised
-// leaves the level alone, which is what we want.
+// ParseLevel is called from go-nfs's init, which reads LOG_LEVEL from the
+// environment. What it returns is handed to SetLevel, which ignores it.
 func (l *nfsLogger) ParseLevel(level string) (nfs.LogLevel, error) {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "panic":
