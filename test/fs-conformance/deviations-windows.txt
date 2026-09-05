@@ -190,7 +190,7 @@ names/ltgt.readdir: readdir -> ok:missing
 names/ltgt.unlink: unlink "lt<gt>" -> ENOENT
 
 # NTFS gives a recreated name a new file reference number; ext4 reuses the inode
-remove/recreate-same-name: create r, unlink, create again -> ok:different-ino [file ino#1 nlink=1 size=0 mtime=new]
+remove/recreate-same-name: create r, unlink, create again -> ok:different-ino [file nlink=1 size=0 mtime=new]
 
 # a symlink is a reparse point, whose size NTFS reports as 0 where ext4 reports the target path's length
 links/symlink: create target.txt, symlink target.txt -> link, readlink -> ok:target.txt [symlink ino#2 nlink=1 size=0 mtime=new]

@@ -530,6 +530,9 @@ func groupRemove(g *group) {
 		return "", unix.Rmdir(g.path("d"))
 	})
 	g.run("recreate-same-name", "create r, unlink, create again", func(s *step) (string, error) {
+		// No inode label: whether the recreated name reuses the inode is what
+		// the value says, and the label would differ between two runs.
+		s.noIno = true
 		if err := createExcl(g.path("r")); err != nil {
 			return "", err
 		}

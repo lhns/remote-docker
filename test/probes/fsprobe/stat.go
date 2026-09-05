@@ -47,6 +47,11 @@ type step struct {
 	g     *group
 	stat  string
 	owner bool
+
+	// noIno drops the inode label for one step whose own value already
+	// reports the identity: a recreated name may or may not reuse the inode,
+	// and the label would differ between two runs on one filesystem.
+	noIno bool
 }
 
 // resultOf turns an error into the transcript's <result> field.
@@ -159,7 +164,7 @@ func (s *step) format(key string, st *unix.Stat_t) string {
 
 	var b strings.Builder
 	b.WriteString("[" + fileType(st.Mode))
-	if !s.g.noIno {
+	if !s.g.noIno && !s.noIno {
 		fmt.Fprintf(&b, " ino#%d", p.label(st))
 	}
 	fmt.Fprintf(&b, " nlink=%d size=%d", uint64(st.Nlink), st.Size) //nolint:unconvert // Nlink's width differs per arch
