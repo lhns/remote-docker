@@ -81,7 +81,9 @@ func Path(pid int) string {
 
 // Root is a process's filesystem as seen from this one, which is how the agent
 // reaches a path inside a daemon's mount namespace without entering it. Pid 0
-// is this process's own, "/", for the shared daemon (ADR 0012).
+// is this process's own, "/", for the shared daemon (ADR 0012). No
+// daemons.Daemon is ever built with pid 0 (both constructors require a
+// positive pid), so "/" from here is never a per-account daemon's root.
 func Root(pid int) string {
 	if pid == 0 {
 		return "/"

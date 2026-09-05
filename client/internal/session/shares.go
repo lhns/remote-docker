@@ -82,7 +82,7 @@ func readBound(path, what string, version int, log *slog.Logger, into interface{
 	}
 	if machine, account := thisMachine(); into.bound().Machine != machine || into.bound().User != account {
 		if log != nil {
-			log.Warn("ignoring a record of "+what+" written elsewhere",
+			log.Warn("ignoring "+what+": written on another machine or by another account",
 				"path", path, "wrote", into.bound().Machine+"/"+into.bound().User)
 		}
 		return false

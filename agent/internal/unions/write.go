@@ -218,6 +218,8 @@ func within(root, name string) (string, error) {
 		return "", fmt.Errorf("unions: %w", err)
 	}
 	target := path.Join(root, name)
+	// root is Relocate's join of a daemon root onto Merged(), so it is never
+	// "/" and never slash-terminated: Under with either refuses every path.
 	if !replay.Under(root, target, "/") {
 		return "", fmt.Errorf("unions: %q leaves the share", name)
 	}

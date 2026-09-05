@@ -34,7 +34,8 @@ func ReadRecord(path string, parse func(line string)) error {
 }
 
 // WriteRecord replaces a record atomically, through a temporary file in the
-// same directory and a rename.
+// same directory, synced to disk, and a rename: a crash or a power loss leaves
+// the old record or the new one, never a truncated one.
 //
 // Never in place: each of these records is the durable half of something a
 // running workspace derives, so one truncated by a crash mid-write costs more
@@ -55,6 +56,10 @@ func WriteRecord(path string, lines []string, mode os.FileMode) error {
 	defer func() { _ = os.Remove(name) }()
 
 	if _, err := tmp.WriteString(body); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
 	}

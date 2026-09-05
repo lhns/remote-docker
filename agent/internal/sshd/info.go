@@ -9,17 +9,6 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// The daemon queries folded into an info reply.
-//
-// workspace-info is the client's FIRST round trip, and these come from asking a
-// daemon that may still be booting: Warm fires at authentication and this is
-// the very next thing the client asks. So every query here uses Lookup and
-// never Ensure, and a daemon that is not up is an ordinary answer rather than a
-// wait. The values are displayed, not acted upon, and the next command starts
-// the daemon. routing_test.go pins it; a careless unification destroys it
-// silently, since everything still works, just slowly, on every first
-// connection after a restart.
-
 // infoQueryTimeout bounds each query: a daemon slow enough to sit on `docker
 // info` is exactly the daemon whose client should not be blocked introducing
 // itself.
@@ -27,6 +16,12 @@ const infoQueryTimeout = 5 * time.Second
 
 // infoField asks the account's daemon one --format question, and answers
 // fallback when the daemon is not up, or does not answer in time.
+//
+// Lookup, never Ensure: workspace-info is the client's first round trip, right
+// after Warm fired at authentication, so the daemon may still be booting. The
+// answers are displayed, and the next command starts the daemon. Ensure here
+// fails silently, as every first connection after a restart waiting on a cold
+// dind for a version string. routing_test.go pins it.
 func (s *Server) infoField(ctx context.Context, account, fallback string, args ...string) string {
 	ctx, cancel := context.WithTimeout(ctx, infoQueryTimeout)
 	defer cancel()
@@ -35,11 +30,19 @@ func (s *Server) infoField(ctx context.Context, account, fallback string, args .
 	if !ok {
 		return fallback
 	}
-	out, err := dockercli.CLI{Host: target.Host}.Line(ctx, args...)
+	out, err := s.line(ctx, target.Host, args...)
 	if err != nil {
 		return fallback
 	}
 	return out
+}
+
+// line asks one daemon one question, through query when a test set it.
+func (s *Server) line(ctx context.Context, host string, args ...string) (string, error) {
+	if s.query != nil {
+		return s.query(ctx, host, args...)
+	}
+	return dockercli.CLI{Host: host}.Line(ctx, args...)
 }
 
 // dockerVersion asks the account's daemon what it is. Unavailable is a normal

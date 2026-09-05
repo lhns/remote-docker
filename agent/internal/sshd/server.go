@@ -76,6 +76,10 @@ type Server struct {
 	// policies below. See core-agent/tunnelserver.
 	tcpip tunnelserver.Forwards
 
+	// query stands in for the docker CLI in tests, which have no daemon and
+	// need to see which host a question went to. Nil is the real CLI.
+	query func(ctx context.Context, host string, args ...string) (string, error)
+
 	mu     sync.Mutex
 	closed bool
 }

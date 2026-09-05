@@ -11,6 +11,8 @@ package main
 // developed on, that refusal is exactly what happens and is what this pins.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,13 +65,30 @@ func TestAWorkspaceWithoutAMachineNeedsNoBackend(t *testing.T) {
 // so `machine rebuild` builds the same machine `machine create --cpus 4` did
 // and its generation matches the record again.
 func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
+	saved := overrides
+	t.Cleanup(func() { overrides = saved })
+	overrides = config.Overrides{}
+
 	image := machine.DefaultImage(version)
-	recorded := &config.Machine{Backend: "wsl", Name: "dev", Image: image, Rootfs: "/cache/rootfs.tar", CPUs: 4, MemoryMB: 8192}
+	rootfs := filepath.Join(t.TempDir(), "rootfs.tar")
+	if err := os.WriteFile(rootfs, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recorded := &config.Workspace{
+		Port: 2222, User: "alice",
+		Machine: &config.Machine{Backend: "wsl", Name: "dev", Image: image, Rootfs: rootfs, CPUs: 4, MemoryMB: 8192},
+	}
 
 	unset := (&machineOptions{backend: "wsl"}).spec("dev", recorded)
-	if unset.CPUs != 4 || unset.MemoryMB != 8192 || unset.Rootfs != "/cache/rootfs.tar" {
-		t.Errorf("spec with no flags = cpus %d, memory %d, rootfs %q; want the recorded 4, 8192, /cache/rootfs.tar",
-			unset.CPUs, unset.MemoryMB, unset.Rootfs)
+	if unset.CPUs != 4 || unset.MemoryMB != 8192 || unset.Rootfs != rootfs {
+		t.Errorf("spec with no flags = cpus %d, memory %d, rootfs %q; want the recorded 4, 8192, %s",
+			unset.CPUs, unset.MemoryMB, unset.Rootfs, rootfs)
+	}
+	// The port and the account are in the generation too: without the
+	// fallback a rebuild of a machine created with --port 2222 destroys it
+	// and builds one on 22.
+	if unset.Port != 2222 || unset.Account != "alice" {
+		t.Errorf("spec with no flags = port %d, account %q; want the recorded 2222, alice", unset.Port, unset.Account)
 	}
 
 	set := (&machineOptions{backend: "wsl", cpus: 2, memoryMB: 1024, rootfs: "/mine.tar"}).spec("dev", recorded)
@@ -77,18 +96,38 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 		t.Errorf("spec with flags = cpus %d, memory %d, rootfs %q; want the flags to win",
 			set.CPUs, set.MemoryMB, set.Rootfs)
 	}
+	overrides = config.Overrides{Port: 2200, User: "bob"}
+	if got := (&machineOptions{backend: "wsl"}).spec("dev", recorded); got.Port != 2200 || got.Account != "bob" {
+		t.Errorf("spec with remote's flags = port %d, account %q; want the flags to win", got.Port, got.Account)
+	}
+	overrides = config.Overrides{}
 
 	// The record's rootfs is the path the recorded IMAGE was fetched to. A
 	// client on another version must fetch its own rather than build the old
 	// image under the new name.
 	older := *recorded
-	older.Image = "ghcr.io/example/workspace:older"
+	olderMachine := *recorded.Machine
+	olderMachine.Image = "ghcr.io/example/workspace:older"
+	older.Machine = &olderMachine
 	if got := (&machineOptions{backend: "wsl"}).spec("dev", &older).Rootfs; got != "" {
 		t.Errorf("rootfs = %q for a record of another image, want it fetched afresh", got)
 	}
 
-	if got := (&machineOptions{backend: "wsl", cpus: 1}).spec("dev", nil); got.CPUs != 1 || got.Rootfs != "" {
-		t.Errorf("spec with no record = %+v, want the flags alone", got)
+	// A cache path that has been pruned names nothing, and rebuild is the way
+	// back: the spec leaves it empty so EnsureRootfs fetches again.
+	pruned := *recorded
+	prunedMachine := *recorded.Machine
+	prunedMachine.Rootfs = filepath.Join(t.TempDir(), "gone.tar")
+	pruned.Machine = &prunedMachine
+	if got := (&machineOptions{backend: "wsl"}).spec("dev", &pruned).Rootfs; got != "" {
+		t.Errorf("rootfs = %q for a record naming a missing file, want it fetched afresh", got)
+	}
+
+	// Create passes no record, so the defaults, not the record, are what it
+	// compares the machine against.
+	got := (&machineOptions{backend: "wsl", cpus: 1}).spec("dev", nil)
+	if got.CPUs != 1 || got.Rootfs != "" || got.Port != config.DefaultSSHPort || got.Account != config.DefaultUser() {
+		t.Errorf("spec with no record = %+v, want the flags and the defaults alone", got)
 	}
 }
 

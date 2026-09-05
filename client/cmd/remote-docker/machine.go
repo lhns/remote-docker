@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -81,22 +82,18 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // already live, falling back to the same defaults the resolver uses so that a
 // machine and a hand-written workspace agree about what "unset" means.
 //
-// A flag left unset falls back to what the machine was RECORDED as built from,
-// when there is a record. Without that a rebuild of a machine created with
-// `--cpus 4` builds one with the backend's default, whose generation then never
-// matches the record, so `status` reports it out of date forever. The rootfs
-// is taken from the record only for the same image: the record holds the path
-// the published image was fetched to, and a client on a new version must fetch
-// the new one rather than build the old image under the new name.
-func (o *machineOptions) spec(name string, recorded *config.Machine) machine.Spec {
-	account := overrides.User
-	if account == "" {
-		account = config.DefaultUser()
-	}
-	port := overrides.Port
-	if port == 0 {
-		port = config.DefaultSSHPort
-	}
+// A setting left unset falls back to what the machine was RECORDED as built
+// from, when there is a record. Spec.Generation hashes every one of them, so
+// without the fallback a rebuild of a machine created with `--cpus 4` or
+// `--port 2222` builds one with the defaults, whose generation never matches
+// the record: `status` reports it out of date forever, and `rebuild` destroys
+// a machine on 2222 to build one on 22. The rootfs is taken from the record
+// only for the same image and only while the file is still there: the record
+// holds the path the published image was fetched to, a client on a new version
+// must fetch the new one rather than build the old image under the new name,
+// and a cache that has been pruned leaves a path naming nothing, where
+// EnsureRootfs fetching again is the repair rather than a failure to open it.
+func (o *machineOptions) spec(name string, recorded *config.Workspace) machine.Spec {
 	spec := machine.Spec{
 		Name:    name,
 		Backend: o.backend,
@@ -106,34 +103,53 @@ func (o *machineOptions) spec(name string, recorded *config.Machine) machine.Spe
 		// than adopting one made from an older image.
 		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
-		Port:     port,
+		Port:     overrides.Port,
 		CPUs:     o.cpus,
 		MemoryMB: o.memoryMB,
-		Account:  account,
+		Account:  overrides.User,
 	}
-	if recorded == nil {
-		return spec
+	if recorded != nil && recorded.Machine != nil {
+		m := recorded.Machine
+		if spec.Port == 0 {
+			spec.Port = recorded.Port
+		}
+		if spec.Account == "" {
+			spec.Account = recorded.User
+		}
+		if spec.CPUs == 0 {
+			spec.CPUs = m.CPUs
+		}
+		if spec.MemoryMB == 0 {
+			spec.MemoryMB = m.MemoryMB
+		}
+		if spec.Rootfs == "" && m.Image == spec.Image && m.Rootfs != "" {
+			if _, err := os.Stat(m.Rootfs); err == nil {
+				spec.Rootfs = m.Rootfs
+			}
+		}
 	}
-	if spec.CPUs == 0 {
-		spec.CPUs = recorded.CPUs
+	if spec.Port == 0 {
+		spec.Port = config.DefaultSSHPort
 	}
-	if spec.MemoryMB == 0 {
-		spec.MemoryMB = recorded.MemoryMB
-	}
-	if spec.Rootfs == "" && recorded.Image == spec.Image {
-		spec.Rootfs = recorded.Rootfs
+	if spec.Account == "" {
+		spec.Account = config.DefaultUser()
 	}
 	return spec
 }
 
-// recordedMachine is what the config says a workspace's machine was built
-// from, or nil when it names none.
-func recordedMachine(name string) *config.Machine {
+// recordedWorkspace is the workspace entry a machine was registered under,
+// which holds the settings it was built from, or nil when there is no entry or
+// it names no machine.
+func recordedWorkspace(name string) *config.Workspace {
 	file, err := config.Load("")
 	if err != nil {
 		return nil
 	}
-	return file.Workspaces[name].Machine
+	ws, ok := file.Workspaces[name]
+	if !ok || ws.Machine == nil {
+		return nil
+	}
+	return &ws
 }
 
 func newMachineCreateCommand() *cobra.Command {
@@ -150,8 +166,11 @@ nothing. Run against one built from different settings, it reports the mismatch
 rather than acting on it, because recreating discards what is inside and that
 is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
+		// Built from the flags alone. Create is where the settings are SAID,
+		// and one that read the record would keep whatever an earlier create
+		// chose, so the mismatch it exists to report never shows.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0], recordedMachine(args[0])), false)
+			return createMachine(cmd, args[0], opts.spec(args[0], nil), false)
 		},
 	}
 	opts.install(cmd)
@@ -174,7 +193,7 @@ Images, containers and volumes INSIDE the machine are lost. Your files are not:
 they are on this machine and are served to it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0], recordedMachine(args[0])), true)
+			return createMachine(cmd, args[0], opts.spec(args[0], recordedWorkspace(args[0])), true)
 		},
 	}
 	opts.install(cmd)
@@ -200,14 +219,16 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 		warn("cannot tell which endpoint %q uses, so a session may still be serving it: %v", name, err)
 		return
 	}
-	// Nothing serving is the ordinary case and not worth a line. A session
-	// still starting has bound the endpoint before it answers for itself, so
-	// reachable is the question and answering is not.
+	// Nothing serving is the ordinary case and not worth a line. Reachable is
+	// a plain dial, so a session that has bound its endpoint answers it before
+	// it answers for itself; the window before the bind is the same whether
+	// the check is a dial or a request, so asking first loses nothing, which is
+	// what `machine start`'s comment on the race relies on.
 	if !proxy.Reachable(endpoint) {
 		return
 	}
 	if err := stopSession(endpoint); err != nil {
-		warn("a session is serving %s and would not stop: %v", endpoint, err)
+		warn("%v", err)
 		return
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
@@ -218,9 +239,13 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 // The name selects the workspace and is never the config path: Resolve's
 // second argument is a file, and a name passed there resolves the DEFAULT
 // workspace's endpoint, so `machine stop dev` would shut down whichever
-// session happened to be the default.
+// session happened to be the default. The process-wide overrides stay, with
+// only the workspace replaced: a `--endpoint` on the command line names where
+// the session serves, and dropping it asks about an endpoint nobody bound.
 func sessionEndpointFor(name string) (string, error) {
-	cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+	o := overrides
+	o.Workspace = name
+	cfg, err := config.Resolve(o, "")
 	if err != nil {
 		return "", err
 	}

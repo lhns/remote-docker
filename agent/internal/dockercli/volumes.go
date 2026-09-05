@@ -50,7 +50,7 @@ func (v Volumes) Mountpoint(ctx context.Context, volume string) (string, error) 
 		// Same rule as a root that cannot be resolved: refuse rather than fall
 		// back. An empty host is the AGENT's daemon, which exists and holds a
 		// different set of volumes.
-		return "", fmt.Errorf("notify: locating the daemon holding volume %s: %w", volume, err)
+		return "", fmt.Errorf("dockercli: locating the daemon holding volume %s: %w", volume, err)
 	}
 
 	mp, err := mountpoint(ctx, host, volume)

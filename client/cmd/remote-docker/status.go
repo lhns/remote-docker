@@ -215,7 +215,7 @@ func daemonLine(info workspace.Info) string {
 	switch info.Storage {
 	case "":
 	case "vfs":
-		parts = append(parts, "vfs (slow)")
+		parts = append(parts, "vfs (slow: every container create copies the whole image)")
 	default:
 		parts = append(parts, info.Storage)
 	}

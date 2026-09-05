@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -173,12 +174,24 @@ func stopSession(endpoint string) error {
 			proxy.DockerHost(endpoint))
 	}
 	if !waitForExit(st.PID, stopTimeout) {
-		return fmt.Errorf(
-			"the session stopped serving %s but process %d is still running, "+
-				"so its workspace resources may not be free yet",
-			proxy.DockerHost(endpoint), st.PID)
+		return &lingeringError{endpoint: endpoint, pid: st.PID}
 	}
 	return nil
+}
+
+// lingeringError is a session that acknowledged the stop, stopped serving,
+// and whose process is still there. Its own type so restartDaemon can tell it
+// from a refusal: the endpoint is free, so a start can go ahead, and the
+// lingering process is a warning and not a reason to leave the old build
+// serving.
+type lingeringError struct {
+	endpoint string
+	pid      int
+}
+
+func (e *lingeringError) Error() string {
+	return fmt.Sprintf("the session stopped serving %s but process %d is still running, "+
+		"so its workspace resources may not be free yet", proxy.DockerHost(e.endpoint), e.pid)
 }
 
 // startDaemon spawns a foreground session, detached, and waits for it to answer.
@@ -375,9 +388,18 @@ func orUnknown(v string) string {
 }
 
 // restartDaemon stops a running session and starts one from this binary.
+//
+// A process still exiting after its endpoint went quiet is warned about and
+// not waited for: the endpoint is free and the start binds it, while aborting
+// would leave the old build serving nothing and the new one never started. Any
+// other failure to stop leaves the running session alone.
 func restartDaemon(cfg config.Config, endpoint string) error {
 	if err := stopSession(endpoint); err != nil {
-		return err
+		var lingering *lingeringError
+		if !errors.As(err, &lingering) {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 	return startDaemon(cfg, endpoint)
 }
@@ -454,7 +476,9 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 		row(out, "session version", orUnknown(f.local.Version))
 		return
 	}
-	row(out, "session version", differentBuild(f.local))
+	// The marker is what a reader scanning the rows catches; versionsLine
+	// carries the same one so the two views of a session agree.
+	rowf(out, "session version", "%s (DIFFERENT)", differentBuild(f.local))
 }
 
 // warnTraceGoesNowhere says so when this process is tracing and the process

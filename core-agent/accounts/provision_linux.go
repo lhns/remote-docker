@@ -101,6 +101,8 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, st
 // which the integration suite asserts rather than trusting this.
 func (p *UnixProvisioner) reconcileGroups(name string) {
 	for _, group := range p.Revoke {
+		// gpasswd -d fails on an account that was never a member, which would
+		// be logged as a failure to revoke something nobody had.
 		if !inGroup(name, group) {
 			continue
 		}

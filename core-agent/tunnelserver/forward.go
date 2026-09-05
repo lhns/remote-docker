@@ -222,7 +222,7 @@ func (f *Forwards) HandleChannel(_ *gssh.Server, _ *gossh.ServerConn, newChan go
 // handleForward is the local forward for either protocol: the same payload and
 // the same AllowDial, then the protocol's dial and the protocol's bridge.
 func (f *Forwards) handleForward(newChan gossh.NewChannel, ctx gssh.Context,
-	dial func(gssh.Context, string) (net.Conn, error), bridge func(gossh.Channel, net.Conn)) {
+	dial func(gssh.Context, string) (net.Conn, error), join func(gossh.Channel, net.Conn)) {
 	var d tunnel.ForwardPayload
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		_ = newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
@@ -247,7 +247,7 @@ func (f *Forwards) handleForward(newChan gossh.NewChannel, ctx gssh.Context,
 		return
 	}
 	go gossh.DiscardRequests(reqs)
-	bridge(ch, conn)
+	join(ch, conn)
 }
 
 // bridge copies both ways and closes both ends when either finishes.

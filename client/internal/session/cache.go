@@ -50,7 +50,8 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 			}
 			return reply.Hello.Version, true
 		})
-	if errors.Is(err, errNotServed) {
+	var notServed *notServedError
+	if errors.As(err, &notServed) {
 		return nil, errors.New("this workspace does not serve delegated shares as a cache" + rewrite.FixUpdateWorkspace)
 	}
 	if err != nil {
@@ -67,9 +68,13 @@ func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
 	return c, nil
 }
 
-// errNotServed is a channel the workspace answered with something other than
-// a greeting: an agent too old for the command.
-var errNotServed = errors.New("the workspace does not serve this channel")
+// notServedError is a channel the workspace answered with something other
+// than a greeting: an agent too old for the command, which the message names.
+type notServedError struct{ command string }
+
+func (e *notServedError) Error() string {
+	return fmt.Sprintf("the workspace did not answer %q", e.command)
+}
 
 // greet opens a channel and completes its version handshake.
 //
@@ -98,7 +103,7 @@ func greet[T any](client *tunnelclient.Client, command string, frame, want int, 
 	}
 	if !ok {
 		_ = stream.Close()
-		return nil, nil, greeting, fmt.Errorf("%w: %s", errNotServed, command)
+		return nil, nil, greeting, &notServedError{command: command}
 	}
 	if version != want {
 		_ = stream.Close()

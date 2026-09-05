@@ -4,6 +4,9 @@
 // own spelling. A socket under the test's own directory on Unix; a uniquely
 // named pipe here, where there is no filesystem path to put one at and where
 // the bind genuinely excludes.
+//
+// It imports testing, so it must only ever be imported from _test.go files:
+// imported from the binary, it links testing's flags into it.
 package endpointtest
 
 import (

@@ -34,6 +34,11 @@ func TestLeasedStreamHoldsUntilClosed(t *testing.T) {
 	inner := &fakeStream{}
 	s := &leasedStream{ReadWriteCloser: inner, release: func() { released++ }}
 
+	// Checked before Close: a lease released at construction and never on
+	// Close would otherwise pass the count below.
+	if released != 0 {
+		t.Fatal("the lease was released before the stream was closed")
+	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

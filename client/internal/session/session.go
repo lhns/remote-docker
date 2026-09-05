@@ -255,14 +255,10 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		registry: nfsserve.NewRegistry(defaultAttrs()),
 	}
 
-	// One list for the cache and the watcher. The cache walks what the
-	// watcher invalidates, so a directory the watcher does not see is one the
-	// cache would fill and then serve stale for good; fswatch substitutes its
-	// defaults for nil, and the cache is handed that same substitution.
-	exclude := opts.WatchExclude
-	if exclude == nil {
-		exclude = fswatch.DefaultExcludes
-	}
+	// One list for the cache and the watcher, resolved once. The cache walks
+	// what the watcher invalidates, so a directory the watcher does not see is
+	// one the cache would fill and then serve stale for good.
+	exclude := fswatch.ExcludesOr(opts.WatchExclude)
 
 	// Only a session that serves may restore a share. A query session exports
 	// nothing, and giving it the record would let asking a question re-export

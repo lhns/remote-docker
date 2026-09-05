@@ -167,13 +167,60 @@ func TestInfoQueriesNeverStartADaemon(t *testing.T) {
 		if len(targets.ensured) != 0 {
 			t.Errorf("an info query started a daemon: Ensure was asked for %v", targets.ensured)
 		}
-		for _, asked := range targets.asked {
-			if asked != account {
-				t.Errorf("the resolver was asked for %q during %s's info reply", asked, account)
+		assertAskedOnlyFor(t, targets, account)
+	}
+}
+
+// With the daemon up, each field is asked of the session's OWN daemon: the
+// host handed to the docker CLI is the one Lookup answered for that account.
+// This is the direction that fails by succeeding, since bob's version string
+// shown to alice is still a version string.
+func TestInfoQueriesAskTheAccountsOwnDaemon(t *testing.T) {
+	for _, account := range []string{"alice", "bob"} {
+		targets := twoAccounts()
+		targets.err = errors.New("this daemon must not be started here")
+		s := &Server{cfg: Config{Daemons: targets}}
+
+		var hosts []string
+		s.query = func(_ context.Context, host string, _ ...string) (string, error) {
+			hosts = append(hosts, host)
+			return "answered by " + host, nil
+		}
+
+		ctx := context.Background()
+		want := targets.byAccount[account].Host
+		if got := s.dockerVersion(ctx, account); got != "answered by "+want {
+			t.Errorf("dockerVersion = %q for %s, want the answer from %s", got, account, want)
+		}
+		if got := s.storageDriver(ctx, account); got != "answered by "+want {
+			t.Errorf("storageDriver = %q for %s, want the answer from %s", got, account, want)
+		}
+
+		if len(hosts) == 0 {
+			t.Fatalf("no query reached the docker CLI for %s", account)
+		}
+		for _, host := range hosts {
+			if host != want {
+				t.Errorf("%s's info reply queried %q, want %q", account, host, want)
 			}
 		}
-		if len(targets.asked) != 3 {
-			t.Errorf("the resolver was asked %d times, want once per field: %v", len(targets.asked), targets.asked)
+		if len(targets.ensured) != 0 {
+			t.Errorf("an info query started a daemon: Ensure was asked for %v", targets.ensured)
+		}
+		assertAskedOnlyFor(t, targets, account)
+	}
+}
+
+// assertAskedOnlyFor checks that the resolver was consulted, and only ever for
+// the session's account. How many times is the fields' own business.
+func assertAskedOnlyFor(t *testing.T, targets *fakeTargets, account string) {
+	t.Helper()
+	if len(targets.asked) == 0 {
+		t.Errorf("the resolver was never asked during %s's info reply", account)
+	}
+	for _, asked := range targets.asked {
+		if asked != account {
+			t.Errorf("the resolver was asked for %q during %s's info reply", asked, account)
 		}
 	}
 }

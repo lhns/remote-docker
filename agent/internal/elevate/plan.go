@@ -103,10 +103,11 @@ type RunSpec struct {
 // correct and a catastrophic invocation here is one flag, and it should be
 // visible in a test rather than buried in a command line.
 func (s RunSpec) Args() []string {
-	args := []string{"run", "-i"}
+	attach := "-i"
 	if s.Detach {
-		args[1] = "-d"
+		attach = "-d"
 	}
+	args := []string{"run", attach}
 	if s.Remove {
 		args = append(args, "--rm")
 	}

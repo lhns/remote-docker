@@ -71,6 +71,11 @@ func (f *gateFixture) setBusy(busy bool, err error) {
 func TestGateDoesNotConnectUntilUsed(t *testing.T) {
 	f := newGate(t, time.Minute)
 
+	// Checked before the first acquire: a gate that connected at construction
+	// and never on acquire would otherwise pass the count below.
+	if got := f.openCount(); got != 0 {
+		t.Fatalf("opened %d connections before any request", got)
+	}
 	if _, ok := f.gate.current(); ok {
 		t.Error("current() reports a connection before one was needed")
 	}

@@ -125,9 +125,12 @@ const (
 // channel and then waits to be told it finished (microsoft/go-winio#85, PR
 // #369 unmerged as of 2026-08-11; re-check at
 // github.com/microsoft/go-winio/issues/85). A client connecting at that moment
-// can consume the signal, after which Close blocks forever and Accept never
-// returns, so the session hangs behind it. The listener is then back in a
-// select that receives the next signal, so asking again lands.
+// can have the signal consumed by the connect path and reported as
+// ERROR_PIPE_CONNECTED or ERROR_NO_DATA, neither of which it recognises as a
+// close: the signal is spent, Close blocks forever and Accept never returns,
+// so the session hangs behind it. It presented as one CI run in many timing
+// out after ten minutes on Windows. The listener is then back in a select that
+// receives the next signal, so asking again lands.
 //
 // Not conditioned on GOOS: a listener that closes promptly is closed on the
 // first attempt and never reaches the timer, which is every listener on every

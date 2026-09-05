@@ -92,17 +92,6 @@ func DefaultBudget() int {
 // engine with nested files and negations, it means nothing outside a git
 // checkout, and dist/ is both commonly ignored and commonly the thing being
 // served.
-// ExcludesOr is the list a watcher actually applies: DefaultExcludes for nil,
-// and an explicit list as it stands, an empty one included. The cache and the
-// watcher both resolve through it so the two never disagree about what is
-// excluded.
-func ExcludesOr(list []string) []string {
-	if list == nil {
-		return DefaultExcludes
-	}
-	return list
-}
-
 var DefaultExcludes = []string{
 	".git",
 	"node_modules",
@@ -113,4 +102,15 @@ var DefaultExcludes = []string{
 	".pytest_cache",
 	".gradle",
 	".terraform",
+}
+
+// ExcludesOr is the exclude list actually applied: DefaultExcludes for nil, an
+// explicit list as it stands, an empty one included. The cache and the watcher
+// both resolve through it; a cache deciding for itself prefetches a directory
+// the watcher never invalidates.
+func ExcludesOr(list []string) []string {
+	if list == nil {
+		return DefaultExcludes
+	}
+	return list
 }
