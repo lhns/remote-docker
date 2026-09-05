@@ -106,6 +106,9 @@ mkdir -p "$WORK/project-$PC" "$WORK/project-$PHONE"
 echo "from the pc" >"$WORK/project-$PC/marker"
 echo "from the phone" >"$WORK/project-$PHONE/marker"
 
+# Watching is on because section 9 mounts a union on each machine, and a
+# union requires it (ADR 0042): its cache is invalidated by what the watcher
+# sees.
 start_session() {
     local machine=$1 endpoint=$2 log=$3 dir=$4
     (
@@ -115,6 +118,7 @@ start_session() {
         REMOTE_DOCKER_PORT=$SSH_PORT \
         REMOTE_DOCKER_USER="$ACCOUNT" \
         REMOTE_DOCKER_ENDPOINT="$endpoint" \
+        REMOTE_DOCKER_WATCH=partial \
         exec "$WORK/remote-docker" remote start --foreground
     ) >"$log" 2>&1 &
     echo $!
@@ -315,6 +319,68 @@ if [ "$phone_again" = "from the phone" ]; then
 else
     bad "the phone's mount broke after the pc collected: $phone_again"
 fi
+
+echo
+echo "== 9. an ephemeral share on one machine, a write-back one on the other =="
+# The union's cache volume carries the machine in its name like any other
+# (section 8), so one machine's union cannot be the other's. What this
+# asserts is the write axis across machines: the phone's container writes
+# back into the phone's directory, the pc's ephemeral write reaches nobody,
+# and neither directory ends up with the other's write.
+pc_eph="$WORK/project-$PC-ephemeral"
+phone_back="$WORK/project-$PHONE-back"
+mkdir -p "$pc_eph" "$phone_back"
+echo "from the pc" >"$pc_eph/marker"
+echo "from the phone" >"$phone_back/marker"
+
+pc_ok=false
+phone_ok=false
+if out=$(dpc run -d --name tc-pc-eph -v "$pc_eph:/w:read=cached,write=ephemeral" alpine:3 sleep 120 2>&1); then
+    pc_ok=true
+else
+    bad "the pc could not mount an ephemeral share: $(echo "$out" | tail -3)"
+fi
+if out=$(dphone run -d --name tc-phone-back -v "$phone_back:/w:read=direct,write=back" alpine:3 sleep 120 2>&1); then
+    phone_ok=true
+else
+    bad "the phone could not mount a write-back share: $(echo "$out" | tail -3)"
+fi
+
+if [ "$pc_ok" = true ] && [ "$phone_ok" = true ]; then
+    if union_is_fuse dpc tc-pc-eph; then
+        ok "tc-pc-eph: the share is a union"
+    else
+        bad "tc-pc-eph: /w is not a fuse mount: [$LAST_OUTPUT]"
+    fi
+    if union_is_fuse dphone tc-phone-back; then
+        ok "tc-phone-back: the share is a union"
+    else
+        bad "tc-phone-back: /w is not a fuse mount: [$LAST_OUTPUT]"
+    fi
+    if [ "$(dpc exec tc-pc-eph cat /w/marker 2>&1)" = "from the pc" ] &&
+        [ "$(dphone exec tc-phone-back cat /w/marker 2>&1)" = "from the phone" ]; then
+        ok "each union serves its own machine's file"
+    else
+        bad "a union served the wrong machine's file"
+    fi
+
+    dpc exec tc-pc-eph sh -c 'echo "pc wrote this" >/w/out.txt' >/dev/null 2>&1
+    dphone exec tc-phone-back sh -c 'echo "phone wrote this" >/w/out.txt' >/dev/null 2>&1
+    if phone_got=$(wait_for_content "$phone_back/out.txt" "phone wrote this" 30); then
+        ok "the phone's write came back to the phone's directory"
+    else
+        bad "the phone's write did not come back: [$phone_got]"
+    fi
+    if [ ! -e "$pc_eph/out.txt" ]; then
+        ok "the pc's ephemeral write reached nobody, 30s on"
+    else
+        bad "an ephemeral write came back to the pc: [$(cat "$pc_eph/out.txt")]"
+    fi
+else
+    info "a corner could not be mounted, so the cross-machine write assertions were skipped"
+fi
+dpc rm -f tc-pc-eph >/dev/null 2>&1
+dphone rm -f tc-phone-back >/dev/null 2>&1
 
 echo
 summary

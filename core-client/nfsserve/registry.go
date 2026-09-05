@@ -60,6 +60,13 @@ type Registry struct {
 	// before it is believed.
 	Restore func(exportPath string) (localPath string, ok bool)
 
+	// OnRead is told every read the workspace makes through a share, in
+	// bytes, as it happens. On a share with a cache that is exactly the
+	// stream of misses, which is what a prefetch policy runs on (ADR 0045).
+	// Nil reports nothing and costs nothing. Set before the first share is
+	// registered: a share's filesystem is built with it.
+	OnRead ReadObserver
+
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
 	byPath map[string]*Share // keyed by canonical local path
@@ -128,16 +135,11 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		base, file = filepath.Dir(localPath), filepath.Base(localPath)
 	}
 
-	inner := osfs.New(base, osfs.WithBoundOS())
-	if file != "" {
-		inner = &singleFileFS{Filesystem: inner, name: file}
-	}
-
 	share := &Share{
 		ExportPath: exportPath,
 		LocalPath:  localPath,
 		File:       file,
-		fs:         withAttrs(inner, r.attrs, exportPath),
+		fs:         withAttrs(shareFS(base, file), r.attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -228,17 +230,34 @@ func normalizeExport(p string) string {
 }
 
 // SetAttrs changes the attributes reported for shares registered from now on,
-// and for existing ones.
-//
-// The session needs this because the workspace account's uid is only known
-// once connected, while the working directory is registered before that --
-// the endpoint has to exist before anything can ask us to connect.
+// and for existing ones: the workspace account's uid is only known once
+// connected, while the working directory is registered before that.
 func (r *Registry) SetAttrs(attrs Attrs) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.attrs = attrs
 	for _, share := range r.shares {
-		share.fs = withAttrs(osfs.New(share.LocalPath, osfs.WithBoundOS()), attrs, share.ExportPath)
+		// Rebuilt the same way it was registered. This used to root a new
+		// osfs at share.LocalPath with no wrapper, which for a single-file
+		// share is the FILE: the wrapper hiding its siblings was dropped and
+		// the filesystem was rooted at something that is not a directory,
+		// on every connect. Released that way (ADR 0039).
+		base := share.LocalPath
+		if share.File != "" {
+			base = filepath.Dir(share.LocalPath)
+		}
+		share.fs = withAttrs(shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
 	}
+}
+
+// shareFS is a share's filesystem before attributes: a bound osfs at base,
+// narrowed to one file when the share is one (ADR 0039). The ONE place this is
+// built, so registration and SetAttrs cannot disagree about it.
+func shareFS(base, file string) billy.Filesystem {
+	inner := osfs.New(base, osfs.WithBoundOS())
+	if file != "" {
+		return &singleFileFS{Filesystem: inner, name: file}
+	}
+	return inner
 }

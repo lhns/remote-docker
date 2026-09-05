@@ -107,11 +107,16 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
+	// Timed, because it is one request and one reply over the tunnel and
+	// therefore the round trip the prefetch policy decides against. The
+	// bandwidth half of that it measures itself, from its own batches.
+	started := time.Now()
 	info, err := readInfo(ctx, client)
 	if err != nil {
 		_ = client.Close()
 		return nil, err
 	}
+	s.rtt.Store(int64(time.Since(started)))
 
 	// Now the account is known, report its uid rather than the default, so
 	// files are owned by whoever will read them.
@@ -136,13 +141,13 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:  s.clientID,
 		Guard:   live.guard,
 
-		// What a share's mount asks of the kernel's attribute cache when the
-		// mount itself named nothing (ADR 0042). Watching is asked of the
+		// What a share gets on each axis the mount left unset (ADR 0042).
+		// Watching is asked of the
 		// session rather than of the setting: `cached` rests on the watcher
 		// poking what changed, and only a hosting session has one.
-		Consistency:      s.opts.Consistency,
-		ConsistencyPaths: s.opts.ConsistencyPaths,
-		Watching:         s.watch != nil,
+		Mode:      s.opts.Mode,
+		ModePaths: s.opts.ModePaths,
+		Watching:  s.watch != nil,
 
 		// A delegated share is a union the WORKSPACE mounts, so the client
 		// asks for it rather than building it (ADR 0044). Opened lazily: a
@@ -226,14 +231,13 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 	})
 }
 
-// cache opens the workspace's cache channel on first use, and answers nil once
-// it is known this workspace has none.
+// ensureCacheChan opens the workspace's cache channel on first use, and
+// answers nil once it is known this workspace has none.
 //
-// Lazily, because the channel exists for one consistency: a session that never
-// mounts a delegated share never opens it, and an older workspace refusing the
-// command is not a reason for the session to fail. The rewriter turns a nil
-// into a refusal naming the mode.
-func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
+// Lazily, because the channel exists for one write mode: a session that never
+// mounts a union never opens it, and an older workspace refusing the command
+// is not a reason for the session to fail.
+func (s *Session) ensureCacheChan(l *liveConn) *cacheChannel {
 	l.cacheOnce.Do(func() {
 		c, err := openCache(l.ssh)
 		if err != nil {
@@ -244,10 +248,17 @@ func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
 		}
 		l.cacheChan = c
 	})
-	if l.cacheChan == nil {
+	return l.cacheChan
+}
+
+// shareCacheFor is what the rewriter is handed, and nil turns into a refusal
+// naming the mode.
+func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
+	c := s.ensureCacheChan(l)
+	if c == nil {
 		return nil
 	}
-	return shareCache{cacheChannel: l.cacheChan, session: s}
+	return shareCache{cacheChannel: c, session: s}
 }
 
 // skew is the workspace's clock minus this machine's, as measured when the

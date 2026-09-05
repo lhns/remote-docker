@@ -42,20 +42,23 @@ func TestASymlinkCannotEscapeAShare(t *testing.T) {
 	}
 	target := mustMount(t, serve(t, r), "/cwd")
 
+	// A refusal at the open or the write is containment (billy resolves the
+	// link inside the root, where the target does not exist) and is logged.
+	// What must not happen is measuring nothing: the link has to exist and
+	// the write through it has to be attempted.
+	attempted := false
 	if err := target.Symlink(outside, "escape"); err != nil {
 		t.Logf("the export refused to create the link: %v", err)
-		return
-	}
-	f, err := target.OpenFile("escape", 0o644)
-	if err != nil {
+	} else if f, err := target.OpenFile("escape", 0o644); err != nil {
+		attempted = true
 		t.Logf("the export refused to open through the link: %v", err)
-		return
-	}
-	_, werr := f.Write([]byte("ESCAPED"))
-	f.Close()
-	if werr != nil {
-		t.Logf("the write through the link failed: %v", werr)
-		return
+	} else {
+		attempted = true
+		_, werr := f.Write([]byte("ESCAPED"))
+		f.Close()
+		if werr != nil {
+			t.Logf("the write through the link failed: %v", werr)
+		}
 	}
 
 	got, err := os.ReadFile(outside)
@@ -65,5 +68,8 @@ func TestASymlinkCannotEscapeAShare(t *testing.T) {
 	if string(got) == "ESCAPED" {
 		t.Errorf("a file outside the share was written through a link the "+
 			"workspace created: %s now holds %q", outside, got)
+	}
+	if !attempted {
+		t.Error("the write through the link was never attempted, so nothing was measured")
 	}
 }

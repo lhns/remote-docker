@@ -287,20 +287,11 @@ path the user can read. The control is the endpoint itself: `0600` on unix
 named pipe (`listen_windows.go`), and never a TCP port. *Covered by*
 `proxy` lock and listen tests.
 
-**E — the endpoint now outlives idleness (1).** A session used to exit after 30
-minutes unused, closing the endpoint with it. It now STANDS BY instead: the
-workspace connection and the file watches are released, the endpoint stays
-bound, and the next request rebuilds the session. So the window in which a
-local process can reach that authority is no longer bounded by time — it lasts
-until the session is stopped.
-
-That is the intended behaviour, since the endpoint is what compose, buildx and
-IDE plugins are told to use, and it is why the control above is the file
-permissions rather than the lifetime. A deployment that wants the old bound
-sets `daemonIdle`, which still ends the process. Note what standby does NOT
-release: the endpoint answers while dormant, so reaching it wakes a session and
-reopens the connection. Nothing is re-authorised at that point; waking is not
-an authentication step.
+**E — the endpoint outlives idleness (1).** An unused session stands by rather
+than exiting, so the endpoint stays bound until the session is stopped and the
+control is the file permissions above, not the lifetime; `daemonIdle` ends the
+process for a deployment that wants a bound. Nothing is re-authorised at that
+point; waking is not an authentication step.
 
 **I — the export is unauthenticated (9, 10).** The NFS server answers
 `AuthFlavorNull` (`core-client/nfsserve/server.go`): anything that can
@@ -803,6 +794,13 @@ another account's union, and the manager keys every share on the pair.
 read as a tar. The greeting says what this agent accepts, so an unknown codec is
 a bug on the client's side, and decoding it as something else would put whatever
 the bytes happened to be through the archive reader.
+
+**I — an `ephemeral` share is a place a container can leave something this
+machine never sees (ADR 0042).** Its changes are never asked for, so what a
+container wrote there is visible to nobody but the workspace. *Covered by*
+`dircache`'s test that an ephemeral share's changes are never requested, and
+`integration.sh` 15e for nothing arriving, including after the container is
+gone.
 
 **I — write-back moves a container's output onto the user's own disk.** The one
 direction here that writes outside the workspace, so it is gated twice: nothing

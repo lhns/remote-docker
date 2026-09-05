@@ -14,6 +14,7 @@ func testSpec() Spec {
 		Export:   "/m/00112233445566ff",
 		Port:     30001,
 		CacheDir: "/var/lib/docker/volumes/rd-aabbccdd-00112233445566ff/_data",
+		Read:     workspace.ReadCached,
 	}
 }
 
@@ -89,11 +90,16 @@ func TestSpecLowerMount(t *testing.T) {
 		}
 	}
 
-	// Consistent underneath, deliberately: the cache above is what makes reads
-	// fast, and a long attribute cache below would only add staleness the
-	// union has no way to notice.
-	if !strings.Contains(options, "actimeo=1") {
-		t.Errorf("options %q do not mount the lower consistently", options)
+	// The lower carries the share's read mode (ADR 0044).
+	if !strings.Contains(options, "actimeo=60") || !strings.Contains(options, "nocto") {
+		t.Errorf("options %q do not carry the cached read mode the spec asked for", options)
+	}
+
+	direct := testSpec()
+	direct.Read = workspace.ReadDirect
+	_, _, options, _ = direct.LowerMount()
+	if !strings.Contains(options, "actimeo=1,") || strings.Contains(options, "nocto") {
+		t.Errorf("options %q do not carry the direct read mode the spec asked for", options)
 	}
 }
 
@@ -132,10 +138,14 @@ func TestSpecValidate(t *testing.T) {
 		spec Spec
 		want string
 	}{
-		{"an export this program does not serve", Spec{Export: "/etc", Port: 1, CacheDir: "/x"}, "export"},
-		{"no port to reach the client on", Spec{Export: workspace.ExportCWD, CacheDir: "/x"}, "port"},
-		{"a cache that is not a path", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "relative"}, "cache directory"},
-		{"a cache that is the root", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/"}, "cache directory"},
+		{"an export this program does not serve", Spec{Export: "/etc", Port: 1, CacheDir: "/x", Read: workspace.ReadCached}, "export"},
+		{"no port to reach the client on", Spec{Export: workspace.ExportCWD, CacheDir: "/x", Read: workspace.ReadCached}, "port"},
+		{"a cache that is not a path", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "relative", Read: workspace.ReadCached}, "cache directory"},
+		{"a cache that is the root", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/", Read: workspace.ReadCached}, "cache directory"},
+		// The read mode becomes the lower's attribute cache, and a value
+		// nobody defined would be mounted as whatever the parser made of it.
+		{"a read mode that is not one", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: "fast"}, "read mode"},
+		{"no read mode at all", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x"}, "read mode"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.spec.Validate()

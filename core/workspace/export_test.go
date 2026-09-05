@@ -152,7 +152,7 @@ func TestParseIDRejects(t *testing.T) {
 }
 
 func TestNFSVolumeOptions(t *testing.T) {
-	opts := NFSVolumeOptions(30000, "/m/00112233445566ff", Unset)
+	opts := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect)
 
 	if opts["type"] != "nfs" {
 		t.Errorf("type = %q, want nfs", opts["type"])
@@ -179,11 +179,11 @@ func TestNFSVolumeOptions(t *testing.T) {
 	}
 }
 
-// The consistency varies the attribute caching and nothing else, which is what
+// The read mode varies the attribute caching and nothing else, which is what
 // makes a mode switch a volume recreation rather than a migration.
 func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
-	live := NFSVolumeOptions(30000, "/m/00112233445566ff", Consistent)["o"]
-	cached := NFSVolumeOptions(30000, "/m/00112233445566ff", Cached)["o"]
+	live := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect)["o"]
+	cached := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadCached)["o"]
 
 	if live == cached {
 		t.Fatal("cached produced the same mount options as consistent")
@@ -205,7 +205,7 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 
 	// Unset is what a mount that named nothing gets, and it must not be a
 	// third behaviour: the workspace default decides before this is reached.
-	if unset := NFSVolumeOptions(30000, "/m/00112233445566ff", Unset)["o"]; unset != live {
+	if unset := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadUnset)["o"]; unset != live {
 		t.Errorf("unset options = %q, want the same as consistent %q", unset, live)
 	}
 }

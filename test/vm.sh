@@ -315,7 +315,7 @@ else
         UNIONDIR="$WORK/uniondir"
         mkdir -p "$UNIONDIR"
         echo "served from the machine" >"$UNIONDIR/marker"
-        if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg         -v "$UNIONDIR:/w:delegated" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
+        if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg         -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
             ok "a container starts against a delegated union"
 
             if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg             sh -c 'grep " /w " /proc/mounts' 2>&1) && echo "$out" | grep -q fuse; then
@@ -349,7 +349,7 @@ else
             # again. Without adoption the supervisor mounts a second fuse-overlayfs on
             # the same path, over the same upper and work directories -- which
             # overlayfs does not allow and which nothing else here would notice.
-            if timeout 300 "$WORK/remote-docker" run --rm             -v "$UNIONDIR:/w:delegated" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
+            if timeout 300 "$WORK/remote-docker" run --rm             -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
                 ok "a second container prepares the same share after the restart"
             else
                 bad "the share could not be prepared again: $(tail -2 "$WORK/deleg2.log" | tr -s '[:space:]' ' ')"

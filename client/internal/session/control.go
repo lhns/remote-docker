@@ -432,9 +432,9 @@ func (s *Session) cacheStatus() []string {
 		// files" -- a number that looks like a bug in the thing it is
 		// reporting on.
 		if r.Done {
-			line := fmt.Sprintf("%s: %d of %d files, %s of %s, %s",
+			line := fmt.Sprintf("%s: %d of %d files, %s of %s, %s sent, %s",
 				local, r.Sent, stats.TotalFiles,
-				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), what)
+				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), humanBytes(r.Bytes), what)
 			// A cache that mysteriously omits .git is worth being able to
 			// explain, which is the only reason the walk counts these.
 			if stats.Excluded > 0 {
@@ -443,7 +443,7 @@ func (s *Session) cacheStatus() []string {
 			out = append(out, line)
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s: %d files so far, %s", local, r.Sent, what))
+		out = append(out, fmt.Sprintf("%s: %d files so far, %s sent, %s", local, r.Sent, humanBytes(r.Bytes), what))
 	}
 	sort.Strings(out)
 	return out

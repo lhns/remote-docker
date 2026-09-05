@@ -82,22 +82,23 @@ type VolumeEnsurer interface {
 	EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error
 }
 
-// Cache is the workspace's end of a delegated share (ADR 0044).
+// Cache is the workspace's end of a share with a union (ADR 0044).
 //
-// Prepare mounts the union -- the live export underneath, a local cache on top
-// -- and answers with the path the container binds. Apply fills that cache,
-// through the union, which is the only way that is defined: a write into the
-// cache layer underneath a mounted union can stay invisible to a container
-// that already looked.
+// Prepare mounts the union, the live export underneath with the share's read
+// mode and a local cache on top, and answers with the path the container
+// binds. Apply fills that cache, through the union, which is the
+// only way that is defined: a write into the cache layer underneath a mounted
+// union can stay invisible to a container that already looked.
 type Cache interface {
-	Prepare(ctx context.Context, export, cache string, port int) (string, error)
+	Prepare(ctx context.Context, export, cache string, port int, mode workspace.Mode) (string, error)
 
-	// Fill starts copying the tree into the cache and returns AT ONCE. The
-	// container does not wait for it, and does not need to: what the cache
-	// does not hold yet is served from the live export underneath, correctly.
-	// A fill that is slow, partial or still running costs speed and never
-	// correctness, which is the property the whole mode rests on.
-	Fill(export, localPath string)
+	// Attach tells the cache about the share and its mode, and returns AT
+	// ONCE. A prefetch, where the mode has one, runs in the background: the
+	// container does not wait for it, and does not need to, because what the
+	// cache does not hold yet is served from the live export underneath,
+	// correctly. A fill that is slow, partial or still running costs speed
+	// and never correctness, which is the property the whole mode rests on.
+	Attach(export, localPath string, mode workspace.Mode)
 }
 
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
@@ -120,28 +121,24 @@ type Rewriter struct {
 	// a volume created by a client that predates this carries.
 	Client string
 
-	// Consistency is the mount consistency a share gets when the mount named
-	// none, and ConsistencyPaths overrides it for one directory and everything
-	// under it. Unset is Docker's own default, which is what this project did
-	// before the axis existed (ADR 0042).
-	Consistency      workspace.Consistency
-	ConsistencyPaths map[string]workspace.Consistency
+	// Mode is what a share gets on each axis the mount left unset, and
+	// ModePaths overrides it for one directory and everything under it. An
+	// axis unset here is Docker's own default (ADR 0042).
+	Mode      workspace.Mode
+	ModePaths map[string]workspace.Mode
 
-	// Cache serves delegated shares as union mounts. Nil refuses the mode by
-	// name, which is what a session that cannot reach the workspace's cache
-	// channel looks like -- an older workspace, or one that does not serve it.
+	// Cache serves delegated shares as union mounts. Nil is a session that
+	// cannot reach the workspace's cache channel, and refuses the mode by name.
 	Cache Cache
 
-	// UnionReady says whether the workspace reported that it can serve a union
-	// at all (workspace.Info.Union). Refused before anything is created rather
-	// than half way through a container start, the same way a single-file
-	// mount is refused on an old Docker (ADR 0039).
+	// UnionReady is what the workspace reported about serving a union
+	// (workspace.Info.Union). A mode it cannot serve is refused before anything
+	// is created rather than half way through a container start (ADR 0039).
 	UnionReady string
 
 	// Watching says whether this session replays local changes into the
-	// workspace. `cached` rests on it: a long attribute cache with nothing to
-	// invalidate it is a stale mount, so asking for one without a watcher is
-	// refused rather than quietly served.
+	// workspace. `read=cached` and every union rest on it, so asking for one
+	// without a watcher is refused rather than quietly served stale.
 	Watching bool
 
 	// Guard is shared with the Collector, and is what stops one deleting the
@@ -236,9 +233,9 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	var requested workspace.RequestedPorts
 
 	// One request, two mount lists, and a directory named in both is one share
-	// with one volume behind it. req is what lets the second list see what the
-	// first settled.
-	req := &request{}
+	// with one volume behind it: modes is what lets the second list see what
+	// the first settled.
+	modes := map[string]workspace.Mode{}
 
 	// No HostConfig means no binds and no ports, and the labels below may
 	// still change the payload.
@@ -248,11 +245,11 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 		}
 		// Binds first: a single-file bind cannot be expressed as a bind
 		// string, so it leaves that list and arrives in Mounts (ADR 0039).
-		moved, err := r.rewriteBinds(ctx, req, hostConfig, &hostChanged)
+		moved, err := r.rewriteBinds(ctx, modes, hostConfig, &hostChanged)
 		if err != nil {
 			return nil, err
 		}
-		if err := r.rewriteMounts(ctx, req, hostConfig, moved, &hostChanged); err != nil {
+		if err := r.rewriteMounts(ctx, modes, hostConfig, moved, &hostChanged); err != nil {
 			return nil, err
 		}
 
@@ -361,7 +358,7 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace
 // file rather than a directory (ADR 0039). Those are returned for the Mounts
 // pass to append, and removed here in the same walk, because the daemon rejects
 // the same target appearing in both lists.
-func (r *Rewriter) rewriteBinds(ctx context.Context, req *request, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
+func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.Mode, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
 	raw, ok := hostConfig["Binds"]
 	if !ok || string(raw) == "null" {
 		return nil, nil
@@ -396,17 +393,20 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, req *request, hostConfig ma
 			continue
 		}
 
-		// Docker's consistency word rides in the option list and is consumed
-		// here: it describes the mount this program makes, not one the daemon
-		// could act on.
-		asked, options := splitConsistency(parsed.Options)
+		// The mode words ride in the option list and are consumed here: they
+		// describe the mount this program makes, not one the daemon could act
+		// on, and the daemon rejects ours by name.
+		asked, options, err := splitMode(parsed.Options)
+		if err != nil {
+			return nil, err
+		}
 		parsed.Options = options
-		consistency, err := r.resolveConsistency(req, parsed.Source, asked)
+		mode, err := r.resolveMode(modes, parsed.Source, asked)
 		if err != nil {
 			return nil, err
 		}
 
-		volume, file, err := r.volumeFor(ctx, parsed.Source, consistency)
+		volume, file, err := r.volumeFor(ctx, parsed.Source, mode)
 		if err != nil {
 			return nil, err
 		}
@@ -508,7 +508,7 @@ func setSubpath(mount map[string]json.RawMessage, file string) error {
 
 // rewriteMounts handles HostConfig.Mounts, the `--mount` form that Compose and
 // the API-level clients prefer.
-func (r *Rewriter) rewriteMounts(ctx context.Context, req *request, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
+func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace.Mode, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
 	raw, ok := hostConfig["Mounts"]
 	if (!ok || string(raw) == "null") && len(moved) == 0 {
 		return nil
@@ -543,21 +543,28 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, req *request, hostConfig m
 			continue
 		}
 
-		asked, err := takeConsistency(mount)
+		asked, err := takeMode(mount)
 		if err != nil {
 			return err
 		}
-		consistency, err := r.resolveConsistency(req, source, asked)
-		if err != nil {
-			return err
-		}
-
-		volume, file, err := r.volumeFor(ctx, source, consistency)
+		mode, err := r.resolveMode(modes, source, asked)
 		if err != nil {
 			return err
 		}
 
-		mount["Type"] = json.RawMessage(`"volume"`)
+		volume, file, err := r.volumeFor(ctx, source, mode)
+		if err != nil {
+			return err
+		}
+
+		// A union is a directory in the daemon's own namespace, so the
+		// container BINDS it; handing Docker a volume name that is a path
+		// created a volume by that name and mounted an empty directory.
+		if mode.Union() {
+			mount["Type"] = json.RawMessage(`"bind"`)
+		} else {
+			mount["Type"] = json.RawMessage(`"volume"`)
+		}
 		encodedSource, err := json.Marshal(volume)
 		if err != nil {
 			return fmt.Errorf("rewrite: encoding mount source: %w", err)
@@ -620,7 +627,7 @@ func supportsSubpath(version string) bool {
 
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency workspace.Consistency) (name, file string, err error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspace.Mode) (name, file string, err error) {
 	// Held across BOTH steps: registering the share is what tells the collector
 	// this volume is spoken for, and the volume does not exist until the step
 	// after it.
@@ -644,26 +651,28 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency 
 	labels := r.ownerLabels()
 	labels[workspace.ManagedLabel] = workspace.ManagedShare
 
-	if consistency == workspace.Delegated {
+	if mode.Union() {
 		// Not a volume the container mounts at all: a union the workspace
 		// mounts for it, with this share's export underneath and a cache on
 		// top. What comes back is a path in the daemon's namespace, which the
-		// caller binds (ADR 0044).
-		merged, err := r.union(ctx, exportPath, name, localPath, labels)
+		// caller binds (ADR 0044). Chosen by the WRITE axis: overlayfs writes
+		// to its upper by construction, so a union is exactly a deferred
+		// write.
+		merged, err := r.union(ctx, exportPath, name, localPath, labels, mode)
 		if err != nil {
 			return "", "", err
 		}
 		return merged, file, nil
 	}
 
-	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, consistency)
+	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, mode.Read)
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
 		return "", "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
 	}
 	return name, file, nil
 }
 
-// union prepares a delegated share's cache and fills it, and answers with the
+// union prepares a share's union, attaches its cache, and answers with the
 // path the container binds (ADR 0044).
 //
 // The cache is a managed volume like any other -- named per client (ADR 0029),
@@ -671,7 +680,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, consistency 
 // union whose lower is this share's live export. A read the cache has costs the
 // workspace's own disk; a read it does not have falls through and is right,
 // which is what lets the cache be filled without the container waiting for it.
-func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string) (string, error) {
+func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string, mode workspace.Mode) (string, error) {
 	cache := workspace.CacheVolumeName(share)
 
 	// An empty map rather than nil: the body is JSON, and a null where the
@@ -680,14 +689,14 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: creating the cache for %s: %w", localPath, err)
 	}
 
-	merged, err := r.Cache.Prepare(ctx, export, cache, r.NFSPort)
+	merged, err := r.Cache.Prepare(ctx, export, cache, r.NFSPort, mode)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
 	}
 
 	// Asynchronous, and this is where the union earns its keep: the container
 	// starts now, against a cache that is empty and a lower that is right.
-	r.Cache.Fill(export, localPath)
+	r.Cache.Attach(export, localPath, mode)
 
 	return merged, nil
 }
