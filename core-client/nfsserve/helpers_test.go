@@ -2,11 +2,13 @@ package nfsserve
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"testing"
 	"time"
 
+	nfs "github.com/willscott/go-nfs"
 	nfsclient "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
@@ -121,4 +123,54 @@ func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
 	}
 	t.Cleanup(func() { target.Close() })
 	return target
+}
+
+// rawStatus is a procedure's NFS status word, which the client library
+// swallows into an error and a raw call has to read for itself.
+func rawStatus(t *testing.T, client *rpc.Client, args any) (uint32, io.ReadSeeker) {
+	t.Helper()
+	res, err := client.Call(args)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	status, err := xdr.ReadUint32(res)
+	if err != nil {
+		t.Fatalf("reading the status: %v", err)
+	}
+	return status, res
+}
+
+// nfsHeader is the RPC header every NFS procedure here starts with.
+func nfsHeader(proc uint32) rpc.Header {
+	return rpc.Header{
+		Rpcvers: 2,
+		Prog:    nfsclient.Nfs3Prog,
+		Vers:    nfsclient.Nfs3Vers,
+		Proc:    proc,
+		Cred:    rpc.AuthNull,
+		Verf:    rpc.AuthNull,
+	}
+}
+
+// rawLink is LINK (RFC 1813 procedure 15) as a kernel client sends it:
+// the file's handle, then the directory handle and the new name. The client
+// library has no Link, which is why this is spelled out.
+func rawLink(t *testing.T, client *rpc.Client, file, dir []byte, name string) uint32 {
+	t.Helper()
+	type linkArgs struct {
+		rpc.Header
+		File []byte
+		Link nfsclient.Diropargs3
+	}
+	status, _ := rawStatus(t, client, &linkArgs{
+		Header: nfsHeader(uint32(nfs.NFSProcedureLink)),
+		File:   file,
+		Link:   nfsclient.Diropargs3{FH: dir, Filename: name},
+	})
+	return status
+}
+
+// statusName spells a status the way the RFC does, so a failure names it.
+func statusName(status uint32) string {
+	return nfs.NFSStatus(status).String()
 }

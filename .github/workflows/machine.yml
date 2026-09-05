@@ -13,13 +13,10 @@ name: machine
 #
 # Hyper-V gets no job at all. The runners do not offer it, and
 # docs/testing-machines.md is the whole of its verification.
+# Every pull request, not only those touching the backend: the Windows client
+# is where both share bugs of 2026-09-04 showed, so every PR meets it.
 on:
   pull_request:
-    paths:
-      - client/internal/machine/**
-      - client/cmd/remote-docker/machine*.go
-      - image/**
-      - .github/workflows/machine.yml
   workflow_dispatch:
 
 permissions:
@@ -56,10 +53,54 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The filesystem conformance probe and its oracle. The probe is one static
+  # Linux binary that walks a directory through every operation a build tool
+  # uses and prints what happened; run against the runner's own disk it is
+  # the oracle, and the Windows job runs the same image against a share backed
+  # by an NTFS directory and diffs the two transcripts.
+  probe:
+    name: build the filesystem probe and record the oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-go
+
+      - name: build the probe
+        run: |
+          set -eux
+          (cd test/probes && CGO_ENABLED=0 GOOS=linux go build -o ../../fsprobe ./fsprobe)
+          mkdir -p ctx
+          cp test/fs-conformance/Dockerfile fsprobe ctx/
+          docker build -t fsprobe:ci ctx
+
+      - name: run the oracle, on the runner's own disk
+        run: |
+          set -eux
+          mkdir -p native
+          docker run --rm -v "$PWD/native:/w" fsprobe:ci /w > transcript-native.txt
+          wc -l transcript-native.txt
+          docker save fsprobe:ci | gzip > fsprobe.tar.gz
+          ls -lh fsprobe.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fsprobe-image
+          path: fsprobe.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: transcript-native
+          path: transcript-native.txt
+          if-no-files-found: error
+          retention-days: 1
+
   wsl:
     name: a machine on wsl
     runs-on: windows-latest
-    needs: rootfs
+    needs: [rootfs, probe]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -186,6 +227,56 @@ jobs:
           $out
           if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }
           .\client\rd.exe remote stop
+
+      # The same probe the Linux leg runs (test/fs-conformance.sh), against a
+      # share whose other end is an NTFS directory. The transcript is compared
+      # with the oracle recorded on the ubuntu runner, and a difference the
+      # deviations file does not name fails the job.
+      - uses: actions/download-artifact@v8
+        with:
+          name: fsprobe-image
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: transcript-native
+
+      - name: load the probe image into the machine's daemon
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        run: |
+          $out = (.\client\rd.exe load -i fsprobe.tar.gz) -join "`n"
+          $out
+          if ($out -notmatch 'fsprobe') { throw "the probe image was not loaded" }
+
+      - name: run the probe against a share backed by NTFS
+        shell: pwsh
+        env:
+          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
+        # Out-File with an explicit encoding, because `>` in Windows PowerShell
+        # writes UTF-16. The runner's pwsh is 7, whose utf8 carries no BOM;
+        # 5.1's does, and the diff step strips one either way.
+        run: |
+          New-Item -ItemType Directory share | Out-Null
+          .\client\rd.exe run --rm -v "${PWD}\share:/w" fsprobe:ci /w | Out-File -Encoding utf8 transcript-windows.txt
+          (Get-Content transcript-windows.txt | Measure-Object -Line).Lines
+
+      - name: diff the transcript against the oracle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sed -i 's/\r$//; 1s/^\xEF\xBB\xBF//' transcript-windows.txt
+          bash test/fs-conformance/diff.sh transcript-native.txt transcript-windows.txt test/fs-conformance/deviations-windows.txt | tee fs-conformance-report.txt
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fs-conformance-windows
+          path: |
+            transcript-windows.txt
+            fs-conformance-report.txt
+          if-no-files-found: ignore
+          retention-days: 7
 
       # rm destroys the machine as well as the entry, and leaving a
       # distribution behind is the failure worth catching: it is a running

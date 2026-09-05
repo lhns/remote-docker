@@ -1,0 +1,21 @@
+# Where a share is allowed to differ from a native bind mount, on Linux.
+#
+# test/fs-conformance/diff.sh reads this file. Every line that is not blank
+# and does not start with `#` is one SHARE-side transcript line, verbatim, as
+# fsprobe printed it when run against a share:
+#
+#     <group>/<step>: <op> -> <result> [<stat>]
+#
+# A step whose share line differs from the native one is fine only if the
+# share line is in here. The line directly ABOVE each entry is a comment that
+# gives the reason and a pointer -- the ADR that decided it, or the README
+# caveat that documents it -- in the form
+#
+#     # <reason> (<pointer>)
+#     <share-side transcript line>
+#
+# An entry with no reason above it is warned about; an entry no run observes
+# any more is STALE and fails, so this file cannot silently outlive the
+# behaviour it excuses. Fill it from the report the first CI run prints:
+# each `share:  ...` line under "unexplained" is a candidate, and each one
+# needs a reason before it goes in.

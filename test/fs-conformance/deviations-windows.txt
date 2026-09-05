@@ -1,0 +1,18 @@
+# Filesystem conformance: where a share backed by an NTFS directory on a
+# Windows client is allowed to differ from the native oracle.
+#
+# Read by test/fs-conformance/diff.sh, which fails the machine.yml job on any
+# difference between transcript-native.txt and transcript-windows.txt that is
+# not listed here. The Linux leg (test/fs-conformance.sh) has its own file.
+#
+# Format:
+#   - a line starting with `#` is a comment
+#   - each deviation is two lines: a `# reason (pointer)` comment naming why
+#     the share is allowed to differ and where that is reasoned about (an ADR,
+#     a test section, a kernel or NTFS reference), followed by the share-side
+#     transcript line VERBATIM, as fsprobe printed it:
+#       <group>/<step>: <op> -> <result> [<stat>]
+#   - every other non-comment line is such a transcript line
+#
+# Empty until the first run of machine.yml has produced a transcript. A line
+# is added here only with a reason; a deviation nobody can explain is a bug.
