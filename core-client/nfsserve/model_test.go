@@ -3,6 +3,7 @@ package nfsserve
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"io"
 	"math/rand"
 	"runtime"
@@ -18,8 +19,9 @@ import (
 )
 
 var (
-	modelSeed  = flag.Int64("nfs.seed", 0, "seed for TestModelRandomOperations; 0 draws one from the clock")
-	modelSteps = flag.Int("nfs.steps", 0, "operations for TestModelRandomOperations; 0 is the platform default")
+	modelSeed   = flag.Int64("nfs.seed", 0, "seed for TestModelRandomOperations; 0 draws one from the clock")
+	modelSteps  = flag.Int("nfs.steps", 0, "operations for TestModelRandomOperations; 0 is the platform default")
+	modelReplay = flag.Int("nfs.replay", -1, "run TestModelRandomOperations with -nfs.seed through this step, inclusive, and stop; the number is the one a failure names")
 )
 
 // defaultSteps is how many operations one run makes: enough to reach every
@@ -45,6 +47,10 @@ const (
 
 	// maxEntries is where the sequence starts leaning on removals.
 	maxEntries = 30
+
+	// historyLen is how many steps a failure repeats, so the operations that
+	// led to it are in one place rather than scattered through the log.
+	historyLen = 20
 )
 
 // A random sequence of operations against a share, checked against a shadow
@@ -58,6 +64,13 @@ const (
 // inode stale (ADR 0033) or a container reading a directory that is not the
 // one on disk, with the server reporting no error at all. The seed is logged
 // so a failure is replayed with -nfs.seed.
+//
+// A failure names a step, and -nfs.replay=N runs the seed through that step
+// and no further, where -nfs.steps=N would stop one short of it. Every step
+// logs one line, which Go prints only for a failing test, and a failure
+// repeats the last historyLen of them. The sequence a seed produces depends
+// on the platform, because the names drawn and the operations weighted differ
+// on Windows, so a seed from CI replays on Linux only.
 func TestModelRandomOperations(t *testing.T) {
 	seed := *modelSeed
 	if seed == 0 {
@@ -67,7 +80,15 @@ func TestModelRandomOperations(t *testing.T) {
 	if steps == 0 {
 		steps = defaultSteps()
 	}
-	t.Logf("seed %d, %d steps", seed, steps)
+	if *modelReplay >= 0 {
+		if *modelSeed == 0 {
+			t.Fatal("-nfs.replay needs the -nfs.seed the failure printed")
+		}
+		steps = *modelReplay + 1
+		t.Logf("replaying seed %d through step %d", seed, *modelReplay)
+	} else {
+		t.Logf("seed %d, %d steps", seed, steps)
+	}
 
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
@@ -97,12 +118,14 @@ func TestModelRandomOperations(t *testing.T) {
 	start := time.Now()
 	for step := range steps {
 		op := m.chooseOp()
-		m.step = step
+		m.step, m.desc = step, ""
 		m.ops[op]++
 		clear(m.touched)
+		failedBefore := t.Failed()
 		m.run(op)
+		m.trace(op, failedBefore)
 		if t.Failed() {
-			t.Fatalf("stopping after step %d (%s); replay with -nfs.seed=%d", step, opNames[op], seed)
+			m.fatalf("stopping after step %d (%s); replay with -nfs.seed=%d -nfs.replay=%d", step, opNames[op], seed, step)
 		}
 		if (step+1)%fullCheckEvery == 0 || step == steps-1 {
 			m.checkAll()
@@ -110,7 +133,7 @@ func TestModelRandomOperations(t *testing.T) {
 			m.checkTouched()
 		}
 		if t.Failed() {
-			t.Fatalf("the tree disagrees with the shadow after step %d (%s); replay with -nfs.seed=%d", step, opNames[op], seed)
+			m.fatalf("the tree disagrees with the shadow after step %d (%s); replay with -nfs.seed=%d -nfs.replay=%d", step, opNames[op], seed, step)
 		}
 	}
 	t.Logf("%d steps in %v, %d entries at the end, ops %v", steps, time.Since(start), len(m.entries), m.ops)
@@ -124,7 +147,21 @@ const (
 	kindLink
 )
 
-var kindTypes = map[entryKind]uint32{kindFile: nfsclient.NF3Reg, kindDir: nfsclient.NF3Dir, kindLink: nfsclient.NF3Lnk}
+var (
+	kindTypes = map[entryKind]uint32{kindFile: nfsclient.NF3Reg, kindDir: nfsclient.NF3Dir, kindLink: nfsclient.NF3Lnk}
+	kindNames = map[entryKind]string{kindFile: "file", kindDir: "dir", kindLink: "link"}
+)
+
+// typeName spells a wire type the way the shadow spells its kind, so the two
+// sides of a diagnosis read alike.
+func typeName(t uint32) string {
+	for kind, wire := range kindTypes {
+		if wire == t {
+			return kindNames[kind]
+		}
+	}
+	return fmt.Sprintf("type %d", t)
+}
 
 type modelEntry struct {
 	kind    entryKind
@@ -178,6 +215,39 @@ type model struct {
 	// touched is what the current step changed or asked about, and so what
 	// is checked before the next one.
 	touched map[string]bool
+
+	// desc is what the current step decided to do, set once the choice is
+	// made and before the wire is asked, so a step that fails mid-way still
+	// names its arguments. history is the last historyLen trace lines.
+	desc    string
+	history []string
+}
+
+// trace logs the step as one line and keeps it for a failure to repeat.
+// "ok" means the operation itself did not fail; a check that follows reports
+// separately, under it.
+func (m *model) trace(op modelOp, failedBefore bool) {
+	desc := m.desc
+	if desc == "" {
+		desc = opNames[op] + " skipped, nothing to choose"
+	}
+	result := "ok"
+	if m.t.Failed() && !failedBefore {
+		result = "FAILED"
+	}
+	line := fmt.Sprintf("step %d: %s -> %s", m.step, desc, result)
+	m.t.Log(line)
+	m.history = append(m.history, line)
+	if len(m.history) > historyLen {
+		m.history = m.history[1:]
+	}
+}
+
+// fatalf stops the run with the recent steps in one place above the reason.
+func (m *model) fatalf(format string, args ...any) {
+	m.t.Helper()
+	m.t.Logf("the last %d steps:\n  %s", len(m.history), strings.Join(m.history, "\n  "))
+	m.t.Fatalf(format, args...)
 }
 
 func (m *model) run(op modelOp) {
@@ -353,6 +423,7 @@ func (m *model) create() {
 		return
 	}
 	p := joinPath(dir, name)
+	m.desc = fmt.Sprintf("CREATE %q", p)
 	m.touch(dir, p)
 	fh, err := m.target.Create(p, 0o644)
 	if err != nil {
@@ -367,6 +438,7 @@ func (m *model) create() {
 	}
 	m.note(p, attr.Fileid, fh)
 	if content := m.randomBytes(); len(content) > 0 {
+		m.desc += " then WRITE"
 		m.writeAt(p, content)
 	}
 }
@@ -376,6 +448,7 @@ func (m *model) write() {
 	if !ok {
 		return
 	}
+	m.desc = fmt.Sprintf("WRITE %q", p)
 	m.touch(p)
 	m.writeAt(p, m.randomBytes())
 }
@@ -383,6 +456,7 @@ func (m *model) write() {
 // writeAt writes at offset zero, which is where the client library's File
 // starts: a shorter write leaves the old tail in place.
 func (m *model) writeAt(p string, data []byte) {
+	m.desc += fmt.Sprintf(" %d bytes", len(data))
 	f, err := m.target.OpenFile(p, 0o644)
 	if err != nil {
 		m.t.Errorf("step %d: open %q for writing: %v", m.step, p, err)
@@ -421,6 +495,7 @@ func (m *model) mkdir() {
 		return
 	}
 	p := joinPath(dir, name)
+	m.desc = fmt.Sprintf("MKDIR %q", p)
 	m.touch(dir, p)
 	fh, err := m.target.Mkdir(p, 0o755)
 	if err != nil {
@@ -467,6 +542,10 @@ func (m *model) rename() {
 		}
 	}
 	dst := joinPath(dstDir, name)
+	m.desc = fmt.Sprintf("RENAME %s %q -> %q", kindNames[srcEntry.kind], src, dst)
+	if over {
+		m.desc += " over an existing file"
+	}
 	m.touch(parentOf(src), dstDir, dst)
 	if err := m.target.Rename(src, dst); err != nil {
 		m.t.Errorf("step %d: RENAME %q -> %q (over an existing file: %v): %v", m.step, src, dst, over, err)
@@ -495,6 +574,12 @@ func (m *model) remove() {
 	if !ok {
 		return
 	}
+	// A link names its target: whether a REMOVE of a link reaches the target
+	// instead is the first thing a failure right after one has to answer.
+	m.desc = fmt.Sprintf("REMOVE %s %q", kindNames[m.entries[p].kind], p)
+	if e := m.entries[p]; e.kind == kindLink {
+		m.desc += fmt.Sprintf(" (-> %q)", e.link)
+	}
 	m.touch(parentOf(p))
 	if err := m.target.Remove(p); err != nil {
 		m.t.Errorf("step %d: REMOVE %q: %v", m.step, p, err)
@@ -510,6 +595,7 @@ func (m *model) rmdir() {
 	if !ok {
 		return
 	}
+	m.desc = fmt.Sprintf("RMDIR %q", p)
 	m.touch(parentOf(p))
 	if err := m.target.RmDir(p); err != nil {
 		m.t.Errorf("step %d: RMDIR %q: %v", m.step, p, err)
@@ -532,6 +618,7 @@ func (m *model) symlink() {
 		link = baseOf(sibling)
 	}
 	p := joinPath(dir, name)
+	m.desc = fmt.Sprintf("SYMLINK %q -> %q", p, link)
 	m.touch(dir, p)
 	if err := m.target.Symlink(link, p); err != nil {
 		m.t.Errorf("step %d: SYMLINK %q -> %q: %v", m.step, p, link, err)
@@ -558,8 +645,10 @@ func (m *model) setattr() {
 		// Modes that keep the owner's write bit: a chmod that takes it away
 		// sets the read-only attribute on Windows, and the next write fails.
 		sattr.Mode = nfsclient.SetMode{SetIt: true, Mode: []uint32{0o644, 0o755, 0o600}[m.rng.Intn(3)]}
+		m.desc = fmt.Sprintf("SETATTR %q mode %#o", p, sattr.Mode.Mode)
 	} else {
 		sattr.Size = nfsclient.SetSize{SetIt: true, Size: uint64(m.rng.Intn(len(e.content) + 8))}
+		m.desc = fmt.Sprintf("SETATTR %q size %d", p, sattr.Size.Size)
 	}
 	if err := m.target.Setattr(p, sattr); err != nil {
 		m.t.Errorf("step %d: SETATTR %q (%+v): %v", m.step, p, sattr, err)
@@ -580,6 +669,7 @@ func (m *model) lookup() {
 	if !ok {
 		return
 	}
+	m.desc = fmt.Sprintf("LOOKUP %q", p)
 	m.touch(p)
 	attr, fh, err := m.target.Lookup(p)
 	if err != nil {
@@ -591,6 +681,7 @@ func (m *model) lookup() {
 
 func (m *model) readdir() {
 	dir, _ := m.pick(m.dirs())
+	m.desc = fmt.Sprintf("READDIRPLUS %q", dir)
 	m.touch(dir)
 }
 
@@ -606,6 +697,7 @@ func (m *model) link() {
 	if name == "" {
 		return
 	}
+	m.desc = fmt.Sprintf("LINK %q -> %q", file, joinPath(dir, name))
 	m.touch(dir, file)
 	_, fileFH, err := m.target.Lookup(file)
 	if err != nil {
@@ -707,6 +799,7 @@ func (m *model) checkListing(dir string) {
 	sort.Strings(got)
 	if !slices.Equal(got, want) {
 		m.t.Errorf("step %d: READDIRPLUS %q lists %q, the shadow holds %q", m.step, dir, got, want)
+		m.describeDisagreement(got, want)
 		return
 	}
 	for _, e := range entries {
@@ -723,4 +816,54 @@ func (m *model) checkListing(dir string) {
 		}
 		m.note(p, e.FileId, e.Handle.FH)
 	}
+}
+
+// describeDisagreement asks the server, by LOOKUP of the path, about every
+// name the listing and the shadow disagree on and about every case twin among
+// the names either holds, and prints each beside what the shadow says. A
+// listing alone says the two differ; this says which file each side has,
+// with its fileid, type and link target, which is what tells a REMOVE that
+// took the wrong file from a shadow that recorded the wrong one.
+func (m *model) describeDisagreement(got, want []string) {
+	all := slices.Compact(slices.Sorted(slices.Values(slices.Concat(got, want))))
+	for _, p := range all {
+		twin := slices.ContainsFunc(all, func(q string) bool { return q != p && strings.EqualFold(q, p) })
+		if slices.Contains(got, p) && slices.Contains(want, p) && !twin {
+			continue
+		}
+		m.t.Logf("  %q: the shadow holds %s; the server says %s", p, m.shadowSays(p), m.serverSays(p))
+	}
+}
+
+func (m *model) shadowSays(p string) string {
+	e := m.entries[p]
+	if e == nil {
+		return "nothing"
+	}
+	s := fmt.Sprintf("%s fileid %#x", kindNames[e.kind], e.fileid)
+	if e.kind == kindLink {
+		s += fmt.Sprintf(" -> %q", e.link)
+	}
+	return s
+}
+
+func (m *model) serverSays(p string) string {
+	attr, _, err := m.target.Lookup(p)
+	if err != nil {
+		return fmt.Sprintf("LOOKUP fails: %v", err)
+	}
+	fattr := attr.(*nfsclient.Fattr)
+	s := fmt.Sprintf("%s fileid %#x", typeName(fattr.Type), fattr.Fileid)
+	if fattr.Type != nfsclient.NF3Lnk {
+		return s
+	}
+	f, err := m.target.Open(p)
+	if err != nil {
+		return s + fmt.Sprintf(", open fails: %v", err)
+	}
+	link, err := f.Readlink()
+	if err != nil {
+		return s + fmt.Sprintf(", READLINK fails: %v", err)
+	}
+	return s + fmt.Sprintf(" -> %q", link)
 }

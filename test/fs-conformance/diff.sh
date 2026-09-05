@@ -4,8 +4,10 @@
 #
 #   diff.sh <native> <share> <deviations>
 #
-# A step is the text before the first `: ` on a line. For each step present
-# in both transcripts: identical is fine; different is EXPLAINED if the
+# A step id is the text before the first `: ` on a line: `<group>/<step>`,
+# with a `.<sub>` suffix on a step that prints several lines. fsprobe gives
+# every line its own, so a repeated id is a probe bug and is warned about.
+# For each id present in both transcripts: identical is fine; different is EXPLAINED if the
 # share's line appears verbatim in the deviations file and UNEXPLAINED if not.
 # A deviations entry that no step needed is STALE. A step in one transcript
 # and not the other is MISSING. Unexplained, stale or missing exits 1.
@@ -16,7 +18,9 @@
 # not failed, because the report is what somebody fills the file from.
 #
 # The report prints the counts first, then the unexplained steps as
-# `native:` / `share:` pairs, then the stale entries, then the missing steps.
+# `native:` / `share:` pairs, then the stale entries, then the missing steps,
+# and last the ids of the unexplained steps on their own, one per line, to be
+# copied into the deviations file without the stat noise.
 set -uo pipefail
 
 if [ $# -ne 3 ]; then
@@ -77,6 +81,7 @@ END {
         differ++
         if (shr[id] in dev) { explained++; used[shr[id]] = 1; continue }
         unexplained[++nun] = "native: " nat[id] "\nshare:  " shr[id]
+        unexplained_id[nun] = id
     }
     for (i = 1; i <= ns; i++) {
         id = sorder[i]
@@ -110,6 +115,11 @@ END {
         print ""
         print "warnings:"
         for (i = 1; i <= nwarn; i++) print warn[i]
+    }
+    if (nun) {
+        print ""
+        print "unexplained ids:"
+        for (i = 1; i <= nun; i++) print unexplained_id[i]
     }
     exit (nun || nstale || nmissing) ? 1 : 0
 }

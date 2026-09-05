@@ -9,7 +9,8 @@ import (
 )
 
 // The transcript is only useful if two runs against the same filesystem are
-// identical: labels reset per run, and nothing printed names the directory.
+// identical: labels reset per group, nothing printed names the directory, and
+// every line carries an id of its own, because diff.sh keys on it.
 func TestTranscriptIsDeterministic(t *testing.T) {
 	dir := t.TempDir()
 	var runs [2]string
@@ -26,12 +27,19 @@ func TestTranscriptIsDeterministic(t *testing.T) {
 	if strings.Contains(runs[0], dir) {
 		t.Fatalf("transcript names the directory:\n%s", runs[0])
 	}
+	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(runs[0]), "\n") {
+		id, _, ok := strings.Cut(line, ": ")
+		if !ok || !strings.Contains(line, " -> ") {
+			t.Errorf("malformed line: %q", line)
+			continue
+		}
+		if seen[id] {
+			t.Errorf("step id printed twice: %s", id)
+		}
+		seen[id] = true
 		if strings.Contains(line, "PANIC:") {
 			t.Errorf("step panicked: %s", line)
-		}
-		if !strings.Contains(line, ": ") || !strings.Contains(line, " -> ") {
-			t.Errorf("malformed line: %q", line)
 		}
 	}
 }

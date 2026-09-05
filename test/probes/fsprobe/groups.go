@@ -15,7 +15,9 @@ import (
 )
 
 // groups is the transcript's order. Step names are ids the runner's diff keys
-// on; keep them stable.
+// on; keep them stable, and unique within a run: a step printing several
+// lines carries a `.<sub>` suffix per line (`case.create`, `case.readdir`),
+// which fsprobe_test.go asserts.
 var groups = []struct {
 	name string
 	run  func(g *group)
@@ -207,13 +209,13 @@ func groupNames(g *group) {
 	// one runs create, stat, readdir and unlink for a single name.
 	one := func(id, name string) {
 		quoted := fmt.Sprintf("%q", name)
-		g.run(id, "create "+quoted, func(s *step) (string, error) {
+		g.run(id+".create", "create "+quoted, func(s *step) (string, error) {
 			err := createExcl(g.path(name))
 			s.Lstat(name)
 			return "", err
 		})
-		g.run(id, "readdir", func(*step) (string, error) { return listed(".", name) })
-		g.run(id, "unlink "+quoted, func(*step) (string, error) { return "", unix.Unlink(g.path(name)) })
+		g.run(id+".readdir", "readdir", func(*step) (string, error) { return listed(".", name) })
+		g.run(id+".unlink", "unlink "+quoted, func(*step) (string, error) { return "", unix.Unlink(g.path(name)) })
 	}
 
 	one("plain", "plain")
@@ -221,13 +223,13 @@ func groupNames(g *group) {
 	one("nfc", "nfc-\u00e9")
 	one("nfd", "nfd-e\u0301")
 
-	g.run("case", "create a and A", func(*step) (string, error) {
+	g.run("case.create", "create a and A", func(*step) (string, error) {
 		if err := createExcl(g.path("a")); err != nil {
 			return "", err
 		}
 		return "", createExcl(g.path("A"))
 	})
-	g.run("case", "readdir count of a/A", func(*step) (string, error) {
+	g.run("case.readdir", "readdir count of a/A", func(*step) (string, error) {
 		entries, err := os.ReadDir(g.dir)
 		if err != nil {
 			return "", err
@@ -243,7 +245,7 @@ func groupNames(g *group) {
 		}
 		return fmt.Sprintf("%d entries", n), nil
 	})
-	g.run("case", "write a, write A, read a", func(*step) (string, error) {
+	g.run("case.write", "write a, write A, read a", func(*step) (string, error) {
 		if err := os.WriteFile(g.path("a"), []byte("lower"), 0o644); err != nil {
 			return "", err
 		}
@@ -259,7 +261,7 @@ func groupNames(g *group) {
 		}
 		return "aliased", nil
 	})
-	g.run("case", "unlink a and A", func(*step) (string, error) {
+	g.run("case.unlink", "unlink a and A", func(*step) (string, error) {
 		err := unix.Unlink(g.path("a"))
 		if err2 := unix.Unlink(g.path("A")); err == nil {
 			err = err2
@@ -270,16 +272,16 @@ func groupNames(g *group) {
 	one("long250", strings.Repeat("n", 250))
 
 	deep := strings.TrimSuffix(strings.Repeat("x/", 300), "/")
-	g.run("deep300", "mkdir chain of 300 components", func(*step) (string, error) {
+	g.run("deep300.mkdir", "mkdir chain of 300 components", func(*step) (string, error) {
 		return "", os.MkdirAll(g.path(deep), 0o755)
 	})
-	g.run("deep300", "create leaf file", func(s *step) (string, error) {
+	g.run("deep300.create", "create leaf file", func(s *step) (string, error) {
 		err := createExcl(g.path(deep + "/f"))
 		s.Stat(deep + "/f")
 		return "", err
 	})
-	g.run("deep300", "readdir leaf", func(*step) (string, error) { return listed(deep, "f") })
-	g.run("deep300", "remove chain", func(*step) (string, error) { return "", os.RemoveAll(g.path("x")) })
+	g.run("deep300.readdir", "readdir leaf", func(*step) (string, error) { return listed(deep, "f") })
+	g.run("deep300.remove", "remove chain", func(*step) (string, error) { return "", os.RemoveAll(g.path("x")) })
 
 	one("con", "con")
 	one("nul", "nul")
@@ -429,7 +431,7 @@ func groupRemove(g *group) {
 		return "no-sillyrename", nil
 	}
 	var fd int
-	g.run("unlink-open", "open u, unlink u", func(*step) (string, error) {
+	g.run("unlink-open.unlink", "open u, unlink u", func(*step) (string, error) {
 		var err error
 		fd, err = unix.Open(g.path("u"), unix.O_RDWR|unix.O_CREAT|unix.O_EXCL, 0o644)
 		if err != nil {
@@ -437,7 +439,7 @@ func groupRemove(g *group) {
 		}
 		return "", unix.Unlink(g.path("u"))
 	})
-	g.run("unlink-open", "write 100 bytes via fd, fstat", func(s *step) (string, error) {
+	g.run("unlink-open.write", "write 100 bytes via fd, fstat", func(s *step) (string, error) {
 		if _, err := unix.Write(fd, make([]byte, 100)); err != nil {
 			return "", err
 		}
@@ -448,9 +450,9 @@ func groupRemove(g *group) {
 		s.Fstat(fd, "u")
 		return fmt.Sprintf("size=%d", st.Size), nil
 	})
-	g.run("unlink-open", "readdir for .nfs* while open", func(*step) (string, error) { return nfsEntries() })
-	g.run("unlink-open", "close", func(*step) (string, error) { return "", unix.Close(fd) })
-	g.run("unlink-open", "readdir for .nfs* after close", func(*step) (string, error) { return nfsEntries() })
+	g.run("unlink-open.readdir-open", "readdir for .nfs* while open", func(*step) (string, error) { return nfsEntries() })
+	g.run("unlink-open.close", "close", func(*step) (string, error) { return "", unix.Close(fd) })
+	g.run("unlink-open.readdir-closed", "readdir for .nfs* after close", func(*step) (string, error) { return nfsEntries() })
 
 	g.run("rmdir-nonempty", "mkdir d d/f, rmdir d", func(*step) (string, error) {
 		if err := unix.Mkdir(g.path("d"), 0o755); err != nil {
@@ -501,7 +503,7 @@ func groupLinks(g *group) {
 		}
 		return fmt.Sprintf("nlink=%d", uint64(st.Nlink)), nil //nolint:unconvert // Nlink's width differs per arch
 	}
-	g.run("hardlink", "create orig, link orig -> hard", func(s *step) (string, error) {
+	g.run("hardlink.link", "create orig, link orig -> hard", func(s *step) (string, error) {
 		if err := os.WriteFile(g.path("orig"), []byte("orig"), 0o644); err != nil {
 			return "", err
 		}
@@ -512,7 +514,7 @@ func groupLinks(g *group) {
 		}
 		return nlink("orig")
 	})
-	g.run("hardlink", "stat orig and hard", func(*step) (string, error) { return g.sameIno("orig", "hard") })
+	g.run("hardlink.stat", "stat orig and hard", func(*step) (string, error) { return g.sameIno("orig", "hard") })
 	g.run("write-via-link", "write hard, read orig", func(*step) (string, error) {
 		if err := os.WriteFile(g.path("hard"), []byte("via link"), 0o644); err != nil {
 			return "", err
@@ -548,7 +550,7 @@ func groupLinks(g *group) {
 		}
 		return match(got, []byte("target")), nil
 	})
-	g.run("dangling", "symlink nothing -> dang, stat", func(s *step) (string, error) {
+	g.run("dangling.symlink", "symlink nothing -> dang, stat", func(s *step) (string, error) {
 		if err := unix.Symlink("nothing", g.path("dang")); err != nil {
 			return "", err
 		}
@@ -557,7 +559,7 @@ func groupLinks(g *group) {
 		s.Stat("dang")
 		return "", err
 	})
-	g.run("dangling", "lstat dang", func(s *step) (string, error) {
+	g.run("dangling.lstat", "lstat dang", func(s *step) (string, error) {
 		var st unix.Stat_t
 		err := unix.Lstat(g.path("dang"), &st)
 		s.Lstat("dang")
@@ -599,7 +601,7 @@ func groupAttrs(g *group) {
 		return "", err
 	})
 	chmod := func(id string, mode uint32) {
-		g.run(id, fmt.Sprintf("chmod %04o m", mode), func(s *step) (string, error) {
+		g.run(id+".chmod", fmt.Sprintf("chmod %04o m", mode), func(s *step) (string, error) {
 			err := unix.Chmod(g.path("m"), mode)
 			s.Stat("m")
 			return "", err
@@ -609,7 +611,7 @@ func groupAttrs(g *group) {
 	chmod("chmod-600", 0o600)
 	chmod("chmod-755", 0o755)
 	chmod("chmod-000", 0)
-	g.run("chmod-000", "open(O_RDONLY) m", func(*step) (string, error) {
+	g.run("chmod-000.open", "open(O_RDONLY) m", func(*step) (string, error) {
 		fd, err := unix.Open(g.path("m"), unix.O_RDONLY, 0)
 		if err != nil {
 			return "", err
@@ -673,11 +675,11 @@ func groupAttrs(g *group) {
 		}
 		return applied()
 	})
-	g.run("mtime-on-write", "stat m", func(s *step) (string, error) {
+	g.run("mtime-on-write.stat", "stat m", func(s *step) (string, error) {
 		s.Stat("m")
 		return "", nil
 	})
-	g.run("mtime-on-write", "sleep 1.1s, write m, stat", func(s *step) (string, error) {
+	g.run("mtime-on-write.write", "sleep 1.1s, write m, stat", func(s *step) (string, error) {
 		time.Sleep(1100 * time.Millisecond)
 		err := os.WriteFile(g.path("m"), []byte("mm"), 0o644)
 		s.Stat("m")
@@ -959,9 +961,9 @@ func (g *group) sh(env []string, name string, args ...string) error {
 
 func groupWorkload(g *group) {
 	if _, err := exec.LookPath("tar"); err != nil {
-		g.run("tar", "tar in PATH", func(*step) (string, error) { return "no-tar", nil })
+		g.run("tar.lookup", "tar in PATH", func(*step) (string, error) { return "no-tar", nil })
 	} else {
-		g.run("tar", "mkdir src with 20 files", func(*step) (string, error) {
+		g.run("tar.mkdir", "mkdir src with 20 files", func(*step) (string, error) {
 			if err := unix.Mkdir(g.path("src"), 0o755); err != nil {
 				return "", err
 			}
@@ -972,12 +974,12 @@ func groupWorkload(g *group) {
 			}
 			return "", nil
 		})
-		g.run("tar", "tar -cf src.tar src", func(*step) (string, error) {
+		g.run("tar.create", "tar -cf src.tar src", func(*step) (string, error) {
 			return "", g.sh(nil, "tar", "-cf", "src.tar", "src")
 		})
-		g.run("tar", "rm -r src", func(*step) (string, error) { return "", os.RemoveAll(g.path("src")) })
-		g.run("tar", "tar -xf src.tar", func(*step) (string, error) { return "", g.sh(nil, "tar", "-xf", "src.tar") })
-		g.run("tar", "verify 20 files", func(s *step) (string, error) {
+		g.run("tar.rm", "rm -r src", func(*step) (string, error) { return "", os.RemoveAll(g.path("src")) })
+		g.run("tar.extract", "tar -xf src.tar", func(*step) (string, error) { return "", g.sh(nil, "tar", "-xf", "src.tar") })
+		g.run("tar.verify", "verify 20 files", func(s *step) (string, error) {
 			s.Stat("src/f00")
 			entries, err := os.ReadDir(g.path("src"))
 			if err != nil {
@@ -995,13 +997,13 @@ func groupWorkload(g *group) {
 			}
 			return fmt.Sprintf("%d files", n), nil
 		})
-		g.run("tar", "touch src/f00", func(s *step) (string, error) {
+		g.run("tar.touch", "touch src/f00", func(s *step) (string, error) {
 			time.Sleep(1100 * time.Millisecond)
 			err := g.sh(nil, "touch", "src/f00")
 			s.Stat("src/f00")
 			return "", err
 		})
-		g.run("tar", "chmod 600 src/f00", func(s *step) (string, error) {
+		g.run("tar.chmod", "chmod 600 src/f00", func(s *step) (string, error) {
 			err := g.sh(nil, "chmod", "600", "src/f00")
 			s.Stat("src/f00")
 			return "", err
@@ -1009,7 +1011,7 @@ func groupWorkload(g *group) {
 	}
 
 	if _, err := exec.LookPath("git"); err != nil {
-		g.run("git", "git in PATH", func(*step) (string, error) { return "no-git", nil })
+		g.run("git.lookup", "git in PATH", func(*step) (string, error) { return "no-git", nil })
 		return
 	}
 	// A repository owned by another uid (root_squash) is refused by git's
@@ -1019,7 +1021,7 @@ func groupWorkload(g *group) {
 	git := func(args ...string) error {
 		return g.sh(env, "git", append([]string{"-c", "safe.directory=*", "-c", "commit.gpgsign=false"}, args...)...)
 	}
-	g.run("git", "owner of the directory", func(*step) (string, error) {
+	g.run("git.owner", "owner of the directory", func(*step) (string, error) {
 		var st unix.Stat_t
 		if err := unix.Stat(g.dir, &st); err != nil {
 			return "", err
@@ -1029,7 +1031,7 @@ func groupWorkload(g *group) {
 		}
 		return "foreign", nil
 	})
-	g.run("git", "git init, config user", func(*step) (string, error) {
+	g.run("git.init", "git init, config user", func(*step) (string, error) {
 		if err := git("init", "-q"); err != nil {
 			return "", err
 		}
@@ -1038,7 +1040,7 @@ func groupWorkload(g *group) {
 		}
 		return "", git("config", "user.name", "fsprobe")
 	})
-	g.run("git", "200 commits, one file each", func(*step) (string, error) {
+	g.run("git.commits", "200 commits, one file each", func(*step) (string, error) {
 		for i := range 200 {
 			name := fmt.Sprintf("c%03d", i)
 			if err := os.WriteFile(g.path(name), []byte(name+"\n"), 0o644); err != nil {
@@ -1053,7 +1055,7 @@ func groupWorkload(g *group) {
 		}
 		return "", nil
 	})
-	g.run("git", "git status --porcelain, twice", func(*step) (string, error) {
+	g.run("git.status", "git status --porcelain, twice", func(*step) (string, error) {
 		dirty := 0
 		for range 2 {
 			cmd := exec.Command("git", "-c", "safe.directory=*", "status", "--porcelain")
@@ -1072,8 +1074,8 @@ func groupWorkload(g *group) {
 		}
 		return fmt.Sprintf("dirty:%d", dirty), nil
 	})
-	g.run("git", "git checkout HEAD~100", func(*step) (string, error) { return "", git("checkout", "-q", "HEAD~100") })
-	g.run("git", "git checkout -", func(*step) (string, error) { return "", git("checkout", "-q", "-") })
-	g.run("git", "git gc", func(*step) (string, error) { return "", git("gc", "-q") })
-	g.run("git", "git fsck", func(*step) (string, error) { return "", git("fsck", "--no-progress") })
+	g.run("git.checkout-back", "git checkout HEAD~100", func(*step) (string, error) { return "", git("checkout", "-q", "HEAD~100") })
+	g.run("git.checkout-return", "git checkout -", func(*step) (string, error) { return "", git("checkout", "-q", "-") })
+	g.run("git.gc", "git gc", func(*step) (string, error) { return "", git("gc", "-q") })
+	g.run("git.fsck", "git fsck", func(*step) (string, error) { return "", git("fsck", "--no-progress") })
 }

@@ -14,8 +14,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// probe is one run of the transcript: the output, the inode labels (per run)
-// and the mtimes seen so far (per group and path).
+// probe is one run of the transcript: the output, the inode labels and the
+// mtimes seen so far (both per group, the mtimes keyed by path). Labels are
+// assigned in order of first sight, so they are reset at the start of every
+// group: one extra file in an early group must not shift every label after it.
 type probe struct {
 	out   io.Writer
 	root  string // DIR/fsprobe
@@ -116,7 +118,7 @@ func (s *step) record(name string, err error, st *unix.Stat_t) {
 }
 
 // format normalises a stat: no device, the inode as a label assigned on first
-// sight in this run, and the mtime relative to the previous stat of the same
+// sight in this group, and the mtime relative to the previous stat of the same
 // path in the same group.
 func (p *probe) format(key string, st *unix.Stat_t) string {
 	label := p.label(st)
@@ -194,7 +196,6 @@ func run(dir string, names []string, large bool, out io.Writer) error {
 		out:    out,
 		root:   filepath.Join(dir, "fsprobe"),
 		large:  large,
-		inos:   map[[2]uint64]int{},
 		mtimes: map[string]unix.Timespec{},
 	}
 	defer func() { _ = os.RemoveAll(p.root) }()
@@ -207,6 +208,7 @@ func run(dir string, names []string, large bool, out io.Writer) error {
 			}
 			found = true
 			g := &group{p: p, name: name, dir: filepath.Join(p.root, name)}
+			p.inos = map[[2]uint64]int{} // labels are per group; see probe
 			_ = os.RemoveAll(g.dir)
 			if err := os.MkdirAll(g.dir, 0o755); err != nil {
 				return fmt.Errorf("mkdir %s: %w", name, err)
