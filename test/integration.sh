@@ -2054,7 +2054,7 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ot
 
         warned=$("$WORK/remote-docker" ps 2>&1)
         case "$warned" in
-            *"different version"*) ok "a session in use from another commit is reported, not restarted" ;;
+            *"different build"*) ok "a session in use from another commit is reported, not restarted" ;;
             *) bad "no version warning while a container depended on the old session" ;;
         esac
         # Captured, so a failure can show which build status says is serving.
