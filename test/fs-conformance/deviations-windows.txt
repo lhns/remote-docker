@@ -18,9 +18,15 @@
 # job until somebody names it. What the Linux file lists and also happens here
 # is repeated here; NTFS's own differences follow.
 #
+# Never hand-predict a line: diff.sh writes suggested-deviations.txt beside its
+# report with the exact share lines it could not explain, and that file is what
+# an entry is copied from.
+#
 # mode, uid and gid appear on the attrs group's lines and on create/create
 # only (step.format in test/probes/fsprobe/stat.go), so the one ownership
-# policy is compared once per run instead of on every stat line.
+# policy is compared once per run instead of on every stat line. Every mode
+# here is 0777: NTFS has no execute bit to preserve, so the share reports every
+# file executable (Attrs.AlwaysExecutable in nfsserve/attrs.go).
 
 # a share reports the workspace account as owner with wide bits (ADR 0046)
 create/create: open(O_CREAT|O_EXCL) f -> ok [file ino#1 nlink=1 size=0 mode=0777 uid=10000 gid=10000 mtime=new]
@@ -61,6 +67,10 @@ attrs/mtime-on-write.stat: stat m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid
 # a share reports the workspace account as owner with wide bits (ADR 0046)
 attrs/mtime-on-write.write: sleep 1.1s, write m, stat (reports bumped/not-bumped) -> ok:bumped [file ino#1 nlink=1 size=2 mode=0777 uid=10000 gid=10000 mtime=not-older]
 
+# NFS silly-rename: the client renames a file unlinked while open, so the name
+# still exists and nlink stays 1 where a native unlink drops it to 0
+remove/unlink-open.write: write 100 bytes via fd, fstat -> ok:size=100 [file ino#1 nlink=1 size=100 mtime=new]
+
 # NFS silly-rename: the client keeps a .nfs* name for a file unlinked while open
 remove/unlink-open.readdir-open: readdir for .nfs* while open -> ok:sillyrename
 
@@ -85,11 +95,6 @@ names/case.write: write a, write A, read a -> ok:aliased
 # NTFS is case-insensitive: `a` and `A` are one file, so the second unlink finds nothing
 names/case.unlink: unlink a and A -> ENOENT
 
-# nul is deliberately not listed here, and must keep failing as unexplained:
-# it reports create -> EEXIST and unlink -> EIO because the name still
-# resolves to the DOS device on lookup, which is a bug in attrFS rather than
-# something NTFS forces.
-#
 # NTFS cannot spell this name; the share refuses it as native Docker on Windows does
 names/con.create: create "con" -> EINVAL [stat:ENOENT]
 
@@ -98,6 +103,15 @@ names/con.readdir: readdir -> ok:missing
 
 # NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
 names/con.unlink: unlink "con" -> ENOENT
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does
+names/nul.create: create "nul" -> EINVAL [stat:ENOENT]
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so it is in no listing
+names/nul.readdir: readdir -> ok:missing
+
+# NTFS cannot spell this name; the share refuses it as native Docker on Windows does, so there is nothing to remove
+names/nul.unlink: unlink "nul" -> ENOENT
 
 # NTFS cannot spell this name; the share refuses it as native Docker on Windows does
 names/aux.create: create "aux" -> EINVAL [stat:ENOENT]

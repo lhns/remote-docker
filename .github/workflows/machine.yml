@@ -275,6 +275,7 @@ jobs:
           path: |
             transcript-windows.txt
             fs-conformance-report.txt
+            suggested-deviations.txt
           if-no-files-found: ignore
           retention-days: 7
 

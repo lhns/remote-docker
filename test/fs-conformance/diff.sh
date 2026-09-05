@@ -21,6 +21,14 @@
 # `native:` / `share:` pairs, then the stale entries, then the missing steps,
 # and last the ids of the unexplained steps on their own, one per line, to be
 # copied into the deviations file without the stat noise.
+#
+# Where there is anything to fix, `suggested-deviations.txt` is written beside
+# the share transcript, which is where the report lands too. It holds the
+# unexplained share lines VERBATIM, each under a `# TODO reason (pointer)`
+# line, and the stale entries commented out. An entry is copied from there and
+# never typed: thirteen of seventeen hand-predicted entries came back stale on
+# the first real run, every one of them because the predicted text was not
+# what the probe printed.
 set -uo pipefail
 
 if [ $# -ne 3 ]; then
@@ -35,9 +43,15 @@ for f in "$native" "$share" "$deviations"; do
     fi
 done
 
+# Beside the share transcript, which is where the caller puts the report.
+# Removed first, so a run that has nothing to fix leaves no stale suggestion
+# from the run before it.
+suggested=$(dirname "$share")/suggested-deviations.txt
+rm -f "$suggested"
+
 # One awk pass over the three files, told apart by name. FNR==NR only
 # distinguishes the first, so the names are passed in.
-awk -v native="$native" -v share="$share" -v deviations="$deviations" '
+awk -v native="$native" -v share="$share" -v deviations="$deviations" -v suggested="$suggested" '
 function stepid(line,    i) {
     i = index(line, ": ")
     return i ? substr(line, 1, i - 1) : ""
@@ -82,6 +96,7 @@ END {
         if (shr[id] in dev) { explained++; used[shr[id]] = 1; continue }
         unexplained[++nun] = "native: " nat[id] "\nshare:  " shr[id]
         unexplained_id[nun] = id
+        unexplained_share[nun] = shr[id]
     }
     for (i = 1; i <= ns; i++) {
         id = sorder[i]
@@ -121,6 +136,28 @@ END {
         print "unexplained ids:"
         for (i = 1; i <= nun; i++) print unexplained_id[i]
     }
+
+    if (nun || nstale) {
+        print "# Written by test/fs-conformance/diff.sh from this run." > suggested
+        print "# Copy an entry into " deviations " once its TODO names a real" > suggested
+        print "# reason and a pointer. The transcript lines are verbatim and must stay so." > suggested
+        for (i = 1; i <= nun; i++) {
+            print "" > suggested
+            print "# TODO reason (pointer)" > suggested
+            print unexplained_share[i] > suggested
+        }
+        if (nstale) {
+            print "" > suggested
+            print "# No longer observed. Delete these from " deviations ":" > suggested
+            for (i = 1; i <= nd; i++) {
+                if (!(dorder[i] in used)) print "#" dorder[i] > suggested
+            }
+        }
+        close(suggested)
+        print ""
+        print "suggestions written to " suggested
+    }
+
     exit (nun || nstale || nmissing) ? 1 : 0
 }
 ' "$native" "$share" "$deviations"

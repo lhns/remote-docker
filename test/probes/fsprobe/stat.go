@@ -77,7 +77,7 @@ func resultOf(err error) string {
 // the result and the run continues. value is the `ok:<value>` payload, empty
 // for a bare `ok`; err wins over value.
 func (g *group) run(name, op string, f func(s *step) (value string, err error)) {
-	s := &step{g: g}
+	s := &step{g: g, owner: g.owner}
 	var result string
 	func() {
 		defer func() {

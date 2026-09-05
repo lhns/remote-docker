@@ -204,7 +204,8 @@ else
 fi
 sed 's/^/        /' "$WORK/report.txt"
 
-for f in transcript-native.txt transcript-native2.txt transcript-linux.txt report.txt; do
+for f in transcript-native.txt transcript-native2.txt transcript-linux.txt report.txt \
+    suggested-deviations.txt; do
     keep "$WORK/$f"
 done
 echo
