@@ -218,3 +218,8 @@ links/symlink-to-dir: mkdir sd sd/f, symlink sd -> sdl, readdir sdl -> ok:1 entr
 
 # NTFS counts no link per subdirectory and reports no size for a directory, where ext4 reports two links and one block
 dirs/mkdir-chain-50: 50 nested dirs, stat leaf -> ok [dir ino#1 nlink=1 size=0 mtime=new]
+
+# NFS silly-rename: a file unlinked while open keeps a .nfs* name, which the
+# client removes when the last descriptor closes; natively there is no such
+# name at any point (README, "What differs from a bind mount")
+remove/unlink-open.readdir-closed: wait for the .nfs* name to go after close -> ok:cleared

@@ -512,7 +512,25 @@ func groupRemove(g *group) {
 	})
 	g.run("unlink-open.readdir-open", "readdir for .nfs* while open", func(*step) (string, error) { return nfsEntries() })
 	g.run("unlink-open.close", "close", func(*step) (string, error) { return "", unix.Close(fd) })
-	g.run("unlink-open.readdir-closed", "readdir for .nfs* after close", func(*step) (string, error) { return nfsEntries() })
+	// Polled, not sampled: the client removes its .nfs* name as part of the
+	// close, and whether that has landed the instant afterwards is a race the
+	// transcript must not carry.
+	g.run("unlink-open.readdir-closed", "wait for the .nfs* name to go after close", func(*step) (string, error) {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			got, err := nfsEntries()
+			if err != nil {
+				return "", err
+			}
+			if got == "no-sillyrename" {
+				return "cleared", nil
+			}
+			if time.Now().After(deadline) {
+				return "still-there", nil
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
 
 	g.run("rmdir-nonempty", "mkdir d d/f, rmdir d", func(*step) (string, error) {
 		if err := unix.Mkdir(g.path("d"), 0o755); err != nil {

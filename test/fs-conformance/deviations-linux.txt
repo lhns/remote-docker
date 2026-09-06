@@ -80,3 +80,8 @@ workload/tar.touch: sleep 1.1s, touch src/f00 (reports bumped/not-bumped) -> ok:
 
 # a share reports the workspace account as owner with wide bits (ADR 0046), so git's safe.directory check sees a foreign owner
 workload/git.owner: owner of the directory -> ok:foreign
+
+# NFS silly-rename: a file unlinked while open keeps a .nfs* name, which the
+# client removes when the last descriptor closes; natively there is no such
+# name at any point (README, "What differs from a bind mount")
+remove/unlink-open.readdir-closed: wait for the .nfs* name to go after close -> ok:cleared
