@@ -904,7 +904,6 @@ a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
 | Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |
 | Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
 | Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
-| Windows host: a directory | `nlink=1` and `size=0`, where a Linux host reports two links or more and one block | NTFS counts no link per subdirectory and no size for a directory |
 
 Everything else the probe does behaves as on a bind mount, which is most of it:
 `flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads

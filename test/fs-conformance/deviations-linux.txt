@@ -8,5 +8,32 @@
 # suggested-deviations.txt that a failing run leaves beside its report;
 # test/fs-conformance/diff.sh has the rest.
 #
-# Empty until the run after the transcript changed shape.
 
+# Every file in a share is the workspace account's, with the owner's read and
+# write bits kept so the share can serve it (ADR 0046).
+create/create: open(O_CREAT|O_EXCL) f -> ok [file ino#1 size=0 mode=0666 uid=10000 gid=10000]
+attrs/create: create m -> ok [file ino#1 size=1 mode=0666 uid=10000 gid=10000]
+attrs/chmod-644.chmod: chmod 0644 m -> ok [file ino#1 size=1 mode=0666]
+attrs/chmod-600.chmod: chmod 0600 m -> ok [file ino#1 size=1 mode=0666]
+attrs/chmod-755.chmod: chmod 0755 m -> ok [file ino#1 size=1 mode=0777]
+attrs/chmod-000.chmod: chmod 0000 m -> ok [file ino#1 size=1 mode=0666]
+attrs/chmod-x.chmod: chmod 0111 m -> ok [file ino#1 size=1 mode=0777]
+attrs/mtime-on-write.stat: stat m -> ok [file ino#1 size=1 mode=0777]
+attrs/mtime-on-write.write: sleep 1.1s, write m, stat (reports bumped/not-bumped) -> ok:bumped [file ino#1 size=2 mode=0777]
+
+# Ownership is synthesised, so chown is accepted and changes nothing; git
+# then calls the tree somebody else's and wants safe.directory (ADR 0046).
+attrs/chown-self: chown m to own uid:gid -> ok [file ino#1 size=1 mode=0777]
+attrs/chown-other: chown m to 1234:1234 -> ok:uid=10000 [file ino#1 size=1 mode=0777]
+workload/git.owner: owner of the directory -> ok:foreign
+
+# A timestamp write is accepted and dropped: applying one made the watcher
+# replay a SETATTR that produced another, 3,063 events for one edit. So tar
+# and cp -p leave the current time behind (attrs.go, ADR 0033).
+attrs/utime-path: utimensat m to epoch 1000000000 -> ok:ignored [file ino#1 size=1 mode=0777]
+attrs/futimens-fd: touch m to now, futimes fd to epoch 1000000000 -> ok:ignored [file ino#1 size=1 mode=0777]
+workload/tar.touch: sleep 1.1s, touch src/f00 (reports bumped/not-bumped) -> ok:not-bumped [file ino#1 size=100]
+
+# Unlinking an open file leaves a .nfs* name until the last close: the NFS
+# client renames rather than removes, since the protocol has no open file.
+remove/unlink-open.readdir-open: readdir for .nfs* while open -> ok:sillyrename

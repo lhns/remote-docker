@@ -9,6 +9,65 @@
 # test/fs-conformance/diff.sh has the rest.
 #
 # Everything in deviations-linux.txt applies here too and is repeated,
-# because each leg is diffed on its own. Empty until the run after the
 # transcript changed shape.
 
+# Every file in a share is the workspace account's. NTFS carries no mode bits,
+# so a file is reported executable and chmod changes nothing (ADR 0046).
+create/create: open(O_CREAT|O_EXCL) f -> ok [file ino#1 size=0 mode=0777 uid=10000 gid=10000]
+attrs/create: create m -> ok [file ino#1 size=1 mode=0777 uid=10000 gid=10000]
+attrs/chmod-644.chmod: chmod 0644 m -> ok [file ino#1 size=1 mode=0777]
+attrs/chmod-600.chmod: chmod 0600 m -> ok [file ino#1 size=1 mode=0777]
+attrs/chmod-755.chmod: chmod 0755 m -> ok [file ino#1 size=1 mode=0777]
+attrs/chmod-000.chmod: chmod 0000 m -> ok [file ino#1 size=1 mode=0777]
+attrs/chmod-x.chmod: chmod 0111 m -> ok [file ino#1 size=1 mode=0777]
+attrs/mtime-on-write.stat: stat m -> ok [file ino#1 size=1 mode=0777]
+attrs/mtime-on-write.write: sleep 1.1s, write m, stat (reports bumped/not-bumped) -> ok:bumped [file ino#1 size=2 mode=0777]
+
+# Ownership is synthesised, so chown is accepted and changes nothing; git
+# then calls the tree somebody else's and wants safe.directory (ADR 0046).
+attrs/chown-self: chown m to own uid:gid -> ok [file ino#1 size=1 mode=0777]
+attrs/chown-other: chown m to 1234:1234 -> ok:uid=10000 [file ino#1 size=1 mode=0777]
+workload/git.owner: owner of the directory -> ok:foreign
+
+# A timestamp write is accepted and dropped: applying one made the watcher
+# replay a SETATTR that produced another, 3,063 events for one edit. So tar
+# and cp -p leave the current time behind (attrs.go, ADR 0033).
+attrs/utime-path: utimensat m to epoch 1000000000 -> ok:ignored [file ino#1 size=1 mode=0777]
+attrs/futimens-fd: touch m to now, futimes fd to epoch 1000000000 -> ok:ignored [file ino#1 size=1 mode=0777]
+workload/tar.touch: sleep 1.1s, touch src/f00 (reports bumped/not-bumped) -> ok:not-bumped [file ino#1 size=100]
+
+# Unlinking an open file leaves a .nfs* name until the last close: the NFS
+# client renames rather than removes, since the protocol has no open file.
+remove/unlink-open.readdir-open: readdir for .nfs* while open -> ok:sillyrename
+
+# NTFS is case-insensitive, so `a` and `A` are one file: the second create is
+# refused, one entry is listed, a write through either name is seen through
+# the other, and the second unlink finds nothing.
+names/case.create: create a and A -> EEXIST
+names/case.readdir: readdir count of a/A -> ok:1 entry
+names/case.write: write a, write A, read a -> ok:aliased
+names/case.unlink: unlink a and A -> ENOENT
+
+# A name NTFS cannot spell is refused at create rather than made and left
+# unreachable, which is what native Docker does on Windows too (names.go).
+names/con: create, readdir, unlink "con" -> EINVAL at create
+names/nul: create, readdir, unlink "nul" -> EINVAL at create
+names/aux: create, readdir, unlink "aux" -> EINVAL at create
+names/com1: create, readdir, unlink "com1" -> EINVAL at create
+names/trailing-dot: create, readdir, unlink "trailing." -> EINVAL at create
+names/trailing-space: create, readdir, unlink "trailing " -> EINVAL at create
+names/colon: create, readdir, unlink "colon:name" -> EINVAL at create
+names/star: create, readdir, unlink "star*" -> EINVAL at create
+names/question: create, readdir, unlink "question?" -> EINVAL at create
+names/quote: create, readdir, unlink "quote\"" -> EINVAL at create
+names/pipe: create, readdir, unlink "pipe|" -> EINVAL at create
+names/ltgt: create, readdir, unlink "lt<gt>" -> EINVAL at create
+
+# The fileid is NTFS's file reference number, which is not reused when a name
+# is recreated; ext4 hands the same inode back (attrs.go, ADR 0033).
+remove/recreate-same-name: create r, unlink, create again -> ok:different-ino [file size=0]
+
+# A symlink's size is the length of its target on Linux and 0 here: the
+# target is read back correctly, and only the stat size differs.
+links/symlink: create target.txt, symlink target.txt -> link, readlink -> ok:target.txt [symlink ino#2 nlink=1 size=0]
+links/dangling.lstat: lstat dang -> ok [symlink ino#3 nlink=1 size=0]
