@@ -101,10 +101,6 @@ jobs:
     # disconnect with its three-minute wait and the conformance probe's five
     # thousand files over the share do not fit in thirty.
     timeout-minutes: 50
-    # State of its own, for every step that runs the client: nothing here
-    # depends on or disturbs whatever the runner image already has.
-    env:
-      REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
     steps:
       - uses: actions/checkout@v7
 
@@ -113,6 +109,18 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: workspace-rootfs
+
+      # State of its own for every step below, so nothing here depends on or
+      # disturbs whatever the runner image already has. Set through GITHUB_ENV
+      # rather than the job's `env:`, where the `runner` context is NOT
+      # available: naming it there makes the whole file invalid, no pull
+      # request run is created at all, and the only sign is a push-event run
+      # with no jobs, named by the path of the file.
+      - name: a state directory of its own
+        shell: pwsh
+        run: |
+          "REMOTE_DOCKER_STATE_DIR=$env:RUNNER_TEMP\rd-state" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: install wsl
         run: wsl --install --no-distribution
