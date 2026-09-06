@@ -14,7 +14,7 @@ go 1.26.3
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/cyphar/filepath-securejoin v0.6.1
+	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.9.1
