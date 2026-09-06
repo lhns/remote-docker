@@ -74,8 +74,6 @@ remove/unlink-open.write: write 100 bytes via fd, fstat -> ok:size=100 [file ino
 # NFS silly-rename: the client keeps a .nfs* name for a file unlinked while open
 remove/unlink-open.readdir-open: readdir for .nfs* while open -> ok:sillyrename
 
-# NFS silly-rename: the .nfs* name is still in the directory just after the last close
-remove/unlink-open.readdir-closed: readdir for .nfs* after close -> ok:sillyrename
 
 # Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016); touch(1) sets the time and nothing else, so nothing is bumped
 workload/tar.touch: sleep 1.1s, touch src/f00 (reports bumped/not-bumped) -> ok:not-bumped [file ino#1 nlink=1 size=100 mtime=not-older]
