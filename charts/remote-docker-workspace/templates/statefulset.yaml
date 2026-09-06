@@ -153,7 +153,7 @@ spec:
     - metadata:
         name: state
         labels:
-          {{- include "remote-docker-workspace.labels" . | nindent 10 }}
+          {{- include "remote-docker-workspace.volumeClaimLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.state.accessModes | nindent 10 }}
@@ -172,7 +172,7 @@ spec:
     - metadata:
         name: graph
         labels:
-          {{- include "remote-docker-workspace.labels" . | nindent 10 }}
+          {{- include "remote-docker-workspace.volumeClaimLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.graph.accessModes | nindent 10 }}
