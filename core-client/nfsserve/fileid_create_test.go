@@ -19,7 +19,7 @@ func TestCreateReplyFileIDMatchesGetattr(t *testing.T) {
 	if _, err := r.RegisterCWD(dir); err != nil {
 		t.Fatal(err)
 	}
-	client, root, err := mountRaw(t, serve(t, r), "/cwd")
+	target, client, root, err := mountAt(t, serve(t, r), "/cwd")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +65,6 @@ func TestCreateReplyFileIDMatchesGetattr(t *testing.T) {
 		t.Fatalf("the CREATE reply carried no handle or no attributes: %+v", created)
 	}
 
-	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, root, "/cwd", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
 	after, err := target.GetAttr(created.FH.FH)
 	if err != nil {
 		t.Fatalf("GETATTR on the created file: %v", err)

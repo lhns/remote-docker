@@ -99,15 +99,11 @@ func TestReadDirPlusPagesThroughAChangingDirectory(t *testing.T) {
 	if _, err := r.RegisterCWD(dir); err != nil {
 		t.Fatal(err)
 	}
-	client, root, err := mountRaw(t, serve(t, r), "/cwd")
+	target, client, root, err := mountAt(t, serve(t, r), "/cwd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, root, "/cwd", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	seen := map[string]int{}
 	removed := map[string]bool{}
@@ -181,16 +177,12 @@ func TestReadDirPlusPagesThroughAChangingDirectory(t *testing.T) {
 			t.Errorf("%s existed for the whole scan and was listed %d times", name, n)
 		}
 	}
-	// Pinned rather than required: a scan holds the snapshot its verifier
-	// names, so what arrived after it started is not in it.
 	for name := range created {
 		if seen[name] != 0 {
 			t.Errorf("%s was created mid-scan and appeared in that scan; the verifier no longer names a snapshot", name)
 		}
 	}
 
-	// The stale verifier is refused once a scan starts over, which is the
-	// signal a client needs to know the snapshot it was paging is gone.
 	fresh := readDirPlus(t, client, root, 0, 0)
 	if fresh.verifier == verifier {
 		t.Errorf("a fresh scan after five creates and five removes carries the old verifier %#x", verifier)

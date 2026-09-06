@@ -190,3 +190,81 @@ func TestSingleFileShareRemovesAndRenamesItsFile(t *testing.T) {
 		t.Errorf("the sibling was touched: %q, %v", got, err)
 	}
 }
+
+// A symlink in the DIRECTORY part cannot carry an attribute write out of the
+// share. Chmod and Link resolved their name lexically, so `escape/x` where
+// `escape -> <outside>` chmodded and linked into a directory the share was
+// never given: a prefix compare cannot see a symlink, and the syscall follows
+// it.
+func TestAttributeWritesDoNotFollowASymlinkOutOfTheShare(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is privileged on this platform")
+	}
+	base := t.TempDir()
+	share := filepath.Join(base, "share")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{share, outside} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	victim := filepath.Join(outside, "x")
+	if err := os.WriteFile(victim, []byte("not ours"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(share, "src"), []byte("ours"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(share, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &attrChange{root: share}
+	if err := c.Chmod("escape/x", 0o777); err == nil {
+		t.Error("CHMOD through a symlink out of the share succeeded")
+	}
+	if err := c.Link("src", "escape/linked"); err == nil {
+		t.Error("LINK through a symlink out of the share succeeded")
+	}
+
+	fi, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("the file outside the share is %v, so the chmod reached it", fi.Mode().Perm())
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "linked")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the link landed outside the share (lstat: %v)", err)
+	}
+}
+
+// A backslash is an ordinary character in a filename off Windows, and archives
+// and Windows-authored repositories produce them. Refusing a base name holding
+// one made `a\b` unremovable through a share where the host was perfectly
+// happy with it.
+func TestRemoveAndRenameOfANameWithABackslash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`\ is a path separator here, so no such filename exists`)
+	}
+	dir := t.TempDir()
+	for _, name := range []string{`a\b`, `c\d`} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fs := shareFS(dir, "")
+
+	if err := fs.Remove(`a\b`); err != nil {
+		t.Errorf(`Remove("a\b") = %v, want it removed like any other name`, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, `a\b`)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf(`a\b is still there: %v`, err)
+	}
+	if err := fs.Rename(`c\d`, `e\f`); err != nil {
+		t.Errorf(`Rename("c\d", "e\f") = %v, want it renamed`, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, `e\f`)); err != nil || string(got) != `c\d` {
+		t.Errorf(`e\f holds %q, err %v`, got, err)
+	}
+}

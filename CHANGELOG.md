@@ -55,9 +55,8 @@ table is in ADR 0045.
 `test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
 a container and prints a transcript; CI runs it against a plain bind mount,
 against a share from a Linux client and from a Windows client, and fails on
-any difference not listed with a reason in `test/fs-conformance/`. README
-"What differs from a bind mount" is that list. The first runs found and
-fixed:
+any difference not listed with a reason in `test/fs-conformance/`. The first
+runs found and fixed:
 
 - Removing or renaming a symlink through a share acted on its target: `rm
   link` deleted the file the link pointed at. The bound filesystem resolved
@@ -73,6 +72,10 @@ fixed:
   directory answer ENOTEMPTY instead of EIO; rename over an empty directory
   works; a file renamed while open keeps its handle instead of going stale;
   a hard link request is parsed as one (it was parsed as a symlink).
+
+One consequence worth knowing: a share reports the workspace account as the
+owner, so git in a container refuses a repository on one as "detected dubious
+ownership" until `safe.directory` is set.
 
 ### Fixed on the way through a cleanup
 

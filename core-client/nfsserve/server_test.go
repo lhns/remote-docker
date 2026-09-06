@@ -227,7 +227,7 @@ func TestServeRefusesAnUnregisteredExport(t *testing.T) {
 	addr := serve(t, r)
 
 	for _, export := range []string{"/", "/etc", "/m/0011223344556677", "/cwd/../..", "/cwdx"} {
-		target, err := mountAt(t, addr, export)
+		target, _, _, err := mountAt(t, addr, export)
 		if err == nil {
 			target.Close()
 			t.Errorf("mounting %q succeeded, want refusal", export)
@@ -238,7 +238,7 @@ func TestServeRefusesAnUnregisteredExport(t *testing.T) {
 	// ToHandle on the returned filesystem before checking the mount status,
 	// so returning nil for a refusal panics it, meaning any client could
 	// crash this process by asking for a path that does not exist.
-	if _, err := mountAt(t, addr, "/cwd"); err != nil {
+	if _, _, _, err := mountAt(t, addr, "/cwd"); err != nil {
 		t.Fatalf("the server stopped serving after refusing a mount: %v", err)
 	}
 }

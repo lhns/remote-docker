@@ -12,8 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// selfCommand builds a command running this binary again as
-// `--child <role> <args>`.
 func selfCommand(role string, args ...string) *exec.Cmd {
 	self, err := os.Executable()
 	if err != nil {

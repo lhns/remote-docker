@@ -227,8 +227,8 @@ jobs:
       - name: run the suite
         run: bash test/${{ matrix.suite }}.sh
 
-      # The path is fs-conformance.sh's FS_CONFORMANCE_ARTIFACTS default; it
-      # sits outside the suite's work directory, which the suite removes.
+      # The path fs-conformance.sh copies to. It sits outside the suite's work
+      # directory, which the suite removes on exit.
       - name: keep the transcripts and the report
         if: always() && matrix.suite == 'fs-conformance'
         uses: actions/upload-artifact@v7

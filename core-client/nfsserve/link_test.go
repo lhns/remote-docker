@@ -7,21 +7,10 @@ import (
 	"testing"
 
 	nfs "github.com/willscott/go-nfs"
-	nfsclient "github.com/willscott/go-nfs-client/nfs"
-	"github.com/willscott/go-nfs-client/nfs/rpc"
 )
 
-// A hard link is made, and the second name IS the file.
-//
-// LINK arrives as RFC 1813 spells it (a file handle, then a directory handle
-// and the new name; rawLink in helpers_test.go), and attrChange.Link answers
-// it with os.Link. Afterwards both names are one inode on the host, the share
-// reports nlink=2 for each (nlink_test.go is where the count itself is
-// pinned), and a write through one name is read through the other, which is
-// what `ln`, `cp -l` and git's object store depend on.
-//
-// One thing must still be refused: a new name that leaves the share. It comes
-// back as NFS3ERR_ACCES, and nothing is created.
+// A hard link is made, and the second name IS the file: LINK as RFC 1813
+// spells it (rawLink in helpers_test.go), answered by attrChange.Link.
 func TestLinkMakesASecondName(t *testing.T) {
 	dir := t.TempDir()
 	const content = "the original, before anything linked it\n"
@@ -38,15 +27,11 @@ func TestLinkMakesASecondName(t *testing.T) {
 	if _, err := r.RegisterCWD(dir); err != nil {
 		t.Fatal(err)
 	}
-	client, root, err := mountRaw(t, serve(t, r), "/cwd")
+	target, client, root, err := mountAt(t, serve(t, r), "/cwd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, root, "/cwd", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, orig, err := target.Lookup("orig")
 	if err != nil {
 		t.Fatalf("looking up the file to link: %v", err)
@@ -121,4 +106,40 @@ func TestLinkMakesASecondName(t *testing.T) {
 			t.Errorf("the source is no longer reachable over the wire: %v", err)
 		}
 	})
+}
+
+// A hard link into a single-file share is refused, and creates nothing.
+//
+// The export is a synthesised directory holding one file (ADR 0039) and the
+// directory it really sits in is the user's own. go-nfs stats the new name
+// through singleFileFS, which answers not-exist for a sibling, so the check
+// passes; what refuses it is singleFileChange, because the Change is built
+// from the filesystem's Root, which is the CONTAINING directory.
+func TestLinkIntoASingleFileShareIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "only.conf")
+	if err := os.WriteFile(file, []byte("server {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(DefaultAttrs)
+	share, err := r.Register(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, client, root, err := mountAt(t, serve(t, r), share.ExportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	_, fh, err := target.Lookup("only.conf")
+	if err != nil {
+		t.Fatalf("looking up the one file: %v", err)
+	}
+
+	if status := rawLink(t, client, fh, root, "sneaky"); status == uint32(nfs.NFSStatusOk) {
+		t.Errorf("LINK into a single-file share returned NFS3_OK")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "sneaky")); !os.IsNotExist(err) {
+		t.Errorf("a LINK through a single-file share made a name in the user's directory (lstat: %v)", err)
+	}
 }

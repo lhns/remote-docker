@@ -11,12 +11,10 @@ import (
 // does so only on Windows.
 //
 // Go opens files through a `\?\` path, which hands the name to NTFS with the
-// Win32 rules switched off: `star*`, `quote"` and `nul` are all created
-// without complaint. Some later operation spells the path without the prefix,
-// and the Win32 layer refuses it, so the conformance run against a Windows
-// host showed create succeeding, readdir listing the entry, and unlink
-// answering ENOENT (EIO for `nul`): a file that can be made and never removed.
-// Docker on a Windows host refuses these names outright, and so does this.
+// Win32 rules switched off, so `star*`, `quote"` and `nul` are created without
+// complaint and then refused by the Win32 layer of some later operation: a
+// file that can be made and never removed (ENOENT, or EIO for `nul`). Docker
+// on a Windows host refuses these names outright, and so does this.
 //
 // The rule is Microsoft's own list for a path component: none of `< > : " | ? *`
 // and no control character; no trailing dot or space; and not a reserved

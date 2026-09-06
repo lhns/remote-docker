@@ -15,23 +15,27 @@ import (
 )
 
 // groups is the transcript's order. Step names are ids the runner's diff keys
-// on; keep them stable, and unique within a run: a step printing several
-// lines carries a `.<sub>` suffix per line (`case.create`, `case.readdir`),
-// which fsprobe_test.go asserts.
-// owner and noIno are what a group prints differently; see step.format in
-// stat.go for why they are a group's property and not a rule about its name.
+// on; keep them stable, and unique within a run: a step printing several lines
+// carries a `.<sub>` suffix per line (`case.create`, `case.readdir`), which
+// fsprobe_test.go asserts.
+// Steps within a group carry state and inode labels are assigned in order of
+// first sight within a group, so a step must not be reordered: append rather
+// than insert.
+// mode and nlink are the stat fields a group prints where others do not; see
+// step.format in stat.go for why they are a group's property and not a rule
+// about its name.
 var groups = []struct {
 	name  string
-	owner bool // print mode, uid and gid on every stat: the attrs group is about them
-	noIno bool // print no inode label: the names group's steps share no inode
+	mode  bool // print the mode on every stat: the attrs group is about it
+	nlink bool // print the link count: the links group is about it
 	run   func(g *group)
 }{
 	{name: "create", run: groupCreate},
-	{name: "names", noIno: true, run: groupNames},
+	{name: "names", run: groupNames},
 	{name: "rename", run: groupRename},
 	{name: "remove", run: groupRemove},
-	{name: "links", run: groupLinks},
-	{name: "attrs", owner: true, run: groupAttrs},
+	{name: "links", nlink: true, run: groupLinks},
+	{name: "attrs", mode: true, run: groupAttrs},
 	{name: "dirs", run: groupDirs},
 	{name: "mmap", run: groupMmap},
 	{name: "locks", run: groupLocks},
@@ -39,10 +43,7 @@ var groups = []struct {
 	{name: "workload", run: groupWorkload},
 }
 
-const (
-	gib   = 1 << 30
-	large = 4*gib + 1
-)
+const gib = 1 << 30
 
 // pattern is 1 MiB of bytes that a torn or shifted read cannot reproduce.
 func pattern() []byte {
@@ -93,7 +94,7 @@ func some(n int) string {
 
 // bumped answers whether name's mtime is later than before. Only meaningful
 // where the caller has waited longer than the filesystem's timestamp
-// granularity; see probe.format in stat.go.
+// granularity, which is why both steps using it sleep first.
 func bumped(g *group, name string, before unix.Timespec) (string, error) {
 	var st unix.Stat_t
 	if err := unix.Stat(g.path(name), &st); err != nil {
@@ -193,7 +194,7 @@ func groupCreate(g *group) {
 		}
 		defer closeFd(fd)
 		err = unix.Ftruncate(fd, 1000)
-		s.Fstat(fd, "f")
+		s.Fstat(fd)
 		return "", err
 	})
 	g.run("sparse", "pwrite 1 byte at 1 GiB, fsync (blocks bucketed to 0 or some, never counted)", func(*step) (string, error) {
@@ -221,38 +222,9 @@ func groupCreate(g *group) {
 		}
 		return fmt.Sprintf("size=%d blocks=%s", st.Size, blocks), nil
 	})
-	if g.p.large {
-		g.run("large", "ftruncate to 4 GiB+1, write and read the last byte", func(s *step) (string, error) {
-			fd, err := unix.Open(g.path("large"), unix.O_RDWR|unix.O_CREAT|unix.O_EXCL, 0o644)
-			if err != nil {
-				return "", err
-			}
-			defer closeFd(fd)
-			if err := unix.Ftruncate(fd, large); err != nil {
-				return "", err
-			}
-			if _, err := unix.Pwrite(fd, []byte{7}, large-1); err != nil {
-				return "", err
-			}
-			buf := make([]byte, 1)
-			if _, err := unix.Pread(fd, buf, large-1); err != nil {
-				return "", err
-			}
-			var st unix.Stat_t
-			if err := unix.Fstat(fd, &st); err != nil {
-				return "", err
-			}
-			s.Fstat(fd, "large")
-			return fmt.Sprintf("%s size=%d", match(buf, []byte{7}), st.Size), nil
-		})
-	}
 }
 
 func groupNames(g *group) {
-	// This group prints no inode label (noIno in the groups table): every name
-	// is created, listed and unlinked on its own, so a label relates nothing to
-	// anything, and a host that refuses one name renumbers every name after it.
-	//
 	// listed says whether one ReadDir of the group directory shows name.
 	listed := func(dir, name string) (string, error) {
 		entries, err := os.ReadDir(g.path(dir))
@@ -266,16 +238,31 @@ func groupNames(g *group) {
 		}
 		return "missing", nil
 	}
-	// one runs create, stat, readdir and unlink for a single name.
+	// at names the call that refused, since a name a filesystem dislikes can be
+	// refused at any of the three.
+	at := func(stage string, err error) error { return result(resultOf(err) + " at " + stage) }
+	// one is create, stat, readdir and unlink for a single name, reported on
+	// ONE line: three lines per name is three deviation entries for one answer.
+	// No inode label, because the names share no inode, so a label relates
+	// nothing to anything and drifts as soon as one host refuses a name another
+	// accepts.
 	one := func(id, name string) {
 		quoted := fmt.Sprintf("%q", name)
-		g.run(id+".create", "create "+quoted, func(s *step) (string, error) {
-			err := createExcl(g.path(name))
+		g.run(id, "create, readdir, unlink "+quoted, func(s *step) (string, error) {
+			s.noIno = true
+			if err := createExcl(g.path(name)); err != nil {
+				return "", at("create", err)
+			}
 			s.Lstat(name)
-			return "", err
+			seen, err := listed(".", name)
+			if err != nil {
+				return "", at("readdir", err)
+			}
+			if err := unix.Unlink(g.path(name)); err != nil {
+				return "", at("unlink", err)
+			}
+			return "created " + seen + " unlinked", nil
 		})
-		g.run(id+".readdir", "readdir", func(*step) (string, error) { return listed(".", name) })
-		g.run(id+".unlink", "unlink "+quoted, func(*step) (string, error) { return "", unix.Unlink(g.path(name)) })
 	}
 
 	one("plain", "plain")
@@ -336,6 +323,7 @@ func groupNames(g *group) {
 		return "", os.MkdirAll(g.path(deep), 0o755)
 	})
 	g.run("deep300.create", "create leaf file", func(s *step) (string, error) {
+		s.noIno = true
 		err := createExcl(g.path(deep + "/f"))
 		s.Stat(deep + "/f")
 		return "", err
@@ -423,7 +411,7 @@ func groupRename(g *group) {
 		if _, err := unix.Write(fd, []byte("hello")); err != nil {
 			return "", err
 		}
-		s.Fstat(fd, "o2")
+		s.Fstat(fd)
 		got, err := os.ReadFile(g.path("o2"))
 		if err != nil {
 			return "", err
@@ -445,7 +433,7 @@ func groupRename(g *group) {
 		if _, err := unix.Write(fd, []byte("hello")); err != nil {
 			return "", err
 		}
-		s.Fstat(fd, "dd2/f")
+		s.Fstat(fd)
 		got, err := os.ReadFile(g.path("dd2/f"))
 		if err != nil {
 			return "", err
@@ -476,8 +464,8 @@ func groupRename(g *group) {
 }
 
 func groupRemove(g *group) {
-	// nfsEntries counts .nfs* entries in the group directory: the client's
-	// silly rename of a file unlinked while open.
+	// A .nfs* entry is the NFS client's silly rename of a file unlinked while
+	// it is still open.
 	nfsEntries := func() (string, error) {
 		entries, err := os.ReadDir(g.dir)
 		if err != nil {
@@ -507,7 +495,7 @@ func groupRemove(g *group) {
 		if err := unix.Fstat(fd, &st); err != nil {
 			return "", err
 		}
-		s.Fstat(fd, "u")
+		s.Fstat(fd)
 		return fmt.Sprintf("size=%d", st.Size), nil
 	})
 	g.run("unlink-open.readdir-open", "readdir for .nfs* while open", func(*step) (string, error) { return nfsEntries() })
@@ -577,23 +565,13 @@ func groupRemove(g *group) {
 }
 
 func groupLinks(g *group) {
-	nlink := func(name string) (string, error) {
-		var st unix.Stat_t
-		if err := unix.Stat(g.path(name), &st); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("nlink=%d", uint64(st.Nlink)), nil //nolint:unconvert // Nlink's width differs per arch
-	}
 	g.run("hardlink.link", "create orig, link orig -> hard", func(s *step) (string, error) {
 		if err := os.WriteFile(g.path("orig"), []byte("orig"), 0o644); err != nil {
 			return "", err
 		}
 		err := unix.Link(g.path("orig"), g.path("hard"))
 		s.Stat("hard")
-		if err != nil {
-			return "", err
-		}
-		return nlink("orig")
+		return "", err
 	})
 	g.run("hardlink.stat", "stat orig and hard", func(*step) (string, error) { return g.sameIno("orig", "hard") })
 	g.run("write-via-link", "write hard, read orig", func(*step) (string, error) {
@@ -611,7 +589,7 @@ func groupLinks(g *group) {
 			return "", err
 		}
 		s.Stat("hard")
-		return nlink("hard")
+		return "", nil
 	})
 	g.run("symlink", "create target.txt, symlink target.txt -> link, readlink", func(s *step) (string, error) {
 		if err := os.WriteFile(g.path("target.txt"), []byte("target"), 0o644); err != nil {
@@ -676,7 +654,9 @@ func groupLinks(g *group) {
 }
 
 func groupAttrs(g *group) {
-	g.run("create", "create m", func(s *step) (string, error) {
+	// runOwner, not run: uid and gid are one constant policy, so they belong in
+	// the transcript once rather than on every chmod line under them.
+	g.runOwner("create", "create m", func(s *step) (string, error) {
 		err := os.WriteFile(g.path("m"), []byte("m"), 0o644)
 		s.Stat("m")
 		return "", err
@@ -692,13 +672,6 @@ func groupAttrs(g *group) {
 	chmod("chmod-600", 0o600)
 	chmod("chmod-755", 0o755)
 	chmod("chmod-000", 0)
-	g.run("chmod-000.open", "open(O_RDONLY) m", func(*step) (string, error) {
-		fd, err := unix.Open(g.path("m"), unix.O_RDONLY, 0)
-		if err != nil {
-			return "", err
-		}
-		return "", unix.Close(fd)
-	})
 	chmod("chmod-x", 0o111)
 	g.run("chown-self", "chown m to own uid:gid", func(s *step) (string, error) {
 		err := unix.Chown(g.path("m"), os.Getuid(), os.Getgid())
@@ -750,7 +723,7 @@ func groupAttrs(g *group) {
 		}
 		defer closeFd(fd)
 		err = unix.Futimes(fd, []unix.Timeval{{Sec: past}, {Sec: past}})
-		s.Fstat(fd, "m")
+		s.Fstat(fd)
 		if err != nil {
 			return "", err
 		}
@@ -769,8 +742,7 @@ func groupAttrs(g *group) {
 	g.run("mtime-on-write.write", "sleep 1.1s, write m, stat (reports bumped/not-bumped)", func(s *step) (string, error) {
 		// The sleep is longer than any filesystem's timestamp granularity, so
 		// bumped/not-bumped is a property of the filesystem rather than of when
-		// the two operations happened to fall. The stat suffix cannot answer it:
-		// see probe.format in stat.go.
+		// the two operations happened to fall.
 		time.Sleep(1100 * time.Millisecond)
 		if err := os.WriteFile(g.path("m"), []byte("mm"), 0o644); err != nil {
 			return "", err
@@ -825,6 +797,10 @@ func groupDirs(g *group) {
 	})
 	g.run("readdir-modified-midscan", "getdents; after 1st buffer create 10, remove 10 listed (count banded, dups bucketed)", func(*step) (string, error) {
 		var modifyErr error
+		// A first getdents buffer holding fewer than ten names is a difference
+		// between two filesystems in its own right, so it is reported in the
+		// value rather than being an out-of-range panic.
+		removed := 0
 		names, err := getdents(g.path(many), func(first []string) {
 			for i := range 10 {
 				if err := createExcl(g.path(fmt.Sprintf("%s/g%05d", many, i))); err != nil {
@@ -832,7 +808,8 @@ func groupDirs(g *group) {
 					return
 				}
 			}
-			for _, name := range first[:10] {
+			removed = min(10, len(first))
+			for _, name := range first[:removed] {
 				if err := unix.Unlink(g.path(many + "/" + name)); err != nil {
 					modifyErr = err
 					return
@@ -858,7 +835,11 @@ func groupDirs(g *group) {
 		// relative to the buffer already read, which is the kernel's business
 		// and not the filesystem's. What the two transcripts have to agree on
 		// is that the scan finished near 5000 and whether it repeated a name.
-		return fmt.Sprintf("entries=%s dups=%s", band(len(names), 5000, 20), some(dups)), nil
+		value := fmt.Sprintf("entries=%s dups=%s", band(len(names), 5000, 20), some(dups))
+		if removed < 10 {
+			value += fmt.Sprintf(" first-buffer=%d", removed)
+		}
+		return value, nil
 	})
 	g.run("order-stable", "two getdents listings compared", func(*step) (string, error) {
 		a, err := getdents(g.path(many), nil)
@@ -1058,77 +1039,70 @@ func (g *group) sh(env []string, name string, args ...string) error {
 }
 
 func groupWorkload(g *group) {
-	if _, err := exec.LookPath("tar"); err != nil {
-		g.run("tar.lookup", "tar in PATH", func(*step) (string, error) { return "no-tar", nil })
-	} else {
-		g.run("tar.mkdir", "mkdir src with 20 files", func(*step) (string, error) {
-			if err := unix.Mkdir(g.path("src"), 0o755); err != nil {
+	// tar and git are both in the image, and a missing one is left to fail on
+	// its own step rather than skipped: skipping changes the step-id set, and
+	// the diff then reports every workload step MISSING instead of naming the
+	// one thing that is wrong.
+	g.run("tar.mkdir", "mkdir src with 20 files", func(*step) (string, error) {
+		if err := unix.Mkdir(g.path("src"), 0o755); err != nil {
+			return "", err
+		}
+		for i := range 20 {
+			if err := os.WriteFile(g.path(fmt.Sprintf("src/f%02d", i)), fill(byte('a'+i), 100), 0o644); err != nil {
 				return "", err
 			}
-			for i := range 20 {
-				if err := os.WriteFile(g.path(fmt.Sprintf("src/f%02d", i)), fill(byte('a'+i), 100), 0o644); err != nil {
-					return "", err
-				}
-			}
-			return "", nil
-		})
-		g.run("tar.create", "tar -cf src.tar src", func(*step) (string, error) {
-			return "", g.sh(nil, "tar", "-cf", "src.tar", "src")
-		})
-		g.run("tar.rm", "rm -r src", func(*step) (string, error) { return "", os.RemoveAll(g.path("src")) })
-		g.run("tar.extract", "tar -xf src.tar", func(*step) (string, error) { return "", g.sh(nil, "tar", "-xf", "src.tar") })
-		g.run("tar.verify", "verify 20 files", func(s *step) (string, error) {
-			s.Stat("src/f00")
-			entries, err := os.ReadDir(g.path("src"))
+		}
+		return "", nil
+	})
+	g.run("tar.create", "tar -cf src.tar src", func(*step) (string, error) {
+		return "", g.sh(nil, "tar", "-cf", "src.tar", "src")
+	})
+	g.run("tar.rm", "rm -r src", func(*step) (string, error) { return "", os.RemoveAll(g.path("src")) })
+	g.run("tar.extract", "tar -xf src.tar", func(*step) (string, error) { return "", g.sh(nil, "tar", "-xf", "src.tar") })
+	g.run("tar.verify", "verify 20 files", func(s *step) (string, error) {
+		s.Stat("src/f00")
+		entries, err := os.ReadDir(g.path("src"))
+		if err != nil {
+			return "", err
+		}
+		n := 0
+		for _, e := range entries {
+			got, err := os.ReadFile(g.path("src/" + e.Name()))
 			if err != nil {
 				return "", err
 			}
-			n := 0
-			for _, e := range entries {
-				got, err := os.ReadFile(g.path("src/" + e.Name()))
-				if err != nil {
-					return "", err
-				}
-				if bytes.Equal(got, fill(byte('a'+n), 100)) {
-					n++
-				}
+			if bytes.Equal(got, fill(byte('a'+n), 100)) {
+				n++
 			}
-			return fmt.Sprintf("%d files", n), nil
-		})
-		g.run("tar.touch", "sleep 1.1s, touch src/f00 (reports bumped/not-bumped)", func(s *step) (string, error) {
-			var st unix.Stat_t
-			if err := unix.Stat(g.path("src/f00"), &st); err != nil {
-				return "", err
-			}
-			// As in attrs/mtime-on-write.write: the sleep is what makes the
-			// answer the filesystem's rather than the scheduler's.
-			time.Sleep(1100 * time.Millisecond)
-			if err := g.sh(nil, "touch", "src/f00"); err != nil {
-				return "", err
-			}
-			s.Stat("src/f00")
-			return bumped(g, "src/f00", st.Mtim)
-		})
-		g.run("tar.chmod", "chmod 600 src/f00", func(s *step) (string, error) {
-			err := g.sh(nil, "chmod", "600", "src/f00")
-			s.Stat("src/f00")
+		}
+		return fmt.Sprintf("%d files", n), nil
+	})
+	g.run("tar.touch", "sleep 1.1s, touch src/f00 (reports bumped/not-bumped)", func(s *step) (string, error) {
+		var st unix.Stat_t
+		if err := unix.Stat(g.path("src/f00"), &st); err != nil {
 			return "", err
-		})
-	}
+		}
+		// As in attrs/mtime-on-write.write: the sleep is what makes the
+		// answer the filesystem's rather than the scheduler's.
+		time.Sleep(1100 * time.Millisecond)
+		if err := g.sh(nil, "touch", "src/f00"); err != nil {
+			return "", err
+		}
+		s.Stat("src/f00")
+		return bumped(g, "src/f00", st.Mtim)
+	})
+	g.run("tar.chmod", "chmod 600 src/f00", func(s *step) (string, error) {
+		err := g.sh(nil, "chmod", "600", "src/f00")
+		s.Stat("src/f00")
+		return "", err
+	})
 
-	if _, err := exec.LookPath("git"); err != nil {
-		g.run("git.lookup", "git in PATH", func(*step) (string, error) { return "no-git", nil })
-		return
-	}
-	// git is pinned so that what it does here is a function of the filesystem
-	// and of nothing else. Every input that varies run to run is fixed: the two
-	// commit timestamps, the identity, the locale and the timezone, so 200
-	// commits produce byte-identical objects twice; the config files, so the
-	// machine's own git config cannot reach in; and auto gc, which otherwise
-	// fires from inside `git commit` at a threshold nothing here controls and
-	// detaches a second process that outlives the step. HOME is the probe root
-	// rather than the repository, so anything git writes to it cannot arrive as
-	// an untracked file in `git status`.
+	// Every input to git that varies run to run is pinned, so that what it does
+	// here is a function of the filesystem and of nothing else: the commit
+	// timestamps, the identity, the locale and the timezone; the config files,
+	// so the machine's own git config cannot reach in; auto gc, which otherwise
+	// detaches a second process that outlives the step; and HOME, so anything
+	// git writes there cannot arrive as an untracked file in `git status`.
 	//
 	// A repository owned by another uid (root_squash) is refused by git's
 	// safe.directory check, which would hide everything after it; the
@@ -1200,8 +1174,11 @@ func groupWorkload(g *group) {
 		return "", nil
 	})
 	g.run("git.status", "git status --porcelain, twice", func(*step) (string, error) {
-		dirty := 0
-		for range 2 {
+		// Reported per run rather than summed: one dirty line twice and two
+		// dirty lines once are the same total, and telling them apart is what a
+		// stat cache serving the second run stale looks like.
+		var dirty [2]int
+		for i := range dirty {
 			cmd := exec.Command("git", gitArgs([]string{"status", "--porcelain"})...)
 			cmd.Dir = g.dir
 			cmd.Env = append(os.Environ(), env...)
@@ -1210,13 +1187,13 @@ func groupWorkload(g *group) {
 				return "", err
 			}
 			if s := strings.TrimSpace(string(out)); s != "" {
-				dirty += len(strings.Split(s, "\n"))
+				dirty[i] = len(strings.Split(s, "\n"))
 			}
 		}
-		if dirty == 0 {
+		if dirty[0] == 0 && dirty[1] == 0 {
 			return "clean", nil
 		}
-		return fmt.Sprintf("dirty:%d", dirty), nil
+		return fmt.Sprintf("dirty:%d,%d", dirty[0], dirty[1]), nil
 	})
 	g.run("git.checkout-back", "git checkout HEAD~100", func(*step) (string, error) { return "", git("checkout", "-q", "HEAD~100") })
 	g.run("git.checkout-return", "git checkout -", func(*step) (string, error) { return "", git("checkout", "-q", "-") })

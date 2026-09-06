@@ -1,82 +1,12 @@
 # Where a share is allowed to differ from a native bind mount, on Linux.
 #
-# test/fs-conformance/diff.sh reads this file. Every line that is not blank
-# and does not start with `#` is one SHARE-side transcript line, verbatim, as
-# fsprobe printed it when run against a share:
+# One share-side transcript line per entry, verbatim, with a `# reason
+# (pointer)` comment above it; a comment covers every entry until a blank
+# line, so one class of deviation is one comment and a block. An unexplained
+# difference fails the build, and so does an entry no run observes any more,
+# which is what keeps this file true. Copy an entry from the
+# suggested-deviations.txt that a failing run leaves beside its report;
+# test/fs-conformance/diff.sh has the rest.
 #
-#     <group>/<step>: <op> -> <result> [<stat>]
-#
-# A step whose share line differs from the native one is fine only if the
-# share line is in here. The line directly ABOVE each entry is a comment that
-# gives the reason and a pointer -- the ADR that decided it, or the README
-# caveat that documents it -- in the form
-#
-#     # <reason> (<pointer>)
-#     <share-side transcript line>
-#
-# An entry with no reason above it is warned about; an entry no run observes
-# any more is STALE and fails, so this file cannot silently outlive the
-# behaviour it excuses. Never hand-predict a line: diff.sh writes
-# suggested-deviations.txt beside its report with the exact share lines it
-# could not explain, and that file is what an entry is copied from.
-#
-# mode, uid and gid appear on the attrs group's lines and on create/create
-# only (step.format in test/probes/fsprobe/stat.go), so the one ownership
-# policy is compared once per run instead of on every stat line. The share
-# synthesises 0666 for a file and adds 0111 where the real file is executable
-# (nfsserve/attrs.go), which is why the modes below stop changing after
-# attrs/chmod-x leaves the file executable.
+# Empty until the run after the transcript changed shape.
 
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-create/create: open(O_CREAT|O_EXCL) f -> ok [file ino#1 nlink=1 size=0 mode=0666 uid=10000 gid=10000 mtime=new]
-
-# NFS silly-rename: the client renames a file unlinked while open, so the name
-# still exists and nlink stays 1 where a native unlink drops it to 0
-remove/unlink-open.write: write 100 bytes via fd, fstat -> ok:size=100 [file ino#1 nlink=1 size=100 mtime=new]
-
-# NFS silly-rename: the client keeps a .nfs* name for a file unlinked while open
-remove/unlink-open.readdir-open: readdir for .nfs* while open -> ok:sillyrename
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/create: create m -> ok [file ino#1 nlink=1 size=1 mode=0666 uid=10000 gid=10000 mtime=new]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/chmod-644.chmod: chmod 0644 m -> ok [file ino#1 nlink=1 size=1 mode=0666 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/chmod-600.chmod: chmod 0600 m -> ok [file ino#1 nlink=1 size=1 mode=0666 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046); the
-# real file is now executable, so the synthesised mode carries 0111
-attrs/chmod-755.chmod: chmod 0755 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/chmod-000.chmod: chmod 0000 m -> ok [file ino#1 nlink=1 size=1 mode=0666 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046); the
-# real file is executable from here on, so the synthesised mode carries 0111
-attrs/chmod-x.chmod: chmod 0111 m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/chown-self: chown m to own uid:gid -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046); chown is accepted and dropped
-attrs/chown-other: chown m to 1234:1234 -> ok:uid=10000 [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016)
-attrs/utime-path: utimensat m to epoch 1000000000 -> ok:ignored [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016)
-attrs/futimens-fd: touch m to now, futimes fd to epoch 1000000000 -> ok:ignored [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/mtime-on-write.stat: stat m -> ok [file ino#1 nlink=1 size=1 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046)
-attrs/mtime-on-write.write: sleep 1.1s, write m, stat (reports bumped/not-bumped) -> ok:bumped [file ino#1 nlink=1 size=2 mode=0777 uid=10000 gid=10000 mtime=not-older]
-
-# Chtimes is accepted and dropped; applying it loops with the watcher's replay (ADR 0016); touch(1) sets the time and nothing else, so nothing is bumped
-workload/tar.touch: sleep 1.1s, touch src/f00 (reports bumped/not-bumped) -> ok:not-bumped [file ino#1 nlink=1 size=100 mtime=not-older]
-
-# a share reports the workspace account as owner with wide bits (ADR 0046), so git's safe.directory check sees a foreign owner
-workload/git.owner: owner of the directory -> ok:foreign

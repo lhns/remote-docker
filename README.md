@@ -887,23 +887,34 @@ docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
 
 ### What differs from a bind mount
 
-Measured, not assumed: `test/probes/fsprobe` runs one fixed sequence of
-filesystem operations inside a container against a plain bind mount on the
-runner and against a share from a Linux and from a Windows client, and CI
-fails on any difference not listed with a reason in
-`test/fs-conformance/deviations-*.txt`. What is listed today:
+`test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
+a container against a plain bind mount on the runner and against a share from a
+Linux and from a Windows client, and CI fails on any difference not listed with
+a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
 
 | behaviour | on a share | why |
 |---|---|---|
-| owner and mode | every file is the workspace account's, `0666`/`0777` | ADR 0046 |
+| owner and mode | every file is the workspace account's; a file reads back `0666`, plus `0111` where the real file is executable, and always `0777` from a Windows host, where there is no execute bit to preserve | ADR 0046, `Attrs.AlwaysExecutable` |
 | `chown` | accepted, changes nothing | ownership is synthesised |
-| `utime`, `touch -d` | accepted, changes nothing; `tar` and `cp -p` leave files with the current time | the watcher replays a SETATTR to invalidate, and applying one looped |
-| `chmod` | applied on this machine with the owner's read and write kept | the share is served as that owner |
+| `utime`, `touch -d` | accepted, changes nothing: every SETATTR of times is dropped, so a `touch` does not move a file's mtime | the watcher replays a SETATTR to invalidate, and applying one looped |
+| `chmod` | reaches the file on this machine, with the owner's read and write forced on; the mode read back is still the synthesised one, so the execute bit on a Linux host is all a container can observe | the share is served as that owner |
+| `git` in a container | a repository on a share is refused as "detected dubious ownership" unless `safe.directory` is set | the share reports the workspace account as owner |
 | unlink of an open file | a `.nfs*` entry until the last close | NFS silly-rename |
-| a directory listing | a snapshot; entries created or removed during a scan appear next scan | NFSv3 READDIR cookies |
 | Windows host: case | `a` and `A` are one file | NTFS is case-insensitive |
-| Windows host: names | `< > : " \| ? *`, a trailing dot or space, and `CON`, `NUL`, `AUX`, `COMn`, `LPTn` are refused with EINVAL | NTFS cannot spell them; native Docker refuses them too |
+| Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |
 | Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
+| Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
+| Windows host: a directory | `nlink=1` and `size=0`, where a Linux host reports two links or more and one block | NTFS counts no link per subdirectory and no size for a directory |
+
+Everything else the probe does behaves as on a bind mount, which is most of it:
+`flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads
+and writes, two processes appending with `O_APPEND` without a torn line, eight
+processes creating in one directory, sparse files, rename in every form
+including over an existing file and while the file is open, hard links, and a
+git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
+`fsck`. Two things this does not answer: a file over 4 GiB, whose step CI does
+not run, and Unicode normalisation, so whether a name written NFD comes back
+NFC is unknown.
 
 ### What cannot be bind mounted
 
@@ -1019,7 +1030,8 @@ push. **macOS has never been executed at all**, in CI or anywhere else.
 **A Windows client is exercised end to end on every pull request**
 (`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
 non-root mkdir and the conformance probe), on one runner image; nobody
-working on this has WSL on their own machine. Swarm itself needs a real cluster and CI cannot cover it.
+working on this has WSL on their own machine. Swarm itself needs a real
+cluster and CI cannot cover it.
 **Android is built and inspected, and CI runs nothing on it**: it checks that
 the binary is loadable on a phone and links the system libc, which is what makes
 DNS work there. A session and a container were confirmed by hand from Termux on

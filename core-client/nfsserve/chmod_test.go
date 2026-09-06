@@ -97,11 +97,7 @@ func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 }
 
 // A chmod that drops the owner's write bit must not take the share's own
-// ability to write with it. The file server runs as the file's owner, so a
-// chmod 0111 applied literally made every later WRITE fail with EACCES, where
-// the same chmod against a bind mount served by root changes nothing. The
-// owner's rw bits are kept on the host; what the container sees is
-// synthesised either way.
+// ability to write with it. See attrChange.Chmod.
 func TestChmodThroughTheShareKeepsTheFileWritable(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)

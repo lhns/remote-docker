@@ -13,8 +13,9 @@ name: machine
 #
 # Hyper-V gets no job at all. The runners do not offer it, and
 # docs/testing-machines.md is the whole of its verification.
+#
 # Every pull request, not only those touching the backend: the Windows client
-# is where both share bugs of 2026-09-04 showed, so every PR meets it.
+# is the one in CI, so every PR meets it.
 on:
   pull_request:
   workflow_dispatch:
@@ -27,10 +28,12 @@ jobs:
   # short: what gets installed into the machine is the artifact CI already
   # builds and tests on every push, and no package manager runs anywhere.
   rootfs:
-    name: export the workspace image as a rootfs
+    name: export the workspace image as a rootfs and record the probe oracle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-go
 
       - name: build the workspace image
         run: docker build -t rd-workspace:ci -f image/Dockerfile .
@@ -46,42 +49,35 @@ jobs:
           docker rm "$id"
           ls -lh rootfs.tar.gz
 
+      # The filesystem conformance probe and its oracle. The probe is one
+      # static Linux binary that walks a directory through every operation a
+      # build tool uses and prints what happened; run against the runner's own
+      # disk it is the oracle, and the wsl job runs the same image against a
+      # share backed by an NTFS directory and diffs the two transcripts.
+      #
+      # build_probe from test/lib.sh, so the recipe for a probe binary lives in
+      # one place and this cannot drift from what test/fs-conformance.sh runs.
+      - name: build the probe image and run the oracle
+        run: |
+          set -eux
+          REPO=$PWD
+          . test/lib.sh
+          build_probe fsprobe "$PWD/fsprobe"
+          mkdir -p ctx
+          cp test/fs-conformance/Dockerfile fsprobe ctx/
+          docker build -t fsprobe:ci ctx
+          mkdir -p native
+          docker run --rm -v "$PWD/native:/w" fsprobe:ci /w > transcript-native.txt
+          wc -l transcript-native.txt
+          docker save fsprobe:ci | gzip > fsprobe.tar.gz
+          ls -lh fsprobe.tar.gz
+
       - uses: actions/upload-artifact@v7
         with:
           name: workspace-rootfs
           path: rootfs.tar.gz
           if-no-files-found: error
           retention-days: 1
-
-  # The filesystem conformance probe and its oracle. The probe is one static
-  # Linux binary that walks a directory through every operation a build tool
-  # uses and prints what happened; run against the runner's own disk it is
-  # the oracle, and the Windows job runs the same image against a share backed
-  # by an NTFS directory and diffs the two transcripts.
-  probe:
-    name: build the filesystem probe and record the oracle
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: ./.github/actions/setup-go
-
-      - name: build the probe
-        run: |
-          set -eux
-          (cd test/probes && CGO_ENABLED=0 GOOS=linux go build -o ../../fsprobe ./fsprobe)
-          mkdir -p ctx
-          cp test/fs-conformance/Dockerfile fsprobe ctx/
-          docker build -t fsprobe:ci ctx
-
-      - name: run the oracle, on the runner's own disk
-        run: |
-          set -eux
-          mkdir -p native
-          docker run --rm -v "$PWD/native:/w" fsprobe:ci /w > transcript-native.txt
-          wc -l transcript-native.txt
-          docker save fsprobe:ci | gzip > fsprobe.tar.gz
-          ls -lh fsprobe.tar.gz
 
       - uses: actions/upload-artifact@v7
         with:
@@ -100,11 +96,10 @@ jobs:
   wsl:
     name: a machine on wsl
     runs-on: windows-latest
-    needs: [rootfs, probe]
+    needs: rootfs
     # Fifty, not thirty: creating a machine, importing the rootfs, an idle
     # disconnect with its three-minute wait and the conformance probe's five
-    # thousand files over the share do not fit, and the job was cancelled
-    # mid-run (2026-09-05).
+    # thousand files over the share do not fit in thirty.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7

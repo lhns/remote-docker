@@ -949,9 +949,12 @@ function was.
   least certain part, named in the runbook, is whether Flatcar's Hyper-V image
   reads the Ignition config from where `Create` writes it. This is the
   strongest entry on this list: WSL at least runs on a runner.
-- **WSL beyond one runner image.** `machine.yml` runs the backend end to end on
-  windows-latest, which is real coverage and is one Windows version on one
-  image. Nobody working on this has WSL on their own machine.
+- **Windows and WSL beyond one runner image.** `machine.yml` takes a session
+  end to end on windows-latest against a WSL workspace, which is one Windows
+  version, one runner image and one WSL kernel; nobody working on this has WSL
+  on their own machine, so no other Windows build or distribution has ever run
+  it. Everything else on Windows is unit tests: say "unit tested on Windows",
+  never "the Windows client is tested".
 - **macOS, entirely.** Cross-compiled on every push, executed never -- no test
   of any kind has run on it. The endpoint code and the fswatch backend are
   where it genuinely diverges, and the kqueue backend (one fd per *file*) is
@@ -962,14 +965,9 @@ function was.
   arm64 has ever been on a device. Say what was actually done, which is that a
   phone reached a workspace over wss and ran a container, by hand, on
   2026-08-14. `android_amd64` has never been executed by anyone.
-- **Windows, beyond one runner image.** `machine.yml` runs the client on
-  windows-latest against a WSL workspace on every pull request: a bind mount,
-  GNU tar with attributes, a non-root mkdir and the conformance probe
-  (`test/probes/fsprobe`, diffed against a native bind mount). That is one
-  Windows version on one image; nobody working on this has WSL on their own
-  machine. `test (windows)` runs the client and shared modules' unit tests,
-  which is where the NFS server's model, spelling and paging tests run
-  against NTFS.
+- **A share against a file over 4 GiB, and Unicode normalisation.**
+  `test/probes/fsprobe` has the large-file step and CI does not run it; nothing
+  anywhere asks whether a name written NFD comes back NFC.
 - **Installing a release.** The pipeline itself now HAS run: `v0.1.0` is tagged
   and published with ten archives, client and agent, for every target the
   matrix builds. What has never happened is somebody downloading one and

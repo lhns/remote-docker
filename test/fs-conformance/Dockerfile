@@ -5,8 +5,10 @@
 #
 # The build context is assembled by test/fs-conformance.sh: this file beside
 # the fsprobe binary that test/lib.sh's build_probe made. git and GNU tar are
-# here for the workloads a later step adds (pjdfstest, fsx); the probe itself
-# needs nothing.
+# what the probe's own tar and git groups run: without them those groups
+# report `no-tar` / `no-git` on one side, which is a difference in the image
+# rather than in the mount. ca-certificates is for git over https, which no
+# group uses yet.
 FROM debian:stable-slim
 
 RUN apt-get update \

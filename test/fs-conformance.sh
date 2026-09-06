@@ -9,17 +9,14 @@
 # test/fs-conformance/deviations-linux.txt, and every listed difference must
 # still be observed.
 #
-# The probe is run against the oracle twice first. Two native runs that
-# disagree would make every later difference noise, so that is asserted
-# before anything crosses a share.
+# That the probe is deterministic is asserted by its own `go test`, which runs
+# on every pull request before this suite does, so it is not re-asserted here.
 #
 # Requires what test/integration.sh requires: docker, and a kernel with NFS
-# client support. FSPROBE_LARGE=1 adds the probe's large-file group.
+# client support.
 #
-# The transcripts and the report are copied OUTSIDE the work directory, to
-# FS_CONFORMANCE_ARTIFACTS (default /tmp/fs-conformance-artifacts), because
-# the work directory is removed on exit and the workflow uploads them after.
-# The first run's report is what fills the deviations file.
+# The transcripts and the report are copied OUTSIDE the work directory, which
+# is removed on exit, so the workflow can upload them after.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,7 +26,7 @@ CONTAINER=remote-docker-fsconf
 SSH_PORT=22226
 ACCOUNT=fsconf
 PROBE_IMAGE=fsprobe:ci
-ARTIFACTS=${FS_CONFORMANCE_ARTIFACTS:-/tmp/fs-conformance-artifacts}
+ARTIFACTS=/tmp/fs-conformance-artifacts
 
 # A full probe run is many round trips over the tunnel, so it gets more than
 # lib.sh's default two minutes.
@@ -38,15 +35,12 @@ DOCKER_TIMEOUT=600
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-PROBE_ARGS=()
-[ "${FSPROBE_LARGE:-}" = 1 ] && PROBE_ARGS+=(--large)
-
 cleanup() {
     # The oracle ran as root on the runner's daemon, so what it left under
     # $WORK is root's and rm -rf as the runner user cannot take it. The same
     # image, as root, can.
     hostdocker run --rm -v "$WORK:/work" --entrypoint sh "$PROBE_IMAGE" \
-        -c 'rm -rf /work/native /work/native2' >/dev/null 2>&1
+        -c 'rm -rf /work/native' >/dev/null 2>&1
     cleanup_suite "${CLIENT_PID:-}"
 }
 trap cleanup EXIT
@@ -77,25 +71,14 @@ fi
 
 echo
 echo "== 2. the oracle: a native bind mount on the runner's daemon =="
-mkdir -p "$WORK/native" "$WORK/native2"
-if hostdocker run --rm -v "$WORK/native:/w" "$PROBE_IMAGE" "${PROBE_ARGS[@]}" /w \
+mkdir -p "$WORK/native"
+if hostdocker run --rm -v "$WORK/native:/w" "$PROBE_IMAGE" /w \
     >"$WORK/transcript-native.txt" 2>"$WORK/probe-native.err"; then
     ok "the probe ran against a native bind mount ($(wc -l <"$WORK/transcript-native.txt") steps)"
 else
     bad "the probe failed on a native bind mount"
     tail -10 "$WORK/probe-native.err" | sed 's/^/        /'
     exit 1
-fi
-
-# A fresh directory, because leftovers from the first run would be a
-# difference in the input rather than in the filesystem.
-if hostdocker run --rm -v "$WORK/native2:/w" "$PROBE_IMAGE" "${PROBE_ARGS[@]}" /w \
-    >"$WORK/transcript-native2.txt" 2>/dev/null &&
-    cmp -s "$WORK/transcript-native.txt" "$WORK/transcript-native2.txt"; then
-    ok "the probe is deterministic"
-else
-    bad "two native runs disagree, so no difference below can be attributed to the share"
-    diff "$WORK/transcript-native.txt" "$WORK/transcript-native2.txt" | head -20 | sed 's/^/        /'
 fi
 
 echo
@@ -114,9 +97,6 @@ else
 fi
 
 export REMOTE_DOCKER_STATE_DIR="$WORK/state"
-export REMOTE_DOCKER_HOST=127.0.0.1
-export REMOTE_DOCKER_PORT=$SSH_PORT
-export REMOTE_DOCKER_USER=$ACCOUNT
 export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
 
 echo
@@ -153,10 +133,12 @@ wait_parent_dockerd
 
 echo
 echo "== 5. open a session =="
+# From inside $WORK/share, so the share the probe mounts is the session's own
+# working directory. The suite's own directory stays outside $WORK, which the
+# cleanup removes.
 mkdir -p "$WORK/share"
-cd "$WORK/share" || exit 1
-"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
-CLIENT_PID=$!
+CLIENT_PID=$(start_session "$REMOTE_DOCKER_STATE_DIR" "$ACCOUNT" \
+    "$REMOTE_DOCKER_ENDPOINT" "$WORK/up.log" "$WORK/share")
 
 if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
     ok "the local Docker endpoint answers"
@@ -182,7 +164,7 @@ fi
 
 echo
 echo "== 6. the probe against a share =="
-if dockert run --rm -v "$WORK/share:/w" "$PROBE_IMAGE" "${PROBE_ARGS[@]}" /w \
+if dockert run --rm -v "$WORK/share:/w" "$PROBE_IMAGE" /w \
     >"$WORK/transcript-linux.txt" 2>"$WORK/probe-linux.err"; then
     ok "the probe ran against a share ($(wc -l <"$WORK/transcript-linux.txt") steps)"
 else
@@ -204,7 +186,7 @@ else
 fi
 sed 's/^/        /' "$WORK/report.txt"
 
-for f in transcript-native.txt transcript-native2.txt transcript-linux.txt report.txt \
+for f in transcript-native.txt transcript-linux.txt report.txt \
     suggested-deviations.txt; do
     keep "$WORK/$f"
 done

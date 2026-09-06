@@ -5,30 +5,27 @@
 #   diff.sh <native> <share> <deviations>
 #
 # A step id is the text before the first `: ` on a line: `<group>/<step>`,
-# with a `.<sub>` suffix on a step that prints several lines. fsprobe gives
-# every line its own, so a repeated id is a probe bug and is warned about.
-# For each id present in both transcripts: identical is fine; different is EXPLAINED if the
-# share's line appears verbatim in the deviations file and UNEXPLAINED if not.
-# A deviations entry that no step needed is STALE. A step in one transcript
-# and not the other is MISSING. Unexplained, stale or missing exits 1.
+# with a `.<sub>` suffix on a step that prints several lines.
 #
-# The deviations file: blank lines and `#` lines are comments, everything
-# else is a share-side transcript line. The line above an entry is expected
-# to be a `# reason (pointer)` comment; one without it is warned about and
-# not failed, because the report is what somebody fills the file from.
+# For each id present in both transcripts, one of three outcomes:
+#   identical    fine.
+#   different    EXPLAINED if the share's line appears verbatim in the
+#                deviations file, UNEXPLAINED if not.
+#   in one only  MISSING.
+# A deviations entry that no step needed is STALE. Unexplained, stale or
+# missing exits 1.
 #
-# The report prints the counts first, then the unexplained steps as
-# `native:` / `share:` pairs, then the stale entries, then the missing steps,
-# and last the ids of the unexplained steps on their own, one per line, to be
-# copied into the deviations file without the stat noise.
+# The deviations file: blank lines and `#` lines are comments, everything else
+# is a share-side transcript line. A `# reason (pointer)` comment covers every
+# entry under it until the next blank line, so a class of deviations is one
+# comment and a block. An entry with no comment above its block is warned
+# about and not failed, because the report is what somebody fills the file
+# from.
 #
-# Where there is anything to fix, `suggested-deviations.txt` is written beside
-# the share transcript, which is where the report lands too. It holds the
-# unexplained share lines VERBATIM, each under a `# TODO reason (pointer)`
-# line, and the stale entries commented out. An entry is copied from there and
-# never typed: thirteen of seventeen hand-predicted entries came back stale on
-# the first real run, every one of them because the predicted text was not
-# what the probe printed.
+# An entry is COPIED from `suggested-deviations.txt`, written beside the share
+# transcript, and never typed: it holds the unexplained share lines verbatim
+# under `# TODO` lines, and the stale entries commented out. The report's own
+# pairs carry a `share:  ` prefix and are not pasteable.
 set -uo pipefail
 
 if [ $# -ne 3 ]; then
@@ -59,7 +56,7 @@ function stepid(line,    i) {
 
 FILENAME == native {
     id = stepid($0)
-    if (id == "") { unparsed++; next }
+    if (id == "") next
     if (id in nat) warn[++nwarn] = "native names step " id " twice"
     else norder[++nn] = id
     nat[id] = $0
@@ -68,18 +65,19 @@ FILENAME == native {
 
 FILENAME == share {
     id = stepid($0)
-    if (id == "") { unparsed++; next }
+    if (id == "") next
     if (id in shr) warn[++nwarn] = "share names step " id " twice"
     else sorder[++ns] = id
     shr[id] = $0
     next
 }
 
+# A comment opens a block and a blank line closes it, so consecutive entries
+# under one comment are all covered by it.
 FILENAME == deviations {
-    if ($0 ~ /^[[:space:]]*$/) { prev_comment = 0; next }
-    if ($0 ~ /^#/) { prev_comment = 1; next }
-    if (!prev_comment) warn[++nwarn] = "deviation on line " FNR " has no # reason comment above it: " $0
-    prev_comment = 0
+    if ($0 ~ /^[[:space:]]*$/) { in_block = 0; next }
+    if ($0 ~ /^#/) { in_block = 1; next }
+    if (!in_block) warn[++nwarn] = "deviation on line " FNR " has no # reason comment above it: " $0
     if ($0 in dev) warn[++nwarn] = "deviation on line " FNR " is listed twice"
     else dorder[++nd] = $0
     dev[$0] = FNR
@@ -91,35 +89,35 @@ END {
         id = norder[i]
         if (!(id in shr)) { missing[++nmissing] = "in native only: " nat[id]; continue }
         compared++
-        if (nat[id] == shr[id]) { same++; continue }
+        if (nat[id] == shr[id]) continue
         differ++
-        if (shr[id] in dev) { explained++; used[shr[id]] = 1; continue }
-        unexplained[++nun] = "native: " nat[id] "\nshare:  " shr[id]
-        unexplained_id[nun] = id
-        unexplained_share[nun] = shr[id]
+        if (shr[id] in dev) { used[shr[id]] = 1; continue }
+        unex[++nun] = id
     }
     for (i = 1; i <= ns; i++) {
         id = sorder[i]
         if (!(id in nat)) missing[++nmissing] = "in share only:  " shr[id]
     }
     for (i = 1; i <= nd; i++) {
-        if (!(dorder[i] in used)) stale[++nstale] = "line " dev[dorder[i]] ": " dorder[i]
+        if (!(dorder[i] in used)) stale[++nstale] = dorder[i]
     }
 
     printf "steps compared: %d   identical: %d   different: %d (explained %d, unexplained %d)\n",
-        compared, same, differ, explained, nun
-    printf "deviations listed: %d   stale: %d   missing steps: %d   unparsed lines: %d\n",
-        nd, nstale, nmissing, unparsed
+        compared, compared - differ, differ, differ - nun, nun
+    printf "deviations listed: %d   stale: %d   missing steps: %d\n", nd, nstale, nmissing
 
     if (nun) {
         print ""
         print "unexplained:"
-        for (i = 1; i <= nun; i++) print unexplained[i]
+        for (i = 1; i <= nun; i++) {
+            print "native: " nat[unex[i]]
+            print "share:  " shr[unex[i]]
+        }
     }
     if (nstale) {
         print ""
         print "stale (listed in " deviations ", no longer observed):"
-        for (i = 1; i <= nstale; i++) print stale[i]
+        for (i = 1; i <= nstale; i++) print "line " dev[stale[i]] ": " stale[i]
     }
     if (nmissing) {
         print ""
@@ -134,7 +132,7 @@ END {
     if (nun) {
         print ""
         print "unexplained ids:"
-        for (i = 1; i <= nun; i++) print unexplained_id[i]
+        for (i = 1; i <= nun; i++) print unex[i]
     }
 
     if (nun || nstale) {
@@ -144,14 +142,12 @@ END {
         for (i = 1; i <= nun; i++) {
             print "" > suggested
             print "# TODO reason (pointer)" > suggested
-            print unexplained_share[i] > suggested
+            print shr[unex[i]] > suggested
         }
         if (nstale) {
             print "" > suggested
             print "# No longer observed. Delete these from " deviations ":" > suggested
-            for (i = 1; i <= nd; i++) {
-                if (!(dorder[i] in used)) print "#" dorder[i] > suggested
-            }
+            for (i = 1; i <= nstale; i++) print "#" stale[i] > suggested
         }
         close(suggested)
         print ""

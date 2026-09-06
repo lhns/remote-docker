@@ -10,10 +10,9 @@ import (
 )
 
 // passes is how many times the transcript is produced before it is compared.
-// Two was not enough: a step whose answer is a race is right most of the time,
-// so a single comparison passes on the runs where the race went the same way
-// twice and the failure arrives later, in a diff between two filesystems, where
-// it reads as a difference between them.
+// A step whose answer is a race is right most of the time, so comparing two
+// runs lets the failure through and it arrives later, in a diff between two
+// filesystems, where it reads as a difference between them.
 const passes = 3
 
 // The transcript is only useful if runs against the same filesystem are
@@ -24,7 +23,7 @@ func TestTranscriptIsDeterministic(t *testing.T) {
 	runs := make([]string, passes)
 	for i := range runs {
 		var out bytes.Buffer
-		if err := run(dir, nil, false, &out); err != nil {
+		if err := run(dir, nil, &out); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
 		runs[i] = out.String()
@@ -56,9 +55,8 @@ func TestTranscriptIsDeterministic(t *testing.T) {
 
 // diffContext renders only the lines where a and b differ, with ctx lines of
 // context around each run of them. The whole transcript is several hundred
-// lines and CI truncates it, which is how the first failure of this test
-// arrived with the differing line cut off; the line and the step id are the
-// only things worth printing.
+// lines and a log that truncates it cuts off the differing line, which is the
+// only thing worth printing.
 func diffContext(a, b string, ctx int) string {
 	al, bl := strings.Split(a, "\n"), strings.Split(b, "\n")
 	n := max(len(al), len(bl))
@@ -102,7 +100,7 @@ func diffContext(a, b string, ctx int) string {
 }
 
 func TestUnknownGroup(t *testing.T) {
-	if err := run(t.TempDir(), []string{"nope"}, false, &bytes.Buffer{}); err == nil {
+	if err := run(t.TempDir(), []string{"nope"}, &bytes.Buffer{}); err == nil {
 		t.Fatal("unknown group accepted")
 	}
 }

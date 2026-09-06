@@ -30,7 +30,10 @@ for target in "${targets[@]}"; do
 	main="${target#*:}"
 	modules+=$(
 		cd "$module" &&
-			go list -deps -f '{{if .Module}}{{.Module.Path}}	{{.Module.Version}}	{{.Module.Dir}}{{end}}' "$main"
+			# A replaced module is named by its REPLACEMENT: .Module.Path keeps the
+			# original, so a fork would be credited to upstream, while .Module.Dir
+			# already points at what is linked (ADR 0047).
+			go list -deps -f '{{if .Module}}{{with .Module.Replace}}{{.Path}}	{{.Version}}{{else}}{{.Module.Path}}	{{.Module.Version}}{{end}}	{{.Module.Dir}}{{end}}' "$main"
 	)$'\n'
 done
 

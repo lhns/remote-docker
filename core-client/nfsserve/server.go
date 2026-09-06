@@ -117,9 +117,15 @@ func (h *mountHandler) Mount(_ context.Context, _ net.Conn, req nfs.MountRequest
 // chmod reported as done and a built binary that cannot be run.
 //
 // Root() is the share's directory, which the names reaching attrChange are
-// relative to.
+// relative to. For a single-file share that directory is the one CONTAINING
+// the file, so the change goes through singleFileChange, which refuses every
+// name but the file itself.
 func (h *mountHandler) Change(fs billy.Filesystem) billy.Change {
-	return &attrChange{root: fs.Root()}
+	c := &attrChange{root: fs.Root()}
+	if one, ok := singleFileOf(fs); ok {
+		return &singleFileChange{attrChange: c, fs: one}
+	}
+	return c
 }
 
 // FSStat reports free space. Docker and ordinary tools query it; zeroes would

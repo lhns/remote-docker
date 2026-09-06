@@ -25,11 +25,10 @@ var (
 )
 
 // defaultSteps is how many operations one run makes: enough to reach every
-// pairing below several times. Windows gets a fifth: an RPC there costs
-// 4-10 ms (go-billy's BoundOS runs EvalSymlinks on every operation, and
-// identityOf opens the file), which is 100 ms a step, and the budget is ten
-// seconds. Measured 2026-09-05 on this project's development machine; the
-// step count and the time are in the log line either way.
+// pairing below several times. Windows gets a fifth, because an RPC there
+// costs 4-10 ms (go-billy's BoundOS runs EvalSymlinks on every operation, and
+// identityOf opens the file) against a ten-second budget. The step count and
+// the time are in the log line either way.
 func defaultSteps() int {
 	if runtime.GOOS == "windows" {
 		return 80
@@ -95,15 +94,11 @@ func TestModelRandomOperations(t *testing.T) {
 	if _, err := r.RegisterCWD(dir); err != nil {
 		t.Fatal(err)
 	}
-	client, root, err := mountRaw(t, serve(t, r), "/cwd")
+	target, client, root, err := mountAt(t, serve(t, r), "/cwd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	target, err := nfsclient.NewTargetWithClient(client, rpc.AuthNull, root, "/cwd", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	m := &model{
 		t:       t,
@@ -685,8 +680,7 @@ func (m *model) readdir() {
 	m.touch(dir)
 }
 
-// link asks for a hard link, which the share refuses (link_test.go), and
-// checks the refusal left nothing behind.
+// link makes a hard link and checks both names are the one file.
 func (m *model) link() {
 	file, ok := m.pick(m.files())
 	if !ok {

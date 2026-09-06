@@ -8,7 +8,7 @@
 // process (a lock held by somebody else, a mapping written from outside,
 // concurrent appenders) re-executes this binary in the hidden `--child` mode.
 //
-// Usage: fsprobe [--group NAME[,NAME...]] [--large] DIR
+// Usage: fsprobe [--group NAME[,NAME...]] DIR
 //
 // Every group runs in DIR/fsprobe/<group>, created fresh and removed at the
 // end. Each step prints
@@ -37,10 +37,9 @@ func main() {
 	}
 
 	groups := flag.String("group", "", "comma-separated group names (default: all)")
-	large := flag.Bool("large", false, "include the 4 GiB+1 step")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: fsprobe [--group NAME[,NAME...]] [--large] DIR")
+		fmt.Fprintln(os.Stderr, "usage: fsprobe [--group NAME[,NAME...]] DIR")
 		os.Exit(2)
 	}
 
@@ -48,7 +47,7 @@ func main() {
 	if *groups != "" {
 		names = strings.Split(*groups, ",")
 	}
-	if err := run(flag.Arg(0), names, *large, os.Stdout); err != nil {
+	if err := run(flag.Arg(0), names, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "fsprobe:", err)
 		os.Exit(1)
 	}
