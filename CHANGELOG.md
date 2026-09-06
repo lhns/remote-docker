@@ -77,6 +77,19 @@ One consequence worth knowing: a share reports the workspace account as the
 owner, so git in a container refuses a repository on one as "detected dubious
 ownership" until `safe.directory` is set.
 
+### The chart upgrades across versions again
+
+`helm upgrade` of `remote-docker-workspace` to any new version was refused as
+`updates to statefulset spec for fields other than ... are forbidden`, on a
+release whose storage was byte-identical: the volume claim templates carried
+`helm.sh/chart` and `app.kubernetes.io/version`, and a volumeClaimTemplate is
+immutable, labels included. They now carry only labels that do not move.
+
+An existing release still has the old labels, and removing them is itself a
+refused change, so the first upgrade past this needs the StatefulSet deleted
+once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
+StatefulSet adopts them.
+
 ### Fixed on the way through a cleanup
 
 - `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's

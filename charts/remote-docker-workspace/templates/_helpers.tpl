@@ -36,6 +36,17 @@ app.kubernetes.io/component: workspace
 {{- end }}
 {{- end -}}
 
+{{/*
+A volumeClaimTemplate is immutable, labels included, so these carry nothing
+that moves: no chart version, no appVersion, no commonLabels. One that moves
+makes the next upgrade forbidden until the StatefulSet is orphan-deleted.
+*/}}
+{{- define "remote-docker-workspace.volumeClaimLabels" -}}
+{{ include "remote-docker-workspace.selectorLabels" . }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/component: workspace
+{{- end -}}
+
 {{- define "remote-docker-workspace.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "remote-docker-workspace.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}

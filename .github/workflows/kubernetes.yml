@@ -110,6 +110,35 @@ jobs:
             *claimName*) echo "the default mounted a claim it does not create"; exit 1 ;;
           esac
 
+      # A volumeClaimTemplate is immutable, so one label that moves with the
+      # chart makes every later upgrade forbidden. Neither helm lint nor
+      # kubeconform sees it: the API server refuses it at update time.
+      - name: a volume claim template does not move with the chart version
+        run: |
+          set -eu
+          claims() {
+            rm -rf "$RUNNER_TEMP/chart-$1"
+            cp -r charts/remote-docker-workspace "$RUNNER_TEMP/chart-$1"
+            sed -i "s/^version: .*/version: $1/; s/^appVersion: .*/appVersion: \"$1\"/" \
+              "$RUNNER_TEMP/chart-$1/Chart.yaml"
+            helm template ws "$RUNNER_TEMP/chart-$1" --kube-version 1.29.0 \
+              --set ingress.host=ws.example.com \
+              --set image.tag=pinned \
+              --set commonLabels.rolled="v$1" \
+              --show-only templates/statefulset.yaml \
+              | sed -n '/^  volumeClaimTemplates:/,$p'
+          }
+          claims 9.9.9  >"$RUNNER_TEMP/claims-a.yaml"
+          claims 9.9.10 >"$RUNNER_TEMP/claims-b.yaml"
+          if ! [ -s "$RUNNER_TEMP/claims-a.yaml" ]; then
+            echo "no volumeClaimTemplates rendered; this check would pass on anything"
+            exit 1
+          fi
+          if ! diff -u "$RUNNER_TEMP/claims-a.yaml" "$RUNNER_TEMP/claims-b.yaml"; then
+            echo "the claims differ between two chart versions, so an upgrade across them is refused"
+            exit 1
+          fi
+
       # The failure this is worth pinning: an ingress with no host matches every
       # request that reaches the controller, so the chart refuses to render one.
       - name: an ingress with no host is refused
@@ -257,7 +286,14 @@ jobs:
       - name: helm upgrade keeps it running
         run: |
           set -eux
-          helm upgrade ws charts/remote-docker-workspace \
+          # A new version and appVersion, which is the upgrade that fails when
+          # something version-bearing has reached an immutable field. The image
+          # is image.tag from install, kept by --reuse-values.
+          rm -rf "$RUNNER_TEMP/chart-next"
+          cp -r charts/remote-docker-workspace "$RUNNER_TEMP/chart-next"
+          sed -i 's/^version: .*/version: 9.9.9/; s/^appVersion: .*/appVersion: "9.9.9"/' \
+            "$RUNNER_TEMP/chart-next/Chart.yaml"
+          helm upgrade ws "$RUNNER_TEMP/chart-next" \
             --namespace rd --reuse-values \
             --set resources.requests.memory=256Mi \
             --wait --timeout 10m
