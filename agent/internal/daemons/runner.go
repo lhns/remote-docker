@@ -131,13 +131,9 @@ const aliveTTL = 2 * time.Second
 //
 // Generous because the first start of a dind on fuse-overlayfs is slow, and
 // because the cost of being early is a session that fails for a reason the
-// user cannot act on.
-//
-// Raised from 90s when the agent became the only supervisor (ADR 0019).
-// The parent daemon used to start every
-// account's dind when the workspace came up, so they booted in parallel with
-// nobody waiting; now the first account to ask pays for its own boot, whenever
-// it asks. CI measured one missing 90 seconds after a workspace restart.
+// user cannot act on. The agent is the only thing that starts a daemon
+// (ADR 0019), so the first account to ask pays for its own boot rather than
+// finding one already warmed at workspace start: CI measured 90 seconds short.
 const DefaultReadyTimeout = 180 * time.Second
 
 // ensure returns the account's daemon, starting or restarting it if needed.
@@ -299,8 +295,7 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 //
 //	error during connect: Get "http://.../_ping": EOF
 //
-// which names neither the daemon nor the reason. That is the same mistake as
-// reading an empty result as data, in a new place.
+// which names neither the daemon nor the reason.
 //
 // So readiness is a round trip: the socket exists, the container reports a pid,
 // and the daemon answers a request. Only the last one is evidence.
@@ -348,10 +343,8 @@ const lastWordsTimeout = 5 * time.Second
 // CALLER's patience ran out rather than this loop's.
 //
 // Both budgets are the same duration, so the caller's context expires first and
-// this is the path almost always taken. It used to return ctx.Err() alone:
-// "context deadline exceeded", naming no daemon and no reason, while an
-// account's daemon crash-looped. The deadline branch above had the log tail
-// all along.
+// this is the path almost always taken. ctx.Err() alone is "context deadline
+// exceeded", which names no daemon and no reason while one crash-loops.
 func (m *Manager) gaveUp(ctx context.Context, name string) error {
 	// A fresh context, because the caller's is spent and `docker logs` on a
 	// cancelled one returns nothing at all.
@@ -569,7 +562,7 @@ func (m *Manager) log() *slog.Logger {
 	return logx.Or(m.Log)
 }
 
-// Lookup returns an account's daemon only if it is already running.
+// lookup returns an account's daemon only if it is already running.
 //
 // Never starts one and never waits, which is the entire point: workspace-info
 // is answered on the client's first round trip, and a cold dind takes seconds

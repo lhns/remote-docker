@@ -35,14 +35,9 @@ func Listen(endpoint string) (net.Listener, error) {
 		return nil, fmt.Errorf("proxy: creating socket directory: %w", err)
 	}
 
-	// The lock is what earns the right to clear the socket.
-	//
-	// A socket left by a process that did not shut down cleanly must be
-	// removed, or every later run fails with "address already in use". But
-	// removing it unconditionally silently unlinks a RUNNING process's socket
-	// and takes its place: the first keeps accepting on an inode nobody can
-	// reach, and looks healthy. Holding the lock means the only socket we can
-	// be clearing is a dead one (ADR 0017).
+	// The lock is what earns the right to clear the socket: holding it means
+	// the only socket that can be cleared here is a dead one. See lock.go and
+	// ADR 0017.
 	lock, err := acquireLock(endpoint)
 	if err != nil {
 		return nil, err

@@ -67,8 +67,10 @@ jobs:
       - name: measure
         env:
           BENCH_SHAPES: ${{ matrix.shape }}
-          BENCH_FILES: ${{ inputs.files || '300' }}
           # Empty on a label run, which falls through to bench.sh's defaults.
+          # The one default repeated here is the shapes, because the matrix
+          # cannot be built from a value the script holds.
+          BENCH_FILES: ${{ inputs.files }}
           BENCH_MODES: ${{ inputs.modes }}
           BENCH_PREFETCH: ${{ inputs.prefetch }}
           BENCH_WORKLOADS: ${{ inputs.workloads }}

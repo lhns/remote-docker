@@ -101,6 +101,10 @@ jobs:
     # disconnect with its three-minute wait and the conformance probe's five
     # thousand files over the share do not fit in thirty.
     timeout-minutes: 50
+    # State of its own, for every step that runs the client: nothing here
+    # depends on or disturbs whatever the runner image already has.
+    env:
+      REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
     steps:
       - uses: actions/checkout@v7
 
@@ -117,12 +121,8 @@ jobs:
         run: go build -o rd.exe ./cmd/remote-docker
         working-directory: client
 
-      # State of its own, so nothing here depends on or disturbs whatever the
-      # runner image already has.
       - name: create the machine
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz
           .\client\rd.exe remote ls
@@ -132,8 +132,6 @@ jobs:
       # the bind rewriting and the daemon inside the machine, in one command.
       - name: docker run, with a bind mount from this machine
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           "from the runner" | Out-File -Encoding ascii marker
           # Joined before matching. PowerShell's -match on an ARRAY is a filter
@@ -147,8 +145,6 @@ jobs:
 
       - name: GNU tar sets attributes on files it wrote, and a non-root uid can mkdir
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         # The one Windows client in CI. GNU tar sets attributes on the
         # descriptor it just wrote, which the kernel cannot retry after ESTALE;
         # both defects that broke it showed only from a Windows client.
@@ -163,8 +159,6 @@ jobs:
 
       - name: creating it again changes nothing
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz) -join "`n"
           $out
@@ -175,8 +169,6 @@ jobs:
       # that quietly did the same would be found by nobody until it had.
       - name: it survives being stopped and started
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           .\client\rd.exe run -d --name survivor alpine:3 sleep 600
           .\client\rd.exe remote machine stop ci
@@ -211,8 +203,6 @@ jobs:
       - name: a machine comes back after sitting idle
         shell: pwsh
         timeout-minutes: 8
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           # A background session, which is the thing holding the machine. A
           # one-shot `docker run` would take its hold with it when it exits and
@@ -241,8 +231,6 @@ jobs:
 
       - name: load the probe image into the machine's daemon
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           $out = (.\client\rd.exe load -i fsprobe.tar.gz) -join "`n"
           $out
@@ -250,8 +238,6 @@ jobs:
 
       - name: run the probe against a share backed by NTFS
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         # Out-File with an explicit encoding, because `>` in Windows PowerShell
         # writes UTF-16. The runner's pwsh is 7, whose utf8 carries no BOM;
         # 5.1's does, and the diff step strips one either way.
@@ -283,8 +269,6 @@ jobs:
       # Linux system with nothing naming it.
       - name: rm takes the machine with it
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           .\client\rd.exe remote rm ci
           $distros = (wsl -l -q) -join "`n"

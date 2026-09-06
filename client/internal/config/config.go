@@ -616,9 +616,9 @@ func (c Config) EndpointFor(base string) string {
 		return c.Endpoint
 	}
 	if c.Name == "" || base == "" {
-		// An empty base cannot be joined to. Returning it means the default,
-		// which is never wrong, unlike the bare separator this used to build:
-		// that named a socket relative to the working directory.
+		// An empty base cannot be joined to: joining one names a socket
+		// relative to the working directory. Returned as it is, which means
+		// the platform default.
 		return base
 	}
 	return joinEndpoint(base, sanitizeUser(c.Name))
@@ -858,7 +858,13 @@ func (f *File) Set(name string, ws Workspace) error {
 		f.Workspaces = map[string]Workspace{}
 	}
 	if f.Host != "" {
-		existing := Workspace{Host: f.Host, Port: f.Port, User: f.User, Endpoint: f.Endpoint}
+		// The WHOLE entry moves, not the four fields that name the address.
+		// The flat form describes one workspace, so its watch mode, its
+		// consistency rules and above all its `machine` belong to that
+		// workspace; left at the top level they become a base that
+		// applyWorkspace lays under every keyed entry, and the new workspace
+		// silently inherits a machine it does not have.
+		existing := f.Workspace
 		flat := f.Default
 		if flat == "" {
 			flat = f.Host
@@ -868,7 +874,7 @@ func (f *File) Set(name string, ws Workspace) error {
 				f.Workspaces[flat] = existing
 			}
 		}
-		f.Host, f.Port, f.User, f.Endpoint = "", 0, "", ""
+		f.Workspace = Workspace{}
 	}
 	f.Workspaces[name] = ws
 	if f.Default == "" {

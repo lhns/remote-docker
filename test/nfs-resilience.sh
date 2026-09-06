@@ -477,7 +477,11 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
             bad "no docker command worked within 8 minutes of the block being lifted"
         fi
 
-        connects=$(grep -c "connected to" "$CLIENT_LOG" 2>/dev/null || echo 0)
+        # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and
+        # the fallback appended a SECOND line, so the comparison below was
+        # given "0\n0" and errored instead of reporting.
+        connects=$(grep -c "connected to" "$CLIENT_LOG" 2>/dev/null)
+        [ -n "$connects" ] || connects=0
         if [ "$connects" -ge 2 ]; then
             info "the client opened a new connection ($connects in this process)"
         else

@@ -97,7 +97,7 @@ type Manager struct {
 
 type containerForwards struct {
 	name     string
-	forwards map[int]Forward // keyed by public port
+	forwards map[int]Forward // keyed by the LOCAL port, which is what this machine opened
 }
 
 // Reconcile brings the set of forwards in line with what is running now.
@@ -157,11 +157,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	// Open forwards for anything newly published, in a stable order.
 	//
-	// Ranging the map left the outcome to Go randomising it, which only shows
-	// when two containers want one local port: whichever was reached first got
-	// it, and a reconcile a moment later could hand it to the other. Rare, and
-	// the kind of rare that is reported as "sometimes it forwards the wrong
-	// one".
+	// Sorted rather than ranged, because two containers can want one local
+	// port: ranging the map lets Go's randomisation decide which gets it, so
+	// successive reconciles hand it back and forth.
 	ids := make([]string, 0, len(wanted))
 	for id := range wanted {
 		ids = append(ids, id)
@@ -311,22 +309,13 @@ func (m *Manager) log() *slog.Logger {
 // published port now, so the number the user typed is claimed on this machine
 // instead, and a second container asking for it has to be refused somewhere.
 // This is the only place that knows what is already open.
-//
-// Scanned rather than indexed, because the forwards are keyed on the published
-// port and there are a handful of them.
 func (m *Manager) Forwarding(local int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, entry := range m.active {
-		for _, fwd := range entry.forwards {
-			_, port, err := net.SplitHostPort(fwd.LocalAddr().String())
-			if err != nil {
-				continue
-			}
-			if n, err := strconv.Atoi(port); err == nil && n == local {
-				return true
-			}
+		if _, ok := entry.forwards[local]; ok {
+			return true
 		}
 	}
 	return false

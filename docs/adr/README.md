@@ -122,7 +122,7 @@ here in an old commit message or comment means:
 | 0031 if it knows about Docker, it is glue | [0021](0021-the-module-layout.md) |
 | 0036 the agent supervises its daemons | [0019](0019-a-dockerd-per-account.md) |
 | 0037 the published port belongs to the client | [0008](0008-published-ports-reach-the-client.md) |
-| 0043 delegated is a copy | [0044](0044-a-delegated-share-is-a-cache.md), which made it a cache |
+| 0043 delegated is a copy | [0044](0044-a-delegated-share-is-a-cache.md), which made it a union over the live export |
 
 ## Status
 

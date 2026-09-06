@@ -49,14 +49,6 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
-	// THE one place a machine is located.
-	//
-	// A workspace on another host is simply there; a machine on this one has to
-	// be running before it can answer, and its address is given to it at boot,
-	// so a stored one goes stale the moment it restarts. Locate does both, and
-	// it is here rather than in the commands because every path to a session
-	// comes through this function -- a check at `machine create` would be right
-	// for the first connection and wrong for every one after a reboot.
 	// Whether this workspace is reached over SSH directly or through a reverse
 	// proxy (ADR 0034). Worked out here because tunnelclient is handed its
 	// connection rather than choosing one (ADR 0021).
@@ -65,6 +57,14 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
+	// THE one place a machine is located and held.
+	//
+	// A workspace on another host is simply there; a machine on this one has to
+	// be running before it can answer, and its address is given to it at boot,
+	// so a stored one is stale the moment it restarts. Here rather than in the
+	// commands because every path to a session comes through this function: a
+	// check at `machine create` would be right for the first connection and
+	// wrong for every one after a reboot.
 	host := transport.Host
 	var hold io.Closer
 	if m := s.opts.Config.Machine; m != nil {
@@ -134,7 +134,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
-		Shares:  shareRegistrar{registry: s.registry, shares: s.shares, changed: s.sharesChanged},
+		Shares:  shareRegistrar{registry: s.registry, shares: s.shares, changed: s.syncWatch},
 		Volumes: live.api,
 		NFSPort: info.NFSPort,
 		Owner:   info.User,
@@ -172,11 +172,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// ports exists to make this session's containers reachable, and collecting
 	// volumes is housekeeping for a long-running `up`.
 	//
-	// A Query session (`status`, `gc`) only asks the workspace a
-	// question and then closes. Starting them there meant a status command
-	// began two background round trips and immediately tore the connection out
-	// from under them, so it printed its table followed by two errors about
-	// work the user never asked for.
+	// A Query session (`status`, `gc`) only asks the workspace a question and
+	// then closes, so starting these there begins background round trips and
+	// then tears the connection out from under them: the command prints its
+	// answer followed by errors about work nobody asked for.
 	if s.opts.Role.hosting() {
 		s.startPorts(liveCtx, live)
 		s.startNotify(live)
@@ -198,7 +197,11 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		})
 	}
 
-	s.progressf("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
+	// Progress belongs to a session that serves. A query command's output is
+	// the command's own, and chatter interleaved with it is noise.
+	if s.opts.Role.hosting() {
+		s.log().Info("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
+	}
 	return live, nil
 }
 
@@ -268,17 +271,12 @@ func (s *Session) skew() time.Duration {
 // covers it.
 const shareReconcileInterval = 30 * time.Second
 
-// sharesChanged tells the watcher a share was just registered.
-func (s *Session) sharesChanged() {
+// syncWatch tells the watcher what to watch, which is whatever the registry
+// exports now. The one way that is said, so a share registered, restored or
+// woken all reach the watcher the same way.
+func (s *Session) syncWatch() {
 	if s.watch != nil {
 		s.watch.Sync(sharesOf(s.registry))
-	}
-}
-
-// progressf reports routine progress, which most commands do not want.
-func (s *Session) progressf(msg string, args ...any) {
-	if s.opts.Role.hosting() {
-		s.log().Info(msg, args...)
 	}
 }
 
@@ -316,12 +314,12 @@ const refusalReasonTimeout = 10 * time.Second
 // workspace rather than guessed at.
 //
 // ssh's tcpip-forward failure carries no reason (RFC 4254 request failure has
-// no payload), so this named the likeliest cause whatever had happened, and was
-// wrong in the case that produced it: the account's daemon would not start, and
-// the forward is bound inside that daemon's namespace.
+// no payload), so naming a likely cause sends somebody hunting the wrong one:
+// the account's daemon failing to start looks identical, and the forward is
+// bound inside that daemon's namespace.
 //
-// Asked again rather than read from live.info, which was true when the session
-// began: a daemon still booting then may have failed since.
+// Asked again rather than read from live.info, which was only true when the
+// session began: a daemon still booting then may have failed since.
 func (s *Session) refusalReason(live *liveConn) string {
 	ctx, cancel := context.WithTimeout(s.ctx, refusalReasonTimeout)
 	defer cancel()

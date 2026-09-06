@@ -28,11 +28,10 @@ func exportLine(endpoint string) string {
 
 // endpointOf is where this workspace's Docker API is served locally.
 //
-// The base is the argument that matters: an empty one derives the RELATIVE
-// path "-dev" for a named workspace, which is a socket in whatever directory
-// the process happens to be in and a docker context reading unix://-dev.
-// Windows cannot show it, since the pipe name is a real constant, and neither
-// can the suites, which set an endpoint explicitly.
+// The base is the argument that matters, and passing an empty one is the way
+// to get this wrong: see config.EndpointFor. Neither Windows nor the suites
+// can show it -- the pipe name is a real constant, and the suites set an
+// endpoint explicitly.
 func endpointOf(cfg config.Config) string {
 	return cfg.EndpointFor(proxy.DefaultEndpoint())
 }

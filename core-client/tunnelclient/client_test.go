@@ -1,7 +1,6 @@
 package tunnelclient
 
 import (
-	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -18,9 +17,7 @@ import (
 // -- is the failure that succeeds, so there is no default at all.
 func TestDialRefusesNoHostKeyPolicy(t *testing.T) {
 	ts := startTestServer(t)
-	host, portStr, _ := net.SplitHostPort(ts.Addr.String())
-	var port int
-	fmt.Sscanf(portStr, "%d", &port)
+	host, port := hostPort(t, ts.Addr.String())
 
 	_, err := Dial(t.Context(), Config{Host: host, Port: port, User: "tester"})
 	if err == nil {
@@ -271,7 +268,7 @@ func TestKeepAliveGivesUpOnAnUnansweredProbe(t *testing.T) {
 	ts := startTestServer(t)
 	ts.silent.Store(true)
 
-	c := ts.dialWith(t, 50*time.Millisecond)
+	c := ts.dialAddr(t, ts.Addr, 50*time.Millisecond)
 
 	select {
 	case <-c.Dead():

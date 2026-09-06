@@ -77,6 +77,37 @@ func TestSetMigratesTheFlatForm(t *testing.T) {
 	}
 }
 
+// Everything the flat entry said moves with it. Left at the top level, those
+// fields are a base under every keyed entry (applyWorkspace runs twice), so the
+// workspace being added inherits them -- and `machine` is the one that hurts:
+// the new workspace would claim a Linux system belonging to the old one, which
+// `rm` would then destroy.
+func TestSetMovesTheWholeFlatEntry(t *testing.T) {
+	f := File{Workspace: Workspace{
+		Host:    "old.example",
+		User:    "bob",
+		Watch:   "partial",
+		Machine: &Machine{Backend: "wsl", Name: "old"},
+	}}
+	if err := f.Set("new", Workspace{Host: "new.example", User: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.Machine != nil {
+		t.Error("the flat entry's machine stayed at the top level, where every workspace inherits it")
+	}
+	if f.Watch != "" {
+		t.Errorf("the flat entry's watch mode stayed at the top level as %q", f.Watch)
+	}
+	moved := f.Workspaces["old.example"]
+	if moved.Machine == nil || moved.Machine.Name != "old" {
+		t.Errorf("the machine did not move with its workspace: %+v", moved)
+	}
+	if moved.Watch != "partial" {
+		t.Errorf("the watch mode did not move with its workspace: %+v", moved)
+	}
+}
+
 func TestSetIsIdempotentAndUpdates(t *testing.T) {
 	var f File
 	_ = f.Set("dev", Workspace{Host: "a"})

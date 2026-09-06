@@ -12,48 +12,38 @@
 #     docker build -f image/Dockerfile .
 FROM golang:1.27-alpine AS build
 WORKDIR /src
-# The golang images set GOTOOLCHAIN=local, which turns a go.mod that asks for a
-# newer Go than the base image into a hard build failure -- and go.mod's
-# directive moves on its own, raised by whatever a dependency requires. That is
-# what broke this build: a docker/buildx bump took the module to 1.26.3 while
-# the tag here still said 1.25, and the error named the toolchain rather than
-# the dependency that moved it. `auto` lets the build fetch what go.mod asks
-# for instead. The tag above still tracks it, so the fetch is normally a no-op.
+# The golang images set GOTOOLCHAIN=local, which turns a go.mod asking for a
+# newer Go than this base image into a build failure naming the toolchain
+# rather than the dependency that raised the directive. `auto` fetches what
+# go.mod asks for; the tag above still tracks it, so that is normally a no-op.
 ENV GOTOOLCHAIN=auto
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
 ARG VERSION=dev
-# Only the agent's module and the two it requires: the shared one, and space,
-# which is the workspace side with no Docker in it. The client's tree --
-# docker/cli, buildx, 215 packages -- is not copied and cannot be resolved from
-# here, which is the point of ADR 0021: this build could break because of a
-# dependency the binary never imported, and now it cannot.
+# Only the agent's module and the two it requires: core, and core-agent, which
+# is the workspace side with no Docker in it. The client's tree is not copied
+# and cannot be resolved from here, so this build cannot break because of a
+# dependency the binary never imported (ADR 0021).
 #
-# go.work is deliberately NOT copied. It would make this build resolve through
-# the workspace instead of through agent/go.mod's own replace, so a missing
-# require here would still succeed and only fail somewhere without it.
+# go.work is deliberately NOT copied. It would resolve this build through the
+# workspace instead of through agent/go.mod's own replace, so a missing require
+# would succeed here and fail only where there is no workspace.
 COPY core/ ./core/
 COPY core-agent/ ./core-agent/
 COPY agent/ ./agent/
-# `go mod download` is deliberately absent. It was here to cache dependencies
-# in their own layer; `go build` fetches exactly what this binary needs, which
-# after the split is 24 lines of go.sum.
+# No `go mod download` layer: the agent's whole dependency set is 28 lines of
+# go.sum, so caching it separately buys nothing.
 RUN cd agent && CGO_ENABLED=0 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/remote-dockerd ./cmd/remote-dockerd
 
 FROM docker:29-dind
 
-# openssh-server, sudo and inotify-tools left with the shell implementation:
-# the agent is its own SSH server, is already root, and watches the keys
-# directory with fsnotify. rclone was never used here at all -- it belonged to
-# the old client, which downloaded its own copy anyway.
-#
 # shadow STAYS. The agent shells out to useradd rather than editing
 # /etc/passwd, because the shadow tools handle the locking between passwd,
-# group and gshadow that hand-editing gets wrong.
-#
-# openssh-client stays too: a developer shell wants git-over-ssh.
+# group and gshadow that hand-editing gets wrong. openssh-client is for a
+# developer shell wanting git-over-ssh; the agent is its own SSH server and
+# needs no openssh-server, no sudo and no inotify-tools.
 RUN apk add --no-cache \
         bash \
         coreutils \
@@ -90,13 +80,11 @@ EXPOSE 2222
 # overlay2 will not work -- set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs
 VOLUME ["/var/lib/docker"]
 
-# tini warns loudly whenever it is not PID 1, and the one dind's entrypoint
-# starts for dockerd never is: it runs under the agent, which supervises it.
-# Nothing is wrong when it says so -- orphans reparent to PID 1, which is the
-# tini below, whose whole job is reaping them -- but the message reads like a
-# fault and has been reported as one. This makes the inner tini a subreaper so
-# it collects its own subtree instead, and is a no-op for the tini that is
-# already PID 1.
+# tini warns whenever it is not PID 1, and the one dind's entrypoint starts for
+# dockerd never is: it runs under the agent. Nothing is wrong when it says so,
+# but the message reads like a fault and has been reported as one. This makes
+# the inner tini a subreaper so it collects its own subtree, and is a no-op for
+# the tini that is already PID 1.
 ENV TINI_SUBREAPER=1
 
 # tini reaps the processes the agent forks per session. The agent is the

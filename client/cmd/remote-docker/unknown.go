@@ -4,13 +4,11 @@ package main
 //
 // cobra's answer for a command that only groups subcommands is to print the
 // help and exit 0, which is wrong twice over: a typo is indistinguishable from
-// a deliberate `--help`, and a script sees success. It hid a whole session of
-// mistyped commands on a terminal that was corrupting keystrokes, because
-// every one of them produced a cheerful help screen and nothing else.
+// a deliberate `--help`, and a script sees success.
 //
-// `workspace creat dev` was worse than silent. Bare `workspace` lists, so the
-// misspelled `create` fell back to the parent, LISTED the workspaces and
-// exited 0, having created nothing.
+// A parent that runs on its own is worse than silent. `remote creat dev` fell
+// back to the parent, which lists the workspaces, so it printed a list and
+// exited 0 having created nothing.
 
 import (
 	"fmt"

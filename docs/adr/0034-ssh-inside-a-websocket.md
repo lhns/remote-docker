@@ -79,8 +79,8 @@ is either a prompt nobody is there to answer or an acceptance of anybody.
   client that vanishes keeps its reverse-tunnel port reserved and the symptom is
   not a lost connection but a REFUSED FORWARD on some later reconnect, with
   containers mounting against a port bound to nothing. `wslisten` pings on the
-  same 60s budget, which also keeps the tunnel alive through a proxy's idle
-  timeout.
+  same 60s budget, a ping every 20s, which also keeps the tunnel alive through
+  a proxy's idle timeout.
 - **`ctx.RemoteAddr()` becomes the proxy's address** for a WebSocket session.
   It is a log field and must not become anything else; authentication is by key
   and is unaffected.

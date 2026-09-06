@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,17 +117,10 @@ func startTestServer(t *testing.T) *testServer {
 	return ts
 }
 
-// dial builds a client against the test server, with state under t.TempDir().
+// dial builds a client against the test server.
 func (ts *testServer) dial(t *testing.T) *Client {
 	t.Helper()
-	return ts.dialWith(t, 0)
-}
-
-// dialWith is dial with a keepalive interval of its own, for the tests about
-// what happens when probes go unanswered.
-func (ts *testServer) dialWith(t *testing.T, keepAlive time.Duration) *Client {
-	t.Helper()
-	return ts.dialAddr(t, ts.Addr, keepAlive)
+	return ts.dialAddr(t, ts.Addr, 0)
 }
 
 // cutter sits between the client and the server so a test can take the
@@ -203,9 +197,7 @@ func (ts *testServer) dialAddr(t *testing.T, addr net.Addr, keepAlive time.Durat
 		t.Fatalf("signer: %v", err)
 	}
 
-	host, portStr, _ := net.SplitHostPort(addr.String())
-	var port int
-	fmt.Sscanf(portStr, "%d", &port)
+	host, port := hostPort(t, addr.String())
 
 	c, err := Dial(t.Context(), Config{
 		Host:      host,
@@ -220,4 +212,18 @@ func (ts *testServer) dialAddr(t *testing.T, addr net.Addr, keepAlive time.Durat
 	}
 	t.Cleanup(func() { c.Close() })
 	return c
+}
+
+// hostPort splits an address into the two fields Config takes.
+func hostPort(t *testing.T, addr string) (string, int) {
+	t.Helper()
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", addr, err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parsing port %q: %v", portText, err)
+	}
+	return host, port
 }

@@ -96,14 +96,9 @@ builds:
     goos: [android]
     goarch: [arm64, amd64]
 
-  # The agent, for a workspace that is a VM rather than a container.
-  #
-  # The image builds this from source and always has; what was missing is a way
-  # to get it onto a machine that is not running the image. See ADR 0025.
-  #
-  # Its own module, which is why this is a separate block with `dir: agent`
-  # rather than another target of the client's -- and why it is cheap: 24 lines
-  # of go.sum against the client's 786 (ADR 0021).
+  # The agent, for a workspace that is a VM rather than a container (ADR 0025).
+  # Its own module, so a separate block with `dir: agent` rather than another
+  # target of the client's.
   #
   # Linux only. The agent drives useradd, netns and inotify; there is nowhere
   # else for it to run and a cross-compile would only prove it links.

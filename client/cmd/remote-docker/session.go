@@ -129,6 +129,9 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 // TextHandler would render them as time=... level=INFO msg="...".
 func logger() *slog.Logger { return logx.Logger(os.Stderr, "  ", false) }
 
+// withQuerySession opens a session that only asks the workspace questions, and
+// hands it to fn.
+//
 // `session.Query` is the load-bearing part, and the reason this is shared
 // rather than written twice. A query session takes neither the local endpoint
 // nor the account's one reverse-tunnel port (ADR 0003), so it still works while

@@ -51,7 +51,6 @@ const (
 const preferredPortTimeout = 90 * time.Second
 
 const (
-
 	// envAccountPrefix goes in front of the unix user name, so an enrolled
 	// `alice` does not take the name `alice` in the machine's own passwd file
 	// (ADR 0025). The account name, the login name and the port are unchanged.
@@ -234,16 +233,16 @@ func serve(addr, wsAddr string) error {
 			return err
 		}
 
+		if len(extraMounts) > 0 {
+			log.Info("per-account daemons get extra mounts", "count", len(extraMounts))
+		}
+
 		// Inherited from the workspace's own dockerd unless overridden. A
 		// deployment on Ceph- or NFS-backed storage sets fuse-overlayfs there,
 		// and a per-account daemon whose graph volume lives on that same
 		// filesystem needs the same answer, or dockerd falls back to
 		// vfs, which copies the whole image on every container create and says
 		// nothing about why everything became slow.
-		if len(extraMounts) > 0 {
-			log.Info("per-account daemons get extra mounts", "count", len(extraMounts))
-		}
-
 		storage := os.Getenv(envDindStorage)
 		if storage == "" {
 			storage = daemons.StorageDriverFrom(dockerdArgs)

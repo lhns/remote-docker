@@ -49,9 +49,9 @@ echo
 echo "== 2. two machines, one account =="
 mkdir -p "$WORK/keys" "$WORK/wsstate"
 for machine in "$PC" "$PHONE"; do
-    REMOTE_DOCKER_STATE_DIR="$WORK/state-$machine" \
-        "$WORK/remote-docker" remote enroll >/dev/null 2>&1
-    if [ ! -f "$WORK/state-$machine/id_ed25519.pub" ]; then
+    # genkey rather than enrol: both keys go into ONE account's file below,
+    # which is what makes these two machines rather than two accounts.
+    if ! genkey "$WORK/state-$machine"; then
         bad "no key generated for $machine"
         exit 1
     fi

@@ -222,8 +222,6 @@ func (c *Client) keepAlive() {
 					return
 				}
 			case <-time.After(2 * c.cfg.KeepAlive):
-				// Twice the interval rather than once, so a workspace briefly
-				// too busy to answer is not mistaken for one that is gone.
 				_ = c.Close()
 				return
 			case <-c.done:

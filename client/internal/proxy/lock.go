@@ -10,23 +10,19 @@ import (
 	"time"
 )
 
-// Binding the endpoint is not a lock, and on one platform it is the opposite
-// of one.
+// Binding the endpoint is not a lock, and the two platforms differ (ADR 0017).
 //
 // On Windows a named pipe bind is exclusive: winio asks for
 // FILE_FLAG_FIRST_PIPE_INSTANCE, and the kernel releases it when the process
-// dies. On Unix, Listen removed any existing socket before binding, because a
-// process that died without cleaning up would otherwise make every later run
-// fail with "address already in use". That recovery is necessary and the way
-// it was done was indiscriminate: a second process silently unlinked a running
-// one's socket and took its place. The first kept accepting on an orphaned
-// inode nobody could reach, and when the second exited the path was bound to
-// nothing while the first still looked healthy.
+// dies. On Unix a bind excludes nothing, and clearing a stale socket first --
+// which is necessary, or a process that died uncleanly makes every later run
+// fail with "address already in use" -- silently unlinks a RUNNING process's
+// socket: the first keeps accepting on an inode nobody can reach and still
+// looks healthy.
 //
-// So: an explicit lock, held for as long as the endpoint is served. Taking it
-// is what earns the right to clear a stale socket, which turns the theft into
-// the recovery it was meant to be. The pid inside it is what lets `start` and
-// `stop` say WHICH process owns a workspace.
+// So: an explicit lock, held for as long as the endpoint is served, and taking
+// it is what earns the right to clear a socket. The pid inside it is what lets
+// `start` and `stop` say WHICH process owns a workspace.
 
 // Lock is a held claim on one workspace's endpoint. Release when done.
 type Lock struct {

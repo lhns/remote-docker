@@ -6,6 +6,12 @@
 - Date: 2026-08-07
 - Updated: 2026-08-07 once candidate 2 was measured; 2026-09-01 when the union
   closed it for one mode
+- Current answer: a share with `write != through` (spelled `delegated` below;
+  [ADR 0042](0042-mount-consistency-modes.md) renamed the modes to two axes)
+  gets the real event through its union, deletions included. A plain mount gets
+  writes and creations replayed as syscalls
+  ([ADR 0016](0016-replaying-change-events-as-real-syscalls.md)) and no faithful
+  deletion, which is what stays open.
 
 This record exists to stop the problem being rediscovered, and to say plainly
 what is not solved. It is not a decision. It should stay open until one of the

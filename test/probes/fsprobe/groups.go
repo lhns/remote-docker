@@ -456,10 +456,7 @@ func groupRename(g *group) {
 			return "", err
 		}
 		s.Stat("i2")
-		if g.p.label(&before) == g.p.label(&after) {
-			return "same-ino", nil
-		}
-		return "different-ino", nil
+		return g.sameStat(&before, &after), nil
 	})
 }
 
@@ -478,7 +475,7 @@ func groupRemove(g *group) {
 		}
 		return "no-sillyrename", nil
 	}
-	var fd int
+	fd := -1 // never 0: a failed open must not leave the next step writing to stdin
 	g.run("unlink-open.unlink", "open u, unlink u", func(*step) (string, error) {
 		var err error
 		fd, err = unix.Open(g.path("u"), unix.O_RDWR|unix.O_CREAT|unix.O_EXCL, 0o644)
@@ -557,10 +554,7 @@ func groupRemove(g *group) {
 			return "", err
 		}
 		s.Stat("r")
-		if g.p.label(&first) == g.p.label(&second) {
-			return "same-ino", nil
-		}
-		return "different-ino", nil
+		return g.sameStat(&first, &second), nil
 	})
 }
 
@@ -1020,13 +1014,19 @@ func groupConcurrency(g *group) {
 	})
 }
 
-// sh runs one external command in the group directory. Its error is the
-// first line of stderr, so the transcript names the reason rather than the
-// exit status.
-func (g *group) sh(env []string, name string, args ...string) error {
+// command is an external command run in the group directory, with env on top
+// of this process's own.
+func (g *group) command(env []string, name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = g.dir
 	cmd.Env = append(os.Environ(), env...)
+	return cmd
+}
+
+// sh runs one external command. Its error is stderr rather than the exit
+// status, so the transcript names the reason; resultOf keeps the first line.
+func (g *group) sh(env []string, name string, args ...string) error {
+	cmd := g.command(env, name, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -1179,10 +1179,7 @@ func groupWorkload(g *group) {
 		// stat cache serving the second run stale looks like.
 		var dirty [2]int
 		for i := range dirty {
-			cmd := exec.Command("git", gitArgs([]string{"status", "--porcelain"})...)
-			cmd.Dir = g.dir
-			cmd.Env = append(os.Environ(), env...)
-			out, err := cmd.Output()
+			out, err := g.command(env, "git", gitArgs([]string{"status", "--porcelain"})...).Output()
 			if err != nil {
 				return "", err
 			}

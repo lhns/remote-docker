@@ -119,18 +119,41 @@ cleanup_suite() {
     rm -rf "$WORK"
 }
 
+# genkey generates a keypair into <statedir> and returns 0 once its public half
+# is there. Separate from enrol because a suite with several machines on ONE
+# account stages the keys itself, in one file (test/two-clients.sh).
+genkey() {
+    local statedir=$1
+    REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" remote enroll >/dev/null 2>&1
+    [ -f "$statedir/id_ed25519.pub" ]
+}
+
 # enrol generates a keypair for one account and stages its public half where
 # the workspace will find it. The FILENAME becomes the ACCOUNT name, which is
 # what a client logs in as; the unix user behind it is `rd-<account>`
 # (ADR 0025).
 enrol() {
     local account=$1 statedir=$2
-    REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" remote enroll >/dev/null 2>&1
-    if [ -f "$statedir/id_ed25519.pub" ]; then
-        cp "$statedir/id_ed25519.pub" "$WORK/keys/$account.pub"
-        return 0
-    fi
-    return 1
+    genkey "$statedir" || return 1
+    cp "$statedir/id_ed25519.pub" "$WORK/keys/$account.pub"
+}
+
+# ssh_account runs one command as an enrolled account, with a stock ssh rather
+# than anything of ours -- which is the point wherever it is used: the agent
+# replaces sshd (ADR 0010) and an ordinary client still has to get a session.
+#
+#   ssh_account <keyfile> <account> <timeout-seconds> <command> [ssh-option...]
+#
+# stdin is /dev/null so a command that reads never waits. stderr is left alone,
+# so a caller that wants it in the capture asks for it: a failure message with
+# nothing after the colon costs a CI round trip. Needs the caller's SSH_PORT.
+ssh_account() {
+    local key=$1 account=$2 secs=$3 command=$4
+    shift 4
+    timeout "$secs" ssh -i "$key" \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o BatchMode=yes -p "$SSH_PORT" "$@" \
+        "$account@127.0.0.1" "$command" </dev/null
 }
 
 # start_workspace runs the workspace container.

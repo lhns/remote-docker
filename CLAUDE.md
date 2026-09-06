@@ -24,9 +24,9 @@ THE REPO ROOT IS NOT A MODULE, deliberately. `go build ./...` here fails
 outright, where a module at the root would instead let it pass while compiling
 almost none of the repository.
 
-core/go.mod              THE SHARED MODULE (ADR 0021). Its library packages have
-                         NO third-party dependency at all; the one x/sys in
-                         go.mod is the probes reading raw inotify.
+core/go.mod              THE SHARED MODULE (ADR 0021). No third-party
+                         dependency at all: its go.mod has no require, and
+                         nothing may add one.
   workspace/             THE NAMES AND NUMBERS both ends derive: share ids,
                          export paths, volume names, mount options, labels,
                          uid<->port, this machine's id, and the workspace-info
@@ -101,11 +101,13 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   replay/                replays the client's changes as real syscalls
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
+  union/                 the cache over the live export: mounting it,
+                         adopting one already serving, releasing it (ADR 0044)
   wslisten/              the same SSH server, reached over a WebSocket. Serves
                          ws and NEVER TLS: the proxy terminates that
 
-agent/go.mod             the agent module: THE GLUE. 6 direct third-party
-                         requires, 28 go.sum lines (2026-09-02; re-check with
+agent/go.mod             the agent module: THE GLUE. 5 direct third-party
+                         requires, 28 go.sum lines (2026-09-06; re-check with
                          `wc -l agent/go.sum`)
   cmd/remote-dockerd/    the server agent (ADR 0010)
   internal/
@@ -126,10 +128,10 @@ charts/                  the Helm chart, for the same agent on Kubernetes
                          (ADR 0035). One privileged pod, two volumes, an
                          ingress in front of the WebSocket port
 test/probes/go.mod       the integration suites' instruments (watchprobe,
-                         pokeprobe, udpecho). Its own module because in core/
-                         it was the ONLY reason that module -- the one every
-                         other module imports -- had a dependency at all.
-                         Linked into nothing and shipped in nothing.
+                         pokeprobe, udpecho, fsprobe). Its own module because
+                         in core/ it was the ONLY reason that module -- the
+                         one every other module imports -- had a dependency at
+                         all. Linked into nothing and shipped in nothing.
 docs/adr/                architecture decision records
 ```
 
@@ -587,7 +589,7 @@ premise of the project, and it applies to building it too. So:
 - **A WebSocket connection carries its own liveness.**
   `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection
   arriving through a reverse proxy is a WebSocket wrapping one, so none of it
-  applies. `wslisten` pings on the same 60s budget instead. Take that away and
+  applies. `wslisten` pings every 20s on the same 60s budget instead. Take that away and
   a client that vanishes keeps its reverse-tunnel port reserved: the symptom is
   not a lost connection but a REFUSED FORWARD on some later reconnect, with
   containers mounting against a port bound to nothing. It also keeps the tunnel
@@ -882,14 +884,14 @@ mount. It also runs `helm lint` and five renders through `kubeconform`, which is
 eight seconds and always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 
-A third suite, `test/vm.sh`, runs the agent ON THE RUNNER with no container
+`test/vm.sh` runs the agent ON THE RUNNER with no container
 around it (ADR 0025), which is the VM deployment: `WORKSPACE_ENABLE_DIND=false`,
 a real unix account provisioned on the runner itself, a session, and a bind
 mount resolving through NFS in both daemon modes. The runner is an Ubuntu
 machine with docker, so that is exactly what is proven -- not systemd, which
 starts nothing here, and not any other distro.
 
-A second suite, `test/per-user-dind.sh`, runs the same workspace with two
+`test/per-user-dind.sh` runs the same workspace with two
 enrolled accounts and a daemon each (the default since ADR 0019): that they reach
 different daemons, that neither can list or stop the other's containers, that
 each account's bind mount resolves (which is the only real proof the reverse
@@ -908,7 +910,7 @@ measured. Two rules for editing it are in its header, and both cost a day when
 broken: no `cmd | grep -q`, and never observe a mount with a docker command,
 because every one of them reopens the connection it was meant to catch broken.
 
-A suite of its own, `test/two-clients.sh`, runs ONE account from TWO client
+`test/two-clients.sh` runs ONE account from TWO client
 machines at the same time (ADR 0029): two state directories with a key each,
 both enrolled in one key file. It proves neither is refused its reverse tunnel,
 that the workspace recorded a different port for each, that each container reads
@@ -916,23 +918,31 @@ ITS OWN machine's file through a bind mount, that both see a container the other
 started, and that a collection on one leaves the other's volumes alone and its
 mounts working.
 
-A fourth suite, `.github/workflows/machine.yml`, is the only one that runs a
-WINDOWS machine end to end. A Linux job exports the workspace image as a rootfs;
-a windows-latest job imports it with the real client and proves the thing the
+`.github/workflows/machine.yml` is the only suite that runs a WINDOWS machine
+end to end. A Linux job exports the workspace image as a rootfs; a
+windows-latest job imports it with the real client and proves the thing the
 whole backend is for: `docker run --rm -v ${PWD}:/w alpine:3 cat /w/marker`
 reading, inside a container in a machine created ninety seconds earlier, a file
 the runner wrote on the Windows side. That single command covers the session,
 the SSH transport, the NFS export, the bind rewriting and the daemon in the
 machine. It also proves create is idempotent and that `remote rm` takes the
 distribution with it, which is the failure worth catching: a running Linux
-system with nothing naming it.
+system with nothing naming it. It ends with GNU tar setting attributes on the
+files it wrote, a non-root uid creating a directory, and the conformance probe
+below run against a share backed by NTFS.
+
+`test/fs-conformance.sh` runs `test/probes/fsprobe` inside a container against a
+plain bind mount on the runner and against a share, and fails on any difference
+not listed with a reason in `test/fs-conformance/deviations-*.txt`. The Linux
+leg is a suite in `integration.yml`; the Windows leg is the last step of
+`machine.yml`, diffed against the same oracle. The deviations that are
+deliberate are tabulated in README under "What differs from a bind mount".
 
 ### NOT tested, and do not claim otherwise
 
-Keep this list honest. An audit found paths described in summaries as tested
-that had no coverage at all -- `elevate` most of all, which had been asserted
-as "the docker run mechanism under it is tested" when only the pure planning
-function was.
+Keep this list honest, and name the assertion rather than the area: "the
+`docker run` mechanism under `elevate` is tested" was written here while only
+its pure planning function was.
 
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
@@ -966,14 +976,16 @@ function was.
   phone reached a workspace over wss and ran a container, by hand, on
   2026-08-14. `android_amd64` has never been executed by anyone.
 - **A share against a file over 4 GiB, and Unicode normalisation.**
-  `test/probes/fsprobe` has the large-file step and CI does not run it; nothing
-  anywhere asks whether a name written NFD comes back NFC.
-- **Installing a release.** The pipeline itself now HAS run: `v0.1.0` is tagged
-  and published with ten archives, client and agent, for every target the
-  matrix builds. What has never happened is somebody downloading one and
-  running it — no archive has been unpacked on a machine that did not build it,
-  so the thing unproven is the artifact, not the workflow that makes it.
-  *(Checked 2026-08-12. Re-check with `gh release view v0.1.0`.)*
+  `test/probes/fsprobe` has no step that writes one: its largest is a 1-byte
+  pwrite at a 1 GiB offset (`sparse`), which is about allocation and not size.
+  Nothing anywhere asks whether a name written NFD comes back NFC.
+  *(Checked 2026-09-06: `grep -n 'g.run(' test/probes/fsprobe/groups.go`.)*
+- **Installing a release.** The pipeline runs: ten releases through `v0.6.0`,
+  each with an archive per target for client and agent, an SBOM beside each and
+  the chart. What has never happened is somebody downloading one and running
+  it: no archive has been unpacked on a machine that did not build it, so the
+  thing unproven is the artifact, not the workflow that makes it.
+  *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.

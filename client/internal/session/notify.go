@@ -82,7 +82,7 @@ func (s *Session) startNotify(live *liveConn) {
 	}
 	live.notify = sink
 	s.watch.SetSink(sink)
-	s.watch.Sync(sharesOf(s.registry))
+	s.syncWatch()
 }
 
 // sharesOf adapts the NFS registry's view of what is exported to the
@@ -120,7 +120,7 @@ func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 			if s.isDormant() {
 				continue
 			}
-			s.watch.Sync(sharesOf(s.registry))
+			s.syncWatch()
 		}
 	}
 }

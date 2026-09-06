@@ -42,11 +42,7 @@ func TestServeReadsAFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	f, err := target.Open("hello.txt")
 	if err != nil {
@@ -66,11 +62,7 @@ func TestServeReadsAFile(t *testing.T) {
 // The share must be writable: containers build into their bind mounts.
 func TestServeWritesAFile(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	const content = "written from the workspace"
 	f, err := target.OpenFile("out.txt", 0o644)
@@ -100,10 +92,7 @@ func TestServeAnUnrelatedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(cwd); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, cwd)
 	share, err := r.Register(other)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -137,11 +126,7 @@ func TestServeListsADirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	entries, err := target.ReadDirPlus(".")
 	if err != nil {
@@ -171,10 +156,7 @@ func TestServeMountsASubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, dir)
 	target := mustMount(t, serve(t, r), "/cwd/src")
 
 	f, err := target.Open("main.go")
@@ -220,10 +202,7 @@ func TestServeReportsSynthesisedOwnership(t *testing.T) {
 // An unregistered export must be refused. This is the boundary that keeps the
 // workspace's view of this machine limited to what the user named.
 func TestServeRefusesAnUnregisteredExport(t *testing.T) {
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, t.TempDir())
 	addr := serve(t, r)
 
 	for _, export := range []string{"/", "/etc", "/m/0011223344556677", "/cwd/../..", "/cwdx"} {
@@ -328,10 +307,7 @@ func TestServeRestoresAnUnregisteredExport(t *testing.T) {
 
 	// Nothing but the working directory is registered, which is what a fresh
 	// session looks like.
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, t.TempDir())
 	export := workspace.ExportPathForID(workspace.ShareID(dir))
 	r.Restore = func(path string) (string, bool) {
 		return dir, path == export
@@ -370,10 +346,7 @@ func TestOneServerServesListenersInTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, dir)
 	srv := New(r, nil)
 
 	read := func(t *testing.T, addr string) {

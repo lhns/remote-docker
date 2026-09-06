@@ -16,15 +16,6 @@ import (
 	nfs "github.com/willscott/go-nfs"
 )
 
-func registryFor(t *testing.T, dir string) *Registry {
-	t.Helper()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	return r
-}
-
 // rootHandleOf is what MOUNT hands the kernel: ToHandle for the empty path.
 func rootHandleOf(t *testing.T, s *Server, export string) []byte {
 	t.Helper()
@@ -100,10 +91,7 @@ func TestRootHandleForAnUnexportedShareIsStale(t *testing.T) {
 func TestRootHandlesDifferPerShare(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(first); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, first)
 	other, err := r.Register(second)
 	if err != nil {
 		t.Fatal(err)

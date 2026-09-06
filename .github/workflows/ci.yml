@@ -50,9 +50,9 @@ jobs:
           fi
 
       # Per module, and every module named explicitly. `./...` stops at a
-      # module boundary, so a loop over the five is the only thing that
-      # actually covers the repository after ADR 0021 -- and a `go test ./...`
-      # at the root would pass while testing almost nothing.
+      # module boundary, so the loop is the only thing that actually covers the
+      # repository after ADR 0021 -- and a `go test ./...` at the root would
+      # pass while testing almost nothing.
       - name: go vet
         run: |
           set -eux
@@ -270,18 +270,26 @@ jobs:
       - name: install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      # Only test/ has shell left. The image's scripts and its sudoers file
-      # were retired by the Go agent (ADR 0010).
+      # The suites, the probe's differ, and the release scripts. The image's
+      # own scripts and its sudoers file were retired by the Go agent
+      # (ADR 0010).
       #
-      # The glob is guarded, because an unmatched pattern is passed through
+      # -x follows `source`, so the suites are checked against the real
+      # test/lib.sh rather than against an unknown. Without it every helper the
+      # library defines is invisible here and half of each suite goes unread.
+      #
+      # Each glob is guarded, because an unmatched pattern is passed through
       # verbatim and shellcheck then fails on a file that does not exist --
       # which is how deleting client/ broke this step once already.
       - name: shellcheck
         run: |
           set -eux
-          if compgen -G 'test/*.sh' >/dev/null; then
-            shellcheck -S warning -s bash test/*.sh
-          fi
+          for glob in 'test/*.sh' 'test/fs-conformance/*.sh' 'scripts/*.sh'; do
+            if compgen -G "$glob" >/dev/null; then
+              # shellcheck disable=SC2086  # the glob is what is being expanded
+              shellcheck -x -S warning -s bash $glob
+            fi
+          done
         shell: bash
 
   # Pull requests only. On main and on tags, release.yml builds this image for

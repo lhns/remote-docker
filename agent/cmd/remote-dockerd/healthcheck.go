@@ -58,7 +58,7 @@ healthcheck:
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "ok (ssh; no local docker socket to check)")
 				return nil
 			}
-			if err := dockerAnswering(ctx); err != nil {
+			if err := dockerAnswering(ctx, socket); err != nil {
 				return err
 			}
 
@@ -93,9 +93,22 @@ func sshAccepting(ctx context.Context, addr string) error {
 
 // dockerAnswering asks the daemon for its version; see ServerVersionArgs for
 // why a request rather than a socket file.
-func dockerAnswering(ctx context.Context) error {
-	if _, err := (dockercli.CLI{}).Line(ctx, dockercli.ServerVersionArgs()...); err != nil {
+//
+// The socket checked is the one --docker-socket named, not whatever the CLI
+// would default to: a deployment that moved the socket would otherwise have its
+// presence tested at one path and its health at another.
+func dockerAnswering(ctx context.Context, socket string) error {
+	if _, err := (dockercli.CLI{Host: dockerHost(socket)}).Line(ctx, dockercli.ServerVersionArgs()...); err != nil {
 		return fmt.Errorf("the workspace's docker daemon is not answering: %w", err)
 	}
 	return nil
+}
+
+// dockerHost is a socket path as a DOCKER_HOST value. Empty stays empty, which
+// is the CLI's own default.
+func dockerHost(socket string) string {
+	if socket == "" {
+		return ""
+	}
+	return "unix://" + socket
 }

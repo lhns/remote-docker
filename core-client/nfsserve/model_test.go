@@ -90,14 +90,8 @@ func TestModelRandomOperations(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target, client, root, err := mountAt(t, serve(t, r), "/cwd")
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, dir)
+	target, client, root := mustMountAt(t, serve(t, r), "/cwd")
 	t.Cleanup(func() { client.Close() })
 
 	m := &model{

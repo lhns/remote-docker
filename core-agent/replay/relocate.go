@@ -14,9 +14,6 @@ import (
 
 // Relocate maps a mountpoint reported by another daemon into our filesystem.
 //
-// Separated from the exec above so it can be tested without one: the tests
-// here run with no daemon, on a machine that is not Linux.
-//
 // `path`, not `path/filepath`: these are always Linux paths, produced by a
 // Linux daemon and consumed by a Linux agent, and running them through
 // Windows-flavoured joining on the development machine would only make the

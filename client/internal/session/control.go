@@ -33,13 +33,9 @@ func (s *Session) sweepIdle() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			s.releaseIfIdle()
+			s.gate.sweep(s.ctx)
 		}
 	}
-}
-
-func (s *Session) releaseIfIdle() {
-	s.gate.sweep(s.ctx)
 }
 
 // hasLiveDependents reports whether anything running still needs us.
@@ -228,16 +224,7 @@ func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
 // it in use until a container names it. Everything between those two is a
 // volume that must survive collection.
 func (s *Session) exportsVolume(volume string) bool {
-	for _, share := range s.registry.Shares() {
-		name, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath)
-		if err != nil {
-			continue
-		}
-		if name == volume {
-			return true
-		}
-	}
-	return false
+	return s.ourVolumes()[volume]
 }
 
 // Status answers the control endpoint, satisfying proxy.Control.

@@ -24,26 +24,21 @@ only port that would ever mount it. The failure then names a port and nothing
 that explains it: `connection refused` against an address nothing on screen
 accounts for, on a container that worked yesterday.
 
-**This record was written for a reported failure that turned out to have a
-different cause, and the correction matters more than the record does.** The
-report was a `docker compose up` reusing an existing container:
+**A `connection refused` on a mount is not evidence of this hazard.** The
+message below was measured on a workspace where the volume named port 30001 and
+the account still held port 30001: nothing had drifted. The port was HELD, by a
+session the workspace had never noticed dying, so every reconnect was refused
+its reverse forward and the client had a session with no export behind it. That
+one is the agent's, `sshd.armDeadPeerDetection`, and `test/nfs-resilience.sh`
+reproduces it.
 
 ```
 error while mounting volume '/var/lib/docker/volumes/rd-6dbf.../_data':
 ... addr=127.0.0.1,port=30001,mountport=30001,... : connection refused
 ```
 
-Measured afterwards on the workspace that produced it: the volume named port
-30001 and the account still held port 30001. **Nothing had drifted.** The port
-was not forgotten, it was HELD — by a session the workspace had never noticed
-dying, so every reconnect was refused its reverse forward and the client had a
-session with no export behind it. That is fixed on the agent side, in
-`sshd.armDeadPeerDetection`, and `test/nfs-resilience.sh` reproduces it.
-
-So the hazard below is real and this record stands on it, but it is narrower
-than the report suggested and nobody should reach for it to explain a
-`connection refused`. Two things bound it, and both are worth knowing before
-spending time here:
+The hazard this record is about is real and narrower than that message. Two
+things bound it:
 
 - Losing the record entirely gives the first machine back `base`, which is
   derived from the uid. **A single-machine account loses nothing.** Only the

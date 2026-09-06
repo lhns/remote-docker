@@ -9,14 +9,9 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-func newTestRegistry(t *testing.T) *Registry {
-	t.Helper()
-	return NewRegistry(DefaultAttrs)
-}
-
 func TestRegisterCWD(t *testing.T) {
 	dir := t.TempDir()
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 
 	share, err := r.RegisterCWD(dir)
 	if err != nil {
@@ -32,7 +27,7 @@ func TestRegisterCWD(t *testing.T) {
 // its handles and its remote volumes rather than orphaning a set per session.
 func TestRegisterIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 
 	first, err := r.Register(dir)
 	if err != nil {
@@ -52,7 +47,7 @@ func TestRegisterIsIdempotent(t *testing.T) {
 
 func TestRegisterDistinctDirectories(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 
 	shareA, err := r.Register(a)
 	if err != nil {
@@ -79,7 +74,7 @@ func TestRegisterAFile(t *testing.T) {
 	if err := os.WriteFile(file, []byte("server {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 
 	share, err := r.Register(file)
 	if err != nil {
@@ -95,7 +90,7 @@ func TestRegisterAFile(t *testing.T) {
 
 func TestRegisterRejectsWhatItCannotServe(t *testing.T) {
 	dir := t.TempDir()
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 
 	if _, err := r.Register(filepath.Join(dir, "does-not-exist")); err == nil {
 		t.Error("Register(missing) = nil error, want an error")
@@ -126,7 +121,7 @@ func TestLookup(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "src", "inner"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 	share, err := r.RegisterCWD(dir)
 	if err != nil {
 		t.Fatalf("RegisterCWD: %v", err)
@@ -171,7 +166,7 @@ func TestLookup(t *testing.T) {
 // path built to climb out of a share, gets nothing.
 func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 	dir := t.TempDir()
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 	if _, err := r.RegisterCWD(dir); err != nil {
 		t.Fatalf("RegisterCWD: %v", err)
 	}
@@ -196,7 +191,7 @@ func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 // confused: "/m/aaa" must never serve a lookup of "/m/aaabbb".
 func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
 	dir := t.TempDir()
-	r := newTestRegistry(t)
+	r := NewRegistry(DefaultAttrs)
 	share, err := r.RegisterCWD(dir)
 	if err != nil {
 		t.Fatal(err)

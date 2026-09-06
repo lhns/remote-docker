@@ -7,6 +7,7 @@ package machine
 // language the Windows speaks.
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -131,36 +132,20 @@ func TestMachineName(t *testing.T) {
 func TestWSLArgs(t *testing.T) {
 	imp := wslImportArgs("rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`, 2)
 	want := []string{"--import", "rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`, "--version", "2"}
-	for i := range want {
-		if imp[i] != want[i] {
-			t.Fatalf("import args = %v, want %v", imp, want)
-		}
+	if !slices.Equal(imp, want) {
+		t.Fatalf("import args = %v, want %v", imp, want)
 	}
 
 	run := wslRunArgs("rd-dev", "sh", "-c", "echo hi")
 	// --user root, because an imported rootfs's default user need not stay
 	// root; --cd /, because WSL otherwise starts in the Windows working
 	// directory translated into /mnt, which may not exist.
-	joined := ""
-	for _, a := range run {
-		joined += a + " "
-	}
+	joined := strings.Join(run, " ")
 	for _, want := range []string{"--user root", "--cd /", "-d rd-dev", "-- sh"} {
-		if !contains(joined, want) {
+		if !strings.Contains(joined, want) {
 			t.Errorf("run args %q are missing %q", joined, want)
 		}
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (func() bool {
-		for i := 0; i+len(needle) <= len(haystack); i++ {
-			if haystack[i:i+len(needle)] == needle {
-				return true
-			}
-		}
-		return false
-	})()
 }
 
 // Quoting, which was wrong once already: an escaping mistake here turns a file
@@ -188,10 +173,10 @@ func TestWSLWriteArgs(t *testing.T) {
 	// The command must reach sh as ONE argument, or the shell sees the config's
 	// own newlines as command separators.
 	last := args[len(args)-1]
-	if !contains(last, "/etc/wsl.conf") || !contains(last, "systemd=false") {
+	if !strings.Contains(last, "/etc/wsl.conf") || !strings.Contains(last, "systemd=false") {
 		t.Fatalf("the write command lost its content or its path: %q", last)
 	}
-	if !contains(last, "printf") {
+	if !strings.Contains(last, "printf") {
 		t.Errorf("expected printf, got %q", last)
 	}
 }
@@ -199,7 +184,7 @@ func TestWSLWriteArgs(t *testing.T) {
 func TestWSLReadGenerationArgs(t *testing.T) {
 	args := wslReadGenerationArgs("rd-dev")
 	joined := strings.Join(args, " ")
-	if !contains(joined, "cat "+generationFile) {
+	if !strings.Contains(joined, "cat "+generationFile) {
 		t.Errorf("the generation is not read from %s: %q", generationFile, joined)
 	}
 	// Inside the distribution, so a machine exported and re-imported by hand
@@ -291,10 +276,10 @@ func TestWSLAddressArgs(t *testing.T) {
 	joined := strings.Join(wslAddressArgs("rd-dev"), " ")
 	// eth0 by name: reading the route table instead answers with the gateway,
 	// which is the Windows side of the NAT and not the machine.
-	if !contains(joined, "ip -4 -o addr show eth0") {
+	if !strings.Contains(joined, "ip -4 -o addr show eth0") {
 		t.Errorf("the address is not read from eth0: %q", joined)
 	}
-	if !contains(joined, "-d rd-dev") {
+	if !strings.Contains(joined, "-d rd-dev") {
 		t.Errorf("the wrong distribution is asked: %q", joined)
 	}
 }

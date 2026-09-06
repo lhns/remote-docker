@@ -313,10 +313,6 @@ func control(endpoint, method, path string, out any) error {
 // it is, because the command about to run will work.
 func ensureDaemon(cfg config.Config, endpoint string) error {
 	if !proxy.Reachable(endpoint) {
-		// Nothing is serving, so whatever goes wrong from here is the reason
-		// the next docker command will fail. Report it: without it the CLI
-		// reaches an endpoint nobody is on and blames a missing daemon, which
-		// is true and useless -- the daemon is missing because of this.
 		if err := cfg.RequireHost(); err != nil {
 			return err
 		}

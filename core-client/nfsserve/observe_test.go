@@ -94,11 +94,7 @@ func TestNoObserverIsNoCost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	share, _, _ := r.Lookup("/cwd")
+	share := cwdShare(t, dir)
 	f, err := share.fs.Open("a")
 	if err != nil {
 		t.Fatal(err)

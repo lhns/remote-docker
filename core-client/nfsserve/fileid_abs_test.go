@@ -4,10 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	nfsfile "github.com/willscott/go-nfs/file"
-
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // go-nfs stats a file it has just created by the absolute OS path osfs returns
@@ -20,17 +16,10 @@ import (
 // fell back to a hash of the path.
 func TestFileIDIsTheSameForAnAbsoluteSpelling(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "fresh"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	share, _, ok := r.Lookup(workspace.ExportCWD)
-	if !ok {
-		t.Fatal("the working directory share is not registered")
-	}
+	share := cwdShare(t, dir)
 
 	rel, err := share.fs.Lstat("fresh")
 	if err != nil {
@@ -40,8 +29,7 @@ func TestFileIDIsTheSameForAnAbsoluteSpelling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat by the absolute path: %v", err)
 	}
-	relID := rel.Sys().(*nfsfile.FileInfo).Fileid
-	absID := abs.Sys().(*nfsfile.FileInfo).Fileid
+	relID, absID := fileidOf(rel), fileidOf(abs)
 	if relID != absID {
 		t.Errorf("one file reported two fileids: %#x by its share path, %#x by its absolute path", relID, absID)
 	}

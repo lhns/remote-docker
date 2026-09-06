@@ -2,6 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-08-13
+- The go-nfs internals cited here are upstream `v0.0.4`, which the project now
+  consumes as a fork ([ADR 0047](0047-a-forked-go-nfs.md)). The fork patches
+  `helpers/cachinghandler.go` `Rename`; the caching behaviour this record rests
+  on is unchanged.
 
 > A share's ROOT handle is a function of its export path. Everything below it
 > stays a cache, because the kernel can ask again for those and cannot ask again

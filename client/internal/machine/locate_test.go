@@ -159,7 +159,7 @@ func TestLocateReportsAMachineThatWillNotStart(t *testing.T) {
 	}
 	// Named, because the caller is about to be told a connection was refused
 	// and the reason is two layers down.
-	if !contains(err.Error(), "dev") || !contains(err.Error(), "no such distribution") {
+	if !strings.Contains(err.Error(), "dev") || !strings.Contains(err.Error(), "no such distribution") {
 		t.Errorf("the error says neither which machine nor why: %v", err)
 	}
 	// And it did not go on to ask an unstarted machine where it is.

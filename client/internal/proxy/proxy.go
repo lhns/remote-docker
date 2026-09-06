@@ -53,11 +53,11 @@ type Proxy struct {
 	// live tracks accepted connections so shutdown can close them.
 	//
 	// A Docker client keeps its connection alive between requests, so a
-	// handler that has finished one sits blocked reading the next. Usually
-	// harmless, because the client exits and the socket closes. Not when the
-	// embedded CLI is that client: it runs in this process, so nothing closes
-	// it, and `docker run` took three minutes to exit while Serve waited for
-	// a peer that was waiting to be told to go away.
+	// handler that has finished one sits blocked reading the next. Harmless
+	// while the client is another process, which exits and closes the socket.
+	// Not when the embedded CLI is the client: it runs in this process, so
+	// nothing closes it, and Serve waits minutes for a peer that is waiting to
+	// be told to go away.
 	mu       sync.Mutex
 	live     map[net.Conn]struct{}
 	shutdown bool
@@ -119,8 +119,8 @@ func (p *Proxy) track(conn net.Conn) bool {
 //
 // A Docker client abandons requests it no longer needs. It stops caring
 // about /containers/<id>/wait the moment the attach stream says the container
-// is gone, so a write failing partway through is routine. Reporting it printed
-// "The pipe has been ended." after a container that had run perfectly.
+// is gone, so a write failing partway through is routine, and reporting it
+// puts "The pipe has been ended." after a container that ran perfectly.
 func clientGone(err error) bool {
 	return errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, io.ErrClosedPipe) ||
@@ -172,8 +172,8 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 		if err != nil {
 			// Once shutdown has begun every connection is closed underneath
 			// its handler on purpose, so the resulting read failure describes
-			// the shutdown rather than a fault. Reporting it turned a clean
-			// exit into two alarming lines about pipes that had ended.
+			// the shutdown rather than a fault, and reporting it makes a clean
+			// exit look like a crash.
 			if err != io.EOF && !clientGone(err) && !p.closing() {
 				p.log().Warn("reading request", "err", err)
 			}

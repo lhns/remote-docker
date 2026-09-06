@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -17,12 +16,13 @@ import (
 // probe is one run of the transcript: the output and the inode labels seen so
 // far. Labels are assigned in order of first sight and reset at the start of
 // every group: one extra file in an early group must not shift every label
-// after it.
+// after it. Nothing here is guarded, because a transcript is only reproducible
+// if the steps run one at a time: two goroutines assigning labels would order
+// them by the scheduler.
 type probe struct {
 	out  io.Writer
 	root string // DIR/fsprobe
 
-	mu   sync.Mutex
 	inos map[[2]uint64]int
 }
 
@@ -180,8 +180,6 @@ func (s *step) format(st *unix.Stat_t) string {
 // label returns the inode label of a stat, assigning one on first sight, for
 // same-ino/different-ino answers.
 func (p *probe) label(st *unix.Stat_t) int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	ino := [2]uint64{uint64(st.Dev), st.Ino} //nolint:unconvert // Dev's width differs per arch
 	label, ok := p.inos[ino]
 	if !ok {
@@ -204,7 +202,16 @@ func fileType(mode uint32) string {
 	}
 }
 
-// sameIno stats two paths and answers same-ino/different-ino by label.
+// sameStat answers same-ino/different-ino for two stats, by label, so that a
+// step comparing identity prints the same word whichever way it obtained them.
+func (g *group) sameStat(a, b *unix.Stat_t) string {
+	if g.p.label(a) == g.p.label(b) {
+		return "same-ino"
+	}
+	return "different-ino"
+}
+
+// sameIno is sameStat for two paths.
 func (g *group) sameIno(a, b string) (string, error) {
 	var sa, sb unix.Stat_t
 	if err := unix.Stat(g.path(a), &sa); err != nil {
@@ -213,10 +220,7 @@ func (g *group) sameIno(a, b string) (string, error) {
 	if err := unix.Stat(g.path(b), &sb); err != nil {
 		return "", err
 	}
-	if g.p.label(&sa) == g.p.label(&sb) {
-		return "same-ino", nil
-	}
-	return "different-ino", nil
+	return g.sameStat(&sa, &sb), nil
 }
 
 // run is the whole transcript: every group, or the named ones, each in a

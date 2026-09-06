@@ -1,30 +1,20 @@
-# Dependency updates, opened as PRs rather than applied.
-#
-# The integration suite is what makes these safe to take: a bump to docker/cli,
-# buildx or moby carries real behaviour, and this repository has been bitten
-# more than once by a claim about a dependency that was not true when checked
-# (docker:dind shipping fuse-overlayfs; buildx being reachable without
-# vendoring it). A PR runs both modes end to end before anybody believes it.
+# Dependency updates, opened as PRs rather than applied, so the integration
+# suite runs both daemon modes end to end before a bump is taken.
 version: 2
 updates:
-  # One entry per module (ADR 0021). Dependabot does not
-  # discover nested modules, so a directory missing here is a module whose
-  # dependencies silently stop being updated -- which is the failure this file
-  # exists to prevent, and which it failed to prevent once: core-client and
-  # core-agent existed in the repository for two commits before they were added
-  # here, and nothing said so.
-  #
-  # The client is where the weight is: 857 lines of go.sum against the agent's
-  # 24 and the shared module's 10.
+  # One entry per module (ADR 0021). Dependabot does not discover nested
+  # modules, so a module missing here silently stops being updated, and
+  # nothing reports it. The client is where the weight is: 861 lines of
+  # go.sum against the agent's 28 and the shared module's none at all
+  # (2026-09-06; re-check with `wc -l */go.sum`).
   - package-ecosystem: gomod
     directory: /client
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      # The docker stack moves together and breaks together: cli, buildx and
-      # buildkit pin each other, which is the whole reason compose cannot be
-      # embedded today. One PR so a combination is tested as a combination.
+      # cli, buildx and buildkit pin each other, so one PR tests a
+      # combination as a combination.
       docker:
         patterns:
           - "github.com/docker/*"
@@ -40,8 +30,8 @@ updates:
       interval: weekly
 
   # The two core modules: the mechanisms with no Docker in them (ADR 0021).
-  # core-client carries the NFS server and the watchers, so of the two it is the
-  # one with real third-party weight.
+  # core-client carries the NFS server and the watchers, so it is the one of
+  # the two with third-party weight.
   - package-ecosystem: gomod
     directory: /core-client
     schedule:
@@ -56,16 +46,15 @@ updates:
     schedule:
       interval: weekly
 
-  # The shared module: the contract, the tunnel and the log handler. It depends
-  # on almost nothing, which is the property worth keeping -- a PR here that
-  # adds weight is worth reading closely.
+  # The shared module: the contract, the tunnel and the log handler. It has no
+  # third-party dependency at all, which is the property worth keeping.
   - package-ecosystem: gomod
     directory: /core
     schedule:
       interval: weekly
 
-  # The cache engine. It has no third-party requires at all, which is the whole
-  # reason it is its own module -- a PR here that adds one is worth refusing.
+  # The cache engine, whose go.mod has no require at all: that is what makes
+  # it a module rather than a package, so a PR adding one is refused.
   - package-ecosystem: gomod
     directory: /dircache
     schedule:
@@ -82,9 +71,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Stated, because the default is FIVE and that is not a rounding error: it
-    # silently withheld the download-artifact bump while five action PRs sat
-    # open, so upload-artifact went to v7 while download stayed on v4.
+    # Stated because the default is five, which silently withholds a bump
+    # while five action PRs sit open: upload-artifact reached v7 while
+    # download-artifact stayed on v4.
     open-pull-requests-limit: 10
 
   # The composite action pins setup-go itself, and the root entry does not

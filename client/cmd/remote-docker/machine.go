@@ -417,7 +417,8 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	}
 
 	out := cmd.OutOrStdout()
-	_, _ = fmt.Fprintf(out, "workspace %q -> %s@127.0.0.1:%d\n", name, spec.Account, spec.Port)
+	_, _ = fmt.Fprintf(out, "workspace %q -> %s@%s:%d\n",
+		name, spec.Account, machinePlaceholderHost, spec.Port)
 
 	cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
 	if err == nil {
@@ -444,21 +445,13 @@ func newMachineStartCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args[0], func(ctx context.Context, _ machine.Backend, ws config.Workspace) error {
-				// Waited for, for the same reason create waits: "started" has
-				// to mean "usable". Starting a machine and returning leaves its
-				// agent still generating a host key and opening a listener, so
-				// whatever runs next races it and loses.
-				//
-				// Held while waiting, because a WSL machine nobody is in shuts
-				// down again -- a start that allowed that would be a command
-				// which reliably undid itself.
 				// Any session serving this workspace predates the machine
-				// being started, so it is holding a connection to a machine
-				// that was stopped -- and to an ADDRESS the machine no longer
-				// has, since it is given a new one at every boot. Left alone,
-				// the next docker command finds that endpoint reachable, uses
-				// it, and gets EOF from a session serving over a dead
-				// connection: an error naming a local pipe and nothing else.
+				// being started, so it holds a connection to a machine that
+				// was stopped -- and to an ADDRESS the machine no longer has,
+				// since it is given a new one at every boot. Left alone, the
+				// next docker command finds that endpoint reachable, uses it,
+				// and gets EOF from a session serving over a dead connection:
+				// an error naming a local pipe and nothing else.
 				//
 				// Together with the shutdown in `stop` this closes the race
 				// from both ends. `stop` can miss a session that was still
@@ -466,12 +459,19 @@ func newMachineStartCommand() *cobra.Command {
 				// `start` runs, it has.
 				stopSessionFor(cmd, args[0])
 
+				// Held while waiting, because a WSL machine nobody is in shuts
+				// down again -- a start that allowed that would be a command
+				// which reliably undid itself.
 				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = hold.Close() }()
 
+				// Located rather than only started: "started" has to mean
+				// "usable", and the agent is still generating a host key and
+				// opening its listener after the machine is up, so whatever
+				// runs next would race it and lose.
 				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
 					return err
 				}

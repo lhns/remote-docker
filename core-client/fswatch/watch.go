@@ -138,7 +138,6 @@ type Stats struct {
 // and goes with the connection instead.
 type Watcher struct {
 	opts Options
-	goos string
 	be   backend
 
 	// raw decouples draining the backend from processing. The drain goroutine
@@ -179,7 +178,6 @@ func New(opts Options) (*Watcher, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Watcher{
 		opts:         opts,
-		goos:         opts.goos,
 		raw:          make(chan fsnotify.Event, 4096),
 		syncC:        make(chan []Share, 1),
 		disconnected: make(map[string]int),
@@ -218,16 +216,12 @@ func (w *Watcher) Sync(shares []Share) {
 	// Non-blocking with replacement: only the latest set matters, and a
 	// caller reconciling on a ticker must never be held up by a walk.
 	select {
+	case <-w.syncC:
+	default:
+	}
+	select {
 	case w.syncC <- shares:
 	default:
-		select {
-		case <-w.syncC:
-		default:
-		}
-		select {
-		case w.syncC <- shares:
-		default:
-		}
 	}
 }
 
@@ -339,7 +333,7 @@ func (w *Watcher) drain() {
 func (w *Watcher) process(out chan<- notify.Frame) {
 	defer close(out)
 
-	t := newTree(w.goos, w.be, w.opts.Budget, w.opts.Exclude, w.opts.Log)
+	t := newTree(w.opts.goos, w.be, w.opts.Budget, w.opts.Exclude, w.opts.Log)
 	c := newCoalescer(w.opts.Debounce, w.opts.MaxDelay, 0)
 
 	timer := time.NewTimer(time.Hour)
@@ -401,11 +395,14 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 		// A directory that appeared must be watched, and re-walked: anything
 		// created inside it between the mkdir and our watch landing produced
 		// no event and would otherwise be lost entirely.
-		if info, err := statNoFollow(e.Name); err == nil && info.IsDir() {
+		// Lstat, never Stat: inotify_add_watch on a symlink watches its
+		// TARGET, which would let a watch escape the share that
+		// osfs.WithBoundOS() exists to bound, and admits cycles.
+		if info, err := os.Lstat(e.Name); err == nil && info.IsDir() {
 			isDir = true
 			if !t.isExcluded(filepath.Base(e.Name)) {
 				t.addTree(root, e.Name, func(p string, dir bool) {
-					if childRel, ok := relativeTo(w.goos, root.parts, p); ok {
+					if childRel, ok := relativeTo(w.opts.goos, root.parts, p); ok {
 						c.add(time.Now(), notify.Event{
 							Export: root.export, Path: childRel,
 							Op: notify.OpCreate, Dir: dir,
@@ -593,9 +590,3 @@ func (w *Watcher) countDropped(n uint64) {
 func (w *Watcher) log() *slog.Logger {
 	return logx.Or(w.opts.Log)
 }
-
-// statNoFollow reports what a path is without following a final symlink. A
-// symlink to a directory must not be walked into: inotify would watch the
-// target, letting a watch escape the share that osfs.WithBoundOS() exists to
-// bound.
-func statNoFollow(p string) (os.FileInfo, error) { return os.Lstat(p) }

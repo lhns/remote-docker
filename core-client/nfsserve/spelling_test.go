@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/go-git/go-billy/v5"
-	nfsfile "github.com/willscott/go-nfs/file"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -30,10 +29,7 @@ func TestFileIDIsOneWhateverTheSpelling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, dir)
 	share, _, ok := r.Lookup(workspace.ExportCWD)
 	if !ok {
 		t.Fatal("the working directory share is not registered")
@@ -65,10 +61,7 @@ func TestFileIDIsOneWhateverTheSpelling(t *testing.T) {
 
 		// A bind written on Windows arrives with forward slashes, and the
 		// registry keeps the spelling it was given (Share.LocalPath).
-		slashed := NewRegistry(DefaultAttrs)
-		if _, err := slashed.RegisterCWD(filepath.ToSlash(dir)); err != nil {
-			t.Fatal(err)
-		}
+		slashed := registryFor(t, filepath.ToSlash(dir))
 		s2, _, ok := slashed.Lookup(workspace.ExportCWD)
 		if !ok {
 			t.Fatal("the forward-slash share is not registered")
@@ -125,11 +118,6 @@ type spelling struct {
 	why  string
 }
 
-// fileidOf is what the wire would carry for a FileInfo the share returned.
-func fileidOf(fi os.FileInfo) uint64 {
-	return fi.Sys().(*nfsfile.FileInfo).Fileid
-}
-
 // splitAnySeparator splits on the last slash of either kind, since a spelling
 // under test may mix them.
 func splitAnySeparator(name string) (dir, base string) {
@@ -143,12 +131,7 @@ func splitAnySeparator(name string) (dir, base string) {
 // "" and "." both name the share itself, and go-nfs asks with both: the
 // mount handle's path is empty, and a lookup of "." is answered from it.
 func TestFileIDOfTheRootIsOneSpelling(t *testing.T) {
-	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	share, _, _ := r.Lookup(workspace.ExportCWD)
+	share := cwdShare(t, t.TempDir())
 	empty, err := share.fs.Stat("")
 	if err != nil {
 		t.Fatalf(`Stat(""): %v`, err)

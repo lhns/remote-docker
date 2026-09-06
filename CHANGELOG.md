@@ -88,6 +88,16 @@ ownership" until `safe.directory` is set.
 - With no `watchExclude` set, prefetch walked `.git` and `node_modules`,
   which the watcher never invalidates; the cache now takes the watcher's
   default list.
+- Adding a named workspace to a config that had only an unnamed one carried
+  four of its fields across and left the rest, `machine` among them, as a base
+  under every entry. The new workspace inherited the old one's machine, so
+  `remote rm <new>` would destroy it. The whole entry moves now.
+- `remote-dockerd healthcheck --docker-socket` tested the named socket for
+  presence and then asked the default one whether it was healthy, so a
+  deployment that moves its socket got an answer about neither.
+- A share released by the workspace kept its prefetch tree and its sender, so
+  attaching that directory again with prefetch off still filled it, and each
+  released share leaked a goroutine.
 
 ### Changed
 

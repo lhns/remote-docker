@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -12,6 +13,9 @@ import (
 	nfsclient "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
+	nfsfile "github.com/willscott/go-nfs/file"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // dialWithRetry works around the host, not the code under test: these tests
@@ -102,15 +106,58 @@ func mountAt(t *testing.T, addr, export string) (*nfsclient.Target, *rpc.Client,
 	return target, client, fh, nil
 }
 
-// mustMount fails the test if the mount is refused.
-func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
+// mustMountAt is mountAt with the refusal fatal, for the tests that speak a
+// procedure the client library hides and so need the connection and the root
+// handle as well as the target.
+func mustMountAt(t *testing.T, addr, export string) (*nfsclient.Target, *rpc.Client, []byte) {
 	t.Helper()
-	target, _, _, err := mountAt(t, addr, export)
+	target, client, root, err := mountAt(t, addr, export)
 	if err != nil {
 		t.Fatalf("mounting %q: %v", export, err)
 	}
 	t.Cleanup(func() { target.Close() })
+	return target, client, root
+}
+
+// mustMount fails the test if the mount is refused.
+func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
+	t.Helper()
+	target, _, _ := mustMountAt(t, addr, export)
 	return target
+}
+
+// registryFor is a registry with dir as the working-directory share, which is
+// what nearly every test here starts from.
+func registryFor(t *testing.T, dir string) *Registry {
+	t.Helper()
+	r := NewRegistry(DefaultAttrs)
+	if _, err := r.RegisterCWD(dir); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// cwdShare registers dir as the working-directory share and returns it, for a
+// test that asks the share's filesystem directly rather than over the wire.
+func cwdShare(t *testing.T, dir string) *Share {
+	t.Helper()
+	share, _, ok := registryFor(t, dir).Lookup(workspace.ExportCWD)
+	if !ok {
+		t.Fatal("the working directory share is not registered")
+	}
+	return share
+}
+
+// fileidOf is what the wire would carry for a FileInfo a share returned.
+func fileidOf(fi os.FileInfo) uint64 {
+	return fi.Sys().(*nfsfile.FileInfo).Fileid
+}
+
+// mountCWD serves dir as /cwd and mounts it, for a test that needs nothing
+// from the registry afterwards.
+func mountCWD(t *testing.T, dir string) *nfsclient.Target {
+	t.Helper()
+	return mustMount(t, serve(t, registryFor(t, dir)), workspace.ExportCWD)
 }
 
 // rawStatus is a procedure's NFS status word, which the client library

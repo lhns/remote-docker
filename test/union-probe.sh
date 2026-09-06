@@ -65,6 +65,11 @@ UPPER=$WORK/cache/upper
 WORKDIR=$WORK/cache/work
 MERGED=$WORK/merged
 HOLDER=union-probe-holder
+# The dinds each section starts, named here so cleanup takes them all: dind3
+# was started in section 12 and removed only on the path that started it.
+DIND=union-probe-dind
+DIND2=union-probe-dind2
+DIND3=union-probe-dind3
 # start_dind runs a dind and waits for its daemon, which three sections need and
 # each used to spell out. The second argument is any extra `docker run` flag,
 # which in practice is --network host.
@@ -80,15 +85,14 @@ start_dind() {
     return 1
 }
 
-DIND=union-probe-dind
-
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
 cleanup() {
     echo
     echo "== cleanup =="
-    docker rm -f "$HOLDER" "$DIND" union-probe-dind2 union-probe-fusehold union-probe-fusewatch >/dev/null 2>&1
+    docker rm -f "$HOLDER" "$DIND" "$DIND2" "$DIND3" \
+        union-probe-watch union-probe-fusehold union-probe-fusewatch >/dev/null 2>&1
     docker volume rm union-probe-vol >/dev/null 2>&1
     sudo umount "$WORK/fuse-merged" 2>/dev/null
     sudo umount "$MERGED" 2>/dev/null
@@ -393,7 +397,10 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     kern_read=$( { time -p sh -c "cat $MERGED/c* >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
     direct_read=$( { time -p sh -c "cat $UPPER/c* >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
     info "200 cached files: fuse ${fuse_read}s, kernel overlay ${kern_read}s, straight off disk ${direct_read}s"
-    lower_via_fuse=$( { time -p sh -c "cat $FUSE_MERGED/pkg/f1 >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
+    # pristine-nested is only ever in the lower, so this read has to fall
+    # through. pkg/f1 does not exist yet -- section 7 creates it -- so timing
+    # that measured an ENOENT.
+    lower_via_fuse=$( { time -p sh -c "cat $FUSE_MERGED/pkg/pristine-nested.txt >/dev/null"; } 2>&1 | awk '/^real/ {print $2}')
     info "one file that misses and falls through to NFS: ${lower_via_fuse}s"
 
     # The floor for landing a batch: files applied THROUGH the union, with no
@@ -553,7 +560,6 @@ echo "== 11. the shape that actually ships, end to end =="
 # host's loopback while a dind has a netns of its own. The real system does not
 # need that: the reverse tunnel is bound inside the account's dind precisely so
 # 127.0.0.1 there is the client's NFS server (ADR 0019).
-DIND2=union-probe-dind2
 if start_dind "$DIND2" "--network host"; then
     # The workspace's own image carries fuse-overlayfs; docker:28-dind does not,
     # which is why a real deployment runs the workspace image for a per-account
@@ -651,7 +657,6 @@ echo "== 12. telling a live union from the directory it leaves behind =="
 # from INSIDE the namespace. What is unmeasured, and is the whole question here,
 # is whether it still answers from OUTSIDE, through /proc/<pid>/root -- so this
 # section asks it rather than assuming it.
-DIND3=union-probe-dind3
 if start_dind "$DIND3" "--network host"; then
     pid=$(docker inspect -f '{{.State.Pid}}' "$DIND3" 2>/dev/null)
     docker exec "$DIND3" sh -c 'mkdir -p /rd/probe12/lower /rd/probe12/merged' >/dev/null 2>&1

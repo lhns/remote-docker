@@ -190,10 +190,7 @@ func (m *Manager) Drop(ctx context.Context, account, export string, paths []stri
 // mergedRoot is where a share's union can be written, as the AGENT can reach
 // it, and it refuses a share that is not serving.
 func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live, string, error) {
-	m.mu.Lock()
-	l, ok := m.shares[key(account, export)]
-	m.mu.Unlock()
-
+	l, ok := m.share(account, export)
 	if !ok {
 		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first: %w", export, ErrNoShare)
 	}
@@ -201,7 +198,7 @@ func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live
 		return nil, "", err
 	}
 
-	root, err := replay.Relocate(l.spec.Merged(), func() (string, error) { return l.spec.Root(), nil })
+	root, err := l.relocate(l.spec.Merged())
 	if err != nil {
 		return nil, "", fmt.Errorf("unions: locating the cache for %s: %w", export, err)
 	}

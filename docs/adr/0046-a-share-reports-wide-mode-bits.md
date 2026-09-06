@@ -14,8 +14,9 @@
   (`client/internal/session/session.go` `defaultAttrs`), and the union's
   root is the upper the agent creates as root, `0:0 0755`.
 - A plain mount never showed it: the kernel asks the server (ACCESS) and
-  go-nfs grants every request. A union checks the mode overlayfs copied from
-  the lower, locally, and refuses.
+  go-nfs grants every request (upstream `v0.0.4` and the fork of
+  [ADR 0047](0047-a-forked-go-nfs.md) alike). A union checks the mode
+  overlayfs copied from the lower, locally, and refuses.
 
 ## The decision
 

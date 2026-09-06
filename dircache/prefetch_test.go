@@ -195,3 +195,19 @@ func TestPolicyEagerIgnoresReads(t *testing.T) {
 	}
 	eventually(t, "the whole tree to be sent", func() bool { return store.appliedCount() == 120 })
 }
+
+// A released share's prefetch goes with it. Left behind, a Touch on the same
+// directory attached again WITHOUT prefetch still finds that tree and queues
+// batches into it, so files go to a share nobody asked to fill.
+func TestForgettingAShareDropsItsPrefetch(t *testing.T) {
+	store := &fakeStore{}
+	c, root := treeCache(t, store)
+	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	eventually(t, "the prefetch to start", func() bool { return c.prefetchFor("/cwd") != nil })
+
+	c.shares.forget("/cwd")
+
+	if c.prefetchFor("/cwd") != nil {
+		t.Error("a released share kept the prefetch that Touch reaches")
+	}
+}

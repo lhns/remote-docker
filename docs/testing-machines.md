@@ -153,7 +153,7 @@ installed" premise ends**, and ADR 0026 says so.
 ### The procedure
 
 ```powershell
-remote-docker remote machine create dev --backend hyperv --rootfs .latcar.vhdx
+remote-docker remote machine create dev --backend hyperv --rootfs .\flatcar.vhdx
 remote-docker remote machine status dev
 remote-docker remote ls
 
@@ -175,7 +175,7 @@ In the order they are likely to fail:
    Switch gave it nothing. The client waits rather than connecting to a
    link-local address, so this presents as a create that times out.
 2. **Ignition did not apply.** The config is written to
-   `%LOCALAPPDATA%emote-docker\machines\dev\config.ign`. Whether Flatcar's
+   `%LOCALAPPDATA%\remote-docker\machines\dev\config.ign`. Whether Flatcar's
    Hyper-V image reads it from there is the single least certain thing in this
    backend -- it may need the config attached another way, and if so this is
    where it fails and the fix belongs in `hyperVBackend.Create`.
@@ -190,7 +190,7 @@ In the order they are likely to fail:
 ```powershell
 remote-docker remote rm dev
 Get-VM                                   # no rd-dev
-Get-ChildItem $env:LOCALAPPDATAemote-docker\machines
+Get-ChildItem $env:LOCALAPPDATA\remote-docker\machines
 docker context ls                        # no rd-dev
 ```
 

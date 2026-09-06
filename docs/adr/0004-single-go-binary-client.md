@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-08-07
+- Current answer: one binary, no external program on any path. `CGO_ENABLED=0`
+  everywhere except Android ([ADR 0023](0023-running-where-the-loader-is-not-us.md)),
+  and the NFS server is a fork of go-nfs ([ADR 0047](0047-a-forked-go-nfs.md)).
 
 ## Context
 
@@ -33,8 +36,9 @@ NFS server as libraries.
 - SSH: `golang.org/x/crypto/ssh`. `client.Listen` replaces `-R`,
   `client.Dial` replaces `-L`, `client.NewSession` replaces remote exec, and
   `x/crypto/ssh/knownhosts` replaces `StrictHostKeyChecking`.
-- NFS: `github.com/willscott/go-nfs` — the same library rclone's `serve nfs` is
-  built on, used directly.
+- NFS: `github.com/willscott/go-nfs`, the same library rclone's `serve nfs` is
+  built on. Consumed through a `replace` onto a fork since 2026-09-06
+  ([ADR 0047](0047-a-forked-go-nfs.md)).
 
 ## Consequences
 
@@ -59,7 +63,5 @@ NFS server as libraries.
   them.
 - We take on the maintenance of an NFS server and an SSH client, where before
   we consumed two mature programs. `go-nfs` is a smaller and less-exercised
-  codebase than rclone; ADR 0009's fallback reasoning applies here too, and a
-  spike precedes the commitment.
-- The old clients are not deleted until the Go client passes the integration
-  suite. Until then they are the only thing that works.
+  codebase than rclone, and that bill arrived: five wire-level defects were
+  forked rather than worked around (ADR 0047).

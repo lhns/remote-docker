@@ -124,7 +124,7 @@ func (s Spec) LowerMount() (source, fstype, data string, flags []string) {
 
 	var kept []string
 	for _, opt := range strings.Split(opts["o"], ",") {
-		if isMountFlag(opt) {
+		if mountFlags[opt] {
 			flags = append(flags, opt)
 			continue
 		}
@@ -146,8 +146,6 @@ var mountFlags = map[string]bool{
 	"nosuid": true, "nodev": true, "noexec": true,
 	"sync": true, "dirsync": true,
 }
-
-func isMountFlag(opt string) bool { return mountFlags[opt] }
 
 // Args are what fuse-overlayfs is run with.
 //

@@ -25,11 +25,7 @@ func TestLinkCountIsReported(t *testing.T) {
 		t.Skipf("no hard links here: %v", err)
 	}
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	parent, err := target.Getattr("parent")
 	if err != nil {

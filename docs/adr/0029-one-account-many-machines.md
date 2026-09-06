@@ -3,7 +3,14 @@
 - Status: Accepted; amends [ADR 0003](0003-client-serves-workspace-mounts.md),
   [ADR 0007](0007-virtual-nfs-export-namespace.md) and
   [ADR 0019](0019-a-dockerd-per-account.md)
-- Date: 2026-08-11
+- Date: 2026-08-11, amended 2026-08-13 and 2026-08-18
+- Current answer: the account is the identity and the machine is the client,
+  keyed on the digest of the enrolled key. The daemon, containers and images are
+  shared; the export, its reverse-tunnel port and the volumes naming it are per
+  machine. A volume outliving its port is repaired from the workspace's own
+  record ([ADR 0032](0032-the-workspace-is-the-record.md)), not from this
+  record's `replaceIfStale` alone. Compose project names still collide between
+  machines, and the accepted remedy is `COMPOSE_PROJECT_NAME` per machine.
 
 ## Context
 
@@ -35,13 +42,11 @@ even if the bind had:
   the commonest way of meeting the problem, and the mount fails with
   `connection refused` against a port nothing on screen explains.
 
-  **Do not read a `connection refused` as evidence of this.** The report that
-  prompted the amendment turned out to be a different fault: the volume named
-  the port the account still held, so nothing had drifted, and the port was held
-  by a session the workspace had never noticed dying. `compose down && up`
-  cures a broken mount for a reason that has nothing to do with ports either --
-  docker's local driver refcounts mounts, so `down` is what unmounts a bad one.
-  See ADR 0032, which carries the correction in full.
+  **Do not read a `connection refused` as evidence of this.** The same symptom
+  comes from a port held by a session the workspace never noticed dying, with
+  nothing drifted at all; and `compose down && up` cures a broken mount for a
+  third reason, docker's local driver refcounting mounts, so `down` is what
+  unmounts a bad one. ADR 0032 carries the distinction in full.
 
   The resolution reverses which record is authoritative: a volume keeps its port
   forever and cannot be re-pointed, so **the volumes are the durable statement

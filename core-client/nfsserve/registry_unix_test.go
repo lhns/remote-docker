@@ -21,7 +21,7 @@ func TestRegisterRefusesASocket(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	_, err = newTestRegistry(t).Register(sock)
+	_, err = NewRegistry(DefaultAttrs).Register(sock)
 	if err == nil {
 		t.Fatal("Register(socket) = nil error, want a refusal")
 	}

@@ -71,8 +71,8 @@ type connGate[T any] struct {
 // Nothing else clears held. Without this a connection that died between two
 // requests is handed to every request after it, and the sweep asks the dead
 // connection whether anything depends on it, gets an error, and the "cannot
-// tell means keep" rule below makes it permanently unreleasable. That was the
-// wedge that needed `remote restart` to clear.
+// tell means keep" rule below makes it permanently unreleasable: a session
+// that only `remote restart` can clear.
 func (g *connGate[T]) invalidate() (T, bool) {
 	var zero T
 
@@ -146,9 +146,8 @@ func (g *connGate[T]) acquire(ctx context.Context) (T, func(), error) {
 // sweep releases the connection if it has been idle and nothing depends on it.
 // It reports whether the connection was released.
 func (g *connGate[T]) sweep(ctx context.Context) bool {
-	// A dead connection is dropped rather than asked. Asking is what wedged it:
-	// busy fails over a dead transport, and "cannot tell means keep" then holds
-	// it forever.
+	// A dead connection is dropped rather than asked: busy fails over a dead
+	// transport, and "cannot tell means keep" would then hold it forever.
 	if dead, ok := g.invalidate(); ok {
 		g.shut(dead)
 		return true

@@ -45,8 +45,8 @@ separately from the client's archive so that an operator setting up a workspace
 does not download 70MB of Docker CLI to do it.
 
 Its own goreleaser build block with `dir: agent`, which is cheap for the reason
-ADR 0021 predicted: the agent's module is 24 lines of go.sum against the
-client's 786.
+ADR 0021 predicted: the agent's module is 28 lines of go.sum against the
+client's 861 (2026-09-06; `wc -l agent/go.sum client/go.sum`).
 
 **No tini.** The image needs it because the agent is PID 1 there and has to reap
 the processes it forks per session. Under systemd those reparent to init.
@@ -71,12 +71,13 @@ decides what the agent is a guest of, and the agent has no `if onKubernetes`.
   breaks out onto **the VM** -- its files, its other services, its network
   position. Nothing about the code changed; the blast radius did.
 - **Shared mode is a different bargain here.** Sharing a dind's daemon means
-  accounts see each other's containers. Sharing a VM's means they also see
-  whatever else that machine runs, and can stop it.
-- **The agent is now testable in CI in a way it never was.** The ubuntu runner
+  accounts see each other's containers (ADR 0012). Sharing a VM's means they
+  also see whatever else that machine runs, and can stop it.
+- **The agent is testable in CI in a way it never was.** The ubuntu runner
   *is* a VM with docker on it, so running the agent natively is available in a
-  way macOS and Android are not. Until `test/vm.sh` exists this record is a
-  design and not a proven one.
+  way macOS and Android are not. `test/vm.sh` is that test: an account
+  provisioned on the runner itself, a session, and a bind mount resolving in
+  both daemon modes. Not systemd, which starts nothing there.
 - **Two deployment shapes to keep working**, and the image is still the one
   that CI exercises most. The switches are shared rather than parallel, which
   is what keeps this from becoming two implementations -- the same argument

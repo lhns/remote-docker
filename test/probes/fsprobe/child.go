@@ -97,7 +97,10 @@ func runChild(role string, args []string) error {
 
 	case "append":
 		// append <file> <tag> <n>: n lines of fixed width, one write each.
-		n, _ := strconv.Atoi(args[2])
+		n, err := strconv.Atoi(args[2])
+		if err != nil {
+			return err
+		}
 		fd, err := unix.Open(args[0], unix.O_WRONLY|unix.O_APPEND, 0)
 		if err != nil {
 			return err
@@ -112,14 +115,17 @@ func runChild(role string, args []string) error {
 
 	case "create":
 		// create <dir> <tag> <n>: n files named <tag>-<i>.
-		n, _ := strconv.Atoi(args[2])
+		n, err := strconv.Atoi(args[2])
+		if err != nil {
+			return err
+		}
 		for i := range n {
 			name := args[0] + "/" + fmt.Sprintf("%s-%03d", args[1], i)
 			fd, err := unix.Open(name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL, 0o644)
 			if err != nil {
 				return err
 			}
-			_ = unix.Close(fd)
+			closeFd(fd)
 		}
 		return nil
 	}

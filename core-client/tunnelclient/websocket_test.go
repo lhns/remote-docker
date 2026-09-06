@@ -60,11 +60,10 @@ func addrOf(srv *httptest.Server) string {
 	return strings.TrimPrefix(strings.TrimPrefix(srv.URL, "https://"), "http://")
 }
 
-// The connection has to name where it went, because known_hosts asks it.
-func TestTheConnectionReportsAnAddressWithAPort(t *testing.T) {
-	srv := echoWS(t, false)
-
-	dial, err := WebSocketDialer(WebSocketOptions{URL: wsURL(srv), Addr: addrOf(srv)})
+// mustDial builds a dialler and opens the connection through it.
+func mustDial(t *testing.T, opts WebSocketOptions) net.Conn {
+	t.Helper()
+	dial, err := WebSocketDialer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,15 @@ func TestTheConnectionReportsAnAddressWithAPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// The connection has to name where it went, because known_hosts asks it.
+func TestTheConnectionReportsAnAddressWithAPort(t *testing.T) {
+	srv := echoWS(t, false)
+
+	conn := mustDial(t, WebSocketOptions{URL: wsURL(srv), Addr: addrOf(srv)})
 
 	addr := conn.RemoteAddr().String()
 	host, port, err := net.SplitHostPort(addr)
@@ -96,15 +103,7 @@ func TestAddrIsRequired(t *testing.T) {
 func TestItCarriesAStream(t *testing.T) {
 	srv := echoWS(t, false)
 
-	dial, err := WebSocketDialer(WebSocketOptions{URL: wsURL(srv), Addr: addrOf(srv)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := dial(context.Background())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer conn.Close()
+	conn := mustDial(t, WebSocketOptions{URL: wsURL(srv), Addr: addrOf(srv)})
 
 	if _, err := conn.Write([]byte("through the proxy")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -134,15 +133,7 @@ func TestCertificateVerification(t *testing.T) {
 		t.Error("an untrusted certificate was accepted")
 	}
 
-	dial, err = WebSocketDialer(WebSocketOptions{URL: url, Addr: addrOf(srv), Insecure: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := dial(context.Background())
-	if err != nil {
-		t.Fatalf("Insecure did not accept the certificate: %v", err)
-	}
-	conn.Close()
+	mustDial(t, WebSocketOptions{URL: url, Addr: addrOf(srv), Insecure: true})
 }
 
 // A CA file makes the same certificate acceptable, which is the case for a
@@ -150,16 +141,7 @@ func TestCertificateVerification(t *testing.T) {
 func TestACAFileVerifies(t *testing.T) {
 	srv := echoWS(t, true)
 
-	pem := certPEM(t, srv)
-	dial, err := WebSocketDialer(WebSocketOptions{URL: wsURL(srv), Addr: addrOf(srv), CAFile: pem})
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := dial(context.Background())
-	if err != nil {
-		t.Fatalf("the CA file did not verify the server: %v", err)
-	}
-	conn.Close()
+	mustDial(t, WebSocketOptions{URL: wsURL(srv), Addr: addrOf(srv), CAFile: certPEM(t, srv)})
 }
 
 // A CA file that is not one is refused when it is read, not left to fail as a
@@ -195,4 +177,28 @@ func certPEM(t *testing.T, srv *httptest.Server) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A hint may only name a flag that exists: the agent has --ws-addr and no
+// --ws-path (ADR 0034).
+func TestHintsNameOnlyFlagsThatExist(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusBadGateway, http.StatusServiceUnavailable} {
+		got := hint(&http.Response{StatusCode: code})
+		if got == "" {
+			t.Errorf("%d has no hint", code)
+		}
+		if strings.Contains(got, "--ws-path") {
+			t.Errorf("%d names --ws-path, which no agent flag matches: %q", code, got)
+		}
+	}
+}
+
+// A status nobody can act on gets no advice at all, rather than a guess.
+func TestNoHintForAnythingElse(t *testing.T) {
+	if got := hint(&http.Response{StatusCode: http.StatusForbidden}); got != "" {
+		t.Errorf("403 produced %q", got)
+	}
+	if got := hint(nil); got != "" {
+		t.Errorf("no response produced %q", got)
+	}
 }

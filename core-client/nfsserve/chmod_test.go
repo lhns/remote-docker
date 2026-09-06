@@ -22,11 +22,7 @@ func TestChmodThroughTheShareReachesTheFile(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	f, err := target.OpenFile("prog", 0o644)
 	if err != nil {
@@ -60,11 +56,7 @@ func TestChmodThroughTheShareReachesTheFile(t *testing.T) {
 // replay -- 3063 events for one edit. See attrChange.Chtimes.
 func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	f, err := target.OpenFile("stamped", 0o644)
 	if err != nil {
@@ -100,11 +92,7 @@ func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 // ability to write with it. See attrChange.Chmod.
 func TestChmodThroughTheShareKeepsTheFileWritable(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	f, err := target.OpenFile("locked", 0o644)
 	if err != nil {
