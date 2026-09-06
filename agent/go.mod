@@ -11,7 +11,7 @@ go 1.26.3
 require (
 	github.com/creack/pty v1.1.24
 	github.com/gliderlabs/ssh v0.3.8
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-agent v0.0.0
 	github.com/spf13/cobra v1.10.2
