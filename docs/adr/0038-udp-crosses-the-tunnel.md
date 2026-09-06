@@ -21,9 +21,6 @@ connection out and `forwarded-tcpip` for a listener. There is no datagram
 channel in the protocol and none in this codebase, so the ports manager filters
 published ports to TCP before it opens anything (`publishedTCP`).
 
-Nobody has reported it, which says more about what people run in a dev workspace
-than about whether it should work.
-
 ## The decision
 
 **Remap UDP anyway**, as ADR 0008 does for TCP: the daemon assigns the published
@@ -36,41 +33,10 @@ first place. What changes is on the workspace, where the number is now the
 daemon's choice: anything reaching a published UDP port from the workspace's own
 network has to look it up rather than assume.
 
-**The requested number is recorded even though nothing reads it.** It costs a
-few bytes in a label, it makes `docker inspect` explain itself, and it is
-exactly the data the forwarding below would need.
+**The requested number goes in the label**, which is what the forwarding below
+reads and what makes `docker inspect` explain itself.
 
-**Forwarding is wanted**, and was built the same week to the shape sketched
-here:
-
-- a channel type of our own, since SSH has none to borrow, carrying
-  length-prefixed datagrams both ways;
-- the framing in `core/tunnel`, which is where the two ends agree on what they
-  speak (ADR 0021);
-- the agent opening a UDP socket inside the account's network namespace, under
-  the policy `AllowDial` already applies to a local forward: loopback only, and
-  not a port another account holds;
-- the client listening on the requested number and holding one channel per
-  source address, with an idle timeout, because a datagram flow has no close;
-- an integration test with a UDP echo server, since none of this can be believed
-  from a unit test.
-
-## Consequences
-
-- **Two people can publish the same UDP port** and neither is refused. Neither
-  can reach it through the tunnel, which was already the case.
-- **A UDP port is unpredictable on the workspace now.** If something there
-  depended on a fixed published UDP port, it needs the assigned one.
-- **The cost of the forwarding above is not only code.** Datagrams inside a TCP
-  stream inherit head-of-line blocking, so a delayed datagram delays the ones
-  behind it. For DNS, syslog and metrics that is unremarkable; for anything
-  latency-shaped it is a different service than the one the user thinks they
-  have, and that has to be said where they will read it rather than discovered.
-- **An older agent will not know the channel type**, so the client has to
-  degrade to today's behaviour rather than failing the session. Whatever gets
-  built starts there.
-
-## How it was built, 2026-08-19
+**And forward it**, since SSH has no datagram channel to borrow. How, in order:
 
 **Not L2TP and not a tun device**, which were the first suggestions and are both
 networks where the need is datagrams for a handful of ports. They want kernel
@@ -111,8 +77,17 @@ is a second thing to get wrong.
 so the ports manager has no UDP code at all: the listener, the flows and the
 framing live behind that one method.
 
-## What this does not do
+**An integration test with a UDP echo server** (`test/probes/udpecho`), since
+none of this can be believed from a unit test.
 
+## Consequences
+
+- **Two people can publish the same UDP port** and neither is refused.
+- **A UDP port is unpredictable on the workspace now.** If something there
+  depended on a fixed published UDP port, it needs the assigned one.
+- **An older agent does not know the channel type** and rejects it. The client
+  opens no listener and the session is otherwise unchanged, which is the whole
+  version check.
 - **Datagrams inherit head-of-line blocking** from the TCP stream carrying
   them, so a delayed one delays those behind it. For DNS, syslog and metrics
   that is unremarkable; for anything latency-shaped it is a different service

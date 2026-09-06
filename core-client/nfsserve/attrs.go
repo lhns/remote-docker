@@ -9,9 +9,11 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-git/go-billy/v5"
+	nfs "github.com/willscott/go-nfs"
 	nfsfile "github.com/willscott/go-nfs/file"
 )
 
@@ -153,21 +155,14 @@ func (a *attrFS) wrap(fi os.FileInfo, fullPath string) os.FileInfo {
 	// Resolved HERE, while the real FileInfo is in hand: attrInfo.Sys replaces
 	// it with the NFS one. The real path goes too, because Windows has to open
 	// the file to read an identity.
+	//
 	// go-nfs stats a just-created file by the absolute OS path osfs returns
-	// (nfs_oncreate.go), everything else by the share-relative one. The fileid
-	// must come from one spelling, or the CREATE reply carries a number no
-	// later reply repeats and the client marks the inode stale.
-	sharePath := fullPath
-	if filepath.IsAbs(fullPath) {
-		if rel, err := filepath.Rel(a.Root(), fullPath); err == nil && !leavesRoot(rel) {
-			sharePath = filepath.ToSlash(rel)
-		}
-	}
-	return &attrInfo{
-		FileInfo: fi,
-		attrs:    a.attrs,
-		fileid:   fileIDOf(fi, filepath.Join(a.Root(), sharePath), sharePath),
-	}
+	// (nfs_oncreate.go), everything else by the share-relative one, and
+	// shareRelative is what makes those one spelling: two would have the CREATE
+	// reply carry a fileid no later reply repeats.
+	sharePath := filepath.ToSlash(shareRelative(a.Root(), fullPath))
+	fileid, nlink := wireIdentity(fi, filepath.Join(a.Root(), sharePath), sharePath)
+	return &attrInfo{FileInfo: fi, attrs: a.attrs, fileid: fileid, nlink: nlink}
 }
 
 // attrInfo overrides the ownership and permission bits of a real FileInfo.
@@ -175,6 +170,14 @@ type attrInfo struct {
 	os.FileInfo
 	attrs  Attrs
 	fileid uint64
+	nlink  uint32
+}
+
+// identity is what the platform keeps about a file that os.FileInfo does not
+// carry portably: which file it is, and how many names it has.
+type identity struct {
+	dev, ino uint64
+	nlink    uint32
 }
 
 // Mode keeps the type bits (directory, symlink, device) and replaces only
@@ -203,45 +206,46 @@ func (i *attrInfo) Mode() fs.FileMode {
 // and that fallback returns nothing at all on Windows.
 func (i *attrInfo) Sys() any {
 	return &nfsfile.FileInfo{
-		Nlink:  1,
+		Nlink:  i.nlink,
 		UID:    i.attrs.UID,
 		GID:    i.attrs.GID,
 		Fileid: i.fileid,
 	}
 }
 
-// fileIDOf is the file's identifier on the wire: the real one the platform
-// keeps, and a path hash only where there is none.
+// wireIdentity is what a reply says about which file this is: the fileid, and
+// the link count beside it, both from the one platform call that knows.
 //
 // A fileid is how a client tells whether a handle still names the same file.
 // Change it under a live handle and Linux does not re-resolve; it marks the
-// inode stale and every open descriptor on it fails:
+// inode stale and every open descriptor on it fails. A path hash cannot hold
+// that, because one file has several spellings -- what a lookup joined, what a
+// listing joined, what a chroot made relative -- so it is the fallback for a
+// platform with no identity to give and nothing more (ADR 0033). Unix has the
+// inode; Windows has NTFS's File Reference Number, one
+// GetFileInformationByHandle away.
 //
-//	NFS: server error: fileid changed
-//	fsid 0:54: expected fileid 0x1548a05f1dee82e0, got 0xd8adad186b880beb
-//
-// A path hash cannot hold that, because one file has several spellings -- what
-// a lookup joined, what a listing joined, what a chroot made relative. It was
-// the Windows fallback applied everywhere, and it killed builds on a share:
-// `ld` sizes the output it has written, and ftruncate on a stale descriptor is
-// what the kernel cannot retry (ADR 0033).
-//
-// Every platform here has a real identity. Unix has the inode; Windows has
-// NTFS's File Reference Number, one GetFileInformationByHandle away.
-func fileIDOf(fi os.FileInfo, osPath, sharePath string) uint64 {
-	dev, ino, ok := inodeOf(fi, osPath)
+// The link count is the real one, so a directory shows its subdirectories and
+// a hard-linked file shows both names the way a native mount does. Never 0: a
+// client reads that as a file with no name.
+func wireIdentity(fi os.FileInfo, osPath, sharePath string) (uint64, uint32) {
+	id, ok := identityOf(fi, osPath)
 	if !ok {
-		return fileID(sharePath)
+		return fileID(sharePath), 1
+	}
+	nlink := id.nlink
+	if nlink == 0 {
+		nlink = 1
 	}
 	// Mixed rather than concatenated: both halves are 64 bits and the wire
 	// field is 64. The client only compares these for equality, so spreading
 	// the loss beats discarding the top of either.
 	h := fnv.New64()
 	var buf [16]byte
-	binary.LittleEndian.PutUint64(buf[:8], dev)
-	binary.LittleEndian.PutUint64(buf[8:], ino)
+	binary.LittleEndian.PutUint64(buf[:8], id.dev)
+	binary.LittleEndian.PutUint64(buf[8:], id.ino)
 	_, _ = h.Write(buf[:])
-	return h.Sum64()
+	return h.Sum64(), nlink
 }
 
 // fileID is the fallback: a path hash, for platforms with no inode to report.
@@ -263,14 +267,26 @@ type attrChange struct {
 	root string
 }
 
+// Pinned because the degradation is silent: go-nfs asks for nfs.UnixChange by
+// assertion, so dropping or renaming one of Link, Mknod, Mkfifo or Socket
+// answers every LINK with NFS3ERR_NOTSUPP with every wire test still passing.
+var _ nfs.UnixChange = (*attrChange)(nil)
+
 // Chmod sets the permissions, which is how a file becomes executable. Without
 // it a binary built on a share links and cannot be run.
+//
+// The owner's read and write bits are always kept. This process is the file's
+// owner and serves every later read and write as it, so a `chmod 0111` or
+// `0444` from a container would make the file unwritable through the share,
+// where the same chmod against Docker's own bind mount, served by root, has no
+// such effect. The mode reported back is synthesised anyway (see Attrs), so
+// nothing the container can observe is changed by keeping them.
 func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 	target, err := c.resolve(name)
 	if err != nil {
 		return err
 	}
-	return os.Chmod(target, mode)
+	return os.Chmod(target, mode|0o600)
 }
 
 // Chown and Lchown are accepted and discarded.
@@ -293,23 +309,66 @@ func (c *attrChange) Lchown(string, int, int) error { return nil }
 // which changes this server caused, and it has no such mechanism.
 func (c *attrChange) Chtimes(string, time.Time, time.Time) error { return nil }
 
+// Link makes a second name for a file, which is LINK: `ln`, `cp -l` and git's
+// object store all issue it. Both names are resolved inside the share, and the
+// new one passes the same spelling rule a create does. Hard links work on NTFS
+// as well as on Unix.
+func (c *attrChange) Link(name, link string) error {
+	if err := checkNewName(shareBase(filepath.Clean(c.root), link)); err != nil {
+		return err
+	}
+	existing, err := c.resolve(name)
+	if err != nil {
+		return err
+	}
+	target, err := c.resolve(link)
+	if err != nil {
+		return err
+	}
+	return os.Link(existing, target)
+}
+
+// Mknod, Mkfifo and Socket are refused: a share carries names, not kernel
+// objects (ADR 0039), and a device or a pipe made here would work on this
+// machine and nowhere else. Refusing with ENOTSUP is what go-nfs reports as
+// NFS3ERR_NOTSUPP.
+func (c *attrChange) Mknod(string, uint32, uint32, uint32) error { return syscall.ENOTSUP }
+func (c *attrChange) Mkfifo(string, uint32) error                { return syscall.ENOTSUP }
+func (c *attrChange) Socket(string) error                        { return syscall.ENOTSUP }
+
 // resolve turns a share-relative name into a path on this machine.
 //
-// Checked on the RESULT: filepath.Join cleans, so "../.." looks ordinary
-// afterwards, and the name came from the workspace. The root is cleaned too:
-// it arrives spelled as the bind was written, forward slashes on Windows,
-// and Join returns the OS spelling.
+// Two rules, and neither covers the other. A name that leaves the share
+// lexically is REFUSED here rather than contained: LINK's new name comes off
+// the wire, and containing `../x` would create a name in somebody's share that
+// nothing asked for. Everything below the root then goes through secureLeaf,
+// because a lexical check cannot see a symlink: `escape/x` where
+// `escape -> /etc` passes every prefix compare and lands in /etc.
+//
+// The root is cleaned because it arrives spelled as the bind was written,
+// forward slashes on Windows included.
 func (c *attrChange) resolve(name string) (string, error) {
 	if c.root == "" {
 		return "", fmt.Errorf("nfsserve: no share directory to write attributes in")
 	}
 	root := filepath.Clean(c.root)
-	target := filepath.Join(root, filepath.FromSlash(name))
-	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
-	if target != root && !strings.HasPrefix(target, prefix) {
-		return "", fmt.Errorf("nfsserve: %q leaves the share", name)
+
+	rel := shareRelative(root, name)
+	// Cleaned for the check alone, because "sub/../../x" climbs out and does
+	// not look it; secureLeaf below still gets the name as it came, so the
+	// components are resolved rather than cancelled lexically.
+	if filepath.IsAbs(rel) || leavesRoot(filepath.Clean(rel)) {
+		// A *PathError carrying ErrPermission, so go-nfs answers NFS3ERR_ACCES
+		// rather than I/O, which sends somebody looking at the disk. It asks
+		// os.IsPermission, which unwraps that type and nothing wrapped by %w.
+		return "", &fs.PathError{Op: "nfsserve:", Path: fmt.Sprintf("%q leaves the share", name), Err: os.ErrPermission}
 	}
-	return target, nil
+	// SETATTR on the share root itself, which arrives as the empty path go-nfs
+	// joins from a root handle.
+	if rel == "" || rel == "." || rel == string(filepath.Separator) {
+		return root, nil
+	}
+	return secureLeaf(root, rel)
 }
 
 // leavesRoot reports whether a relative path from filepath.Rel climbs out.

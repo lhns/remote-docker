@@ -36,3 +36,16 @@ func TestHealthcheckDialsLoopbackForABareBindAddress(t *testing.T) {
 		}
 	}
 }
+
+// --docker-socket has to reach the daemon query as well as the stat in front
+// of it. Tested at one path and asked at another, a deployment that moved the
+// socket reports the default daemon's health under the moved one's name.
+func TestHealthcheckAsksTheSocketItWasGiven(t *testing.T) {
+	if got := dockerHost("/run/ws/docker.sock"); got != "unix:///run/ws/docker.sock" {
+		t.Errorf("dockerHost = %q, want the socket it was given", got)
+	}
+	// Nothing named is the CLI's own default, not "unix://".
+	if got := dockerHost(""); got != "" {
+		t.Errorf("dockerHost(\"\") = %q, want the CLI default", got)
+	}
+}

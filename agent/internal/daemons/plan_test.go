@@ -188,10 +188,10 @@ func TestLabelValue(t *testing.T) {
 
 // A daemon carries no restart policy, so the agent is its only supervisor.
 //
-// It used to carry `unless-stopped`, which made the parent dockerd restart it
-// forever with nothing of ours watching: a daemon that would not start
-// crash-looped, and reconcile could not replace it because a container that
-// never stops failing never answers what it is running. See docs/adr/0036.
+// A policy makes the parent dockerd a second supervisor with no backoff and
+// nothing in our log: a daemon that will not start crash-loops, and reconcile
+// cannot replace it because a container that never stops failing never answers
+// what it is running. See docs/adr/0036.
 //
 // What that costs is real and is the reason this test explains itself: an
 // account's detached containers come back when that account next connects,

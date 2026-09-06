@@ -79,7 +79,7 @@ type Targets interface {
 	Mode() string
 }
 
-// Target satisfies Targets for the per-account manager.
+// target renders one daemon as the Target both modes answer in.
 func (m *Manager) target(d *Daemon) Target {
 	return Target{
 		Socket:    d.Socket,
@@ -115,8 +115,9 @@ func (m *Manager) Mode() string { return workspace.ModePerAccount }
 //
 // A Targets implementation rather than a nil check, which is the whole point:
 // the mode is chosen once, where it is read from the environment, and no code
-// downstream asks again. It was nine `if Daemons != nil` branches, and the
-// invariant they were guarding is one that fails by succeeding.
+// downstream asks again. A `if Daemons != nil` at a use site is the shape a
+// routing mistake hides in, because getting it wrong succeeds against somebody
+// else's containers.
 type shared struct{ socket string }
 
 // Shared serves every account from one daemon at the given socket.

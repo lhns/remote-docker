@@ -253,7 +253,9 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 // narrowed to one file when the share is one (ADR 0039). The ONE place this is
 // built, so registration and SetAttrs cannot disagree about it.
 func shareFS(base, file string) billy.Filesystem {
-	inner := osfs.New(base, osfs.WithBoundOS())
+	// noFollowFS sits directly on the osfs so every layer above it, the single
+	// file view and the attributes alike, removes and renames a link as a link.
+	inner := &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
 	if file != "" {
 		return &singleFileFS{Filesystem: inner, name: file}
 	}

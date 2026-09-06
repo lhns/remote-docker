@@ -14,6 +14,7 @@ go 1.26.3
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/cyphar/filepath-securejoin v0.6.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.9.1
@@ -25,7 +26,6 @@ require (
 
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
-	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
@@ -37,3 +37,5 @@ require (
 // ignore the workspace and build one module at a time, so a missing require
 // fails where it is wrong.
 replace github.com/lhns/remote-docker/core => ../core
+
+replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260905215120-0fbb162b6b6f

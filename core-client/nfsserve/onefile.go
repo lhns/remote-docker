@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-billy/v5"
+	nfs "github.com/willscott/go-nfs"
 )
 
 // singleFileFS is a directory containing exactly one file.
@@ -125,6 +126,47 @@ func (s *singleFileFS) TempFile(string, string) (billy.File, error) { return nil
 
 // Chroot has nowhere to go: this filesystem is one file deep.
 func (s *singleFileFS) Chroot(string) (billy.Filesystem, error) { return nil, os.ErrNotExist }
+
+// singleFileChange is the same refusal for the operations that do not go
+// through the filesystem at all.
+//
+// go-nfs asks the handler for a billy.Change and calls it with paths, so
+// attrChange writes to the real directory this share sits in: LINK stats the
+// new name through singleFileFS, which answers not-exist for a sibling, and
+// then creates it beside the user's file. The refusals above cannot see that
+// call, which is why it is refused here.
+type singleFileChange struct {
+	*attrChange
+	fs *singleFileFS
+}
+
+var _ nfs.UnixChange = (*singleFileChange)(nil)
+
+// Link is refused whatever it names: a new name is by definition not the one
+// file this share shows.
+func (c *singleFileChange) Link(string, string) error { return os.ErrPermission }
+
+func (c *singleFileChange) Chmod(name string, mode os.FileMode) error {
+	if !c.fs.visible(name) {
+		return os.ErrPermission
+	}
+	return c.attrChange.Chmod(name, mode)
+}
+
+// singleFileOf reports the single-file view under a share's filesystem, past
+// the attribute wrapper go-nfs hands the handler back.
+func singleFileOf(fs billy.Filesystem) (*singleFileFS, bool) {
+	for {
+		switch v := fs.(type) {
+		case *singleFileFS:
+			return v, true
+		case *attrFS:
+			fs = v.Filesystem
+		default:
+			return nil, false
+		}
+	}
+}
 
 // describeMode names what a path is, for a refusal that says why rather than
 // what it is not.

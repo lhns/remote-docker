@@ -341,7 +341,7 @@ func TestCacheVolumesBelongToTheirShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := ParseVolumeName(cwd + "-" + cacheRole); !ok {
-		t.Errorf("the cwd share's cache is not recognised: %q", cwd+"-"+cacheRole)
+	if _, _, ok := ParseVolumeName(CacheVolumeName(cwd)); !ok {
+		t.Errorf("the cwd share's cache is not recognised: %q", CacheVolumeName(cwd))
 	}
 }

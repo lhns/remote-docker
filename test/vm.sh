@@ -125,6 +125,11 @@ session() {
     CLIENT_PID=$!
 }
 
+# rd runs one client command with a timeout, so a command that hangs reports
+# where it stopped rather than spending the job's budget. Also the exec-fn
+# lib.sh's union_is_fuse is given.
+rd() { timeout 60 "$WORK/remote-docker" "$@"; }
+
 # unions_running counts the fuse-overlayfs servers on this machine.
 #
 # All of them, because this suite holds one union at a time and the process
@@ -141,6 +146,7 @@ if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
 else
     bad "no usable docker on this machine; nothing below can work"
     summary
+    exit 1
 fi
 
 if command -v useradd >/dev/null; then
@@ -187,12 +193,14 @@ if (cd "$REPO/agent" && CGO_ENABLED=0 go build -o "$WORK/remote-dockerd" ./cmd/r
 else
     bad "the agent did not build"
     summary
+    exit 1
 fi
 if build_client; then
     ok "the client builds"
 else
     bad "the client did not build"
     summary
+    exit 1
 fi
 
 echo
@@ -203,6 +211,7 @@ else
     bad "the agent did not start"
     dump_agent_log true
     summary
+    exit 1
 fi
 
 if enrol "$ACCOUNT" "$WORK/state"; then
@@ -210,6 +219,7 @@ if enrol "$ACCOUNT" "$WORK/state"; then
 else
     bad "could not enrol"
     summary
+    exit 1
 fi
 
 if wait_unix_account "$ACCOUNT"; then
@@ -218,6 +228,7 @@ else
     bad "no unix account appeared"
     dump_agent_log true
     summary
+    exit 1
 fi
 
 # The account name is ours; the unix name is not. The client logs in as
@@ -239,6 +250,7 @@ else
     tail -30 "$WORK/client.log" | sed 's/^/        /'
     dump_agent_log true
     summary
+    exit 1
 fi
 
 # The whole point of the project, against an agent with no container around it.
@@ -250,7 +262,7 @@ else
     bad "the bind mount did not resolve: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
-if out=$(timeout 60 "$WORK/remote-docker" remote status 2>&1) &&
+if out=$(rd remote status 2>&1) &&
     echo "$out" | grep -q "^status"; then
     ok "remote status answers against a machine workspace"
 else
@@ -318,17 +330,17 @@ else
         if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg         -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
             ok "a container starts against a delegated union"
 
-            if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg             sh -c 'grep " /w " /proc/mounts' 2>&1) && echo "$out" | grep -q fuse; then
+            if union_is_fuse rd vm-deleg; then
                 ok "its share is a union rather than a directory that resembles one"
             else
-                bad "/w is not a fuse mount: $(echo "$out" | tail -2 | tr -s '[:space:]' ' ')"
+                bad "/w is not a fuse mount: [$LAST_OUTPUT]"
                 dump_agent_log false
             fi
 
             # BEFORE the restart, so a failure afterwards says which half is
             # broken. Without it, "the held share stopped working" cannot be
             # told from a union that never served the file at all.
-            if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg cat /w/marker 2>&1) &&
+            if out=$(rd exec vm-deleg cat /w/marker 2>&1) &&
                 echo "$out" | grep -q "served from the machine"; then
                 ok "it reads this machine's file through the union"
             else
@@ -365,14 +377,14 @@ else
             fi
 
             # And the container that held it throughout still reads through its mount.
-            if out=$(timeout 60 "$WORK/remote-docker" exec vm-deleg cat /w/marker 2>&1) &&
+            if out=$(rd exec vm-deleg cat /w/marker 2>&1) &&
                 echo "$out" | grep -q "served from the machine"; then
                 ok "the container held its share across the agent restart"
             else
                 bad "the held share stopped working: $(echo "$out" | tail -2 | tr -s '[:space:]' ' ')"
                 dump_agent_log false
             fi
-            timeout 60 "$WORK/remote-docker" rm -f vm-deleg >/dev/null 2>&1
+            rd rm -f vm-deleg >/dev/null 2>&1
         else
             bad "no container against a delegated union: $(tail -3 "$WORK/deleg.log" | tr -s '[:space:]' ' ')"
             dump_agent_log false

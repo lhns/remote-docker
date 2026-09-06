@@ -56,8 +56,8 @@ func TestWithoutAnAnswerTheLocalPortIsThePublishedOne(t *testing.T) {
 }
 
 // Forwarding is what refuses a second container asking for a port this session
-// already opened, so it has to answer about the LOCAL number rather than the
-// published one they are keyed on.
+// already opened, so it has to answer about the LOCAL number and not the
+// published one.
 func TestForwardingAnswersAboutTheLocalPort(t *testing.T) {
 	docker := &fakeDocker{containers: []Container{
 		{ID: "a", Name: "web", Ports: []Published{tcp(32768, 80)}},
@@ -82,11 +82,10 @@ func TestForwardingAnswersAboutTheLocalPort(t *testing.T) {
 // Two containers of one account, one from this machine and one from another.
 // Both asked for 8080 on their own machine; only one of them asked for it HERE.
 //
-// The other is forwarded where the daemon published it, which is how it worked
-// before the published port became the client's (ADR 0008), and is what lets
-// somebody start a container on the pc and
-// reach it from the phone (ADR 0029). Without this they contend for one local
-// port and one of them silently loses.
+// The other is forwarded where the daemon published it (ADR 0008), which is
+// what lets somebody start a container on the pc and reach it from the phone
+// (ADR 0029). Without this they contend for one local port and one of them
+// silently loses.
 func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 	const mine, theirs = "thismachine", "othermachine"
 

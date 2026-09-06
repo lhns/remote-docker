@@ -186,8 +186,8 @@ func (r *Replayer) apply(ctx context.Context, frame notify.Frame) {
 
 // poke resolves an in-share path and performs the operation.
 func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
-	root, ok := r.root(ctx, export)
-	if !ok {
+	root, err := r.mountpoint(ctx, export)
+	if err != nil || root == "" {
 		return
 	}
 	abs, ok := resolve(root, share)
@@ -199,26 +199,20 @@ func (r *Replayer) poke(ctx context.Context, export, share string, isDir bool) {
 	if err := r.Poker.Poke(abs, isDir); err != nil {
 		// A path that is not there is the ordinary case, not a fault: the
 		// container may not have looked at it, or it may have changed again
-		// since. Logging every one would drown the log during a build.
-		r.debug("notify: poking a path", "path", abs, "err", err)
+		// since. Debug, because logging every one at a higher level would
+		// drown the log during a build.
+		r.log().Debug("notify: poking a path", "path", abs, "err", err)
 	}
 }
 
-// root is the directory in the workspace holding this export.
+// mountpoint is the directory in the workspace holding this export, cached for
+// mountpointTTL.
 //
 // Singular, and that is an assumption worth knowing about: two separate mounts
 // of one export do not share an inode the way dockerd's bind mount does, so a
 // poke reaches only the mount it names. Today there is exactly one, dockerd's
 // volume (ADR 0018). Adding a second mount without poking both would make
 // changes appear under one and not the other, with nothing failing.
-func (r *Replayer) root(ctx context.Context, export string) (string, bool) {
-	mp, err := r.mountpoint(ctx, export)
-	if err != nil || mp == "" {
-		return "", false
-	}
-	return mp, true
-}
-
 func (r *Replayer) mountpoint(ctx context.Context, export string) (string, error) {
 	volume, err := workspace.VolumeNameForExport(r.Client, export)
 	if err != nil {
@@ -305,9 +299,3 @@ func cleanShare(p string) string {
 func (r *Replayer) log() *slog.Logger {
 	return logx.Or(r.Log)
 }
-
-// debug is for the ordinary, expected failures: a path that has changed
-// again, a container that never looked at it. A level now rather than a
-// separate do-nothing method, so raising it is a handler's decision instead of
-// an edit here.
-func (r *Replayer) debug(msg string, args ...any) { r.log().Debug(msg, args...) }

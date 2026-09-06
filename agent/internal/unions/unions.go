@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core-agent/netns"
+	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core-agent/union"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/logx"
@@ -140,6 +141,21 @@ func (l *live) isApplied(name string, size int64, modTime time.Time) bool {
 	defer l.appliedMu.Unlock()
 	a, ok := l.applied[name]
 	return ok && a.size == size && a.modTime.Equal(modTime)
+}
+
+// share is the live union for one of an account's shares, if this manager has
+// one.
+func (m *Manager) share(account, export string) (*live, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.shares[key(account, export)]
+	return l, ok
+}
+
+// relocate maps one of this union's paths, which is a path in the daemon's own
+// filesystem, into the agent's view of it.
+func (l *live) relocate(p string) (string, error) {
+	return replay.Relocate(p, func() (string, error) { return l.spec.Root(), nil })
 }
 
 // ErrNoShare is what every op answers for a share this workspace is not
@@ -471,8 +487,8 @@ func (m *Manager) stop(k string, l *live) {
 //
 // Asked of the daemon that would serve it, because that is where the answer
 // differs: in per-account mode the binary has to be in the image that daemon
-// runs (agent/internal/daemons/plan.go:38), and the agent's own filesystem
-// says nothing about it.
+// runs (see daemons.DefaultImage), and the agent's own filesystem says nothing
+// about it.
 func Capability(root string) string {
 	if root == "" {
 		root = "/"

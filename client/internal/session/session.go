@@ -310,7 +310,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		// exactly, and a cached copy of a file that is gone is the one way
 		// this mode can be wrong rather than slow (ADR 0044).
 		s.watch.SetObserver(cacheObserver{cache: s.cache})
-		s.watch.Sync(sharesOf(s.registry))
+		s.syncWatch()
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}
 
@@ -343,6 +343,12 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 
 		if err := s.listen(opts.Endpoint); err != nil {
 			cancel()
+			// The watcher is already walking the working directory by now, and
+			// it holds handles the context does not: cancelling alone leaves
+			// it running in a process that is about to report a failure.
+			if s.watch != nil {
+				_ = s.watch.Close()
+			}
 			return nil, err
 		}
 	} else {
@@ -486,9 +492,7 @@ func (s *Session) wake() {
 		return
 	}
 
-	if s.watch != nil {
-		s.watch.Sync(sharesOf(s.registry))
-	}
+	s.syncWatch()
 	s.log().Info("woken by a request")
 }
 

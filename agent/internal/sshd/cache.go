@@ -139,27 +139,27 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		merged, err := s.cfg.Unions.Prepare(ctx, name, account.Client(),
 			unions.Daemon{Host: target.Host, PID: target.PID}, req)
 		if err != nil {
-			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return refused(err), nil
 		}
 		return cache.Reply{Merged: merged}, nil
 
 	case cache.OpApply:
 		err := s.cfg.Unions.Apply(ctx, name, req.Export, req.Codec, io.LimitReader(body, req.Bytes))
 		if err != nil {
-			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return refused(err), nil
 		}
 		return cache.Reply{}, nil
 
 	case cache.OpDrop:
 		if err := s.cfg.Unions.Drop(ctx, name, req.Export, req.Paths); err != nil {
-			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return refused(err), nil
 		}
 		return cache.Reply{}, nil
 
 	case cache.OpChanges:
 		changes, err := s.cfg.Unions.Changes(ctx, name, req.Export)
 		if err != nil {
-			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return refused(err), nil
 		}
 		return cache.Reply{Changes: changes}, nil
 
@@ -177,13 +177,21 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 	case cache.OpPull:
 		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)
 		if err != nil {
-			return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}, nil
+			return refused(err), nil
 		}
 		return cache.Reply{Bytes: int64(len(pulled))}, pulled
-
 	}
 
 	// Validate has already refused every op this agent does not know, so
 	// reaching here would mean the two disagree.
 	return cache.Reply{Err: fmt.Sprintf("workspace-cache: nothing handles %q", req.Op)}, nil
+}
+
+// refused is a failed op as the client reads it.
+//
+// Unknown is the one distinction that matters to the other side: a share this
+// workspace is not serving is something the client can fix by preparing it
+// again, and anything else is not.
+func refused(err error) cache.Reply {
+	return cache.Reply{Err: err.Error(), Unknown: errors.Is(err, unions.ErrNoShare)}
 }

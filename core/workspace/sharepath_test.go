@@ -3,9 +3,7 @@ package workspace
 import "testing"
 
 // Both protocols ask this, and what they ask it about becomes a syscall the
-// agent performs as root. It was an unexported helper of the notify wire types
-// until the protocols moved into packages of their own (ADR 0021); tested here
-// directly now that it is the shared rule and neither protocol owns it.
+// agent performs as root.
 func TestValidSharePathRejects(t *testing.T) {
 	for _, p := range []string{
 		"",

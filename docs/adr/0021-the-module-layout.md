@@ -273,12 +273,13 @@ that passes without proving anything.
   dependency bought on purpose for the one bulk transfer this protocol makes,
   and the point of stating the count is that such a purchase is visible rather
   than that it never happens.
-- **`core`'s library packages have no third-party dependency at all.** The one
-  `x/sys` in `core/go.mod` is the probes reading raw inotify.
-- **`./...` stops at every module boundary**, so the six-module loop is the only
-  thing that covers the repository. With no root module the naive command fails
+- **`core` has no third-party dependency at all.** Its `go.mod` carries no
+  require; the `x/sys` it used to hold went to `test/probes` with the probes
+  that read raw inotify.
+- **`./...` stops at every module boundary**, so the seven-module loop is the
+  only thing that covers the repository. With no root module the naive command fails
   rather than passing.
-- **`golangci-lint` runs seven times**: one per module, plus `GOOS=linux` for
+- **`golangci-lint` runs nine times**: one per module, plus `GOOS=linux` for
   `agent` and `core-agent`, whose Linux-only files a host lint never sees.
 - **Dependabot needs one entry per module.** It does not discover nested modules;
   a directory missing from `dependabot.yml` stops being updated silently.

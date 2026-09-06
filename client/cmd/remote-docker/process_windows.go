@@ -18,10 +18,10 @@ func killPID(pid int) error {
 
 // processAlive reports whether pid is still RUNNING.
 //
-// Opening the process is not the question, and answering it that way is a bug
-// this file had: a process that has exited can still be opened while any
-// handle to it remains, so `stop` would have waited its whole timeout and then
-// reported a running session that had been gone for seconds.
+// Opening the process is not the question: one that has exited can still be
+// opened while any handle to it remains, so answering that way makes `stop`
+// wait its whole timeout and then report a running session that has been gone
+// for seconds.
 //
 // GetExitCodeProcess is the question. STILL_ACTIVE (259) means running;
 // anything else is an exit status. The ambiguity Windows is famous for here --

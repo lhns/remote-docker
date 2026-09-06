@@ -76,23 +76,30 @@ func (b hyperVBackend) Available(ctx context.Context) error {
 	return nil
 }
 
-func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, error) {
+// look reads a machine's state and its recorded notes. See psGetVM, which asks
+// for both in one call.
+//
+// Absent with empty notes is a machine that is not there: Get-VM with
+// -ErrorAction SilentlyContinue says so by printing nothing.
+func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNotes, error) {
 	out, err := b.ps(ctx, psGetVM(machineName(name)))
 	if err != nil {
-		// A machine that is not there is not an error, and Get-VM with
-		// -ErrorAction SilentlyContinue says so by printing nothing.
+		return Absent, hyperVNotes{}, err
+	}
+	lines := strings.SplitN(strings.TrimSpace(out), "\n", 2)
+	var notes hyperVNotes
+	if len(lines) > 1 {
+		notes = decodeNotes(lines[1])
+	}
+	return parseVMState(lines[0]), notes, nil
+}
+
+func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, error) {
+	state, notes, err := b.look(ctx, name)
+	if err != nil || state == Absent {
 		return Observed{State: Absent}, nil
 	}
-
-	lines := strings.SplitN(strings.TrimSpace(out), "\n", 2)
-	observed := Observed{State: parseVMState(lines[0])}
-	if observed.State == Absent {
-		return observed, nil
-	}
-	if len(lines) > 1 {
-		observed.Generation = decodeNotes(lines[1]).Generation
-	}
-	return observed, nil
+	return Observed{State: state, Generation: notes.Generation}, nil
 }
 
 // Create builds the machine from a Flatcar image and one Ignition document.
@@ -156,15 +163,11 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 // afterwards the only way in is the SSH that key is for -- PowerShell Direct is
 // Windows-guest only. See hyperVEnrolment.
 func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) error {
-	out, err := b.ps(ctx, psGetVM(machineName(name)))
+	_, notes, err := b.look(ctx, name)
 	if err != nil {
 		return err
 	}
-	lines := strings.SplitN(strings.TrimSpace(out), "\n", 2)
-	if len(lines) < 2 {
-		return nil
-	}
-	return hyperVEnrolment(decodeNotes(lines[1]), publicKey)
+	return hyperVEnrolment(notes, publicKey)
 }
 
 func (b hyperVBackend) Start(ctx context.Context, name string) error {

@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-08-07
+- Current answer: the proxy decodes `/containers/create` and copies everything
+  else through. A shell on the workspace is a stock `ssh`, not a subcommand
+  ([ADR 0018](0018-one-way-to-do-each-thing.md)).
 
 ## Context
 
@@ -54,8 +57,6 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
 - Requests we do not understand are forwarded verbatim rather than rejected.
   A proxy that fails closed on unfamiliar traffic would be a worse tool than
   the wrapper it replaces.
-- ~~`remote-docker shell` still exists and still opens an interactive session
-  on the workspace.~~ **Corrected by [ADR 0018](0018-one-way-to-do-each-thing.md):**
-  `shell` is gone. The point it was making still holds -- the proxy replaced
-  the wrapper's `docker` subcommand, not its usefulness as a way in -- but a
-  stock `ssh` is what provides the way in now, and the agent still serves it.
+- **The proxy replaced the wrapper's `docker` subcommand, not its usefulness
+  as a way in.** The way in is a stock `ssh`, which the agent serves to any
+  enrolled key; `remote-docker shell` was deleted by ADR 0018.

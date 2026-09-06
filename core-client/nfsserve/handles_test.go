@@ -10,16 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-)
 
-func registryFor(t *testing.T, dir string) *Registry {
-	t.Helper()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	return r
-}
+	"github.com/go-git/go-billy/v5"
+	"github.com/lhns/remote-docker/core/logx"
+	nfs "github.com/willscott/go-nfs"
+)
 
 // rootHandleOf is what MOUNT hands the kernel: ToHandle for the empty path.
 func rootHandleOf(t *testing.T, s *Server, export string) []byte {
@@ -96,10 +91,7 @@ func TestRootHandleForAnUnexportedShareIsStale(t *testing.T) {
 func TestRootHandlesDifferPerShare(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(first); err != nil {
-		t.Fatal(err)
-	}
+	r := registryFor(t, first)
 	other, err := r.Register(second)
 	if err != nil {
 		t.Fatal(err)
@@ -188,5 +180,43 @@ func TestHandleSizes(t *testing.T) {
 	share, _, _ := r.Lookup("/cwd")
 	if got := len(s.handler.ToHandle(share.fs, []string{"marker"})); got != cachedHandleSize {
 		t.Errorf("an ordinary handle is %d bytes, want the %d go-nfs mints", got, cachedHandleSize)
+	}
+}
+
+// forgetfulHandler is a Handler that cannot move a cached handle, and records
+// what it was asked to forget instead.
+type forgetfulHandler struct {
+	nfs.Handler
+	handle      []byte
+	invalidated [][]byte
+}
+
+func (f *forgetfulHandler) ToHandle(billy.Filesystem, []string) []byte { return f.handle }
+
+func (f *forgetfulHandler) InvalidateHandle(_ billy.Filesystem, h []byte) error {
+	f.invalidated = append(f.invalidated, h)
+	return nil
+}
+
+// A rename the embedded handler cannot follow must INVALIDATE the source
+// handle, which is what go-nfs does for a handler with no Rename of its own.
+// It cannot do it here: rootHandler always implements the interface, so
+// go-nfs never reaches its own fallback, and returning nil left the cache
+// naming a path the file no longer has.
+func TestRenameInvalidatesWhenTheHandlerCannotMoveAHandle(t *testing.T) {
+	r := registryFor(t, t.TempDir())
+	share, _, ok := r.Lookup("/cwd")
+	if !ok {
+		t.Fatal("no share")
+	}
+	stub := &forgetfulHandler{handle: make([]byte, cachedHandleSize)}
+	h := &rootHandler{Handler: stub, registry: r, log: logx.Or(nil)}
+
+	if err := h.Rename(share.fs, []string{"old"}, share.fs, []string{"new"}); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if len(stub.invalidated) != 1 || string(stub.invalidated[0]) != string(stub.handle) {
+		t.Errorf("the source handle was invalidated %d times (%x); a client keeps resolving the old path",
+			len(stub.invalidated), stub.invalidated)
 	}
 }

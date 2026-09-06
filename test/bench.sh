@@ -26,7 +26,7 @@ set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 WORK=$(mktemp -d)
-# shellcheck disable=SC2034  # IMAGE and CONTAINER are read by lib.sh.
+# shellcheck disable=SC2034  # IMAGE is read by lib.sh's build_image.
 IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-bench
 PIN=bench-workload
@@ -320,7 +320,6 @@ for policy in $PREFETCH; do
                 tree="$WORK/bench-$row"
                 rm -rf "$tree"
                 build_tree "$tree" "$FILES"
-                mkdir -p "$tree/out"
                 cmd=$(workload_cmd "$w" "$tree")
                 want=$(workload_bytes "$w" "$tree")
 

@@ -445,13 +445,13 @@ func (t *Tree) Read(path string, n int64) []Entry {
 	var (
 		out   []Entry
 		total int64
-		cap   = t.cap()
+		limit = t.cap()
 	)
 	for at := leaf; at != nil; at = at.parent {
 		if at.unfetched() == 0 {
 			continue
 		}
-		if total+at.unfetched() > cap {
+		if total+at.unfetched() > limit {
 			break
 		}
 		if !t.promote(at) {

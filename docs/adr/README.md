@@ -45,6 +45,7 @@ writes are not synchronous is a union over the live export.
 | [0044](0044-a-delegated-share-is-a-cache.md) | A share with `write != through` is a union, not a snapshot | |
 | [0045](0045-prefetch-follows-the-reads.md) | Prefetch follows the reads: an escalating tree over small files | |
 | [0046](0046-a-share-reports-wide-mode-bits.md) | A share reports wide mode bits, owned by the account | |
+| [0047](0047-a-forked-go-nfs.md) | A forked go-nfs, consumed through a `replace` | |
 
 ## Code layout
 
@@ -121,7 +122,7 @@ here in an old commit message or comment means:
 | 0031 if it knows about Docker, it is glue | [0021](0021-the-module-layout.md) |
 | 0036 the agent supervises its daemons | [0019](0019-a-dockerd-per-account.md) |
 | 0037 the published port belongs to the client | [0008](0008-published-ports-reach-the-client.md) |
-| 0043 delegated is a copy | [0044](0044-a-delegated-share-is-a-cache.md), which made it a cache |
+| 0043 delegated is a copy | [0044](0044-a-delegated-share-is-a-cache.md), which made it a union over the live export |
 
 ## Status
 

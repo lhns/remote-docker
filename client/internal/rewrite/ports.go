@@ -43,9 +43,9 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 			continue
 		}
 
-		// TCP only, because only TCP gets a local listener. Refusing a
-		// container on the strength of a TCP listener holding the number would
-		// be refusing it for something unrelated.
+		// TCP only, because the question is asked by opening a TCP listener.
+		// Refusing a UDP publication on the strength of a TCP listener holding
+		// the number would be refusing it for something unrelated.
 		if workspace.IsTCP(workspace.ProtoOf(containerPort)) && r.LocalPortFree != nil {
 			for _, port := range fixed {
 				if err := r.LocalPortFree(port); err != nil {
@@ -116,9 +116,9 @@ func fixedPorts(list []binding) ([]int, binding) {
 // The only binding left where it is asks for an empty HostPort, which is the
 // user asking for any port already.
 //
-// UDP is moved like TCP even though the tunnel cannot carry it: two accounts
-// publishing 53/udp collided on the workspace, and moving it costs nothing the
-// client could otherwise have had. It is unreachable from here either way
+// UDP is moved like TCP, and for the same reason: two accounts publishing
+// 53/udp collide on a shared workspace daemon. The client opens the number it
+// asked for in front of whatever the daemon picked, on either protocol
 // (ADR 0038).
 func remappable(b binding) (int, bool) {
 	var hostPort string

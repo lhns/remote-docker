@@ -120,9 +120,9 @@ type Event struct {
 // malformed path and a privileged syscall. Neither end may assume the other
 // checked.
 func (e Event) Validate() error {
-	// VolumeNameForExport accepts exactly /cwd and /m/<16 hex> and rejects
-	// everything else, which is the same set the agent can resolve to a
-	// volume. Reusing it means the two cannot drift apart.
+	// ValidExport accepts exactly /cwd and /m/<16 hex>, which is the same set
+	// the agent can resolve to a volume. Reusing it means the two cannot
+	// drift apart.
 	if err := workspace.ValidExport(e.Export); err != nil {
 		return fmt.Errorf("workspace: notify event export: %w", err)
 	}

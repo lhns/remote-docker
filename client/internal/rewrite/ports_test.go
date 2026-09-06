@@ -99,11 +99,10 @@ func TestAnAlreadyEmptyPortIsLeftAlone(t *testing.T) {
 	}
 }
 
-// UDP is moved like TCP, because two accounts publishing 53/udp collided on the
-// workspace and moving it costs nothing that was reachable anyway: the tunnel
-// carries TCP, so a published UDP port has never been reachable from here
-// (ADR 0038).
-func TestUDPIsRemappedThoughItIsNotForwarded(t *testing.T) {
+// UDP is moved like TCP, because two accounts publishing 53/udp collided on
+// the workspace, and the client opens the number that was asked for in front
+// of whatever the daemon picked, on either protocol (ADR 0038).
+func TestUDPIsRemappedLikeTCP(t *testing.T) {
 	r, _, _ := newRewriter()
 
 	hostConfig, labels := create(t, r, `{"HostConfig":{"PortBindings":{"53/udp":[{"HostPort":"5353"}]}}}`)
@@ -116,8 +115,8 @@ func TestUDPIsRemappedThoughItIsNotForwarded(t *testing.T) {
 	}
 }
 
-// The local refusal is about a listener this machine opens, and UDP never gets
-// one, so a TCP listener on that number must not refuse a UDP publication.
+// The local refusal is asked by opening a TCP listener, so a TCP listener on
+// that number must not refuse a UDP publication.
 func TestUDPIsNotRefusedForATakenLocalPort(t *testing.T) {
 	r, _, _ := newRewriter()
 	r.LocalPortFree = func(int) error { return errTaken }

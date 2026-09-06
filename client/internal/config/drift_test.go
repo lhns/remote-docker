@@ -135,8 +135,7 @@ var settingSources = map[string]struct {
 
 	// Not a setting. `machine create` writes it and `rm` reads it to know
 	// there is a machine to destroy; no environment variable or flag provides
-	// it, and Resolve does not carry it, because the commands that care read
-	// the file directly.
+	// it, so there is no source for these tests to honour it from.
 	"Machine": {record: true},
 }
 
@@ -334,11 +333,11 @@ func jsonName(field string) string {
 	return tag
 }
 
-// typed converts a sample to the JSON type that field holds.
-// samplePath is the key a map-valued setting is written under, so the entry
-// above can read the same one back.
+// samplePath is the key a map-valued setting is written under, so the entry in
+// settingSources can read the same one back.
 const samplePath = "/home/alice/project"
 
+// typed converts a sample to the JSON type that field holds.
 func typed(field, sample string) any {
 	f, _ := reflect.TypeOf(Workspace{}).FieldByName(field)
 	switch f.Type.Kind() {

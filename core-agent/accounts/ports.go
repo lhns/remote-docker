@@ -113,9 +113,12 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// derived port, which another machine may hold and which this machine's
 	// volumes were not built for. ADR 0032 has why that is better than a
 	// session that half works.
-	want, err := p.preferred(account, client)
-	if err != nil {
-		return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
+	want := 0
+	if p.Preferred != nil {
+		var err error
+		if want, err = p.Preferred(account, client); err != nil {
+			return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
+		}
 	}
 
 	port := 0
@@ -139,15 +142,6 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// costs it its volumes rather than its connection.
 	_ = p.save()
 	return port, nil
-}
-
-// preferred asks what this machine's existing state expects. Zero with no error
-// is an ordinary new machine; an error is fatal to For.
-func (p *Ports) preferred(account, client string) (int, error) {
-	if p.Preferred == nil {
-		return 0, nil
-	}
-	return p.Preferred(account, client)
 }
 
 // free reports whether a port may be handed to somebody who does not derive it.

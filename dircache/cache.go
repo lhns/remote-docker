@@ -142,9 +142,8 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 	if _, known := c.shares.get(share); known {
 		return
 	}
-	state := &shareState{}
+	state := &shareState{opts: opts}
 	c.shares.set(share, root, state)
-	c.shares.setOptions(share, opts)
 	// Whatever the policy: a cache filled by an earlier session still holds a
 	// file deleted here while nothing ran, and only the record of that fill
 	// can take it out.
@@ -297,6 +296,9 @@ type shareState struct {
 
 	// Cached is whether the cache holds everything the prefetch chose.
 	Cached bool
+
+	// opts is what the share was attached with.
+	opts ShareOptions
 }
 
 // Report is what one share has cached, for a status command.
@@ -324,9 +326,6 @@ type shares struct {
 	mu    sync.Mutex
 	state map[string]*shareState
 
-	// options is what each share was attached with.
-	options map[string]ShareOptions
-
 	// prefetch is each share's tree and sender, for the tree policy.
 	prefetch map[string]*prefetch
 
@@ -342,20 +341,12 @@ type shares struct {
 	manifests map[string]map[string]baseline
 }
 
-func (f *shares) setOptions(share string, opts ShareOptions) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.options == nil {
-		f.options = map[string]ShareOptions{}
-	}
-	f.options[share] = opts
-}
-
 // ephemeral reports whether a share never carries writes back.
 func (f *shares) ephemeral(share string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.options[share].Ephemeral
+	s, ok := f.state[share]
+	return ok && s.opts.Ephemeral
 }
 
 func (f *shares) set(share, root string, s *shareState) {
@@ -387,12 +378,17 @@ func (f *shares) finish(s *shareState, cached bool, err error) bool {
 
 // forget drops a share, so a later consumer of the same directory fills it from
 // scratch rather than against a manifest for a cache that is gone.
+//
+// The prefetch goes with it. Left behind, a Touch on a share attached again
+// without prefetch would still find that tree and queue batches into it, so
+// files would be sent to a share nobody asked to fill.
 func (f *shares) forget(share string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.state, share)
 	delete(f.roots, share)
 	delete(f.manifests, share)
+	delete(f.prefetch, share)
 }
 
 // noteSent records what a batch put in a share's cache.

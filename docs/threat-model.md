@@ -201,7 +201,7 @@ sequenceDiagram
     C->>A: SSH handshake, inside the WebSocket
     A-->>C: host key, compared against known_hosts
     C->>A: publickey auth
-    Note over W: pings on a 20s budget, and a peer that<br/>stops answering is dropped, releasing its port
+    Note over W: pings every 20s and drops a peer that has<br/>not answered in 60s, releasing its port
 ```
 
 **S — which end TLS authenticates (1, 2).** TLS authenticates the *proxy*. The
@@ -487,8 +487,7 @@ sequenceDiagram
     end
 ```
 
-**I/E — reading another account's machine (8–10).** Found while writing this
-document. With one daemon for everybody (ADR 0012) every account shares the
+**I/E — reading another account's machine (8–10).** With one daemon for everybody (ADR 0012) every account shares the
 agent's network namespace, so `127.0.0.1:<alice's port>` is genuinely reachable
 from bob's session, and what answers is her NFS export with `AuthFlavorNull`:
 read and write access to the directories on her machine. Binding her port was
@@ -713,7 +712,7 @@ iptables rules and mounts NFS in its own namespace, so there is no unprivileged
 mode. This is the same bargain as ADR 0013 on Swarm: whoever installs the chart
 could already run privileged pods.
 
-**E — a token an account could read (4).** Found while updating this document.
+**E — a token an account could read (4).**
 A projected ServiceAccount token is mounted at mode 0644, and an enrolled
 account gets a shell in that container as its own uid, so it could read the
 pod's cluster identity. The agent never calls the Kubernetes API, so the chart
@@ -926,21 +925,19 @@ Stated here rather than buried, because each is a deliberate trade.
   one. The numbers were range-checked and their count was not, so one label
   could ask a machine for as many sockets as it has. Capped at 1024, dropped
   the way the parser drops anything else it will not use. Flow 5 has the detail.
-- **A datagram flow held until its forward ends** was found in the same pass and
-  deliberately not changed: its lifetime is the forward's because TCP's is, and
+- **A datagram flow held until its forward ends**, deliberately not changed: its lifetime is the forward's because TCP's is, and
   a second lifetime rule is a second thing to get wrong. ADR 0038 records the
   cost and the trigger that would change it.
-- **A prepare may only name the asking machine's own cache volume.** Found
-  writing flow 9. `CacheRequest.Validate` asks whether the volume is a MANAGED
+- **A prepare may only name the asking machine's own cache volume.**
+  `CacheRequest.Validate` asks whether the volume is a MANAGED
   one, which every machine of an account satisfies for every other machine's
   volumes — one account's machines share a daemon (ADR 0029). So a second
   machine could have the agent mount somebody else's cache as the upper of its
   own union and write into it through its own container. The agent now derives
   the name from the key digest and compares, rather than trusting the one it was
   handed. Inside one account either way, and a narrowing worth having.
-- **A symlink cannot escape a share, and it is measured now.** Writing flow 3
-  raised it, because go-billy validates where a link is placed and never where
-  it points. It holds anyway: the server never resolves a link, NFSv3 leaving
+- **A symlink cannot escape a share, and it is measured now.** go-billy
+  validates where a link is placed and never where it points. It holds anyway: the server never resolves a link, NFSv3 leaving
   that to the client in its own namespace. `symlink_test.go` asserts it rather
   than leaving it to reasoning.
 - **`attrChange` follows links server-side**, the one path that reasoning does

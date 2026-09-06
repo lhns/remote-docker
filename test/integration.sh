@@ -35,10 +35,9 @@ PIN_SH='while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done'
 
 # expect_output runs a container and compares its stdout to a literal.
 #
-# Seven copies of this shape existed, each nine lines, and each reported an
-# empty capture as a content mismatch -- "got []" -- when it actually means the
-# container produced no answer at all. That distinction has cost real time
-# three times in this suite's history, so it is the reason the helper exists.
+# An empty capture is reported as its own case rather than as a content
+# mismatch: "got []" reads as the wrong answer when it means the container
+# produced no answer at all, and telling those apart is why this exists.
 #
 #   expect_output <description> <expected> -- <docker run args...>
 expect_output() {
@@ -731,22 +730,19 @@ fi
 
 echo
 echo "== 11c. idle release, and what must survive it =="
-# Two claims, and the first one used to be untested while looking tested.
+# Two claims, in this order: a release actually happens when nothing depends on
+# us, and one does NOT happen while a container does.
 #
-# The old probe container was created THROUGH this client, so it carried our
-# owner label and held one of our volumes -- hasLiveDependents returned true on
-# the first check and the connection was never released at all. The test then
-# asserted the container was still alive, which it trivially was. The reconnect
-# path ADR 0015 calls load-bearing was never exercised.
-#
-# So: first prove a release actually happens when nothing depends on us, then
-# prove one does NOT happen while a container does.
+# The order is what makes the second mean anything. A probe container created
+# THROUGH this client carries our owner label and holds one of our volumes, so
+# hasLiveDependents is true from the first check, no release ever happens, and
+# "the container is still alive" is trivially true -- which leaves the reconnect
+# path ADR 0015 calls load-bearing unexercised.
 
 # (a) nothing running -> the connection must be released and reopen on demand.
 #
-# 12 seconds against an 8-second timer: a 1.5x margin. It was 20, twice, which
-# spent 40 seconds of every run waiting past a timeout the suite itself sets
-# short at the top of this file precisely to avoid that.
+# 12 seconds against the 8-second timer set at the top of this file: a 1.5x
+# margin, and no longer, since every second here is spent on every run.
 sleep 12
 expect_output "the client reconnects after an idle release" "after-idle" -- --rm alpine:3 echo after-idle
 
@@ -780,7 +776,7 @@ else
 fi
 
 echo
-echo "== 11d. one account cannot bind another's NFS port =="
+echo "== 11e. one account cannot bind another's NFS port =="
 # ADR 0010's entire justification, and untested until now. Under sshd this
 # depended on a permitlisten string generated correctly into every key's
 # authorized_keys; under the agent it is a comparison.
@@ -851,11 +847,9 @@ else
         #
         # Reported rather than asserted, because it follows from this mode
         # rather than from a defect in it. The threat model records it.
-        shell_reach=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
-            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o BatchMode=yes -p "$SSH_PORT" "$OTHER@127.0.0.1" \
+        shell_reach=$(ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$OTHER" 60 \
             "nc -w 2 127.0.0.1 $first_port </dev/null && echo CONNECTED || echo REFUSED" \
-            2>/dev/null </dev/null | tr -d '\015')
+            2>/dev/null | tr -d '\015')
         case "$shell_reach" in
         *CONNECTED*)
             info "shared daemon: $OTHER's shell reaches $ACCOUNT's export on $first_port (ADR 0012)" ;;
@@ -1045,10 +1039,8 @@ echo "== 13b. a stock ssh still gets a shell, and the embedded CLI =="
 #
 # -tt forces a pty, so `tty` naming one proves the agent allocated it rather
 # than falling through to the non-pty branch.
-shellout=$(timeout 60 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o BatchMode=yes -tt -p "$SSH_PORT" "$ACCOUNT@127.0.0.1" \
-    'tty; id -un; docker ps --format {{.Names}} 2>&1 | head -3' 2>&1 </dev/null)
+shellout=$(ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$ACCOUNT" 60 \
+    'tty; id -un; docker ps --format {{.Names}} 2>&1 | head -3' -tt 2>&1)
 
 # tr squeezes the pty's CRLF out so a failure prints as one readable line.
 trim() { echo "$1" | tr -d '
@@ -2237,15 +2229,19 @@ fi
 # to see that from inside the process, which is why it is asserted here: the
 # command must FAIL to reach a daemon that is not there, rather than succeed
 # against ours.
-hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/dev/null 2>&1 || true
-if out=$(timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps 2>&1); then
+#
+# The context has to EXIST for the refusal below to mean anything: a command
+# naming a context that was never created fails too, and reports a pass.
+if ! hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/dev/null 2>&1; then
+    bad "could not create a foreign context, so nothing was asked of one"
+elif out=$(timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps 2>&1); then
     bad "a foreign context was redirected to our daemon"
     info "output: $(echo "$out" | head -2 | tr '
 ' '; ')"
 else
     ok "a docker context we did not create is left alone"
 fi
-hostdocker context rm -f itest-foreign >/dev/null 2>&1 || true
+hostdocker context rm -f itest-foreign >/dev/null 2>&1
 
 # And ours, named explicitly, reaches the workspace it names rather than the
 # default one.

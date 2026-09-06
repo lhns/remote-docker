@@ -25,12 +25,19 @@ func testHostKey(t *testing.T) ssh.PublicKey {
 	return signer.PublicKey()
 }
 
-func TestKnownHostsTrustsOnFirstUse(t *testing.T) {
+// newKnownHosts is a checker over a fresh known_hosts, and its path.
+func newKnownHosts(t *testing.T) (*KnownHosts, string) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "known_hosts")
 	kh, err := NewKnownHosts(path)
 	if err != nil {
 		t.Fatalf("NewKnownHosts: %v", err)
 	}
+	return kh, path
+}
+
+func TestKnownHostsTrustsOnFirstUse(t *testing.T) {
+	kh, path := newKnownHosts(t)
 
 	key := testHostKey(t)
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2222}
@@ -57,11 +64,7 @@ func TestKnownHostsTrustsOnFirstUse(t *testing.T) {
 // an interception, and there is no interactive user on the far side of an
 // automated tunnel to make that judgement, so it is refused, not prompted.
 func TestKnownHostsRefusesAChangedKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known_hosts")
-	kh, err := NewKnownHosts(path)
-	if err != nil {
-		t.Fatalf("NewKnownHosts: %v", err)
-	}
+	kh, path := newKnownHosts(t)
 
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2222}
 	original := testHostKey(t)
@@ -70,7 +73,7 @@ func TestKnownHostsRefusesAChangedKey(t *testing.T) {
 	}
 
 	imposter := testHostKey(t)
-	err = kh.Callback()("workspace.example:2222", addr, imposter)
+	err := kh.Callback()("workspace.example:2222", addr, imposter)
 	if err == nil {
 		t.Fatal("a changed host key was accepted")
 	}
@@ -84,11 +87,7 @@ func TestKnownHostsRefusesAChangedKey(t *testing.T) {
 }
 
 func TestKnownHostsSeparatesHosts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known_hosts")
-	kh, err := NewKnownHosts(path)
-	if err != nil {
-		t.Fatalf("NewKnownHosts: %v", err)
-	}
+	kh, _ := newKnownHosts(t)
 
 	addrA := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2222}
 	addrB := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2), Port: 2222}

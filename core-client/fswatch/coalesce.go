@@ -3,6 +3,7 @@ package fswatch
 import (
 	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/lhns/remote-docker/core/notify"
@@ -174,32 +175,18 @@ func commonDir(a, b string) string {
 	if i == 0 {
 		return "/"
 	}
-	return "/" + joinSlash(ap[:i])
+	return "/" + strings.Join(ap[:i], "/")
 }
 
+// splitSlash splits an in-share path into its non-empty components.
 func splitSlash(p string) []string {
 	var parts []string
-	start := 0
-	for i := 0; i <= len(p); i++ {
-		if i == len(p) || p[i] == '/' {
-			if i > start {
-				parts = append(parts, p[start:i])
-			}
-			start = i + 1
+	for part := range strings.SplitSeq(p, "/") {
+		if part != "" {
+			parts = append(parts, part)
 		}
 	}
 	return parts
-}
-
-func joinSlash(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += "/"
-		}
-		out += p
-	}
-	return out
 }
 
 // due reports whether a pending entry should be flushed at now: either it has

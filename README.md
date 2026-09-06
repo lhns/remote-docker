@@ -105,7 +105,7 @@ Hyper-V and are willing to be the first.
 
 - **Bind mounts from anywhere on your machine.** Another drive, above the
   working directory, unrelated to it. Not only a synced project folder.
-  **Single files work too** -- `-v ./nginx.conf:/etc/nginx/nginx.conf` -- and
+  **Single files work too**, as `-v ./nginx.conf:/etc/nginx/nginx.conf`, and
   only that file is shared, not the directory holding it
   ([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)).
 - **Published ports reach your localhost.** `-p 8080:80` means
@@ -227,7 +227,7 @@ Everything that is ours lives under `remote`:
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
-`workspace use` sets two things: the default in `~/.remote-docker.json`, which
+`remote use` sets two things: the default in `~/.remote-docker.json`, which
 only this binary reads, and `currentContext` in `~/.docker/config.json`, which
 is what compose, buildx, Testcontainers and IDE plugins resolve. The second is
 machine-wide, so it redirects those tools too. `--no-context` sets only ours,
@@ -238,8 +238,8 @@ never had a docker CLI: the binary is one, and writes the context itself.
 
 There is no `context` command. A docker context is written when a workspace is
 created and removed when it is
-([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)). Re-run `workspace
-create` to rewrite one that has drifted.
+([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)). Re-run
+`remote create` to rewrite one that has drifted.
 
 ## Settings
 
@@ -264,7 +264,7 @@ default.**
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
 | `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
-| `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | `30m` | how long before an unused session lets go of the workspace, keeping its endpoint |
+| `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
@@ -860,8 +860,8 @@ docker gets   C:\Users\you\x;C:\Program Files\Git\app
 The container side is restored automatically now
 ([ADR 0040](docs/adr/0040-git-bash-mangles-argv.md)), and the source keeps the
 Windows spelling Git Bash correctly gave it, so `-v` works from Git Bash without
-setting anything. Where the reversal cannot be exact -- Git Bash maps `/bin` and
-`/usr/bin` onto one directory -- it says what it read.
+setting anything. Git Bash maps `/bin` and `/usr/bin` onto one directory, so
+where the reversal cannot be exact it says what it read.
 
 Only `-v` is repaired. These are mangled too and are not:
 
@@ -876,14 +876,44 @@ Git installation; the client offers that reading back and takes it when the
 workspace declared the path and this machine does not have it. `//lib/modules`
 survives conversion untouched and works as well, if you would rather be explicit.
 
-For those, and for anything else that surprises you, either escape at the source
--- `MSYS_NO_PATHCONV=1 docker …`, whose value is ignored and which disables
-conversion entirely, or a leading double slash (`//app`) -- or use `--mount`,
-which Git Bash has never mangled:
+For those, and for anything else that surprises you, escape at the source or use
+`--mount`, which Git Bash has never mangled. Escaping is
+`MSYS_NO_PATHCONV=1 docker …`, whose value is ignored and which disables
+conversion entirely, or a leading double slash (`//app`):
 
 ```bash
 docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
 ```
+
+### What differs from a bind mount
+
+`test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
+a container against a plain bind mount on the runner and against a share from a
+Linux and from a Windows client, and CI fails on any difference not listed with
+a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
+
+| behaviour | on a share | why |
+|---|---|---|
+| owner and mode | every file is the workspace account's; a file reads back `0666`, plus `0111` where the real file is executable, and always `0777` from a Windows host, where there is no execute bit to preserve | ADR 0046, `Attrs.AlwaysExecutable` |
+| `chown` | accepted, changes nothing | ownership is synthesised |
+| `utime`, `touch -d` | accepted, changes nothing: every SETATTR of times is dropped, so a `touch` does not move a file's mtime | the watcher replays a SETATTR to invalidate, and applying one looped |
+| `chmod` | reaches the file on this machine, with the owner's read and write forced on; the mode read back is still the synthesised one, so the execute bit on a Linux host is all a container can observe | the share is served as that owner |
+| `git` in a container | a repository on a share is refused as "detected dubious ownership" unless `safe.directory` is set | the share reports the workspace account as owner |
+| unlink of an open file | a `.nfs*` entry until the last close | NFS silly-rename |
+| Windows host: case | `a` and `A` are one file | NTFS is case-insensitive |
+| Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |
+| Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
+| Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
+
+Everything else the probe does behaves as on a bind mount, which is most of it:
+`flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads
+and writes, two processes appending with `O_APPEND` without a torn line, eight
+processes creating in one directory, sparse files, rename in every form
+including over an existing file and while the file is open, hard links, and a
+git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
+`fsck`. Two things this does not answer: a file over 4 GiB, which no step
+writes, and Unicode normalisation, so whether a name written NFD comes back
+NFC is unknown.
 
 ### What cannot be bind mounted
 
@@ -905,7 +935,7 @@ is about your filesystem. The exception is deliberate and belongs to whoever run
 the workspace: paths listed in `WORKSPACE_DIND_MOUNTS` are resolved by the
 workspace's own daemon
 ([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)), which is what lets a
-tool that builds its own flags -- `kind` mounting `/lib/modules` -- work at all.
+tool that builds its own flags work at all: `kind` mounts `/lib/modules`.
 A path your machine also has still wins, so nothing changes for the mounts you
 already use.
 
@@ -996,9 +1026,11 @@ milliseconds. If that matters more than surviving a node move, put
 
 The integration suites run the Linux client against a real workspace on every
 push. **macOS has never been executed at all**, in CI or anywhere else.
-**Windows is unit tested**, including the named-pipe endpoint, but no Windows
-machine has taken a session end to end, because the suite needs a Linux
-kernel's NFS client. Swarm itself needs a real cluster and CI cannot cover it.
+**A Windows client is exercised end to end on every pull request**
+(`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
+non-root mkdir and the conformance probe), on one runner image; nobody
+working on this has WSL on their own machine. Swarm itself needs a real
+cluster and CI cannot cover it.
 **Android is built and inspected, and CI runs nothing on it**: it checks that
 the binary is loadable on a phone and links the system libc, which is what makes
 DNS work there. A session and a container were confirmed by hand from Termux on
@@ -1035,17 +1067,19 @@ echoing back as a change of its own
 
 ## Project layout
 
-Five Go modules in one repository
-([ADR 0021](docs/adr/0021-the-module-layout.md)). Three of them
-are the core and know nothing about Docker; the two binaries are the glue that
-does.
+Seven Go modules in one repository
+([ADR 0021](docs/adr/0021-the-module-layout.md)). Four of them know nothing
+about Docker; the two binaries are the glue that does.
 
 ```
 core/                  what both ends must agree on
   workspace/           the contract: paths, uid→port, volume names
   tunnel/              one bidirectional copy, one answer to half-closing
+  notify/  cache/      the change channel and the cache channel, each entire
   logx/                one log handler, so both look the same
-  probes/              helpers the integration suites run in containers
+
+dircache/              filling a local copy of a tree, and carrying writes
+                       back. Depends on nothing, in-repo or out
 
 core-client/           this machine, minus Docker
   tunnelclient/        dialling the tunnel
@@ -1056,30 +1090,33 @@ core-client/           this machine, minus Docker
 core-agent/            the workspace, minus Docker
   tunnelserver/        answering the tunnel
   accounts/            one unix account per enrolled key
-  notify/              replaying changes as real syscalls
-  netns/               running inside another process's netns
+  replay/              replaying changes as real syscalls
+  union/               the cache over the live export
+  netns/  wslisten/    another process's netns; SSH over a WebSocket
 
 client/                the client binary (docker/cli, buildx)
   cmd/remote-docker/   also answers to `docker`
   internal/            api proxy, bind rewriting, ports, machines, session
 
-agent/                 the agent binary (four direct dependencies)
+agent/                 the agent binary (five direct third-party requires)
   cmd/remote-dockerd/  the workspace binary
   internal/            per-account daemons, dockerd supervision, elevate
 
 image/  deploy/        the workspace container and its deployments
-test/                  the integration suites
+charts/                the Helm chart
+test/                  the integration suites, and their probes
 docs/adr/              why everything is the way it is
 ```
 
 ## Development
 
 The repository root is not a module, and `./...` stops at a module boundary, so
-every command loops over the five.
+every command loops over the seven.
 
 ```bash
-for m in ./core ./core-client ./core-agent ./agent ./client; do (cd $m && go build ./... && go test ./...); done
-for m in ./core ./core-client ./core-agent ./agent ./client; do (cd $m && golangci-lint run ./...); done
+mods="./core ./dircache ./core-client ./core-agent ./agent ./client ./test/probes"
+for m in $mods; do (cd $m && go build ./... && go test ./...); done
+for m in $mods; do (cd $m && golangci-lint run ./...); done
 bash test/integration.sh      # needs docker and NFS client support
 ```
 

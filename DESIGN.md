@@ -15,6 +15,6 @@ it cost:
 | Why the client serves and the workspace mounts | [ADR 0003](docs/adr/0003-client-serves-workspace-mounts.md) |
 | Why bind mounts became per-container volumes, retiring the mount-propagation problem this brief spent most of its length on | [ADR 0006](docs/adr/0006-per-bind-nfs-volumes.md) |
 
-The records are append-only: a decision that stops being true is superseded by
-a later one rather than edited, so the reasoning behind the current shape can
-always be traced back.
+One record holds one decision, and a later answer is merged back into the
+record that owns the question rather than added beside it. `docs/adr/README.md`
+is the index, and carries the numbers that have been retired.

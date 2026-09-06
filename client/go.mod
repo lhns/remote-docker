@@ -283,3 +283,5 @@ exclude google.golang.org/genproto v0.0.0-20230306155012-7f2fa6fef1f4
 require github.com/lhns/remote-docker/dircache v0.0.0
 
 replace github.com/lhns/remote-docker/dircache => ../dircache
+
+replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260905215120-0fbb162b6b6f

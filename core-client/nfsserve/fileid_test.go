@@ -5,10 +5,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	nfsfile "github.com/willscott/go-nfs/file"
-
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // A file must report the same fileid however it is reached.
@@ -23,11 +19,7 @@ import (
 // handle it could not resolve.
 func TestFileIDIsStableHoweverTheFileIsReached(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	f, err := target.OpenFile("p2", 0o644)
 	if err != nil {
@@ -85,10 +77,6 @@ func TestFileIDIsStableHoweverTheFileIsReached(t *testing.T) {
 // report, and was never right anywhere else.
 func TestFileIDSurvivesADifferentSpellingOfThePath(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +84,7 @@ func TestFileIDSurvivesADifferentSpellingOfThePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, _, ok := r.Lookup(workspace.ExportCWD)
-	if !ok {
-		t.Fatal("the working directory share is not registered")
-	}
+	share := cwdShare(t, dir)
 
 	// Asserted on every platform, deliberately. Unix has the inode and Windows
 	// has NTFS's File Reference Number, so there is no platform this project
@@ -109,7 +94,7 @@ func TestFileIDSurvivesADifferentSpellingOfThePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := inodeOf(probe, osPath); !ok {
+	if _, ok := identityOf(probe, osPath); !ok {
 		t.Fatalf("no file identity on %s, so the fileid falls back to hashing "+
 			"the path and cannot be stable across spellings", runtime.GOOS)
 	}
@@ -127,8 +112,7 @@ func TestFileIDSurvivesADifferentSpellingOfThePath(t *testing.T) {
 		t.Fatalf("stat from inside the subdirectory: %v", err)
 	}
 
-	outerID := outer.Sys().(*nfsfile.FileInfo).Fileid
-	innerID := inner.Sys().(*nfsfile.FileInfo).Fileid
+	outerID, innerID := fileidOf(outer), fileidOf(inner)
 	if outerID != innerID {
 		t.Errorf("one file reported two fileids: %#x as sub/p2, %#x as p2 -- "+
 			"the client reads that as the file having been replaced, and every "+

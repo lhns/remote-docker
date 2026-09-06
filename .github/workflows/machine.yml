@@ -13,13 +13,11 @@ name: machine
 #
 # Hyper-V gets no job at all. The runners do not offer it, and
 # docs/testing-machines.md is the whole of its verification.
+#
+# Every pull request, not only those touching the backend: the Windows client
+# is the one in CI, so every PR meets it.
 on:
   pull_request:
-    paths:
-      - client/internal/machine/**
-      - client/cmd/remote-docker/machine*.go
-      - image/**
-      - .github/workflows/machine.yml
   workflow_dispatch:
 
 permissions:
@@ -30,10 +28,12 @@ jobs:
   # short: what gets installed into the machine is the artifact CI already
   # builds and tests on every push, and no package manager runs anywhere.
   rootfs:
-    name: export the workspace image as a rootfs
+    name: export the workspace image as a rootfs and record the probe oracle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-go
 
       - name: build the workspace image
         run: docker build -t rd-workspace:ci -f image/Dockerfile .
@@ -49,6 +49,29 @@ jobs:
           docker rm "$id"
           ls -lh rootfs.tar.gz
 
+      # The filesystem conformance probe and its oracle. The probe is one
+      # static Linux binary that walks a directory through every operation a
+      # build tool uses and prints what happened; run against the runner's own
+      # disk it is the oracle, and the wsl job runs the same image against a
+      # share backed by an NTFS directory and diffs the two transcripts.
+      #
+      # build_probe from test/lib.sh, so the recipe for a probe binary lives in
+      # one place and this cannot drift from what test/fs-conformance.sh runs.
+      - name: build the probe image and run the oracle
+        run: |
+          set -eux
+          REPO=$PWD
+          . test/lib.sh
+          build_probe fsprobe "$PWD/fsprobe"
+          mkdir -p ctx
+          cp test/fs-conformance/Dockerfile fsprobe ctx/
+          docker build -t fsprobe:ci ctx
+          mkdir -p native
+          docker run --rm -v "$PWD/native:/w" fsprobe:ci /w > transcript-native.txt
+          wc -l transcript-native.txt
+          docker save fsprobe:ci | gzip > fsprobe.tar.gz
+          ls -lh fsprobe.tar.gz
+
       - uses: actions/upload-artifact@v7
         with:
           name: workspace-rootfs
@@ -56,11 +79,28 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fsprobe-image
+          path: fsprobe.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: transcript-native
+          path: transcript-native.txt
+          if-no-files-found: error
+          retention-days: 1
+
   wsl:
     name: a machine on wsl
     runs-on: windows-latest
     needs: rootfs
-    timeout-minutes: 30
+    # Fifty, not thirty: creating a machine, importing the rootfs, an idle
+    # disconnect with its three-minute wait and the conformance probe's five
+    # thousand files over the share do not fit in thirty.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
 
@@ -70,6 +110,18 @@ jobs:
         with:
           name: workspace-rootfs
 
+      # State of its own for every step below, so nothing here depends on or
+      # disturbs whatever the runner image already has. Set through GITHUB_ENV
+      # rather than the job's `env:`, where the `runner` context is NOT
+      # available: naming it there makes the whole file invalid, no pull
+      # request run is created at all, and the only sign is a push-event run
+      # with no jobs, named by the path of the file.
+      - name: a state directory of its own
+        shell: pwsh
+        run: |
+          "REMOTE_DOCKER_STATE_DIR=$env:RUNNER_TEMP\rd-state" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: install wsl
         run: wsl --install --no-distribution
 
@@ -77,12 +129,8 @@ jobs:
         run: go build -o rd.exe ./cmd/remote-docker
         working-directory: client
 
-      # State of its own, so nothing here depends on or disturbs whatever the
-      # runner image already has.
       - name: create the machine
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz
           .\client\rd.exe remote ls
@@ -92,8 +140,6 @@ jobs:
       # the bind rewriting and the daemon inside the machine, in one command.
       - name: docker run, with a bind mount from this machine
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           "from the runner" | Out-File -Encoding ascii marker
           # Joined before matching. PowerShell's -match on an ARRAY is a filter
@@ -107,8 +153,6 @@ jobs:
 
       - name: GNU tar sets attributes on files it wrote, and a non-root uid can mkdir
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         # The one Windows client in CI. GNU tar sets attributes on the
         # descriptor it just wrote, which the kernel cannot retry after ESTALE;
         # both defects that broke it showed only from a Windows client.
@@ -123,8 +167,6 @@ jobs:
 
       - name: creating it again changes nothing
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           $out = (.\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz) -join "`n"
           $out
@@ -135,8 +177,6 @@ jobs:
       # that quietly did the same would be found by nobody until it had.
       - name: it survives being stopped and started
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           .\client\rd.exe run -d --name survivor alpine:3 sleep 600
           .\client\rd.exe remote machine stop ci
@@ -171,8 +211,6 @@ jobs:
       - name: a machine comes back after sitting idle
         shell: pwsh
         timeout-minutes: 8
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           # A background session, which is the thing holding the machine. A
           # one-shot `docker run` would take its hold with it when it exits and
@@ -187,13 +225,58 @@ jobs:
           if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }
           .\client\rd.exe remote stop
 
+      # The same probe the Linux leg runs (test/fs-conformance.sh), against a
+      # share whose other end is an NTFS directory. The transcript is compared
+      # with the oracle recorded on the ubuntu runner, and a difference the
+      # deviations file does not name fails the job.
+      - uses: actions/download-artifact@v8
+        with:
+          name: fsprobe-image
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: transcript-native
+
+      - name: load the probe image into the machine's daemon
+        shell: pwsh
+        run: |
+          $out = (.\client\rd.exe load -i fsprobe.tar.gz) -join "`n"
+          $out
+          if ($out -notmatch 'fsprobe') { throw "the probe image was not loaded" }
+
+      - name: run the probe against a share backed by NTFS
+        shell: pwsh
+        # Out-File with an explicit encoding, because `>` in Windows PowerShell
+        # writes UTF-16. The runner's pwsh is 7, whose utf8 carries no BOM;
+        # 5.1's does, and the diff step strips one either way.
+        run: |
+          New-Item -ItemType Directory share | Out-Null
+          .\client\rd.exe run --rm -v "${PWD}\share:/w" fsprobe:ci /w | Out-File -Encoding utf8 transcript-windows.txt
+          (Get-Content transcript-windows.txt | Measure-Object -Line).Lines
+
+      - name: diff the transcript against the oracle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sed -i 's/\r$//; 1s/^\xEF\xBB\xBF//' transcript-windows.txt
+          bash test/fs-conformance/diff.sh transcript-native.txt transcript-windows.txt test/fs-conformance/deviations-windows.txt | tee fs-conformance-report.txt
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fs-conformance-windows
+          path: |
+            transcript-windows.txt
+            fs-conformance-report.txt
+            suggested-deviations.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
       # rm destroys the machine as well as the entry, and leaving a
       # distribution behind is the failure worth catching: it is a running
       # Linux system with nothing naming it.
       - name: rm takes the machine with it
         shell: pwsh
-        env:
-          REMOTE_DOCKER_STATE_DIR: ${{ runner.temp }}\rd-state
         run: |
           .\client\rd.exe remote rm ci
           $distros = (wsl -l -q) -join "`n"

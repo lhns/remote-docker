@@ -25,11 +25,7 @@ import (
 // knowing precisely.
 func TestServeTruncatesAFile(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatal(err)
-	}
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mountCWD(t, dir)
 
 	f, err := target.OpenFile("p2", 0o644)
 	if err != nil {

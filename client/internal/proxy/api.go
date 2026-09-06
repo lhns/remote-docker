@@ -325,12 +325,7 @@ func (c *APIClient) VolumesInUse(ctx context.Context) (map[string]bool, error) {
 		return nil, fmt.Errorf("proxy: listing containers: %s", apiError(resp))
 	}
 
-	var containers []struct {
-		Mounts []struct {
-			Type string
-			Name string
-		}
-	}
+	var containers []Container
 	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
 		return nil, fmt.Errorf("proxy: decoding container mounts: %w", err)
 	}

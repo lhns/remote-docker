@@ -50,6 +50,33 @@ table is in ADR 0045.
   workspace account as before, and the union's upper is created 0777
   (ADR 0046).
 
+### A share is measured against a bind mount
+
+`test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
+a container and prints a transcript; CI runs it against a plain bind mount,
+against a share from a Linux client and from a Windows client, and fails on
+any difference not listed with a reason in `test/fs-conformance/`. The first
+runs found and fixed:
+
+- Removing or renaming a symlink through a share acted on its target: `rm
+  link` deleted the file the link pointed at. The bound filesystem resolved
+  the final path component; it resolves only the directory now.
+- A `chmod` that dropped the owner's write bit made the file unwritable for
+  the share itself, so every later write from the container failed with
+  EACCES. The owner's read and write bits are kept on this machine.
+- From a Windows host, names NTFS cannot spell (`< > : " | ? *`, a trailing
+  dot or space, `CON`, `NUL`, ...) could be created and not deleted. They are
+  refused with EINVAL, as native Docker refuses them.
+- A share reported every file with one link; the real count is reported.
+- go-nfs (now `github.com/lhns/go-nfs`): rmdir and rename over a non-empty
+  directory answer ENOTEMPTY instead of EIO; rename over an empty directory
+  works; a file renamed while open keeps its handle instead of going stale;
+  a hard link request is parsed as one (it was parsed as a symlink).
+
+One consequence worth knowing: a share reports the workspace account as the
+owner, so git in a container refuses a repository on one as "detected dubious
+ownership" until `safe.directory` is set.
+
 ### Fixed on the way through a cleanup
 
 - `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's
@@ -61,6 +88,16 @@ table is in ADR 0045.
 - With no `watchExclude` set, prefetch walked `.git` and `node_modules`,
   which the watcher never invalidates; the cache now takes the watcher's
   default list.
+- Adding a named workspace to a config that had only an unnamed one carried
+  four of its fields across and left the rest, `machine` among them, as a base
+  under every entry. The new workspace inherited the old one's machine, so
+  `remote rm <new>` would destroy it. The whole entry moves now.
+- `remote-dockerd healthcheck --docker-socket` tested the named socket for
+  presence and then asked the default one whether it was healthy, so a
+  deployment that moves its socket got an answer about neither.
+- A share released by the workspace kept its prefetch tree and its sender, so
+  attaching that directory again with prefetch off still filled it, and each
+  released share leaked a goroutine.
 
 ### Changed
 

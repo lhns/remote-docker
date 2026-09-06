@@ -17,10 +17,10 @@ every table); the user-facing table and examples are in the README.
 | `cached` | trusts attributes for a minute | `back` | the union, carried back within seconds | yes |
 | | | `ephemeral` | the union, and never carried back | yes |
 
-Spelled `read=cached,write=back` in a `-v` list, or as one csv-quoted field
-in `--mount`: `'type=bind,...,"consistency=read=cached,write=back"'`. Docker's
-own `default`, `consistent`, `cached` and `delegated` are aliases; ADR 0042
-has the mapping.
+How they are spelled on a `-v`, on a `--mount` and in the config, and which
+Docker word maps to which pair, is the README section
+[Faster access to a shared directory](../README.md#faster-access-to-a-shared-directory);
+ADR 0042 has the parsing rules.
 
 ## The union
 
@@ -61,19 +61,8 @@ ADR 0045.
 
 ## Prior art
 
-Read for this design, 2026-09-04. Lazy loading never reaches parity with an
-eager copy (Slacker, FAST'16, run phase 17% slower; FlacIO, FAST'25, existing
-lazy loaders 4.6x off) and everyone ships it anyway. Nobody ships pure lazy:
-Coda's `spy`, eStargz `optimize`, DADI and Nydus all record an access order
-from a real run, coalesce it into few large transfers, and background-fill
-the rest. Online access predictors (Kroeger and Long 1996/2001; Griffioen and
-Appleton 1994; Vitter and Krishnan, JACM 1996) exist and were never adopted by
-a shipping filesystem. The escalating tree appears unpublished. Its ancestors
-are Linux readahead (Wu, Xi, Li, OLS 2007: 4x under `max/16`, 2x up to
-`max/2`, then clamp), buddy allocation (Knowlton 1965) and competitive
-prefetching (Li, Shen, Papathanasiou, EuroSys 2007: factor 2 for depth).
-JuiceFS's prefetch is the depth-one cautionary case; patent art at depth one
-is US 6,529,998 and US 11,474,948.
+What was read before designing this, and what it says about lazy filling, is
+[ADR 0045](adr/0045-prefetch-follows-the-reads.md) (checked 2026-09-04).
 
 ## Where the code lives
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core/cache"
 )
 
@@ -126,14 +125,11 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.
 func (m *Manager) upperRoot(account, export string) (*live, string, error) {
-	m.mu.Lock()
-	l, ok := m.shares[key(account, export)]
-	m.mu.Unlock()
-
+	l, ok := m.share(account, export)
 	if !ok {
 		return nil, "", fmt.Errorf("unions: %s has no cache: %w", export, ErrNoShare)
 	}
-	root, err := replay.Relocate(l.spec.Upper(), func() (string, error) { return l.spec.Root(), nil })
+	root, err := l.relocate(l.spec.Upper())
 	if err != nil {
 		return nil, "", fmt.Errorf("unions: locating the cache layer of %s: %w", export, err)
 	}

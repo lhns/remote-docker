@@ -81,31 +81,19 @@ the daemon advertising `Builder-Version: 2` on `/_ping`. Only linking buildx
 fixes it. `test/integration.sh` therefore asserts the build is BuildKit rather
 than asserting that `docker build` succeeded.
 
-## How compose got here, and the lesson that outlives it
+## Compose, and why the exclusion expired
 
-Compose was excluded twice, both times for a real dependency deadlock in the
-ecosystem's `github.com/docker/docker` → `github.com/moby/moby` migration:
+Compose was excluded twice for a dependency deadlock in the ecosystem's
+`github.com/docker/docker` to `github.com/moby/moby` migration: taking compose
+v2.40.3 meant pinning `docker/cli` back a major version and buildx back seven
+minors, over one blank import (`moby/buildkit/util/tracing/env`) that no single
+buildkit version satisfied for both. compose v5 builds against the stack this
+binary already carries, so embedding it was `go get` plus one file.
 
-- compose v2.40.3 wanted cli v28.5.1, buildx v0.29.1 and buildkit v0.25.1, while
-  buildx v0.36.1 wanted buildkit v0.32.2. Taking compose meant pinning `docker/cli`
-  back a major version and buildx back seven minors.
-- The blocker was one blank import — `moby/buildkit/util/tracing/env`, wired for
-  an `init()` compose calls nothing from — deleted from buildkit between v0.25
-  and v0.32. Compose's `main` had not adapted either, and no single buildkit
-  satisfied both, so the only routes were `go mod vendor` (all of it, re-edited
-  after every regeneration) or a `replace` onto a fork of the builder itself.
-  Not proportionate for a side effect nobody used.
-
-**compose v5 resolved it**: it builds against buildx v0.36, buildkit v0.32 and
-`moby/moby/api` v1.55 — the stack this binary already carries — so embedding it
-was `go get` plus one file, with no downgrade and no fork.
-
-**The lesson is about the record, not the dependency.** This ADR said "revisit
-when buildx and Compose have completed the migration", and then its conclusion
-outlived the condition: "compose cannot be embedded" was quoted as current fact
-in the README, in `--help`, and in advice to a user to install a standalone
-compose. A revisit trigger nobody evaluates is a decision that has quietly
-stopped being true. The check was one command:
+**A revisit trigger nobody evaluates is a decision that has quietly stopped
+being true.** "Compose cannot be embedded" was quoted as current fact in the
+README, in `--help` and in advice to a user, for months after this was the
+check:
 
 ```bash
 (cd client && go get github.com/docker/compose/v5 && go build ./...)
@@ -115,12 +103,10 @@ stopped being true. The check was one command:
 
 - **One binary provides the daemon connection, the filesystem, the builder and
   the client.** Genuinely zero-install, which is the whole premise.
-- **The proxy must be transparent to hijacked and streamed connections.** The
-  main technical consequence, following directly from `docker build`: `/session`
-  is an HTTP upgrade carrying gRPC, and `/containers/*/attach`, `/exec/*/start`,
-  `/build`, `/events` and `/logs` are long-lived or bidirectional. A proxy that
-  buffers, or only understands request/response, works for `docker ps` and fails
-  at exactly the commands people care about (ADR 0005).
+- **The proxy must be transparent to hijacked and streamed connections**
+  ([ADR 0005](0005-docker-api-proxy-over-cli-wrapper.md) states the rule).
+  `docker build` is what forces it here: `/session` is an HTTP upgrade carrying
+  gRPC.
 - **Build contexts upload from the client over the SSH connection**, so large
   contexts are bound by the tunnel and `.dockerignore` hygiene matters as much as
   keeping build artifacts off the NFS share (ADR 0002).

@@ -413,7 +413,9 @@ echo "== 9. a shell points at its own daemon, AND CAN USE IT =="
 # a directory it could not enter. The variable was perfect and `docker ps` in a
 # shell said "permission denied while trying to connect to the Docker daemon
 # socket". So the shell is made to actually USE it.
-shell_out=$(timeout 90 ssh -i "$WORK/state-$A/id_ed25519"     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null     -o BatchMode=yes -p "$SSH_PORT" "$A@127.0.0.1"     'echo "HOST=$DOCKER_HOST"; docker ps --format "{{.Names}}" 2>&1 | head -5'     2>/dev/null </dev/null | tr -d '\015')
+shell_out=$(ssh_account "$WORK/state-$A/id_ed25519" "$A" 90 \
+    'echo "HOST=$DOCKER_HOST"; docker ps --format "{{.Names}}" 2>&1 | head -5' \
+    2>/dev/null | tr -d '\015')
 
 case "$shell_out" in
     *"HOST=unix:///run/rd/$A/docker.sock"*)
@@ -620,10 +622,8 @@ else
     done
 
     for who in "$A" "$B"; do
-        reach=$(timeout 120 ssh -i "$WORK/state-$who/id_ed25519" \
-            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o BatchMode=yes -p "$SSH_PORT" "$who@127.0.0.1" "$probe" \
-            2>/dev/null </dev/null | tr -d '\015')
+        reach=$(ssh_account "$WORK/state-$who/id_ed25519" "$who" 120 "$probe" \
+            2>/dev/null | tr -d '\015')
         case "$reach" in
         *CONNECTED*) bad "SECURITY: $who's shell reached the NFS export on $alice_port" ;;
         *REFUSED*)   ok "$who's shell cannot reach the export on $alice_port" ;;

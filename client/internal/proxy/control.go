@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -78,7 +79,7 @@ func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 	}
 }
 
-func writeControl(w net.Conn, status int, body any) {
+func writeControl(w io.Writer, status int, body any) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		encoded = []byte(`{"message":"encoding the response failed"}`)

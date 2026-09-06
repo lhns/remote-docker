@@ -271,8 +271,7 @@ appears unpublished; its ancestors are Linux readahead (Wu, Xi, Li, OLS 2007:
 4x under `max/16`, 2x to `max/2`, then clamp), buddy allocation (Knowlton,
 1965) and competitive prefetching (Li, Shen, Papathanasiou, EuroSys 2007,
 factor 2 for depth). JuiceFS is the depth-one cautionary case; patent art at
-depth one is US 6,529,998 and US 11,474,948. `docs/caching.md` carries the
-reading.
+depth one is US 6,529,998 and US 11,474,948.
 
 ## Consequences
 

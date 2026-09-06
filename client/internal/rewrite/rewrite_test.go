@@ -451,10 +451,12 @@ func TestRewriteForwardsExoticMountTypes(t *testing.T) {
 }
 
 // newFileRewriter reports localPath as a single-file share exporting base.
-func newFileRewriter(localPath, base string) (*Rewriter, *fakeVolumes) {
-	s := &fakeSharer{files: map[string]string{localPath: base}}
-	v := &fakeVolumes{}
-	return &Rewriter{Shares: s, Volumes: v, NFSPort: 30000}, v
+func newFileRewriter(localPath, base string) *Rewriter {
+	return &Rewriter{
+		Shares:  &fakeSharer{files: map[string]string{localPath: base}},
+		Volumes: &fakeVolumes{},
+		NFSPort: 30000,
+	}
 }
 
 // A `-v` of a single file cannot stay in Binds: a bind string has no field for
@@ -462,7 +464,7 @@ func newFileRewriter(localPath, base string) (*Rewriter, *fakeVolumes) {
 // a directory (ADR 0039).
 func TestASingleFileBindMovesToMounts(t *testing.T) {
 	const local = "/home/alice/nginx.conf"
-	r, _ := newFileRewriter(local, "nginx.conf")
+	r := newFileRewriter(local, "nginx.conf")
 
 	out, err := r.ContainerCreate(t.Context(),
 		[]byte(`{"HostConfig":{"Binds":["`+local+`:/etc/nginx/nginx.conf:ro"]}}`))
@@ -501,7 +503,7 @@ func TestASingleFileBindMovesToMounts(t *testing.T) {
 // do not become one rewrite that has to know about both.
 func TestADirectoryBindIsUnaffectedByAFileBeside(t *testing.T) {
 	const file = "/home/alice/my.cnf"
-	r, _ := newFileRewriter(file, "my.cnf")
+	r := newFileRewriter(file, "my.cnf")
 
 	out, err := r.ContainerCreate(t.Context(),
 		[]byte(`{"HostConfig":{"Binds":["/home/alice/src:/app","`+file+`:/etc/my.cnf"]}}`))
@@ -524,7 +526,7 @@ func TestADirectoryBindIsUnaffectedByAFileBeside(t *testing.T) {
 // VolumeOptions the caller set survives beside it.
 func TestASingleFileMountGainsASubpath(t *testing.T) {
 	const local = "/home/alice/my.cnf"
-	r, _ := newFileRewriter(local, "my.cnf")
+	r := newFileRewriter(local, "my.cnf")
 
 	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Mounts":[
 		{"Type":"bind","Source":"`+local+`","Target":"/etc/my.cnf","VolumeOptions":{"NoCopy":true}}
@@ -551,7 +553,7 @@ func TestASingleFileMountGainsASubpath(t *testing.T) {
 // with, and `ro` is the one that matters.
 func TestASingleFileBindRefusesAnOptionItCannotCarry(t *testing.T) {
 	const local = "/home/alice/app.conf"
-	r, _ := newFileRewriter(local, "app.conf")
+	r := newFileRewriter(local, "app.conf")
 
 	_, err := r.ContainerCreate(t.Context(),
 		[]byte(`{"HostConfig":{"Binds":["`+local+`:/etc/app.conf:ro,z"]}}`))

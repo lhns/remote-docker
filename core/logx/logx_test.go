@@ -8,13 +8,9 @@ import (
 	"testing"
 )
 
-// The rendered line is the whole point of this package, so it is pinned.
-//
-// A migration this mechanical gets exactly one thing wrong without noticing:
-// the output. `go build` proves nothing about it, and the two audiences --
-// somebody watching `start --foreground`, somebody reading `docker logs` on a
-// workspace, would both be handed slog's `time=... level=INFO msg="..."`
-// instead of the prose they have always had.
+// The rendered line is the whole point of this package, so it is pinned:
+// `go build` proves nothing about it, and losing it hands both audiences
+// slog's `time=... level=INFO msg="..."` instead of the prose they read.
 func TestTheClientsFormatIsUnchanged(t *testing.T) {
 	var out bytes.Buffer
 	log := slog.New(New(&out, "  ", false))

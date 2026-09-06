@@ -83,8 +83,10 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		NFSPort: port,
 		Docker:  s.dockerVersion(session.Context(), account.Name()),
 		Storage: s.storageDriver(session.Context(), account.Name()),
-		Mode:    s.mode(),
-		Agent:   s.cfg.Version,
+		// The resolver knows which arrangement this workspace runs, because
+		// choosing it is what chose the mode.
+		Mode:  s.cfg.Daemons.Mode(),
+		Agent: s.cfg.Version,
 
 		// Which side of a dind mount this is was decided once, on the way in
 		// (ADR 0041). The client matches sources against the list and never
@@ -326,7 +328,3 @@ func supplementaryGroups(name string, gid int) []uint32 {
 	}
 	return out
 }
-
-// mode names how this workspace serves daemons, for the info reply. The
-// resolver knows, because choosing it is what chose the mode.
-func (s *Server) mode() string { return s.cfg.Daemons.Mode() }

@@ -142,6 +142,30 @@ func exportKey(export string) []byte {
 	return sum[:exportKeySize]
 }
 
+// mover is go-nfs's optional interface for re-pointing a cached handle at a
+// renamed file (nfs_onrename.go's renameHandleMover), satisfied by the caching
+// handler.
+type mover interface {
+	Rename(billy.Filesystem, []string, billy.Filesystem, []string) error
+}
+
+// Rename re-points a cached handle at the file's new path instead of forgetting
+// it, so a client that renames a file it holds open keeps its handle. Forwarded
+// for the same reason as the verifier pair below: embedding does not carry an
+// optional interface, and without it every rename costs the opener an ESTALE,
+// including the silly-rename the kernel does for an unlinked open file.
+//
+// The fallback is go-nfs's own: because rootHandler always implements mover,
+// go-nfs never reaches its `else invalidate` branch, so a handler that cannot
+// move a handle must be told to forget it here. Returning nil instead leaves a
+// cached handle naming the path the file no longer has.
+func (h *rootHandler) Rename(sourceFS billy.Filesystem, source []string, destFS billy.Filesystem, dest []string) error {
+	if m, ok := h.Handler.(mover); ok {
+		return m.Rename(sourceFS, source, destFS, dest)
+	}
+	return h.InvalidateHandle(sourceFS, h.ToHandle(sourceFS, source))
+}
+
 // VerifierFor and DataForVerifier are READDIR cookie business, which go-nfs
 // asks for through a separate optional interface (nfs.CachingHandler). They are
 // forwarded explicitly because embedding nfs.Handler does not carry them, and

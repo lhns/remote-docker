@@ -6,6 +6,10 @@
   [ADR 0017](0017-a-background-session-per-workspace.md)
 - Corrects [ADR 0005](0005-docker-api-proxy-over-cli-wrapper.md) and
   [ADR 0010](0010-go-ssh-server-agent.md)
+- Current answer: one spelling each, under `remote` rather than `workspace`
+  since [ADR 0024](0024-the-docker-cli-is-the-root.md): `remote create`, `ls`,
+  `use`, `rm`, `inspect`, `start`, `stop`. `up` and `shell` are gone;
+  `add`/`list`/`default`/`remove` are still aliases.
 
 ## Context
 
@@ -56,7 +60,7 @@ that `context install` used to be.
 `use` were ours alone, and it set only the default in `~/.remote-docker.json`,
 which nothing but this binary reads. `docker context use` writes
 `currentContext` in `~/.docker/config.json`, and that is what compose, buildx,
-Testcontainers and every IDE plugin resolve. So `workspace use dev` announced a
+Testcontainers and every IDE plugin resolve. So `use dev` announced a
 default and left every other tool on the machine talking to whatever was
 selected before, usually a Docker Desktop pipe that is not there. A command
 named after docker's verb has to do docker's half too.
@@ -131,17 +135,17 @@ a rewrite.
   a real regression for them and it is accepted: the alternative is carrying a
   mount, a package and a recovery path so that one command is four characters
   shorter than the one every machine already has.
-- **`workspace use` now changes a machine-wide setting.** `currentContext` is
+- **`remote use` changes a machine-wide setting.** `currentContext` is
   one value per user, shared by every docker tool, so selecting a workspace
   redirects all of them. That is what the command is for and it is said on
   screen, but it is wider than writing our own config file, and it is the
   reason `use` is the only verb here that reaches outside our own state.
 - **`golang.org/x/term` falls to an indirect dependency**, which is a small
   sign the deletion was real rather than cosmetic.
-- **Hidden aliases are a maintenance claim, not free.** `up`, `add`, `list`,
-  `default` and `remove` all still work, so all of them can still break.
-  Section 16 exercises `up` and section 17 exercises `list` deliberately for
-  that reason — an alias nothing exercises is an alias nobody notices breaking.
+- **Hidden aliases are a maintenance claim, not free.** `add`, `list`,
+  `default` and `remove` still work, so all of them can still break. Section 17
+  exercises `list` deliberately for that reason: an alias nothing exercises is
+  an alias nobody notices breaking. `up` was retired with the move to `remote`.
 - **The help is now a list of things that each do one job.** That is the whole
   return on this, and it is worth being honest that it is a usability return
   and not a technical one.

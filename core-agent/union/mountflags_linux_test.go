@@ -31,7 +31,7 @@ func TestEveryMountFlagHasABit(t *testing.T) {
 // filesystem options rather than being silently classed as a flag.
 func TestUnknownOptionIsNotAFlag(t *testing.T) {
 	for _, opt := range []string{"nfsvers=3", "nolock", "actimeo=1", "addr=127.0.0.1"} {
-		if isMountFlag(opt) {
+		if mountFlags[opt] {
 			t.Errorf("%q was taken for a kernel flag; the NFS client needs it", opt)
 		}
 	}

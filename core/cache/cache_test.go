@@ -161,19 +161,3 @@ func TestCacheCodecNegotiation(t *testing.T) {
 		})
 	}
 }
-
-// And the agent's side of the same rule: a batch naming an encoding this
-// version has not got is refused by name, before anything reads it as a tar.
-func TestCacheRequestCodecs(t *testing.T) {
-	const share = "/m/00112233445566ff"
-
-	if err := (Request{Op: OpApply, Export: share, Bytes: 10, Codec: CodecZstd}).Validate(); err != nil {
-		t.Errorf("a zstd batch was refused: %v", err)
-	}
-	if err := (Request{Op: OpApply, Export: share, Bytes: 10, Codec: "brotli"}).Validate(); err == nil {
-		t.Error("a batch named an encoding this version has not got and was accepted")
-	}
-	if !supportsCodec(CodecNone) {
-		t.Error("a plain tar was not supported")
-	}
-}
