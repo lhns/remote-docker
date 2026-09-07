@@ -113,6 +113,19 @@ refused change, so the first upgrade past this needs the StatefulSet deleted
 once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
 StatefulSet adopts them.
 
+### A refused symlink says why
+
+Creating a symlink through a share from a Windows client fails unless Developer
+Mode is on or the client runs elevated: Windows withholds the privilege. The
+container is told `EACCES` and nothing else, which is what `npm i` of any
+package with a bin entry ends on. The client now says what happened and what to
+do about it, once per share.
+
+Serving a hard link instead was built and measured, and it does not work over
+NFSv3: answering SYMLINK with success is answering that a symlink exists, and
+the client then serves the target it sent as the file's contents.
+`core-client/nfsserve/symlink.go` records why, so the next person does not
+rebuild it.
 ### A slow share can be timed
 
 `REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that

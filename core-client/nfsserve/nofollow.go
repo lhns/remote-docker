@@ -2,9 +2,11 @@ package nfsserve
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/go-git/go-billy/v5"
@@ -23,6 +25,13 @@ import (
 // (checkNewName, which only Windows has a rule for).
 type noFollowFS struct {
 	billy.Filesystem // a bound osfs, whose Root is the share directory
+
+	// log carries what only this side can see: the wire has an errno and no
+	// room for a reason. Nil is silence (logx.Or).
+	log *slog.Logger
+
+	// warned holds the privilege message to one per share (symlink.go).
+	warned sync.Once
 }
 
 // Stat and Lstat refuse a name the host cannot spell, so a lookup of `nul`
@@ -87,7 +96,13 @@ func (n *noFollowFS) Symlink(target, link string) error {
 	if err := checkNewName(n.base(link)); err != nil {
 		return err
 	}
-	return n.Filesystem.Symlink(target, link)
+	err := n.Filesystem.Symlink(target, link)
+	if symlinkPrivileged(err) {
+		// The container is told EACCES and nothing more, and the remedy is on
+		// this machine, so it is said here.
+		n.warnPrivilege()
+	}
+	return err
 }
 
 func (n *noFollowFS) Remove(name string) error {
@@ -120,7 +135,7 @@ func (n *noFollowFS) Chroot(p string) (billy.Filesystem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &noFollowFS{Filesystem: inner}, nil
+	return &noFollowFS{Filesystem: inner, log: n.log}, nil
 }
 
 func (n *noFollowFS) relative(name string) string { return shareRelative(n.Root(), name) }

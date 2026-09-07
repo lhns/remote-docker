@@ -70,12 +70,12 @@ type Registry struct {
 	OnRead ReadObserver
 
 	// Log is where a share's own diagnostics go, the wire having no room for
-	// them. Nil says nothing. Read when a share's filesystem is built, so set
-	// it before the first share is registered.
+	// them. Read when a share's filesystem is built, so set it before the
+	// first share is registered.
 	Log *slog.Logger
 
-	// The tracing threshold, read once. shareFS runs on every registration
-	// and again for every share on every SetAttrs, and a value that is not
+	// The tracing threshold, read once. shareFS runs on every registration and
+	// again for every share on every SetAttrs, and a value that is not
 	// understood is worth saying once rather than once per share per connect.
 	traceOnce sync.Once
 	trace     time.Duration
@@ -268,14 +268,13 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 func (r *Registry) shareFS(base, file string) billy.Filesystem {
 	// noFollowFS sits directly on the osfs so every layer above it, the single
 	// file view and the attributes alike, removes and renames a link as a link.
-	var inner billy.Filesystem = &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	var inner billy.Filesystem = &noFollowFS{
+		Filesystem: osfs.New(base, osfs.WithBoundOS()),
+		log:        r.Log,
+	}
 	if idle := fdCacheIdle(); idle > 0 {
 		inner = withFDCache(inner, idle, fdCacheMax)
 	}
-	// Timing, when REMOTE_DOCKER_NFS_TRACE asks for it (trace.go). Not
-	// installed otherwise, so a share nobody is diagnosing pays nothing for it.
-	// Outermost, so it times what the descriptor cache avoids as well as what
-	// it does not.
 	r.traceOnce.Do(func() { r.trace = traceThreshold(r.Log) })
 	if r.trace > 0 {
 		inner = withTrace(inner, base, r.Log, r.trace)
