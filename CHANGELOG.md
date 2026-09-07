@@ -103,8 +103,8 @@ this package uses for every other write. Measured on Windows against a share
 four directories deep: 4.79ms per `Lstat` before, 0.42ms after, where the
 `os.Lstat` under both is 0.09ms. Against a real workspace over a WAN link, 300
 small files went from 20.9s to 6.3s, and the CREATE round trip from 34ms to
-9ms. It falls on every metadata operation, not just writes, so directory walks
-and `git status` gain the same.
+9ms. It falls on every metadata operation and not only on writes, so a
+directory walk and `git status` were paying it too.
 
 Large files are unaffected: they were never paying it per byte.
 
