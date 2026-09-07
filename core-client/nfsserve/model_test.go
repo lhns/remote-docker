@@ -27,8 +27,8 @@ var (
 // defaultSteps is how many operations one run makes: enough to reach every
 // pairing below several times. Windows gets a fifth, because an RPC there
 // costs several milliseconds (identityOf opens the file, and every metadata
-// call is a path resolution before the syscall) against a ten-second budget. The step count and
-// the time are in the log line either way.
+// call is a path resolution before the syscall) against a ten-second budget.
+// The step count and the time are in the log line either way.
 func defaultSteps() int {
 	if runtime.GOOS == "windows" {
 		return 80

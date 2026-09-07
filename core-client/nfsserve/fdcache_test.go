@@ -12,8 +12,7 @@ import (
 )
 
 // countingOpens counts the opens that reach the filesystem underneath the
-// cache, which is the whole measurement: go-nfs opens and closes on every
-// WRITE, so a file written in N requests was opened N times.
+// cache, which is the whole measurement (fdcache.go).
 type countingOpens struct {
 	billy.Filesystem
 	opens atomic.Int64
@@ -129,7 +128,7 @@ func TestTheCacheIsOnByDefaultAndCanBeTurnedOff(t *testing.T) {
 		if row.set {
 			t.Setenv("REMOTE_DOCKER_NFS_FDCACHE", row.env)
 		} else {
-			os.Unsetenv("REMOTE_DOCKER_NFS_FDCACHE")
+			unsetEnv(t, "REMOTE_DOCKER_NFS_FDCACHE")
 		}
 		if got := fdCacheIdle(); got != row.want {
 			t.Errorf("REMOTE_DOCKER_NFS_FDCACHE=%q (set=%v) gives %s, want %s", row.env, row.set, got, row.want)

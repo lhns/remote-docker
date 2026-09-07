@@ -24,7 +24,7 @@ func TestLstatReportsTheLinkItself(t *testing.T) {
 	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
-	fs := NewRegistry(DefaultAttrs).shareFS(dir, "")
+	fs := shareFSOver(dir, "")
 
 	fi, err := fs.Lstat("link")
 	if err != nil {
@@ -51,7 +51,7 @@ func TestLstatOfADirectoryByEverySpelling(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fs := NewRegistry(DefaultAttrs).shareFS(dir, "")
+	fs := shareFSOver(dir, "")
 
 	root, err := os.Lstat(dir)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestLstatCannotReachOutsideTheShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := NewRegistry(DefaultAttrs).shareFS(dir, "")
+	fs := shareFSOver(dir, "")
 
 	// An absolute path above the share is refused outright: nothing makes it
 	// relative to the root, so there is nothing to clamp.
@@ -139,7 +139,7 @@ func BenchmarkLstat(b *testing.B) {
 	name := filepath.Join("a", "b", "c", "d", "f")
 
 	b.Run("share", func(b *testing.B) {
-		fs := NewRegistry(DefaultAttrs).shareFS(dir, "")
+		fs := shareFSOver(dir, "")
 		for b.Loop() {
 			if _, err := fs.Lstat(name); err != nil {
 				b.Fatal(err)

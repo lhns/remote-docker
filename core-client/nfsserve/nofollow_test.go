@@ -123,7 +123,7 @@ func TestNoFollowStaysInsideTheShare(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fs := NewRegistry(DefaultAttrs).shareFS(share, "")
+	fs := shareFSOver(share, "")
 
 	for _, name := range []string{".", "..", "sub/..", "sub/.", "/", "", "sub/"} {
 		if err := fs.Remove(name); err == nil {
@@ -165,7 +165,7 @@ func TestSingleFileShareRemovesAndRenamesItsFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fs := NewRegistry(DefaultAttrs).shareFS(dir, "only.conf")
+	fs := shareFSOver(dir, "only.conf")
 
 	if err := fs.Rename("only.conf", "sibling"); !errors.Is(err, os.ErrPermission) {
 		t.Errorf("Rename onto a sibling = %v, want permission denied", err)
@@ -246,7 +246,7 @@ func TestRemoveAndRenameOfANameWithABackslash(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fs := NewRegistry(DefaultAttrs).shareFS(dir, "")
+	fs := shareFSOver(dir, "")
 
 	if err := fs.Remove(`a\b`); err != nil {
 		t.Errorf(`Remove("a\b") = %v, want it removed like any other name`, err)

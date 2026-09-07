@@ -64,7 +64,7 @@ func TestWindowsHostRefusesANameItCouldNotDelete(t *testing.T) {
 
 	// OpenFile with O_CREATE is not a procedure NFS has, so it is asked of the
 	// filesystem directly.
-	fs := NewRegistry(DefaultAttrs).shareFS(dir, "")
+	fs := shareFSOver(dir, "")
 	if _, err := fs.OpenFile(`quote"`, os.O_CREATE|os.O_WRONLY, 0o644); !errors.Is(err, syscall.EINVAL) {
 		t.Errorf("OpenFile(O_CREATE) of quote\" = %v, want EINVAL", err)
 	}
