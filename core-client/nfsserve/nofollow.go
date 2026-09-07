@@ -46,11 +46,43 @@ func (n *noFollowFS) Stat(name string) (os.FileInfo, error) {
 	return n.Filesystem.Stat(name)
 }
 
+// Lstat resolves through secureLeaf rather than the bound osfs, which is a
+// cost and not a behaviour: both leave the last element alone and contain the
+// directory part, but go-billy's Lstat runs filepath.EvalSymlinks TWICE for one
+// call, over the file's directory and over the share root, walking every
+// component of an absolute path each time. Measured on Windows against a share
+// four directories deep, 4.79ms against 0.42ms, where the os.Lstat under both
+// is 0.09ms; go-nfs stats a path several times per request. BenchmarkLstat
+// measures both again.
+//
+// The one difference: secureLeaf CLAMPS a name that climbs out of the share to
+// the share root where go-billy refuses it, so `../x` reports <share>/x or
+// nothing and never a file above the share. That is what REMOVE and RENAME
+// have always done here (TestNoFollowStaysInsideTheShare).
 func (n *noFollowFS) Lstat(name string) (os.FileInfo, error) {
 	if n.unspellable(name) {
 		return nil, os.ErrNotExist
 	}
-	return n.Filesystem.Lstat(name)
+	p, err := n.lstatPath(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.Lstat(p)
+}
+
+// lstatPath is secureLeaf, except that the share root is its own answer: it has
+// no last element to leave alone, and secureLeaf refuses a name whose base is
+// `.`. It stays out of secureLeaf because the other callers are REMOVE,
+// RENAME, CHMOD and LINK, and the share root is exactly what those must keep
+// refusing.
+func (n *noFollowFS) lstatPath(name string) (string, error) {
+	// The CLEANED relative name, not the one that arrived: `sub/.` has a base
+	// of `.`, which secureLeaf refuses, and it names sub perfectly well here.
+	rel := filepath.Clean(filepath.FromSlash(shareRelative(n.Root(), name)))
+	if rel == "." || rel == string(filepath.Separator) {
+		return n.Root(), nil
+	}
+	return secureLeaf(n.Root(), rel)
 }
 
 // unspellable reports whether a lookup names something the host cannot spell.
