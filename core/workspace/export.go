@@ -285,12 +285,33 @@ func parseID(s string) (string, error) {
 // what makes per-bind volumes better than one host-side mount: nothing has to
 // propagate, and replacing a share is a container restart.
 //
-// The options are not arbitrary. soft plus a short timeo makes a dead tunnel
-// surface as EIO rather than parking container processes in uninterruptible
-// sleep. nolock and noacl because the server implements neither NLM nor the
-// NFS_ACL sideband, and without noacl the client probes for one on every
-// mount and the server logs the refusal as an error. port == mountport skips
-// rpcbind.
+// The options are not arbitrary. soft makes a dead tunnel surface as EIO
+// rather than parking container processes in uninterruptible sleep. nolock and
+// noacl because the server implements neither NLM nor the NFS_ACL sideband,
+// and without noacl the client probes for one on every mount and the server
+// logs the refusal as an error. port == mountport skips rpcbind.
+//
+// timeo is DECISECONDS, which is the unit that misleads: the 30 this asked for
+// before read as 30 seconds and meant 3. 600 is the kernel's own default for
+// TCP. It is not a per-request service budget either -- the deadline runs from
+// transmit and includes the time a request spends queued behind others, and
+// go-nfs answers one request at a time per connection, so queueing more writes
+// than the server drains inside it fails all of them at once rather than
+// detecting a stall. Measured at timeo=30: 224 WRITEs in flight timing out
+// together at 9.07s, with the transport never reconnecting.
+//
+// nconnect gives the mount eight TCP connections rather than one, which is
+// throughput against that same serial service: one connection is one request
+// at a time.
+//
+// A CAVEAT covering all three, and anything else transport-level: Linux keeps
+// one RPC transport per server address, and every share of a client mounts
+// from 127.0.0.1:<tunnel port>. So timeo, retrans and nconnect are taken from
+// whichever share mounted FIRST and silently ignored for every share after it.
+// Changing them takes a workspace whose daemon has been restarted, not the
+// next mount, which is why a change here can look like it did nothing.
+// (Checked 2026-09-07 against a live workspace: a volume recording timeo=600
+// whose container had mounted timeo=30.)
 //
 // The attribute caching is the one part that varies, and it is what the
 // read mode asks for (ADR 0042). Everything else is the same mount whatever
@@ -301,7 +322,7 @@ func NFSVolumeOptions(port int, exportPath string, read Read) map[string]string 
 		"addr=127.0.0.1",
 		fmt.Sprintf("port=%d", port),
 		fmt.Sprintf("mountport=%d", port),
-		"nfsvers=3", "nolock", "noacl", "soft", "timeo=30", "retrans=2",
+		"nfsvers=3", "nolock", "noacl", "soft", "timeo=600", "retrans=2", "nconnect=8",
 	}, attributeOptions(read)...)
 	options = append(options, "noatime", "rsize=1048576", "wsize=1048576")
 

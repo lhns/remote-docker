@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -172,6 +173,12 @@ func TestNFSVolumeOptions(t *testing.T) {
 		"nfsvers=3",
 		"nolock",
 		"soft",
+		"rsize=1048576",
+
+		// Deciseconds, so this is the kernel's own 60s TCP default.
+		"timeo=600",
+		"retrans=2",
+		"nconnect=8",
 	} {
 		if !strings.Contains(o, want) {
 			t.Errorf("options %q are missing %q", o, want)
@@ -195,11 +202,17 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 		t.Errorf("cached options = %q, want a long attribute cache and nocto", cached)
 	}
 
-	// Everything a mount needs to work at all is the same in both, so the two
-	// differ in caching and in nothing that could break one of them.
-	for _, want := range []string{"addr=127.0.0.1", "port=30000", "nfsvers=3", "soft", "rsize=1048576"} {
-		if !strings.Contains(cached, want) {
-			t.Errorf("cached options %q are missing %q", cached, want)
+	// Nothing else may differ at all, which also covers everything a mount
+	// needs to work: a word TestNFSVolumeOptions asserts of the live options
+	// is in the cached ones too unless it shows up here. Linux keeps one RPC
+	// transport per server address and every share mounts from
+	// 127.0.0.1:<tunnel port>, so a transport option that varied with the read
+	// mode would be taken from whichever share mounted first and silently
+	// ignored for the rest. Only the attribute cache is per superblock.
+	attributeCache := map[string]bool{"actimeo=1": true, "actimeo=60": true, "nocto": true}
+	for _, word := range symmetricDifference(strings.Split(live, ","), strings.Split(cached, ",")) {
+		if !attributeCache[word] {
+			t.Errorf("%q differs between the read modes; only the attribute cache may (live %q, cached %q)", word, live, cached)
 		}
 	}
 
@@ -344,4 +357,20 @@ func TestCacheVolumesBelongToTheirShare(t *testing.T) {
 	if _, _, ok := ParseVolumeName(CacheVolumeName(cwd)); !ok {
 		t.Errorf("the cwd share's cache is not recognised: %q", CacheVolumeName(cwd))
 	}
+}
+
+// symmetricDifference is the words in one list and not the other, both ways.
+func symmetricDifference(a, b []string) []string {
+	var only []string
+	for _, word := range a {
+		if !slices.Contains(b, word) {
+			only = append(only, word)
+		}
+	}
+	for _, word := range b {
+		if !slices.Contains(a, word) {
+			only = append(only, word)
+		}
+	}
+	return only
 }

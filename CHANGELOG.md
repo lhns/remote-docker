@@ -50,6 +50,29 @@ table is in ADR 0045.
   workspace account as before, and the union's upper is created 0777
   (ADR 0046).
 
+### A large write to a share no longer fails, and a share is faster
+
+Writing a big file into a shared directory could fail with `Input/output
+error`, and `npm i` of a package carrying a large binary failed every time.
+The mount asked for `timeo=30`, which is 3 seconds, and that deadline is not a
+stall detector: it runs from transmit, includes the time a request spends
+queued behind others, and the server answers one request at a time per
+connection. Queueing more writes than it could drain in three seconds failed
+all of them at once. Measured on a live workspace: 224 WRITEs in flight timing
+out together at 9.07s, with the transport never reconnecting.
+
+A share now uses the kernel's own TCP default of 60 seconds and eight
+connections instead of one. `npm i -g opencode-ai` on a plain share, which had
+failed every time, completes in 120 seconds with no I/O errors, no WRITE
+timeouts and the full 185MB binary where a previous run had left a truncated
+27MB one.
+
+A caveat worth knowing, because it is why this can look like it did nothing:
+Linux keeps one RPC transport per server address, and every share of a machine
+mounts from the same one. `timeo`, `retrans` and `nconnect` are taken from
+whichever share mounted first and silently ignored for the rest, until the
+workspace's daemon is restarted.
+
 ### A share is measured against a bind mount
 
 `test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
@@ -103,6 +126,21 @@ evidence was on the workspace, in the NFS client's counters.
 The value is a duration or bare milliseconds. Anything else, and anything under
 `1ms`, is refused with a line saying so: the report rounds to milliseconds, so
 a smaller threshold prints `took=0s` for every call a share makes.
+### A share stops opening the same file once per megabyte
+
+NFS has no open file, so the server opened, seeked, wrote and CLOSED on every
+WRITE request: a 185MB file at `wsize=1048576` was opened and closed 180 times.
+On Windows that was the whole cost of a large write. Measured on a live
+workspace while npm extracted a 185MB executable, 173 opens of that one file
+took between 1.3 and 12.4 seconds EACH, while opening the same file once it is
+finished takes 0.2ms: a scanner re-reads the file after each close and the next
+open waits behind it, so the cost grew with the file and was paid per megabyte.
+
+The file now stays open for a couple of seconds after the request that used it,
+and the next request reuses it. `npm i` of one 185MB package went from 331
+seconds to 13, with per-write latency falling from 35 seconds to 788ms.
+
+`REMOTE_DOCKER_NFS_FDCACHE` tunes how long, and `0` turns it off.
 
 ### Fixed on the way through a cleanup
 
