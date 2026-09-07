@@ -35,9 +35,12 @@ round-trip per `stat()` is exactly the cost a source tree cannot absorb.
   chosen for the tunnel because AES-NI makes it several GB/s where ChaCha20 is
   markedly slower.
 - Mount options are load-bearing and are documented where they are set:
-  `soft` with a short `timeo` so a dead tunnel fails I/O with `EIO` instead of
-  parking container processes in uninterruptible sleep; `nolock` because the
-  server implements no NLM; `port` equal to `mountport` to skip rpcbind.
+  `soft` so a dead tunnel fails I/O with `EIO` instead of parking container
+  processes in uninterruptible sleep; `nolock` because the server implements
+  no NLM; `port` equal to `mountport` to skip rpcbind. The deadline that goes
+  with `soft` is the kernel's own (`timeo=600`), and
+  `core/workspace/export.go` says why a shorter one failed writes rather than
+  detecting a stall.
 - **No `inotify` over NFS.** Hot-reloaders need polling. This is inherent to
   the protocol, not a configuration mistake.
 
