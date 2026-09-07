@@ -2,12 +2,14 @@ package nfsserve
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
@@ -66,6 +68,17 @@ type Registry struct {
 	// Nil reports nothing and costs nothing. Set before the first share is
 	// registered: a share's filesystem is built with it.
 	OnRead ReadObserver
+
+	// Log is where a share's own diagnostics go, the wire having no room for
+	// them. Read when a share's filesystem is built, so set it before the
+	// first share is registered.
+	Log *slog.Logger
+
+	// The tracing threshold, read once. shareFS runs on every registration and
+	// again for every share on every SetAttrs, and a value that is not
+	// understood is worth saying once rather than once per share per connect.
+	traceOnce sync.Once
+	trace     time.Duration
 
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
@@ -139,7 +152,7 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		ExportPath: exportPath,
 		LocalPath:  localPath,
 		File:       file,
-		fs:         withAttrs(shareFS(base, file), r.attrs, exportPath, r.OnRead),
+		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -245,17 +258,27 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 		if share.File != "" {
 			base = filepath.Dir(share.LocalPath)
 		}
-		share.fs = withAttrs(shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
+		share.fs = withAttrs(r.shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
 	}
 }
 
 // shareFS is a share's filesystem before attributes: a bound osfs at base,
 // narrowed to one file when the share is one (ADR 0039). The ONE place this is
 // built, so registration and SetAttrs cannot disagree about it.
-func shareFS(base, file string) billy.Filesystem {
+func (r *Registry) shareFS(base, file string) billy.Filesystem {
 	// noFollowFS sits directly on the osfs so every layer above it, the single
 	// file view and the attributes alike, removes and renames a link as a link.
-	inner := &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	var inner billy.Filesystem = &noFollowFS{
+		Filesystem: osfs.New(base, osfs.WithBoundOS()),
+		log:        r.Log,
+	}
+	if idle := fdCacheIdle(); idle > 0 {
+		inner = withFDCache(inner, idle, fdCacheMax)
+	}
+	r.traceOnce.Do(func() { r.trace = traceThreshold(r.Log) })
+	if r.trace > 0 {
+		inner = withTrace(inner, base, r.Log, r.trace)
+	}
 	if file != "" {
 		return &singleFileFS{Filesystem: inner, name: file}
 	}

@@ -975,6 +975,18 @@ its pure planning function was.
   arm64 has ever been on a device. Say what was actually done, which is that a
   phone reached a workspace over wss and ran a container, by hand, on
   2026-08-14. `android_amd64` has never been executed by anyone.
+- **Creating a symlink from an ordinary Windows account.** Windows needs
+  `SeCreateSymbolicLinkPrivilege`, which Developer Mode grants and a normal
+  account does not hold, so `os.Symlink` fails with ERROR_PRIVILEGE_NOT_HELD
+  and a share refuses the request. `machine.yml` runs the probe's `links`
+  group from a Windows client and it PASSES, because GitHub runners are
+  elevated, and no job anywhere runs the Windows client unelevated: the one
+  thing that would catch this is the thing CI cannot see. The unit tests say
+  it by skipping (`symlink_test.go`, `nofollow_test.go`, `model_test.go`).
+  Nothing tests the refusal, and nothing stands in for it: see
+  `core-client/nfsserve/symlink.go` for why a hard link cannot.
+  *(Checked 2026-09-07 on an unelevated account here: `os.Symlink` returns
+  errno 1314. Re-check with a two-line `os.Symlink` under `go run`.)*
 - **A share against a file over 4 GiB, and Unicode normalisation.**
   `test/probes/fsprobe` has no step that writes one: its largest is a 1-byte
   pwrite at a 1 GiB offset (`sparse`), which is about allocation and not size.
