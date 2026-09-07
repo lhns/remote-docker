@@ -34,6 +34,17 @@ file in the union costs more round trips than reading it: a cold union reads
 in the plain mount's time at every latency, and a sparse read is slower. The
 table is in ADR 0045.
 
+### A share stops getting slower the longer a session runs
+
+Every NFS request resolved its file handle through a cache walk, and the cache
+holds one entry per path the workspace has touched, so each request cost more
+than the last. With 50,000 files seen it was 10.3ms of pure CPU per request
+against 12us at the start, which is 1.9 seconds of it for a single 256MB
+write; the writes queued behind that ran out of the mount's timeout and the
+write failed with EIO, on a share that had worked earlier in the same session.
+Nothing logged it. The fix is in the fork (ADR 0047), and
+`core-client/nfsserve/handlecost_test.go` is the gate.
+
 ### A share works for tar and for a container that is not root
 
 - From a Windows client, a file a container had just created went stale on

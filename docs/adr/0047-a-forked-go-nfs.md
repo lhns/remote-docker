@@ -1,10 +1,10 @@
 # 0047 — A forked go-nfs, consumed through a `replace`
 
 - Status: Accepted
-- Date: 2026-09-06
+- Date: 2026-09-06 (amended 2026-09-07: a sixth fix, `refreshAncestors`)
 - Current answer: `github.com/willscott/go-nfs` is replaced by
   `github.com/lhns/go-nfs`, branch `lhns-fixes`, forked from upstream `v0.0.4`,
-  in both `core-client/go.mod` and `client/go.mod`. It carries five fixes and
+  in both `core-client/go.mod` and `client/go.mod`. It carries six fixes and
   nothing else, and is dropped when upstream merges them.
 
 ## What forced it
@@ -27,6 +27,38 @@ the export namespace could produce them.
 - `rmdir` is `onRemove` in go-nfs (`nfs_onrmdir.go` delegates), so one mapping
   covers both.
 
+## The sixth fix, which no conformance probe can see
+
+`CachingHandler.FromHandle` refreshes the LRU recency of a handle's ancestors,
+so a parent is not evicted while a live child still needs it. It reached them
+by walking the WHOLE cache: `activeHandles.Keys()` allocating a slice of every
+key, a `Peek` per key, and a `Get` under the exclusive LRU lock per prefix
+match. It runs on EVERY request, the cache here is sized at a million
+(`handleCacheSize` in `core-client/nfsserve/server.go`), and a handle is minted
+per path the workspace touches, so the cost of resolving one handle grew with
+how many files the session had ever seen. The ancestors are already indexed by
+path in `reverseHandles`, so the fix reaches them directly: O(depth) rather
+than O(cache).
+
+Every answer is identical, which is why fsprobe cannot see it. Measured by
+`core-client/nfsserve/handlecost_test.go`:
+
+| handles cached | per resolution, before | after |
+|---|---|---|
+| 100 | 12.1us | 4.4us |
+| 1,000 | 94us | 3.5us |
+| 10,000 | 1.18ms | ~0 |
+| 50,000 | 10.3ms | 3.1us |
+
+- Linear before, flat after. 16 bytes of garbage per cached handle per request
+  became 88 bytes flat.
+- At 50,000 handles that is 1.9 seconds of pure cache walking for one 256MB
+  write, on top of the write itself. It is enough to push the RPCs queued
+  behind it past a soft mount's timeout, which is EIO on a write that worked
+  earlier in the same session.
+- It logs nothing and degrades for as long as a session runs, so it presents as
+  a share that gets slower the longer it is used.
+
 ## The decision
 
 | | |
@@ -35,7 +67,7 @@ the export namespace could produce them.
 | base | upstream `v0.0.4` |
 | consumed as | `replace github.com/willscott/go-nfs => github.com/lhns/go-nfs@<pseudo-version>` |
 | in | `core-client/go.mod` (direct) and `client/go.mod` (indirect, through core-client) |
-| tests | each fix carries one in the fork (`nfs_fixes_test.go`, `nfs_einval_test.go`, `helpers/cachinghandler_rename_test.go`) |
+| tests | each conformance fix carries one in the fork (`nfs_fixes_test.go`, `nfs_einval_test.go`, `helpers/cachinghandler_rename_test.go`); `refreshAncestors` is gated here instead, in `core-client/nfsserve/handlecost_test.go`, because what it fixes is a cost rather than an answer and only this repository's cache size shows it |
 | upstream | a pull request per fix, to follow, so the fork can be dropped rather than maintained |
 | licence | Apache-2.0, unchanged from upstream |
 
@@ -63,6 +95,6 @@ and is upstream and untouched in both modules.
 - **The fork must be re-based on any upstream release before it can be
   dropped**, and a rebase is where a fix silently stops applying. The tests in
   the fork are what catch that.
-- **Exit condition:** upstream merges the five fixes and cuts a release. Then
+- **Exit condition:** upstream merges the six fixes and cuts a release. Then
   both `replace` lines go, `go.mod` requires that version, and this record is
   deleted.
