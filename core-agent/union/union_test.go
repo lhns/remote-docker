@@ -68,7 +68,12 @@ func TestSpecLowerMount(t *testing.T) {
 		t.Errorf("source = %q, want the export path", source)
 	}
 	for _, want := range []string{"addr=127.0.0.1", "port=30001", "mountport=30001",
-		"nfsvers=3", "soft", "nolock", "rsize=1048576"} {
+		"nfsvers=3", "soft", "nolock", "rsize=1048576",
+
+		// The transport options reach the NFS client rather than the split
+		// taking them for kernel flags, which would mount the lower with the
+		// kernel's defaults while the volume recorded ours.
+		"timeo=600", "nconnect=8"} {
 		if !strings.Contains(options, want) {
 			t.Errorf("options %q are missing %q", options, want)
 		}
