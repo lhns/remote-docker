@@ -352,8 +352,10 @@ workspace's loopback shaped, reading them all:
 | 0.3ms, 10mbit | 0.87s | 0.74s |
 
 One run, 2026-09-04, so the two columns are comparable with each other rather
-than assembled from separate ones. Re-check with the `bench` label on a pull
-request.
+than assembled from separate ones. It predates the mount-option and server
+fixes in the unreleased notes and has not been repeated since, so read it as
+the shape of the cost rather than today's absolute seconds. Re-check with the
+`bench` label on a pull request.
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
