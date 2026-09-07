@@ -93,13 +93,16 @@ StatefulSet adopts them.
 ### A slow share can be timed
 
 `REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
-takes at least that long, with the operation, the path and the running count
-and mean for that operation. Off by default, and not installed at all when
-unset. Nothing here measured how long anything took: go-nfs reports errors and
-everything below Warn is dropped, so a request that was merely slow said
-nothing at any level and the only evidence was on the workspace, in the NFS
-client's counters. The value is a duration, or bare milliseconds; anything
-else is refused with a line saying so.
+takes at least that long, with the operation, the path, and the running count
+and mean for that operation. Off by default and not installed at all when
+unset, so a share nobody is diagnosing pays nothing for it. Nothing else here
+measured latency: go-nfs reports errors and everything below Warn is dropped,
+so a request that was merely slow said nothing at any level and the only
+evidence was on the workspace, in the NFS client's counters.
+
+The value is a duration or bare milliseconds. Anything else, and anything under
+`1ms`, is refused with a line saying so: the report rounds to milliseconds, so
+a smaller threshold prints `took=0s` for every call a share makes.
 
 ### Fixed on the way through a cleanup
 

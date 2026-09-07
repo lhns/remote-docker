@@ -69,8 +69,8 @@ type Registry struct {
 	OnRead ReadObserver
 
 	// Log is where a share's own diagnostics go, the wire having no room for
-	// them. Read when a share's filesystem is built, so set it before the
-	// first share is registered.
+	// them. Nil says nothing. Read when a share's filesystem is built, so set
+	// it before the first share is registered.
 	Log *slog.Logger
 
 	mu     sync.RWMutex
@@ -264,6 +264,7 @@ func (r *Registry) shareFS(base, file string) billy.Filesystem {
 	var inner billy.Filesystem = &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
 	// Timing, when REMOTE_DOCKER_NFS_TRACE asks for it (trace.go). Not
 	// installed otherwise, so a share nobody is diagnosing pays nothing for it.
+	// TestShareFSIsTracedOnlyWhenAsked pins that.
 	if slow := traceThreshold(r.Log); slow > 0 {
 		inner = withTrace(inner, base, r.Log, slow)
 	}

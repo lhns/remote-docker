@@ -254,6 +254,9 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		// before that, so the defaults are never observed.
 		registry: nfsserve.NewRegistry(defaultAttrs()),
 	}
+	// Set before the first share is registered: a share's filesystem is built
+	// with it (REMOTE_DOCKER_NFS_TRACE reads it).
+	s.registry.Log = opts.Log
 
 	// One list for the cache and the watcher, resolved once. The cache walks
 	// what the watcher invalidates, so a directory the watcher does not see is
@@ -286,10 +289,6 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		s.registry.OnRead = s.cache.Touch
 		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
-
-	// Read when a share's filesystem is built, so set before the first share
-	// is registered.
-	s.registry.Log = opts.Log
 
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
 		cancel()
