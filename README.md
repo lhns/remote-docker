@@ -268,6 +268,7 @@ default.**
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
+| `REMOTE_DOCKER_NFS_FDCACHE` | | | `2s` that a file stays open after the request that used it; `0` closes it on every request |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
 
 Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
@@ -275,8 +276,9 @@ Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 `REMOTE_DOCKER_TRACE` belongs to the **session**, which is the process that
 forwards the requests, so set it there:
 `REMOTE_DOCKER_TRACE=1 remote-docker remote start`. On a docker command it does
-nothing, and says so. `REMOTE_DOCKER_NFS_TRACE` belongs to the session too,
-which is what serves the share.
+nothing, and says so. `REMOTE_DOCKER_NFS_TRACE` and
+`REMOTE_DOCKER_NFS_FDCACHE` belong to the session too, which is what serves
+the share.
 
 ### Several workspaces
 
@@ -906,7 +908,7 @@ a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
 | Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |
 | Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
 | Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
-| Windows host: creating a symlink | refused, unless Developer Mode is on or the client runs elevated; the client says so once per share. Nothing stands in for it: a hard link was built and measured, and the container then reads the target back as the file's contents | Windows needs `SeCreateSymbolicLinkPrivilege`, and NFSv3 cannot answer "I made something else" |
+| Windows host: creating a symlink | refused, unless Developer Mode is on or the client runs elevated; the client says so once per share, and nothing stands in for it | Windows needs `SeCreateSymbolicLinkPrivilege`, and NFSv3 cannot answer "I made something else" (`core-client/nfsserve/symlink.go`) |
 
 Everything else the probe does behaves as on a bind mount, which is most of it:
 `flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads
@@ -914,10 +916,11 @@ and writes, two processes appending with `O_APPEND` without a torn line, eight
 processes creating in one directory, sparse files, rename in every form
 including over an existing file and while the file is open, hard links, and a
 git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
-`fsck`. Three things this does not answer: a file over 4 GiB, which no step
-writes; Unicode normalisation, so whether a name written NFD comes back NFC is
-unknown; and creating a symlink from an ordinary Windows account, since the
-only runner that exercises it is elevated.
+`fsck`. A name written NFC and one written NFD are each created, listed and
+unlinked under the bytes they were written with, so neither client normalises
+them. Two things this does not answer: a file over 4 GiB, which no step writes,
+and creating a symlink from an ordinary Windows account, since the only runner
+that exercises it is elevated.
 
 ### What cannot be bind mounted
 

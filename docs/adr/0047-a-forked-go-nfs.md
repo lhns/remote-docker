@@ -1,18 +1,21 @@
 # 0047 — A forked go-nfs, consumed through a `replace`
 
 - Status: Accepted
-- Date: 2026-09-06 (amended 2026-09-07: a sixth fix, `refreshAncestors`)
+- Date: 2026-09-06
 - Current answer: `github.com/willscott/go-nfs` is replaced by
-  `github.com/lhns/go-nfs`, branch `lhns-fixes`, forked from upstream `v0.0.4`,
-  in both `core-client/go.mod` and `client/go.mod`. It carries six fixes and
-  nothing else, and is dropped when upstream merges them.
+  `github.com/lhns/go-nfs`, branch `all-fixes`, forked from upstream `v0.0.4`,
+  in both `core-client/go.mod` and `client/go.mod`. It carries the fixes below
+  and nothing else, and is dropped when upstream merges them.
 
 ## What forced it
 
 `test/probes/fsprobe` runs the same filesystem operations against a share and
 against a native bind mount and compares the answers. Five differences were the
 server library's, not this project's: nothing in `core-client/nfsserve` or in
-the export namespace could produce them.
+the export namespace could produce them. Two more are costs rather than
+answers, so no conformance probe can see either.
+
+### The conformance fixes
 
 | fix, in the fork | what a user sees without it |
 |---|---|
@@ -27,7 +30,7 @@ the export namespace could produce them.
 - `rmdir` is `onRemove` in go-nfs (`nfs_onrmdir.go` delegates), so one mapping
   covers both.
 
-## The sixth fix, which no conformance probe can see
+### Resolving a handle cost O(cache), and the cache is a million entries
 
 `CachingHandler.FromHandle` refreshes the LRU recency of a handle's ancestors,
 so a parent is not evicted while a live child still needs it. It reached them
@@ -59,15 +62,40 @@ Every answer is identical, which is why fsprobe cannot see it. Measured by
 - It logs nothing and degrades for as long as a session runs, so it presents as
   a share that gets slower the longer it is used.
 
+### A connection was serial
+
+`conn.serve` handled one request, wrote its reply, and only then read the next.
+A client multiplexes every outstanding RPC for a mount onto one connection, so
+the slowest operation was the latency of everything queued behind it — which is
+the other half of the timeout this project hit at `timeo=30`
+(`core/workspace/export.go`). The fork dispatches up to
+`DefaultMaxConcurrentRequests` (8) at a time per connection and lets replies
+complete out of order, which the protocol allows: a reply is matched to its
+call by XID.
+
+Two things it required, and both are the fix rather than tidiness:
+
+- **The request body is read into memory before it is dispatched.** Handlers
+  parse their arguments lazily out of `req.Body`, so a body left on the
+  connection can only be handled while nothing else reads that connection.
+  Bounded at 2 MiB, because the length is the client's own number and FSINFO
+  advertises a 1 GiB wtmax; over the cap the body stays a reader over the
+  connection and is handled inline. Linux negotiates a wsize of at most 1 MiB,
+  so that is the exotic case.
+- **`ToHandle` mints under the reverse index's lock.** Two concurrent LOOKUPs
+  of one path that both missed would otherwise mint a handle each and hand the
+  client two handles for one file, which a client is entitled to treat as two
+  objects.
+
 ## The decision
 
 | | |
 |---|---|
-| fork | `github.com/lhns/go-nfs`, branch `lhns-fixes` |
+| fork | `github.com/lhns/go-nfs`, branch `all-fixes` |
 | base | upstream `v0.0.4` |
 | consumed as | `replace github.com/willscott/go-nfs => github.com/lhns/go-nfs@<pseudo-version>` |
 | in | `core-client/go.mod` (direct) and `client/go.mod` (indirect, through core-client) |
-| tests | each conformance fix carries one in the fork (`nfs_fixes_test.go`, `nfs_einval_test.go`, `helpers/cachinghandler_rename_test.go`); `refreshAncestors` is gated here instead, in `core-client/nfsserve/handlecost_test.go`, because what it fixes is a cost rather than an answer and only this repository's cache size shows it |
+| tests | each conformance fix carries one in the fork (`nfs_fixes_test.go`, `nfs_einval_test.go`, `helpers/cachinghandler_rename_test.go`), and concurrency carries `nfs_concurrent_test.go` with the fork's CI running every package under `-race`. `refreshAncestors` is gated HERE instead, in `core-client/nfsserve/handlecost_test.go`, because what it fixes is a cost rather than an answer and only this repository's cache size shows it |
 | upstream | a pull request per fix, to follow, so the fork can be dropped rather than maintained |
 | licence | Apache-2.0, unchanged from upstream |
 
@@ -95,6 +123,6 @@ and is upstream and untouched in both modules.
 - **The fork must be re-based on any upstream release before it can be
   dropped**, and a rebase is where a fix silently stops applying. The tests in
   the fork are what catch that.
-- **Exit condition:** upstream merges the six fixes and cuts a release. Then
-  both `replace` lines go, `go.mod` requires that version, and this record is
+- **Exit condition:** upstream merges these fixes and cuts a release. Then both
+  `replace` lines go, `go.mod` requires that version, and this record is
   deleted.

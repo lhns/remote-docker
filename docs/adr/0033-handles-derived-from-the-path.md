@@ -97,10 +97,10 @@ where this client runs. Re-check with any equivalent recursive walk; the
 throwaway used here counted files and hashed each path.
 
 That is fatal, and not by a small margin. The volume mounts are
-`soft,timeo=30,retrans=2`, so an RPC gives up after about sixty seconds: a
-rebuild triggered by a container's read would still be walking when the kernel
-abandoned the read that started it. The lazy repair fails precisely in the case
-it exists for.
+`soft,timeo=600,retrans=2` (`core/workspace/export.go`), so an RPC gives up
+after a few minutes at most: a rebuild triggered by a container's read would
+still be walking when the kernel abandoned the read that started it. The lazy
+repair fails precisely in the case it exists for.
 
 It is also the wrong shape. A walk costs what the tree CONTAINS; the problem is
 proportional to what a container has TOUCHED, and for a `node_modules` those
