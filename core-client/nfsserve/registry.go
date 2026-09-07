@@ -255,7 +255,13 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 func shareFS(base, file string) billy.Filesystem {
 	// noFollowFS sits directly on the osfs so every layer above it, the single
 	// file view and the attributes alike, removes and renames a link as a link.
-	inner := &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	var inner billy.Filesystem = &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	// Timing, when REMOTE_DOCKER_NFS_TRACE asks for it (trace.go). Not
+	// installed otherwise, so a share that is not being diagnosed pays
+	// nothing for it.
+	if slow := traceThreshold(); slow > 0 {
+		inner = withTrace(inner, base, traceLogger(), slow)
+	}
 	if file != "" {
 		return &singleFileFS{Filesystem: inner, name: file}
 	}
