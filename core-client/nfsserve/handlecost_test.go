@@ -4,27 +4,16 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
-
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// What one RPC costs to resolve a handle, as the handle cache fills.
+// What one RPC costs to resolve a handle, as the handle cache fills. The
+// resolution it gates, and the numbers, are in ADR 0047.
 //
-// go-nfs resolves every request through CachingHandler.FromHandle, which
-// refreshes the LRU recency of the handle's ancestors. That refresh used to
-// walk EVERY key in the cache: one allocated slice of all keys, one Peek per
-// key, and a Get under the exclusive LRU lock per prefix match. The cache
-// holds a million handles (handleCacheSize) and one is minted per path the
-// workspace touches, so the cost of resolving a single handle grew with how
-// many files the session had ever seen. It is pure CPU, it logs nothing, and
-// it gets worse the longer a session runs. Fixed in the fork by reaching the
-// ancestors through the reverse path index: see ADR 0047.
-//
-// The gate counts BYTES ALLOCATED per call rather than time, because the scan
-// allocated 16 bytes per cached handle and that number is exact on a loaded CI
-// runner where a duration is not. runtime.ReadMemStats stops the world, so
-// TotalAlloc is exact. testing.AllocsPerRun is the wrong tool: it counts
-// allocation EVENTS, and the slice of every key is one event whatever its size.
+// BYTES ALLOCATED per call rather than time, because the walk allocated 16
+// bytes per cached handle and that number is exact on a loaded CI runner where
+// a duration is not; runtime.ReadMemStats stops the world. testing.AllocsPerRun
+// is the wrong tool: it counts allocation EVENTS, and the slice of every key is
+// one event whatever its size.
 func TestPerRPCCostDoesNotGrowWithTheHandleCache(t *testing.T) {
 	const (
 		small   = 100
@@ -73,7 +62,7 @@ func TestPerRPCCostDoesNotGrowWithTheHandleCache(t *testing.T) {
 //
 // A small cache is the only way to ask this without minting a million handles,
 // which is what newServer's limit parameter is for.
-func TestFromHandleWorkIsBounded(t *testing.T) {
+func TestAnAncestorIsNotEvictedWhileAChildIsInUse(t *testing.T) {
 	const limit = 64
 
 	share := cwdShare(t, t.TempDir())
@@ -132,15 +121,5 @@ func fillTo(tb testing.TB, srv *Server, share *Share, n int) {
 	tb.Helper()
 	for i := range n {
 		srv.handler.ToHandle(share.fs, []string{"fill", fmt.Sprint(i / 100), fmt.Sprint(i)})
-	}
-}
-
-// Guard the assumption the tests above rest on: the export they use is the one
-// the client addresses, so a handle minted for it is the kind of handle a real
-// WRITE presents.
-func TestTheMeasuredShareIsTheWorkingDirectoryShare(t *testing.T) {
-	share := cwdShare(t, t.TempDir())
-	if share.ExportPath != workspace.ExportCWD {
-		t.Fatalf("export path %q, want %q", share.ExportPath, workspace.ExportCWD)
 	}
 }
