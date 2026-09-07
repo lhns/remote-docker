@@ -90,6 +90,24 @@ refused change, so the first upgrade past this needs the StatefulSet deleted
 once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
 StatefulSet adopts them.
 
+### Small files on a share are three times faster
+
+Every attribute lookup resolved its path through go-billy's bound filesystem,
+which runs `filepath.EvalSymlinks` twice for one `Lstat`: once over the file's
+directory and once over the share root, walking every component of an absolute
+path each time. go-nfs stats a path several times per request, so creating one
+small file paid it five times.
+
+It now resolves the way REMOVE and RENAME already did, through the containment
+this package uses for every other write. Measured on Windows against a share
+four directories deep: 4.79ms per `Lstat` before, 0.42ms after, where the
+`os.Lstat` under both is 0.09ms. Against a real workspace over a WAN link, 300
+small files went from 20.9s to 6.3s, and the CREATE round trip from 34ms to
+9ms. It falls on every metadata operation, not just writes, so directory walks
+and `git status` gain the same.
+
+Large files are unaffected: they were never paying it per byte.
+
 ### Fixed on the way through a cleanup
 
 - `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's

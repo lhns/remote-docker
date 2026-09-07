@@ -37,11 +37,37 @@ func (n *noFollowFS) Stat(name string) (os.FileInfo, error) {
 	return n.Filesystem.Stat(name)
 }
 
+// Lstat resolves the way REMOVE and RENAME do rather than through the bound
+// osfs, which is a cost rather than a behaviour: both leave the last element
+// alone and contain the directory part, but go-billy's Lstat runs
+// filepath.EvalSymlinks TWICE for it, once over the file's directory and once
+// over the share root, walking every component of an absolute path each time.
+//
+// Measured on Windows against a share four directories deep: 4.79ms through
+// the bound osfs against 0.42ms through secureLeaf, where the os.Lstat under
+// both is 0.09ms. go-nfs stats a path several times per request, so creating
+// one small file cost five of these: it is most of what a share spends on a
+// file, and it falls on every metadata operation, not just writes.
 func (n *noFollowFS) Lstat(name string) (os.FileInfo, error) {
 	if n.unspellable(name) {
 		return nil, os.ErrNotExist
 	}
-	return n.Filesystem.Lstat(name)
+	p, err := n.lstatPath(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.Lstat(p)
+}
+
+// lstatPath is secureLeaf, except that the share root is its own answer: it has
+// no last element to leave alone, and secureLeaf refuses a name that does not
+// name an entry in a directory.
+func (n *noFollowFS) lstatPath(name string) (string, error) {
+	rel := filepath.Clean(filepath.FromSlash(shareRelative(n.Root(), name)))
+	if rel == "." || rel == string(filepath.Separator) {
+		return n.Root(), nil
+	}
+	return n.leaf(name)
 }
 
 // unspellable reports whether a lookup names something the host cannot spell.
