@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
@@ -72,6 +73,12 @@ type Registry struct {
 	// them. Nil says nothing. Read when a share's filesystem is built, so set
 	// it before the first share is registered.
 	Log *slog.Logger
+
+	// The tracing threshold, read once. shareFS runs on every registration
+	// and again for every share on every SetAttrs, and a value that is not
+	// understood is worth saying once rather than once per share per connect.
+	traceOnce sync.Once
+	trace     time.Duration
 
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
@@ -265,8 +272,9 @@ func (r *Registry) shareFS(base, file string) billy.Filesystem {
 	// Timing, when REMOTE_DOCKER_NFS_TRACE asks for it (trace.go). Not
 	// installed otherwise, so a share nobody is diagnosing pays nothing for it.
 	// TestShareFSIsTracedOnlyWhenAsked pins that.
-	if slow := traceThreshold(r.Log); slow > 0 {
-		inner = withTrace(inner, base, r.Log, slow)
+	r.traceOnce.Do(func() { r.trace = traceThreshold(r.Log) })
+	if r.trace > 0 {
+		inner = withTrace(inner, base, r.Log, r.trace)
 	}
 	if file != "" {
 		return &singleFileFS{Filesystem: inner, name: file}
