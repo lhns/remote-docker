@@ -2,12 +2,16 @@ package nfsserve
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/go-git/go-billy/v5"
+
+	"github.com/lhns/remote-docker/core/logx"
 )
 
 // noFollowFS makes REMOVE and RENAME act on a symlink rather than on what it
@@ -23,7 +27,20 @@ import (
 // (checkNewName, which only Windows has a rule for).
 type noFollowFS struct {
 	billy.Filesystem // a bound osfs, whose Root is the share directory
+
+	// symlinks is what a SYMLINK request does here (SymlinkMode).
+	symlinks SymlinkMode
+
+	// log carries what only this side can see: the wire has an errno and no
+	// room for a reason. Nil is silence.
+	log *slog.Logger
+
+	// warned keeps the privilege message to one per share; a tool that links
+	// once links a hundred times.
+	warned sync.Once
 }
+
+func (n *noFollowFS) logger() *slog.Logger { return logx.Or(n.log) }
 
 // Stat and Lstat refuse a name the host cannot spell, so a lookup of `nul`
 // finds the DOS device rather than nothing: without this the probe's create of
@@ -87,7 +104,17 @@ func (n *noFollowFS) Symlink(target, link string) error {
 	if err := checkNewName(n.base(link)); err != nil {
 		return err
 	}
-	return n.Filesystem.Symlink(target, link)
+	if n.symlinks == SymlinkHardlink {
+		return n.hardLink(target, link)
+	}
+
+	err := n.Filesystem.Symlink(target, link)
+	if symlinkPrivileged(err) {
+		// The container is told EACCES and nothing more, and the remedy is on
+		// this machine rather than in the container, so it is said here.
+		n.warnPrivilege()
+	}
+	return err
 }
 
 func (n *noFollowFS) Remove(name string) error {
@@ -120,7 +147,7 @@ func (n *noFollowFS) Chroot(p string) (billy.Filesystem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &noFollowFS{Filesystem: inner}, nil
+	return &noFollowFS{Filesystem: inner, symlinks: n.symlinks, log: n.log}, nil
 }
 
 func (n *noFollowFS) relative(name string) string { return shareRelative(n.Root(), name) }

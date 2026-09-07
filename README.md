@@ -904,6 +904,7 @@ a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
 | Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |
 | Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
 | Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
+| Windows host: creating a symlink | refused, unless Developer Mode is on or the client runs elevated. `symlinks: hardlink` translates a link to an existing file inside the share into a hard link instead, which reads back as an ordinary file with two links and no readlink | Windows needs `SeCreateSymbolicLinkPrivilege` |
 
 Everything else the probe does behaves as on a bind mount, which is most of it:
 `flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads
@@ -911,9 +912,11 @@ and writes, two processes appending with `O_APPEND` without a torn line, eight
 processes creating in one directory, sparse files, rename in every form
 including over an existing file and while the file is open, hard links, and a
 git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
-`fsck`. Two things this does not answer: a file over 4 GiB, which no step
-writes, and Unicode normalisation, so whether a name written NFD comes back
-NFC is unknown.
+`fsck`. Three things this does not answer: a file over 4 GiB, which no step
+writes; Unicode normalisation, so whether a name written NFD comes back NFC is
+unknown; and creating a symlink from a Windows client, which the probe does
+exercise but only on a runner that happens to be elevated, so it says nothing
+about an ordinary Windows account.
 
 ### What cannot be bind mounted
 

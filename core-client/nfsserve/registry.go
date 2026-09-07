@@ -2,6 +2,7 @@ package nfsserve
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -66,6 +67,13 @@ type Registry struct {
 	// Nil reports nothing and costs nothing. Set before the first share is
 	// registered: a share's filesystem is built with it.
 	OnRead ReadObserver
+
+	// Symlinks is what a share does when a container creates a symlink, and
+	// Log is where the reason goes when it cannot. Both are read when a
+	// share's filesystem is built, so set them before the first share is
+	// registered.
+	Symlinks SymlinkMode
+	Log      *slog.Logger
 
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
@@ -139,7 +147,7 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		ExportPath: exportPath,
 		LocalPath:  localPath,
 		File:       file,
-		fs:         withAttrs(shareFS(base, file), r.attrs, exportPath, r.OnRead),
+		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -245,17 +253,21 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 		if share.File != "" {
 			base = filepath.Dir(share.LocalPath)
 		}
-		share.fs = withAttrs(shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
+		share.fs = withAttrs(r.shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
 	}
 }
 
 // shareFS is a share's filesystem before attributes: a bound osfs at base,
 // narrowed to one file when the share is one (ADR 0039). The ONE place this is
 // built, so registration and SetAttrs cannot disagree about it.
-func shareFS(base, file string) billy.Filesystem {
+func (r *Registry) shareFS(base, file string) billy.Filesystem {
 	// noFollowFS sits directly on the osfs so every layer above it, the single
 	// file view and the attributes alike, removes and renames a link as a link.
-	inner := &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	inner := &noFollowFS{
+		Filesystem: osfs.New(base, osfs.WithBoundOS()),
+		symlinks:   r.Symlinks,
+		log:        r.Log,
+	}
 	if file != "" {
 		return &singleFileFS{Filesystem: inner, name: file}
 	}
