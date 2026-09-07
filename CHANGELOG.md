@@ -113,6 +113,19 @@ refused change, so the first upgrade past this needs the StatefulSet deleted
 once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
 StatefulSet adopts them.
 
+### A slow share can be timed
+
+`REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
+takes at least that long, with the operation, the path, and the running count
+and mean for that operation. Off by default and not installed at all when
+unset, so a share nobody is diagnosing pays nothing for it. Nothing else here
+measured latency: go-nfs reports errors and everything below Warn is dropped,
+so a request that was merely slow said nothing at any level and the only
+evidence was on the workspace, in the NFS client's counters.
+
+The value is a duration or bare milliseconds. Anything else, and anything under
+`1ms`, is refused with a line saying so: the report rounds to milliseconds, so
+a smaller threshold prints `took=0s` for every call a share makes.
 ### A share stops opening the same file once per megabyte
 
 NFS has no open file, so the server opened, seeked, wrote and CLOSED on every
