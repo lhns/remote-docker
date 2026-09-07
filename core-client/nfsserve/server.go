@@ -39,7 +39,13 @@ type Server struct {
 
 // New builds a server over the given registry. A nil logger is silence.
 func New(registry *Registry, log *slog.Logger) *Server {
-	h := &mountHandler{registry: registry}
+	return newServer(registry, log, handleCacheSize)
+}
+
+// newServer is New with the handle cache limit as a parameter, so a test can
+// ask what happens when the cache fills without minting a million handles.
+func newServer(registry *Registry, log *slog.Logger, limit int) *Server {
+	h := &mountHandler{registry: registry, limit: limit}
 	return &Server{
 		registry: registry,
 		// The caching handler supplies the directory verifiers and every handle
@@ -47,7 +53,7 @@ func New(registry *Registry, log *slog.Logger) *Server {
 		// rootHandler takes the root, which is the one the kernel cannot ask
 		// for twice. See ADR 0033.
 		handler: &rootHandler{
-			Handler:  helpers.NewCachingHandler(h, handleCacheSize),
+			Handler:  helpers.NewCachingHandler(h, limit),
 			registry: registry,
 			log:      logx.Or(log),
 		},
@@ -75,6 +81,7 @@ func (s *Server) Serve(l net.Listener) error {
 // share can address another.
 type mountHandler struct {
 	registry *Registry
+	limit    int
 }
 
 // refusedFS is returned alongside every failing mount status.
@@ -158,4 +165,4 @@ func (h *mountHandler) FromHandle([]byte) (billy.Filesystem, []string, error) {
 
 func (h *mountHandler) InvalidateHandle(billy.Filesystem, []byte) error { return nil }
 
-func (h *mountHandler) HandleLimit() int { return handleCacheSize }
+func (h *mountHandler) HandleLimit() int { return h.limit }

@@ -128,7 +128,7 @@ func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
 
 // registryFor is a registry with dir as the working-directory share, which is
 // what nearly every test here starts from.
-func registryFor(t *testing.T, dir string) *Registry {
+func registryFor(t testing.TB, dir string) *Registry {
 	t.Helper()
 	r := NewRegistry(DefaultAttrs)
 	if _, err := r.RegisterCWD(dir); err != nil {
@@ -139,7 +139,7 @@ func registryFor(t *testing.T, dir string) *Registry {
 
 // cwdShare registers dir as the working-directory share and returns it, for a
 // test that asks the share's filesystem directly rather than over the wire.
-func cwdShare(t *testing.T, dir string) *Share {
+func cwdShare(t testing.TB, dir string) *Share {
 	t.Helper()
 	share, _, ok := registryFor(t, dir).Lookup(workspace.ExportCWD)
 	if !ok {

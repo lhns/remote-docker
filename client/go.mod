@@ -67,7 +67,7 @@ require (
 	github.com/containerd/ttrpc v1.2.9 // indirect
 	github.com/containerd/typeurl/v2 v2.3.0 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
-	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
@@ -284,4 +284,4 @@ require github.com/lhns/remote-docker/dircache v0.0.0
 
 replace github.com/lhns/remote-docker/dircache => ../dircache
 
-replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260905215120-0fbb162b6b6f
+replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260907193112-63c8705031ae
