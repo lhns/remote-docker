@@ -15,15 +15,12 @@ import (
 //
 // NFS has no open file, so go-nfs opens, seeks, writes and CLOSES on every
 // WRITE request: a 185MB file written at wsize=1048576 is opened and closed
-// 180 times. On Windows that is the whole cost of a large write. Measured on a
-// live workspace while npm extracted a 185MB executable: 173 opens of that one
-// file took between 1.3 and 12.4 seconds EACH, several of them unblocking
-// together, while opening the same file once finished takes 0.2ms. A scanner
-// re-reads the file after each close and the next open waits for it, so the
-// cost grows with the file and is paid per megabyte.
-//
-// It is wasted work with or without a scanner, so the file stays open for a
-// short while after a request lets go of it and the next request reuses it.
+// 180 times. On Windows an open of a file being written costs between 1.3 and
+// 12.4 seconds, against 0.2ms for the same file once nothing is writing it: a
+// scanner re-reads what each close finished and the next open waits behind it,
+// so the cost grows with the file and is paid per megabyte. It is wasted work
+// with or without a scanner, so the file stays open for a short while after a
+// request lets go of it and the next request reuses it.
 //
 // The descriptor is SHARED, so a request may not use the file's own offset:
 // two writes interleaving their Seek and Write would land wherever the other
@@ -103,6 +100,12 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 		c.mu.Unlock()
 		return &sharedFile{fd: e}, nil
 	}
+	if len(c.open) >= c.max {
+		// Uncached rather than unbounded. billy's own descriptor is right for
+		// this one, because nothing holds it past the request.
+		c.mu.Unlock()
+		return c.Filesystem.OpenFile(name, flag, perm)
+	}
 	c.mu.Unlock()
 
 	// Opened through billy first, which is what resolves the path inside the
@@ -130,10 +133,6 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 		c.mu.Unlock()
 		_ = f.Close()
 		return &sharedFile{fd: e}, nil
-	}
-	if len(c.open) >= c.max {
-		c.mu.Unlock()
-		return &plainFile{File: f}, nil // uncached rather than unbounded
 	}
 	e := &cachedFD{file: f, owner: c, path: name, refs: 1}
 	c.open[name] = e
@@ -189,9 +188,9 @@ func (c *fdCacheFS) evict(name string) {
 //
 // By PREFIX, not by name: renaming a directory means renaming everything under
 // it, and Windows refuses to rename a directory that holds an open file even
-// when the file itself was opened to allow it. The model test found that at
-// once, as a RENAME of a directory answering NFS3ERR_ACCES because a write to
-// a file two levels down still had a descriptor cached.
+// when the file itself was opened to allow it. That presents as a RENAME
+// answering NFS3ERR_ACCES because a write to a file two levels down still had
+// a descriptor cached.
 func (c *fdCacheFS) Remove(name string) error {
 	c.evictTree(name)
 	return c.Filesystem.Remove(name)
@@ -299,25 +298,6 @@ func (s *sharedFile) Truncate(size int64) error {
 func (s *sharedFile) Lock() error   { return errNoServerLocks }
 func (s *sharedFile) Unlock() error { return errNoServerLocks }
 
-// errNoServerLocks is what a lock through this layer answers.
-//
-// Shares are mounted nolock and go-nfs implements no NLM, so the server is
-// never asked to lock: a container's flock and fcntl locks are its own
-// kernel's, which is why the conformance probe's locking steps match a bind
-// mount. Answering an error rather than nil means that if the server ever IS
-// asked, it fails where it can be seen instead of reporting a lock nobody
-// took.
-var errNoServerLocks = errors.New("nfsserve: this share does not lock on the server; it is mounted nolock")
-
-// plainFile is an os.File as a billy.File, for a descriptor the cache declined
-// to keep.
-type plainFile struct {
-	*os.File
-}
-
-func (p *plainFile) Lock() error   { return errNoServerLocks }
-func (p *plainFile) Unlock() error { return errNoServerLocks }
-
 // Close gives the descriptor back rather than closing it, which is the whole
 // point. Closing twice must not release twice.
 func (s *sharedFile) Close() error {
@@ -328,3 +308,12 @@ func (s *sharedFile) Close() error {
 	s.fd.owner.release(s.fd)
 	return nil
 }
+
+// errNoServerLocks is what a lock through this layer answers.
+//
+// Shares are mounted nolock and go-nfs implements no NLM, so the server is
+// never asked to lock: a container's flock and fcntl locks are its own
+// kernel's. Answering an error rather than nil means that if the server ever
+// IS asked, it fails where it can be seen instead of reporting a lock nobody
+// took.
+var errNoServerLocks = errors.New("nfsserve: this share does not lock on the server; it is mounted nolock")

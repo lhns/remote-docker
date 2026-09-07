@@ -57,14 +57,9 @@ func TestADescriptorIsReusedAcrossRequests(t *testing.T) {
 	}
 }
 
-// The condition for holding a descriptor at all.
-//
-// Go's os.OpenFile does not ask Windows for FILE_SHARE_DELETE, so a file this
-// process holds open can be neither removed nor renamed by anything else:
-// measured 2026-09-07, both fail with "used by another process". Holding one
-// across requests would then make a user's own `rm` fail on a file their
-// container had just written, which is why the cache opens the descriptor
-// itself (openShared) rather than keeping billy's.
+// The condition for holding a descriptor at all: a user's own `rm` must keep
+// working on a file their container has just written. See openShared in
+// fdopen_windows.go for what Go's os.OpenFile does instead.
 func TestAHeldDescriptorDoesNotBlockTheMachinesOwnTools(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"doomed.bin", "moved.bin"} {
@@ -92,10 +87,9 @@ func TestAHeldDescriptorDoesNotBlockTheMachinesOwnTools(t *testing.T) {
 	}
 }
 
-// Renaming a directory means renaming everything under it, and Windows refuses
-// to rename a directory holding an open file even when the file itself was
-// opened to allow it. The model test found this as a RENAME answering
-// NFS3ERR_ACCES because a write two levels down still had a descriptor cached.
+// Windows refuses to rename a directory holding an open file even when the
+// file itself was opened to allow it, so a rename drops the descriptors below
+// it as well as its own. See fdCacheFS.Remove.
 func TestRenamingADirectoryDropsTheDescriptorsBelowIt(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "a", "deep"), 0o755); err != nil {
