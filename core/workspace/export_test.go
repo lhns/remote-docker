@@ -173,18 +173,11 @@ func TestNFSVolumeOptions(t *testing.T) {
 		"nfsvers=3",
 		"nolock",
 		"soft",
+		"rsize=1048576",
 
-		// timeo is deciseconds, so this is the kernel's own 60s TCP default.
-		// It is measured from transmit and includes the time a request waits
-		// behind others, and the server answers one request at a time per
-		// connection, so a shorter one fails every queued WRITE at once
-		// rather than detecting a stall. Measured at timeo=30: 224 WRITEs
-		// timing out together.
+		// Deciseconds, so this is the kernel's own 60s TCP default.
 		"timeo=600",
 		"retrans=2",
-
-		// Eight transports rather than one, because a connection is served
-		// serially. Throughput, not parallelism for its own sake.
 		"nconnect=8",
 	} {
 		if !strings.Contains(o, want) {
@@ -209,20 +202,13 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 		t.Errorf("cached options = %q, want a long attribute cache and nocto", cached)
 	}
 
-	// Everything a mount needs to work at all is the same in both, so the two
-	// differ in caching and in nothing that could break one of them.
-	for _, want := range []string{"addr=127.0.0.1", "port=30000", "nfsvers=3", "soft", "rsize=1048576"} {
-		if !strings.Contains(cached, want) {
-			t.Errorf("cached options %q are missing %q", cached, want)
-		}
-	}
-
-	// And nothing else may differ at all. Linux keeps one RPC transport per
-	// server address and every share mounts from 127.0.0.1:<tunnel port>, so
-	// a transport option (timeo, retrans, nconnect) that varied with the read
+	// Nothing else may differ at all, which also covers everything a mount
+	// needs to work: a word TestNFSVolumeOptions asserts of the live options
+	// is in the cached ones too unless it shows up here. Linux keeps one RPC
+	// transport per server address and every share mounts from
+	// 127.0.0.1:<tunnel port>, so a transport option that varied with the read
 	// mode would be taken from whichever share mounted first and silently
-	// ignored for the rest: a volume recording one value while the container
-	// mounted another. Only the attribute cache is per superblock.
+	// ignored for the rest. Only the attribute cache is per superblock.
 	attributeCache := map[string]bool{"actimeo=1": true, "actimeo=60": true, "nocto": true}
 	for _, word := range symmetricDifference(strings.Split(live, ","), strings.Split(cached, ",")) {
 		if !attributeCache[word] {
