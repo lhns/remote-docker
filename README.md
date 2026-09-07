@@ -275,8 +275,8 @@ Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 `REMOTE_DOCKER_TRACE` belongs to the **session**, which is the process that
 forwards the requests, so set it there:
 `REMOTE_DOCKER_TRACE=1 remote-docker remote start`. On a docker command it does
-nothing, and says so. `REMOTE_DOCKER_NFS_TRACE` is the session's too, since the
-session is what serves the share.
+nothing, and says so. `REMOTE_DOCKER_NFS_TRACE` belongs to the session too,
+which is what serves the share.
 
 ### Several workspaces
 

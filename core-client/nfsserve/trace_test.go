@@ -28,7 +28,7 @@ func TestTraceThreshold(t *testing.T) {
 	} {
 		t.Run(tc.value, func(t *testing.T) {
 			t.Setenv("REMOTE_DOCKER_NFS_TRACE", tc.value)
-			if got := traceThreshold(); got != tc.want {
+			if got := traceThreshold(nil); got != tc.want {
 				t.Errorf("traceThreshold() = %v with %q, want %v", got, tc.value, tc.want)
 			}
 		})
@@ -39,7 +39,7 @@ func TestTraceThreshold(t *testing.T) {
 		// package, which os.Unsetenv on its own would not do.
 		t.Setenv("REMOTE_DOCKER_NFS_TRACE", "1s")
 		os.Unsetenv("REMOTE_DOCKER_NFS_TRACE")
-		if got := traceThreshold(); got != 0 {
+		if got := traceThreshold(nil); got != 0 {
 			t.Errorf("traceThreshold() = %v unset, want 0", got)
 		}
 	})
@@ -52,12 +52,12 @@ func TestShareFSIsTracedOnlyWhenAsked(t *testing.T) {
 
 	t.Setenv("REMOTE_DOCKER_NFS_TRACE", "1s")
 	os.Unsetenv("REMOTE_DOCKER_NFS_TRACE")
-	if _, traced := shareFS(dir, "").(*traceFS); traced {
+	if _, traced := NewRegistry(DefaultAttrs).shareFS(dir, "").(*traceFS); traced {
 		t.Error("the share is traced with the switch unset")
 	}
 
 	t.Setenv("REMOTE_DOCKER_NFS_TRACE", "1s")
-	if _, traced := shareFS(dir, "").(*traceFS); !traced {
+	if _, traced := NewRegistry(DefaultAttrs).shareFS(dir, "").(*traceFS); !traced {
 		t.Error("the share is not traced with the switch set")
 	}
 }
@@ -120,7 +120,7 @@ func TestTracedShareServesTheSameFiles(t *testing.T) {
 // coarse enough to time a real Stat at zero.
 func TestTraceReportsASlowCall(t *testing.T) {
 	var buf bytes.Buffer
-	fs := withTrace(shareFS(t.TempDir(), ""), "/cwd", slog.New(slog.NewTextHandler(&buf, nil)), time.Second).(*traceFS)
+	fs := withTrace(NewRegistry(DefaultAttrs).shareFS(t.TempDir(), ""), "/cwd", slog.New(slog.NewTextHandler(&buf, nil)), time.Second).(*traceFS)
 	fs.observe("Stat", "hello.txt", time.Now().Add(-2*time.Second))
 
 	line := buf.String()
@@ -141,7 +141,7 @@ func TestTraceCountsQuietly(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	fs := withTrace(shareFS(dir, ""), dir, slog.New(slog.NewTextHandler(&buf, nil)), time.Hour).(*traceFS)
+	fs := withTrace(NewRegistry(DefaultAttrs).shareFS(dir, ""), dir, slog.New(slog.NewTextHandler(&buf, nil)), time.Hour).(*traceFS)
 	if _, err := fs.Stat("hello.txt"); err != nil {
 		t.Fatalf("Stat: %v", err)
 	}

@@ -95,11 +95,11 @@ StatefulSet adopts them.
 `REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
 takes at least that long, with the operation, the path and the running count
 and mean for that operation. Off by default, and not installed at all when
-unset. Nothing here measured how long anything took: go-nfs reports errors,
-and everything below Warn is dropped, so a request that merely takes seconds
-said nothing at any level and the only evidence was on the workspace, in the
-NFS client's counters. It is a duration, or bare milliseconds; anything else
-is refused with a line saying so.
+unset. Nothing here measured how long anything took: go-nfs reports errors and
+everything below Warn is dropped, so a request that was merely slow said
+nothing at any level and the only evidence was on the workspace, in the NFS
+client's counters. The value is a duration, or bare milliseconds; anything
+else is refused with a line saying so.
 
 ### Fixed on the way through a cleanup
 

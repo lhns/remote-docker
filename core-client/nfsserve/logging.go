@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	nfs "github.com/willscott/go-nfs"
 )
@@ -32,22 +31,10 @@ import (
 // Package-level because go-nfs's logger is package-level; there is nothing
 // per-server to attach it to.
 func SetLogger(log *slog.Logger) {
-	traceLog.Store(log)
 	loggerOnce.Do(func() { nfs.SetLogger(&nfsLogger{log: log}) })
 }
 
 var loggerOnce sync.Once
-
-// traceLog is where traceFS reports, kept here because a share's filesystem is
-// built without a logger to hand. Only the diagnostic path reads it.
-var traceLog atomic.Pointer[slog.Logger]
-
-func traceLogger() *slog.Logger {
-	if log := traceLog.Load(); log != nil {
-		return log
-	}
-	return slog.Default()
-}
 
 // nfsLogger adapts go-nfs's logger to ours.
 //
