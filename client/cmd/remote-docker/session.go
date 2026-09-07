@@ -13,7 +13,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
 	"github.com/lhns/remote-docker/core-client/fswatch"
-	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -66,10 +65,6 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	symlinks, err := nfsserve.ParseSymlinkMode(cfg.Symlinks)
-	if err != nil {
-		return fmt.Errorf("symlinks: %w", err)
-	}
 
 	s, err := session.Open(ctx, session.Options{
 		Config:      cfg,
@@ -84,7 +79,6 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 		PosixSource:  msysFrom(os.Getenv).posixSource,
 		Mode:         mode,
 		ModePaths:    modePaths,
-		Symlinks:     symlinks,
 		Watch:        watch,
 		WatchBudget:  cfg.WatchBudget,
 		WatchExclude: cfg.WatchExclude,

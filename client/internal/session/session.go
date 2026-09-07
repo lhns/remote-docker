@@ -65,10 +65,6 @@ type Options struct {
 	Mode      workspace.Mode
 	ModePaths map[string]workspace.Mode
 
-	// Symlinks is what a share does when a container creates one. Parsed by
-	// the command layer, like Mode.
-	Symlinks nfsserve.SymlinkMode
-
 	// PosixSource reports the POSIX path a shell may have rewritten a bind
 	// source into. Supplied by the command layer, which is where the shell is
 	// known; nil everywhere else, which is every platform but Windows.
@@ -291,11 +287,9 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
 
-	// Both are read when a share's filesystem is built, so they are set before
-	// the first share is registered. The logger carries what only this side
-	// can see: a refused symlink reaches the container as an errno with no
-	// room for the reason or the remedy.
-	s.registry.Symlinks = opts.Symlinks
+	// Read when a share's filesystem is built, so set before the first share
+	// is registered. It carries what only this side can see: a refused symlink
+	// reaches the container as an errno with no room for the reason.
 	s.registry.Log = opts.Log
 
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {

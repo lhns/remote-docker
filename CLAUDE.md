@@ -983,8 +983,8 @@ its pure planning function was.
   elevated: no job anywhere runs the Windows client unelevated, so the one
   thing that would catch this is the thing CI cannot see. The unit tests say
   so in their own way, by skipping (`symlink_test.go`, `nofollow_test.go`,
-  `model_test.go`). `symlinks: hardlink` is tested on every platform; the
-  refusal it stands in for is not tested anywhere.
+  `model_test.go`). Nothing tests the refusal, and nothing stands in for it:
+  see `core-client/nfsserve/symlink.go` for why a hard link cannot.
   *(Checked 2026-09-07: `os.Symlink` on this machine returns errno 1314.)*
 - **A share against a file over 4 GiB, and Unicode normalisation.**
   `test/probes/fsprobe` has no step that writes one: its largest is a 1-byte

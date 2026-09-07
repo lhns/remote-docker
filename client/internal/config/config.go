@@ -88,12 +88,6 @@ type Config struct {
 	// or "tree" (what is read, and its neighbourhood) (ADR 0045).
 	Prefetch string
 
-	// Symlinks is what a share does when a container creates one: native, or
-	// hardlink where the host will not make a symlink at all. Windows needs a
-	// privilege an ordinary account does not hold, so a link is refused there
-	// unless Developer Mode is on.
-	Symlinks string
-
 	// WatchExclude replaces the default list of directory names never
 	// watched. Empty means the default.
 	WatchExclude []string
@@ -210,7 +204,6 @@ type Workspace struct {
 	CacheFiles    int      `json:"cacheFiles,omitempty"`
 	CacheBytes    int64    `json:"cacheBytes,omitempty"`
 	Prefetch      string   `json:"prefetch,omitempty"`
-	Symlinks      string   `json:"symlinks,omitempty"`
 	WatchExclude  []string `json:"watchExclude,omitempty"`
 	IdleTimeout   string   `json:"idleTimeout,omitempty"`
 	DaemonIdle    string   `json:"daemonIdle,omitempty"`
@@ -334,7 +327,6 @@ const (
 	EnvCacheFiles    = "REMOTE_DOCKER_CACHE_FILES"
 	EnvCacheBytes    = "REMOTE_DOCKER_CACHE_BYTES"
 	EnvPrefetch      = "REMOTE_DOCKER_PREFETCH"
-	EnvSymlinks      = "REMOTE_DOCKER_SYMLINKS"
 	EnvWatchExclude  = "REMOTE_DOCKER_WATCH_EXCLUDE"
 	EnvIdleTimeout   = "REMOTE_DOCKER_IDLE_TIMEOUT"
 	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
@@ -481,9 +473,6 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Prefetch != "" {
 		cfg.Prefetch = ws.Prefetch
 	}
-	if ws.Symlinks != "" {
-		cfg.Symlinks = ws.Symlinks
-	}
 	if ws.WatchBudget != 0 {
 		cfg.WatchBudget = ws.WatchBudget
 	}
@@ -570,9 +559,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvPrefetch); v != "" {
 		cfg.Prefetch = v
-	}
-	if v := os.Getenv(EnvSymlinks); v != "" {
-		cfg.Symlinks = v
 	}
 	if v := os.Getenv(EnvWatchExclude); v != "" {
 		cfg.WatchExclude = splitList(v)

@@ -96,10 +96,6 @@ var settingSources = map[string]struct {
 		env: EnvPrefetch, override: false, sample: "eager",
 		want: func(c Config) string { return c.Prefetch },
 	},
-	"Symlinks": {
-		env: EnvSymlinks, override: false, sample: "hardlink",
-		want: func(c Config) string { return c.Symlinks },
-	},
 	"WatchExclude": {
 		env: EnvWatchExclude, override: false, sample: "node_modules",
 		want: func(c Config) string {

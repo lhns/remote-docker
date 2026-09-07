@@ -68,12 +68,11 @@ type Registry struct {
 	// registered: a share's filesystem is built with it.
 	OnRead ReadObserver
 
-	// Symlinks is what a share does when a container creates a symlink, and
-	// Log is where the reason goes when it cannot. Both are read when a
-	// share's filesystem is built, so set them before the first share is
-	// registered.
-	Symlinks SymlinkMode
-	Log      *slog.Logger
+	// Log is where a share says what only this side can see: a refused
+	// symlink reaches the container as an errno with no room for the reason.
+	// Read when a share's filesystem is built, so set it before the first
+	// share is registered.
+	Log *slog.Logger
 
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
@@ -265,7 +264,6 @@ func (r *Registry) shareFS(base, file string) billy.Filesystem {
 	// file view and the attributes alike, removes and renames a link as a link.
 	inner := &noFollowFS{
 		Filesystem: osfs.New(base, osfs.WithBoundOS()),
-		symlinks:   r.Symlinks,
 		log:        r.Log,
 	}
 	if file != "" {
