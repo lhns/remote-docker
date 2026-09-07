@@ -50,6 +50,29 @@ table is in ADR 0045.
   workspace account as before, and the union's upper is created 0777
   (ADR 0046).
 
+### A large write to a share no longer fails, and a share is faster
+
+Writing a big file into a shared directory could fail with `Input/output
+error`, and `npm i` of a package carrying a large binary failed every time.
+The mount asked for `timeo=30`, which is 3 seconds. That deadline is not a
+stall detector: it runs from transmit, includes the time a request spends
+waiting behind other requests, and the server answers one request at a time
+per connection, so queueing more writes than it can drain in three seconds
+failed all of them at once. Measured on a live workspace: 224 WRITEs in
+flight, timing out together at 9.07s each, with the transport never
+reconnecting and every metadata operation on the same mount unaffected.
+
+A share now uses the kernel's own TCP default of 60 seconds, and eight
+connections instead of one. Two concurrent 150MB writes went from failing to
+zero timeouts, and from 16.8 MB/s to 23.7 MB/s; 740MB across four writers
+lands in 36 seconds.
+
+A caveat worth knowing, because it is why this looked like it did nothing the
+first time: Linux keeps one RPC transport per server address, and every share
+of a machine mounts from the same one. `timeo`, `retrans` and `nconnect` are
+taken from whichever share mounted first and silently ignored for the rest,
+until the workspace's daemon is restarted.
+
 ### A share is measured against a bind mount
 
 `test/probes/fsprobe` runs one fixed sequence of filesystem operations inside

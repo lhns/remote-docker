@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -172,6 +173,19 @@ func TestNFSVolumeOptions(t *testing.T) {
 		"nfsvers=3",
 		"nolock",
 		"soft",
+
+		// timeo is deciseconds, so this is the kernel's own 60s TCP default.
+		// It is measured from transmit and includes the time a request waits
+		// behind others, and the server answers one request at a time per
+		// connection, so a shorter one fails every queued WRITE at once
+		// rather than detecting a stall. Measured at timeo=30: 224 WRITEs
+		// timing out together.
+		"timeo=600",
+		"retrans=2",
+
+		// Eight transports rather than one, because a connection is served
+		// serially. Throughput, not parallelism for its own sake.
+		"nconnect=8",
 	} {
 		if !strings.Contains(o, want) {
 			t.Errorf("options %q are missing %q", o, want)
@@ -200,6 +214,19 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 	for _, want := range []string{"addr=127.0.0.1", "port=30000", "nfsvers=3", "soft", "rsize=1048576"} {
 		if !strings.Contains(cached, want) {
 			t.Errorf("cached options %q are missing %q", cached, want)
+		}
+	}
+
+	// And nothing else may differ at all. Linux keeps one RPC transport per
+	// server address and every share mounts from 127.0.0.1:<tunnel port>, so
+	// a transport option (timeo, retrans, nconnect) that varied with the read
+	// mode would be taken from whichever share mounted first and silently
+	// ignored for the rest: a volume recording one value while the container
+	// mounted another. Only the attribute cache is per superblock.
+	attributeCache := map[string]bool{"actimeo=1": true, "actimeo=60": true, "nocto": true}
+	for _, word := range symmetricDifference(strings.Split(live, ","), strings.Split(cached, ",")) {
+		if !attributeCache[word] {
+			t.Errorf("%q differs between the read modes; only the attribute cache may (live %q, cached %q)", word, live, cached)
 		}
 	}
 
@@ -344,4 +371,20 @@ func TestCacheVolumesBelongToTheirShare(t *testing.T) {
 	if _, _, ok := ParseVolumeName(CacheVolumeName(cwd)); !ok {
 		t.Errorf("the cwd share's cache is not recognised: %q", CacheVolumeName(cwd))
 	}
+}
+
+// symmetricDifference is the words in one list and not the other, both ways.
+func symmetricDifference(a, b []string) []string {
+	var only []string
+	for _, word := range a {
+		if !slices.Contains(b, word) {
+			only = append(only, word)
+		}
+	}
+	for _, word := range b {
+		if !slices.Contains(a, word) {
+			only = append(only, word)
+		}
+	}
+	return only
 }

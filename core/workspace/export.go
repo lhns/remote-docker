@@ -285,12 +285,37 @@ func parseID(s string) (string, error) {
 // what makes per-bind volumes better than one host-side mount: nothing has to
 // propagate, and replacing a share is a container restart.
 //
-// The options are not arbitrary. soft plus a short timeo makes a dead tunnel
-// surface as EIO rather than parking container processes in uninterruptible
-// sleep. nolock and noacl because the server implements neither NLM nor the
-// NFS_ACL sideband, and without noacl the client probes for one on every
-// mount and the server logs the refusal as an error. port == mountport skips
-// rpcbind.
+// The options are not arbitrary. soft makes a dead tunnel surface as EIO
+// rather than parking container processes in uninterruptible sleep. nolock and
+// noacl because the server implements neither NLM nor the NFS_ACL sideband,
+// and without noacl the client probes for one on every mount and the server
+// logs the refusal as an error. port == mountport skips rpcbind.
+//
+// timeo is the kernel's own default for TCP, 60 seconds, and not the 3 it used
+// to be. The deadline is not a stall detector: it is measured from transmit,
+// including the time a request waits behind others, and the server answers one
+// request at a time per connection. So the client only has to queue more
+// writes than the server can drain inside it for every queued request to fail
+// at once, which a large write does routinely. Measured on a live workspace at
+// timeo=30: 224 WRITEs in flight, all timing out together at 9.07s with the
+// transport never reconnecting, and `npm i` of a package carrying a 185MB
+// binary failing every time. At 60s the same writes complete.
+//
+// nconnect gives the mount that many TCP connections instead of one. It is
+// throughput here rather than parallelism for its own sake: go-nfs serves a
+// connection serially, so one connection is one request at a time. Measured on
+// the same workspace, two concurrent 150MB writes went from 16.8 MB/s to
+// 23.7 MB/s and from failing to zero timeouts.
+//
+// A CAVEAT that applies to all three, and to anything else transport-level:
+// Linux keeps one RPC transport per server address, and every share of a
+// client mounts from 127.0.0.1:<tunnel port>. So timeo, retrans and nconnect
+// come from whichever share mounted FIRST and are silently ignored for every
+// share after it, for as long as the kernel holds that client. Changing them
+// takes effect on a workspace whose daemon has been restarted, not on the next
+// mount. Measured 2026-09-07: a volume recording timeo=600 while the container
+// mounted timeo=30. Only the attribute cache, which is per superblock, really
+// varies per share (attributeOptions, ADR 0042).
 //
 // The attribute caching is the one part that varies, and it is what the
 // read mode asks for (ADR 0042). Everything else is the same mount whatever
@@ -301,7 +326,7 @@ func NFSVolumeOptions(port int, exportPath string, read Read) map[string]string 
 		"addr=127.0.0.1",
 		fmt.Sprintf("port=%d", port),
 		fmt.Sprintf("mountport=%d", port),
-		"nfsvers=3", "nolock", "noacl", "soft", "timeo=30", "retrans=2",
+		"nfsvers=3", "nolock", "noacl", "soft", "timeo=600", "retrans=2", "nconnect=8",
 	}, attributeOptions(read)...)
 	options = append(options, "noatime", "rsize=1048576", "wsize=1048576")
 
