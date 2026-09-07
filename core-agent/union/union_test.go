@@ -67,13 +67,12 @@ func TestSpecLowerMount(t *testing.T) {
 	if source != ":/m/00112233445566ff" {
 		t.Errorf("source = %q, want the export path", source)
 	}
+	// What the option list holds is core/workspace's to pin; what this asserts
+	// is that the split leaves these on the NFS client's side of it. Taken for
+	// kernel flags they would be dropped, and the lower would mount with the
+	// kernel's defaults while the volume recorded ours.
 	for _, want := range []string{"addr=127.0.0.1", "port=30001", "mountport=30001",
-		"nfsvers=3", "soft", "nolock", "rsize=1048576",
-
-		// The transport options reach the NFS client rather than the split
-		// taking them for kernel flags, which would mount the lower with the
-		// kernel's defaults while the volume recorded ours.
-		"timeo=600", "nconnect=8"} {
+		"nfsvers=3", "soft", "nolock", "rsize=1048576", "timeo=600", "nconnect=8"} {
 		if !strings.Contains(options, want) {
 			t.Errorf("options %q are missing %q", options, want)
 		}

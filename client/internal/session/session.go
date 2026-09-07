@@ -290,10 +290,6 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
 
-	// Read when a share's filesystem is built, so set before the first share
-	// is registered.
-	s.registry.Log = opts.Log
-
 	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
 		cancel()
 		return nil, err

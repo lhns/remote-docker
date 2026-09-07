@@ -291,20 +291,18 @@ func parseID(s string) (string, error) {
 // and without noacl the client probes for one on every mount and the server
 // logs the refusal as an error. port == mountport skips rpcbind.
 //
-// timeo is DECISECONDS, which is the unit that misleads: the 30 this asked for
-// before read as 30 seconds and meant 3. 600 is the kernel's own default for
-// TCP. It is not a per-request service budget either -- the deadline runs from
-// transmit and includes the time a request spends queued behind others, and
-// go-nfs answers one request at a time per connection, so queueing more writes
-// than the server drains inside it fails all of them at once rather than
-// detecting a stall. Measured at timeo=30: 224 WRITEs in flight timing out
-// together at 9.07s, with the transport never reconnecting.
+// timeo is DECISECONDS, so 600 is the kernel's own TCP default and a 30 here
+// means 3 seconds rather than 30. It is not a per-request service budget: the
+// deadline runs from transmit and includes time spent queued behind other
+// requests, and go-nfs answers one at a time per connection, so a short one
+// fails a whole queue at once instead of detecting a stall. Measured at
+// timeo=30: 224 WRITEs in flight timing out together at 9.07s, with the
+// transport never reconnecting.
 //
-// nconnect gives the mount eight TCP connections rather than one, which is
-// throughput against that same serial service: one connection is one request
-// at a time.
+// nconnect gives the mount eight TCP connections against that same serial
+// service: one connection is one request at a time.
 //
-// A CAVEAT covering all three, and anything else transport-level: Linux keeps
+// A CAVEAT covering both, and anything else transport-level: Linux keeps
 // one RPC transport per server address, and every share of a client mounts
 // from 127.0.0.1:<tunnel port>. So timeo, retrans and nconnect are taken from
 // whichever share mounted FIRST and silently ignored for every share after it.
