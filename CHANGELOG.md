@@ -90,6 +90,22 @@ refused change, so the first upgrade past this needs the StatefulSet deleted
 once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
 StatefulSet adopts them.
 
+### A share stops opening the same file once per megabyte
+
+NFS has no open file, so the server opened, seeked, wrote and CLOSED on every
+WRITE request: a 185MB file at `wsize=1048576` was opened and closed 180 times.
+On Windows that was the whole cost of a large write. Measured on a live
+workspace while npm extracted a 185MB executable, 173 opens of that one file
+took between 1.3 and 12.4 seconds EACH, while opening the same file once it is
+finished takes 0.2ms: a scanner re-reads the file after each close and the next
+open waits behind it, so the cost grew with the file and was paid per megabyte.
+
+The file now stays open for a couple of seconds after the request that used it,
+and the next request reuses it. `npm i` of one 185MB package went from 331
+seconds to 13, with per-write latency falling from 35 seconds to 788ms.
+
+`REMOTE_DOCKER_NFS_FDCACHE` tunes how long, and `0` turns it off.
+
 ### Fixed on the way through a cleanup
 
 - `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's

@@ -255,7 +255,10 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 func shareFS(base, file string) billy.Filesystem {
 	// noFollowFS sits directly on the osfs so every layer above it, the single
 	// file view and the attributes alike, removes and renames a link as a link.
-	inner := &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	var inner billy.Filesystem = &noFollowFS{Filesystem: osfs.New(base, osfs.WithBoundOS())}
+	if idle := fdCacheIdle(); idle > 0 {
+		inner = withFDCache(inner, idle, fdCacheMax)
+	}
 	if file != "" {
 		return &singleFileFS{Filesystem: inner, name: file}
 	}
