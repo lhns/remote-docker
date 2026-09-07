@@ -100,9 +100,9 @@ do about it, once per share.
 
 Serving a hard link instead was built and measured, and it does not work over
 NFSv3: answering SYMLINK with success is answering that a symlink exists, and
-the client then serves the target it sent as the file's contents. The reasoning
-is in `core-client/nfsserve/symlink.go` so the next person does not spend the
-day finding out.
+the client then serves the target it sent as the file's contents.
+`core-client/nfsserve/symlink.go` records why, so the next person does not
+rebuild it.
 
 ### Fixed on the way through a cleanup
 

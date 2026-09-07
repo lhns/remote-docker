@@ -68,10 +68,9 @@ type Registry struct {
 	// registered: a share's filesystem is built with it.
 	OnRead ReadObserver
 
-	// Log is where a share says what only this side can see: a refused
-	// symlink reaches the container as an errno with no room for the reason.
-	// Read when a share's filesystem is built, so set it before the first
-	// share is registered.
+	// Log is where a share's own diagnostics go, the wire having no room for
+	// them. Read when a share's filesystem is built, so set it before the
+	// first share is registered.
 	Log *slog.Logger
 
 	mu     sync.RWMutex

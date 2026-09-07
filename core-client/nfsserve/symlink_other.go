@@ -2,6 +2,6 @@
 
 package nfsserve
 
-// symlinkPrivileged is Windows's alone: everywhere else a symlink needs no
-// privilege, and what the host refuses it refuses at the syscall.
+// symlinkPrivileged is Windows's alone: nowhere else does a symlink need a
+// privilege.
 func symlinkPrivileged(error) bool { return false }

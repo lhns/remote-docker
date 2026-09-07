@@ -10,8 +10,6 @@ import (
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/go-git/go-billy/v5"
-
-	"github.com/lhns/remote-docker/core/logx"
 )
 
 // noFollowFS makes REMOVE and RENAME act on a symlink rather than on what it
@@ -29,15 +27,12 @@ type noFollowFS struct {
 	billy.Filesystem // a bound osfs, whose Root is the share directory
 
 	// log carries what only this side can see: the wire has an errno and no
-	// room for a reason. Nil is silence.
+	// room for a reason. Nil is silence (logx.Or).
 	log *slog.Logger
 
-	// warned keeps the privilege message to one per share; a tool that links
-	// once links a hundred times.
+	// warned holds the privilege message to one per share (symlink.go).
 	warned sync.Once
 }
-
-func (n *noFollowFS) logger() *slog.Logger { return logx.Or(n.log) }
 
 // Stat and Lstat refuse a name the host cannot spell, so a lookup of `nul`
 // finds the DOS device rather than nothing: without this the probe's create of
@@ -104,7 +99,7 @@ func (n *noFollowFS) Symlink(target, link string) error {
 	err := n.Filesystem.Symlink(target, link)
 	if symlinkPrivileged(err) {
 		// The container is told EACCES and nothing more, and the remedy is on
-		// this machine rather than in the container, so it is said here.
+		// this machine, so it is said here.
 		n.warnPrivilege()
 	}
 	return err

@@ -904,7 +904,7 @@ a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
 | Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |
 | Windows host: inode of a recreated name | a new inode number, where ext4 reuses the old one | NTFS file reference numbers |
 | Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
-| Windows host: creating a symlink | refused, unless Developer Mode is on or the client runs elevated. Nothing stands in for it: serving a hard link instead was built and measured, and the client then reads the link's own target back as the file's contents | Windows needs `SeCreateSymbolicLinkPrivilege`, and NFSv3 cannot answer "I made something else" |
+| Windows host: creating a symlink | refused, unless Developer Mode is on or the client runs elevated; the client says so once per share. Nothing stands in for it: a hard link was built and measured, and the container then reads the target back as the file's contents | Windows needs `SeCreateSymbolicLinkPrivilege`, and NFSv3 cannot answer "I made something else" |
 
 Everything else the probe does behaves as on a bind mount, which is most of it:
 `flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads
@@ -914,9 +914,8 @@ including over an existing file and while the file is open, hard links, and a
 git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
 `fsck`. Three things this does not answer: a file over 4 GiB, which no step
 writes; Unicode normalisation, so whether a name written NFD comes back NFC is
-unknown; and creating a symlink from a Windows client, which the probe does
-exercise but only on a runner that happens to be elevated, so it says nothing
-about an ordinary Windows account.
+unknown; and creating a symlink from an ordinary Windows account, since the
+only runner that exercises it is elevated.
 
 ### What cannot be bind mounted
 

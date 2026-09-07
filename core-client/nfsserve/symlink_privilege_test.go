@@ -2,7 +2,6 @@ package nfsserve
 
 import (
 	"bytes"
-	"io/fs"
 	"os"
 	"runtime"
 	"strings"
@@ -16,7 +15,8 @@ import (
 // ERROR_PRIVILEGE_NOT_HELD, which does NOT match os.ErrPermission, so the
 // obvious test for it silently never fires.
 func TestSymlinkPrivilegedMatchesTheErrnoAndNotErrPermission(t *testing.T) {
-	privilege := &fs.PathError{Op: "symlink", Path: "link", Err: syscall.Errno(1314)}
+	// The shape os.Symlink returns, measured on 2026-09-07.
+	privilege := &os.LinkError{Op: "symlink", Old: "target", New: "link", Err: syscall.Errno(1314)}
 
 	want := runtime.GOOS == "windows"
 	if got := symlinkPrivileged(privilege); got != want {
@@ -30,9 +30,7 @@ func TestSymlinkPrivilegedMatchesTheErrnoAndNotErrPermission(t *testing.T) {
 	}
 }
 
-// The message is said once per share however many links a tool makes: npm
-// creates a bin entry per package, and a hundred identical warnings is a
-// message nobody reads.
+// One message per share however many links a tool makes (symlink.go).
 func TestThePrivilegeMessageIsSaidOncePerShare(t *testing.T) {
 	var buf bytes.Buffer
 	n := &noFollowFS{log: logx.Logger(&buf, "  ", false)}
