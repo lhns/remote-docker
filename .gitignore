@@ -7,6 +7,8 @@ test/watchdir
 # the binary into the directory it runs in, and a 95MB artifact in client/ was
 # once one `git add -A` away from being committed.
 #
+# `rd` is the same output under the short name a hand-run build gives it.
+#
 # NOT the bare name `remote-docker`: an unanchored pattern matches directories
 # too, so it swallowed client/cmd/remote-docker/ and every new source file in
 # it, silently. The fix for one silent mistake made a worse one.
@@ -23,6 +25,12 @@ test/watchdir
 /agent/remote-docker.exe
 /agent/remote-dockerd
 /agent/remote-dockerd.exe
+/rd
+/rd.exe
+/client/rd
+/client/rd.exe
+/agent/rd
+/agent/rd.exe
 *.test
 *.test.exe
 coverage.out
