@@ -120,7 +120,11 @@ func (s Spec) Dirs() []string {
 // EINVAL, which surfaces as `invalid argument` against a mount whose options
 // are, one at a time, all valid.
 func (s Spec) LowerMount() (source, fstype, data string, flags []string) {
-	opts := workspace.NFSVolumeOptions(s.Port, s.Export, s.Read)
+	// No nconnect: REMOTE_DOCKER_NFS_NCONNECT is the client's, and nothing
+	// carries it across, so a union's lower opens one connection whatever the
+	// client asked for. What the variable reaches is the share's own volume,
+	// which is the mount a write=through share gets.
+	opts := workspace.NFSVolumeOptions(s.Port, s.Export, s.Read, 0)
 
 	var kept []string
 	for _, opt := range strings.Split(opts["o"], ",") {

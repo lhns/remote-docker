@@ -110,6 +110,11 @@ type Rewriter struct {
 	// tunnel exposes this client's NFS server.
 	NFSPort int
 
+	// NConnect is how many connections a share's mount asks the workspace's
+	// NFS client for. Zero asks for nothing, which is the default and the only
+	// value a pre-5.3 workspace can mount at all. See NConnectEnv.
+	NConnect int
+
 	// Owner identifies this client's containers on a daemon shared with other
 	// accounts. Empty disables labelling.
 	Owner string
@@ -675,7 +680,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspa
 		return merged, file, nil
 	}
 
-	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, mode.Read)
+	opts := workspace.NFSVolumeOptions(r.NFSPort, exportPath, mode.Read, r.NConnect)
 	if err := r.Volumes.EnsureVolume(ctx, name, opts, labels); err != nil {
 		return "", "", fmt.Errorf("rewrite: creating volume for %s: %w", localPath, err)
 	}

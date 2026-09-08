@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -141,12 +142,13 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
-		Shares:  shareRegistrar{registry: s.registry, shares: s.shares, changed: s.syncWatch},
-		Volumes: live.api,
-		NFSPort: info.NFSPort,
-		Owner:   info.User,
-		Client:  s.clientID,
-		Guard:   live.guard,
+		Shares:   shareRegistrar{registry: s.registry, shares: s.shares, changed: s.syncWatch},
+		Volumes:  live.api,
+		NFSPort:  info.NFSPort,
+		NConnect: s.nconnect(),
+		Owner:    info.User,
+		Client:   s.clientID,
+		Guard:    live.guard,
 
 		Mode:      s.opts.Mode,
 		ModePaths: s.opts.ModePaths,
@@ -428,6 +430,30 @@ func (s *Session) watchPorts(ctx context.Context, live *liveConn) {
 		}
 	}
 }
+
+// nconnect is how many connections a share's mount asks the workspace's NFS
+// client for, from REMOTE_DOCKER_NFS_NCONNECT.
+//
+// Read once, and a value that cannot be honoured is reported once and then
+// ignored: connect runs again on every reconnect, and a warning each time about
+// a variable nothing is going to act on is noise in the one log a person
+// watches.
+func (s *Session) nconnect() int {
+	nconnectOnce.Do(func() {
+		n, err := rewrite.NConnect()
+		if err != nil {
+			s.log().Warn("ignoring " + err.Error())
+			return
+		}
+		nconnectValue = n
+	})
+	return nconnectValue
+}
+
+var (
+	nconnectOnce  sync.Once
+	nconnectValue int
+)
 
 // localPortFree reports whether this machine can open a port for a container
 // about to be created.
