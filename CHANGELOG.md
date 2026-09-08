@@ -218,6 +218,10 @@ StatefulSet adopts them.
   session opened during the 60-second key poll waited out the whole pass.
   Revoking an account could also change a key list another connection was
   reading at that moment.
+- One machine waiting on a cold daemon stalled every port forward on the
+  workspace. Working out which port a machine's existing volumes need can take
+  up to 90 seconds, because it starts that account's daemon to ask, and the port
+  record was locked for the whole question.
 
 ### Changed
 
