@@ -127,7 +127,12 @@ func cacheRefusal(err error, agent string) error {
 	}
 	var silent *silentError
 	if errors.As(err, &silent) {
-		return fmt.Errorf("%w\n  fix: try again, or use write=through", silent)
+		// The remedy names only the thing that is known to work. "Try again"
+		// would be the obvious suggestion and is wrong for the case that
+		// produced this: measured against a real v0.5.1 workspace, which never
+		// answers, so retrying never succeeds.
+		return fmt.Errorf("%w\n  fix: use write=%s, which is served by the mount itself",
+			silent, workspace.WriteThrough)
 	}
 	return err
 }

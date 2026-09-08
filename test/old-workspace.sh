@@ -130,10 +130,19 @@ if [ "$refused" -eq 0 ]; then
 else
     bad "the mount was not refused by name"
 fi
-if grep -qE 'fix: update the workspace' <<<"$LAST_OUTPUT"; then
+# Either remedy, because which one this is depends on the agent and both are
+# correct. Measured on 2026-09-08 against the published 0.5.1 image, this is the
+# SILENT case: that agent runs `workspace-cache` as a shell command and then
+# blocks on a stdin the client never closes, so it never answers at all, and the
+# refusal is the deadline rather than a workspace that told us anything. An
+# agent that runs the command and exits gives the other one.
+if grep -qE 'fix: use write=through|fix: update the workspace' <<<"$LAST_OUTPUT"; then
     ok "the refusal carries a remedy"
 else
     bad "the refusal carries no remedy"
+fi
+if grep -qE 'said nothing for' <<<"$LAST_OUTPUT"; then
+    ok "a workspace that never answered is reported as never having answered"
 fi
 # Context, never the test: no version comparison gates anything, and the
 # workspace's own version is reported because it is what somebody acts on.
