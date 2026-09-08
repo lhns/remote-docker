@@ -211,3 +211,29 @@ func TestForgettingAShareDropsItsPrefetch(t *testing.T) {
 		t.Error("a released share kept the prefetch that Touch reaches")
 	}
 }
+
+// Forgetting a share ends its sender too. Dropping the map entry alone left a
+// goroutine ticking for the life of the cache, holding the whole tree and
+// applying batches into a share the workspace had released.
+func TestForgettingAShareStopsItsSender(t *testing.T) {
+	store := &fakeStore{}
+	c, root := treeCache(t, store)
+	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	eventually(t, "the whole tree to be sent", func() bool { return store.appliedCount() == 120 })
+
+	p := c.prefetchFor("/cwd")
+	c.shares.forget("/cwd")
+
+	// A demand batch the sender would take on its next round. A live one
+	// applies it; a stopped one never looks.
+	sent := store.appliedCount()
+	p.mu.Lock()
+	p.queue = append(p.queue, []Entry{{Path: "pkga/faa.go", Size: 2000}})
+	p.mu.Unlock()
+	p.wake()
+
+	time.Sleep(3 * walkEvery)
+	if got := store.appliedCount(); got != sent {
+		t.Errorf("a forgotten share's sender applied %d more entries; it is still running", got-sent)
+	}
+}

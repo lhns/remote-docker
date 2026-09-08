@@ -75,18 +75,23 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
 			return nil, err
 		}
+		// ONE release rule, because live.machine is the hold's only closer and
+		// every failure before that hand-over used to leave a wsl.exe session
+		// running under a context nothing cancels. Disarmed where live takes it.
+		defer func() {
+			if hold != nil {
+				_ = hold.Close()
+			}
+		}()
+
 		host, err = machine.Locate(ctx, m.Backend, m.Name, transport.Port)
 		if err != nil {
-			_ = hold.Close()
 			return nil, err
 		}
 	}
 
 	dial, err := dialerFor(transport, s.opts.Config)
 	if err != nil {
-		if hold != nil {
-			_ = hold.Close()
-		}
 		return nil, err
 	}
 
@@ -123,6 +128,8 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	s.registry.SetAttrs(attrsFor(info))
 
 	live := &liveConn{ssh: client, info: info, machine: hold}
+	// live owns the hold from here.
+	hold = nil
 	if info.Now != 0 {
 		// Measured here, once, rather than per comparison: the round trip that
 		// fetched this is the only thing between the two readings, and it is
@@ -160,7 +167,9 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	}
 	if s.opts.Role.hosting() {
 		if err := s.startNFS(live); err != nil {
-			_ = client.Close()
+			// live's own teardown, not just the ssh client's: it is what
+			// releases the machine by this point.
+			live.close()
 			return nil, err
 		}
 	}

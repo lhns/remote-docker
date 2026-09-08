@@ -381,7 +381,8 @@ func (f *shares) finish(s *shareState, cached bool, err error) bool {
 //
 // The prefetch goes with it. Left behind, a Touch on a share attached again
 // without prefetch would still find that tree and queue batches into it, so
-// files would be sent to a share nobody asked to fill.
+// files would be sent to a share nobody asked to fill. Removing it from the
+// map is also how the sender is told to stop, which it checks per round.
 func (f *shares) forget(share string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

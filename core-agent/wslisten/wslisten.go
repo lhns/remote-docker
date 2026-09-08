@@ -108,6 +108,11 @@ func (l *Listener) Handler() http.Handler {
 			// from the handler would let net/http tear the hijacked connection
 			// down underneath the SSH session riding it.
 			<-ctx.Done()
+		case <-ctx.Done():
+			// keepAlive gave up on the peer before anything accepted this.
+			// The channel is unbuffered, so without this the handler parks on
+			// the send for good, holding a hijacked HTTP connection.
+			_ = c.CloseNow()
 		case <-l.closed:
 			cancel()
 			_ = c.Close(websocket.StatusGoingAway, "shutting down")

@@ -41,8 +41,10 @@ type tree struct {
 
 	roots []*shareRoot
 
-	// dirs maps a watched directory to the export it belongs to, keyed by
-	// dirKey so a lookup survives the case the OS chooses to report.
+	// dirs maps a watched directory to the spelling it was added with, keyed
+	// by dirKey so a lookup survives the case the OS chooses to report. The
+	// value is what removal hands back to the backend: the key is folded and
+	// slash-joined, which is not a path the backend holds.
 	dirs map[string]string
 
 	// denied names the shallowest directory of each subtree the budget
@@ -229,7 +231,7 @@ func (t *tree) addOne(r *shareRoot, dir string) bool {
 		}
 		return false
 	}
-	t.dirs[key] = r.export
+	t.dirs[key] = dir
 	return true
 }
 
@@ -267,14 +269,20 @@ func (t *tree) deny(dir string) {
 // the path fsnotify recorded at Add time, and every path we then put on the
 // wire is wrong. Dropping the old subtree outright is the only fix; the
 // matching event at the new location walks and re-adds it.
+//
+// Every descendant leaves the BACKEND as well as the map. The map is the only
+// record of what was added, so one dropped from it alone can never be removed
+// again: a permanent leak of a whole tree, which is what Standby's sync(nil)
+// was meant to hand back. It also left the rename half-done, since a watch
+// nothing removed keeps firing under the spelling it was added with.
 func (t *tree) removeTree(dir string) {
 	key := dirKey(t.goos, dir)
-	for watched := range t.dirs {
+	for watched, path := range t.dirs {
 		if watched == key || strings.HasPrefix(watched, key+"/") {
 			delete(t.dirs, watched)
+			_ = t.be.Remove(path)
 		}
 	}
-	_ = t.be.Remove(dir)
 }
 
 // removeOne drops a single directory's watch, for a delete.
