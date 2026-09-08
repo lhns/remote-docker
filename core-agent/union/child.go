@@ -97,34 +97,31 @@ func (s Spec) Root() string { return netns.Root(s.PID) }
 // stop being given.
 var errNotAMount = errors.New("nothing is mounted there")
 
-// Prober answers whether a union is serving, with at most one Lstat in flight
-// per union.
+// prober answers whether a union is serving, with at most one Lstat in flight
+// per merged path.
 //
-// The state is here rather than in a caller because the goroutine is here.
-// mountedAt's Lstat of the merged path blocks uninterruptibly on a wedged FUSE
-// server, so it outlives the context that gave up waiting for it and pins an OS
-// thread for as long as it runs. A caller arriving while that Lstat has not
-// returned learns nothing by starting a second one: "has not answered" is
-// already the answer. Without the bound, unions.awaitGone, which polls this
-// every restartDelay for the whole life of an adopted mount, leaks a goroutine
-// and a thread every two seconds forever.
+// mountedAt's Lstat blocks uninterruptibly on a wedged FUSE server, so it
+// outlives the context that gave up waiting for it and pins an OS thread until
+// it returns. A caller arriving meanwhile learns nothing from a second one:
+// "has not answered yet" is already the answer. Unbounded, unions.awaitGone
+// polls this every restartDelay for the whole life of an adopted mount and
+// leaks a goroutine and a thread every two seconds, forever.
 //
 // The zero value is ready, and it is safe for concurrent use.
-type Prober struct {
+type prober struct {
 	mu       sync.Mutex
 	inflight map[string]*probe
 
-	// mounted is mountedAt, indirected so a test can hold a probe open. A
-	// field rather than a package variable, and set before the prober is used:
-	// the goroutine below reads it, so anything that could reassign it later
-	// races with a probe still blocked in the last one. Nil in production,
-	// where a wedged FUSE server is what this exists for and there is no way
-	// to make one on a development machine.
+	// mounted is mountedAt, indirected so a test can hold a probe open. Set at
+	// construction and never reassigned: the goroutine below reads it, so a
+	// later write races with a probe still blocked in the previous one. Nil in
+	// production, since there is no way to wedge a FUSE server on a
+	// development machine.
 	mounted func(string) bool
 }
 
 // at reports whether anything is mounted at path.
-func (p *Prober) at(path string) bool {
+func (p *prober) at(path string) bool {
 	if p.mounted != nil {
 		return p.mounted(path)
 	}
@@ -140,7 +137,7 @@ type probe struct {
 
 // defaultProber is the process's, because what is being bounded is an OS thread
 // and there is one pool of those.
-var defaultProber Prober
+var defaultProber prober
 
 // Alive reports whether the union answers, and it is the ONLY definition of
 // "up" this package offers.
@@ -152,13 +149,13 @@ var defaultProber Prober
 //
 // A context because a wedged server answers nothing at all: the Lstat blocks on
 // the FUSE server behind it, so it runs on a goroutine of its own and every
-// caller asking does not wait with it. Bounding that goroutine is Prober's.
+// caller asking does not wait with it. Bounding that goroutine is prober's.
 func Alive(ctx context.Context, spec Spec) error {
-	return defaultProber.Alive(ctx, spec)
+	return defaultProber.alive(ctx, spec)
 }
 
-// Alive is Alive against this prober's in-flight set.
-func (p *Prober) Alive(ctx context.Context, spec Spec) error {
+// alive is Alive against this prober's in-flight set.
+func (p *prober) alive(ctx context.Context, spec Spec) error {
 	merged := path.Join(spec.Root(), spec.Merged())
 
 	pr, ours := p.begin(merged)
@@ -185,7 +182,7 @@ func (p *Prober) Alive(ctx context.Context, spec Spec) error {
 
 // begin joins the probe already in flight for merged, or claims the right to
 // make one.
-func (p *Prober) begin(merged string) (*probe, bool) {
+func (p *prober) begin(merged string) (*probe, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if pr, ok := p.inflight[merged]; ok {
@@ -204,7 +201,7 @@ func (p *Prober) begin(merged string) (*probe, bool) {
 // Cleared BEFORE the answer goes out, so an Lstat that returns after minutes of
 // blocking is never handed to a later caller as a fresh reading: that caller
 // starts its own.
-func (p *Prober) finish(merged string, pr *probe, err error) {
+func (p *prober) finish(merged string, pr *probe, err error) {
 	pr.err = err
 
 	p.mu.Lock()

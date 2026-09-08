@@ -88,17 +88,18 @@ type Manager struct {
 	shares map[string]*live
 
 	// pending is the share keys a Prepare is mounting, so a second Prepare for
-	// the same share waits rather than starting a union of its own. The shape
-	// is daemons.Manager.ensure's, and so is the rule it exists for: the slow
-	// work happens with m.mu released, because every other cache operation
-	// reaches m.share and would otherwise queue behind one cold union.
+	// the same share waits rather than stacking a second fuse-overlayfs on one
+	// upper (ADR 0044). Single-flighted rather than locked, in the shape of
+	// daemons.Manager.ensure, because mounting takes up to readyTimeout and
+	// every other cache operation reaches m.share: under m.mu they would all
+	// queue behind one cold union.
 	pending map[string]chan struct{}
 
 	// probe answers whether a union is serving, and onStart is told about each
-	// one this manager mounts. Both are nil in production, where the answers
-	// are union.Alive and nothing. A test sets them because no union can be
-	// mounted on a development machine, and because a second union started for
-	// one share replaces the first in m.shares and is otherwise invisible.
+	// one this manager mounts. Nil in production, where they are union.Alive
+	// and nothing. Tests need both: no union can be mounted on a development
+	// machine, and a second one started for a share replaces the first in
+	// m.shares, so nothing else would show that it happened.
 	probe   func(context.Context, union.Spec) error
 	onStart func(union.Spec)
 }
@@ -235,18 +236,14 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 	for {
 		existing, known := m.share(account, req.Export)
 
-		// Outside m.mu deliberately. A liveness check costs up to aliveTimeout
-		// against a wedged server and mounting costs up to readyTimeout, and
-		// every other cache operation for every other account reaches m.share:
-		// holding the lock across either stalls all of them behind one share.
+		// Outside m.mu, for the reason on the pending field: a wedged server
+		// takes aliveTimeout to say so.
 		if known && m.alive(existing.spec) {
 			return existing.spec.Merged(), nil
 		}
 
 		m.mu.Lock()
 		if wait, ok := m.pending[k]; ok {
-			// Somebody else is mounting this share. Wait for them rather than
-			// racing: two Prepares must not both start a union on one path.
 			m.mu.Unlock()
 			select {
 			case <-wait:
@@ -442,7 +439,7 @@ func (m *Manager) alive(spec union.Spec) bool {
 // aliveErr asks whether a union is serving, within aliveTimeout whatever the
 // caller's context allows.
 //
-// The budget is not the caller's to skip. mergedRoot passes the cache session's
+// The budget is not the caller's to skip: mergedRoot passes the cache session's
 // context, which gliderlabs builds with context.WithCancel and no deadline
 // (agent/internal/sshd/cache.go), so an Apply or a Drop against a wedged FUSE
 // server waited for as long as the SSH session lived.
@@ -480,7 +477,8 @@ func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
 			continue
 		}
 		specs = append(specs, l.spec)
-		m.stop(k, l)
+		m.remove(k, l)
+		drain(l)
 	}
 	m.mu.Unlock()
 
@@ -569,14 +567,9 @@ func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 	return out
 }
 
-// stop ends supervision and waits for it. The caller holds the lock.
-func (m *Manager) stop(k string, l *live) {
-	m.remove(k, l)
-	drain(l)
-}
-
 // remove ends supervision and forgets the share. The caller holds the lock;
-// waiting for the supervisor is drain's, and must not happen under it.
+// waiting for the supervisor is drain's, and belongs outside it. ReleaseAccount
+// still drains under the lock, which costs up to stopTimeout per share.
 func (m *Manager) remove(k string, l *live) {
 	l.cancel()
 	delete(m.shares, k)

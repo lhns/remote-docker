@@ -13,20 +13,20 @@ func wedgedSpec() Spec {
 
 // wedged is a prober whose Lstat never returns until the returned channel is
 // closed, which is what a FUSE mount with nothing serving it does.
-func wedged() (*Prober, chan struct{}) {
+func wedged() (*prober, chan struct{}) {
 	block := make(chan struct{})
-	return &Prober{mounted: func(string) bool {
+	return &prober{mounted: func(string) bool {
 		<-block
 		return true
 	}}, block
 }
 
 // ask puts one bounded question to the prober and insists it went unanswered.
-func ask(t *testing.T, p *Prober) {
+func ask(t *testing.T, p *prober) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
-	if err := p.Alive(ctx, wedgedSpec()); err == nil {
+	if err := p.alive(ctx, wedgedSpec()); err == nil {
 		t.Fatal("a wedged mount was reported as serving")
 	}
 }
@@ -56,8 +56,12 @@ func TestAliveKeepsOneProbeAgainstAWedgedMount(t *testing.T) {
 	}
 }
 
-// The bound must not outlive the wedge: once the Lstat returns, the next caller
-// gets a reading of its own rather than the stale one it blocked on.
+// The bound must not outlive the wedge: a prober that has seen a mount fail to
+// answer reports it serving again as soon as the Lstat returns, rather than
+// keeping the in-flight probe and its verdict.
+//
+// It does not distinguish joining that probe's answer from starting a fresh
+// one, which finish's ordering decides and nothing here observes.
 func TestAliveProbesAgainOnceTheLstatReturns(t *testing.T) {
 	p, block := wedged()
 
@@ -66,7 +70,7 @@ func TestAliveProbesAgainOnceTheLstatReturns(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := p.Alive(ctx, wedgedSpec()); err != nil {
+	if err := p.alive(ctx, wedgedSpec()); err != nil {
 		t.Errorf("the mount answered and the prober did not ask again: %v", err)
 	}
 }
