@@ -16,11 +16,8 @@ import (
 // NFS has no open file, so go-nfs opens, seeks, writes and CLOSES on every
 // WRITE request: a 185MB file written at wsize=1048576 is opened and closed
 // 180 times. On Windows an open of a file being written costs between 1.3 and
-// 12.4 seconds, against 0.2ms for the same file once nothing is writing it: a
-// scanner re-reads what each close finished and the next open waits behind it,
-// so the cost grows with the file and is paid per megabyte. It is wasted work
-// with or without a scanner, so the file stays open for a short while after a
-// request lets go of it and the next request reuses it.
+// 12.4 seconds, against 0.2ms for the same file once nothing is writing it, so
+// the cost grows with the file and is paid per megabyte.
 //
 // The descriptor is SHARED, so a request may not use the file's own offset:
 // two writes interleaving their Seek and Write would land wherever the other
@@ -83,6 +80,9 @@ func cacheable(flag int) bool {
 	return flag&forbidden == 0
 }
 
+// OpenFile serves a cached descriptor where it can, and billy's own where it
+// cannot. Falling back is never a refusal: an uncached descriptor is correct
+// for the request, since nothing holds it past that request.
 func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, error) {
 	if !cacheable(flag) {
 		// The identity or the length is about to change, so anything held for
@@ -93,9 +93,6 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 
 	c.mu.Lock()
 	if c.closed {
-		// A request still holding the replaced stack is served uncached rather
-		// than refused: billy's own descriptor is right for it, nothing
-		// holding that past the request.
 		c.mu.Unlock()
 		return c.Filesystem.OpenFile(name, flag, perm)
 	}
@@ -109,8 +106,6 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 		return &sharedFile{fd: e}, nil
 	}
 	if len(c.open) >= c.max {
-		// Uncached rather than unbounded. billy's own descriptor is right for
-		// this one, because nothing holds it past the request.
 		c.mu.Unlock()
 		return c.Filesystem.OpenFile(name, flag, perm)
 	}
@@ -134,8 +129,8 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 
 	c.mu.Lock()
 	if c.closed {
-		// Closed while this one was in the filesystem. Nothing would ever
-		// close an entry added now, so hand back an uncached descriptor.
+		// Closed while this one was in the filesystem: nothing would ever close
+		// an entry added now.
 		c.mu.Unlock()
 		_ = f.Close()
 		return c.Filesystem.OpenFile(name, flag, perm)
@@ -230,9 +225,8 @@ func (c *fdCacheFS) evictEntry(e *cachedFD) {
 // Without it each rebuild orphans a cache that keeps files open until its idle
 // timers expire, which is the state the cache exists to avoid on Windows.
 //
-// A descriptor a request is still holding is dropped from the map and closed
-// by that request's release instead, the same path an eviction while in use
-// takes: the alternative is a write landing on a closed file.
+// One a request still holds is closed by that request's release instead, as an
+// eviction while in use is: the alternative is a write landing on a closed file.
 func (c *fdCacheFS) Close() error {
 	c.mu.Lock()
 	c.closed = true

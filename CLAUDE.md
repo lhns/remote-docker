@@ -513,21 +513,6 @@ premise of the project, and it applies to building it too. So:
   union leaves behind. Reachable only where dockerd outlives the agent, so
   `test/vm.sh` is where it is asserted and a container deployment cannot show
   it: there the agent is pid 1 and takes every dind with it.
-- **A daemon's exec-root gets a tmpfs, and NEVER while a daemon is serving from
-  it.** The directory is in a container's writable layer, so runtime state
-  written there outlives a kill and dockerd will not start over a
-  `containerd.pid` naming a live pid -- the failure, both of its shapes and
-  their measurements are in `agent/internal/daemons.ExecRoot`. A per-account
-  daemon gets it as `--tmpfs`; the shared daemon (ADR 0012) gets it from the
-  agent, in `supervise.prepareExecRoot`, before dockerd starts. The refusals
-  are the load-bearing half, and are the same discipline as the union above: a
-  path already mounted is left alone, and a live containerd socket or docker
-  socket means a daemon is serving, so mounting would take its containerd
-  socket, its shim sockets and its runc state away while it kept running --
-  worse than the bug. Never answer this by DELETING a stale `containerd.pid`
-  instead: a SIGKILLed dockerd's containerd is reparented and may genuinely
-  still be running, and deleting the file orphans it. A mount that cannot be
-  made is a warning and a daemon that starts anyway, never a refusal to serve.
 - **A union that never mounted looks exactly like one that did, and every
   test passes against it.** Everything reaches a share through a PATH: the
   agent writes the cache through the merged path, the container binds it, an
@@ -926,29 +911,34 @@ premise of the project, and it applies to building it too. So:
   `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
   state is worthless; this one holds somebody's containers, images and volumes.
   `Ensure` on a stopped daemon runs `docker start`.
-- **A per-account daemon's runtime state must not survive the container.** Its
-  `/run` is part of the writable layer, so a daemon that was KILLED rather than
-  stopped comes back with the last life's state still there, and the workspace
-  container restarting kills every one of them. dind's entrypoint deletes
-  `docker*.pid`, which `containerd.pid` does not match, and a stale one naming
-  a LIVE pid kills the daemon two ways, both seen in run `34240150838`:
-  `pidfile.Write` refuses to overwrite it, so dockerd starts containerd, kills
-  it and exits (`process with PID 35 is still running`), 16.125s in -- which
-  was dockerd's warning sleep, gone now that nothing binds TCP, so the same
-  failure now arrives at once; or
+- **A daemon's runtime state must not survive its container, so the exec-root
+  gets a tmpfs -- and NEVER while a daemon is serving from it.** A container's
+  `/run` is part of its writable layer, so a daemon KILLED rather than stopped
+  comes back with the last life's state still there, and the workspace
+  container restarting kills every per-account daemon at once. dind's
+  entrypoint deletes `docker*.pid`, which `containerd.pid` does not match, and
+  a stale one naming a LIVE pid kills the daemon two ways, both seen in run
+  `34240150838`: `pidfile.Write` refuses to overwrite it, so dockerd starts
+  containerd, kills it and exits (`process with PID 35 is still running`); or
   `pidfile.Read` believes it, so dockerd starts NOTHING and times out 15s later
-  waiting for the containerd it never launched (`containerd is still running`,
-  then `timeout waiting for containerd to start`), 31.27s in. containerd boots
-  in 0.01s, so neither number is a budget that was too small, and a fix
-  answering only the first mode is half a fix. The exec-root is a tmpfs for
-  that reason (`daemons.ExecRoot`). Measured on a runner: 11 failures in 114
-  restarts without it, 0 in 50 clean stops, because a clean shutdown removes
-  the file itself. Seen since at least 2026-08-15 (runs `31853452966`,
-  `31852016220`), which is a floor: run history does not reach further back.
-  The SHARED daemon of ADR 0012 has the same exposure and no fix: it
-  runs the same entrypoint in the workspace container, whose `/run` is equally
-  a writable layer, so a `docker restart` of that container can leave the same
-  file behind. Nothing tests it and no deployment file mounts a tmpfs there.
+  waiting for the containerd it never launched. containerd boots in 0.01s, so
+  neither is a budget that was too small, and a fix answering only the first
+  mode is half a fix. Measured on a runner: 11 failures in 114 restarts without
+  it, 0 in 50 clean stops, because a clean shutdown removes the file itself.
+  Seen since at least 2026-08-15 (runs `31853452966`, `31852016220`), which is
+  a floor: run history does not reach further back. A per-account daemon gets
+  the tmpfs as `--tmpfs` (`daemons.ExecRoot`, which carries the two failure
+  modes); the shared daemon of ADR 0012 has the same exposure and gets it from
+  the agent, in `supervise.prepareExecRoot`, before dockerd starts. The
+  refusals there are the load-bearing half, and are the same discipline as a
+  serving union: a path already mounted is left alone, and a live containerd or
+  docker socket means a daemon is serving, so mounting would take its
+  containerd socket, its shim sockets and its runc state away while it kept
+  running, which is worse than the bug. Never answer this by DELETING a stale
+  `containerd.pid` instead: a SIGKILLed dockerd's containerd is reparented and
+  may genuinely still be running, and deleting the file orphans it. A mount
+  that cannot be made is a warning and a daemon that starts anyway, never a
+  refusal to serve.
 - **Adoption keys on the persisted workspace id, never a container id.** An id
   changes on every redeploy, so adopting by it orphans every account's daemon
   on the first `compose up -d` -- still running, unadoptable, holding their

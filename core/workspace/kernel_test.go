@@ -129,10 +129,10 @@ var minKernel = map[string]option{
 // Every option this code can emit, under every read mode, is one the supported
 // floor parses.
 //
-// THE TEST THAT WAS MISSING. `nconnect=8` was pinned as a literal string in
-// export_test.go, and that test passed while every mount on a 3.10 workspace
-// failed: asserting that we wrote what we meant to write says nothing about
-// whether the kernel reading it has heard of the word.
+// export_test.go pins the literal option string, which is a different question
+// and passed while every mount on a 3.10 workspace failed: asserting that we
+// wrote what we meant says nothing about whether the kernel reading it has
+// heard of the word.
 //
 // It covers the union's lower mount too, which is this same list split in two
 // (core-agent/union asks NFSVolumeOptions rather than copying it). It does NOT

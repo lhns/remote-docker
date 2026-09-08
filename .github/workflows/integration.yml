@@ -17,35 +17,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Two questions, and no suite starts until both have passed: does this change
-  # need the suites at all, and can this runner mount NFS.
+  # Two questions, and no suite starts until both have passed.
   #
-  # The first. The suites are expensive -- a real workspace, a real NFS mount,
-  # two modes, most of ten minutes -- so they were gated on an `integration`
-  # label. That label DID NOT EXIST, so the gate never opened: every pull
-  # request this repository has ever had skipped the suites entirely, silently,
-  # reporting green.
+  # Does this change need the suites? PATHS decide, and the `integration` label
+  # is the manual override for a change that touches none of them. It was the
+  # label ALONE, and that label did not exist, so the gate never opened: every
+  # pull request this repository had skipped the suites silently and reported
+  # green. Fails OPEN, because a wasted runner is cheaper than that.
   #
-  # It cost something real. Dependabot opened the Go base-image bump an hour
-  # before a dependency raised go.mod past it and broke the image build; the PR
-  # sat unmerged because a dependency PR that nothing meaningful has run
-  # against looks exactly like one that has. The suites are worth most on
-  # precisely the changes nobody wants to read closely.
-  #
-  # So: paths decide, and the label remains as the manual override for a change
-  # that touches none of them but deserves the run anyway. Fails OPEN -- if the
-  # diff cannot be read, run them. Wasting a runner is cheaper than the last
-  # two days.
-  #
-  # The second, and the one most likely to stop the suites outright: can a
-  # privileged container on a GitHub runner mount NFS? The runner's kernel is
-  # shared with every container on it, so NFS client support is not something
-  # the image can supply -- if the kernel lacks it, no amount of apt-get inside
-  # the container helps, and the suites need a different home.
-  #
-  # It was a job of its own for twenty-six seconds of work, in front of six
-  # suites that all waited on it. Why a runner slot is worth this: ci.yml, the
-  # lint job.
+  # Can a privileged container on this runner mount NFS? The runner's kernel is
+  # shared with every container on it, so no apt-get inside the image can
+  # supply NFS client support: without it the suites need a different home.
+  # Folded in here rather than a job of its own for 26s of work (why a runner
+  # slot is worth that: ci.yml, the lint job).
   gate:
     name: do the suites apply, and can this runner mount nfs
     runs-on: ubuntu-latest
@@ -133,13 +117,10 @@ jobs:
 
   # Can a cache be a union mount? Every question the cache mode (ADR 0044) asks
   # of the KERNEL rather than of our code, with no binary of ours but the watch
-  # probe.
-  #
-  # A job of its own rather than another tail on gate: at about three minutes
-  # it is the one capability probe the suites should not wait behind, and it
-  # settles nothing they depend on. It is here rather than in a branch's own
-  # workflow because the answers expire -- they are about the runner's kernel,
-  # and that moves.
+  # probe. A job of its own rather than another tail on gate: at about three
+  # minutes it is the one capability probe the suites should not wait behind,
+  # and it settles nothing they depend on. It runs on every pull request
+  # because its answers are about the runner's kernel, and that moves.
   union-capability:
     name: can a cache be a union mount
     runs-on: ubuntu-latest
@@ -157,41 +138,17 @@ jobs:
       - name: probe
         run: bash test/union-probe.sh
 
-  # The suites, one job each, all on the same runner recipe. The names are
-  # what the checks are known by and stay as they were; the matrix is only
-  # what runs and how long it may take.
+  # The suites, one job each, all on the same runner recipe. The names are what
+  # the checks are known by and stay as they were; each suite's own header says
+  # what it proves. What is not in those headers:
   #
-  #   integration     the whole thing together: a real workspace container,
-  #                   the real client binary, a real kernel NFS mount.
-  #   vm              the agent on the runner itself, with no container around
-  #                   it (ADR 0025). The only suite that needs an NFS client
-  #                   and fuse-overlayfs on the runner: everywhere else the
-  #                   mount happens inside a container that carries its own.
-  #   per-user-dind   a daemon per account (ADR 0019), with two accounts. Its
-  #                   own suite because the two modes need differently
-  #                   configured workspaces, and integration.sh passing
-  #                   UNCHANGED is the evidence the shared mode still works.
-  #   two-clients     one account from TWO machines at once (ADR 0029): two
-  #                   state directories, two keys, sessions held at the same
-  #                   time rather than one after the other.
-  #   nfs-resilience  what a mount does when the session drops. It reports
-  #                   what it measured whether it passes or fails, because the
-  #                   point is the numbers and a green tick hides them.
-  #   old-workspace   the one suite that does NOT build both ends: this
-  #                   client against a workspace image PULLED from ghcr, which
-  #                   is the only way the compatibility claim can be checked.
-  #                   It needs network access to ghcr.io and nothing else.
-  #   volume-ownership  a named volume onto a path the image does not create,
-  #                   run against the runner's own daemon and through a
-  #                   session. It is the only suite whose oracle is plain
-  #                   Docker, which is what lets it separate Docker's rule
-  #                   about a fresh volume's mountpoint from a rewrite of a
-  #                   named volume, which is forbidden.
-  #   fs-conformance  the same filesystem probe against a native bind mount
-  #                   and against a share, and every difference listed with a
-  #                   reason in test/fs-conformance/deviations-linux.txt. The
-  #                   transcripts and the report are uploaded whatever the
-  #                   verdict, because the report is what fills that file.
+  #   vm              the only suite needing an NFS client and fuse-overlayfs
+  #                   on the RUNNER, since it has no container to carry them.
+  #   old-workspace   the only suite that does not build both ends; it needs
+  #                   network access to ghcr.io.
+  #   volume-ownership  the only suite whose oracle is plain Docker, which
+  #                   is what separates Docker's rule about a fresh
+  #                   volume's mountpoint from a rewrite of a named one.
   suite:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

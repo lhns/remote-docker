@@ -13,21 +13,17 @@ import (
 	"unicode/utf16"
 )
 
-// generationFile is where a machine's generation is kept, inside the
-// distribution itself.
-//
-// Inside rather than beside: a distribution exported, moved or re-imported by
-// hand carries it, and one somebody deleted takes it with it. A file next to
-// the config can disagree with reality, and a generation that lies is worse
-// than one that is missing, because Plan trusts a mismatch enough to recreate.
+// generationFile is where a machine's generation is kept, INSIDE the
+// distribution: one exported, moved or deleted by hand carries it or takes it
+// with it. A file beside the config can disagree with reality, and a generation
+// that lies is worse than one that is missing, because Plan trusts a mismatch
+// enough to recreate.
 const generationFile = "/etc/remote-docker-generation"
 
-// agentLog is where the agent's output goes inside the machine.
-//
-// WSL's boot command has no console and nothing collects its output, so without
-// this an agent that refuses to start is a machine that is simply unreachable,
-// with the reason written to a closed file descriptor. It is a shell
-// redirection because the boot command is run by a shell.
+// agentLog is where the agent's output goes inside the machine. WSL's boot
+// command has no console, so without this an agent that refuses to start is a
+// machine that is simply unreachable, with the reason written to a closed file
+// descriptor.
 const agentLog = "/var/log/remote-dockerd.log"
 
 // decodeWSLOutput turns wsl.exe's output into a string.
@@ -130,23 +126,16 @@ func observeWSL(distros []wslDistribution, name, generation string) Observed {
 // dockerd itself (ADR 0010).
 func wslConf(spec Spec) string {
 	env := []string{
-		// The image's own environment, restored by hand.
+		// The image's own environment, restored by hand: `docker export` writes
+		// a FILESYSTEM and the image config is not in the tarball, so a machine
+		// imported from one starts with WSL's environment and none of the
+		// image's. These two have no default in the agent's own code. It fails a
+		// long way from here, and the whole failure is CLAUDE.md's "a rootfs is
+		// a filesystem" invariant.
 		//
-		// `docker export` writes a FILESYSTEM; the image config (ENV, PATH, the
-		// entrypoint) lives beside the layers and is not in the tarball, so a
-		// machine imported from one starts with WSL's environment and none of
-		// the image's. It fails a long way from here: the agent cannot find
-		// `dockerd-entrypoint.sh` on a PATH without /usr/local/bin, restarts it
-		// every two seconds forever, and blocks its own listener for ninety
-		// seconds waiting for a socket that never appears. Windows sees a
-		// refused connection.
-		//
-		// PATH and DOCKER_TLS_CERTDIR are the two with no default in the agent's
-		// own code. DOCKER_TLS_CERTDIR is EMPTY rather than unset, which is
-		// still a different answer: the agent names `dockerd` itself, so the
-		// dind block that reads this never runs, but dind's docker-entrypoint.sh
-		// does, and a non-empty value there points a client with no DOCKER_HOST
-		// and no socket at tcp://docker:2376.
+		// DOCKER_TLS_CERTDIR is EMPTY rather than unset, which is still a
+		// different answer: dind's docker-entrypoint.sh points a client with no
+		// DOCKER_HOST and no socket at tcp://docker:2376 when it is set.
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"DOCKER_TLS_CERTDIR=",
 
@@ -215,19 +204,17 @@ func wslWriteArgs(name, path, content string) []string {
 	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
 }
 
-// shellQuote wraps a string for `sh -c`.
-//
-// Single quotes, with the only escape sh understands for them: end the quote,
-// an escaped quote, start again. What passes through here is our own config and
-// a hex digest rather than anything hostile, so what it is for is a newline in
-// the content not ending the command.
+// shellQuote wraps a string for `sh -c`: single quotes, with the only escape sh
+// understands for them. What passes through is our own config and a hex digest
+// rather than anything hostile, so what it is for is a newline in the content
+// not ending the command.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // wslImportArgs is the command that creates a distribution from a rootfs.
-func wslImportArgs(name, dir, rootfs string, version int) []string {
-	return []string{"--import", name, dir, rootfs, "--version", fmt.Sprint(version)}
+func wslImportArgs(name, dir, rootfs string) []string {
+	return []string{"--import", name, dir, rootfs, "--version", "2"}
 }
 
 // wslRunArgs runs a command inside a distribution as root.

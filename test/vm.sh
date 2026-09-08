@@ -2,18 +2,15 @@
 #
 # The agent on a machine, not in a container (ADR 0025).
 #
-# The claim is narrow and worth stating exactly: the same binary, with
-# WORKSPACE_ENABLE_DIND=false because this machine already has a dockerd,
-# serves the same workspace. There is no VM mode and no second code path --
-# both daemon modes read the switch they always read, and this runs each.
-#
-# The runner IS the machine, which is what makes this testable at all, and why
-# it is worth having: every other "this works on X" in the project either runs
-# in CI or says plainly that it does not.
+# The claim is narrow: the same binary, with WORKSPACE_ENABLE_DIND=false
+# because this machine already has a dockerd, serves the same workspace. There
+# is no VM mode and no second code path; both daemon modes read the switch they
+# always read, and this runs each. The runner IS the machine, which is what
+# makes it testable at all.
 #
 # What this does NOT prove: any distro but Ubuntu, any docker but the runner's,
-# and systemd. The unit file is not exercised here -- what is under test is the
-# agent as a guest, not systemd's ability to run a binary.
+# and systemd. What is under test is the agent as a guest, not systemd's
+# ability to run a binary.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -118,9 +115,8 @@ dump_agent_log() {
 # does the same for the other suites.
 session() {
     local log=$1
-    # Watching on, because a delegated share refuses to run without it: its
-    # cache holds copies and the watcher is what keeps them honest (ADR 0044).
-    # Harmless to every other section, which does not use one.
+    # Watching on for the same reason lib.sh's start_session has it: a
+    # delegated share refuses to run without it (ADR 0044).
     (cd "$WORK/project" && exec env REMOTE_DOCKER_WATCH=partial         "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
     CLIENT_PID=$!
 }

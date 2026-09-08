@@ -73,18 +73,12 @@ jobs:
             echo "chart_version=0.0.0-dev.${SHORT}" >> "$GITHUB_OUTPUT"
           fi
 
-  # One job per architecture, each on a runner of that architecture.
-  #
-  # This used to be a single job building both under QEMU, and emulating arm64
-  # to compile Go and run apk cost more than everything else in the workflow
-  # put together -- 5m25s against 1m40s for the whole test suite. Native arm
-  # runners are free for public repositories, so the emulation was buying
-  # nothing.
-  #
-  # Each pushes by digest only; the manifest job below joins them under the
-  # real tags. That is docker's own recommended shape for this, and it is what
-  # lets the two architectures build at the same time instead of one after the
-  # other.
+  # One job per architecture, each on a runner of that architecture. Building
+  # both under QEMU cost more than everything else in the workflow put together
+  # (5m25s against 1m40s for the whole test suite), and native arm runners are
+  # free for public repositories. Each pushes by digest only and the manifest
+  # job below joins them under the real tags, which is what lets the two build
+  # at the same time.
   image:
     name: image (${{ matrix.platform }})
     needs: [ci, meta]
@@ -265,11 +259,10 @@ jobs:
             remote-docker-workspace-*.tgz
             workspace-chart.sbom.spdx.json
 
-  # Skipped on ordinary commits, and that is deliberate: this job publishes a
-  # GitHub Release, which per-commit would be noise, and `goreleaser release`
-  # needs a tag to release. Per-commit binaries are not missing -- the ci
-  # job above builds them from this same .goreleaser.yaml and uploads them as
-  # workflow artifacts.
+  # Tags only: this publishes a GitHub Release, which per-commit would be
+  # noise, and `goreleaser release` needs a tag. Per-commit binaries are not
+  # missing. ci.yml builds them from this same .goreleaser.yaml and uploads
+  # them as workflow artifacts.
   binaries:
     name: release binaries (tags only)
     needs: [ci]
@@ -295,14 +288,11 @@ jobs:
         with:
           syft-version: v1.14.0
 
-      # The release description is the CHANGELOG's section for this version,
-      # not a list of commits. goreleaser generates the list by default, which
-      # is the git history rewritten slightly -- useful, and not what somebody
-      # arriving at a release page wants to read first.
-      #
-      # Falls back to the generated notes when the changelog has no section for
-      # the tag, so a release is never blocked by a missing entry, and says so
-      # in the log rather than silently publishing a commit dump.
+      # The release description is the CHANGELOG's section for this version
+      # rather than goreleaser's default commit list. Falls back to that list
+      # when the changelog has no section for the tag, so a release is never
+      # blocked by a missing entry, and says so in the log rather than
+      # silently publishing a commit dump.
       - id: notes
         name: release notes from the changelog
         run: |
@@ -330,14 +320,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The two Windows binaries, for the installers job below. goreleaser's
-      # dist directory is not visible outside this job, and the archives on the
-      # release page are zips rather than the bare exe.
-      #
-      # Their paths come out of artifacts.json rather than being spelled out:
-      # goreleaser's per-build directory carries the amd64 and arm64 variant
-      # suffixes, and a hardcoded one breaks silently on a goreleaser upgrade
-      # that changes them.
+      # The two Windows binaries, for the installers job below: goreleaser's
+      # dist directory is not visible outside this job and the release page
+      # carries zips rather than the bare exe. Their paths come out of
+      # artifacts.json because goreleaser's per-build directory names carry
+      # variant suffixes, and a hardcoded one breaks silently on an upgrade.
       - name: collect the windows binaries
         run: |
           set -eux

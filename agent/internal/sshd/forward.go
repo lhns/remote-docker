@@ -42,12 +42,12 @@ type ForwardPolicy struct {
 
 // reservation is one held port, and WHICH session holds it.
 //
-// The token is the whole point. Keyed by account name, a reservation could be
-// released by any session of that account, including one that had just failed
-// to bind: a second machine's failed attempt deleted the first machine's live
-// reservation, after which AllowDial reported the port as free and, on a shared
-// daemon (ADR 0012), another account could reach an NFS export that
-// authenticates nobody.
+// The token is the whole point. Keyed by account name alone, a reservation
+// could be released by any session of that account, including one that had
+// just failed to bind: a second machine's failed attempt deleted the first
+// machine's live reservation, after which AllowDial reported the port as free
+// and, on a shared daemon (ADR 0012), another account could reach an NFS
+// export that authenticates nobody.
 type reservation struct {
 	account string
 	token   uint64
@@ -142,11 +142,9 @@ func (p *ForwardPolicy) owns(account sessionAccount, port int) bool {
 // session of the same account.
 //
 // Refusing a second session of one account is not a policy about accounts, it
-// is the truth about the port: one listener can hold it, and pretending
-// otherwise is what let a failed attempt speak for the session that had
-// succeeded. A client whose previous connection is still being torn down is
-// refused here rather than allowed to take a port its own live listener is
-// using.
+// is the truth about the port: one listener can hold it. A client whose
+// previous connection is still being torn down is refused here rather than
+// allowed to take a port its own live listener is using.
 func (p *ForwardPolicy) Bind(account sessionAccount, host string, port uint32) (uint64, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

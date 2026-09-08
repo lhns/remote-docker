@@ -238,9 +238,8 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 // one write mode, so a session whose mounts are all write=through never asks
 // and is never told. That is the common case against an older workspace and it
 // must stay SILENT, which it cannot be if the answer is fetched at connect.
-// Once, so a failure stands for the life of this connection rather than costing
-// a handshake per container; the next connection asks again, which is the
-// reconnect after an idle release (ADR 0015).
+// Once, so a failure costs one handshake rather than one per container; the
+// next connection asks again (ADR 0015).
 func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChannel, error) {
 	l.cacheOnce.Do(func() {
 		l.cacheChan, l.cacheErr = openCache(ctx, l.ssh)

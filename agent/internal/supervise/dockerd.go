@@ -27,11 +27,9 @@ type Dockerd struct {
 	Socket string
 
 	// ExecRoot is dockerd's --exec-root, given a tmpfs of its own before the
-	// daemon is first started so that nothing in it survives the workspace
-	// container being restarted. Empty means leave it alone, which is what
-	// every test here wants and what a caller who has not thought about it
-	// gets: see prepareExecRoot for why the mount is conditional and what it
-	// costs to get wrong.
+	// daemon is first started. Empty means leave it alone, which is what every
+	// test here wants and what a caller who has not thought about it gets. See
+	// prepareExecRoot.
 	ExecRoot string
 
 	// StartTimeout bounds how long to wait for the socket before reporting
@@ -47,10 +45,8 @@ type Dockerd struct {
 }
 
 const (
-	// command is the entrypoint to run. The dind image ships
-	// dockerd-entrypoint.sh, which sets up iptables, deletes a stale
-	// docker*.pid and runs dockerd under tini. See args for why `dockerd` is
-	// spelled out rather than left to it.
+	// command is the entrypoint to run: dind's own script, which sets up
+	// iptables, deletes a stale docker*.pid and runs dockerd under tini.
 	command = "dockerd-entrypoint.sh"
 
 	// restartDelay is how long to wait before restarting a daemon that died.
@@ -90,15 +86,10 @@ func (d *Dockerd) Run(ctx context.Context) error {
 
 // args is the command line handed to dockerd-entrypoint.sh.
 //
-// `dockerd` is named FIRST, and that word is what keeps this daemon off TCP.
-// The script supplies its own --host flags only when there is no argument or
-// the first one starts with a dash, and one of those flags is always
-// tcp://0.0.0.0:2375 -- an unauthenticated Docker API, in the namespace every
-// shell of this workspace runs in, that nothing here has ever dialled. Naming
-// the binary skips that block and keeps the one below it, which deletes a
-// stale docker*.pid, injects tini and sets up iptables.
-// (docker-library/docker `dockerd-entrypoint.sh`, read 2026-09-08; re-check
-// with `curl -s https://raw.githubusercontent.com/docker-library/docker/master/dockerd-entrypoint.sh`.)
+// `dockerd` is named FIRST, and that word is what keeps this daemon off TCP:
+// the reason is on the command daemons.Plan builds, and here it is the
+// namespace every shell of this workspace runs in that would hold an
+// unauthenticated Docker API.
 //
 // The socket is then ours to state, and it is the one WaitReady watches for.
 // The script would have derived it from DOCKER_HOST, which is a second place

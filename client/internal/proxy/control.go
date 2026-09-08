@@ -104,44 +104,31 @@ type Status struct {
 	// cannot know would be worse than saying nothing.
 	Version string `json:"version"`
 
-	// Storage is the graph driver of the daemon this session is talking to.
+	// Storage is the graph driver of the daemon this session is talking to, and
+	// Tracing whether the session was started with TraceEnv set.
 	//
-	// Carried here so an ordinary `docker` command can warn about it. The
-	// session is the only thing that has spoken to the workspace, since every
-	// other command talks to the session, so without this the fact would be
-	// reachable only by running `status` on purpose, which is not something
-	// somebody does while wondering why their container is slow.
+	// Both are here because the session is the only thing that has spoken to
+	// the workspace, so an ordinary `docker` command can only warn about them
+	// through this. Without it they are reachable by running `status` on
+	// purpose, which nobody does while wondering why a container is slow.
 	Storage string `json:"storage,omitempty"`
-
-	// Tracing is whether the session was started with TraceEnv set.
-	//
-	// Here for the same reason Storage is: only the session can answer it, and
-	// the question is asked by somebody standing at another command wondering
-	// why setting the variable printed nothing.
-	Tracing bool `json:"tracing,omitempty"`
+	Tracing bool   `json:"tracing,omitempty"`
 
 	PID       int    `json:"pid"`
 	Connected bool   `json:"connected"`
 	Since     string `json:"since"`
 
 	// Caches is one line per delegated share saying how much of it is cached
-	// (ADR 0044).
-	//
-	// Reported because a partly cached share is not a failure and has nothing
-	// else to show for itself: it works, it is simply slower for the part that
-	// did not fit, and without this the only symptom is a directory that feels
-	// fast in places. A share still filling reads the same way, which is the
-	// point -- both are "some of it is local", and neither is wrong.
+	// (ADR 0044). A partly cached share is not a failure and has nothing else
+	// to show for itself: it works, and is simply slower for the part that did
+	// not fit. A share still filling reads the same way, which is the point.
 	Caches []string `json:"caches,omitempty"`
 
 	// Drops is how many times this session has found its connection dead and
-	// opened another, and LastDrop when it last did.
-	//
-	// Reported because reconnecting is invisible otherwise: a session that
-	// does it once is working, one that does it every few minutes is a link
-	// worth looking at, and neither can be told from the outside. Carried with
-	// the time so "twice, an hour ago" reads differently from "twice, just
-	// now"; a session that recovered is not a session with a problem.
+	// opened another, and LastDrop when it last did. Reconnecting is invisible
+	// otherwise, and one that does it every few minutes is a link worth looking
+	// at; the time is carried so "twice, an hour ago" reads differently from
+	// "twice, just now".
 	Drops    int    `json:"drops,omitempty"`
 	LastDrop string `json:"lastDrop,omitempty"`
 }

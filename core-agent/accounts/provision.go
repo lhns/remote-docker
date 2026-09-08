@@ -1,15 +1,15 @@
 package accounts
 
+// UnixProvisioner creates real unix accounts.
+//
+// It shells out to useradd rather than editing /etc/passwd directly: the shadow
+// tooling handles the group file, the home directory skeleton and the locking
+// between them, and reimplementing that to avoid one dependency would trade a
+// well-understood tool for a novel source of corruption.
+//
 // The type is untagged and only its Ensure method is per platform: a copy per
 // build tag can gain a field on one side and compile everywhere except the
 // machine nobody builds on.
-
-// UnixProvisioner creates real unix accounts.
-//
-// It shells out to useradd rather than editing /etc/passwd directly. The
-// shadow tooling handles the group file, the home directory skeleton and the
-// locking between them; reimplementing that to avoid one dependency would be
-// trading a well-understood tool for a novel source of corruption.
 type UnixProvisioner struct {
 	// Groups the account joins, and is reconciled INTO if it already exists.
 	// Empty means no --groups; the caller states them in both modes.

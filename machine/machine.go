@@ -68,14 +68,12 @@ type Spec struct {
 	// Account is the workspace account this machine's owner logs in as.
 	Account string
 
-	// PublicKey is the key that account logs in with.
+	// PublicKey is the key that account logs in with. In the Spec because a
+	// Hyper-V machine has no door but the SSH it opens, so it goes into the
+	// Ignition document or nobody ever gets in; WSL writes it later through
+	// Enrol.
 	//
-	// Part of the Spec because one backend needs it at creation: a Hyper-V
-	// machine has no door but the SSH this key opens, so the key goes into the
-	// Ignition document or it never gets in at all. The WSL backend writes it
-	// afterwards through Enrol.
-	//
-	// Deliberately NOT part of Generation. A rotated key would otherwise mean a
+	// Deliberately NOT part of Generation: a rotated key would otherwise mean a
 	// rebuild deciding itself, and a rebuild discards every image in the
 	// machine (ADR 0026).
 	PublicKey string
@@ -216,12 +214,9 @@ type Backend interface {
 	//
 	// A machine with nobody in it shuts down, and WSL counts only its own
 	// sessions as somebody: neither an open TCP connection from the host nor a
-	// command that runs and exits is one. Poking every ten seconds was measured
-	// (ADR 0026) starting a machine that stopped thirty seconds later, so its
-	// dockerd never became ready and its agent never opened a listener.
-	//
-	// So the hold is one session that STAYS OPEN, and it is the caller's job to
-	// keep it for as long as the machine is needed.
+	// command that runs and exits is one (ADR 0026 measures what poking one
+	// instead produced). So a hold is one session that STAYS OPEN, and the
+	// caller keeps it for as long as the machine is needed.
 	Hold(ctx context.Context, name string) (io.Closer, error)
 
 	// Address is where this machine can be reached from here.
@@ -236,12 +231,10 @@ type Backend interface {
 	Destroy(ctx context.Context, name string) error
 }
 
-// namePrefix keeps our machines out of the user's own namespace.
-//
-// A WSL distribution list and a Hyper-V VM list are both places the user has
-// their own things, and `Get-VM dev` or `wsl -d dev` are poor names to take
-// from somebody. Same argument as the unix account prefix (ADR 0025), and the
-// same prefix, so one machine is spelled the same way everywhere it appears.
+// namePrefix keeps our machines out of the user's own namespace: a WSL
+// distribution list and a Hyper-V VM list are both places the user has their
+// own things. The unix account prefix (ADR 0025) for the same reason, and the
+// same string, so one machine is spelled the same way everywhere.
 const namePrefix = "rd-"
 
 // machineName is what a machine is called on the platform hosting it.
@@ -283,11 +276,9 @@ func firstIPv4(fields []string) string {
 	return ""
 }
 
-// closerFunc makes a func into an io.Closer.
-//
-// Here rather than in a _windows.go file beside the backend that needed it
-// first: locate_test.go's fake backend returns a hold too, and a helper
-// compiled only on Windows makes that test compile only on Windows.
+// closerFunc makes a func into an io.Closer. Not in a _windows.go file beside
+// the backend that needed it first, because locate_test.go's fake returns a
+// hold too and would then compile only on Windows.
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
@@ -327,11 +318,11 @@ func Locate(ctx context.Context, backendName, name string, port int) (string, er
 		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
 	}
 
-	// "Located" has to mean "dialable". A machine that was stopped is up before
-	// its agent is, since the agent generates a host key and waits for dockerd
-	// before it listens, so returning the address at boot hands the caller a
-	// refused connection that works on the next attempt. Here rather than in
-	// each of the three callers because the one that forgot was the session.
+	// "Located" has to mean "dialable", and here rather than in each caller. A
+	// machine that was stopped is up before its agent is, since the agent
+	// generates a host key and waits for dockerd before it listens, so
+	// returning the address at boot hands the caller a refused connection that
+	// works on the next attempt.
 	if err := waitForListener(ctx, addr, port); err != nil {
 		return "", fmt.Errorf("the %s machine %q is running but %w", backendName, name, err)
 	}

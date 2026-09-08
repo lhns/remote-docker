@@ -7,10 +7,6 @@
 # edits the system PATH, and moves any docker.exe it finds out of the way so the
 # feature can be tested both with and without one present. Meant for a
 # throwaway machine, which is what .github/workflows/msi.yml gives it.
-#
-# Two rules from the bash suites apply here as well: an assertion prints what it
-# saw, and an msiexec failure with no log is a wasted round trip, so every
-# unexpected exit code dumps the verbose log before failing.
 
 [CmdletBinding()]
 param(
@@ -99,8 +95,8 @@ function Assert-NotInstalled() {
 Section 'a machine with no docker.exe anywhere the installer looks'
 
 # GitHub's Windows runners ship a docker.exe, which is exactly what the refusal
-# is about, so the positive cases need it out of the way first. Recorded and
-# reported rather than deleted quietly. The four are the ones remote-docker.wxs
+# is about, so the positive cases need it out of the way first. Moved and
+# reported rather than deleted quietly. These four are what remote-docker.wxs
 # searches.
 $candidates = @(
   (Join-Path $env:SystemRoot 'System32\docker.exe'),

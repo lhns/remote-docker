@@ -1,12 +1,9 @@
 name: ci
 
 # Runs directly on pull requests, and is CALLED by release.yml for pushes to
-# main and for tags. That is why there is no `push` trigger here: if both fired
-# on a main push, the same checks would run twice and the two runs would fight
-# over the concurrency group below.
-#
-# Being called rather than merely running alongside is what makes a tag safe to
-# push -- release.yml waits for this to pass before publishing anything.
+# main and for tags, which is what makes a tag safe to push: release.yml waits
+# for this before publishing. No `push` trigger, because both firing on a main
+# push would run the same checks twice into one concurrency group.
 on:
   pull_request:
   workflow_call:
@@ -15,18 +12,10 @@ on:
 permissions:
   contents: read
 
-# Every commit gets its own run, and nothing is ever cancelled by a later push.
-#
-# This used to cancel an in-flight run when a branch was pushed again, on the
-# reasoning that the older run tests code nobody will merge. What that costs is
-# the answer you were actually waiting for: a push that fixes one suite kills
-# the run that was still telling you about another, and a cancelled job's
-# conclusion is not "success", so it reads as a failure in anything scanning
-# results.
-#
-# The group is per SHA rather than per ref, which keeps the one thing
-# cancellation was really for -- the same commit triggered twice does not run
-# twice -- without a new commit destroying an old commit's answer.
+# Per SHA and never cancelled: the same commit triggered twice still runs once,
+# and a later push does not destroy an earlier commit's answer. A cancelled
+# job's conclusion is not "success", so anything scanning results reads it as a
+# failure.
 concurrency:
   group: ci-${{ github.sha }}
   cancel-in-progress: false
@@ -49,10 +38,8 @@ jobs:
             exit 1
           fi
 
-      # Per module, and every module named explicitly. `./...` stops at a
-      # module boundary, so the loop is the only thing that actually covers the
-      # repository after ADR 0021 -- and a `go test ./...` at the root would
-      # pass while testing almost nothing.
+      # `./...` stops at a module boundary (ADR 0021), so the loop is the only
+      # thing covering the repository; at the root it would test almost nothing.
       - name: go vet
         run: |
           set -eux
@@ -69,7 +56,6 @@ jobs:
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
-      # One profile per module, where the loop above wrote them.
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
@@ -77,36 +63,20 @@ jobs:
             */coverage.out
             test/probes/coverage.out
 
-  # The client, on the platform whose code has no counterpart anywhere else.
+  # The code that has no counterpart on Linux, on the OS it was written for.
+  # The endpoint is a named PIPE here and a unix socket there, `processAlive`
+  # asks GetExitCodeProcess a question with no meaning on Unix, core-client's
+  # fswatch has a Windows backend, and `machine`'s wsl_windows.go and
+  # hyperv_windows.go are build-tagged windows: the Linux jobs never compile
+  # them and the cross-compile matrix builds them without running them. Drop a
+  # module from this list and its Windows-specific code is tested nowhere.
   #
-  # Everything above runs on Linux, which was defensible while no test was
-  # platform-specific. It stopped being: the endpoint is a named PIPE here and
-  # a unix socket there, and `processAlive` asks Windows a question -- via
-  # GetExitCodeProcess -- that has no meaning on Unix. Both had bugs, both were
-  # caught by tests that ran on one developer's machine and nowhere else, which
-  # is the one place this project's own premise says not to depend on.
+  # Not the agent or core-agent: both are Linux-only by design (useradd, netns,
+  # inotify), and the cross-compile matrix keeps their `_other.go` stubs honest.
   #
-  # The client, core-client and the shared module. Not the agent or core-agent:
-  # both are Linux-only by design (useradd, netns, inotify); the cross-compile
-  # matrix already keeps their `_other.go` stubs honest, and running their tests
-  # here would prove nothing about the machine they actually run on.
-  #
-  # core-client EARNS a place here rather than inheriting one. Its fswatch has a
-  # Windows backend of its own and its NFS server serves this machine's files,
-  # so this is the only job where either runs on the OS it was written for.
-  #
-  # `machine` earns it harder: `wsl_windows.go` and `hyperv_windows.go` are
-  # build-tagged windows, so the Linux jobs above do not compile them and the
-  # lint loop never sees them. The cross-compile matrix builds them under
-  # GOOS=windows and runs nothing. This job is the only place either file is
-  # executed, so dropping `machine` from this list drops all testing of the
-  # most Windows-specific code in the repository, with nothing reporting it.
-  #
-  # No -race: it needs cgo, and a C toolchain on this runner is a dependency
-  # for a check the Linux job already performs on the same code.
-  #
-  # No gofmt either -- `.gitattributes` forces LF, and a gofmt run on a
-  # checkout is a test of git's line endings rather than of the source.
+  # No -race, which needs cgo and a C toolchain for a check the Linux job
+  # already makes; no gofmt, which `.gitattributes` makes a test of git's line
+  # endings rather than of the source.
   test-windows:
     name: test (windows)
     runs-on: windows-latest
@@ -123,11 +93,9 @@ jobs:
             (cd "$mod" && go test ./...)
           done
 
-  # Go and shell in one job. shellcheck was a job of its own for seventeen
-  # seconds of work, and a job costs a runner slot plus twenty to thirty
-  # seconds of scheduling whatever it does -- which is the whole cost when
-  # this account can run twenty jobs at once and one pull request asks for
-  # twenty-six.
+  # Go and shell in one job. A job costs a runner slot plus 20-30s of
+  # scheduling whatever it does, and shellcheck alone was 17s of work: this
+  # account runs twenty jobs at once and one pull request asks for twenty-six.
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -140,36 +108,27 @@ jobs:
       - name: install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
-      # Per module, and the agent TWICE. Its session handling is Linux-only,
-      # so a host-only lint does not see the file at all -- which is how a
-      # QF1002 reached CI once already. `./...` stops at a module boundary, so
-      # the loop is what makes this cover the repository.
+      # Per module, and the agent and core-agent TWICE: both carry Linux-only
+      # files (session handling, netns, the unix provisioner, the inotify
+      # poker) that a lint on the runner's own GOOS does not see at all, which
+      # is how a QF1002 reached CI once already.
       - name: golangci-lint
         run: |
           set -eux
           for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./machine ./test/probes; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
-          # The agent and core-agent both carry Linux-only files (netns, the unix
-          # provisioner, the inotify poker), which a lint on the runner's own
-          # GOOS does not see at all.
           (cd agent && GOOS=linux golangci-lint run --timeout 5m ./...)
           (cd core-agent && GOOS=linux golangci-lint run --timeout 5m ./...)
 
       - name: install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      # The suites, the probe's differ, and the release scripts. The image's
-      # own scripts and its sudoers file were retired by the Go agent
-      # (ADR 0010).
-      #
-      # -x follows `source`, so the suites are checked against the real
-      # test/lib.sh rather than against an unknown. Without it every helper the
-      # library defines is invisible here and half of each suite goes unread.
-      #
-      # Each glob is guarded, because an unmatched pattern is passed through
-      # verbatim and shellcheck then fails on a file that does not exist --
-      # which is how deleting client/ broke this step once already.
+      # -x follows `source`, so the suites are read against the real
+      # test/lib.sh; without it every helper it defines is invisible here and
+      # half of each suite goes unchecked. Each glob is guarded because an
+      # unmatched pattern is passed through verbatim and shellcheck then fails
+      # on a file that does not exist, which is how deleting client/ broke this.
       - name: shellcheck
         run: |
           set -eux
@@ -189,13 +148,10 @@ jobs:
       matrix:
         goos: [windows, linux, darwin]
         goarch: [amd64, arm64]
-        # Android added as legs rather than as rows of the grid, so that the
-        # windows/darwin/linux cross product stays what it is.
-        #
-        # These are the only targets built with cgo: Android resolves hostnames
-        # through bionic or not at all (ADR 0023), so they need the NDK's
-        # compiler. cc is the wrapper's name, and the steps below put the NDK
-        # path in front of it.
+        # Android as legs rather than rows, so the windows/darwin/linux cross
+        # product stays what it is. The only targets built with cgo: Android
+        # resolves hostnames through bionic or not at all (ADR 0023), so they
+        # need the NDK's compiler, named by `cc` and located below.
         include:
           - goos: android
             goarch: arm64
@@ -214,15 +170,11 @@ jobs:
 
       - uses: ./.github/actions/setup-go
 
-      # Every package of every module, not just the binary: a dependency that
-      # quietly needs cgo, or a build-tagged file with no counterpart for this
-      # platform, should fail here rather than at release time. goreleaser
-      # below builds only the client, so it would not notice.
-      #
-      # The agent is cross-compiled here too even though it only ever runs on
-      # Linux. It costs seconds, and it is what keeps the _other.go stubs
-      # honest -- they exist so the package still builds on the machine this
-      # project is developed on.
+      # Every package of every module, not just the binary goreleaser builds
+      # below: a dependency that quietly needs cgo, or a build-tagged file with
+      # no counterpart for this platform, fails here rather than at release
+      # time. The agent is included though it only runs on Linux, because this
+      # is what keeps its `_other.go` stubs honest.
       - name: go build
         env:
           CGO_ENABLED: ${{ matrix.cgo || 0 }}
@@ -246,11 +198,10 @@ jobs:
       - name: compose version
         run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
 
-      # The shippable binary, from .goreleaser.yaml: the same file, flags and
-      # naming a tagged release uses, so only the version string differs.
-      # `--single-target` shares the build cache with the step above.
-      # CC is not set here: .goreleaser.yaml builds it from ANDROID_NDK_HOME
-      # itself, so a release and this build cannot disagree about the compiler.
+      # The shippable binary, from .goreleaser.yaml: same file, flags and
+      # naming a tagged release uses, so only the version string differs. No CC
+      # here, because .goreleaser.yaml derives it from ANDROID_NDK_HOME itself
+      # and a release and this build cannot then disagree about the compiler.
       - uses: goreleaser/goreleaser-action@v7
         env:
           CGO_ENABLED: ${{ matrix.cgo || 0 }}
@@ -267,14 +218,10 @@ jobs:
         if: matrix.goos == 'android' || matrix.goos == 'linux'
         run: bash test/elf.sh "${{ matrix.goos }}" "$(find dist -type f -name remote-docker | head -1)"
 
-      # One artifact per platform rather than one holding all six. GitHub zips
-      # an artifact whole, so a combined one meant downloading every platform
-      # to get the one you wanted.
-      #
-      # The paths are exact rather than `remote-docker*`, which also matched
-      # `remote-dockerd` and swept the AGENT into the client's artifact. It was
-      # built and uploaded and nobody could find it, because it was inside
-      # something named for the other binary.
+      # One artifact per platform: GitHub zips an artifact whole, so a combined
+      # one means downloading every platform to get one. The paths are exact
+      # rather than `remote-docker*`, which also matched `remote-dockerd` and
+      # swept the AGENT into the client's artifact, where nobody could find it.
       - uses: actions/upload-artifact@v7
         with:
           name: remote-docker-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -286,10 +233,9 @@ jobs:
           # ones worth keeping.
           retention-days: 14
 
-      # The agent, on the platforms it has (ADR 0025). Its own artifact,
-      # because an operator setting up a VM workspace wants 6MB of agent and
-      # not 70MB of Docker CLI, and because a binary nobody can find is a
-      # binary nobody will use.
+      # The agent, on the platforms it has (ADR 0025). Its own artifact: an
+      # operator setting up a VM workspace wants 6MB of agent, not 70MB of
+      # Docker CLI wrapped around it.
       - uses: actions/upload-artifact@v7
         if: matrix.goos == 'linux'
         with:

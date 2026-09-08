@@ -16,25 +16,16 @@ import (
 // Guard keeps garbage collection off the volume a bind rewrite is in the
 // middle of creating.
 //
-// The two halves of a volume's life do not overlap in the DAEMON's view: it
-// learns a volume is in use only when a container referencing it is created,
-// which is strictly after the volume exists. Between those two moments the
-// volume is ours, needed, and reported as unused, and the collector runs
-// exactly then, because the connection it rides on is opened lazily by the
-// very request that is creating the volume.
+// The daemon calls a volume in use only once a container names it, which is
+// strictly after the volume exists, and the collector runs in that gap because
+// the connection it rides on is opened lazily by the very request creating the
+// volume. Losing that race is silent and looks like the file server broke: the
+// daemon RECREATES a missing named volume as an empty local one, so the
+// container starts with an empty directory where the project should be.
 //
-// What happens when it loses is silent and looks like the file server broke:
-// the daemon RECREATES a missing named volume as an empty local one, so the
-// container starts with an empty directory where the user's project should be
-// and the first thing to read a file reports it missing. `remote-docker start
-// && docker run -v $PWD:/w` failed that way in CI.
-//
-// Exported answers whether a volume backs a directory this session is
-// exporting, which is the fact the daemon cannot know. The lock closes the
-// remaining window: a removal decides under it, and a rewrite holds it across
-// registering the share and creating the volume. Whichever goes first, the
-// other sees a settled world: either the share is registered and the volume is
-// spared, or the volume goes and is immediately recreated.
+// Exported answers the fact the daemon cannot know. The lock closes the rest of
+// the window by spanning registering the share and creating its volume, so
+// whichever goes first the other sees a settled world.
 type Guard struct {
 	mu sync.Mutex
 

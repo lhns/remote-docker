@@ -119,7 +119,7 @@ func TestObserveWSL(t *testing.T) {
 }
 
 func TestWSLArgs(t *testing.T) {
-	imp := wslImportArgs("rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`, 2)
+	imp := wslImportArgs("rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`)
 	want := []string{"--import", "rd-dev", `C:\wsl\rd-dev`, `C:\wsl\rootfs.tar`, "--version", "2"}
 	if !slices.Equal(imp, want) {
 		t.Fatalf("import args = %v, want %v", imp, want)
