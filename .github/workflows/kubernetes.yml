@@ -201,17 +201,71 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
 
-          # And the ADMISSION webhook, which is a different thing from the
-          # controller pod being ready and is what every Ingress creation is
-          # validated against. Creating one in the window between the two
-          # fails with `connection refused` against the webhook service --
-          # measured 2026-09-01, on a commit that changed two markdown files.
-          for _ in $(seq 1 60); do
-            ips=$(kubectl get endpoints -n ingress-nginx ingress-nginx-controller-admission -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
-            [ -n "$ips" ] && break
+      # The controller pod being ready is not the ADMISSION webhook answering,
+      # and neither is its endpoint being listed. Every Ingress creation is
+      # validated against that webhook, so `helm install` in the window between
+      # them fails with `connection refused` against the webhook service.
+      #
+      # Waiting for the endpoint to appear was the 2026-09-01 remedy and it does
+      # not close it: on 2026-09-08 (issue #151) the controller pod reported
+      # `condition met`, the endpoint was listed as 10.244.0.7:8443, and the
+      # refusal came back against that same address 0.3 seconds later.
+      #
+      # So ask the webhook itself. A server-side dry-run CREATE takes the exact
+      # path `helm install` takes: the API server calls
+      # validate.nginx.ingress.kubernetes.io over the network and reports what
+      # it got back. It is callable on a dry run at all because the webhook
+      # declares `sideEffects: None` (checked 2026-09-08 in the deploy.yaml
+      # pinned above), and it creates nothing, so the poll is free to repeat.
+      #
+      # Costs one API call, about a fifth of a second, when the webhook is
+      # already up.
+      - name: the admission webhook answers
+        run: |
+          set -eu
+          probe="$RUNNER_TEMP/webhook-probe.yaml"
+          cat >"$probe" <<'YAML'
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: admission-webhook-probe
+            namespace: default
+          spec:
+            ingressClassName: nginx
+            rules:
+              - host: probe.invalid
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: no-such-service
+                          port:
+                            number: 80
+          YAML
+
+          last="(never ran)"
+          for i in $(seq 1 60); do
+            if last=$(kubectl create --dry-run=server -f "$probe" 2>&1); then
+              echo "the admission webhook answered on attempt $i"
+              exit 0
+            fi
             sleep 2
           done
-          kubectl get endpoints -n ingress-nginx ingress-nginx-controller-admission
+
+          echo "the admission webhook never answered in 120s; its last refusal:"
+          echo "$last"
+          echo "== the admission endpoint =="
+          kubectl get endpoints -n ingress-nginx ingress-nginx-controller-admission -o wide || true
+          echo "== the controller =="
+          kubectl get pods -n ingress-nginx -o wide || true
+          kubectl describe pods -n ingress-nginx \
+            --selector=app.kubernetes.io/component=controller | tail -40 || true
+          echo "== the controller's log =="
+          kubectl logs -n ingress-nginx \
+            --selector=app.kubernetes.io/component=controller --tail=60 || true
+          exit 1
 
       - name: install the chart
         run: |
