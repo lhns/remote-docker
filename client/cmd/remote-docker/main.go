@@ -59,18 +59,13 @@ func main() {
 // $?` has to answer what the container answered. Collapsing everything to 1
 // breaks any script that branches on it.
 //
-// Docker's own 128+signal mapping is not reproduced here, and does not have to
-// be. `getExitCode` in its cmd/docker/docker.go reaches that branch only
-// through errCtxSignalTerminated, which is unexported in that package main, and
-// what the branch covers is a command cancelled with no container to carry a
-// status. There this binary is killed by the signal instead, which a shell
-// reports as the same number.
-//
-// An interrupted `docker run` gets its number from the container: the CLI
-// catches every signal for the length of the run and forwards it
-// (cli/command/container/run.go, notifyAllSignals), the container dies of it,
-// and its status arrives here as a cli.StatusError like any other. Measured end
-// to end in test/integration.sh section 6e, against docker/cli v29.7.2.
+// Docker's own 128+signal mapping is not reproduced here and does not have to
+// be: `getExitCode` in its cmd/docker/docker.go reaches that branch only
+// through errCtxSignalTerminated, unexported in that package main, and what it
+// covers is a command with no container to carry a status, where this binary is
+// killed by the signal instead. An interrupted `docker run` gets its number
+// from the container, arriving here as a cli.StatusError like any other;
+// test/integration.sh section 6e pins it.
 func exitCode(err error) int {
 	if err == nil {
 		return 0

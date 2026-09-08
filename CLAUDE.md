@@ -895,20 +895,12 @@ only as far as the mapping from `cli.StatusError`.
 
 An EXEC's status, in 6d, which is a second hijacked stream and a different
 endpoint (`/exec/<id>/start`, `/exec/<id>/json`): 11, 0, 13 with `-i`, and 21
-through the embedded CLI.
-
-An INTERRUPTED `docker run`, in 6e: SIGINT to the client while the container
-runs, and the container's status is what comes back, 130 where it re-raises
-the signal and its own 77 where it picks one. Docker's 128+N mapping is not
-reachable from here and is not needed for either: `errCtxSignalTerminated` is
-unexported in its `cmd/docker/docker.go`, and the branch it feeds covers
-commands with no container to carry a status, where this binary is killed by
-the signal instead. 6e also pins the case that surprised: a container whose
-pid 1 has no handler IGNORES the signal, runs to completion and reports its
-own status, so one Ctrl-C on `docker run alpine sleep 60` stops nothing.
-Stock docker does the same and its escape hatch is a third signal, which
-exits 1. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read `getExitCode`
-and `forceExitAfter3TerminationSignals` in `cmd/docker/docker.go`.)*
+through the embedded CLI. An INTERRUPTED `docker run`, in 6e: 130 where the
+container re-raises the signal, its own 77 where it picks one, and 0 where its
+pid 1 has no handler, ignores the signal and runs to completion, which stock
+docker does too. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read
+`getExitCode` and `forceExitAfter3TerminationSignals` in
+`cmd/docker/docker.go`.)*
 
 Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
 (ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
@@ -1060,11 +1052,9 @@ its pure planning function was.
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
 - **A signal arriving anywhere but during an attached `docker run`.** 6e sends
-  SIGINT to a client that is inside `runContainer`, where docker's own handler
-  is installed. Nothing tests SIGINT during a `build`, a `pull`, or the gap
-  before the container starts, and those take the other route: no handler, so
-  the process dies of the signal. Nothing tests SIGTERM anywhere, and nothing
-  tests any of this on Windows, where a signal is not what it is here.
+  SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
+  a `build` or a `pull`, or before the container starts; nothing tests SIGTERM
+  anywhere, and nothing tests any of this on Windows.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
