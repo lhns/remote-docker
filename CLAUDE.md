@@ -874,6 +874,14 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
+A container's exit status reaching the user, in `integration.sh` 6c: `exit 7`
+giving the client 7 rather than 1 or 0, the same with stdin attached (`-i`),
+42 through the EMBEDDED CLI, which is the only place `exitCode` runs, a
+non-zero container putting NOTHING on the terminal, and `docker wait`
+reporting 9 for a detached one. The status crosses the hijacked stream, where
+over-detecting a hijack exits 0 having printed nothing; the unit tests reach
+only as far as the mapping from `cli.StatusError`.
+
 Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
 (ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
 still seeing an edit made here despite a 60s attribute cache, in 2s
@@ -1023,6 +1031,12 @@ its pure planning function was.
   it: no archive has been unpacked on a machine that did not build it, so the
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
+- **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
+  covers containers that exit on their own. Ctrl-C is not one: docker maps a
+  signal-terminated context to 128+signal through an error unexported in its own
+  package main, so this binary exits 1 instead of 130, which `exitCode`'s
+  comment says. No suite runs `docker exec ... sh -c 'exit 7'` either, which is
+  a second hijacked stream carrying a status.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
