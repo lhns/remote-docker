@@ -27,12 +27,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  chart:
-    name: the chart renders and is valid
+  # Not gated by which paths changed. It runs beside the integration suites,
+  # whose longest job is ten minutes against this one's four, so it costs
+  # nothing anyone waits for -- and a gate would mean an agent change reaching
+  # main without ever having run on a cluster.
+  end-to-end:
+    name: a session through the ingress
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
+    env:
+      # StatefulSet of one, so the name is the release plus an ordinal.
+      POD: ws-remote-docker-workspace-0
     steps:
       - uses: actions/checkout@v7
+
+      # The chart's own checks, folded in from a job of their own that did nine
+      # seconds of work (why a runner slot is worth that: ci.yml, the lint
+      # job). They run FIRST, ahead of everything expensive, so a chart that
+      # cannot render fails in twenty seconds rather than after an image build
+      # and a cluster. It costs this job about eighteen seconds it did not
+      # spend before, and that is the trade to undo first if runner slots stop
+      # being scarce.
+      #
+      # helm is pinned for the whole job now rather than only for the render
+      # checks. Installing the chart used whatever helm the runner image
+      # carried, which was one more thing that could move underneath a failure.
       - uses: azure/setup-helm@v5
         with:
           version: v3.16.3
@@ -149,20 +168,6 @@ jobs:
           fi
           helm template ws charts/remote-docker-workspace --kube-version 1.29.0 2>&1 \
             | grep -q "ingress.host is required"
-
-  # Not gated by which paths changed. It runs beside the integration suites,
-  # whose longest job is ten minutes against this one's four, so it costs
-  # nothing anyone waits for -- and a gate would mean an agent change reaching
-  # main without ever having run on a cluster.
-  end-to-end:
-    name: a session through the ingress
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    env:
-      # StatefulSet of one, so the name is the release plus an ordinal.
-      POD: ws-remote-docker-workspace-0
-    steps:
-      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-go
 

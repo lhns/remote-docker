@@ -44,8 +44,11 @@ jobs:
           id=$(docker create rd-workspace:ci)
           # Gzipped, because that is what a release publishes and what somebody
           # downloads. `wsl --import` reads it directly, and this is where that
-          # is proven rather than assumed.
-          docker export "$id" | gzip -9 > rootfs.tar.gz
+          # is proven rather than assumed. The LEVEL is not part of that: -9 on
+          # a 400 MB rootfs spent about a minute of single-threaded CPU on this
+          # workflow's critical path to save bandwidth between two jobs on the
+          # same runner network.
+          docker export "$id" | gzip -1 > rootfs.tar.gz
           docker rm "$id"
           ls -lh rootfs.tar.gz
 
@@ -72,6 +75,33 @@ jobs:
           docker save fsprobe:ci | gzip > fsprobe.tar.gz
           ls -lh fsprobe.tar.gz
 
+      # The Windows client, cross-compiled HERE rather than on the Windows
+      # runner. actions/setup-go on windows-latest restores a 526 MB module and
+      # build cache, and extracting it costs one to four minutes (measured 248s
+      # on 2026-09-08, run 34212595094), all of it on the critical path of the
+      # longest workflow this repository has, to compile one binary in seven
+      # seconds.
+      #
+      # CGO_ENABLED=0 is what .goreleaser.yaml ships for windows, so the binary
+      # under test is now the one a user downloads. Building on the runner
+      # picked up its gcc and produced a cgo binary nobody ships. That the
+      # client COMPILES on Windows natively is still covered by ci.yml's
+      # `test (windows)` job, which builds every package it tests.
+      - name: cross-compile the windows client
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -o rd.exe ./cmd/remote-docker
+        working-directory: client
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-client
+          path: client/rd.exe
+          if-no-files-found: error
+          retention-days: 1
+
       - uses: actions/upload-artifact@v7
         with:
           name: workspace-rootfs
@@ -97,18 +127,25 @@ jobs:
     name: a machine on wsl
     runs-on: windows-latest
     needs: rootfs
-    # Fifty, not thirty: creating a machine, importing the rootfs, an idle
-    # disconnect with its three-minute wait and the conformance probe's five
-    # thousand files over the share do not fit in thirty.
+    # Fifty, not thirty: creating a machine, importing the rootfs, waiting out
+    # an idle disconnect and the conformance probe's five thousand files over
+    # the share do not fit in thirty.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-go
-
+      # No setup-go on this runner. Everything Go here is built on the Linux
+      # job above and arrives as an artifact; see the cross-compile step there
+      # for what that is worth and what still covers the Windows build.
       - uses: actions/download-artifact@v8
         with:
           name: workspace-rootfs
+
+      # Into client/, which is where every step below already spells it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-client
+          path: client
 
       # State of its own for every step below, so nothing here depends on or
       # disturbs whatever the runner image already has. Set through GITHUB_ENV
@@ -124,10 +161,6 @@ jobs:
 
       - name: install wsl
         run: wsl --install --no-distribution
-
-      - name: build the client
-        run: go build -o rd.exe ./cmd/remote-docker
-        working-directory: client
 
       - name: create the machine
         shell: pwsh
@@ -201,13 +234,14 @@ jobs:
 
       # Left alone, and then used again.
       #
-      # A session that has been idle DISCONNECTS on purpose (ADR 0015), which
-      # releases the machine and lets WSL shut it down. All of that is correct,
-      # and the machine being stopped here is not the failure -- the failure is
-      # the command after it. This found one: the machine was started again and
-      # dialled immediately, before its agent was listening, so the first
-      # command failed and the second worked, which reads as flakiness rather
-      # than as the deterministic bug it was.
+      # A session that has been idle for DefaultIdleTimeout, one minute,
+      # disconnects on purpose (ADR 0015), which releases the machine and lets
+      # WSL start its own idle countdown on a machine nobody is in. All of that
+      # is correct, and the machine stopping here is not the failure -- the
+      # failure is the command after it. This found one: the machine was
+      # started again and dialled immediately, before its agent was listening,
+      # so the first command failed and the second worked, which reads as
+      # flakiness rather than as the deterministic bug it was.
       - name: a machine comes back after sitting idle
         shell: pwsh
         timeout-minutes: 8
@@ -216,10 +250,36 @@ jobs:
           # one-shot `docker run` would take its hold with it when it exits and
           # prove nothing about a machine left alone.
           .\client\rd.exe remote start
-          Start-Sleep -Seconds 180
 
-          $state = (wsl -l -v | Out-String)
+          # Polled for `Stopped` rather than slept for a fixed 180 seconds.
+          # The machine stops at 106s (measured 2026-09-08), so the fixed sleep
+          # carried 74s of dead margin on every run, and it asserted only that
+          # time had passed. `Stopped` is the precondition the command after
+          # this one is about, so a machine that never stops fails here naming
+          # what wsl said, rather than turning that command into a test of
+          # nothing.
+          #
+          # 300s bounds a failure and is not an expected duration: nothing
+          # waits for it once the machine has stopped.
+          $start = Get-Date
+          $deadline = $start.AddSeconds(300)
+          $state = ""
+          while ($true) {
+            # NULs stripped: wsl.exe writes UTF-16, and read as bytes that is
+            # text with a NUL between every character, against which every
+            # match silently fails.
+            $state = ((wsl -l -v | Out-String) -replace "`0", "")
+            if ($state -match 'rd-ci +Stopped') { break }
+            if ((Get-Date) -ge $deadline) { break }
+            Start-Sleep -Seconds 5
+          }
+          $waited = [int]((Get-Date) - $start).TotalSeconds
+          "waited ${waited}s for the machine to stop; wsl -l -v says:"
           $state
+          if ($state -notmatch 'rd-ci +Stopped') {
+            throw "the machine never stopped while idle, after ${waited}s; wsl -l -v printed above"
+          }
+
           $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
           $out
           if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }

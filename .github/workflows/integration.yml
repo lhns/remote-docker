@@ -17,12 +17,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Decides whether this change needs the suites at all.
+  # Two questions, and no suite starts until both have passed: does this change
+  # need the suites at all, and can this runner mount NFS.
   #
-  # These are expensive -- a real workspace, a real NFS mount, two modes, most
-  # of ten minutes -- so they were gated on an `integration` label. That label
-  # DID NOT EXIST, so the gate never opened: every pull request this repository
-  # has ever had skipped the suites entirely, silently, reporting green.
+  # The first. The suites are expensive -- a real workspace, a real NFS mount,
+  # two modes, most of ten minutes -- so they were gated on an `integration`
+  # label. That label DID NOT EXIST, so the gate never opened: every pull
+  # request this repository has ever had skipped the suites entirely, silently,
+  # reporting green.
   #
   # It cost something real. Dependabot opened the Go base-image bump an hour
   # before a dependency raised go.mod past it and broke the image build; the PR
@@ -34,8 +36,18 @@ jobs:
   # that touches none of them but deserves the run anyway. Fails OPEN -- if the
   # diff cannot be read, run them. Wasting a runner is cheaper than the last
   # two days.
+  #
+  # The second, and the one most likely to stop the suites outright: can a
+  # privileged container on a GitHub runner mount NFS? The runner's kernel is
+  # shared with every container on it, so NFS client support is not something
+  # the image can supply -- if the kernel lacks it, no amount of apt-get inside
+  # the container helps, and the suites need a different home.
+  #
+  # It was a job of its own for twenty-six seconds of work, in front of six
+  # suites that all waited on it. Why a runner slot is worth this: ci.yml, the
+  # lint job.
   gate:
-    name: do the suites apply
+    name: do the suites apply, and can this runner mount nfs
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.decide.outputs.run }}
@@ -77,23 +89,8 @@ jobs:
             say false "documentation or unrelated config only: skipping the suites."
           fi
 
-  # Settles one question, and it is the one most likely to stop the whole
-  # integration suite: can a privileged container on a GitHub runner mount NFS?
-  #
-  # The runner's kernel is shared with every container on it, so NFS client
-  # support is not something the image can supply -- if the kernel lacks it,
-  # no amount of apt-get inside the container helps, and the suite needs a
-  # different home. Answering it here, cheaply, before the suite exists.
-  nfs-capability:
-    name: nfs client in a privileged container
-    runs-on: ubuntu-latest
-    # Every suite below hangs off this job, so gating it gates all of them.
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
-    steps:
-      - uses: actions/checkout@v7
-
       - name: does the runner kernel know about nfs at all
+        if: steps.decide.outputs.run == 'true'
         run: |
           set -x
           grep -c nfs /proc/filesystems || true
@@ -101,6 +98,7 @@ jobs:
           grep nfs /proc/filesystems
 
       - name: export a directory from the runner
+        if: steps.decide.outputs.run == 'true'
         run: |
           set -eux
           sudo apt-get update
@@ -116,6 +114,7 @@ jobs:
       # host networking so the container reaches the runner's own loopback,
       # which is where the real client's reverse tunnel will listen too.
       - name: mount it from inside a privileged container
+        if: steps.decide.outputs.run == 'true'
         run: |
           set -eux
           docker run --rm --privileged --network host \
@@ -129,15 +128,18 @@ jobs:
             '
 
       - name: verdict
+        if: steps.decide.outputs.run == 'true'
         run: echo "NFS client works inside a privileged container on this runner."
 
   # Can a cache be a union mount? Every question the cache mode (ADR 0044) asks
-  # of the KERNEL rather than of our code, answered in about three minutes with
-  # no binary of ours but the watch probe.
+  # of the KERNEL rather than of our code, with no binary of ours but the watch
+  # probe.
   #
-  # Beside nfs-capability rather than inside it because it settles a different
-  # thing, and it is here rather than in a branch's own workflow because the
-  # answers expire: they are about the runner's kernel, and that moves.
+  # A job of its own rather than another tail on gate: at about three minutes
+  # it is the one capability probe the suites should not wait behind, and it
+  # settles nothing they depend on. It is here rather than in a branch's own
+  # workflow because the answers expire -- they are about the runner's kernel,
+  # and that moves.
   union-capability:
     name: can a cache be a union mount
     runs-on: ubuntu-latest
@@ -183,7 +185,8 @@ jobs:
   suite:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    needs: nfs-capability
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false

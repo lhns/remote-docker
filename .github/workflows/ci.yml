@@ -116,6 +116,11 @@ jobs:
             (cd "$mod" && go test ./...)
           done
 
+  # Go and shell in one job. shellcheck was a job of its own for seventeen
+  # seconds of work, and a job costs a runner slot plus twenty to thirty
+  # seconds of scheduling whatever it does -- which is the whole cost when
+  # this account can run twenty jobs at once and one pull request asks for
+  # twenty-six.
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -143,6 +148,31 @@ jobs:
           # GOOS does not see at all.
           (cd agent && GOOS=linux golangci-lint run --timeout 5m ./...)
           (cd core-agent && GOOS=linux golangci-lint run --timeout 5m ./...)
+
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      # The suites, the probe's differ, and the release scripts. The image's
+      # own scripts and its sudoers file were retired by the Go agent
+      # (ADR 0010).
+      #
+      # -x follows `source`, so the suites are checked against the real
+      # test/lib.sh rather than against an unknown. Without it every helper the
+      # library defines is invisible here and half of each suite goes unread.
+      #
+      # Each glob is guarded, because an unmatched pattern is passed through
+      # verbatim and shellcheck then fails on a file that does not exist --
+      # which is how deleting client/ broke this step once already.
+      - name: shellcheck
+        run: |
+          set -eux
+          for glob in 'test/*.sh' 'test/fs-conformance/*.sh' 'scripts/*.sh'; do
+            if compgen -G "$glob" >/dev/null; then
+              # shellcheck disable=SC2086  # the glob is what is being expanded
+              shellcheck -x -S warning -s bash $glob
+            fi
+          done
+        shell: bash
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -260,54 +290,3 @@ jobs:
           path: dist/**/remote-dockerd
           if-no-files-found: error
           retention-days: 14
-
-  shell:
-    name: shell
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
-
-      # The suites, the probe's differ, and the release scripts. The image's
-      # own scripts and its sudoers file were retired by the Go agent
-      # (ADR 0010).
-      #
-      # -x follows `source`, so the suites are checked against the real
-      # test/lib.sh rather than against an unknown. Without it every helper the
-      # library defines is invisible here and half of each suite goes unread.
-      #
-      # Each glob is guarded, because an unmatched pattern is passed through
-      # verbatim and shellcheck then fails on a file that does not exist --
-      # which is how deleting client/ broke this step once already.
-      - name: shellcheck
-        run: |
-          set -eux
-          for glob in 'test/*.sh' 'test/fs-conformance/*.sh' 'scripts/*.sh'; do
-            if compgen -G "$glob" >/dev/null; then
-              # shellcheck disable=SC2086  # the glob is what is being expanded
-              shellcheck -x -S warning -s bash $glob
-            fi
-          done
-        shell: bash
-
-  # Pull requests only. On main and on tags, release.yml builds this image for
-  # real -- multi-arch and pushed -- so building it here as well would be the
-  # same work twice for a strictly weaker result.
-  image:
-    name: image
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: image/Dockerfile
-          push: false
-          load: true
-          tags: remote-docker-workspace:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
