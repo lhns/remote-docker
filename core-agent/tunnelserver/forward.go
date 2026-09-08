@@ -158,17 +158,20 @@ func (f *Forwards) open(ctx gssh.Context, conn *gossh.ServerConn, payload remote
 	f.forwards[addr] = ln
 	f.mu.Unlock()
 
-	// The listener does not outlive the connection that asked for it.
+	// The listener does not outlive the connection that asked for it. By
+	// identity, not by address: the reservation is released on this same
+	// ctx.Done, so a second session may already hold the address.
 	go func() {
 		<-ctx.Done()
-		f.close(addr)
+		f.drop(addr, ln)
 	}()
 
 	go f.serve(conn, ln, payload.BindAddr, uint32(port), addr)
 	return true, gossh.Marshal(&remoteForwardSuccess{BindPort: uint32(port)})
 }
 
-// close takes down the listener for addr, if there is one.
+// close takes down the listener for addr, for cancel-tcpip-forward, which
+// names a forward by address and nothing else.
 func (f *Forwards) close(addr string) {
 	f.mu.Lock()
 	ln, ok := f.forwards[addr]
@@ -176,6 +179,17 @@ func (f *Forwards) close(addr string) {
 	if ok {
 		_ = ln.Close()
 	}
+}
+
+// drop takes down one particular listener, leaving a successor registered
+// under the same address alone.
+func (f *Forwards) drop(addr string, ln net.Listener) {
+	f.mu.Lock()
+	if f.forwards[addr] == ln {
+		delete(f.forwards, addr)
+	}
+	f.mu.Unlock()
+	_ = ln.Close()
 }
 
 // serve turns each accepted connection into a forwarded-tcpip channel.
@@ -207,9 +221,10 @@ func (f *Forwards) serve(conn *gossh.ServerConn, ln net.Listener, bindAddr strin
 		}()
 	}
 
-	f.mu.Lock()
-	delete(f.forwards, key)
-	f.mu.Unlock()
+	// Ordinarily the listener was taken down and drop has nothing to do. Any
+	// other accept error used to return having deleted the entry and closed
+	// nothing, leaving the port bound and unreachable for the agent's life.
+	f.drop(key, ln)
 }
 
 // HandleChannel answers direct-tcpip, which is `ssh -L`. Register it as the

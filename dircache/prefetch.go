@@ -174,6 +174,11 @@ func (c *Cache) feedTree(p *prefetch) {
 
 // send is the share's one sender: demand batches first, in order, and the
 // walk's smallest leftovers when nothing has been read for a while.
+//
+// It stops when the share is forgotten as well as when the cache is: forget
+// drops the prefetch from the map, which keeps a Touch away from this tree but
+// does not end the goroutine holding it. For THIS prefetch and not merely for
+// one, because a share attached again starts a second sender under the same id.
 func (c *Cache) send(p *prefetch) {
 	ticker := time.NewTicker(walkEvery)
 	defer ticker.Stop()
@@ -184,6 +189,9 @@ func (c *Cache) send(p *prefetch) {
 			return
 		case <-p.kick:
 		case <-ticker.C:
+		}
+		if c.prefetchFor(p.share) != p {
+			return
 		}
 
 		for {

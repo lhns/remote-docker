@@ -10,6 +10,41 @@ software.
 
 ## Unreleased
 
+### Five resources that were acquired and never handed back
+
+An audit for one defect shape: a resource whose release is conditional, or
+whose release path cannot reach the thing it is meant to release.
+
+- **Standing by released one file watch per share, not the tree.** `remote`
+  drops its watches when a session goes idle, which on a large project is the
+  only local resource worth having back. Only the share's top directory was
+  ever handed to the backend; every directory below it stayed registered, and
+  nothing could remove it again, because the map it was dropped from was the
+  only record of what had been added. Each one is a 64KB buffer on Windows and
+  an open descriptor per file on macOS. It also left a renamed directory's
+  subtree still reporting changes under its old path, which is the thing the
+  removal exists to stop.
+- **A released share kept its prefetch sender.** The share was forgotten and
+  the goroutine behind it was not: it went on ticking for the life of the
+  session, holding an entry per file in the tree, and sending the walk's
+  leftovers into a cache the workspace had released.
+- **A machine-backed workspace leaked a hold per failed connection.** The
+  `wsl.exe` session that keeps the machine from shutting down is released by
+  the connection that took it, and three failure paths returned before the
+  connection existed. The gate reopens on every request, so a workspace whose
+  agent was not answering leaked one hold per retry, each keeping the machine
+  awake.
+- **A reverse forward was closed by address rather than by identity.** The
+  reservation and the listener are given up on the same event, in no fixed
+  order, so a second session could hold the address by then and lose its
+  listener to the first session's teardown. An accept error other than the
+  close left the socket bound with nothing accepting on it and the entry
+  already deleted, so the port was refused to every reconnect for the life of
+  the agent.
+- **A WebSocket that died before it was accepted parked its handler forever.**
+  The keepalive gives up on a peer that stops answering, and the handler was
+  waiting to hand the connection over on a channel nobody would receive from.
+
 ### A mount has two settings, `read=` and `write=`
 
 ```bash

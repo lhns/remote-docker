@@ -418,3 +418,53 @@ func TestASingleFileShareReportsOnlyItsOwnFile(t *testing.T) {
 		t.Error("a sibling of the exported file was reported as part of the share")
 	}
 }
+
+// Standby calls Sync(nil) to hand the watches back on a large tree, and the
+// descendants are all of them. Dropping them from the map alone released one
+// per share and leaked the rest: the map is the only record of what was added.
+func TestRemoveTreeReleasesEveryDescendant(t *testing.T) {
+	root := mkdirs(t, t.TempDir(), "src", "src/deep", "pkg")
+	be := newFakeBackend()
+	tr := newTestTree(t, be, 100, nil)
+
+	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	added := be.addedSet()
+	if len(added) != 4 {
+		t.Fatalf("setup: watched %d directories, want 4: %v", len(added), added)
+	}
+
+	tr.sync(nil)
+
+	removed := make(map[string]bool, len(be.removedList()))
+	for _, p := range be.removedList() {
+		removed[p] = true
+	}
+	for want := range added {
+		if !removed[want] {
+			t.Errorf("watch on %s was never handed back; removed %v", want, be.removedList())
+		}
+	}
+	if len(tr.dirs) != 0 {
+		t.Errorf("kept %d watched directories after removing every share", len(tr.dirs))
+	}
+}
+
+// The backend is asked with the spelling it was given at Add time. The map key
+// is folded and slash-joined, so removing by key would remove nothing.
+func TestRemoveTreeAsksTheBackendWithTheAddedSpelling(t *testing.T) {
+	root := mkdirs(t, t.TempDir(), "Src")
+	be := newFakeBackend()
+	tr := newTestTree(t, be, 100, nil)
+
+	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.removeTree(root)
+
+	for _, p := range be.removedList() {
+		if !filepath.IsAbs(p) {
+			t.Errorf("removed %q, want the absolute path the watch was added with", p)
+		}
+	}
+	if !slices.Contains(be.removedList(), filepath.Join(root, "Src")) {
+		t.Errorf("removed %v, want the child spelled as it was added", be.removedList())
+	}
+}
