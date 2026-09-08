@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
 	nfsclient "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
@@ -135,6 +136,24 @@ func registryFor(t testing.TB, dir string) *Registry {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// shareFSOver is a share's filesystem over dir before attributes, which is
+// what a test asks for when the layers Registry.shareFS builds are themselves
+// under test. An empty file is a directory share.
+func shareFSOver(dir, file string) billy.Filesystem {
+	return NewRegistry(DefaultAttrs).shareFS(dir, file)
+}
+
+// unsetEnv removes a variable for one test. Through t.Setenv first so it is
+// restored for the rest of the package, which os.Unsetenv alone would not do:
+// a test that simply unsets leaks that into every test after it.
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "placeholder")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // cwdShare registers dir as the working-directory share and returns it, for a

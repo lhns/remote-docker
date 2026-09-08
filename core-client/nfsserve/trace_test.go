@@ -45,27 +45,21 @@ func TestTraceThreshold(t *testing.T) {
 	}
 
 	t.Run("unset", func(t *testing.T) {
-		unsetTrace(t)
+		unsetEnv(t, "REMOTE_DOCKER_NFS_TRACE")
 		if got := traceThreshold(nil); got != 0 {
 			t.Errorf("traceThreshold() = %v unset, want 0", got)
 		}
 	})
 }
 
-// unsetTrace removes the switch for one test. Through t.Setenv so it is
-// restored for the rest of the package, which os.Unsetenv alone would not do.
-func unsetTrace(t *testing.T) {
-	t.Helper()
-	t.Setenv("REMOTE_DOCKER_NFS_TRACE", "1s")
-	if err := os.Unsetenv("REMOTE_DOCKER_NFS_TRACE"); err != nil {
-		t.Fatal(err)
-	}
+// tracedOver is a traced share over dir, reporting the tracer itself so a test
+// can read the summary it keeps.
+func tracedOver(dir string, log *slog.Logger, slow time.Duration) *traceFS {
+	return withTrace(shareFSOver(dir, ""), dir, log, slow).(*traceFS)
 }
 
-// tracedLayer reports whether a traceFS sits anywhere in a share's filesystem,
-// which is what has to be absent when nobody asked for it: the wrapper costs a
-// time.Now and a locked map update on EVERY call, and a single-file share
-// hides it one layer down.
+// tracedLayer reports whether a traceFS sits anywhere in a share's filesystem.
+// Anywhere rather than outermost: a single-file share hides it one layer down.
 func tracedLayer(fs billy.Filesystem) bool {
 	for {
 		switch v := fs.(type) {
@@ -90,13 +84,13 @@ func TestShareFSIsTracedOnlyWhenAsked(t *testing.T) {
 	// Both share shapes, because a single-file share puts the wrapper under
 	// singleFileFS, where a check on the outermost type cannot see it.
 	for _, file := range []string{"", "only.conf"} {
-		unsetTrace(t)
-		if tracedLayer(NewRegistry(DefaultAttrs).shareFS(dir, file)) {
+		unsetEnv(t, "REMOTE_DOCKER_NFS_TRACE")
+		if tracedLayer(shareFSOver(dir, file)) {
 			t.Errorf("the share is traced with the switch unset (file %q)", file)
 		}
 
 		t.Setenv("REMOTE_DOCKER_NFS_TRACE", "1s")
-		if !tracedLayer(NewRegistry(DefaultAttrs).shareFS(dir, file)) {
+		if !tracedLayer(shareFSOver(dir, file)) {
 			t.Errorf("the share is not traced with the switch set (file %q)", file)
 		}
 	}
@@ -111,8 +105,8 @@ func TestTracedCallsReturnWhatAnUntracedOneDoes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	plain := NewRegistry(DefaultAttrs).shareFS(dir, "")
-	traced := withTrace(NewRegistry(DefaultAttrs).shareFS(dir, ""), dir, nil, time.Hour)
+	plain := shareFSOver(dir, "")
+	traced := tracedOver(dir, nil, time.Hour)
 
 	for _, tc := range []struct {
 		name string
@@ -203,16 +197,15 @@ func TestTracedShareServesTheSameFiles(t *testing.T) {
 	}
 }
 
-// go-nfs answers READ with Open, ReadAt and Close (nfs_onread.go), never Read,
-// so timing Read alone leaves every byte a share serves untimed and reports a
-// read count of zero. That is worse than no tracer: the reader concludes the
-// filesystem is not where the time goes.
+// The server's read path, which is Open, ReadAt and Close (traceFile): timing
+// Read alone would leave every byte a share serves untimed, and report a read
+// count of zero.
 func TestTraceTimesTheServersReadPath(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fs := withTrace(NewRegistry(DefaultAttrs).shareFS(dir, ""), dir, nil, time.Hour).(*traceFS)
+	fs := tracedOver(dir, nil, time.Hour)
 
 	f, err := fs.Open("hello.txt")
 	if err != nil {
@@ -240,7 +233,7 @@ func TestTraceTimesTheServersReadPath(t *testing.T) {
 // coarse enough to time a real Stat at zero.
 func TestTraceReportsASlowCall(t *testing.T) {
 	var buf bytes.Buffer
-	fs := withTrace(NewRegistry(DefaultAttrs).shareFS(t.TempDir(), ""), "/cwd", slog.New(slog.NewTextHandler(&buf, nil)), time.Second).(*traceFS)
+	fs := withTrace(shareFSOver(t.TempDir(), ""), "/cwd", slog.New(slog.NewTextHandler(&buf, nil)), time.Second).(*traceFS)
 	fs.observe("Stat", "hello.txt", time.Now().Add(-2*time.Second))
 
 	line := buf.String()
@@ -261,7 +254,7 @@ func TestTraceCountsQuietly(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	fs := withTrace(NewRegistry(DefaultAttrs).shareFS(dir, ""), dir, slog.New(slog.NewTextHandler(&buf, nil)), time.Hour).(*traceFS)
+	fs := tracedOver(dir, slog.New(slog.NewTextHandler(&buf, nil)), time.Hour)
 	if _, err := fs.Stat("hello.txt"); err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
@@ -284,7 +277,7 @@ func TestTraceCountsQuietly(t *testing.T) {
 // on a filesystem the user chose precisely because it is large.
 func TestTraceSummaryDoesNotGrowWithPaths(t *testing.T) {
 	dir := t.TempDir()
-	fs := withTrace(NewRegistry(DefaultAttrs).shareFS(dir, ""), dir, nil, time.Hour).(*traceFS)
+	fs := tracedOver(dir, nil, time.Hour)
 
 	// Concurrently, because go-nfs dispatches requests in parallel and the
 	// summary is shared between them.

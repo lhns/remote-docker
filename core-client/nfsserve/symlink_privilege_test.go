@@ -11,9 +11,8 @@ import (
 	"github.com/lhns/remote-docker/core/logx"
 )
 
-// The trap this detection exists to avoid: Windows refuses a symlink with
-// ERROR_PRIVILEGE_NOT_HELD, which does NOT match os.ErrPermission, so the
-// obvious test for it silently never fires.
+// The errno rule of symlink_windows.go, pinned in both directions because the
+// obvious spelling of it never fires.
 func TestSymlinkPrivilegedMatchesTheErrnoAndNotErrPermission(t *testing.T) {
 	// The shape os.Symlink returns, measured on 2026-09-07.
 	privilege := &os.LinkError{Op: "symlink", Old: "target", New: "link", Err: syscall.Errno(1314)}

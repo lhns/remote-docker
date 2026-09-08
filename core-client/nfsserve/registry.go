@@ -262,12 +262,17 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 	}
 }
 
-// shareFS is a share's filesystem before attributes: a bound osfs at base,
-// narrowed to one file when the share is one (ADR 0039). The ONE place this is
+// shareFS is a share's filesystem before attributes. The ONE place this is
 // built, so registration and SetAttrs cannot disagree about it.
+//
+// The order is the whole of it. From the disk up: a bound osfs at base;
+// noFollowFS, which has to sit directly on it so that every layer above
+// removes and renames a link as a link; the descriptor cache (fdcache.go, on
+// unless REMOTE_DOCKER_NFS_FDCACHE turns it off) and the tracer (trace.go, off
+// unless REMOTE_DOCKER_NFS_TRACE asks for it), neither of which is present at
+// all when its switch says no, because each costs something on every call; and,
+// for a single-file share, the one-file view on top (ADR 0039).
 func (r *Registry) shareFS(base, file string) billy.Filesystem {
-	// noFollowFS sits directly on the osfs so every layer above it, the single
-	// file view and the attributes alike, removes and renames a link as a link.
 	var inner billy.Filesystem = &noFollowFS{
 		Filesystem: osfs.New(base, osfs.WithBoundOS()),
 		log:        r.Log,
