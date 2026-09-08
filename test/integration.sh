@@ -1080,13 +1080,10 @@ else
     ok "and it can use the shared docker daemon"
 fi
 
-# The exit status must follow the COMMAND, not the client's stdin.
-#
-# serveExec used to hand gssh.Session to cmd.Stdin, so os/exec made an os.Pipe
-# with a copying goroutine and cmd.Run waited for it: the status arrived only
-# once the client closed its stdin. Every other ssh assertion in these suites
-# redirects </dev/null (ssh_account does), which EOFs at once and cannot show
-# it, so this one holds stdin OPEN through a fifo, which is what a terminal is.
+# The exit status must follow the COMMAND, not the client's stdin. Every other
+# ssh assertion in these suites goes through ssh_account, which redirects
+# </dev/null and so EOFs at once: that cannot show the hang, so this one holds
+# stdin OPEN through a fifo, which is what a terminal is.
 stdin_fifo="$WORK/ssh-stdin-open"
 rm -f "$stdin_fifo"
 mkfifo "$stdin_fifo"

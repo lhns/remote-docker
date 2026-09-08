@@ -212,7 +212,7 @@ StatefulSet adopts them.
 - A non-pty `ssh workspace <command>` withheld its exit status until the
   client closed its stdin, so `ssh workspace true` from a terminal hung
   although the command had exited. The status follows the command now. Our own
-  client never tripped this: it sets no stdin, so x/crypto EOFs one at once.
+  client never tripped this: it sets no stdin, so x/crypto sends EOF at once.
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.
