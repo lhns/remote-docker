@@ -212,6 +212,12 @@ StatefulSet adopts them.
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.
+- Connecting waited for the workspace to finish reading its key directory. The
+  account store held its write lock across `useradd` for every enrolled
+  account, and public-key authentication reads through that same lock, so a
+  session opened during the 60-second key poll waited out the whole pass.
+  Revoking an account could also change a key list another connection was
+  reading at that moment.
 
 ### Changed
 
