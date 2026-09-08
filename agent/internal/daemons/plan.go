@@ -82,28 +82,21 @@ const (
 // its own so that nothing in it survives the container being restarted.
 //
 // A container's /run is part of its writable layer, so runtime state written
-// there OUTLIVES a stop, which on a real machine it never does. dind's
-// entrypoint knows this and deletes what it can, but its cleanup is
-//
-//	find /run /var/run -iname 'docker*.pid' -delete
-//
-// and containerd's pid file is `containerd.pid`, which that pattern does not
-// match. So a daemon killed rather than stopped -- which is every per-account
-// daemon when the workspace container restarts, since they die with the dockerd
-// holding them -- comes back with a stale
-// /var/run/docker/containerd/containerd.pid naming a pid from its PREVIOUS
-// life. dockerd starts containerd, then refuses to record its pid because that
-// file already names a live process, kills the containerd it just started, and
-// exits:
+// there outlives a kill, which on a real machine it never does. dind's
+// entrypoint deletes `docker*.pid` and containerd's file is `containerd.pid`,
+// so a daemon killed rather than stopped comes back with a stale
+// containerd/containerd.pid naming a pid from its previous life. dockerd then
+// starts containerd, refuses to record its pid because the file names a live
+// process, kills the containerd it just started, and exits:
 //
 //	failed to start containerd: libcontainerd: failed to save daemon pid to
 //	disk: process with PID 35 is still running
 //
-// The pid it names is a coincidence -- the pid namespace is new, and the number
-// is live again only if the daemon's own startup happens to have reached it --
-// which is why this appeared as a flake rather than as a daemon that never
-// comes back. Measured in CI: about one run in eighty, always after the
-// workspace restarted, with the daemon dying 16.1 seconds in.
+// It dies 16.1 seconds in, which is dockerd's deliberate delay before the
+// unencrypted-listener warning and not a budget running out (issue #154).
+//
+// The pid is live only by coincidence, which is why this presented as a flake.
+// The invariant in CLAUDE.md carries the measurement.
 const ExecRoot = "/var/run/docker"
 
 // Labels identify a container as a daemon we manage, and whose.
@@ -161,8 +154,7 @@ type Spec struct {
 	Mounts []elevate.Mount
 	Env    []string
 
-	// Tmpfs are the paths inside the daemon container that must start empty
-	// every time. See ExecRoot.
+	// Tmpfs are paths that must start empty every time. See ExecRoot.
 	Tmpfs []string
 
 	// Command is the dockerd invocation, including the sockets it listens on.
@@ -273,10 +265,8 @@ func Plan(account string, opts Options) (Spec, error) {
 			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
 			{Type: "volume", Name: VolumeName(account), Destination: "/var/lib/docker"},
 		}, opts.Mounts...),
-		// exec and mode are spelled out rather than left to docker's tmpfs
-		// defaults, which are mode=1777 and no promise about noexec: this is
-		// dockerd's exec-root, and on a real machine it is a 0755 directory on
-		// /run that runc may execute from.
+		// exec because runc executes from the exec-root, and 0755 rather
+		// than docker's tmpfs default of 1777.
 		Tmpfs: []string{ExecRoot + ":rw,exec,mode=755"},
 		// TLS off: the only thing that can reach this daemon is the agent,
 		// over a unix socket in a directory only the agent and the account can

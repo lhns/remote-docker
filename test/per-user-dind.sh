@@ -33,6 +33,19 @@ DOCKER_TIMEOUT=180
 cleanup() { cleanup_suite "${CLIENT_A_PID:-}" "${CLIENT_B_PID:-}"; }
 trap cleanup EXIT
 
+# wait_dind waits up to 2 x $2 seconds for an account's own daemon to answer.
+wait_dind() {
+    local account=$1 tries=$2
+    for _ in $(seq 1 "$tries"); do
+        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$account" \
+                docker version >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
 echo "== 1. build =="
 if build_image && build_client; then
     ok "image and client build"
@@ -614,12 +627,7 @@ else
     # reporting nothing, which looks nothing like what it tests.
     info "starting $B's daemon, so the shell probe does not pay for its boot"
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
-    for _ in $(seq 1 90); do
-        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker version >/dev/null 2>&1; then
-            break
-        fi
-        sleep 2
-    done
+    wait_dind "$B" 90 || info "$B's daemon never answered; the probe below pays for its boot"
 
     for who in "$A" "$B"; do
         reach=$(ssh_account "$WORK/state-$who/id_ed25519" "$who" 120 "$probe" \
@@ -636,22 +644,14 @@ fi
 
 echo
 echo "== 13. a daemon that was killed rather than stopped starts again =="
-# The failure this reproduces on purpose, because it otherwise arrives about
-# once in eighty runs (agent/internal/daemons.ExecRoot has the measurement).
-#
-# A container's /run is part of its writable layer, so a daemon that was killed
-# comes back with the runtime state of its previous life still there. dind's
-# entrypoint deletes `docker*.pid` and containerd's file is containerd.pid, so
-# that one survives, and dockerd refuses to record the containerd it just
-# started because the file names a live pid:
-#
-#	failed to start containerd: libcontainerd: failed to save daemon pid to
-#	disk: process with PID 35 is still running
-#
-# In the wild the pid is live only by coincidence. Here it is pid 1, the
-# daemon container's own init, which is alive in every incarnation, so the
-# coincidence is arranged and the failure is deterministic.
-PIDFILE=/var/run/docker/containerd/containerd.pid
+# Arranged rather than waited for: in the wild this arrives about once in
+# eighty runs (agent/internal/daemons.ExecRoot has the failure and the
+# measurement). A stale containerd.pid only stops dockerd while the pid it
+# names is alive, which in the wild is a coincidence; pid 1 is the daemon
+# container's own init and is alive in every incarnation, so planting that
+# makes it deterministic.
+EXECROOT=/var/run/docker
+PIDFILE=$EXECROOT/containerd/containerd.pid
 if ! planted=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
         sh -c "echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
     bad "could not plant a stale containerd pid in $B's daemon: [$planted]"
@@ -661,15 +661,7 @@ else
     hostdocker exec "$CONTAINER" docker kill "rd-dind-$B" >/dev/null 2>&1
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
 
-    answered=""
-    for _ in $(seq 1 60); do
-        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker version >/dev/null 2>&1; then
-            answered=yes
-            break
-        fi
-        sleep 2
-    done
-    if [ -n "$answered" ]; then
+    if wait_dind "$B" 60; then
         ok "$B's daemon came back with a stale containerd pid file behind it"
     else
         bad "$B's daemon did not come back after being killed with a stale $PIDFILE"
@@ -679,11 +671,11 @@ else
             sed "s/^/    rd-dind-$B: /"
     fi
 
-    # The mechanism, asserted separately from the outcome: a tmpfs is what
-    # makes the exec-root empty again, and a daemon that happened to start
-    # would otherwise hide its absence until the next coincidence.
+    # The mechanism, asserted separately from the outcome: a daemon that
+    # happened to start would otherwise hide a missing tmpfs until the next
+    # coincidence.
     if outputs '^tmpfs$' hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
-            stat -f -c %T /var/run/docker; then
+            stat -f -c %T "$EXECROOT"; then
         ok "the exec-root is a tmpfs, so nothing in it survives a restart"
     else
         bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"

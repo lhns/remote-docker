@@ -93,11 +93,8 @@ type RunSpec struct {
 	Mounts []Mount
 	Env    []string
 
-	// Tmpfs are --tmpfs values: a path, optionally followed by :options.
-	//
-	// A separate field rather than a Mount type, because a tmpfs has no
-	// source: Mount.Arg renders source:destination, and there is nothing to
-	// put on the left.
+	// Tmpfs are --tmpfs values: a path, optionally followed by :options. Not
+	// Mounts, which renders source:destination and a tmpfs has no source.
 	Tmpfs []string
 
 	// Command follows the image.

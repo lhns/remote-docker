@@ -845,12 +845,15 @@ premise of the project, and it applies to building it too. So:
   `/run` is part of the writable layer, so a daemon that was KILLED rather than
   stopped comes back with the last life's state still there, and the workspace
   container restarting kills every one of them. dind's entrypoint deletes
-  `docker*.pid`, which `containerd.pid` does not match, so dockerd either
-  refuses to record the containerd it just started (`process with PID 35 is
-  still running`) or waits 15s for one it never started. The exec-root is a
-  tmpfs for that reason (`daemons.ExecRoot`). Measured on a runner: 11 failures
-  in 114 restarts without it, 0 in 50 clean stops, because a clean shutdown
-  removes the file itself.
+  `docker*.pid`, which `containerd.pid` does not match, so dockerd refuses to
+  record the containerd it just started (`process with PID 35 is still
+  running`) and exits. The exec-root is a tmpfs for that reason
+  (`daemons.ExecRoot`). Measured on a runner: 11 failures in 114 restarts
+  without it, 0 in 50 clean stops, because a clean shutdown removes the file
+  itself. The SHARED daemon of ADR 0012 has the same exposure and no fix: it
+  runs the same entrypoint in the workspace container, whose `/run` is equally
+  a writable layer, so a `docker restart` of that container can leave the same
+  file behind. Nothing tests it and no deployment file mounts a tmpfs there.
 - **Adoption keys on the persisted workspace id, never a container id.** An id
   changes on every redeploy, so adopting by it orphans every account's daemon
   on the first `compose up -d` -- still running, unadoptable, holding their
