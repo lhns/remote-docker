@@ -926,6 +926,15 @@ reporting 9 for a detached one. The status crosses the hijacked stream, where
 over-detecting a hijack exits 0 having printed nothing; the unit tests reach
 only as far as the mapping from `cli.StatusError`.
 
+An EXEC's status, in 6d, which is a second hijacked stream and a different
+endpoint (`/exec/<id>/start`, `/exec/<id>/json`): 11, 0, 13 with `-i`, and 21
+through the embedded CLI. An INTERRUPTED `docker run`, in 6e: 130 where the
+container re-raises the signal, its own 77 where it picks one, and 0 where its
+pid 1 has no handler, ignores the signal and runs to completion, which stock
+docker does too. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read
+`getExitCode` and `forceExitAfter3TerminationSignals` in
+`cmd/docker/docker.go`.)*
+
 Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
 (ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
 still seeing an edit made here despite a 60s attribute cache, in 2s
@@ -1116,12 +1125,10 @@ its pure planning function was.
   `[System64Folder]` is System32, which is the reverse of what the names say:
   searching only the first builds, installs, and misses the directory people
   mean. CI caught it because the runner had a `docker.exe` in each.
-- **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
-  covers containers that exit on their own. Ctrl-C is not one: docker maps a
-  signal-terminated context to 128+signal through an error unexported in its own
-  package main, so this binary exits 1 instead of 130, which `exitCode`'s
-  comment says. No suite runs `docker exec ... sh -c 'exit 7'` either, which is
-  a second hijacked stream carrying a status.
+- **A signal arriving anywhere but during an attached `docker run`.** 6e sends
+  SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
+  a `build` or a `pull`, or before the container starts; nothing tests SIGTERM
+  anywhere, and nothing tests any of this on Windows.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
