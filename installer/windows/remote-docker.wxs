@@ -42,6 +42,16 @@
       the refusal message names.
     -->
     <Property Id="DOCKERONPATH" Secure="yes">
+      <!--
+        BOTH system directories, and neither is optional. In a 64-bit package
+        `SystemFolder` is SysWOW64 and `System64Folder` is System32, which is
+        the reverse of what the names suggest; both are on PATH on a 64-bit
+        Windows. Searching only `SystemFolder` looks right, builds, installs,
+        and misses every docker.exe in the directory people mean.
+      -->
+      <DirectorySearch Id="DS.System64" Path="[System64Folder]">
+        <FileSearch Id="FS.System64" Name="docker.exe" />
+      </DirectorySearch>
       <DirectorySearch Id="DS.System" Path="[SystemFolder]">
         <FileSearch Id="FS.System" Name="docker.exe" />
       </DirectorySearch>

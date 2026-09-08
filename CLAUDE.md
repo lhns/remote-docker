@@ -1080,11 +1080,15 @@ its pure planning function was.
   (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's
   warning is therefore expected rather than a symptom, and the MSIs are not in
   `checksums.txt` either, because goreleaser writes that before they exist.
-- **The `docker.exe` refusal reads three directories, not PATH.** Windows
+- **The `docker.exe` refusal reads four directories, not PATH.** Windows
   Installer's AppSearch cannot enumerate PATH (ADR 0048), so a `docker.exe`
-  anywhere but System32 or Docker Desktop's two locations is not found and is
-  shadowed. `test/msi.ps1` section 7 asserts the refusal against a System32
-  stub, which is a real PATH directory and the only one it can assert about.
+  anywhere but the two system directories or Docker Desktop's two locations is
+  not found and is shadowed. `test/msi.ps1` section 7 asserts the refusal
+  against a System32 stub, which is a real PATH directory and the only one it
+  can assert about. In a 64-bit MSI, `[SystemFolder]` is **SysWOW64** and
+  `[System64Folder]` is System32, which is the reverse of what the names say:
+  searching only the first builds, installs, and misses the directory people
+  mean. CI caught it because the runner had a `docker.exe` in each.
 - **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
   covers containers that exit on their own. Ctrl-C is not one: docker maps a
   signal-terminated context to 128+signal through an error unexported in its own

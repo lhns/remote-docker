@@ -84,10 +84,14 @@ fires, which is silent for a release cycle.
   release's MSI to the next; changing it leaves two installs side by side, two
   entries in Programs and Features, and two copies on PATH. Written in capitals
   in the `.wxs` for that reason.
-- **The refusal reads three directories, not PATH.** Windows Installer's
+- **The refusal reads four directories, not PATH.** Windows Installer's
   `AppSearch` cannot enumerate `PATH`, and there is no locator that does. So
-  `DOCKERONPATH` is a `DirectorySearch` over System32 and Docker Desktop's two
-  locations, each of which is on PATH when it holds a `docker.exe`. A
+  `DOCKERONPATH` is a `DirectorySearch` over the two system directories and
+  Docker Desktop's two locations, each of which is on PATH when it holds a
+  `docker.exe`. In a 64-bit package `SystemFolder` is **SysWOW64** and
+  `System64Folder` is **System32**, the reverse of what the names suggest;
+  searching only the first builds, installs, and misses the directory that was
+  meant. A
   `docker.exe` elsewhere on PATH is not noticed and is shadowed, because the
   install directory is appended and therefore loses — the failure is that the
   user does not get what they asked for, not that they lose the other tool.

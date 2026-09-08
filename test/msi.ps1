@@ -101,6 +101,7 @@ Section 'a machine with no docker.exe anywhere the installer looks'
 # reported rather than deleted quietly.
 $candidates = @(
   (Join-Path $env:SystemRoot 'System32\docker.exe'),
+  (Join-Path $env:SystemRoot 'SysWOW64\docker.exe'),
   (Join-Path $env:ProgramFiles 'Docker\docker.exe'),
   (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe')
 )

@@ -113,10 +113,10 @@ the "docker" name would shadow it.
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName ALLOWDOCKERSHADOW=1
 ```
 
-The check reads the directories a `docker.exe` actually comes from — System32
-and Docker Desktop's two — rather than the whole PATH, which Windows Installer
-cannot enumerate. A `docker.exe` somewhere else on PATH will not be noticed,
-and yours will win, because the install directory is appended.
+The check reads the directories a `docker.exe` actually comes from — the two
+system directories and Docker Desktop's two — rather than the whole PATH, which
+Windows Installer cannot enumerate. A `docker.exe` somewhere else on PATH will
+not be noticed, and yours will win, because the install directory is appended.
 
 **The MSI is unsigned.** There is no code-signing certificate for this project,
 so SmartScreen will warn about an unrecognised publisher and the elevation
