@@ -4,22 +4,20 @@ package sshd
 //
 // A reverse forward's port reservation is released when the connection ends
 // (reversePolicy.Allow), which is only as good as this side's ability to notice
-// an ending. A client whose network black-holes -- a laptop suspended, a VPN
-// dropped -- leaves a connection that is dead and looks alive: with
-// unacknowledged data on it, Linux retransmits for about fifteen minutes before
-// the socket fails, and the port stays reserved for all of it.
+// an ending. A client whose network black-holes, a laptop suspended or a VPN
+// dropped, leaves a connection that is dead and looks alive: Linux retransmits
+// unacknowledged data for about fifteen minutes, and the port stays reserved
+// for all of it.
 //
-// What that costs is worse than the lost connection. The client reconnects, is
-// authenticated, and is refused the one port its volumes can mount from:
-// "tcpip-forward request denied by peer". It then holds a session with no NFS
-// export behind it, so containers get "connection refused" against a port bound
-// to a corpse -- a failure that names a port and nothing that explains it.
+// What that costs is worse than the lost connection. The client reconnects and
+// is refused the one port its volumes can mount from ("tcpip-forward request
+// denied by peer"), so it holds a session with no NFS export behind it and its
+// containers get "connection refused" against a port bound to a corpse.
 //
-// The client probes the other direction itself (tunnelclient.keepAlive). This
+// The client probes the other direction itself (tunnelclient.keepAlive); this
 // is the same judgement left to the kernel, because the agent has no
-// request/reply clock of its own to hang one on.
-//
-// Covered by test/nfs-resilience.sh section 10.
+// request/reply clock of its own to hang one on. Covered by
+// test/nfs-resilience.sh section 10.
 
 import (
 	"net"
@@ -27,12 +25,9 @@ import (
 )
 
 // peerTimeout is how long a connection may fail to make progress before the
-// workspace treats the client as gone.
-//
-// Comparable to the client's own detection window (a 15s probe with a 30s
-// wait), because the two are answering the same question from opposite ends and
-// a workspace slower to decide than its client is a workspace that refuses the
-// reconnect the client has already begun.
+// workspace treats the client as gone. Comparable to the client's own
+// detection window (a 15s probe with a 30s wait): a workspace slower to decide
+// than its client refuses the reconnect that client has already begun.
 const peerTimeout = 60 * time.Second
 
 // armDeadPeerDetection bounds how long a connection may go unanswered.

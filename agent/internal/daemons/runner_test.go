@@ -71,16 +71,13 @@ func manager(f fakeDocker) *Manager {
 	}
 }
 
-// A daemon that is not running cannot be running anything, whatever it says
-// when asked -- and it says nothing, because it is not up to answer.
+// A daemon that is not running cannot be running anything, and it says nothing
+// when asked, because it is not up to answer.
 //
-// This is the rule that left a real workspace broken for as long as it stayed
-// broken. reconcile would not replace a daemon built from stale settings unless
-// it could prove nothing was running inside, and it asked the daemon. A
-// crash-looping container never answers, "cannot tell" counted as busy, and the
-// one daemon that most needed rebuilding was the one the rule protected. It
-// logged "has containers running" about a container that was restarting every
-// nineteen seconds.
+// The rule this replaced left a real workspace broken: reconcile asked the
+// daemon whether anything was running inside, a crash-looping one never
+// answered, "cannot tell" counted as busy, and the daemon that most needed
+// rebuilding was the one the rule protected.
 func TestABrokenDaemonIsNotBusy(t *testing.T) {
 	for _, state := range []string{"restarting", "exited", "created", "dead"} {
 		t.Run(state, func(t *testing.T) {
@@ -158,11 +155,7 @@ func TestStopStraysStopsRunningDaemonsAndRemovesNothing(t *testing.T) {
 // A crash-looping daemon is the case this exists for: it restarts forever in a
 // mode that never sends it a session, and nothing else would stop it.
 func TestStopStraysStopsACrashLoopingDaemon(t *testing.T) {
-	var ran []string
-	m := manager(fakeDocker{
-		listing: `{"Labels":"remote-docker.account=alice","State":"restarting"}`,
-		ran:     &ran,
-	})
+	m := manager(fakeDocker{listing: `{"Labels":"remote-docker.account=alice","State":"restarting"}`})
 
 	if n, err := m.StopStrays(context.Background()); err != nil || n != 1 {
 		t.Fatalf("StopStrays = %d, %v; want 1, nil", n, err)

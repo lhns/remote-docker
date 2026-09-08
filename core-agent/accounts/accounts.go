@@ -61,9 +61,8 @@ func (a Account) Authorized(key ssh.PublicKey) bool {
 // Provisioner creates the unix account behind a workspace user.
 //
 // An interface because creating users needs root, which unit tests do not
-// have. The shell suite could only run as root and therefore never ran in CI;
-// this is what lets the interesting logic (naming, collisions, uid
-// allocation, revocation) be tested anywhere.
+// have, and naming, collisions, uid allocation and revocation all have to be
+// testable on a machine that is not a workspace.
 type Provisioner interface {
 	// Ensure creates the account if it does not exist.
 	//
@@ -160,12 +159,10 @@ func (s *Store) Sync() error {
 	}
 
 	// Sorted, so a collision is decided by name rather than by directory order,
-	// which would make the winner depend on the filesystem.
-	//
-	// Files whose name is ALREADY the account name are considered first, so
-	// alice.pub beats Alice.pub for "alice". Sorted order alone would hand it
-	// to Alice.pub, because uppercase sorts first, which is deterministic but
-	// arbitrary: the exact spelling is the one the enroller meant.
+	// which would make the winner depend on the filesystem. Files whose name is
+	// ALREADY the account name go first, so alice.pub beats Alice.pub for
+	// "alice": sorted order alone would hand it to Alice.pub, uppercase sorting
+	// first, which is deterministic but arbitrary.
 	var exact, folded []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pub") {
@@ -194,10 +191,8 @@ func (s *Store) Sync() error {
 			continue
 		}
 
-		// The shell version let a second file silently overwrite the first's
-		// access: Alice.pub and alice.pub both yield "alice". Refusing is
-		// the only safe answer: picking one would hand somebody an account
-		// they did not ask for.
+		// Alice.pub and alice.pub both yield "alice", and picking one would
+		// hand somebody an account they did not ask for.
 		if other, taken := claimed[name]; taken {
 			s.log().Warn("ignoring a key file: its account name is already claimed",
 				"file", file, "account", name, "claimedBy", other)
@@ -240,10 +235,10 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	// 1. Decide the uids. No lock and no exec.
 	//
 	// Sorted, because this loop ASSIGNS uids to accounts that do not have one
-	// yet, and ranging a map would assign them in Go's randomised order. Sync
-	// goes to some trouble to order the key files deterministically; handing
-	// the result over as a map threw that away, and the uid a new account got
-	// (and therefore its reverse-tunnel port) depended on the run.
+	// yet, and ranging a map would assign them in Go's randomised order: Sync
+	// orders the key files deterministically and handing the result over as a
+	// map threw that away, so the uid a new account got, and therefore its
+	// reverse-tunnel port, depended on the run.
 	names := slices.Sorted(maps.Keys(found))
 	changed := false
 	for _, name := range names {
@@ -299,9 +294,9 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 		next[name] = found[name]
 	}
 
-	// Revoke, do not delete. Removing the account and its home would be a
-	// silent way to lose whatever the user left there, and a key file is
-	// removed far more often than a person leaves for good.
+	// Revoke, do not delete. Removing the account and its home would silently
+	// lose whatever the user left there, and a key file is removed far more
+	// often than a person leaves for good.
 	//
 	// An account is enrolled exactly while its file holds a key, so emptying
 	// the file revokes: that is the interface. But a file being saved is empty
@@ -388,9 +383,9 @@ func (s *Store) saveUIDs(uids map[string]int) error {
 // not one.
 //
 // Line by line, because a file holds several keys and one bad line should cost
-// that line. Parsing the file as a stream stopped at the first thing it could
-// not read, so a typo, a wrapped paste or a BOM on the top line took every key
-// under it with it, and the account was revoked over a line nobody had touched.
+// that line. Read as one stream it stopped at the first thing it could not
+// parse, so a typo, a wrapped paste or a BOM on the top line took every key
+// under it, and the account was revoked over a line nobody had touched.
 func parseKeys(path string) (keys []ssh.PublicKey, skipped int, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

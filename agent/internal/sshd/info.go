@@ -62,13 +62,10 @@ func (s *Server) storageDriver(ctx context.Context, account string) string {
 }
 
 // unionCapability reports whether this workspace can serve a delegated share as
-// a cache, for the account asking.
-//
-// Asked of the daemon that would serve it rather than of the agent, because
-// that is where the answer differs: in per-account mode fuse-overlayfs has to
-// be in the image THAT daemon runs, and the agent's own filesystem says nothing
-// about it. A daemon that has not started cannot be asked, and an empty answer
-// reads as "not available", which is what an older agent's answer reads as too.
+// a cache, for the account asking. Asked of the daemon that would serve it; see
+// unions.Capability. A daemon that has not started cannot be asked, and the
+// empty answer reads as "not available", which is what an older agent's answer
+// reads as too.
 func (s *Server) unionCapability(ctx context.Context, account string) string {
 	if s.cfg.Unions == nil {
 		return ""

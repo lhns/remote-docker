@@ -7,12 +7,8 @@ import (
 	"os/user"
 )
 
-// addGroup creates a system group if it is missing.
-//
-// Shelling out to addgroup rather than editing /etc/group: the alpine and
-// shadow tools handle the locking between the group and gshadow files, and
-// reimplementing that to save a dependency would trade a well-understood tool
-// for a novel source of corruption.
+// addGroup creates a system group if it is missing, through the shadow tools
+// for the reason on accounts.UnixProvisioner.
 func addGroup(name string) error {
 	if _, err := user.LookupGroup(name); err == nil {
 		return nil

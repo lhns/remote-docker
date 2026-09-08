@@ -19,17 +19,12 @@ func TestTheReadyBudgetDefaultsAndIsOverridable(t *testing.T) {
 }
 
 // A failed start is remembered for a moment, so the callers behind it fail
-// fast rather than each paying the whole ready budget.
-//
-// `docker compose up` is hundreds of API calls and every one of them lands in
-// ensure. They all wait on the leader, and when it fails they all wake at once:
-// without a record each becomes the next leader in turn, so N callers against a
-// daemon that will not start is N times the budget, serialised.
+// fast rather than each becoming the next leader and paying the whole ready
+// budget again (see failTTL).
 //
 // The account name is refused by Plan, which makes start fail without touching
 // the filesystem. What is asserted is the error's IDENTITY: the same value back
-// means it was answered from the record, and a fresh one means the whole
-// attempt ran again.
+// means it was answered from the record, a fresh one that the attempt ran again.
 func TestAFailedStartIsRememberedSoTheNextCallerDoesNotPayForItAgain(t *testing.T) {
 	m := manager(fakeDocker{})
 

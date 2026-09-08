@@ -2,10 +2,9 @@ package replay
 
 // Mapping a path reported by another daemon into this filesystem.
 //
-// Kept beside the replayer rather than beside the thing that asks a daemon,
-// because what it enforces is containment and containment is the replayer's
-// promise: the paths it is handed are attacker-controlled and it performs
-// syscalls on the user's own files.
+// Kept beside the replayer because what it enforces is containment, which is
+// the replayer's promise: the paths it is handed are attacker-controlled and it
+// performs syscalls on the user's own files.
 
 import (
 	"fmt"
@@ -31,13 +30,10 @@ func Relocate(mp string, root func() (string, error)) (string, error) {
 		return "", fmt.Errorf("notify: locating the daemon holding the volume: %w", err)
 	}
 	// "" and "/" both mean the identity mapping: the daemon's filesystem IS
-	// ours. Accept both rather than making one mandatory -- a root of "/" is a
-	// true statement and a resolver is entitled to make it.
-	//
-	// Letting "/" fall through to the join below does not merely look wrong, it
-	// refuses everything: Under("/", p, "/") asks whether p starts with "//",
-	// which is never true, so every replay on a shared daemon reads as an
-	// escape attempt.
+	// ours, and a resolver is entitled to say either. Letting "/" fall through
+	// to the join below refuses everything, because Under("/", p, "/") asks
+	// whether p starts with "//": every replay on a shared daemon would read as
+	// an escape attempt.
 	if prefix == "" || prefix == "/" {
 		return mp, nil
 	}

@@ -75,24 +75,14 @@ const (
 	envDindImage   = "WORKSPACE_DIND_IMAGE"
 	envDindStorage = "WORKSPACE_DIND_STORAGE_DRIVER"
 
-	// envDindReady bounds how long a cold per-account daemon has to answer,
-	// in seconds. A shell waits on it (agent/internal/sshd/session.go calls
-	// Ensure before opening one), so it is also how long an account whose
-	// daemon will not start waits for a prompt.
-	//
-	// The default is 180s and a healthy daemon answers in about a second, so
-	// the whole budget is for a workspace slower than the one this was
-	// measured on. Lowering it makes a broken daemon report sooner and risks
-	// refusing a slow one; that trade is the operator's, which is why this is
-	// a setting rather than a constant.
+	// envDindReady bounds how long a cold per-account daemon has to answer, in
+	// seconds; see daemons.DefaultReadyTimeout. A shell waits on it, since
+	// sshd calls Ensure before opening one, so it is also how long an account
+	// whose daemon will not start waits for a prompt.
 	envDindReady = "WORKSPACE_DAEMON_READY_TIMEOUT"
 
-	// envDindMounts adds bind mounts to every account's daemon, for
-	// configuration it can only be given as files: a daemon.json naming an
-	// insecure registry, or the certificates for a registry with a private CA.
-	// A workspace mounts those into its own daemon and each account's daemon
-	// needs the same ones, or a pull that works on the workspace fails inside
-	// every account.
+	// envDindMounts adds bind mounts to every account's daemon; the format and
+	// what it is for are on daemons.ParseMounts.
 	envDindMounts = "WORKSPACE_DIND_MOUNTS"
 )
 
@@ -156,12 +146,10 @@ func serve(addr, wsAddr string) error {
 	daemon := &supervise.Dockerd{
 		Args: dockerdArgs,
 		Log:  logger("dockerd"),
-		// The shared daemon's exec-root is the default one, and the constant
-		// and the failure it prevents live once, in daemons.ExecRoot. Set here
-		// rather than defaulted inside supervise so that the mount happens
+		// Set here rather than defaulted inside supervise, so the mount happens
 		// only where the agent is about to start a daemon itself: with
-		// WORKSPACE_ENABLE_DIND=false the operator starts dockerd, Run is
-		// never called, and this is a no-op (ADR 0025).
+		// WORKSPACE_ENABLE_DIND=false the operator starts dockerd, Run is never
+		// called, and this is a no-op (ADR 0025).
 		ExecRoot: daemons.ExecRoot,
 	}
 	if envOr(envEnableDind, "true") == "true" {
@@ -210,16 +198,12 @@ func serve(addr, wsAddr string) error {
 		return err
 	}
 
-	// THE one place the mode is chosen. Everything downstream asks the resolver
-	// and is told; nothing else branches on which arrangement this workspace
-	// runs, which is what stops one session being routed to another account's
-	// daemon by a check somebody forgot to copy (ADR 0019).
+	// THE one place the mode is chosen; everything downstream asks the resolver
+	// (daemons.Targets) and is told.
 	//
-	// The shared daemon is a supported configuration rather than a fallback: a
-	// single-account workspace has nothing to separate and would pay for
-	// separation in memory and in duplicated layer cache.
-	// Parsed in BOTH modes: per-account it also performs the mounts, shared it
-	// only declares what the workspace's own daemon already has (ADR 0041).
+	// The mounts are parsed in BOTH modes: per-account it also performs them,
+	// shared it only declares what the workspace's own daemon already has
+	// (ADR 0041).
 	extraMounts, err := daemons.ParseMounts(os.Getenv(envDindMounts))
 	if err != nil {
 		return fmt.Errorf("%s: %w", envDindMounts, err)
@@ -256,12 +240,8 @@ func serve(addr, wsAddr string) error {
 			log.Info("per-account daemons get extra mounts", "count", len(extraMounts))
 		}
 
-		// Inherited from the workspace's own dockerd unless overridden. A
-		// deployment on Ceph- or NFS-backed storage sets fuse-overlayfs there,
-		// and a per-account daemon whose graph volume lives on that same
-		// filesystem needs the same answer, or dockerd falls back to
-		// vfs, which copies the whole image on every container create and says
-		// nothing about why everything became slow.
+		// Inherited from the workspace's own dockerd unless overridden; see
+		// daemons.StorageDriverFrom.
 		storage := os.Getenv(envDindStorage)
 		if storage == "" {
 			storage = daemons.StorageDriverFrom(dockerdArgs)
@@ -270,13 +250,10 @@ func serve(addr, wsAddr string) error {
 			}
 		}
 
-		// The workspace's OWN image by default, because it is the only one
-		// known to carry what this workspace decided it needs, fuse-overlayfs
-		// above all, which stock docker:dind does not ship. elevate sets
-		// WORKSPACE_IMAGE from the container it inspected; a deployment that
-		// does not elevate sets it in the stack file. Without either, the
-		// stock image is used and a Ceph- or NFS-backed workspace will say so
-		// loudly rather than silently.
+		// The workspace's OWN image by default, for the reason on
+		// daemons.DefaultImage. elevate sets WORKSPACE_IMAGE from the container
+		// it inspected; a deployment that does not elevate sets it in the stack
+		// file; without either the stock image is used.
 		image := os.Getenv(envDindImage)
 		if image == "" {
 			image = os.Getenv(elevate.ImageEnv)
@@ -310,10 +287,8 @@ func serve(addr, wsAddr string) error {
 		targets = manager
 		log.Info("each account gets its own docker daemon", "workspace", id)
 
-		// Adopt before serving. A restarted agent that did not would find
-		// every name taken, so `docker run --name` conflicts rather than
-		// replacing, and every account locked out of the daemon holding its
-		// own running containers.
+		// Before serving, so no account meets a daemon this agent has not
+		// taken ownership of. See Manager.Adopt.
 		if n, err := manager.Adopt(ctx); err != nil {
 			log.Warn("could not adopt existing daemons", "err", err)
 		} else if n > 0 {
@@ -356,16 +331,13 @@ func serve(addr, wsAddr string) error {
 			}
 			return false
 		},
-		// The port a machine's volumes were built for, which outlives the
-		// record above: a volume keeps its port forever and cannot be
-		// re-pointed, so a machine given a different one loses all of them.
+		// The port a machine's volumes were built for; see Ports.Preferred.
 		//
 		// Ensure, where the other info queries deliberately use Lookup. Those
 		// fill in fields that are displayed, so an unavailable daemon costs a
 		// dash on a table; this one is ACTED UPON and a wrong answer costs
-		// somebody their volumes. It is reached only for a machine the record
-		// has forgotten, so the wait is paid once by that machine and never on
-		// an ordinary connect.
+		// somebody their volumes. Reached only for a machine the record has
+		// forgotten, so the wait is paid once and never on an ordinary connect.
 		Preferred: func(account, client string) (int, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), preferredPortTimeout)
 			defer cancel()
@@ -380,9 +352,8 @@ func serve(addr, wsAddr string) error {
 	}
 
 	// Union mounts for delegated shares (ADR 0044). Self is how the agent runs
-	// itself again: the union is served by a child, because a mount namespace
-	// cannot be entered from inside a Go process that has to keep running.
-	// os.Executable is right here; CLAUDE.md's self.go rule is the client's,
+	// itself again, since the union is served by a child; see core-agent/union.
+	// os.Executable is right here: CLAUDE.md's self.go rule is the client's,
 	// for Termux, and the agent runs in a container.
 	self, err := os.Executable()
 	if err != nil {
@@ -527,12 +498,10 @@ func envOr(name, fallback string) string {
 
 // readySeconds reads WORKSPACE_DAEMON_READY_TIMEOUT.
 //
-// Read once at startup and complained about once, then left alone: a value
-// nobody can act on is worth a line in the log, and re-reading it per request
-// would put that line in front of every docker command. Anything unusable
-// falls back to the default rather than refusing to serve, which is what the
-// rest of these settings do -- a workspace that will not start says less than
-// one that starts with the documented number.
+// Read once at startup and complained about once: re-reading it per request
+// would put that warning in front of every docker command. Anything unusable
+// falls back to the default rather than refusing to serve, as the rest of
+// these settings do.
 func readySeconds(log *slog.Logger) time.Duration {
 	raw := os.Getenv(envDindReady)
 	if raw == "" {
@@ -560,12 +529,9 @@ func envInt(name string, fallback int) int {
 	return fallback
 }
 
-// logger prefixes messages so the container log says which part spoke.
-//
-// The prefix travels as an ordinary slog attribute and is rendered by
-// logx.Handler, so a subsystem asks for its own by naming itself, nothing
-// carries a second logging concept, and the line on screen is what it always
-// was.
+// logger prefixes messages so the container log says which part spoke. The
+// prefix is an ordinary slog attribute, rendered by logx.Handler, so there is
+// no second logging concept to keep in step.
 func logger(component string) *slog.Logger {
 	return logx.Logger(os.Stderr, "", true).With(logx.ComponentKey, component)
 }

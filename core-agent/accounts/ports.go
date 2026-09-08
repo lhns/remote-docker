@@ -2,17 +2,13 @@ package accounts
 
 // Which port serves which of an account's machines.
 //
-// The uid decides an account's FIRST port (ADR 0003) and cannot decide any
-// more than that: the formula tiles the space one port per uid, so there is no
-// second slot to derive. An account used from two machines therefore needs an
-// allocation, and the agent is the only thing that can make one, since it is
-// the only thing that binds.
-//
-// Stability is what ADR 0003 says actually mattered, and it is kept: a port is
-// remembered against the CLIENT (ADR 0029), so the same machine reconnecting is
-// offered the same port and the volumes it created still mount. What is given
-// up is the property that no coordination is needed, which the agent pays for
-// with this file.
+// The uid decides an account's FIRST port (ADR 0003) and cannot decide more:
+// the formula tiles the space one port per uid, so there is no second slot to
+// derive. An account used from two machines therefore needs an allocation, and
+// the agent is the only thing that can make one, since it is the only thing
+// that binds. Stability is kept, which is what ADR 0003 was for: a port is
+// remembered against the CLIENT (ADR 0029), so the same machine reconnecting
+// is offered the same port and the volumes it created still mount.
 
 import (
 	"fmt"
@@ -42,15 +38,14 @@ type Ports struct {
 	// Preferred reports the port a machine's existing state already expects:
 	// 0 when it has none, and an error when the question could not be put.
 	//
-	// This file is a CACHE. The durable record of a port is the volumes that
-	// were built for it, because a volume keeps the port it was created with
-	// forever and cannot be re-pointed. So a machine this file has forgotten
-	// can still be given the port its volumes need, instead of a new one that
-	// makes every one of them unmountable.
+	// This file is a CACHE; the durable record of a port is the volumes built
+	// for it, since a volume keeps its port forever and cannot be re-pointed
+	// (ADR 0032). So a machine this file has forgotten can still be given the
+	// port its volumes need rather than one that makes them all unmountable.
 	//
-	// A func because finding that out means asking Docker, and nothing in this
-	// module may know Docker exists (ADR 0021). Nil skips the question, which
-	// is what a workspace with no daemon of its own wants.
+	// A func because answering means asking Docker, and nothing in this module
+	// may know Docker exists (ADR 0021). Nil skips the question, which is what
+	// a workspace with no daemon of its own wants.
 	Preferred func(account, client string) (int, error)
 
 	mu       sync.Mutex
@@ -101,14 +96,13 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 		return port, nil
 	}
 
-	// What this machine's volumes already expect, before anything is chosen for
-	// it. Only reached when the record does not know this machine: an entry
-	// that exists was persisted deliberately and is the answer.
+	// What this machine's volumes already expect. Only reached when the record
+	// does not know this machine: an entry that exists was persisted
+	// deliberately and is the answer.
 	//
 	// A question that could not be put is refused rather than answered with the
 	// derived port, which another machine may hold and which this machine's
-	// volumes were not built for. ADR 0032 has why that is better than a
-	// session that half works.
+	// volumes were not built for (ADR 0032).
 	want := 0
 	if p.Preferred != nil {
 		if want, err = p.Preferred(account, client); err != nil {
@@ -163,8 +157,8 @@ func (p *Ports) decide(key assignment, base, want int) (int, error) {
 
 	// Reserved is a full account listing per call
 	// (agent/cmd/remote-dockerd/serve.go), and free(want) and allocate can meet
-	// the same port, so the answers are remembered for this decision. It stays
-	// inside the lock, in ADR 0032's atomic step.
+	// the same port, so its answers are remembered for this decision. Inside
+	// the lock, in ADR 0032's atomic step.
 	reserved := p.memoReserved()
 
 	port := 0
@@ -222,12 +216,11 @@ func (p *Ports) free(port int, reserved func(int) bool) bool {
 
 // allocate picks a free port, counting DOWN from the top of the range.
 //
-// Down, because the derived ports grow UP from PortBase with the uid, and the
+// Down, because the derived ports grow UP from PortBase with the uid and the
 // mapping is a bijection over the whole range: every port above the base is
 // spoken for by some hypothetical uid, so there is no gap to allocate from.
-// Starting at the far end means an allocated port only meets a derived one
-// once a workspace has tens of thousands of accounts, and Reserved catches it
-// even then.
+// Starting at the far end means an allocated port only meets a derived one on a
+// workspace with tens of thousands of accounts, and free catches it even then.
 //
 // Deterministic rather than random, so an operator can predict the range and
 // a rerun of the same sequence produces the same file.
@@ -236,10 +229,6 @@ func (p *Ports) allocate(taken map[int]bool, reserved func(int) bool) int {
 		if taken[port] {
 			continue
 		}
-		// Skip a port an account that EXISTS derives, because that account is
-		// entitled to it whether or not it has ever connected. Handing it out
-		// would work until they did, and then take a working tunnel away from
-		// somebody.
 		if uid, err := p.Mapping.UIDForPort(port); err == nil && reserved(uid) {
 			continue
 		}

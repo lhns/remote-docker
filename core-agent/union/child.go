@@ -52,7 +52,7 @@ func envFor(mode string, spec Spec) []string {
 	}
 }
 
-// FromEnv reads back what Env wrote, and reports which mode was asked for.
+// FromEnv reads back what envFor wrote, and reports which mode was asked for.
 //
 // Validated here as well as where it was built. The child runs as root inside
 // somebody's daemon, and "the parent checked" is not a property this side can
@@ -98,24 +98,21 @@ func (s Spec) Root() string { return netns.Root(s.PID) }
 var errNotAMount = errors.New("nothing is mounted there")
 
 // prober answers whether a union is serving, with at most one Lstat in flight
-// per merged path.
+// per merged path. The zero value is ready and safe for concurrent use.
 //
 // mountedAt's Lstat blocks uninterruptibly on a wedged FUSE server, so it
 // outlives the context that gave up waiting for it and pins an OS thread until
 // it returns. A caller arriving meanwhile learns nothing from a second one:
 // "has not answered yet" is already the answer. Unbounded, unions.awaitGone
-// polls this every restartDelay for the whole life of an adopted mount and
-// leaks a goroutine and a thread every two seconds, forever.
-//
-// The zero value is ready, and it is safe for concurrent use.
+// polls this every restartDelay for the life of an adopted mount and leaks a
+// goroutine and a thread every two seconds, forever.
 type prober struct {
 	mu       sync.Mutex
 	inflight map[string]*probe
 
 	// mounted is mountedAt, indirected so a test can hold a probe open. Set at
-	// construction and never reassigned: the goroutine below reads it, so a
-	// later write races with a probe still blocked in the previous one. Nil in
-	// production, since there is no way to wedge a FUSE server on a
+	// construction and never reassigned, because the goroutine below reads it.
+	// Nil in production: there is no way to wedge a FUSE server on a
 	// development machine.
 	mounted func(string) bool
 }
@@ -147,9 +144,8 @@ var defaultProber prober
 // why it is not a stat, is on mountedAt. Read through /proc/<pid>/root, which
 // resolves in the daemon's namespace without entering it.
 //
-// A context because a wedged server answers nothing at all: the Lstat blocks on
-// the FUSE server behind it, so it runs on a goroutine of its own and every
-// caller asking does not wait with it. Bounding that goroutine is prober's.
+// A context, because a wedged server answers nothing at all and the Lstat that
+// asks blocks on it. See prober, which is what bounds that.
 func Alive(ctx context.Context, spec Spec) error {
 	return defaultProber.alive(ctx, spec)
 }
@@ -214,12 +210,10 @@ func (p *prober) finish(merged string, pr *probe, err error) {
 }
 
 // MountedShares names the share ids that have a union mounted, reading the
-// filesystem under root rather than any process's memory.
-//
-// Which is the point: after an agent restart the mounts are still serving and
-// nothing in this process knows about them. Anything that decides what may be
-// deleted has to ask the filesystem, or it will truthfully report "none" about
-// unions that are running (ADR 0044).
+// FILESYSTEM under root rather than any process's memory: after an agent
+// restart the mounts are still serving and nothing in this process knows about
+// them, so anything deciding what may be deleted would truthfully report
+// "none" about unions that are running (ADR 0044).
 //
 // root is "/" for the shared daemon and /proc/<pid>/root for one per account,
 // exactly as Spec.Root gives it.

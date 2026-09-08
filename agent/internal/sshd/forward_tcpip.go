@@ -30,11 +30,8 @@ type localPolicy struct{ s *Server }
 // Allow gates `ssh -R`, which is how the client's NFS export reaches the
 // workspace. This is where ADR 0010's claim is enforced.
 //
-// It reserves as well as permits, and returns the token that releases the
-// reservation again. A reservation belongs to this session and nothing else may
-// give it up: releasing by account name meant a second machine's FAILED bind
-// deleted the first machine's live reservation, after which AllowDial reported
-// the port as free to every other account on a shared daemon.
+// It RESERVES as well as permits, and returns the token that gives the
+// reservation up again; see forward.go's reservation for why a token.
 func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64, bool) {
 	s := p.s
 	account, ok := accountFor(ctx)
@@ -73,18 +70,12 @@ func (p reversePolicy) Release(token uint64, host string, port uint32) {
 
 // Listen binds the reverse forward where this account's containers can reach it.
 //
-// One listener, in one namespace, chosen by mode. NOT one in each.
-//
-// With a daemon per account, the ONLY thing that needs to reach the client's
-// NFS export is that account's dockerd, and binding in the agent's namespace as
-// well would put an unauthenticated NFS export in the namespace every account's
-// shell runs in. The plan for this work called for a dual bind to keep the
-// agent's own `~/workspace` mount working; ADR 0018 deleted that mount, so the
-// second listener would now have no user and a real cost.
-//
-// With no Manager, this is exactly what it always was: the shared dockerd lives
-// in the agent's namespace, so binding there is what makes the export reachable
-// at all.
+// One listener, in one namespace, chosen by mode. NOT one in each: with a
+// daemon per account the only thing that needs the client's NFS export is that
+// account's dockerd, and binding in the agent's namespace as well would put an
+// unauthenticated export in the namespace every account's shell runs in. In
+// shared mode the daemon IS in the agent's namespace, which is what makes the
+// export reachable there at all.
 func (p reversePolicy) Listen(ctx gssh.Context, addr string) (net.Listener, error) {
 	account, ok := accountFor(ctx)
 	if !ok {

@@ -6,13 +6,9 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Target is where one account's Docker daemon is, in the four ways the agent
-// needs to address it.
-//
-// Resolve it once, through Targets, and let every site take what it is given.
-// The alternative is each site asking for itself, with its own
-// `if manager == nil` for the shared-daemon mode -- and a wrong answer here
-// does not fail. It succeeds, against another account's containers.
+// Target is where one account's Docker daemon is, in every way the agent needs
+// to address it. Resolve it once, through Targets, and let every site take what
+// it is given.
 type Target struct {
 	// Socket is the unix socket a `docker system dial-stdio` session is
 	// spliced to. This is the Docker API as the client sees it.
@@ -38,9 +34,7 @@ type Target struct {
 	// our filesystem; /proc/<pid>/root for one in a container of its own.
 	//
 	// Untrusted input downstream: the daemon reports its own mountpoints and
-	// the account is root inside it. See notify.relocate, which checks that a
-	// joined path stays under the root, because path.Join CLEANS and ".." escapes
-	// look like containment.
+	// the account is root inside it. See replay.Relocate.
 	Root string
 
 	// PID is the daemon's process, which is what a mount namespace is entered
@@ -54,7 +48,13 @@ type Target struct {
 	PID int
 }
 
-// Targets resolves an account to its daemon.
+// Targets resolves an account to its daemon, and is the ONE way that is done.
+//
+// The implementation is chosen once, where the mode is read: daemons.Shared for
+// ADR 0012's single daemon, a *Manager for ADR 0019's one per account. Never
+// reintroduce an `if manager == nil` at a use site. That is the shape a routing
+// mistake hides in, because sending a session to the wrong daemon does not
+// fail: it succeeds, against somebody else's containers, with nothing logged.
 //
 // Two lookups, and the difference between them is load-bearing rather than
 // stylistic:
@@ -111,13 +111,8 @@ func (m *Manager) Lookup(ctx context.Context, account string) (Target, bool) {
 // Mode names this arrangement in workspace-info.
 func (m *Manager) Mode() string { return workspace.ModePerAccount }
 
-// shared is the workspace's own dockerd, serving every account (ADR 0012).
-//
-// A Targets implementation rather than a nil check, which is the whole point:
-// the mode is chosen once, where it is read from the environment, and no code
-// downstream asks again. A `if Daemons != nil` at a use site is the shape a
-// routing mistake hides in, because getting it wrong succeeds against somebody
-// else's containers.
+// shared is the workspace's own dockerd, serving every account (ADR 0012): an
+// implementation rather than a nil check, for the reason on Targets.
 type shared struct{ socket string }
 
 // Shared serves every account from one daemon at the given socket.
@@ -128,9 +123,9 @@ func Shared(socket string) Targets {
 	return shared{socket: socket}
 }
 
-// The same target for everybody, which is exactly what this mode means. The
-// account is accepted and ignored rather than absent from the signature: it is
-// what makes the two modes the same call.
+// The same target for everybody, which is what this mode means. The account is
+// accepted and ignored rather than absent from the signature, so the two modes
+// are the same call.
 func (s shared) Ensure(_ context.Context, _ string) (Target, error) {
 	return s.target(), nil
 }
@@ -145,10 +140,9 @@ func (shared) Warm(string) {}
 
 func (shared) Mode() string { return workspace.ModeShared }
 
-// Host and NetNSPath are deliberately empty, not filled in with the values
-// that would be equivalent. Empty is the statement that no redirection is
-// needed (the default socket, this namespace) and it is what the call
-// sites branch on where they still need to (a login shell gets no DOCKER_HOST
+// Host and NetNSPath are deliberately empty rather than filled in with the
+// equivalent values: empty says no redirection is needed, and it is what a call
+// site branches on where it still must (a login shell gets no DOCKER_HOST
 // rather than a redundant one).
 func (s shared) target() Target {
 	return Target{Socket: s.socket, Root: "/"}

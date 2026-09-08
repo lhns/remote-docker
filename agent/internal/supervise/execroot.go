@@ -10,31 +10,24 @@ import (
 
 // prepareExecRoot puts a tmpfs on dockerd's exec-root before the daemon starts.
 //
-// A container's /run is part of its writable layer, so runtime state written
-// there outlives a kill, which on a real machine it never does. The dind
-// entrypoint deletes `docker*.pid` and containerd's file is `containerd.pid`,
-// so a workspace container that ended uncleanly and was started again on the
-// SAME layer comes back with a stale containerd/containerd.pid naming a pid
-// from its previous life. What that does to dockerd, both ways, is written
-// down once in agent/internal/daemons.ExecRoot; a tmpfs is the same answer
-// here (ADR 0012). README's "Restarting a workspace container" is the same
-// thing said to an operator.
-//
-// Narrower than the per-account case: this daemon is stopped with SIGTERM and
-// a clean shutdown removes the file, so it needs an unclean end AND a restart
-// reusing the writable layer -- `docker restart`, a host reboot under
-// `restart: unless-stopped`, an OOM kill, a SIGKILL after the stop grace
-// period. Kubernetes is not exposed at all, because kubelet creates a
-// container with a fresh layer.
+// The shared daemon (ADR 0012) has the exposure daemons.ExecRoot describes, for
+// the same reason: it runs the same entrypoint in the workspace container,
+// whose /run is equally a writable layer. Narrower, because this daemon is
+// stopped with SIGTERM and a clean shutdown removes the file, so it needs an
+// unclean end AND a restart reusing the layer: `docker restart`, a host reboot
+// under `restart: unless-stopped`, an OOM kill, a SIGKILL after the stop grace
+// period. Kubernetes is not exposed at all, because kubelet creates a container
+// with a fresh layer. README's "Restarting a workspace container" says the same
+// to an operator.
 //
 // Done here rather than in deploy/docker-compose.yml, deploy/swarm.yml and the
 // chart, which between them would fix nobody's existing deployment: the agent
 // is privileged and can mount it for every deployment at once.
 //
-// Deleting a stale containerd.pid instead would be wrong. A SIGKILLed dockerd
-// leaves its containerd reparented and possibly still running, and deleting
-// the file then orphans it. The tmpfs is correct because it makes the whole
-// directory not survive, which is what it does on a real machine.
+// Deleting a stale containerd.pid instead would be wrong: a SIGKILLed dockerd
+// leaves its containerd reparented and possibly still running, and deleting the
+// file orphans it. The tmpfs is correct because it makes the whole directory
+// not survive, which is what it does on a real machine.
 //
 // Never fatal: a workspace serving without the tmpfs has the exposure it had
 // before this existed, and refusing to start the daemon over a failed mount is
@@ -60,8 +53,7 @@ func prepareExecRoot(path, socket string, log *slog.Logger) {
 }
 
 // warnNoTmpfs is what an agent that is not privileged, or whose mount fails
-// for any other reason, puts on screen. The daemon still starts; the only
-// thing lost is that the directory survives a restart again.
+// for any other reason, puts on screen.
 func warnNoTmpfs(log *slog.Logger, path string, err error) {
 	log.Warn("no tmpfs on dockerd's exec-root; a stale containerd.pid there can stop the daemon starting after an unclean kill",
 		"path", path, "err", err)
@@ -78,19 +70,17 @@ func execRootAction(path string, sockets []string) (mount bool, why string) {
 	case mountedAt(path):
 		// An operator may have mounted one, and a redeploy may have left the
 		// agent's own. A second tmpfs on the same path hides the first rather
-		// than replacing it. Asked as st_dev against the parent, which is
-		// core-agent/union's precedent for the same question.
+		// than replacing it.
 		return false, "it already has a filesystem of its own"
 	case serving(sockets):
 		// THE case that must not be got wrong. Under
 		// WORKSPACE_ENABLE_DIND=false the operator starts dockerd and the
-		// agent may restart underneath it; a redeploy or a crash-restart can
-		// leave one running here too. A fresh tmpfs over a serving daemon's
-		// exec-root takes away its containerd socket, its shim sockets and its
-		// runc state while it keeps running against paths nothing can reach,
-		// so every container operation fails naming nothing. Strictly worse
-		// than the stale pid file. Same discipline as a serving union, which
-		// is adopted and never mounted over (ADR 0044).
+		// agent may restart underneath it. A fresh tmpfs over a serving
+		// daemon's exec-root takes away its containerd socket, its shim
+		// sockets and its runc state while it keeps running, so every
+		// container operation fails naming nothing: strictly worse than the
+		// stale pid file. Same discipline as a serving union, which is adopted
+		// and never mounted over (ADR 0044).
 		return false, "a docker daemon is already serving from it"
 	}
 	return true, ""
