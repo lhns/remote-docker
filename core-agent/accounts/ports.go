@@ -116,7 +116,7 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 		}
 	}
 
-	return p.decide(account, key, base, want)
+	return p.decide(key, base, want)
 }
 
 // lookup answers for a machine the record already knows, which is every
@@ -139,7 +139,7 @@ func (p *Ports) lookup(key assignment) (port int, known bool, err error) {
 // the window is given a different port with nothing said, and its volumes then
 // cannot mount. It needs a lost record AND both machines re-deriving the same
 // base, and Ports has no logger to say so with.
-func (p *Ports) decide(account string, key assignment, base, want int) (int, error) {
+func (p *Ports) decide(key assignment, base, want int) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -176,7 +176,7 @@ func (p *Ports) decide(account string, key assignment, base, want int) (int, err
 		port = base
 		if taken[base] {
 			if port = p.allocate(taken, reserved); port == 0 {
-				return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", account)
+				return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", key.account)
 			}
 		}
 	}
