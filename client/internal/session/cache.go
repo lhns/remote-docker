@@ -148,11 +148,17 @@ func greet[T any](ctx context.Context, client *tunnelclient.Client, command stri
 	}
 
 	r := bufio.NewReaderSize(stream, frame)
-	line, err := readGreeting(ctx, stream, r)
+	line, waited, err := readGreeting(ctx, stream, r)
 	if err != nil {
 		_ = stream.Close()
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, nil, greeting, &silentError{command: command, after: handshakeTimeout}
+		if errors.Is(err, context.Canceled) {
+			// This client stopped waiting, which is the session closing. Its
+			// error travels unchanged rather than becoming a claim that the
+			// workspace was silent for a wait nobody performed.
+			return nil, nil, greeting, err
+		}
+		if errors.Is(err, context.DeadlineExceeded) && waited > 0 {
+			return nil, nil, greeting, &silentError{command: command, after: waited}
 		}
 		if errors.Is(err, io.EOF) {
 			// A CLEAN end with nothing on it: the command ran and produced no
@@ -183,9 +189,21 @@ func greet[T any](ctx context.Context, client *tunnelclient.Client, command stri
 // readGreeting reads the one line a greeting is, bounded. Closing the stream is
 // the only lever, for the reason cacheChannel.do gives: the close fails the
 // blocked read, so the goroutine ends on the slow path as well as the fast one.
-func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (string, error) {
+//
+// It returns the budget it read under, which is handshakeTimeout or the
+// caller's own deadline where that is shorter. Reporting the constant instead
+// names a wait nobody performed, which is what a refusal must never do.
+func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (string, time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+
+	// Derived rather than measured, so the number in the message is the one the
+	// read was given rather than however long the scheduler took to report it.
+	// To the second, because this is a diagnosis and not a measurement, and a
+	// budget under half a second rounds to zero and is reported as no silence
+	// at all rather than as "said nothing for 0s".
+	deadline, _ := ctx.Deadline()
+	budget := time.Until(deadline).Round(time.Second)
 
 	type result struct {
 		line string
@@ -199,10 +217,10 @@ func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (strin
 
 	select {
 	case res := <-done:
-		return res.line, res.err
+		return res.line, budget, res.err
 	case <-ctx.Done():
 		_ = stream.Close()
-		return "", ctx.Err()
+		return "", budget, ctx.Err()
 	}
 }
 

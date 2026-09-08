@@ -196,8 +196,47 @@ func TestAGreetingNobodySendsEndsAtTheDeadline(t *testing.T) {
 		if !errors.As(err, &silent) {
 			t.Fatalf("openCache = %v, want a silentError", err)
 		}
+		// The TEXT, not just the type. The duration must be the budget this
+		// read was actually given, which is the caller's 2s and not the 10s
+		// constant: a refusal naming a wait nobody performed is the failure
+		// this whole change exists to stop.
+		const want = `the workspace accepted "workspace-cache" and then said nothing for 2s`
+		if silent.Error() != want {
+			t.Errorf("openCache = %q, want %q", silent.Error(), want)
+		}
 	case <-time.After(handshakeTimeout):
 		t.Fatal("openCache did not return; the greeting read is unbounded again")
+	}
+}
+
+// A caller that gives up is not the workspace saying nothing. Session shutdown
+// cancels the context every handshake runs under, and reporting that as silence
+// would name both a cause and a duration nobody checked.
+func TestACancelledCallerIsNotReportedAsSilence(t *testing.T) {
+	client := startWorkspace(t, func(string) (string, bool) { return "", false })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := openCache(ctx, client)
+		done <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("openCache = %v, want it to carry context.Canceled", err)
+		}
+		var silent *silentError
+		if errors.As(err, &silent) {
+			t.Errorf("openCache = %v, want no silentError for a caller that gave up", err)
+		}
+		if strings.Contains(err.Error(), "said nothing") {
+			t.Errorf("openCache = %q, must not claim the workspace was silent", err)
+		}
+	case <-time.After(handshakeTimeout):
+		t.Fatal("openCache ignored its caller's cancellation")
 	}
 }
 

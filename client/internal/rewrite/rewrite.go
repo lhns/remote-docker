@@ -703,7 +703,7 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 	// is the session's memoised answer.
 	channel, err := r.openCache(ctx)
 	if err != nil {
-		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
+		return "", fmt.Errorf("rewrite: reaching the workspace's cache for %s: %w", localPath, err)
 	}
 
 	merged, err := channel.Prepare(ctx, export, cache, r.NFSPort, mode)
