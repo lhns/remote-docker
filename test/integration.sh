@@ -227,17 +227,11 @@ echo "== 6c. a container's exit status reaches the client =="
 # The status comes back over the HIJACKED stream through the proxy, which is
 # the path the "must not over-detect a hijack" invariant is about: read as an
 # ordinary response, `docker run` exits 0 having printed nothing, which is a
-# failure reported as a success. Everything below is unit tested -- exitCode()
-# in client/cmd/remote-docker/exit_test.go maps cli.StatusError through -- and
-# nothing before this ran a container and looked at $?.
+# failure reported as a success.
 #
-# Not the SSH session's exit status, which is a different mechanism and lives
-# in section 13b.
-#
-# Each case uses its own code, so a failure names which one collapsed.
+# Not the SSH session's exit status, which is a different mechanism and belongs
+# with the stock-ssh section (13b).
 
-# expect_status runs a command and compares the status it exited with.
-#
 #   expect_status <description> <want> <cmd...>
 #
 # stdin is the caller's, because whether stdin is attached is half of what
@@ -274,10 +268,8 @@ expect_status "the embedded CLI returns the container's status" 42 \
     timeout 60 "$WORK/remote-docker" run --rm alpine:3 sh -c 'exit 42' </dev/null
 
 # And says nothing while doing it. cli.StatusError carrying only a code has an
-# empty Error(), and main.go prints only a non-empty one, so a container that
-# exits non-zero must leave the terminal exactly as the Docker CLI would: with
-# nothing on it. Printing regardless puts a bare "remote-docker:" after every
-# failing container.
+# empty Error(), and main.go prints only a non-empty one; printing regardless
+# puts a bare "remote-docker:" after every failing container.
 quiet=$(timeout 60 "$WORK/remote-docker" run --rm alpine:3 sh -c 'exit 5' 2>&1 </dev/null)
 if [ -z "$quiet" ]; then
     ok "a non-zero container puts nothing on the terminal"
@@ -286,7 +278,7 @@ else
 fi
 
 # Detached, where the status is read back with `docker wait` and never crosses
-# an attached stream at all. A number here that the cases above did not get
+# an attached stream at all: a number here that the attached cases did not get
 # says the daemon recorded it and the attach path lost it.
 if cid=$(dockert run -d alpine:3 sh -c 'exit 9' 2>&1); then
     waited=$(dockert wait "$cid" 2>&1)

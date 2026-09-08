@@ -857,8 +857,8 @@ giving the client 7 rather than 1 or 0, the same with stdin attached (`-i`),
 42 through the EMBEDDED CLI, which is the only place `exitCode` runs, a
 non-zero container putting NOTHING on the terminal, and `docker wait`
 reporting 9 for a detached one. The status crosses the hijacked stream, where
-over-detecting a hijack exits 0 having printed nothing, and where the unit
-tests reach only as far as the mapping from `cli.StatusError`.
+over-detecting a hijack exits 0 having printed nothing; the unit tests reach
+only as far as the mapping from `cli.StatusError`.
 
 Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
 (ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
@@ -1012,9 +1012,9 @@ its pure planning function was.
 - **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
   covers containers that exit on their own. Ctrl-C is not one: docker maps a
   signal-terminated context to 128+signal through an error unexported in its own
-  package main, so this binary exits 1 instead of 130, said in `exitCode`'s
-  comment and asserted nowhere. No suite runs `docker exec ... sh -c 'exit 7'`
-  either, which is a second hijacked stream carrying a status.
+  package main, so this binary exits 1 instead of 130, which `exitCode`'s
+  comment says. No suite runs `docker exec ... sh -c 'exit 7'` either, which is
+  a second hijacked stream carrying a status.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
