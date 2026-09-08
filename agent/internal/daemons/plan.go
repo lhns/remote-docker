@@ -92,11 +92,17 @@ const (
 //	failed to start containerd: libcontainerd: failed to save daemon pid to
 //	disk: process with PID 35 is still running
 //
-// It dies 16.1 seconds in, which is dockerd's deliberate delay before the
+// It dies 16.125s in, which is dockerd's deliberate delay before the
 // unencrypted-listener warning and not a budget running out (issue #154).
 //
+// The same file kills the daemon a SECOND way, and a fix that answers only the
+// first is half a fix: dockerd can instead read the live pid, believe
+// containerd is already up, start nothing at all, and time out 15s later
+// waiting for it. containerd boots in 0.01s, so neither number is a timeout
+// that was too short.
+//
 // The pid is live only by coincidence, which is why this presented as a flake.
-// The invariant in CLAUDE.md carries the measurement.
+// The invariant in CLAUDE.md carries both measurements.
 const ExecRoot = "/var/run/docker"
 
 // Labels identify a container as a daemon we manage, and whose.
