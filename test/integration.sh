@@ -223,6 +223,84 @@ else
 fi
 
 echo
+echo "== 6c. a container's exit status reaches the client =="
+# The status comes back over the HIJACKED stream through the proxy, which is
+# the path the "must not over-detect a hijack" invariant is about: read as an
+# ordinary response, `docker run` exits 0 having printed nothing, which is a
+# failure reported as a success. Everything below is unit tested -- exitCode()
+# in client/cmd/remote-docker/exit_test.go maps cli.StatusError through -- and
+# nothing before this ran a container and looked at $?.
+#
+# Not the SSH session's exit status, which is a different mechanism and lives
+# in section 13b.
+#
+# Each case uses its own code, so a failure names which one collapsed.
+
+# expect_status runs a command and compares the status it exited with.
+#
+#   expect_status <description> <want> <cmd...>
+#
+# stdin is the caller's, because whether stdin is attached is half of what
+# this section tests.
+expect_status() {
+    local what=$1 want=$2
+    shift 2
+    local out status
+    out=$("$@" 2>&1)
+    status=$?
+    if [ "$status" -eq "$want" ]; then
+        ok "$what"
+    else
+        bad "$what: exited $status, want $want; output [$out]"
+    fi
+}
+
+expect_status "a container's non-zero exit reaches the client" 7 \
+    dockert run --rm alpine:3 sh -c 'exit 7' </dev/null
+
+expect_status "a container that succeeds exits 0" 0 \
+    dockert run --rm alpine:3 true </dev/null
+
+# With -i, so stdin is attached and the client half-closes it when the
+# container is done with it. Closing the whole stream instead tears down the
+# session carrying the container's output, and the status with it.
+printf 'go\n' >"$WORK/exit-stdin"
+expect_status "a status survives an attached stdin (-i)" 3 \
+    dockert run -i --rm alpine:3 sh -c 'read line; exit 3' <"$WORK/exit-stdin"
+
+# The embedded CLI is where exitCode() actually runs: the runner's docker above
+# proves the proxy carries the status, this proves this binary returns it.
+expect_status "the embedded CLI returns the container's status" 42 \
+    timeout 60 "$WORK/remote-docker" run --rm alpine:3 sh -c 'exit 42' </dev/null
+
+# And says nothing while doing it. cli.StatusError carrying only a code has an
+# empty Error(), and main.go prints only a non-empty one, so a container that
+# exits non-zero must leave the terminal exactly as the Docker CLI would: with
+# nothing on it. Printing regardless puts a bare "remote-docker:" after every
+# failing container.
+quiet=$(timeout 60 "$WORK/remote-docker" run --rm alpine:3 sh -c 'exit 5' 2>&1 </dev/null)
+if [ -z "$quiet" ]; then
+    ok "a non-zero container puts nothing on the terminal"
+else
+    bad "a non-zero container printed [$quiet]"
+fi
+
+# Detached, where the status is read back with `docker wait` and never crosses
+# an attached stream at all. A number here that the cases above did not get
+# says the daemon recorded it and the attach path lost it.
+if cid=$(dockert run -d alpine:3 sh -c 'exit 9' 2>&1); then
+    waited=$(dockert wait "$cid" 2>&1)
+    if [ "$waited" = "9" ]; then
+        ok "docker wait reports a detached container's status"
+    else
+        bad "docker wait said [$waited], want 9"
+    fi
+    docker rm -f "$cid" >/dev/null 2>&1
+else
+    bad "could not start the detached exit-status container: $(echo "$cid" | head -3)"
+fi
+
+echo
 echo "== 7. a bind mount under the working directory =="
 expect_output "the container read this machine's file through the tunnel" "from the project directory" -- --rm -v "$PROJECT:/w" alpine:3 cat /w/marker
 
