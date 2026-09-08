@@ -1,0 +1,32 @@
+name: setup wix
+description: >-
+  WiX v5 as a dotnet global tool, with the UI extension the installer uses.
+
+# WiX v5 builds an MSI on Linux, which is the whole reason the release job can
+# stay on ubuntu-latest. Pinned, and pinned in one place: the extension version
+# has to match the toolset version, and two workflows naming them separately
+# would drift the first time one was bumped.
+inputs:
+  version:
+    description: WiX toolset version
+    required: false
+    default: "5.0.2"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: "8.0.x"
+
+    - shell: bash
+      run: |
+        set -eux
+        dotnet tool install --global wix --version "${{ inputs.version }}"
+        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+    - shell: bash
+      run: |
+        set -eux
+        wix extension add -g "WixToolset.UI.wixext/${{ inputs.version }}"
+        wix --version

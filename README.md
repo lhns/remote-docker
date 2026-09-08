@@ -69,6 +69,62 @@ and update.
 `docker compose` and `docker build` (BuildKit, through buildx) are included, so
 the whole toolchain is one file.
 
+## Windows: an installer
+
+Every release also carries an MSI per architecture, beside the zip:
+`remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It installs
+`remote-docker.exe` into `C:\Program Files\remote-docker` and **appends** that
+directory to the system PATH, so a shell opened afterwards has it. Per machine,
+so it needs administrator rights.
+
+```powershell
+# with a UI, and a feature tree
+msiexec /i remote-docker_0.6.0_windows_amd64.msi
+
+# silently, remote-docker.exe only
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn
+
+# silently, and also as docker.exe
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName
+
+# uninstall
+msiexec /x remote-docker_0.6.0_windows_amd64.msi /qn
+```
+
+**The `docker.exe` option is off by default.** Selected, it puts a second copy
+of the same binary in the install directory under the name `docker.exe`, so
+`docker run ...` on this machine is this program. There is no code behind it:
+the Docker CLI is this program's root command
+([ADR 0024](docs/adr/0024-the-docker-cli-is-the-root.md)), so the file's name is
+the whole of it. The MSI carries the binary once and makes the copy at install,
+removing it again at uninstall, so selecting the option costs nothing to
+download.
+
+What it does **not** do is take the name from anybody else. If a `docker.exe`
+is already installed, the install stops and says where it found one:
+
+```
+A docker.exe is already installed at C:\Program Files\Docker\docker.exe, and
+the "docker" name would shadow it.
+  fix: leave that feature unselected, or pass ALLOWDOCKERSHADOW=1 to install it anyway.
+```
+
+```powershell
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName ALLOWDOCKERSHADOW=1
+```
+
+The check reads the directories a `docker.exe` actually comes from — System32
+and Docker Desktop's two — rather than the whole PATH, which Windows Installer
+cannot enumerate. A `docker.exe` somewhere else on PATH will not be noticed,
+and yours will win, because the install directory is appended.
+
+**The MSI is unsigned.** There is no code-signing certificate for this project,
+so SmartScreen will warn about an unrecognised publisher and the elevation
+prompt will name none. It is also **not** in the release's `checksums.txt`,
+which is written before the installers are built, so there is nothing on the
+release page to check it against. If either matters to you, take the zip
+instead: it is the same binary, and it is in `checksums.txt`.
+
 ## A workspace on this machine (Windows)
 
 When there is no Linux host to point at, this builds one locally and registers
@@ -1066,6 +1122,10 @@ cluster and CI cannot cover it.
 option newer than the supported floor passes CI and fails on the workspace, on
 every bind mount at once. `nconnect=8` did exactly that on a RHEL 7 workspace.
 What guards it is a table, not a test run.
+**The Windows MSI is installed and uninstalled on a runner** when the installer
+changes, which is more than the zips get — nobody has ever unpacked one of
+those on a machine that did not build it. But no MSI from a real release has
+been installed by anybody, and none of them is signed.
 **Android is built and inspected, and CI runs nothing on it**: it checks that
 the binary is loadable on a phone and links the system libc, which is what makes
 DNS work there. A session and a container were confirmed by hand from Termux on

@@ -1,0 +1,117 @@
+name: msi
+
+# The Windows installer, built and then actually installed.
+#
+# Not on every push, and deliberately: what this proves is a function of
+# installer/windows/** and of this file, not of the Go code. The binary inside
+# the MSI is a payload; renaming it, putting it on PATH and refusing to shadow
+# somebody else's docker.exe are decided entirely by the .wxs. So the paths
+# filter below is the trigger, on the same reasoning that keeps test/bench.sh
+# behind a label: a Windows runner on every push would be paid for constantly
+# and would answer the same question every time.
+#
+# What that costs: a change to the client that broke `remote --help` would not
+# be caught here. It is caught by ci.yml on every push, which runs the unit
+# tests on Windows.
+#
+# The release workflow builds and uploads the MSI without waiting for this, so
+# a tag can publish an installer this suite has not seen. That is the one gap,
+# and the remedy is to touch installer/windows/ in the pull request that
+# changes it, which any real change to it does by definition.
+on:
+  pull_request:
+    paths:
+      - "installer/windows/**"
+      - "test/msi.ps1"
+      - ".github/workflows/msi.yml"
+      - ".github/actions/setup-wix/**"
+  push:
+    branches: [main]
+    paths:
+      - "installer/windows/**"
+      - "test/msi.ps1"
+      - ".github/workflows/msi.yml"
+      - ".github/actions/setup-wix/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msi-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build the installers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-go
+      - uses: ./.github/actions/setup-wix
+
+      # Not goreleaser: this needs two Windows binaries and nothing else it
+      # does. The version is a stand-in, and has to be three numbers, which is
+      # the constraint build.sh enforces.
+      - name: build the client for windows
+        run: |
+          set -eux
+          cd client
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=windows GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "../dist/windows_${arch}/remote-docker.exe" ./cmd/remote-docker
+          done
+
+      # Both architectures, because `wix build -arch arm64` failing is a
+      # release-day failure otherwise. Only the amd64 one is installed below:
+      # GitHub has no Windows arm64 runner.
+      - name: build the msis
+        run: |
+          set -eux
+          bash installer/windows/build.sh --version 0.0.1 --arch x64 \
+            --binary dist/windows_amd64/remote-docker.exe \
+            --out dist/msi/remote-docker_0.0.1_windows_amd64.msi
+          bash installer/windows/build.sh --version 0.0.1 --arch arm64 \
+            --binary dist/windows_arm64/remote-docker.exe \
+            --out dist/msi/remote-docker_0.0.1_windows_arm64.msi
+
+      - name: a snapshot version is refused rather than truncated
+        run: |
+          set -eu
+          if bash installer/windows/build.sh --version 0.0.0-dev.9370b24 --arch x64 \
+               --binary dist/windows_amd64/remote-docker.exe --out /tmp/should-not-exist.msi; then
+            echo "build.sh accepted a snapshot version; it must refuse one"
+            exit 1
+          fi
+          echo "refused, as it must be"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msi
+          path: dist/msi/*.msi
+          if-no-files-found: error
+          retention-days: 1
+
+  install:
+    name: install it on windows
+    needs: [build]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: msi
+          path: msi
+
+      - name: install, uninstall, and the docker.exe feature
+        shell: pwsh
+        run: ./test/msi.ps1 -Msi msi/remote-docker_0.0.1_windows_amd64.msi
+
+      # The suite prints the log of whichever msiexec run failed, but a job
+      # that died some other way leaves them behind and they are the only
+      # record of what the installer did.
+      - name: the msiexec logs
+        if: failure()
+        shell: pwsh
+        run: Get-ChildItem "$env:TEMP\msi-logs" | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName }

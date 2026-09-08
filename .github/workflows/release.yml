@@ -284,6 +284,10 @@ jobs:
 
       - uses: ./.github/actions/setup-go
 
+      # WiX v5 builds an MSI on Linux, so the Windows installer is made here
+      # rather than on a Windows runner (ADR 0048).
+      - uses: ./.github/actions/setup-wix
+
       # What the embedded Compose reports as its version. Read from the module
       # graph so it cannot drift from go.mod.
       - name: compose version
@@ -330,3 +334,43 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The Windows installers, attached to the release goreleaser just made.
+      #
+      # A step of its own rather than a line in .goreleaser.yaml, because
+      # goreleaser's msi support is Pro-only (checked 2026-09-08:
+      # https://goreleaser.com/customization/msi/ says "Pro"). Named to match
+      # the archives beside them, so remote-docker_<v>_windows_amd64.zip and
+      # .msi sit next to each other on the release page.
+      #
+      # The binary paths come out of artifacts.json rather than being spelled
+      # out: goreleaser's per-build directory carries the amd64 and arm64
+      # variant suffixes, and a hardcoded one breaks silently on a goreleaser
+      # upgrade that changes them.
+      #
+      # NOT in checksums.txt, which goreleaser wrote before this step ran.
+      - name: windows installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          version="${GITHUB_REF_NAME#v}"
+
+          build_msi() {
+            goarch="$1"
+            wixarch="$2"
+            binary=$(jq -r --arg a "$goarch" \
+              '.[] | select(.type == "Binary" and .goos == "windows" and .goarch == $a) | .path' \
+              dist/artifacts.json)
+            if [ -z "$binary" ]; then
+              echo "no windows/$goarch binary in dist/artifacts.json" >&2
+              exit 1
+            fi
+            bash installer/windows/build.sh \
+              --version "$version" --arch "$wixarch" --binary "$binary" \
+              --out "dist/msi/remote-docker_${version}_windows_${goarch}.msi"
+          }
+
+          build_msi amd64 x64
+          build_msi arm64 arm64
+
+          gh release upload "$GITHUB_REF_NAME" dist/msi/*.msi --clobber

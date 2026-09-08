@@ -122,6 +122,10 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the volume lookup notify asks for
 
 image/                   the workspace container (Dockerfile only)
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.sh, no code:
+                         WiX v5 builds it on LINUX, which is why the release
+                         job stays on ubuntu. `docker.exe` is a Feature and a
+                         DuplicateFile, so the payload ships once
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
 charts/                  the Helm chart, for the same agent on Kubernetes
@@ -183,6 +187,14 @@ bash test/integration.sh
 # claim about speed has to come from. Run it from the `bench` label on a pull
 # request, or workflow_dispatch once it is on main.
 bash test/bench.sh
+
+# the Windows MSI, on Linux. The version must be major.minor.build, which is
+# what an MSI compares; build.sh refuses anything else rather than truncating.
+dotnet tool install --global wix --version 5.0.2
+wix extension add -g WixToolset.UI.wixext/5.0.2
+installer/windows/build.sh --version 0.6.0 --arch x64 \
+  --binary dist/remote-docker_windows_amd64_v1/remote-docker.exe \
+  --out dist/msi/remote-docker_0.6.0_windows_amd64.msi
 
 # the chart, in eight seconds and without a cluster
 helm lint charts/remote-docker-workspace
@@ -979,6 +991,18 @@ leg is a suite in `integration.yml`; the Windows leg is the last step of
 `machine.yml`, diffed against the same oracle. The deviations that are
 deliberate are tabulated in README under "What differs from a bind mount".
 
+`test/msi.ps1` installs the Windows MSI on a runner: `remote-docker.exe` in
+Program Files, the install directory APPENDED to the system PATH and not
+prepended, `remote-docker remote --help` running from a shell whose PATH came
+from the registry rather than from this process, the `docker.exe` feature
+absent by default and working when `ADDLOCAL` asks for it, the refusal firing
+against a `docker.exe` in System32 with a message naming it, the override, and
+an uninstall that takes both names and the PATH entry with it. It is
+`msi.yml`, which runs on changes under `installer/windows/` rather than on
+every push -- a Windows runner per push answers the same question every time,
+which is the argument that keeps `bench.sh` behind a label. NOT on the release
+path: see the not-tested list below.
+
 ### NOT tested, and do not claim otherwise
 
 Keep this list honest, and name the assertion rather than the area: "the
@@ -1042,6 +1066,22 @@ its pure planning function was.
   it: no archive has been unpacked on a machine that did not build it, so the
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
+  The Windows MSI is the exception and only in part: `msi.yml` installs one on
+  a runner, runs the binary out of a fresh shell's PATH and uninstalls it, but
+  the MSI it installs is built by that workflow from a stand-in version. **No
+  MSI from a real tag release has been installed by anybody**, and `msi.yml` is
+  triggered by changes under `installer/windows/`, so a tag publishes without
+  waiting for it.
+- **The MSI is unsigned, and nothing verifies it.** The repository has no
+  code-signing certificate; `GITHUB_TOKEN` is the only secret any workflow uses
+  (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's
+  warning is therefore expected rather than a symptom, and the MSIs are not in
+  `checksums.txt` either, because goreleaser writes that before they exist.
+- **The `docker.exe` refusal reads three directories, not PATH.** Windows
+  Installer's AppSearch cannot enumerate PATH (ADR 0048), so a `docker.exe`
+  anywhere but System32 or Docker Desktop's two locations is not found and is
+  shadowed. `test/msi.ps1` section 7 asserts the refusal against a System32
+  stub, which is a real PATH directory and the only one it can assert about.
 - **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
   covers containers that exit on their own. Ctrl-C is not one: docker maps a
   signal-terminated context to 128+signal through an error unexported in its own

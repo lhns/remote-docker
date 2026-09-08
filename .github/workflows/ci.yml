@@ -166,7 +166,7 @@ jobs:
       - name: shellcheck
         run: |
           set -eux
-          for glob in 'test/*.sh' 'test/fs-conformance/*.sh' 'scripts/*.sh'; do
+          for glob in 'test/*.sh' 'test/fs-conformance/*.sh' 'scripts/*.sh' 'installer/windows/*.sh'; do
             if compgen -G "$glob" >/dev/null; then
               # shellcheck disable=SC2086  # the glob is what is being expanded
               shellcheck -x -S warning -s bash $glob
