@@ -213,6 +213,15 @@ StatefulSet adopts them.
   client closed its stdin, so `ssh workspace true` from a terminal hung
   although the command had exited. The status follows the command now. Our own
   client never tripped this: it sets no stdin, so x/crypto sends EOF at once.
+- A workspace that accepted a connection and then answered nothing wedged the
+  session until `remote restart`. The client's own Docker API calls carried a
+  context that nothing enforced, so one hung forever, taking port forwarding
+  and the idle-release check with it. They now return when their deadline
+  passes.
+- Closing a session could leave a local port open behind it. Port
+  reconciliation lists containers before it takes its lock, so one already
+  running when the session closed reopened the forwards that close had just
+  torn down, and nothing would close them again.
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.
