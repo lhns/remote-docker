@@ -146,29 +146,58 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 // on its way.
 func (c *fdCacheFS) release(e *cachedFD) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	e.refs--
 	if e.refs > 0 {
-		return
-	}
-	if e.timer != nil {
-		e.timer.Stop()
-	}
-	e.timer = time.AfterFunc(c.idle, func() { c.evict(e.path) })
-}
-
-// evict closes the descriptor held for name, if nothing is using it. A file
-// still in use is dropped from the map instead, so the last release closes it
-// and no later request can find it.
-func (c *fdCacheFS) evict(name string) {
-	c.mu.Lock()
-	e, ok := c.open[name]
-	if !ok {
 		c.mu.Unlock()
 		return
 	}
-	delete(c.open, name)
+
+	// Evicted while it was in use: nothing can reach it again, and the idle
+	// timer looks entries up by name, so it would find whatever took this
+	// name next or nothing at all. Either way this descriptor would never be
+	// closed, and on Windows it holds the file open. Close it here.
+	if c.open[e.path] != e {
+		c.mu.Unlock()
+		e.close()
+		return
+	}
+
+	if e.timer != nil {
+		e.timer.Stop()
+	}
+	e.timer = time.AfterFunc(c.idle, func() { c.evictEntry(e) })
+	c.mu.Unlock()
+}
+
+// close shuts the descriptor once, under the lock that orders writes on it.
+func (e *cachedFD) close() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_ = e.file.Close()
+}
+
+// evict drops whatever is held for name. A file still in use is dropped from
+// the map and closed by its last release instead, so no later request finds a
+// descriptor that is about to stop meaning this name.
+func (c *fdCacheFS) evict(name string) {
+	c.mu.Lock()
+	e, ok := c.open[name]
+	c.mu.Unlock()
+	if ok {
+		c.evictEntry(e)
+	}
+}
+
+// evictEntry is evict for an entry already in hand, which is what the idle
+// timer has. It removes only THIS entry: by the time a timer fires the name
+// may belong to a different descriptor, and closing that one would take a
+// live file away from whatever is writing it.
+func (c *fdCacheFS) evictEntry(e *cachedFD) {
+	c.mu.Lock()
+	if c.open[e.path] == e {
+		delete(c.open, e.path)
+	}
 	if e.timer != nil {
 		e.timer.Stop()
 		e.timer = nil
@@ -177,9 +206,7 @@ func (c *fdCacheFS) evict(name string) {
 	c.mu.Unlock()
 
 	if !inUse {
-		e.mu.Lock()
-		_ = e.file.Close()
-		e.mu.Unlock()
+		e.close()
 	}
 }
 

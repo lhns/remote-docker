@@ -38,4 +38,4 @@ require (
 // fails where it is wrong.
 replace github.com/lhns/remote-docker/core => ../core
 
-replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260908071343-891a623c4923
+replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260908081423-aacfa7abd090
