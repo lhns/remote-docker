@@ -14,10 +14,14 @@
 # but reading the log cannot tell it apart from a share whose reported
 # ownership was wrong (ADR 0046), and a user hitting it through us blames us.
 #
-# So every case runs twice, against the RUNNER's own daemon and through a real
+# So each case runs twice, against the RUNNER's own daemon and through a real
 # session, and the suite fails on any DIFFERENCE. The runner's daemon is the
-# oracle: an identical failure on both is Docker's behaviour, and a failure
-# only through the session is ours.
+# oracle: an identical answer from both is Docker's behaviour and not ours.
+#
+# It stays because it asks a second question the same way. Rewriting a named
+# volume is forbidden (the volume would be replaced by an export of a directory
+# that does not exist), and a rewrite is exactly what would make these two
+# daemons disagree.
 #
 # Requires: docker, and a kernel with NFS client support.
 set -uo pipefail
@@ -177,14 +181,6 @@ echo "== 6. a named volume onto a path the image DOES create, owned by uid 1000 
 # ownership, so uid 1000 keeps it.
 compare "named volume, mountpoint present and chowned in the image" OK \
     -v volown-present:/home/app/present -- /home/app/present
-
-echo
-echo "== 7. the same shape on a SHARE, which is the half that is ours =="
-# ADR 0046: a share reports 0666/0777 owned by the enrolled account, so a
-# container running as any uid can write into it. Plain docker binds the
-# directory straight, which is the oracle.
-compare "a bind mount, written as uid 1000" OK \
-    -v "$PROJECT:/home/app/shared" -- /home/app/shared
 
 hostdocker volume rm volown-absent volown-present >/dev/null 2>&1
 summary

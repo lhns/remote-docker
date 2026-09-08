@@ -181,6 +181,12 @@ jobs:
   #                   client against a workspace image PULLED from ghcr, which
   #                   is the only way the compatibility claim can be checked.
   #                   It needs network access to ghcr.io and nothing else.
+  #   volume-ownership  a named volume onto a path the image does not create,
+  #                   run against the runner's own daemon and through a
+  #                   session. It is the only suite whose oracle is plain
+  #                   Docker, which is what lets it separate Docker's rule
+  #                   about a fresh volume's mountpoint from a rewrite of a
+  #                   named volume, which is forbidden.
   #   fs-conformance  the same filesystem probe against a native bind mount
   #                   and against a share, and every difference listed with a
   #                   reason in test/fs-conformance/deviations-linux.txt. The
@@ -223,6 +229,10 @@ jobs:
             name: this client against a published older workspace
             container: remote-docker-oldworkspace
             timeout: 30
+          - suite: volume-ownership
+            name: who owns a named volume's mountpoint
+            container: remote-docker-volown
+            timeout: 20
     steps:
       - uses: actions/checkout@v7
 
