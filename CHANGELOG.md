@@ -10,6 +10,23 @@ software.
 
 ## Unreleased
 
+### No daemon binds an unauthenticated Docker API, and every one starts sooner
+
+Every dockerd here also listened on `tcp://0.0.0.0:2375` with no
+authentication: full control of that daemon for anything that could reach the
+namespace it sat in. With a daemon per account that is every container the
+account runs with `--network host`; with the shared daemon it is every
+account's shell. Nothing here ever dialled it. It came from dind's entrypoint,
+which supplies dockerd's `--host` flags when the command starts with one, and
+the daemon command now names `dockerd` so that block never runs.
+
+The port is gone rather than locked, and with it the sixteen seconds dockerd
+sleeps to make somebody read the warning about it. A per-account daemon that
+used to take about 17 seconds to answer now takes about 1.
+
+Each account's daemon container is recreated once to pick this up, and keeps
+its images, containers and volumes.
+
 ### An account's daemon no longer fails to restart after the workspace does
 
 A workspace restart kills every account's daemon rather than stopping it, and

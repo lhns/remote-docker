@@ -652,6 +652,7 @@ else
     # probe pays for a cold dind boot rather than measuring what it is here to
     # measure.
     info "starting $B's daemon, so the shell probe does not pay for its boot"
+    started_at=$(date +%s)
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
     if ! wait_dind "$B" 90; then
         # Said HERE, while it is still about the daemon. Left to the probe, a
@@ -659,6 +660,14 @@ else
         # which names the symptom and nothing that can be acted on.
         bad "$B's daemon did not answer in 180s, so the probe below proves nothing"
         dump_dind "$B"
+    else
+        # Printed rather than only waited on: this restart is the one place a
+        # healthy daemon's whole boot is timed, and it is the number any claim
+        # about daemon startup has to come from. It was 17.0s +/- 0.2 while
+        # dockerd slept at the unencrypted-listener warning, and 1s once no
+        # daemon bound TCP (2026-09-08). wait_dind polls every 2 seconds, so
+        # that is the resolution.
+        info "$B's daemon answered in $(( $(date +%s) - started_at ))s"
     fi
 
     for who in "$A" "$B"; do
@@ -732,6 +741,38 @@ else
         bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"
     fi
 fi
+
+echo
+echo "== 14. an account's daemon binds no TCP API =="
+# dind's entrypoint supplies dockerd's --host flags whenever the first argument
+# is absent or starts with a dash, and one of them is always
+# tcp://0.0.0.0:2375: an unauthenticated Docker API, bound in the account's own
+# network namespace, where every container that account runs can reach it.
+# Naming `dockerd` first skips that block (agent/internal/daemons.Entrypoint).
+#
+# Two assertions, because either alone can pass for the wrong reason: what the
+# daemon BOUND, and what a container can REACH.
+listeners=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$A" netstat -lnt 2>&1)
+case "$listeners" in
+*:2375*|*:2376*)
+    bad "SECURITY: $A's daemon is listening on a TCP port: [$listeners]" ;;
+*Active*|*Proto*)
+    ok "$A's daemon binds no Docker API on 2375 or 2376" ;;
+*)
+    # No header means netstat itself did not run, so the absence above is
+    # evidence of nothing.
+    bad "netstat said nothing inside $A's daemon, so no listener was measured: [$listeners]" ;;
+esac
+
+# --network host is the daemon's own namespace, which is where a published port
+# and the NFS export both live, so this is the reach a container really has.
+probe2375="nc -w 2 127.0.0.1 2375 </dev/null && echo CONNECTED || echo REFUSED"
+reach=$(da run --rm --network host alpine:3 sh -c "$probe2375" 2>/dev/null | tr -d '\015')
+case "$reach" in
+*CONNECTED*) bad "SECURITY: a container in $A's daemon reached a Docker API on 2375" ;;
+*REFUSED*)   ok "a container in $A's daemon finds nothing on 2375" ;;
+*)           bad "the 2375 probe said nothing, so it proves nothing: [$reach]" ;;
+esac
 
 echo
 if [ "$FAIL" -ne 0 ]; then
