@@ -27,26 +27,40 @@ type APIClient struct {
 }
 
 // do performs one request over a fresh connection to the daemon.
+//
+// The request is written by hand and read back with http.ReadResponse, so
+// there is no Transport to honour ctx and the context on the http.Request is
+// inert. Closing the connection is the only lever there is: DialDocker returns
+// an io.ReadWriteCloser, which through tunnelclient is an ssh.Session and a
+// pair of pipes with no deadline to set. So a watchdog closes it, and stops on
+// every path out of here -- a workspace that accepts and then says nothing
+// otherwise blocks the caller forever, which wedges watchPorts and
+// session.hasLiveDependents, and with it idle release.
 func (c *APIClient) do(ctx context.Context, method, path string, body any) (*http.Response, io.Closer, error) {
 	conn, err := c.Dialer.DialDocker(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("proxy: connecting to the workspace daemon: %w", err)
+	}
+	stop := closeOnCancel(ctx, conn)
+
+	fail := func(format string, err error) (*http.Response, io.Closer, error) {
+		stop()
+		conn.Close()
+		return nil, nil, fmt.Errorf(format, err)
 	}
 
 	var payload io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			conn.Close()
-			return nil, nil, fmt.Errorf("proxy: encoding request: %w", err)
+			return fail("proxy: encoding request: %w", err)
 		}
 		payload = strings.NewReader(string(encoded))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+path, payload)
 	if err != nil {
-		conn.Close()
-		return nil, nil, fmt.Errorf("proxy: building request: %w", err)
+		return fail("proxy: building request: %w", err)
 	}
 	req.Host = "docker"
 	if body != nil {
@@ -54,16 +68,40 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 	}
 
 	if err := req.Write(conn); err != nil {
-		conn.Close()
-		return nil, nil, fmt.Errorf("proxy: sending request: %w", err)
+		return fail("proxy: sending request: %w", err)
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
-		conn.Close()
-		return nil, nil, fmt.Errorf("proxy: reading response: %w", err)
+		return fail("proxy: reading response: %w", err)
 	}
+
+	// Stopped here rather than deferred, because the connection outlives this
+	// function: Events hands it back to the caller and goes on decoding from
+	// it, so the watchdog must cover the request and the response head only.
+	// The caller's own ctx is what ends that stream.
+	stop()
 	return resp, conn, nil
+}
+
+// closeOnCancel closes conn when ctx is done, until stop is called. stop waits
+// for the goroutine, so a fast call leaves nothing parked until the session's
+// long-lived context is eventually cancelled.
+func closeOnCancel(ctx context.Context, conn io.Closer) (stop func()) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
 }
 
 // EnsureVolume creates an NFS-backed volume, replacing one whose definition no
