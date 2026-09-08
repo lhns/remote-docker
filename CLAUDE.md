@@ -672,6 +672,16 @@ premise of the project, and it applies to building it too. So:
   `per-user-dind.sh` section 12 asserts the absence, `integration.sh` section 11
   measures the shared mode, and the threat model's flow 5 is where it is
   reasoned about.
+- **An `*Account` is immutable once it is in `accounts.Store.accounts`; a
+  change means a new one, in a new map.** `Lookup` hands the pointer to the SSH
+  authenticator, which ranges `Keys` with no synchronisation, so revoking by
+  setting `Keys = nil` on a published account is a data race against every
+  connection authenticating at that moment. `reconcile` builds the next map and
+  swaps it. That is also what lets provisioning run OUTSIDE the write lock,
+  which it must: `useradd` per account under the lock `Lookup` reads through
+  meant no session could authenticate for the length of a key-directory pass,
+  and `Sync` runs on a 60s poll. `syncMu` is then the only thing keeping two
+  syncs from handing one uid to two accounts.
 - **Never range a map to assign something durable.** Account uids are handed
   out in `accounts.reconcile`, which used to range the `found` map -- so which
   account got which uid, and therefore which reverse-tunnel port, differed

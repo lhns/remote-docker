@@ -84,7 +84,17 @@ type Store struct {
 	Provisioner Provisioner
 	Log         *slog.Logger
 
-	mu       sync.RWMutex
+	// syncMu serialises Sync end to end. mu is not held across the uid
+	// allocation, so without this two syncs would each load their own uid map,
+	// each call nextUID, and hand one uid to two accounts.
+	syncMu sync.Mutex
+
+	mu sync.RWMutex
+
+	// An *Account in here is IMMUTABLE once published: Lookup hands the
+	// pointer to the SSH authenticator, which ranges Keys with no
+	// synchronisation (agent/internal/sshd/server.go). A change, revocation
+	// included, means a new *Account in a new map.
 	accounts map[string]*Account
 
 	// unusable is the accounts whose key file was present but held no usable
@@ -136,6 +146,9 @@ func (s *Store) uidmapPath() string { return filepath.Join(s.StateDir, "uidmap")
 
 // Sync reads the keys directory and brings accounts into line with it.
 func (s *Store) Sync() error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
 	entries, err := os.ReadDir(s.KeysDir)
 	if err != nil {
 		return fmt.Errorf("accounts: reading %s: %w", s.KeysDir, err)
@@ -219,18 +232,21 @@ func (s *Store) Sync() error {
 //
 // unusable names the accounts whose file is still there but held no key this
 // time round. See the revoke loop for why that is not the same thing as gone.
+//
+// Four phases, and only the last holds s.mu, because provisioning shells out
+// to useradd per account and Lookup reads through that lock. See the syncMu
+// and accounts fields.
 func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, uids map[string]int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	changed := false
-
+	// 1. Decide the uids. No lock and no exec.
+	//
 	// Sorted, because this loop ASSIGNS uids to accounts that do not have one
 	// yet, and ranging a map would assign them in Go's randomised order. Sync
 	// goes to some trouble to order the key files deterministically; handing
 	// the result over as a map threw that away, and the uid a new account got
 	// (and therefore its reverse-tunnel port) depended on the run.
-	for _, name := range slices.Sorted(maps.Keys(found)) {
+	names := slices.Sorted(maps.Keys(found))
+	changed := false
+	for _, name := range names {
 		account := found[name]
 		uid, ok := uids[name]
 		if !ok {
@@ -240,19 +256,47 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 		}
 		account.UID = uid
 		account.GID = uid
+	}
 
-		unix, home, err := s.Provisioner.Ensure(name, uid, s.Shell)
+	// Persisted before anything is provisioned. Crashing in between leaves a
+	// uid allocated to an account that does not exist yet, which costs
+	// nothing: nextUID is highest+1 and never reuses one.
+	if changed {
+		if err := s.saveUIDs(uids); err != nil {
+			return err
+		}
+	}
+
+	// 2. Provision, still with no lock held and in the same order.
+	failed := map[string]bool{}
+	for _, name := range names {
+		account := found[name]
+		unix, home, err := s.Provisioner.Ensure(name, account.UID, s.Shell)
 		if err != nil {
 			s.log().Error("could not provision an account", "account", name, "err", err)
+			failed[name] = true
 			continue
 		}
 		account.Unix = unix
 		account.Home = home
+	}
 
-		if _, existed := s.accounts[name]; !existed {
-			s.log().Info("account ready", "account", name, "uid", uid)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 3. Build the next map, seeded from the current one so an account whose
+	// Ensure failed this round is carried forward and keeps authenticating: a
+	// transient useradd failure must not present as a key that stopped working.
+	next := make(map[string]*Account, len(s.accounts)+len(found))
+	maps.Copy(next, s.accounts)
+	for _, name := range names {
+		if failed[name] {
+			continue
 		}
-		s.accounts[name] = account
+		if _, existed := s.accounts[name]; !existed {
+			s.log().Info("account ready", "account", name, "uid", found[name].UID)
+		}
+		next[name] = found[name]
 	}
 
 	// Revoke, do not delete. Removing the account and its home would be a
@@ -265,30 +309,35 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	// meant on purpose. So a file that is THERE and holds nothing has to say so
 	// twice, the second read being the next event or the next poll. A file that
 	// is GONE revokes at once: there is no write window to be caught in.
-	for name, account := range s.accounts {
+	//
+	// A COPY with no keys, never Keys=nil on an account already published: see
+	// the accounts field.
+	for name, account := range next {
 		if _, still := found[name]; still {
 			continue
 		}
 		if unusable[name] && !s.unusable[name] {
 			continue
 		}
-		if len(account.Keys) > 0 {
-			reason := "its key file is gone"
-			if unusable[name] {
-				reason = "its key file holds no usable public key"
-			}
-			s.log().Info("revoking an account: "+reason+". the account and its home are kept",
-				"account", name)
+		if len(account.Keys) == 0 {
+			continue
 		}
-		account.Keys = nil
-	}
-	s.unusable = unusable
+		reason := "its key file is gone"
+		if unusable[name] {
+			reason = "its key file holds no usable public key"
+		}
+		s.log().Info("revoking an account: "+reason+". the account and its home are kept",
+			"account", name)
 
-	if changed {
-		if err := s.saveUIDs(uids); err != nil {
-			return err
-		}
+		revoked := *account
+		revoked.Keys = nil
+		next[name] = &revoked
 	}
+
+	// 4. Swap. s.unusable is what the two-read rule above reads next time, so
+	// it changes with the map it was computed against.
+	s.accounts = next
+	s.unusable = unusable
 	return nil
 }
 
