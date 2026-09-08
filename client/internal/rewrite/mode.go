@@ -1,6 +1,7 @@
 package rewrite
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -122,17 +123,18 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 //
 // spelled is the Docker word the mount used, if it used one; writeAsked is
 // what the refusals put it through.
-func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, asked workspace.Mode, spelled string) (workspace.Mode, error) {
+func (r *Rewriter) resolveMode(ctx context.Context, modes map[string]workspace.Mode, source string, asked workspace.Mode, spelled string) (workspace.Mode, error) {
 	// An axis nobody named is Docker's default for it.
 	got := asked.Or(r.modeFor(source)).Or(workspace.DefaultMode)
 
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
-		if r.Cache == nil {
-			return workspace.ModeUnset, fmt.Errorf(
-				"rewrite: %s asks for %s, which needs a session that can reach the workspace's cache\n"+
-					"  fix: use write=%s, which is served by the mount itself",
-				source, wants, workspace.WriteThrough)
+		// Here and nowhere earlier is where the workspace is asked whether it
+		// serves a cache at all: this is the first request that needs one, and
+		// a session that never gets here never asks.
+		if _, err := r.openCache(ctx); err != nil {
+			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for %s, and %w",
+				source, wants, err)
 		}
 		if !r.Watching {
 			// A stronger requirement than read=cached's, and for a stronger
@@ -165,6 +167,16 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 	}
 	modes[key] = got
 	return got, nil
+}
+
+// openCache reaches the session's cache channel, and answers for a session
+// that has none at all: a query session, or a test that wired no cache.
+func (r *Rewriter) openCache(ctx context.Context) (Cache, error) {
+	if r.OpenCache == nil {
+		return nil, fmt.Errorf("this session cannot reach the workspace's cache\n"+
+			"  fix: use write=%s, which is served by the mount itself", workspace.WriteThrough)
+	}
+	return r.OpenCache(ctx)
 }
 
 // writeAsked names the write mode a refusal is about, and where a Docker word

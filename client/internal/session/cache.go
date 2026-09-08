@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -42,18 +43,14 @@ type cacheChannel struct {
 }
 
 // openCache establishes the channel and completes the version handshake.
-func openCache(client *tunnelclient.Client) (*cacheChannel, error) {
-	stream, r, reply, err := greet(client, cache.Command, cache.MaxFrame, cache.Version,
+func openCache(ctx context.Context, client *tunnelclient.Client) (*cacheChannel, error) {
+	stream, r, reply, err := greet(ctx, client, cache.Command, cache.MaxFrame, cache.Version,
 		func(reply cache.Reply) (int, bool) {
 			if reply.Hello == nil {
 				return 0, false
 			}
 			return reply.Hello.Version, true
 		})
-	var notServed *notServedError
-	if errors.As(err, &notServed) {
-		return nil, errors.New("this workspace does not serve delegated shares as a cache" + rewrite.FixUpdateWorkspace)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +73,74 @@ func (e *notServedError) Error() string {
 	return fmt.Sprintf("the workspace did not answer %q", e.command)
 }
 
+// silentError is a channel the workspace accepted and then said nothing on
+// before the deadline.
+//
+// Kept apart from notServedError because only one of the two is a statement
+// about the workspace at all: silence names no cause, so what is reported is
+// what was observed and nothing more.
+type silentError struct {
+	command string
+	after   time.Duration
+}
+
+func (e *silentError) Error() string {
+	return fmt.Sprintf("the workspace accepted %q and then said nothing for %s", e.command, e.after)
+}
+
+// handshakeTimeout bounds every greeting this client waits for.
+//
+// The agent writes a greeting as it begins serving the command: it waits on no
+// daemon, no mount and no disk, so this is one round trip and nothing else. Ten
+// seconds is far more than any link this tunnel works over needs, and short
+// enough to read as a failure rather than as a hang. The same number as
+// refusalReasonTimeout, for the same reason.
+//
+// Without it the client hangs outright against an agent predating a command
+// (measured against v0.5.1 and workspace-cache): that agent has no case for the
+// command, falls through to serveExec and runs it as a shell command, whose
+// exit is never reported because os/exec waits on a copy from the session's
+// stdin, which this client never closes. Both ends then block reading the
+// other, and nothing is printed. The agent side of that is fixed, but only for
+// agents built since; every workspace already deployed still behaves this way,
+// and it is equally the shape of any command added later, so the deadline is
+// the only protection the client can give itself.
+const handshakeTimeout = 10 * time.Second
+
+// cacheRefusal turns a cache channel that could not be opened into the tail of
+// the sentence refusing a mount that needs one, with its remedy under it.
+//
+// It reports only what was established, which is why the two cases are not one
+// message. A workspace that answered the command with something other than a
+// greeting does not serve it, and that is the sentence rewrite.unionAvailable
+// already gives for a workspace reporting no union, so the two arrive alike. A
+// workspace that answered nothing is reported as answering nothing: no version,
+// no age and no cause, because none was checked.
+//
+// The agent's version rides along as CONTEXT. It is the fact somebody acts on,
+// and it is never the test: what gates is this request needing a capability the
+// workspace does not serve, never a version compared against a table.
+func cacheRefusal(err error, agent string) error {
+	var notServed *notServedError
+	if errors.As(err, &notServed) {
+		return fmt.Errorf("this workspace does not serve it%s%s", runningVersion(agent), rewrite.FixUpdateWorkspace)
+	}
+	var silent *silentError
+	if errors.As(err, &silent) {
+		return fmt.Errorf("%w\n  fix: try again, or use write=through", silent)
+	}
+	return err
+}
+
+// runningVersion names the agent answering, or nothing at all for a workspace
+// predating workspace.Info.Agent.
+func runningVersion(agent string) string {
+	if agent == "" {
+		return ""
+	}
+	return "; it runs remote-dockerd " + agent
+}
+
 // greet opens a channel and completes its version handshake.
 //
 // The agent dispatches session commands on exact strings and runs anything
@@ -84,7 +149,7 @@ func (e *notServedError) Error() string {
 // nothing to say. Reading a greeting first is the only thing that tells them
 // apart. hello reads the version out of a decoded greeting, and false means
 // the line was not one.
-func greet[T any](client *tunnelclient.Client, command string, frame, want int, hello func(T) (int, bool)) (io.ReadWriteCloser, *bufio.Reader, T, error) {
+func greet[T any](ctx context.Context, client *tunnelclient.Client, command string, frame, want int, hello func(T) (int, bool)) (io.ReadWriteCloser, *bufio.Reader, T, error) {
 	var greeting T
 	stream, err := client.OpenStream(command)
 	if err != nil {
@@ -92,9 +157,20 @@ func greet[T any](client *tunnelclient.Client, command string, frame, want int, 
 	}
 
 	r := bufio.NewReaderSize(stream, frame)
-	line, err := r.ReadString('\n')
+	line, err := readGreeting(ctx, stream, r)
 	if err != nil {
 		_ = stream.Close()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, nil, greeting, &silentError{command: command, after: handshakeTimeout}
+		}
+		if errors.Is(err, io.EOF) {
+			// A CLEAN end with nothing on it: the command ran and produced no
+			// greeting, which is what an agent that has no case for it does
+			// once its shell has exited. A link that broke ends in a reset or a
+			// closed pipe instead, and stays the error it was rather than
+			// becoming a claim about how old the workspace is.
+			return nil, nil, greeting, &notServedError{command: command}
+		}
 		return nil, nil, greeting, fmt.Errorf("no greeting from the workspace: %w", err)
 	}
 	version, ok := 0, false
@@ -111,6 +187,36 @@ func greet[T any](client *tunnelclient.Client, command string, frame, want int, 
 			command, version, want)
 	}
 	return stream, r, greeting, nil
+}
+
+// readGreeting reads the one line a greeting is, bounded.
+//
+// Closing the stream is the only lever, exactly as cacheChannel.do says of a
+// timed-out exchange: it is an SSH channel with no deadline to set. The close
+// fails the blocked read, so the goroutine ends on the slow path as well as on
+// the fast one, and the buffered channel means it never blocks handing its
+// result over to a caller that has already gone.
+func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+
+	type result struct {
+		line string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		line, err := r.ReadString('\n')
+		done <- result{line, err}
+	}()
+
+	select {
+	case res := <-done:
+		return res.line, res.err
+	case <-ctx.Done():
+		_ = stream.Close()
+		return "", ctx.Err()
+	}
 }
 
 // do sends one request, with its payload if it has one, and returns the answer.
@@ -352,7 +458,11 @@ func (s *Session) liveCache() *cacheChannel {
 	if !ok || live == nil {
 		return nil
 	}
-	return s.ensureCacheChan(live)
+	// Only ever reached for a share that already has a union, so the channel is
+	// open by now and this is the memoised answer. The refusal a mount gets is
+	// where the reason is said; here there is nobody to say it to.
+	c, _ := s.ensureCacheChan(s.ctx, live)
+	return c
 }
 
 // liveStore is what dircache is given, and the nil check is why it is not

@@ -3,6 +3,7 @@ package rewrite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,17 @@ func (f *fakeCache) Attach(export, localPath string, mode workspace.Mode) {
 	f.attached, f.from, f.mode = export, localPath, mode
 }
 
+// servingCache is a session whose cache channel opens.
+func servingCache(c Cache) func(context.Context) (Cache, error) {
+	return func(context.Context) (Cache, error) { return c, nil }
+}
+
+// refusingCache is a session whose cache channel does not, answering with the
+// tail of the sentence the mount is refused with.
+func refusingCache(err error) func(context.Context) (Cache, error) {
+	return func(context.Context) (Cache, error) { return nil, err }
+}
+
 // cachedRewriter is a rewriter that may serve `read=cached`, which means one
 // with a watcher behind it.
 func cachedRewriter() (*Rewriter, *fakeVolumes) {
@@ -50,7 +62,7 @@ func cachedRewriter() (*Rewriter, *fakeVolumes) {
 func unionRewriter() (*Rewriter, *fakeVolumes, *fakeCache) {
 	r, v := cachedRewriter()
 	c := &fakeCache{}
-	r.Cache = c
+	r.OpenCache = servingCache(c)
 	r.UnionReady = workspace.UnionReady
 	return r, v, c
 }
@@ -393,17 +405,59 @@ func TestAUnionInTheMountsFormIsABind(t *testing.T) {
 	}
 }
 
+// An older workspace serving ordinary mounts is never asked whether it has a
+// cache channel, so it is never told anything about one.
+//
+// This is the common case and the user's constraint: a workspace that serves
+// every mount it was given is not doing anything wrong, and a message about a
+// capability nobody asked for is noise. The silence is structural rather than a
+// suppressed log line, which is why it can be asserted here at all.
+func TestOrdinaryMountsNeverAskForTheCacheChannel(t *testing.T) {
+	for _, spelling := range []string{"", ":ro", ":write=through", ":read=cached,write=through"} {
+		r, _ := cachedRewriter()
+		r.UnionReady = "" // a workspace predating unions entirely
+		asked := false
+		r.OpenCache = func(context.Context) (Cache, error) {
+			asked = true
+			return nil, errors.New("this workspace does not serve it" + FixUpdateWorkspace)
+		}
+
+		body := []byte(`{"HostConfig":{"Binds":["/home/alice/project:/app` + spelling + `"]}}`)
+		if _, err := r.ContainerCreate(t.Context(), body); err != nil {
+			t.Errorf("a %q mount was refused: %v", spelling, err)
+		}
+		if asked {
+			t.Errorf("a %q mount opened the cache channel", spelling)
+		}
+	}
+}
+
 // The mode is refused before anything is created, naming the remedy, rather
 // than half way through a container start.
 func TestAUnionIsRefusedWhereTheWorkspaceCannotServeIt(t *testing.T) {
 	const bind = `{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:read=cached,write=back"]}}`
 
 	noChannel, _ := cachedRewriter()
-	noChannel.Cache = nil
+	noChannel.OpenCache = nil
 	noChannel.UnionReady = workspace.UnionReady
 	if _, err := noChannel.ContainerCreate(t.Context(), []byte(bind)); err == nil ||
 		!strings.Contains(err.Error(), "write=back") {
 		t.Fatalf("with no channel: err = %v, want the write mode named", err)
+	}
+
+	// A channel that could not be opened refuses THIS mount, and the reason
+	// travels whole from whoever tried to open it: only that side can tell a
+	// workspace that does not serve the channel from one that said nothing.
+	refused, _ := cachedRewriter()
+	refused.UnionReady = workspace.UnionReady
+	refused.OpenCache = refusingCache(errors.New(
+		"this workspace does not serve it; it runs remote-dockerd 0.5.1" + FixUpdateWorkspace))
+	_, err := refused.ContainerCreate(t.Context(), []byte(bind))
+	const want = "rewrite: /home/alice/project asks for write=back, " +
+		"and this workspace does not serve it; it runs remote-dockerd 0.5.1" +
+		"\n  fix: update the workspace, or use write=through"
+	if err == nil || err.Error() != want {
+		t.Errorf("a channel that would not open refused with\n%v\nwant\n%s", err, want)
 	}
 
 	for _, c := range []struct{ reported, want string }{
@@ -419,7 +473,7 @@ func TestAUnionIsRefusedWhereTheWorkspaceCannotServeIt(t *testing.T) {
 		{"", "write=through"},
 	} {
 		r, volumes := cachedRewriter()
-		r.Cache = &fakeCache{}
+		r.OpenCache = servingCache(&fakeCache{})
 		r.UnionReady = c.reported
 
 		_, err := r.ContainerCreate(t.Context(), []byte(bind))
@@ -448,7 +502,7 @@ func TestARefusedUnionNamesTheWordThatAskedForIt(t *testing.T) {
 			`"Target":"/app","Consistency":"delegated"}]}}`,
 	} {
 		r, volumes := cachedRewriter()
-		r.Cache = &fakeCache{}
+		r.OpenCache = servingCache(&fakeCache{})
 		r.UnionReady = workspace.UnionNoBinary
 
 		_, err := r.ContainerCreate(t.Context(), []byte(ask))
@@ -533,7 +587,7 @@ func TestASingleFileTakesAModeToo(t *testing.T) {
 // wrong rather than merely slow.
 func TestAUnionNeedsTheWatcherToo(t *testing.T) {
 	r, _, _ := newRewriter()
-	r.Cache = &fakeCache{}
+	r.OpenCache = servingCache(&fakeCache{})
 	r.UnionReady = workspace.UnionReady
 
 	_, err := r.ContainerCreate(t.Context(),

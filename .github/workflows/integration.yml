@@ -177,6 +177,10 @@ jobs:
   #   nfs-resilience  what a mount does when the session drops. It reports
   #                   what it measured whether it passes or fails, because the
   #                   point is the numbers and a green tick hides them.
+  #   old-workspace   the one suite that does NOT build both ends: this
+  #                   client against a workspace image PULLED from ghcr, which
+  #                   is the only way the compatibility claim can be checked.
+  #                   It needs network access to ghcr.io and nothing else.
   #   fs-conformance  the same filesystem probe against a native bind mount
   #                   and against a share, and every difference listed with a
   #                   reason in test/fs-conformance/deviations-linux.txt. The
@@ -214,6 +218,10 @@ jobs:
           - suite: fs-conformance
             name: does a share behave like a bind mount
             container: remote-docker-fsconf
+            timeout: 30
+          - suite: old-workspace
+            name: this client against a published older workspace
+            container: remote-docker-oldworkspace
             timeout: 30
     steps:
       - uses: actions/checkout@v7
