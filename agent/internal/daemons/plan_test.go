@@ -86,6 +86,26 @@ func TestAnUnknownWorkspaceOmitsTheLabelRatherThanEmptyingIt(t *testing.T) {
 	}
 }
 
+// dind's entrypoint chooses dockerd's --host flags itself when the first
+// argument is absent or starts with a dash, and one of them is always
+// tcp://0.0.0.0:2375: an unauthenticated Docker API inside the account's own
+// network namespace, reachable by every container that account runs, which
+// nothing here has ever dialled. Naming the binary is what skips that.
+func TestTheCommandNamesDockerdSoNoTCPListenerIsAdded(t *testing.T) {
+	spec := plan(t, "alice", Options{StorageDriver: "fuse-overlayfs"})
+
+	if len(spec.Command) == 0 || spec.Command[0] != "dockerd" {
+		t.Fatalf("the entrypoint chooses the listeners for %v", spec.Command)
+	}
+	if args := strings.Join(spec.Args(), " "); strings.Contains(args, "tcp://") {
+		t.Errorf("a TCP listener reached the command line: %s", args)
+	}
+	// The flags must still be there: the first word is added, not swapped in.
+	if !strings.Contains(strings.Join(spec.Command, " "), "--storage-driver fuse-overlayfs") {
+		t.Errorf("the storage driver did not survive: %v", spec.Command)
+	}
+}
+
 // The agent dials the socket in the bind-mounted directory; the conventional
 // path is kept so anything running inside the daemon still finds one.
 func TestTheDaemonListensWhereTheAgentDials(t *testing.T) {
@@ -270,10 +290,12 @@ func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
 		t.Errorf("the entrypoint never reached the args: %s", args)
 	}
 
-	// And the command must be FLAGS ONLY. A leading "dockerd" there would be
-	// passed to dockerd as a positional argument, which it refuses.
-	if len(spec.Command) == 0 || spec.Command[0] != "-H" {
-		t.Errorf("Command should start with a flag, got %v", spec.Command)
+	// The command NAMES dockerd, and the script consumes that word rather than
+	// handing it on: `set -- docker-init -- "$@"` makes it the program tini
+	// runs, not a positional argument. Which listeners that buys is
+	// TestTheCommandNamesDockerdSoNoTCPListenerIsAdded.
+	if len(spec.Command) == 0 || spec.Command[0] != "dockerd" {
+		t.Errorf("Command should name dockerd, got %v", spec.Command)
 	}
 }
 

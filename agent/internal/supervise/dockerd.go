@@ -40,8 +40,9 @@ type Dockerd struct {
 
 const (
 	// command is the entrypoint to run. The dind image ships
-	// dockerd-entrypoint.sh, which prepends `dockerd` when the first argument
-	// starts with a dash and sets up the storage driver and iptables.
+	// dockerd-entrypoint.sh, which sets up iptables, deletes a stale
+	// docker*.pid and runs dockerd under tini. See args for why `dockerd` is
+	// spelled out rather than left to it.
 	command = "dockerd-entrypoint.sh"
 
 	// restartDelay is how long to wait before restarting a daemon that died.
@@ -74,8 +75,28 @@ func (d *Dockerd) Run(ctx context.Context) error {
 	return nil
 }
 
+// args is the command line handed to dockerd-entrypoint.sh.
+//
+// `dockerd` is named FIRST, and that word is what keeps this daemon off TCP.
+// The script supplies its own --host flags only when there is no argument or
+// the first one starts with a dash, and one of those flags is always
+// tcp://0.0.0.0:2375 -- an unauthenticated Docker API, in the namespace every
+// shell of this workspace runs in, that nothing here has ever dialled. Naming
+// the binary skips that block and keeps the one below it, which deletes a
+// stale docker*.pid, injects tini and sets up iptables.
+// (docker-library/docker `dockerd-entrypoint.sh`, read 2026-09-08; re-check
+// with `curl -s https://raw.githubusercontent.com/docker-library/docker/master/dockerd-entrypoint.sh`.)
+//
+// The socket is then ours to state, and it is the one WaitReady watches for.
+// The script would have derived it from DOCKER_HOST, which is a second place
+// for the two to disagree.
+func (d *Dockerd) args() []string {
+	d.applyDefaults()
+	return append([]string{"dockerd", "--host=unix://" + d.Socket}, d.Args...)
+}
+
 func (d *Dockerd) runOnce(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, command, d.Args...)
+	cmd := exec.CommandContext(ctx, command, d.args()...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 

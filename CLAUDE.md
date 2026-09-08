@@ -799,8 +799,12 @@ premise of the project, and it applies to building it too. So:
   the cause: dockerd's entrypoint is not on a `PATH` without `/usr/local/bin`,
   the agent restarts it every two seconds forever and blocks its own listener
   for ninety seconds waiting for a socket that will never appear.
-  `DOCKER_TLS_CERTDIR` must be EMPTY rather than unset, which is how
-  `image/Dockerfile` turns dind's TLS off.
+  `DOCKER_TLS_CERTDIR` is carried over as EMPTY rather than unset, and empty
+  and unset are still different answers. It no longer decides anything about
+  the daemon -- naming `dockerd` skips the block that reads it, see the
+  invariant below -- and what still reads it is dind's `docker-entrypoint.sh`,
+  which points a client with no `DOCKER_HOST` and no socket at
+  `tcp://docker:2376` when it is set.
 - **A VM workspace is the same agent, not a mode.** ADR 0025 moves two things
   to the operator -- starting dockerd (`WORKSPACE_ENABLE_DIND=false`) and, in
   shared-daemon mode only, the NFS client -- and changes nothing else. Never
@@ -865,6 +869,25 @@ premise of the project, and it applies to building it too. So:
   the PARENT for the container's state first: exited, restarting, created or
   dead cannot be running anything. The old rule stands for a daemon that is up
   and slow to answer, where being wrong costs somebody's containers.
+- **The command handed to `dockerd-entrypoint.sh` NAMES `dockerd`, and that
+  word is the only thing keeping a daemon off TCP.** The script supplies
+  dockerd's own `--host` flags whenever the first argument is absent or starts
+  with a dash, and one of them is always `tcp://0.0.0.0:2375`, or
+  `tcp://0.0.0.0:2376` with `--tlsverify` when `DOCKER_TLS_CERTDIR` is set. So
+  a command of flags alone -- which is what both `WORKSPACE_DOCKERD_ARGS` and
+  the per-account plan used to be -- puts an unauthenticated Docker API in the
+  account's own network namespace, reachable by every container that account
+  runs, and in shared mode in the namespace every shell runs in. Nothing here
+  has ever dialled it: every path reaches a daemon through a unix socket named
+  by `DOCKER_HOST`. Naming the binary skips that block and keeps the one below
+  it, which deletes a stale `docker*.pid`, injects tini and sets up iptables --
+  and the word is consumed rather than passed on, since `set -- docker-init --
+  "$@"` makes it the program tini runs. It also bought 16.125 seconds of every
+  daemon start: dockerd sleeps 1s + 15s after the "DON'T BIND ON ANY IP ADDRESS
+  WITHOUT setting --tlsverify" warning so a human reads it (moby
+  `cmd/dockerd/daemon.go`, `loadListeners`, read 2026-09-08).
+  `per-user-dind.sh` section 14 asserts both halves: what the daemon bound, and
+  what a container in its namespace can reach.
 - **A failed start is remembered for 5 seconds, and that is not a backoff.**
   `ensure` single-flights, so a burst all waits on one leader -- and when the
   leader failed it stored nothing, so every waiter woke, became the next leader
@@ -893,7 +916,9 @@ premise of the project, and it applies to building it too. So:
   `docker*.pid`, which `containerd.pid` does not match, and a stale one naming
   a LIVE pid kills the daemon two ways, both seen in run `34240150838`:
   `pidfile.Write` refuses to overwrite it, so dockerd starts containerd, kills
-  it and exits (`process with PID 35 is still running`), 16.125s in; or
+  it and exits (`process with PID 35 is still running`), 16.125s in -- which
+  was dockerd's warning sleep, gone now that nothing binds TCP, so the same
+  failure now arrives at once; or
   `pidfile.Read` believes it, so dockerd starts NOTHING and times out 15s later
   waiting for the containerd it never launched (`containerd is still running`,
   then `timeout waiting for containerd to start`), 31.27s in. containerd boots
@@ -1014,8 +1039,9 @@ each account's bind mount resolves (which is the only real proof the reverse
 tunnel was bound inside that account's netns), that both publish the same port
 at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
 is in the `docker` group, that NO account's shell can reach the NFS export at
-all, and that restarting the agent adopts the running daemons with their
-containers intact.
+all, that an account's daemon binds no Docker API on 2375 or 2376 and a
+container in its namespace reaches none, and that restarting the agent adopts
+the running daemons with their containers intact.
 
 `test/nfs-resilience.sh` asks what a mount DOES when the thing behind it goes
 away, on both layers and both ways a connection can end: a session released, a
