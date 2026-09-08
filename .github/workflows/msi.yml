@@ -11,12 +11,9 @@ name: msi
 # and would answer the same question every time.
 #
 # What that costs: a change to the client that broke `remote --help` would not
-# be caught here. It is caught by ci.yml on every push.
-#
-# The release workflow builds and uploads the MSI without waiting for this, so
-# a tag can publish an installer this suite has not seen. That is the one gap,
-# and the remedy is to touch installer/windows/ in the pull request that
-# changes it, which any real change to it does by definition.
+# be caught here. It is caught by ci.yml on every push. The release workflow
+# also builds and uploads the MSI without waiting for this, so a tag can publish
+# an installer this suite has not seen; ADR 0048 records both gaps.
 on:
   pull_request:
     paths:
@@ -86,19 +83,17 @@ jobs:
       # release-day failure otherwise. Only the amd64 one is installed below:
       # GitHub has no Windows arm64 runner.
       #
-      # The version is a stand-in, and has to be three numbers, which is the
+      # The version is a stand-in and has to be three numbers, which is the
       # constraint build.ps1 enforces.
       - name: build the msis
         shell: pwsh
         run: |
-          ./installer/windows/build.ps1 -Version 0.0.1 -Arch x64 `
-            -Binary windows/amd64/remote-docker.exe `
-            -Out dist/msi/remote-docker_0.0.1_windows_amd64.msi
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          ./installer/windows/build.ps1 -Version 0.0.1 -Arch arm64 `
-            -Binary windows/arm64/remote-docker.exe `
-            -Out dist/msi/remote-docker_0.0.1_windows_arm64.msi
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          foreach ($pair in @(@('amd64', 'x64'), @('arm64', 'arm64'))) {
+            ./installer/windows/build.ps1 -Version 0.0.1 -Arch $pair[1] `
+              -Binary "windows/$($pair[0])/remote-docker.exe" `
+              -Out "dist/msi/remote-docker_0.0.1_windows_$($pair[0]).msi"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
 
       - name: a snapshot version is refused rather than truncated
         shell: pwsh

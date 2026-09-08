@@ -4,14 +4,8 @@
 #     -Binary dist/windows_amd64/remote-docker.exe `
 #     -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
 #
-# Needs WiX v5: `dotnet tool install --global wix` and
-# `wix extension add -g WixToolset.UI.wixext`.
-#
-# ON WINDOWS, and it has to be. WiX is a dotnet tool and loads on Linux, but it
-# says so itself and then means it: "The WiX Toolset only supports Windows...
-# All behavior after this point is undefined", after which `wix build` refused
-# an ordinary `Directory/@Name` as "not a relative path" (WIX0389). Measured on
-# ubuntu-latest, 2026-09-08. See ADR 0048.
+# Needs WiX v5, which .github/actions/setup-wix installs. PowerShell and not
+# bash because WiX only runs on Windows, whatever .NET says (ADR 0048).
 
 [CmdletBinding()]
 param(
@@ -23,13 +17,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# An MSI ProductVersion is three numbers, and the installer compares only
-# those: major and minor are one byte each, build is two. Anything else is
-# refused here rather than truncated, because a version silently rounded to
-# something else is an upgrade that never fires.
-#
-# This is why the MSI is built for tag releases only. A snapshot version is
-# `sha-9370b24`, which has no mapping to three numbers at all.
+# An MSI ProductVersion is three numbers and nothing else compares. Refused
+# here rather than truncated, because a version silently rounded to something
+# else is an upgrade that never fires (ADR 0048). It is also why the MSI is
+# built for tag releases only: a snapshot version has no mapping to three
+# numbers at all.
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
   Write-Host "not an MSI version: $Version"
   Write-Host "  fix: build the installer only for a v<major>.<minor>.<patch> tag"

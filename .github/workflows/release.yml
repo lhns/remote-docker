@@ -361,13 +361,9 @@ jobs:
           retention-days: 1
 
   # The Windows installers, attached to the release the job above just made.
-  #
-  # Its own job, and on Windows, because WiX only runs there: it loads on Linux
-  # and says "All behavior after this point is undefined", then refuses an
-  # ordinary Directory/@Name (ADR 0048). Not a line in .goreleaser.yaml either,
-  # because goreleaser's msi support is Pro-only (checked 2026-09-08:
-  # https://goreleaser.com/customization/msi/ says "exclusively available with
-  # GoReleaser Pro").
+  # Its own job on Windows, and a gh upload rather than a line in
+  # .goreleaser.yaml, for the two reasons ADR 0048 records: WiX only runs on
+  # Windows, and goreleaser's msi block is Pro-only.
   #
   # Named to match the archives, so remote-docker_<v>_windows_amd64.zip and
   # .msi sit next to each other on the release page. NOT in checksums.txt,
