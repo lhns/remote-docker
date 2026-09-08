@@ -11,25 +11,14 @@ func wedgedSpec() Spec {
 	return Spec{Export: "/m/0011223344556677", Port: 30001, CacheDir: "/var/lib/docker/volumes/v/_data"}
 }
 
-// wedge replaces the Lstat with one that never returns until the test lets it,
-// which is what a FUSE server with nothing behind it does.
-func wedge(t *testing.T) chan struct{} {
-	t.Helper()
+// wedged is a prober whose Lstat never returns until the returned channel is
+// closed, which is what a FUSE mount with nothing serving it does.
+func wedged() (*Prober, chan struct{}) {
 	block := make(chan struct{})
-	restore := mounted
-	mounted = func(string) bool {
+	return &Prober{mounted: func(string) bool {
 		<-block
 		return true
-	}
-	t.Cleanup(func() {
-		mounted = restore
-		select {
-		case <-block:
-		default:
-			close(block)
-		}
-	})
-	return block
+	}}, block
 }
 
 // ask puts one bounded question to the prober and insists it went unanswered.
@@ -49,16 +38,16 @@ func ask(t *testing.T, p *Prober) {
 // this every restartDelay for the whole life of an adopted mount, so a probe
 // per call is a goroutine and a thread every two seconds, forever.
 func TestAliveKeepsOneProbeAgainstAWedgedMount(t *testing.T) {
-	_ = wedge(t)
-	var p Prober
+	p, block := wedged()
+	defer close(block)
 
-	ask(t, &p)
+	ask(t, p)
 	time.Sleep(20 * time.Millisecond)
 	before := runtime.NumGoroutine()
 
 	const polls = 20
 	for range polls {
-		ask(t, &p)
+		ask(t, p)
 	}
 	time.Sleep(20 * time.Millisecond)
 
@@ -70,10 +59,9 @@ func TestAliveKeepsOneProbeAgainstAWedgedMount(t *testing.T) {
 // The bound must not outlive the wedge: once the Lstat returns, the next caller
 // gets a reading of its own rather than the stale one it blocked on.
 func TestAliveProbesAgainOnceTheLstatReturns(t *testing.T) {
-	block := wedge(t)
-	var p Prober
+	p, block := wedged()
 
-	ask(t, &p)
+	ask(t, p)
 	close(block)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

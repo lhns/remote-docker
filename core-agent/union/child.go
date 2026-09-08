@@ -97,11 +97,6 @@ func (s Spec) Root() string { return netns.Root(s.PID) }
 // stop being given.
 var errNotAMount = errors.New("nothing is mounted there")
 
-// mounted is mountedAt, indirected so a test can hold a probe open. Nothing in
-// production replaces it: a wedged FUSE server is what Prober exists for, and
-// there is no way to make one on a development machine.
-var mounted = mountedAt
-
 // Prober answers whether a union is serving, with at most one Lstat in flight
 // per union.
 //
@@ -118,6 +113,22 @@ var mounted = mountedAt
 type Prober struct {
 	mu       sync.Mutex
 	inflight map[string]*probe
+
+	// mounted is mountedAt, indirected so a test can hold a probe open. A
+	// field rather than a package variable, and set before the prober is used:
+	// the goroutine below reads it, so anything that could reassign it later
+	// races with a probe still blocked in the last one. Nil in production,
+	// where a wedged FUSE server is what this exists for and there is no way
+	// to make one on a development machine.
+	mounted func(string) bool
+}
+
+// at reports whether anything is mounted at path.
+func (p *Prober) at(path string) bool {
+	if p.mounted != nil {
+		return p.mounted(path)
+	}
+	return mountedAt(path)
 }
 
 // probe is one Lstat and whatever it eventually answered. Waiters read err
@@ -154,7 +165,7 @@ func (p *Prober) Alive(ctx context.Context, spec Spec) error {
 	if ours {
 		go func() {
 			var err error
-			if !mounted(merged) {
+			if !p.at(merged) {
 				err = errNotAMount
 			}
 			p.finish(merged, pr, err)
