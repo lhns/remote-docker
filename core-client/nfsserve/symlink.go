@@ -9,20 +9,19 @@ import "github.com/lhns/remote-docker/core/logx"
 // neither, so os.Symlink fails with ERROR_PRIVILEGE_NOT_HELD and a share
 // refuses the request. `npm i` of any package with a bin entry ends there.
 //
-// A HARD LINK is the obvious substitute, since os.Link needs no privilege. It
-// was built and measured on 2026-09-07 and it cannot be done over NFSv3:
-// answering SYMLINK with success is answering that a symlink exists, so the
-// Linux client holds the inode as one and serves the target IT sent as the
-// file's contents, whatever the server reports the type to be afterwards.
+// A HARD LINK is the obvious substitute, since os.Link needs no privilege, and
+// it cannot be done over NFSv3 (measured 2026-09-07): answering SYMLINK with
+// success answers that a symlink exists, so the Linux client holds the inode as
+// one and serves the target IT sent as the file's contents, whatever the server
+// reports the type to be afterwards, and through every attribute timeout, new
+// container and fresh mount.
 //
 //	cat bin/prog   ->  ../lib/          (the target, cut to the file's length)
 //	stat bin/prog  ->  regular file, nlink=2
 //
-// It survived an attribute timeout, a new container and a fresh mount, and a
-// hard link made on this machine rather than through the share read correctly
-// in the same container. So nothing is being corrupted: the protocol has no
-// way to answer "I made something other than what you asked for", and silently
-// serving the wrong bytes is worse than a refusal that names its remedy.
+// The protocol has no way to answer "I made something other than what you asked
+// for", and silently serving the wrong bytes is worse than a refusal that names
+// its remedy.
 
 // warnPrivilege says why the host refused, once per share: npm creates a bin
 // entry per package, and a hundred identical warnings is a message nobody

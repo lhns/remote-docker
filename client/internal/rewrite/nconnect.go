@@ -10,23 +10,16 @@ import (
 )
 
 // NConnectEnv asks the workspace's NFS client to open several TCP connections
-// behind every share of this machine. OFF unless it is set.
+// behind every share of this machine. OFF unless it is set, and it raises the
+// ceiling on requests in flight (go-nfs Server.MaxConcurrentRequests bounds them
+// per connection) rather than anything measured.
 //
-// It REQUIRES Linux 5.3 or newer on the WORKSPACE, and nothing checks that
-// before mounting: the NFS client refuses the whole option string over one word
-// it does not know, so an older workspace fails every bind mount with `invalid
-// argument` against a list whose every word is individually valid. That is
-// acceptable only because it is opt-in, so this is read from the environment and
-// has no config-file key: a workspace-side kernel gate, and a default other than
-// off, are decisions for whoever measures it first.
-//
-// What it does is one thing and not per share: Linux keeps one RPC transport per
-// server address and every share mounts from 127.0.0.1:<tunnel port>, so all of
-// them share one transport and this multiplies the connections behind every
-// share at once. With the fork's per-connection bound on requests in flight
-// (go-nfs Server.MaxConcurrentRequests), more connections is a higher ceiling on
-// what the client can have outstanding. Whether that is FASTER here is
-// unmeasured.
+// It needs Linux 5.3 on the WORKSPACE and nothing checks that before mounting,
+// so an older one fails every bind mount (workspace.nconnectOption). Being
+// opt-in is what makes that acceptable, which is why this is an environment
+// variable with no config-file key: a kernel gate, and a default other than off,
+// are for whoever measures it first. It is not per share either, for the reason
+// workspace.NFSVolumeOptions gives.
 const NConnectEnv = "REMOTE_DOCKER_NFS_NCONNECT"
 
 // NConnect is what NConnectEnv asks for: 0 when it is unset, empty, or names one
@@ -34,8 +27,7 @@ const NConnectEnv = "REMOTE_DOCKER_NFS_NCONNECT"
 //
 // The error is for a value that cannot be honoured, and the caller logs it and
 // carries on with 0 rather than failing the command: a variable a person set on
-// a whim must not stop them running a container, and a mount silently carrying a
-// number the kernel refuses would take every share down with it.
+// a whim must not stop them running a container.
 func NConnect() (int, error) {
 	v := strings.TrimSpace(os.Getenv(NConnectEnv))
 	if v == "" {

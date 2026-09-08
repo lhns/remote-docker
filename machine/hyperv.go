@@ -9,9 +9,8 @@ package machine
 //
 // What runs here is Flatcar Container Linux with the workspace image as a
 // privileged container, which is the compose deployment unchanged (ADR 0026).
-// Flatcar is chosen for the property the whole design rests on: no package
-// manager, an immutable /usr, and one declarative Ignition file applied at
-// first boot, so there is no `apt install` to be halfway through.
+// Flatcar for the property the design rests on: no package manager, an
+// immutable /usr, and one Ignition file applied at first boot.
 // (Checked 2026-08-11: `curl -sI https://stable.release.flatcar-linux.net/\
 // amd64-usr/current/flatcar_production_hyperv_image.vhd.bz2` and
 // https://www.flatcar.org/docs/latest/installing/vms/hyper-v/. Fedora CoreOS is
@@ -25,31 +24,23 @@ import (
 	"strings"
 )
 
-// hyperVSwitch is the network the machine is attached to.
-//
-// The Default Switch, which Hyper-V creates and maintains itself: it is NAT
-// with DHCP, the host can reach machines on it, and it needs no administrator
-// decision about the user's network. A machine gets a new address from it on
-// every boot, which is why an address is asked for rather than stored -- the
-// same answer the WSL backend arrived at by measurement.
+// hyperVSwitch is the network the machine is attached to: the Default Switch,
+// which Hyper-V creates and maintains itself, so it needs no administrator
+// decision about the user's network. It is NAT with DHCP, and a machine gets a
+// new address on every boot, which is why Backend.Address is asked every time.
 const hyperVSwitch = "Default Switch"
 
 // hyperVBuilding is the generation a machine carries between New-VM and the
 // notes psSetNotes writes once it is built.
 //
-// psNewVM used to write the Spec's own generation, so a create that died before
-// psSetNotes left a machine that already matched: Plan said Nothing, nothing
-// offered to rebuild it, and its notes carried no key, which hyperVEnrolment
-// reads as "assume match" -- a machine reporting healthy that nothing can log
-// into.
-//
-// Writing no generation at all does not fix that. An unreadable generation is
-// read as a MATCH rather than a mismatch (see Observed.Generation), which is
-// deliberate and must stay: recreating somebody's machine because a label could
-// not be read would destroy their work to satisfy our bookkeeping. So the
-// unfinished state is written down instead, as a generation no Spec can
-// produce -- Spec.Generation is 16 hex characters -- and Plan reads it as
-// Recreate, which `machine create` reports and `machine rebuild` acts on.
+// A half-finished create must not look finished. Writing the Spec's own
+// generation made one that died before psSetNotes match: Plan said Nothing,
+// nothing offered to rebuild it, and its notes carried no key, so
+// hyperVEnrolment assumed a match too. A machine reporting healthy that nothing
+// can log into. Writing NO generation does not fix it either, because an
+// unreadable one is deliberately read as a match (Observed.Generation). So the
+// unfinished state is a generation no Spec can produce, which Plan reads as
+// Recreate.
 const hyperVBuilding = "building"
 
 // hyperVNotes is what a machine records about itself, in the one place Hyper-V
@@ -270,12 +261,8 @@ func urlEncode(s string) string {
 	return b.String()
 }
 
-// The PowerShell each operation runs.
-//
-// Built as strings here so the commands are testable on a machine with no
-// Hyper-V, which is every machine this is developed on. Each takes the VM name
-// already prefixed: a bare name reaching Get-VM is a machine somebody else
-// made.
+// The PowerShell each operation runs. Each takes the VM name ALREADY PREFIXED:
+// a bare name reaching Get-VM is a machine somebody else made.
 
 // psGetVM asks for a machine's state and its notes in one call.
 //

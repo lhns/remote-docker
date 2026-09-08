@@ -19,9 +19,6 @@ import (
 // KeyPair is this machine's identity to the workspace.
 type KeyPair struct {
 	Signer ssh.Signer
-
-	// Path is where the private key lives; Path+".pub" holds the public half.
-	Path string
 }
 
 // AuthorizedKey returns the public key in authorized_keys form: the single
@@ -48,7 +45,7 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 	signer, err := loadKey(path)
 	switch {
 	case err == nil:
-		return KeyPair{Signer: signer, Path: path}, nil
+		return KeyPair{Signer: signer}, nil
 	case !errors.Is(err, fs.ErrNotExist):
 		return KeyPair{}, err
 	}
@@ -77,7 +74,7 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 			if lerr != nil {
 				return KeyPair{}, lerr
 			}
-			return KeyPair{Signer: signer, Path: path}, nil
+			return KeyPair{Signer: signer}, nil
 		}
 		return KeyPair{}, fmt.Errorf("keys: creating key file: %w", err)
 	}
@@ -104,7 +101,7 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 		return KeyPair{}, fmt.Errorf("keys: writing public key: %w", err)
 	}
 
-	return KeyPair{Signer: signer, Path: path}, nil
+	return KeyPair{Signer: signer}, nil
 }
 
 func loadKey(path string) (ssh.Signer, error) {

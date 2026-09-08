@@ -115,8 +115,10 @@ type Options struct {
 	newBackend func() (backend, error)
 }
 
-// Stats is what `status` reports. Everything that was dropped appears here,
-// because a cap the user cannot see is a cap that lies.
+// Stats is what the watcher is doing: everything it dropped appears here,
+// because a cap nobody can see is a cap that lies. Nothing in the client reads
+// it (`status` reports the dircache's own figures); it is how the tests see the
+// budget, the exclude list and overflow reporting.
 type Stats struct {
 	Mode       Mode
 	Connected  bool
