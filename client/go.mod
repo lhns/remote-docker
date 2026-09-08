@@ -11,7 +11,7 @@ require (
 	github.com/docker/buildx v0.37.0
 	github.com/docker/cli v29.8.0+incompatible
 	github.com/docker/compose/v5 v5.5.1
-	github.com/google/go-containerregistry v0.22.0 // indirect
+	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/klauspost/compress v1.20.0
 	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-client v0.0.0
