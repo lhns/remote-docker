@@ -302,7 +302,7 @@ func parseID(s string) (string, error) {
 // transport never reconnecting.
 //
 // nconnect is NOT asked for, and this list holds nothing else newer than the
-// supported floor either (kernelfloor.go, which is the table and the test).
+// supported floor either: kernel_test.go is the table and the test.
 // It gave the mount eight TCP connections rather than one, and it needs Linux
 // 5.3; a workspace running RHEL 7 (3.10.0-1160.119.1.el7.x86_64) refused the
 // WHOLE option string over that one word, so every bind mount there failed as

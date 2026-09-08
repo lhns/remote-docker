@@ -25,8 +25,9 @@ import (
 // all. Every other option is carried through untouched, `ro` above all: the
 // export behind the volume is read-write, so that flag is the only thing
 // between a container and the user's files.
+//
 // Returns the mode, the word it was SPELLED as when that was one of Docker's
-// (see asWritten), and the remaining options.
+// (see dockerSpelling), and the remaining options.
 func splitMode(options string) (workspace.Mode, string, string, error) {
 	if options == "" {
 		return workspace.ModeUnset, "", "", nil
@@ -119,6 +120,7 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 // things can only get one of them. Refused rather than silently resolved: the
 // second EnsureVolume would recreate the volume the first just made, and both
 // containers would quietly run under the second answer.
+//
 // spelled is the word the mount actually used when it was one of Docker's,
 // which the refusals quote: `delegated` is write=back, and a message naming
 // only write=back names something nobody typed.
