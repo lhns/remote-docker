@@ -40,7 +40,8 @@ STRIDE letters are used where they apply and left out where they do not.
 | whoever holds a copy of the config directory | a synced folder, a backup, a stolen laptop | the private key at 0600, and a share record that is refused wholesale when another machine or account wrote it |
 
 **Not modelled**, said once so the rest reads as deliberate: defects in
-`x/crypto/ssh`, `coder/websocket`, the kernel's NFS client or `dockerd`; an
+`x/crypto/ssh`, `coder/websocket`, `go-nfs` (a fork, see [The software you
+run](#the-software-you-run)), the kernel's NFS client or `dockerd`; an
 operator who is already root on the node; physical access to an unlocked
 machine; and side channels. Each is either somebody else's boundary or a thing
 no control here could hold.
@@ -332,9 +333,49 @@ dind's entrypoint, which chooses dockerd's `--host` flags when the command
 begins with a flag, and the daemon command now names `dockerd` so that block
 never runs. The alternative was `--tlsverify` on 2376, which would have left an
 authenticated port nobody presents a certificate to and put certificate
-generation on every daemon's startup path. *Covered by* `per-user-dind.sh`
-section 14, which asserts what the daemon bound and what a container in its
-namespace can reach.
+generation on every daemon's startup path.
+
+The first word of the command is the whole control, so it is pinned in three
+places, and the coverage is asymmetric:
+
+| daemon | where the word is | pinned by |
+|---|---|---|
+| per account (default, ADR 0019) | `agent/internal/daemons/plan.go` | `plan_test.go`, and `per-user-dind.sh` section 14 end to end |
+| shared (ADR 0012) | `agent/internal/supervise/dockerd.go` (`args`) | `agent/internal/supervise/args_test.go` only |
+
+`per-user-dind.sh` 14 asserts both halves, since either alone can pass for the
+wrong reason: what the daemon bound, and what a container in its namespace can
+reach. **No suite asserts the same of the shared daemon**; there
+`supervise.Dockerd.args` and its unit test are the whole assurance, and
+anything that put a flag in front of that word again would be caught by that
+test and by nothing else.
+
+What this does not change is what separates accounts. `AllowDial` gates SSH
+channels; a process opening a socket in its own namespace asks no policy at
+all, so on a shared daemon an account's shell still reaches whatever is bound
+there (flow 5), and with a daemon per account it is the namespace, not a rule,
+that keeps it out.
+
+**T — a daemon's runtime state does not survive its container.** Both daemon
+kinds now get a tmpfs on dockerd's exec-root: a per-account one as `--tmpfs`
+(`daemons.ExecRoot`), the shared one from `supervise.prepareExecRoot` before
+dockerd starts. The reason is availability, not confidentiality: a daemon killed
+rather than stopped came back to a stale `containerd.pid` in its writable layer
+and would not start. What it is worth here is that runtime state, containerd and
+shim sockets included, no longer persists in a layer outliving the process that
+made it. The refusals are the load-bearing half and are the same discipline as
+adopting a serving union: a path already mounted is left alone, and a live
+containerd or docker socket means a daemon is serving. *Covered by*
+`supervise/execroot_test.go`, `daemons/plan_test.go`, `integration.sh` section
+20 and `per-user-dind.sh` section 13.
+
+**No change here: `REMOTE_DOCKER_NFS_NCONNECT`.** Said rather than left out. It
+is opt in (`client/internal/rewrite/nconnect.go`), and all it changes is how
+many TCP connections the workspace's NFS client opens to the same tunnel port.
+Same export, same port inside the same namespace, same `AUTH_NULL`, same
+reverse forward: nothing in this flow moves. The value is parsed and range
+checked here rather than passed through to a mount option, and one that cannot
+be honoured is logged and treated as unset. *Covered by* `nconnect_test.go`.
 
 **I — your registry credentials leave this machine (2-5).** The daemon does the
 pulling but has no logins of its own: the CLI resolves yours locally
@@ -400,14 +441,20 @@ restores only from a MOUNT that missed rather than from a lookup. *Covered by*
 **T — a volume that is not ours (4).** Volumes are only ever created, never
 rewritten onto a name the user chose; garbage collection requires both the
 `rd-` prefix and the managed label, since somebody may legitimately name a
-volume `rd-backups`. *Covered by* `rewrite/gc_test.go`.
+volume `rd-backups`. *Covered by* `rewrite/gc_test.go`, `integration.sh` section
+11, and since 2026-09-08 by `test/volume-ownership.sh`, which is the stronger
+of them: it runs the same named-volume cases against the RUNNER's own daemon and
+through a session and fails on any difference, so plain Docker is the oracle
+rather than our own expectation, and a rewrite is exactly what would make the
+two disagree.
 
 **D — the collector deleting a live volume (4).** A volume exists before any
 container names it, and the daemon calls it unused in that window. `rewrite.Guard`
 holds one lock across registering the share and creating the volume. Losing
 that race is silent: the daemon recreates the missing volume as an empty local
 one and the container starts with an empty directory. *Covered by*
-`rewrite/guard_test.go` and `integration.sh` section 16.
+`rewrite/guard_test.go` and `integration.sh` section 13b, where `remote gc` runs
+against a live session and must remove nothing that is in use.
 
 ---
 
@@ -438,7 +485,7 @@ sequenceDiagram
 (`agent/internal/sshd/forward.go`) enforces three rules in order: loopback
 only, a port this account was allocated and no other, one holder at a time. The
 middle rule is the one that stops bob binding alice's port before she connects.
-*Covered by* `forward_test.go` and `integration.sh` section 11.
+*Covered by* `forward_test.go` and `integration.sh` section 11e.
 
 **S — a port the client chose (2).** An account's first port is still derived
 from its uid, and the rest are allocated by `accounts.Ports`, so `Allow` asks
@@ -515,7 +562,7 @@ already refused; dialling it was not.
 holder rather than a port range, because `PortForUID` counts up from 30000 and
 docker publishes host ports from 32768, so refusing the range would refuse the
 forwarding this feature exists for. *Covered by* `dial_test.go` and
-`integration.sh` section 11, which uses the forward rather than merely
+`integration.sh` section 11e, which uses the forward rather than merely
 requesting it, since ssh opens the local listener before asking for the
 channel.
 
@@ -537,7 +584,7 @@ Two things follow, and neither is a patch to `AllowDial`:
   both accounts' shells.
 - **Shared mode rests on its stated assumption**, which ADR 0012 has always
   made: everyone enrolled in a workspace is mutually trusted. `integration.sh`
-  section 11 probes it from a second account's shell and reports what it finds
+  section 11e probes it from a second account's shell and reports what it finds
   rather than failing, because it follows from the mode. It connects, which is
   how this stopped being an argument about namespaces and became a measurement.
 
@@ -577,16 +624,19 @@ sender whose flow it belongs to; and `ReadDatagram` reads the length off the
 wire but never allocates from it, so a peer claiming 65535 bytes gets an error
 rather than a buffer (`core/tunnel/datagram.go`).
 
-**D — a datagram flow is reclaimed only when the forward ends (3–6).** One flow
-per source address, and its lifetime is the forward's, which is the rule TCP
-already follows (ADR 0038). A local sender that changes source port per datagram
-therefore opens an SSH channel and a workspace socket per datagram, and nothing
-releases them until the container stops. Forwards bind `127.0.0.1`, so this
-needs a process on the user's own machine -- but a loopback port is reachable by
-every local user, not only the owner, which the endpoint's file permissions are
-what protect it from. Nothing bounds it today. The trigger for adding an idle
-timeout is somebody watching the channel count climb, which is the same trigger
-ADR 0038 already records.
+**D — a datagram flow is reclaimed when it goes quiet (3–6).** One flow per
+source address, each a goroutine, a `tunnel.MaxDatagram` buffer and an SSH
+channel. A local sender that changes source port per datagram, which is what a
+resolver does, opened one per datagram, and until 2026-08 nothing released them
+until the container stopped. A flow that has carried nothing for two minutes is
+now swept (`udpFlowIdle`, `udpFlowSweepInterval`, in
+`client/internal/session/udpforward.go`; ADR 0038 is amended and its Decision no
+longer says "no timeout, no bound, no eviction"). The peak is still unbounded: a
+burst opens a channel per source port and the sweep only reclaims them. Forwards
+bind `127.0.0.1`, so this needs a process on the user's own machine -- but a
+loopback port is reachable by every local user, not only the owner, which the
+endpoint's file permissions do not cover. *Covered by* `udpforward_test.go`
+(`TestAQuietFlowExpires`, a busy flow surviving a sweep, and Close during one).
 
 **T/S — the client trusts labels any account can write (1–2).** Which containers
 a client forwards, and since the port became the client's (ADR 0008) which LOCAL port it opens for them, are
@@ -596,10 +646,10 @@ else's labels, so a hostile one can make another user's client open listeners on
 their machine at numbers of the attacker's choosing, carrying the attacker's
 service -- a plausible use of it is answering DNS or syslog on the loopback
 address something else on that machine trusts. How MANY it can ask for is
-bounded: `workspace.MaxRequestedPorts` caps one label at 1024 ports, which is
-past any published range and far short of a label that asks a machine to open
-every socket it has. WHICH numbers those are is not bounded and cannot be, since
-any of them may be the one the user asked for.
+bounded: `maxRequestedPorts` in `core/workspace/ports.go` caps one label at 1024
+ports, which is past any published range and far short of a label that asks a
+machine to open every socket it has. WHICH numbers those are is not bounded and
+cannot be, since any of them may be the one the user asked for.
 This sits inside ADR 0012's stated assumption rather than outside it, and it is
 one more thing the default mode does not have: with a daemon per account, the
 labels a client reads were written by that account alone.
@@ -838,6 +888,20 @@ of somebody's project. What it consumes is that account's own graph volume, and
 an enrolled account can already fill that from any container it starts. Listed
 under accepted risks for that reason rather than defended against here.
 
+**D — a workspace that never answers.** The direction this model
+otherwise ignores. An agent with no case for the command falls through to its
+exec handler, which blocks on a stdin the client will not close while the
+client blocks on the greeting: neither end moves, nothing is printed. Every
+greeting -- cache channel, change channel, `workspace-info` -- is now read under
+a ten second deadline and the stream closed on expiry (`handshakeTimeout`,
+`greet`, `client/internal/session/cache.go`). No version gates anything; what
+gates is a mount needing a capability the workspace does not serve
+(`write=back`, `write=ephemeral`), and that mount is refused by name rather than
+downgraded to `write=through`, since a downgrade moves where somebody's writes
+land. *Covered by* `client/internal/session/handshake_test.go` and
+`test/old-workspace.sh`, which runs this client against the published `0.5.1`
+workspace image.
+
 ---
 
 ## The software you run
@@ -858,6 +922,33 @@ after it was built.
 release they sit in: whoever could replace an archive could replace the file
 listing its hash. Verify the checksum against a second source, or build from
 source, if that matters to you.
+
+**The Windows MSI is unsigned, and it can install the binary as `docker.exe`**
+(ADR 0048, since 2026-09-08). Two surfaces:
+
+| | |
+|---|---|
+| signature | none. No code-signing certificate exists for this project and SmartScreen will warn. It is also **not** in `checksums.txt`, which goreleaser writes before the installer is built |
+| scope | `perMachine`: Program Files, elevated, system PATH |
+| the `docker.exe` name | a WiX Feature, `Level="2"`, unselected by default; `<CopyFile>` makes the second name at install and removes it at uninstall |
+| the refusal | a type 19 custom action when `DOCKERONPATH` finds a `docker.exe`, overridable with `ALLOWDOCKERSHADOW=1` |
+| what it searches | four directories (`System64Folder`, `SystemFolder`, Docker Desktop's two), because Windows Installer's `AppSearch` cannot enumerate PATH |
+
+So a `docker.exe` anywhere else on PATH is not noticed. The install directory is
+appended (`Environment Part="last"`), never prepended, so ours is the one
+shadowed: the failure is the user not getting the name they asked for, not
+losing the other vendor's tool. *Covered by* `test/msi.ps1`, which installs,
+runs the binary out of a fresh shell's PATH and uninstalls, on a Windows runner.
+An MSI built by an actual tag release has never run: `msi.yml` triggers on
+changes under `installer/windows/`, and the release job that uploads it is
+behind `github.ref_type == 'tag'`.
+
+**The NFS server library is a fork this project controls** (ADR 0047). Both
+`core-client/go.mod` and `client/go.mod` `replace github.com/willscott/go-nfs`
+with `github.com/lhns/go-nfs`, pinned by pseudo-version. It carries five
+conformance fixes and a handle-cache fix and nothing else, and is dropped when
+upstream merges them. It is in the client's trusted computing base: it parses
+what the workspace sends.
 
 **Chart `0.2.0` is unsigned**, because the signing step could not authenticate
 to the registry it had just pushed to. Fixed for `0.2.1` and after; the tag
@@ -925,6 +1016,14 @@ Stated here rather than buried, because each is a deliberate trade.
   whoever installs the chart is already able to run privileged pods.
 - **No audit trail inside containers.** Sessions, forwards and refusals are
   logged; what a container did with a mounted directory is not.
+- **The Windows MSI is unsigned and outside `checksums.txt`.** Nothing in the
+  download path authenticates it; the remedy is the zip, which is the same
+  binary and is in `checksums.txt`. Its `docker.exe` feature is off by default
+  and refused when a `docker.exe` is found, but the search reads four
+  directories rather than PATH.
+- **Only a unit test says the shared daemon binds no TCP API.** The per-account
+  daemon has an end-to-end assertion (`per-user-dind.sh` 14); the shared one has
+  `supervise/args_test.go` and nothing else.
 - **Windows and macOS clients are less exercised.** The endpoint code and the
   file-watching backends are where they diverge. Windows takes a session end to
   end only in the machine workflow; macOS has never run a test of any kind.
@@ -938,14 +1037,21 @@ Stated here rather than buried, because each is a deliberate trade.
 - **`automountServiceAccountToken: false` in the chart**: an enrolled account
   has a shell in the pod and could read its ServiceAccount token. Flow 8 has the
   detail and ADR 0035 records the decision.
-- **`workspace.MaxRequestedPorts`**: a client opens local listeners at numbers
-  taken from a container label, and on a shared daemon any account can write
-  one. The numbers were range-checked and their count was not, so one label
-  could ask a machine for as many sockets as it has. Capped at 1024, dropped
-  the way the parser drops anything else it will not use. Flow 5 has the detail.
-- **A datagram flow held until its forward ends**, deliberately not changed: its lifetime is the forward's because TCP's is, and
-  a second lifetime rule is a second thing to get wrong. ADR 0038 records the
-  cost and the trigger that would change it.
+- **A cap on the ports a label may ask for** (`maxRequestedPorts`,
+  `core/workspace/ports.go`): a client opens local listeners at numbers taken
+  from a container label, and on a shared daemon any account can write one. The
+  numbers were range-checked and their count was not, so one label could ask a
+  machine for as many sockets as it has. Capped at 1024, dropped the way the
+  parser drops anything else it will not use. Flow 5 has the detail.
+- **A datagram flow is now expired when it goes quiet.** This document recorded
+  it as deliberately unbounded, on the argument that a flow's lifetime is the
+  forward's because TCP's is. A sender whose source port changes per datagram,
+  which is what a resolver does, therefore left a goroutine, a buffer and an SSH
+  channel behind per datagram until the container stopped. Bounded at two
+  minutes idle since 2026-08 (`client/internal/session/udpforward.go`,
+  `TestAQuietFlowExpires`); ADR 0038 is amended rather than superseded, and its
+  Decision no longer reads "no timeout, no bound, no eviction". Flow 5 has the
+  detail.
 - **A prepare may only name the asking machine's own cache volume.**
   `CacheRequest.Validate` asks whether the volume is a MANAGED
   one, which every machine of an account satisfies for every other machine's
