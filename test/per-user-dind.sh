@@ -33,6 +33,19 @@ DOCKER_TIMEOUT=180
 cleanup() { cleanup_suite "${CLIENT_A_PID:-}" "${CLIENT_B_PID:-}"; }
 trap cleanup EXIT
 
+# wait_dind waits up to 2 x $2 seconds for an account's own daemon to answer.
+wait_dind() {
+    local account=$1 tries=$2
+    for _ in $(seq 1 "$tries"); do
+        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$account" \
+                docker version >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
 # dump_dind says why an account's daemon is not usable, in the two ways nothing
 # else here prints.
 #
@@ -640,15 +653,7 @@ else
     # measure.
     info "starting $B's daemon, so the shell probe does not pay for its boot"
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
-    dind_ready=""
-    for _ in $(seq 1 90); do
-        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker version >/dev/null 2>&1; then
-            dind_ready=yes
-            break
-        fi
-        sleep 2
-    done
-    if [ -z "$dind_ready" ]; then
+    if ! wait_dind "$B" 90; then
         # Said HERE, while it is still about the daemon. Left to the probe, a
         # daemon that will not stay up is reported as "the probe said nothing",
         # which names the symptom and nothing that can be acted on.
@@ -689,6 +694,43 @@ else
     done
 
     da rm -f alice-hold >/dev/null 2>&1
+fi
+
+echo
+echo "== 13. a daemon that was killed rather than stopped starts again =="
+# Arranged rather than waited for: in the wild this arrives about once in
+# eighty runs (agent/internal/daemons.ExecRoot has the failure and the
+# measurement). A stale containerd.pid only stops dockerd while the pid it
+# names is alive, which in the wild is a coincidence; pid 1 is the daemon
+# container's own init and is alive in every incarnation, so planting that
+# makes it deterministic.
+EXECROOT=/var/run/docker
+PIDFILE=$EXECROOT/containerd/containerd.pid
+if ! planted=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
+        sh -c "echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
+    bad "could not plant a stale containerd pid in $B's daemon: [$planted]"
+else
+    # kill, not stop: this is what the workspace container restarting does to
+    # every per-account daemon, since they die with the dockerd holding them.
+    hostdocker exec "$CONTAINER" docker kill "rd-dind-$B" >/dev/null 2>&1
+    hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
+
+    if wait_dind "$B" 60; then
+        ok "$B's daemon came back with a stale containerd pid file behind it"
+    else
+        bad "$B's daemon did not come back after being killed with a stale $PIDFILE"
+        dump_dind "$B"
+    fi
+
+    # The mechanism, asserted separately from the outcome: a daemon that
+    # happened to start would otherwise hide a missing tmpfs until the next
+    # coincidence.
+    if outputs '^tmpfs$' hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
+            stat -f -c %T "$EXECROOT"; then
+        ok "the exec-root is a tmpfs, so nothing in it survives a restart"
+    else
+        bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"
+    fi
 fi
 
 echo

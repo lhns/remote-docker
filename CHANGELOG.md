@@ -10,6 +10,44 @@ software.
 
 ## Unreleased
 
+### An account's daemon no longer fails to restart after the workspace does
+
+A workspace restart kills every account's daemon rather than stopping it, and
+about one time in eighty the daemon then refused to come back: runtime state
+from its previous life survived in the container, and dockerd will not start
+over it. The account's shell waited three minutes for a daemon that was never
+coming, with nothing on screen saying why.
+
+The daemon's exec-root is a tmpfs now, as it is on any real machine, so nothing
+in it survives. Each account's daemon container is recreated once to pick this
+up, and keeps its images, containers and volumes: those are on a volume the
+container in front of it does not own.
+### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
+
+Reported from the field, and it deadlocked outright. The client opens the
+cache channel by asking for `workspace-cache` and reading a greeting; an agent
+predating that command has no case for it, falls through to running it as a
+shell command, and its `os/exec` then waits on a copy of the session's stdin
+which the client never closes because it is blocked reading the greeting. Both
+ends waited on the other, and nothing reached the terminal.
+
+- **Every handshake this client makes is bounded, at ten seconds.** The cache
+  channel, the change channel and `workspace-info`. Closing the stream is the
+  only lever an SSH channel gives, and that is what expiry does. This protects
+  the client against every workspace already deployed, including ones
+  predating whatever is added next; the agent side of the same deadlock was
+  fixed separately, and only helps agents built since.
+- **A mount that needs a capability the workspace does not serve is refused,
+  naming the mount.** `write=back` and `write=ephemeral` need the cache
+  channel; `read=cached` on its own does not. The refusal reports the agent's
+  version as context, and never uses it as the test: there is no minimum
+  version anywhere, because the handshake is built so either side can be
+  older. A workspace that answered nothing gets a different message, because
+  silence names no cause.
+- **An older workspace serving ordinary `write=through` mounts is silent and
+  unchanged.** The channel is now opened when a mount asks for one, so a
+  session that mounts nothing delegated never asks and is never told.
+
 ### Five resources that were acquired and never handed back
 
 An audit for one defect shape: a resource whose release is conditional, or

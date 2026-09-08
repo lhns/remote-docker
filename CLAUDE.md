@@ -874,6 +874,27 @@ premise of the project, and it applies to building it too. So:
   `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
   state is worthless; this one holds somebody's containers, images and volumes.
   `Ensure` on a stopped daemon runs `docker start`.
+- **A per-account daemon's runtime state must not survive the container.** Its
+  `/run` is part of the writable layer, so a daemon that was KILLED rather than
+  stopped comes back with the last life's state still there, and the workspace
+  container restarting kills every one of them. dind's entrypoint deletes
+  `docker*.pid`, which `containerd.pid` does not match, and a stale one naming
+  a LIVE pid kills the daemon two ways, both seen in run `34240150838`:
+  `pidfile.Write` refuses to overwrite it, so dockerd starts containerd, kills
+  it and exits (`process with PID 35 is still running`), 16.125s in; or
+  `pidfile.Read` believes it, so dockerd starts NOTHING and times out 15s later
+  waiting for the containerd it never launched (`containerd is still running`,
+  then `timeout waiting for containerd to start`), 31.27s in. containerd boots
+  in 0.01s, so neither number is a budget that was too small, and a fix
+  answering only the first mode is half a fix. The exec-root is a tmpfs for
+  that reason (`daemons.ExecRoot`). Measured on a runner: 11 failures in 114
+  restarts without it, 0 in 50 clean stops, because a clean shutdown removes
+  the file itself. Seen since at least 2026-08-15 (runs `31853452966`,
+  `31852016220`), which is a floor: run history does not reach further back.
+  The SHARED daemon of ADR 0012 has the same exposure and no fix: it
+  runs the same entrypoint in the workspace container, whose `/run` is equally
+  a writable layer, so a `docker restart` of that container can leave the same
+  file behind. Nothing tests it and no deployment file mounts a tmpfs there.
 - **Adoption keys on the persisted workspace id, never a container id.** An id
   changes on every redeploy, so adopting by it orphans every account's daemon
   on the first `compose up -d` -- still running, unadoptable, holding their
@@ -925,6 +946,15 @@ non-zero container putting NOTHING on the terminal, and `docker wait`
 reporting 9 for a detached one. The status crosses the hijacked stream, where
 over-detecting a hijack exits 0 having printed nothing; the unit tests reach
 only as far as the mapping from `cli.StatusError`.
+
+An EXEC's status, in 6d, which is a second hijacked stream and a different
+endpoint (`/exec/<id>/start`, `/exec/<id>/json`): 11, 0, 13 with `-i`, and 21
+through the embedded CLI. An INTERRUPTED `docker run`, in 6e: 130 where the
+container re-raises the signal, its own 77 where it picks one, and 0 where its
+pid 1 has no handler, ignores the signal and runs to completion, which stock
+docker does too. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read
+`getExitCode` and `forceExitAfter3TerminationSignals` in
+`cmd/docker/docker.go`.)*
 
 Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
 (ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
@@ -1004,6 +1034,18 @@ distribution with it, which is the failure worth catching: a running Linux
 system with nothing naming it. It ends with GNU tar setting attributes on the
 files it wrote, a non-root uid creating a directory, and the conformance probe
 below run against a share backed by NTFS.
+
+`test/old-workspace.sh` is the only suite that does NOT build both ends. It
+pulls a PUBLISHED workspace image (`ghcr.io/lhns/remote-docker-workspace:0.5.1`
+by default, `WORKSPACE_IMAGE` to change it) and runs the current client against
+it. Every other suite has both ends knowing every command the other speaks, so
+none of them can see a client asking for a channel the workspace has never heard
+of, which is what hung a 0.6.0 client against a 0.5.1 workspace with nothing on
+screen. It proves the endpoint comes up at all, that a `write=through` mount
+reads this machine's file, that NOTHING is said about the cache channel while
+nobody asks for one, and that a `write=back` mount is refused by name with a
+remedy rather than hanging or being quietly downgraded. It needs network access
+to ghcr.io and nothing else.
 
 `test/fs-conformance.sh` runs `test/probes/fsprobe` inside a container against a
 plain bind mount on the runner and against a share, and fails on any difference
@@ -1116,12 +1158,10 @@ its pure planning function was.
   `[System64Folder]` is System32, which is the reverse of what the names say:
   searching only the first builds, installs, and misses the directory people
   mean. CI caught it because the runner had a `docker.exe` in each.
-- **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
-  covers containers that exit on their own. Ctrl-C is not one: docker maps a
-  signal-terminated context to 128+signal through an error unexported in its own
-  package main, so this binary exits 1 instead of 130, which `exitCode`'s
-  comment says. No suite runs `docker exec ... sh -c 'exit 7'` either, which is
-  a second hijacked stream carrying a status.
+- **A signal arriving anywhere but during an attached `docker run`.** 6e sends
+  SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
+  a `build` or a `pull`, or before the container starts; nothing tests SIGTERM
+  anywhere, and nothing tests any of this on Windows.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.
