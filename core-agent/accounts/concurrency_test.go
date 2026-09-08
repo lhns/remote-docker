@@ -6,23 +6,21 @@ package accounts
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
 
 // blockingProvisioner parks inside Ensure until it is released, which is what
-// a cold useradd looks like from here.
+// a cold useradd looks like from here. One account only, so Ensure is called
+// once.
 type blockingProvisioner struct {
 	entered chan struct{}
 	release chan struct{}
-	once    sync.Once
 }
 
 func (b *blockingProvisioner) Ensure(name string, _ int, _ string) (string, string, error) {
-	b.once.Do(func() { close(b.entered) })
+	close(b.entered)
 	<-b.release
 	unix := DefaultPrefix + name
 	return unix, "/home/" + unix, nil
@@ -70,9 +68,7 @@ func TestRevokeDoesNotRaceWithAuthentication(t *testing.T) {
 	}
 
 	// Emptied, not removed: that is the revoke path, and it takes two reads.
-	if err := os.WriteFile(filepath.Join(s.keysDir, "alice.pub"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	s.write(t, "alice.pub", nil)
 	if err := s.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -147,13 +143,10 @@ func TestConcurrentSyncsAllocateDistinctUIDs(t *testing.T) {
 // failingProvisioner starts working and then stops, which is a transient
 // useradd failure on a workspace under load.
 type failingProvisioner struct {
-	mu   sync.Mutex
 	fail bool
 }
 
 func (f *failingProvisioner) Ensure(name string, _ int, _ string) (string, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.fail {
 		return "", "", errors.New("useradd: no")
 	}
@@ -173,9 +166,7 @@ func TestFailedProvisioningKeepsAKnownAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prov.mu.Lock()
 	prov.fail = true
-	prov.mu.Unlock()
 
 	if err := s.Sync(); err != nil {
 		t.Fatal(err)

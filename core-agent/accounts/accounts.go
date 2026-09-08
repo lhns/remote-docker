@@ -84,18 +84,17 @@ type Store struct {
 	Provisioner Provisioner
 	Log         *slog.Logger
 
-	// syncMu serialises Sync end to end: the directory read, the uid
-	// allocation and the swap below. mu is not held across the allocation, so
-	// without this two syncs would each load their own uid map, each call
-	// nextUID, and hand one uid to two accounts.
+	// syncMu serialises Sync end to end. mu is not held across the uid
+	// allocation, so without this two syncs would each load their own uid map,
+	// each call nextUID, and hand one uid to two accounts.
 	syncMu sync.Mutex
 
 	mu sync.RWMutex
 
-	// accounts is published to Lookup, whose callers keep the *Account and
-	// range its Keys with no synchronisation (agent/internal/sshd/server.go).
-	// An *Account in here is therefore IMMUTABLE: a change, revocation
-	// included, means a new one in a new map.
+	// An *Account in here is IMMUTABLE once published: Lookup hands the
+	// pointer to the SSH authenticator, which ranges Keys with no
+	// synchronisation (agent/internal/sshd/server.go). A change, revocation
+	// included, means a new *Account in a new map.
 	accounts map[string]*Account
 
 	// unusable is the accounts whose key file was present but held no usable
@@ -234,12 +233,9 @@ func (s *Store) Sync() error {
 // unusable names the accounts whose file is still there but held no key this
 // time round. See the revoke loop for why that is not the same thing as gone.
 //
-// Four phases, and only the last holds s.mu. Provisioning shells out to
-// useradd, usermod and gpasswd per account, so holding the write lock across
-// it blocked Lookup, which is the SSH public-key auth path
-// (agent/internal/sshd/server.go): every session had to wait out a sync, and
-// Sync runs on a 60s poll rather than only at startup. syncMu is what keeps
-// the uid allocation atomic now that the write lock does not.
+// Four phases, and only the last holds s.mu, because provisioning shells out
+// to useradd per account and Lookup reads through that lock. See the syncMu
+// and accounts fields.
 func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, uids map[string]int) error {
 	// 1. Decide the uids. No lock and no exec.
 	//
@@ -262,18 +258,16 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 		account.GID = uid
 	}
 
-	// Persisted before anything is provisioned, which never needed s.mu.
-	// Crashing between here and phase 2 leaves a uid allocated to an account
-	// that does not exist yet, and costs nothing: nextUID is highest+1 and
-	// never reuses one.
+	// Persisted before anything is provisioned. Crashing in between leaves a
+	// uid allocated to an account that does not exist yet, which costs
+	// nothing: nextUID is highest+1 and never reuses one.
 	if changed {
 		if err := s.saveUIDs(uids); err != nil {
 			return err
 		}
 	}
 
-	// 2. Provision, still with no lock held and in the same order. A failure
-	// costs that account this round and nothing else.
+	// 2. Provision, still with no lock held and in the same order.
 	failed := map[string]bool{}
 	for _, name := range names {
 		account := found[name]
@@ -290,10 +284,9 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 3. Build the next map. Seeded from the current one, so an account whose
-	// Ensure failed this round is carried forward as it was and keeps
-	// authenticating: a transient useradd failure must not present as a key
-	// that stopped working.
+	// 3. Build the next map, seeded from the current one so an account whose
+	// Ensure failed this round is carried forward and keeps authenticating: a
+	// transient useradd failure must not present as a key that stopped working.
 	next := make(map[string]*Account, len(s.accounts)+len(found))
 	maps.Copy(next, s.accounts)
 	for _, name := range names {
@@ -317,8 +310,8 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	// twice, the second read being the next event or the next poll. A file that
 	// is GONE revokes at once: there is no write window to be caught in.
 	//
-	// A COPY with no keys, never Keys=nil on the account already published:
-	// see the comment on the accounts field.
+	// A COPY with no keys, never Keys=nil on an account already published: see
+	// the accounts field.
 	for name, account := range next {
 		if _, still := found[name]; still {
 			continue
