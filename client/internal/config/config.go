@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // DefaultSSHPort is the workspace's sshd port.
@@ -740,26 +742,17 @@ func DefaultUser() string {
 }
 
 // sanitizeUser reduces a local username to what the workspace will accept as
-// an account name, matching how the server derives one from a .pub filename.
+// an account name. The derivation is the workspace's own, asked of it rather
+// than copied, because the two ends must land on the same name.
+//
+// A username nothing can be derived from becomes "user", which is a guess the
+// user can correct, where the workspace refuses the key file instead.
 func sanitizeUser(name string) string {
-	name = strings.ToLower(name)
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	out := strings.TrimLeft(b.String(), "0123456789-")
-	if out == "" {
+	account, err := workspace.AccountName(name)
+	if err != nil {
 		return "user"
 	}
-	if len(out) > 30 {
-		out = out[:30]
-	}
-	return out
+	return account
 }
 
 // Save writes the config file, creating its directory if needed.

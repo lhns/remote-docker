@@ -1,5 +1,11 @@
 package accounts
 
+import "github.com/lhns/remote-docker/core/workspace"
+
+// maxNameLength is the account-name cap. core/workspace owns it because the
+// client derives the same name from the local username (workspace.AccountName).
+const maxNameLength = workspace.MaxAccountNameLength
+
 // DefaultPrefix is what a unix account name starts with.
 //
 // The account name is ours -- it comes from the key file, it is what a client
@@ -15,8 +21,8 @@ const DefaultPrefix = "rd-"
 
 // unixName is the unix user behind an account.
 //
-// Truncated so the whole thing fits, prefix included. SanitizeName already
-// caps the account at maxNameLength, so without this the prefix would push it
+// Truncated so the whole thing fits, prefix included. workspace.AccountName
+// already caps the account at maxNameLength, so without this the prefix would push it
 // past what Linux accepts. It moves the cliff where two long names collapse
 // into one from 30 characters to 30 minus the prefix; beyond that they were
 // already colliding, and the uid lookup in Ensure is what catches it either
