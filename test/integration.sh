@@ -293,6 +293,131 @@ else
 fi
 
 echo
+echo "== 6d. an exec's exit status reaches the client =="
+# A second status-carrying hijacked stream: 6c reads /containers/<id>/attach
+# and /containers/<id>/wait, this reads /exec/<id>/start and /exec/<id>/json,
+# and one working says nothing about the other. A distinct code per case, so a
+# collapse to 1 still names which one broke.
+#
+# 6d and 6e are guards on behaviour that already works, not regression tests.
+if dockert run -d --name itest-exec alpine:3 sleep 300 >/dev/null 2>&1; then
+    expect_status "an exec's non-zero exit reaches the client" 11 \
+        dockert exec itest-exec sh -c 'exit 11' </dev/null
+
+    expect_status "an exec that succeeds exits 0" 0 \
+        dockert exec itest-exec true </dev/null
+
+    printf 'go\n' >"$WORK/exec-stdin"
+    expect_status "an exec status survives an attached stdin (-i)" 13 \
+        dockert exec -i itest-exec sh -c 'read line; exit 13' <"$WORK/exec-stdin"
+
+    expect_status "the embedded CLI returns an exec's status" 21 \
+        timeout 60 "$WORK/remote-docker" exec itest-exec sh -c 'exit 21' </dev/null
+
+    docker rm -f itest-exec >/dev/null 2>&1
+else
+    bad "could not start the container the exec status assertions run in"
+fi
+
+echo
+echo "== 6e. an interrupted docker run =="
+# What a script sees when somebody presses Ctrl-C. The number comes from the
+# container and not from here: the CLI catches every signal for the length of a
+# `run` (cli/command/container/run.go, notifyAllSignals) and forwards it, and
+# the container's status arrives as a cli.StatusError like any other. Docker's
+# own 128+N mapping covers commands with no container to carry a status, and is
+# unreachable from here anyway, errCtxSignalTerminated being unexported in its
+# package main.
+#
+#   run_interrupted <container name> <sh script>
+#
+# Leaves the client's exit status in INTERRUPTED_STATUS, and fails if the
+# container never started. The signal goes in only once the container is
+# running: earlier it lands mid-create, which is a different case.
+run_interrupted() {
+    local name=$1 script=$2
+    INTERRUPTED_STATUS=
+
+    "$WORK/remote-docker" run --rm --name "$name" alpine:3 sh -c "$script" \
+        >"$WORK/$name.log" 2>&1 </dev/null &
+    local pid=$!
+
+    local running=no
+    for _ in $(seq 1 60); do
+        if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = "true" ]; then
+            running=yes
+            break
+        fi
+        sleep 1
+    done
+    if [ "$running" = no ]; then
+        bad "$name never started: $(head -3 "$WORK/$name.log")"
+        kill -KILL "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+        docker rm -f "$name" >/dev/null 2>&1
+        return 1
+    fi
+    # Running is not ready: the script's trap is installed a moment later, and
+    # a signal before that hits the pid-1 rule the third case below is about.
+    #
+    # The scripts `sleep 60 & wait` rather than sleeping in the foreground: a
+    # shell waiting on a foreground command defers its trap until that command
+    # returns, so the answer would arrive a minute late.
+    sleep 2
+
+    # A client that catches the signal and then waits forever would hang the
+    # suite rather than failing it.
+    (
+        sleep 90
+        kill -KILL "$pid" 2>/dev/null
+    ) &
+    local watchdog=$!
+
+    kill -INT "$pid" 2>/dev/null
+    wait "$pid"
+    INTERRUPTED_STATUS=$?
+
+    kill "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    docker rm -f "$name" >/dev/null 2>&1
+    return 0
+}
+
+# The container re-raises the signal with its handler removed, so the daemon
+# derives 128+2 itself and nothing on this side invents the number.
+if run_interrupted itest-interrupt-signal 'trap "trap - INT; kill -INT $$" INT; sleep 60 & wait'; then
+    if [ "$INTERRUPTED_STATUS" -eq 130 ]; then
+        ok "an interrupted docker run exits 130"
+    else
+        bad "an interrupted docker run exited $INTERRUPTED_STATUS, want 130; output [$(head -3 "$WORK/itest-interrupt-signal.log")]"
+    fi
+fi
+
+# The same through a status the container chooses, with no 128+N anywhere in
+# it: a client that only ever reports 130 passes the case above and fails this.
+if run_interrupted itest-interrupt-status 'trap "exit 77" INT; sleep 60 & wait'; then
+    if [ "$INTERRUPTED_STATUS" -eq 77 ]; then
+        ok "an interrupted container's own status reaches the client"
+    else
+        bad "an interrupted container's status arrived as $INTERRUPTED_STATUS, want 77; output [$(head -3 "$WORK/itest-interrupt-status.log")]"
+    fi
+fi
+
+# A container whose pid 1 has no handler IGNORES the signal, so one Ctrl-C
+# stops nothing: it runs to completion and this binary faithfully reports its
+# 0. That is the kernel's rule for pid 1 in a namespace, not anything here, and
+# stock docker does the same; its escape hatch is a third signal, which exits 1.
+# Measured 2026-09-08 (run 34242976755) with a `sleep 60` here, which ran its
+# full minute after the client was interrupted.
+if run_interrupted itest-interrupt-ignored 'sleep 10'; then
+    if [ "$INTERRUPTED_STATUS" -eq 0 ]; then
+        ok "a container that ignores the signal runs on, and its status is reported"
+    else
+        bad "a container that ignores the signal ended as $INTERRUPTED_STATUS, want 0; output [$(head -3 "$WORK/itest-interrupt-ignored.log")]"
+    fi
+fi
+
+echo
 echo "== 7. a bind mount under the working directory =="
 expect_output "the container read this machine's file through the tunnel" "from the project directory" -- --rm -v "$PROJECT:/w" alpine:3 cat /w/marker
 

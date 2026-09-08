@@ -158,7 +158,8 @@ not be read would destroy their work to satisfy our bookkeeping.
   because it is the only record that a Linux system was built. Deleting it
   anyway leaves a machine running with nothing naming it.
 - **The decisions are pure and the platform calls are an interface**
-  (`client/internal/machine`), the shape `elevate` and `daemons` already use.
+  (the `machine` module, ADR 0021), the shape `elevate` and `daemons` already
+  use.
   It matters more here: **nobody working on this project has WSL or Hyper-V**,
   so anything that is not a pure function is code that ships without having
   run. The interface exists to make that surface as small as it can be.

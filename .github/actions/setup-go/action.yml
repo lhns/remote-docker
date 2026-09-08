@@ -21,4 +21,5 @@ runs:
           core-client/go.sum
           agent/go.sum
           client/go.sum
+          machine/go.sum
           test/probes/go.sum

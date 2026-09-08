@@ -1,10 +1,9 @@
 package machine
 
-// The WSL backend's decisions, tested on a machine with no WSL.
-//
-// The output samples are real shapes from `wsl -l -v`: UTF-16 with a BOM, an
-// asterisk column for the default distribution, and a header row in whatever
-// language the Windows speaks.
+// The WSL backend's decisions, tested on a machine with no WSL. The output
+// samples are real shapes from `wsl -l -v`: UTF-16 with a BOM, an asterisk
+// column for the default distribution, and a header row in whatever language
+// the Windows speaks.
 
 import (
 	"slices"
@@ -84,7 +83,7 @@ func TestParseWSLListSkipsAHeaderInAnyLanguage(t *testing.T) {
 }
 
 func TestObserveWSL(t *testing.T) {
-	distros := []WSLDistribution{
+	distros := []wslDistribution{
 		{Name: "Ubuntu", State: "Running", Version: 2},
 		{Name: "rd-dev", State: "Stopped", Version: 2},
 		{Name: "rd-old", State: "Running", Version: 1},
@@ -116,16 +115,6 @@ func TestObserveWSL(t *testing.T) {
 	}
 	if got := observeWSL(distros, "rd-dev", "abc"); got.Generation != "abc" {
 		t.Errorf("the generation was not carried through: %q", got.Generation)
-	}
-}
-
-// A distribution list and a VM list are both the user's own namespace, holding
-// their Ubuntu, their Docker Desktop distributions, whatever else. Taking a
-// bare name there is the mistake ADR 0025 records for unix accounts, and both
-// backends make it the same way now.
-func TestMachineName(t *testing.T) {
-	if got := machineName("dev"); got != "rd-dev" {
-		t.Errorf("machineName(dev) = %q", got)
 	}
 }
 

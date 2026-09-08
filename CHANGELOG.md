@@ -10,6 +10,18 @@ software.
 
 ## Unreleased
 
+### An account's daemon no longer fails to restart after the workspace does
+
+A workspace restart kills every account's daemon rather than stopping it, and
+about one time in eighty the daemon then refused to come back: runtime state
+from its previous life survived in the container, and dockerd will not start
+over it. The account's shell waited three minutes for a daemon that was never
+coming, with nothing on screen saying why.
+
+The daemon's exec-root is a tmpfs now, as it is on any real machine, so nothing
+in it survives. Each account's daemon container is recreated once to pick this
+up, and keeps its images, containers and volumes: those are on a volume the
+container in front of it does not own.
 ### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
 
 Reported from the field, and it deadlocked outright. The client opens the
@@ -303,6 +315,15 @@ StatefulSet adopts them.
 
 ### Changed
 
+- **Every release now carries a Windows MSI**, one per architecture, beside the
+  zips: `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It
+  installs into `C:\Program Files\remote-docker` and appends that to the system
+  PATH. An optional feature, off by default, installs a second copy named
+  `docker.exe` — `msiexec /i ... /qn ADDLOCAL=Main,DockerName` — and **refuses
+  when a `docker.exe` is already installed**, naming the one it found;
+  `ALLOWDOCKERSHADOW=1` overrides that. The MSI is unsigned, so SmartScreen
+  will warn, and it is not in the release's `checksums.txt`. See
+  [ADR 0048](docs/adr/0048-a-windows-installer.md).
 - A share whose mode needs a union, on a workspace that cannot make one, is
   refused naming the word that asked for it. `delegated` is
   `read=cached,write=back`, so it is the one way to ask for a union without

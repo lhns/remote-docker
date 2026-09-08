@@ -9,6 +9,7 @@ package machine
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,94 @@ func TestNotesRoundTrip(t *testing.T) {
 	if got := decodeNotes("my dev box, do not delete"); got.Generation != "" {
 		t.Errorf("prose parsed as a generation: %q", got.Generation)
 	}
+}
+
+func TestObserveVM(t *testing.T) {
+	// A PowerShell that failed says nothing about whether the machine is
+	// there. Reported as absent, `machine status` prints `absent` for a machine
+	// that is running and `machine create` proceeds against a name already
+	// taken, where the error names creation rather than what actually happened.
+	boom := errors.New("powershell.exe: exit status 1")
+	if _, err := observeVM(Absent, hyperVNotes{}, boom); !errors.Is(err, boom) {
+		t.Errorf("a PowerShell failure was not reported: %v", err)
+	}
+	if _, err := observeVM(Running, hyperVNotes{Generation: "g"}, boom); err == nil {
+		t.Error("a PowerShell failure on a running machine was swallowed")
+	}
+
+	// Absence has its own signal and needs no error: psGetVM asks with
+	// -ErrorAction SilentlyContinue and prints nothing when the VM is not there.
+	got, err := observeVM(Absent, hyperVNotes{}, nil)
+	if err != nil {
+		t.Fatalf("a machine that is simply not there was reported as a failure: %v", err)
+	}
+	if got.State != Absent {
+		t.Errorf("nothing printed was read as %v", got.State)
+	}
+
+	if got, err = observeVM(Running, hyperVNotes{Generation: "g"}, nil); err != nil {
+		t.Fatalf("observeVM: %v", err)
+	}
+	if got.State != Running || got.Generation != "g" {
+		t.Errorf("a running machine observed as %+v", got)
+	}
+}
+
+func TestHalfCreatedMachineIsRebuildable(t *testing.T) {
+	spec := Spec{Name: "dev", Backend: "hyperv", Port: 2222}
+
+	// What New-VM leaves behind is what a create that died before psSetNotes
+	// leaves behind: no key, and a generation saying so.
+	notes := decodeNotes(notesArg(t, psNewVM("rd-dev", "d.vhdx", "d", spec)))
+	if notes.Generation == spec.Generation() {
+		t.Fatal("New-VM marks the machine as built from the spec, so a create that died halfway matches and nothing rebuilds it")
+	}
+	if notes.Key != "" {
+		t.Errorf("New-VM records a key the machine has not been given: %q", notes.Key)
+	}
+
+	// Leaving the notes empty would not be enough: an unreadable generation is
+	// read as a match, so the half-built machine would still report healthy.
+	// See Observed.Generation and hyperVBuilding.
+	if notes.Generation == "" {
+		t.Fatal("an empty generation is read as a match, which is the fault this is meant to close")
+	}
+
+	observed, err := observeVM(Stopped, notes, nil)
+	if err != nil {
+		t.Fatalf("observeVM: %v", err)
+	}
+	if got := Plan(spec, observed); got != Recreate {
+		t.Errorf("a half-created machine plans %v, so nothing offers to rebuild the one thing nothing can log into", got)
+	}
+
+	// psSetNotes is the single point at which a machine becomes built, and it
+	// writes both fields.
+	done := decodeNotes(notesArg(t, psSetNotes("rd-dev", hyperVNotes{Generation: spec.Generation(), Key: "k"})))
+	if done.Generation != spec.Generation() || done.Key != "k" {
+		t.Fatalf("the finished notes record %+v", done)
+	}
+	if got := Plan(spec, Observed{State: Running, Generation: done.Generation}); got != Nothing {
+		t.Errorf("a finished machine plans %v", got)
+	}
+}
+
+// notesArg pulls the JSON out of the `-Notes '...'` argument of a PowerShell
+// command, undoing psQuote.
+func notesArg(t *testing.T, script string) string {
+	t.Helper()
+
+	_, rest, ok := strings.Cut(script, "-Notes '")
+	if !ok {
+		t.Fatalf("no -Notes argument in: %s", script)
+	}
+	// psQuote doubles a single quote, and JSON produced here contains none, so
+	// the first quote ends the literal.
+	quoted, _, ok := strings.Cut(rest, "'")
+	if !ok {
+		t.Fatalf("unterminated -Notes argument in: %s", script)
+	}
+	return quoted
 }
 
 func TestHyperVEnrolment(t *testing.T) {
@@ -158,7 +247,7 @@ func TestHyperVUnit(t *testing.T) {
 	}
 
 	// Without an image it runs the published one rather than nothing.
-	if !strings.Contains(hyperVUnit(Spec{Port: 22}), DefaultImageRepo) {
+	if !strings.Contains(hyperVUnit(Spec{Port: 22}), defaultImageRepo) {
 		t.Error("a spec with no image produces a unit that runs nothing")
 	}
 }

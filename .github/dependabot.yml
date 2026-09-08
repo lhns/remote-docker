@@ -60,6 +60,14 @@ updates:
     schedule:
       interval: weekly
 
+  # Provisioning a workspace on this machine (ADR 0026). Its third-party
+  # weight is go-containerregistry, which turns the workspace image into a
+  # rootfs; what it refuses is a dependency on the rest of this repository.
+  - package-ecosystem: gomod
+    directory: /machine
+    schedule:
+      interval: weekly
+
   # The integration suites' instruments. Not linked into anything and not
   # shipped; it carries x/sys because it reads raw inotify.
   - package-ecosystem: gomod

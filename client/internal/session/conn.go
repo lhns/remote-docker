@@ -18,12 +18,12 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
+	"github.com/lhns/remote-docker/machine"
 
 	"github.com/lhns/remote-docker/core/workspace"
 )

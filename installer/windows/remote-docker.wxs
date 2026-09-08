@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer. Built on Windows by WiX v5; see build.ps1 beside this
+  file and docs/adr/0048-a-windows-installer.md, which carries the reasoning
+  for everything below.
+
+  Two preprocessor variables, both required: BinPath (the remote-docker.exe to
+  package) and Version (major.minor.build, validated by build.ps1).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!--
+    THE UpgradeCode MUST NEVER CHANGE. It is the only thing that relates one
+    release's MSI to the next: change it and every future upgrade silently
+    stops being an upgrade, leaving two installs side by side, two entries in
+    Programs and Features, and two copies on PATH.
+  -->
+  <Package Name="remote-docker"
+           Manufacturer="lhns"
+           Version="$(Version)"
+           UpgradeCode="6FDE5FD9-D1A3-4094-B8EC-2193CA79C91F"
+           Scope="perMachine"
+           Language="1033"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="Docker from a machine that cannot have Docker installed" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first if you mean to go back." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="remote-docker" />
+    </StandardDirectory>
+
+    <!--
+      The full path of a docker.exe already installed, or empty. AppSearch
+      cannot enumerate PATH, so these are the four directories one realistically
+      comes from, each of which is on PATH when it holds one; first match wins.
+
+      In a 64-bit package `SystemFolder` is SysWOW64 and `System64Folder` is
+      System32, the reverse of what the names suggest. Both are searched:
+      reading only the first builds, installs and refuses correctly while
+      missing the directory anyone means.
+    -->
+    <Property Id="DOCKERONPATH" Secure="yes">
+      <DirectorySearch Id="DS.System64" Path="[System64Folder]">
+        <FileSearch Id="FS.System64" Name="docker.exe" />
+      </DirectorySearch>
+      <DirectorySearch Id="DS.System" Path="[SystemFolder]">
+        <FileSearch Id="FS.System" Name="docker.exe" />
+      </DirectorySearch>
+      <DirectorySearch Id="DS.Desktop" Path="[ProgramFiles64Folder]Docker\Docker\resources\bin">
+        <FileSearch Id="FS.Desktop" Name="docker.exe" />
+      </DirectorySearch>
+      <DirectorySearch Id="DS.DockerRoot" Path="[ProgramFiles64Folder]Docker">
+        <FileSearch Id="FS.DockerRoot" Name="docker.exe" />
+      </DirectorySearch>
+    </Property>
+
+    <!-- Set on the command line to install the docker.exe name anyway. -->
+    <Property Id="ALLOWDOCKERSHADOW" Secure="yes" />
+
+    <!--
+      The feature refuses rather than shadowing another vendor's docker.exe,
+      which is the larger version of the promise ADR 0024 makes about a docker
+      context we did not create. After CostFinalize, where feature action states
+      become readable, and in both sequences so a silent install and an
+      interactive one refuse alike.
+    -->
+    <CustomAction Id="RefuseDockerShadow"
+                  Error="A docker.exe is already installed at [DOCKERONPATH], and the &quot;docker&quot; name would shadow it.&#xA;fix: leave that feature unselected, or pass ALLOWDOCKERSHADOW=1 to install it anyway." />
+    <InstallUISequence>
+      <Custom Action="RefuseDockerShadow" After="CostFinalize"
+              Condition="NOT Installed AND &amp;DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="RefuseDockerShadow" After="CostFinalize"
+              Condition="NOT Installed AND &amp;DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="remote-docker" Level="1" AllowAbsent="no" AllowAdvertise="no"
+             Description="The remote-docker command, added to the system PATH.">
+      <Component Id="C.RemoteDockerExe" Directory="INSTALLFOLDER">
+        <File Id="F.RemoteDockerExe" Name="remote-docker.exe" Source="$(BinPath)" KeyPath="yes" />
+      </Component>
+
+      <!--
+        Appended, never prepended: the install directory going first would put
+        this binary in front of every tool already on the machine.
+      -->
+      <Component Id="C.Path" Directory="INSTALLFOLDER">
+        <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="Path"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <Environment Id="E.Path" Name="PATH" Value="[INSTALLFOLDER]"
+                     Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+
+      <!--
+        Level 2 against the default INSTALLLEVEL of 1: shown in the feature
+        tree, unselected, and selectable; level 0 would hide it entirely. The
+        second name is a DuplicateFile, so the payload ships once and the copy
+        is made at install and removed at uninstall. Nothing in the Go program
+        reads its own name to decide what to be: the Docker CLI is the root
+        command (ADR 0024), so the file's name is the whole installation.
+      -->
+      <Feature Id="DockerName" Title="Also install it as docker.exe" Level="2" AllowAdvertise="no"
+               Description="A second copy named docker.exe, so `docker` on this machine is this program. Refused if a docker.exe is already installed.">
+        <Component Id="C.DockerAlias" Directory="INSTALLFOLDER">
+          <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="DockerAlias"
+                         Type="integer" Value="1" KeyPath="yes" />
+          <CopyFile Id="CF.DockerExe" FileId="F.RemoteDockerExe"
+                    DestinationDirectory="INSTALLFOLDER" DestinationName="docker.exe" />
+        </Component>
+      </Feature>
+    </Feature>
+
+    <ui:WixUI Id="WixUI_FeatureTree" />
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+  </Package>
+</Wix>
