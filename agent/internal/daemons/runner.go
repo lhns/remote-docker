@@ -89,6 +89,13 @@ type Manager struct {
 	mu      sync.Mutex
 	byName  map[string]*Daemon
 	pending map[string]chan struct{}
+	failed  map[string]failure
+}
+
+// failure is the last start that did not work, and when it was given up on.
+type failure struct {
+	at  time.Time
+	err error
 }
 
 // docker is the part of the docker command this package uses.
@@ -131,6 +138,23 @@ func (m *Manager) client(host string) docker {
 // long enough that a burst of API calls, which is what any real docker
 // command is, costs one check rather than hundreds.
 const aliveTTL = 2 * time.Second
+
+// failTTL is how long a failed start is remembered, so that the callers behind
+// it fail fast instead of each paying the ready budget again.
+//
+// Five seconds, and the shape of the problem rather than the length of the
+// budget is what picks it. A burst arrives all at once -- every waiter is woken
+// by the leader closing its channel, within microseconds -- so any window at
+// all collapses the herd; what the window buys on top of that is the calls
+// still being made while the user reads the error. Short enough that somebody
+// who starts a daemon by hand and tries again is not told about the last
+// failure: the remedy for a broken daemon has to work on the next command, not
+// on the one after the timer.
+//
+// Deliberately not longer. A memo cannot tell a daemon that will never start
+// from one somebody has just repaired, and refusing a working daemon is the
+// worse of the two mistakes.
+const failTTL = 5 * time.Second
 
 // DefaultReadyTimeout is how long a cold daemon has to answer.
 //
@@ -190,6 +214,14 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 		}
 
 		m.mu.Lock()
+		// A start that just failed is answered from the record rather than
+		// attempted again. Without this every waiter woken by the leader's
+		// failure becomes the next leader and pays the whole budget itself,
+		// which for `docker compose up` is hundreds of callers serialised.
+		if f, ok := m.failed[account]; ok && time.Since(f.at) < failTTL {
+			m.mu.Unlock()
+			return nil, f.err
+		}
 		if wait, ok := m.pending[account]; ok {
 			// Somebody else is starting it. Wait for them rather than racing.
 			m.mu.Unlock()
@@ -217,6 +249,12 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 			}
 			started.checked = time.Now()
 			m.byName[account] = started
+			delete(m.failed, account)
+		} else {
+			if m.failed == nil {
+				m.failed = map[string]failure{}
+			}
+			m.failed[account] = failure{at: time.Now(), err: err}
 		}
 		m.mu.Unlock()
 		close(wait)
@@ -847,6 +885,9 @@ func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 
 	m.mu.Lock()
 	delete(m.byName, account)
+	// The record of the last failure goes with it: this command is exactly the
+	// repair the memo must not outlive.
+	delete(m.failed, account)
 	m.mu.Unlock()
 
 	if !purge {

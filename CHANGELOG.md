@@ -18,6 +18,11 @@ for a first start on fuse-overlayfs over Ceph or NFS; a healthy daemon answers
 in about a second. Everything that account does waits on it, a shell included,
 so it is also how long somebody with a broken daemon waits for a prompt.
 
+A start that fails is also remembered for five seconds now. `docker compose up`
+is hundreds of API calls, every one of them asks for the daemon, and when the
+first attempt failed each of the others started over and paid the whole budget
+again, one after another.
+
 ### An account's daemon no longer fails to restart after the workspace does
 
 A workspace restart kills every account's daemon rather than stopping it, and
