@@ -1080,6 +1080,35 @@ else
     ok "and it can use the shared docker daemon"
 fi
 
+# The exit status must follow the COMMAND, not the client's stdin. Every other
+# ssh assertion in these suites goes through ssh_account, which redirects
+# </dev/null and so EOFs at once: that cannot show the hang, so this one holds
+# stdin OPEN through a fifo, which is what a terminal is.
+stdin_fifo="$WORK/ssh-stdin-open"
+rm -f "$stdin_fifo"
+mkfifo "$stdin_fifo"
+# Writes nothing and keeps the write end open, so ssh never sends stdin EOF.
+sleep 120 >"$stdin_fifo" &
+stdin_holder=$!
+
+ssh_exec_status() {
+    timeout 20 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o BatchMode=yes -p "$SSH_PORT" "$ACCOUNT@127.0.0.1" true \
+        <"$stdin_fifo"
+    echo "rc=$?"
+}
+
+if outputs '^rc=0$' ssh_exec_status; then
+    ok "a non-pty ssh command returns its exit status with stdin still open"
+else
+    bad "ssh true withheld its status with stdin open (124 is the timeout): $LAST_OUTPUT"
+fi
+
+kill "$stdin_holder" 2>/dev/null || true
+wait "$stdin_holder" 2>/dev/null || true
+rm -f "$stdin_fifo"
+
 # The embedded CLI: the client's own docker, not the runner's.
 if out=$(timeout 60 "$WORK/remote-docker" ps --format '{{.Names}}' 2>&1); then
     ok "the embedded docker CLI talks to the workspace"

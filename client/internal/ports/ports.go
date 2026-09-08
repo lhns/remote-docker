@@ -93,6 +93,12 @@ type Manager struct {
 
 	mu     sync.Mutex
 	active map[string]*containerForwards
+
+	// closed stops Reconcile repopulating active. Reconcile lists containers
+	// OUTSIDE the lock, so one in flight when Close runs would reopen real
+	// listeners (and for udp a goroutine each) that nothing ever closes:
+	// session.liveConn.close calls Close exactly once.
+	closed bool
 }
 
 type containerForwards struct {
@@ -127,6 +133,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
 	if m.active == nil {
 		m.active = map[string]*containerForwards{}
 	}
@@ -227,10 +236,12 @@ func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
 	delete(m.active, id)
 }
 
-// Close tears down every forward.
+// Close tears down every forward, and ends the manager: a Reconcile after it,
+// or one already listing containers when it ran, opens nothing.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closed = true
 	for id, entry := range m.active {
 		for _, fwd := range entry.forwards {
 			_ = fwd.Close()
