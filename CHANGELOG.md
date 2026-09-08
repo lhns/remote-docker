@@ -236,6 +236,10 @@ StatefulSet adopts them.
   an OS thread every two seconds, for as long as the agent ran, and a fill or a
   deletion against such a share waited for the SSH session's lifetime instead of
   reporting the share as not serving.
+- A forwarded UDP flow lived until the container stopped, so a sender whose
+  source port changes per datagram, which is what a resolver does, left a
+  goroutine, a 64KB buffer and an SSH channel behind per datagram. A flow that
+  has carried nothing for two minutes is closed now (ADR 0038).
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.
