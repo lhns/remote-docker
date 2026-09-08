@@ -78,10 +78,9 @@ does not:
 | what ends a flow | FIN or RST on the connection | nothing the protocol carries |
 | flows per exchange | one per connection | one per SOURCE PORT, and a resolver picks a new one per query |
 
-- **2 minutes**, on a per-flow `lastUsed` touched in both directions. The
+- **2 minutes**, on a per-flow `lastUsed` stamped in both directions. The
   workloads carried here are request/response shaped (resolver, syslog,
-  metrics), so a two-minute gap means the exchange is over; a sender that
-  speaks again costs one channel open.
+  metrics), so a two-minute gap means the exchange is over.
 - **Swept every 30s**, the cadence `shareReconcileInterval` and the port
   manager already use.
 - **Not a bound**, which the consequence below already ruled out: a cap evicts
@@ -111,9 +110,8 @@ none of this can be believed from a unit test.
   than the user thinks they have, which is why the README says so rather than
   only this record.
 - **A sender whose source port changes per datagram costs a flow per datagram
-  for 2 minutes, not forever.** A resolver does exactly that. This was the
-  revisit trigger the record named, and the timeout above is the answer it
-  named.
+  for 2 minutes, not forever.** A resolver does exactly that. It was the
+  revisit trigger this record named, and the timeout is the answer.
 - **A flow that is quiet longer than 2 minutes and then speaks pays one channel
   open.** A datagram is not lost by it: the flow is opened by the datagram that
   finds none.

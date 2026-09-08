@@ -271,10 +271,9 @@ func (f *udpForward) countFlows() int {
 	return len(f.flows)
 }
 
-// forwardWithClock hands back a forward whose idle window the test drives, so
-// nothing here waits for a real one. The returned function moves the forward's
-// clock forward.
-func forwardWithClock(t *testing.T, d *dialer, idle time.Duration) (*udpForward, func(time.Duration)) {
+// forwardWithClock hands back a forward on a clock the test drives, so nothing
+// here waits out udpFlowIdle. The returned function moves that clock forward.
+func forwardWithClock(t *testing.T, d *dialer) (*udpForward, func(time.Duration)) {
 	t.Helper()
 	fwd := forwardTo(t, d)
 
@@ -285,7 +284,6 @@ func forwardWithClock(t *testing.T, d *dialer, idle time.Duration) (*udpForward,
 	// Set under the forward's own lock: serve reads now while holding it, and
 	// the race detector counts a plain assignment here as a write against that.
 	fwd.mu.Lock()
-	fwd.idle = idle
 	fwd.now = func() time.Time {
 		mu.Lock()
 		defer mu.Unlock()
@@ -300,12 +298,10 @@ func forwardWithClock(t *testing.T, d *dialer, idle time.Duration) (*udpForward,
 	}
 }
 
-// A flow that goes quiet is closed, which is what keeps a sender whose source
-// port changes per datagram from leaving one channel behind per datagram
-// (ADR 0038).
+// A flow that goes quiet is closed (ADR 0038).
 func TestAQuietFlowExpires(t *testing.T) {
 	d := &dialer{}
-	fwd, advance := forwardWithClock(t, d, time.Minute)
+	fwd, advance := forwardWithClock(t, d)
 	sender := senderTo(t, fwd)
 
 	if _, err := sender.Write([]byte("query")); err != nil {
@@ -318,11 +314,11 @@ func TestAQuietFlowExpires(t *testing.T) {
 		t.Fatal("a flow was closed before its idle window had passed")
 	}
 
-	advance(2 * time.Minute)
+	advance(2 * udpFlowIdle)
 	fwd.sweep()
 
 	if !d.flow(0).isClosed() {
-		t.Error("a flow that carried nothing for twice its idle window is still open")
+		t.Error("a flow that carried nothing for twice udpFlowIdle is still open")
 	}
 	if n := fwd.countFlows(); n != 0 {
 		t.Errorf("the forward still holds %d flows", n)
@@ -332,7 +328,7 @@ func TestAQuietFlowExpires(t *testing.T) {
 // A flow still carrying datagrams is not expired underneath its sender.
 func TestABusyFlowSurvivesASweep(t *testing.T) {
 	d := &dialer{}
-	fwd, advance := forwardWithClock(t, d, time.Minute)
+	fwd, advance := forwardWithClock(t, d)
 	sender := senderTo(t, fwd)
 
 	if _, err := sender.Write([]byte("first")); err != nil {
@@ -340,9 +336,9 @@ func TestABusyFlowSurvivesASweep(t *testing.T) {
 	}
 	waitFor(t, "the flow to open", func() bool { return d.count() == 1 })
 
-	// Past the idle window, then used again: the sweep that follows must find
-	// it fresh.
-	advance(2 * time.Minute)
+	// Past udpFlowIdle, then used again: the sweep that follows must find it
+	// fresh.
+	advance(2 * udpFlowIdle)
 	if _, err := sender.Write([]byte("second")); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +351,7 @@ func TestABusyFlowSurvivesASweep(t *testing.T) {
 
 	// A reply counts as use too: the container answering is the other direction
 	// of the same exchange.
-	advance(2 * time.Minute)
+	advance(2 * udpFlowIdle)
 	d.flow(0).replies <- []byte("answer")
 	buf := make([]byte, 64)
 	if err := sender.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
@@ -374,7 +370,7 @@ func TestABusyFlowSurvivesASweep(t *testing.T) {
 // Close while a sweep is running is clean, which is only visible under -race.
 func TestCloseDuringASweep(t *testing.T) {
 	d := &dialer{}
-	fwd, advance := forwardWithClock(t, d, time.Millisecond)
+	fwd, advance := forwardWithClock(t, d)
 
 	senders := make([]net.Conn, 0, 8)
 	for range 8 {
@@ -385,7 +381,7 @@ func TestCloseDuringASweep(t *testing.T) {
 		}
 	}
 	waitFor(t, "every flow to open", func() bool { return d.count() == len(senders) })
-	advance(time.Second)
+	advance(2 * udpFlowIdle)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
