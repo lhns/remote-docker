@@ -258,11 +258,7 @@ func Plan(account string, opts Options) (Spec, error) {
 	}
 
 	// `dockerd` is named FIRST, and that word is what keeps this daemon off
-	// TCP. See Entrypoint: dind's script only supplies its own --host flags
-	// when the first argument is absent or begins with a dash, and one of
-	// those flags is always tcp://0.0.0.0:2375 or, with certificates,
-	// tcp://0.0.0.0:2376. Naming the binary skips that block and keeps the
-	// one below it, which is the half that matters here.
+	// TCP: see Entrypoint for what the script does with it.
 	//
 	// Two listeners, the one the agent dials and the conventional path, so
 	// anything running inside the daemon's own container still works.

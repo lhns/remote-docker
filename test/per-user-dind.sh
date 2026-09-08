@@ -664,8 +664,9 @@ else
         # Printed rather than only waited on: this restart is the one place a
         # healthy daemon's whole boot is timed, and it is the number any claim
         # about daemon startup has to come from. It was 17.0s +/- 0.2 while
-        # dockerd slept at the unencrypted-listener warning. wait_dind polls
-        # every 2 seconds, so that is the resolution.
+        # dockerd slept at the unencrypted-listener warning, and 1s once no
+        # daemon bound TCP (2026-09-08). wait_dind polls every 2 seconds, so
+        # that is the resolution.
         info "$B's daemon answered in $(( $(date +%s) - started_at ))s"
     fi
 
