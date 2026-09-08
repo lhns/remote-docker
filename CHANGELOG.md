@@ -222,6 +222,11 @@ StatefulSet adopts them.
   reconciliation lists containers before it takes its lock, so one already
   running when the session closed reopened the forwards that close had just
   torn down, and nothing would close them again.
+- A share is rebuilt on every connect, and the descriptor cache it was built
+  with was left holding its files open until its idle timers expired. Bounded
+  rather than a leak, at up to 64 descriptors for two seconds each, and worth
+  fixing because one of them can be a file a container is mid-write, which is
+  the state the cache exists to avoid on Windows.
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.

@@ -585,6 +585,18 @@ premise of the project, and it applies to building it too. So:
   nobody has explained, but it fails loudly in CI rather than quietly here, so it
   lives beside the code in `core-client/nfsserve/handles.go` with a test pinning
   it.
+- **The share registry never shrinks, and must not learn to.** There is no
+  unregister: a share removed leaves every container mounting it with `Stale
+  file handle` against a mount that still looks fine, because the root handle
+  is derived from the export path and MOUNT issues it once, and nothing on this
+  side can tell which exports still have a live kernel mount. `Shares` also
+  feeds the idle release and `rewrite.Guard`, where "in use" must not depend on
+  who asked. Bounded by design: one entry per distinct path this process has
+  exported, tens of bytes each, for the life of the client process. What a
+  share HOLDS is a different question, and is released. `SetAttrs` rebuilds
+  every share's filesystem on every connect, so the stack it replaces is closed
+  (`closeFS`), or its descriptor cache goes on holding files open until its
+  idle timers expire.
 
 - **A WebSocket connection carries its own liveness.**
   `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection
