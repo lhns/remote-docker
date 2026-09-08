@@ -10,7 +10,7 @@ software.
 
 ## Unreleased
 
-### No daemon binds an unauthenticated Docker API, and every one starts sooner
+### Security: no daemon binds an unauthenticated Docker API
 
 Every dockerd here also listened on `tcp://0.0.0.0:2375` with no
 authentication: full control of that daemon for anything that could reach the
@@ -39,7 +39,7 @@ them survives. An agent that cannot mount one says so and starts the daemon
 anyway, and one that finds a daemon already serving from that directory leaves
 it alone.
 
-### The wait for a cold daemon is a setting, and a burst no longer pays it each
+### The wait for a cold daemon is a setting
 
 `WORKSPACE_DAEMON_READY_TIMEOUT` is how many seconds a per-account daemon has
 to answer when it is started. The default is unchanged at 180, chosen for a
@@ -51,7 +51,7 @@ A start that fails is remembered for five seconds. `docker compose up` is
 hundreds of API calls, every one of them asks for the daemon, and each used to
 start over and pay the whole budget again.
 
-### A large write to a share no longer fails, and a share is faster
+### A large write to a share no longer fails
 
 Writing a big file into a shared directory could fail with `Input/output
 error`, and `npm i` of a package carrying a large binary failed every time.
@@ -89,7 +89,7 @@ Linux keeps one RPC transport per server address, and every share of a machine
 mounts from the same one. `timeo` and `retrans` are taken from whichever share
 mounted first and ignored for the rest, until the workspace's daemon restarts.
 
-### A share behaves like a bind mount, and is measured against one
+### A share behaves like a bind mount
 
 `test/probes/fsprobe` runs one fixed sequence of filesystem operations inside a
 container and prints a transcript; CI runs it against a plain bind mount and
@@ -151,7 +151,7 @@ costs more round trips than reading it: measured on a shaped link, a cold union
 reads in the plain mount's time at every latency, and a sparse read is slower.
 The table is in [ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md).
 
-### A slow share can be timed, and can be given more connections
+### A slow share can be timed
 
 `REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
 takes at least that long, with the operation, the path, and the running count
@@ -172,7 +172,7 @@ every mount option this code emits is in the table in
 `core/workspace/kernel_test.go` with the kernel it needs. A test fails on one
 above that floor.
 
-### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
+### A client no longer hangs against an older workspace
 
 Reported from the field. The client opens the cache channel and reads a
 greeting; an agent predating that command runs it as a shell command instead,
