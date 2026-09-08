@@ -113,12 +113,16 @@ var minKernel = map[string]option{
 	// rather than what the NFS client sees.
 	"noatime": {kernel{2, 6, 0}, "MS_NOATIME, a kernel mount flag rather than an NFS option; predates every other row, and the number here is a safe lower bound rather than a checked one"},
 
-	// NOT EMITTED, and this row is why. Added in 5.3, commit 28cc5cd8c68f;
-	// fs/nfs/super.c at v5.2 does not contain the string at all. `man 5 nfs`
-	// carries no "since Linux 5.3" line for it, so the commit is the citation
-	// and the man page is not. Red Hat documents it from RHEL 8.3
+	// EMITTED ONLY WHEN ASKED FOR, by REMOTE_DOCKER_NFS_NCONNECT on the client,
+	// and this row is why nothing gets it otherwise. Added in 5.3, commit
+	// 28cc5cd8c68f; fs/nfs/super.c at v5.2 does not contain the string at all.
+	// `man 5 nfs` carries no "since Linux 5.3" line for it, so the commit is the
+	// citation and the man page is not. Red Hat documents it from RHEL 8.3
 	// (4.18.0-240.el8); no RHEL 7 backport was found, which source cannot
-	// prove either way. It cost a RHEL 7 workspace every one of its mounts.
+	// prove either way. It cost a RHEL 7 workspace every one of its mounts back
+	// when it was unconditional, so the variable is off by default and nothing
+	// checks the workspace's kernel: a mount that asks for it and is refused is
+	// somebody's own request failing loudly.
 	"nconnect": {kernel{5, 3, 0}, "5.3, commit 28cc5cd8c68f; absent from v5.2 fs/nfs/super.c"},
 }
 
@@ -137,7 +141,10 @@ var minKernel = map[string]option{
 // rather than deriving it from a version.
 func TestEmittedOptionsFitTheSupportedKernel(t *testing.T) {
 	for _, read := range []Read{ReadUnset, ReadDirect, ReadCached} {
-		opts := NFSVolumeOptions(30000, "/m/00112233445566ff", read)
+		// Nothing asked for nconnect, which is the only word this list can
+		// carry that the floor does not parse. What a mount that DID ask for it
+		// gets is the next test.
+		opts := NFSVolumeOptions(30000, "/m/00112233445566ff", read, 0)
 		for _, word := range strings.Split(opts["o"], ",") {
 			name, _, _ := strings.Cut(word, "=")
 			needs, known := minKernel[name]
@@ -152,6 +159,28 @@ func TestEmittedOptionsFitTheSupportedKernel(t *testing.T) {
 					"is every mount on such a workspace failing, on volumes that can never be repaired.",
 					read, word, needs.needs, needs.source, minimumKernel)
 			}
+		}
+	}
+}
+
+// nconnect is the ONLY word above the floor a mount can be given, so asking for
+// it is the only way to build an option list a 3.10 workspace refuses.
+//
+// If a second such word ever appears here, the opt-in above stops being one
+// decision a user makes and becomes a set of them, and README's "requires Linux
+// 5.3 on the workspace" stops being the whole answer.
+func TestNConnectIsTheOnlyWordAboveTheFloor(t *testing.T) {
+	for _, word := range strings.Split(NFSVolumeOptions(30000, "/m/00112233445566ff", ReadCached, NConnectMax)["o"], ",") {
+		name, _, _ := strings.Cut(word, "=")
+		needs, known := minKernel[name]
+		if !known {
+			t.Errorf("%q is in no row of minKernel", word)
+			continue
+		}
+		if !minimumKernel.atLeast(needs.needs) && name != "nconnect" {
+			t.Errorf("%q needs Linux %s (%s) and nothing asks for it by name, so a mount that "+
+				"named only nconnect gets it too and fails on a %s workspace",
+				word, needs.needs, needs.source, minimumKernel)
 		}
 	}
 }

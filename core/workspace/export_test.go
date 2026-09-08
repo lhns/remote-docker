@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -153,7 +154,7 @@ func TestParseIDRejects(t *testing.T) {
 }
 
 func TestNFSVolumeOptions(t *testing.T) {
-	opts := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect)
+	opts := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect, 0)
 
 	if opts["type"] != "nfs" {
 		t.Errorf("type = %q, want nfs", opts["type"])
@@ -184,19 +185,65 @@ func TestNFSVolumeOptions(t *testing.T) {
 		}
 	}
 
-	// nconnect was in this list and needs Linux 5.3, which cost a RHEL 7
-	// workspace every one of its mounts. The version rule is asserted for the
-	// whole list in kernel_test.go; this is the one word that has been wrong.
+	// nconnect was in this list unconditionally and needs Linux 5.3, which cost
+	// a RHEL 7 workspace every one of its mounts. It is opt-in now, so what has
+	// to hold is that a mount which asked for nothing carries no trace of it.
+	// The version rule is asserted for the whole list in kernel_test.go; this is
+	// the one word that has been wrong.
 	if strings.Contains(o, "nconnect") {
-		t.Errorf("options %q ask for nconnect, which the supported floor (%s) does not parse", o, minimumKernel)
+		t.Errorf("options %q ask for nconnect unasked, which the supported floor (%s) does not parse", o, minimumKernel)
 	}
+}
+
+// nconnect reaches the option list only when a mount asks for it, and adding it
+// changes nothing else.
+//
+// The default has to be byte-identical to what a workspace already mounts:
+// a docker volume's driver options are immutable, so a word appearing here by
+// accident is not a slower mount but every mount on a pre-5.3 workspace failing
+// forever.
+func TestNFSVolumeOptionsAskForNConnectOnlyWhenTold(t *testing.T) {
+	off := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect, 0)["o"]
+
+	for _, n := range []int{0, 1, -1, NConnectMax + 1, 1000} {
+		if got := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect, n)["o"]; got != off {
+			t.Errorf("nconnect=%d gives %q, want the default %q: 0 and 1 are off, and the "+
+				"kernel refuses the whole option string over a value outside 1..%d",
+				n, got, off, NConnectMax)
+		}
+	}
+
+	for _, n := range []int{2, 8, NConnectMax} {
+		o := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect, n)["o"]
+		word := fmt.Sprintf("nconnect=%d", n)
+		if !strings.Contains(o, word) {
+			t.Errorf("asking for %d connections gives %q, which is missing %q", n, o, word)
+		}
+		// The one word, and nothing else moved.
+		rest := strings.Join(without(strings.Split(o, ","), word), ",")
+		if rest != off {
+			t.Errorf("asking for %d connections gives %q, which differs from the default %q "+
+				"by more than %q", n, o, off, word)
+		}
+	}
+}
+
+// without is s with every occurrence of word removed.
+func without(s []string, word string) []string {
+	var kept []string
+	for _, w := range s {
+		if w != word {
+			kept = append(kept, w)
+		}
+	}
+	return kept
 }
 
 // The read mode varies the attribute caching and nothing else, which is what
 // makes a mode switch a volume recreation rather than a migration.
 func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
-	live := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect)["o"]
-	cached := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadCached)["o"]
+	live := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadDirect, 0)["o"]
+	cached := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadCached, 0)["o"]
 
 	if live == cached {
 		t.Fatal("cached produced the same mount options as consistent")
@@ -224,7 +271,7 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 
 	// Unset is what a mount that named nothing gets, and it must not be a
 	// third behaviour: the workspace default decides before this is reached.
-	if unset := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadUnset)["o"]; unset != live {
+	if unset := NFSVolumeOptions(30000, "/m/00112233445566ff", ReadUnset, 0)["o"]; unset != live {
 		t.Errorf("unset options = %q, want the same as consistent %q", unset, live)
 	}
 }

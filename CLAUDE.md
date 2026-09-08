@@ -562,7 +562,9 @@ premise of the project, and it applies to building it too. So:
   string over one word it does not know, and a docker volume's driver options
   are IMMUTABLE, so an option too new is not a slower mount: it is every mount
   on that workspace failing, forever, until somebody removes the volumes by
-  hand. `nconnect=8` needs 5.3 and did exactly that. Every option
+  hand. `nconnect=8` needs 5.3 and did exactly that; it is back as
+  `REMOTE_DOCKER_NFS_NCONNECT`, off unless a person names it, which is the only
+  thing that makes an unchecked kernel requirement acceptable. Every option
   `NFSVolumeOptions` emits is in the table in `core/workspace/kernel_test.go`
   with the kernel it needs and where that was read; adding one means adding a
   row, and a row above the floor fails the test. There is no way to ask the NFS
@@ -1263,6 +1265,13 @@ its pure planning function was.
   is the table in `core/workspace/kernel_test.go`, a claim about the kernel
   rather than about this code, so only reading the kernel source or `man 5 nfs`
   re-checks a row.
+- **Whether `nconnect` helps at all.** `REMOTE_DOCKER_NFS_NCONNECT` offers the
+  option that broke that RHEL 7 workspace, off by default and with no kernel
+  check: a workspace too old refuses every mount, loudly, and unsetting the
+  variable is the remedy. No suite and no bench has ever run with it set, so
+  nothing here says it is faster. What is unit tested is that the option list is
+  byte-identical without it, that 0 and 1 emit nothing and that 16 is the
+  kernel's ceiling.
 
 ## Conventions
 

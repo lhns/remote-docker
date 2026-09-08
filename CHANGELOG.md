@@ -38,6 +38,25 @@ A start that fails is also remembered for five seconds now. `docker compose up`
 is hundreds of API calls, every one of them asks for the daemon, and when the
 first attempt failed each of the others started over and paid the whole budget
 again, one after another.
+### More connections behind a share, if you ask for them
+
+`REMOTE_DOCKER_NFS_NCONNECT=2` to `16` tells the workspace's NFS client to open
+that many connections per share. Off unless you set it.
+
+**It needs Linux 5.3 or newer on the workspace and nothing checks first.** This
+is the option that broke every bind mount on a RHEL 7 workspace when it was
+unconditional: an older NFS client refuses the whole option string over the one
+word it does not know, so `invalid argument` names a list whose every word is
+valid. Now nobody gets it without asking, and unsetting the variable is the fix.
+
+It is one setting for all shares rather than one per share, because Linux keeps
+a single RPC transport per server address and every share mounts from the same
+one. More connections raises the ceiling on requests in flight, which the file
+server bounds per connection.
+
+**Whether it is faster is unmeasured.** Nothing in CI or in the bench runs with
+it on. Turn it on, report what happened, and that is what would make it a
+default.
 
 ### An account's daemon no longer fails to restart after the workspace does
 

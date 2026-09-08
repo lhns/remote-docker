@@ -326,6 +326,7 @@ default.**
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
 | `REMOTE_DOCKER_NFS_FDCACHE` | | | `2s` that a file stays open after the request that used it; `0` closes it on every request |
+| `REMOTE_DOCKER_NFS_NCONNECT` | | | off; `2`–`16` connections per share. **Needs Linux 5.3 on the workspace** and breaks every mount without it. See [More connections behind a share](#more-connections-behind-a-share) |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
 
 Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
@@ -333,9 +334,9 @@ Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 `REMOTE_DOCKER_TRACE` belongs to the **session**, which is the process that
 forwards the requests, so set it there:
 `REMOTE_DOCKER_TRACE=1 remote-docker remote start`. On a docker command it does
-nothing, and says so. `REMOTE_DOCKER_NFS_TRACE` and
-`REMOTE_DOCKER_NFS_FDCACHE` belong to the session too, which is what serves
-the share.
+nothing, and says so. `REMOTE_DOCKER_NFS_TRACE`,
+`REMOTE_DOCKER_NFS_FDCACHE` and `REMOTE_DOCKER_NFS_NCONNECT` belong to the
+session too, which is what serves the share.
 
 ### Several workspaces
 
@@ -498,6 +499,36 @@ carries it, which is what a per-account daemon should be running anyway (see
 A mount outranks a per-directory rule, which outranks the workspace setting,
 and switching costs a volume rebuild rather than a migration.
 
+### More connections behind a share
+
+**`REMOTE_DOCKER_NFS_NCONNECT` requires Linux 5.3 or newer on the WORKSPACE,
+and nothing checks that before mounting.** Not your own machine's kernel: the
+workspace is what mounts a share. On anything older the NFS client refuses the
+*whole* option string over the one word it does not know, so **every bind mount
+fails**, with `invalid argument` against an option list whose every word is
+individually valid, and the volumes it made cannot be repaired without removing
+them. That is why it is off unless you set it, and unsetting it is the fix.
+
+```bash
+REMOTE_DOCKER_NFS_NCONNECT=4 remote-docker remote start
+```
+
+`2` to `16`; `0` and `1` are off, which is what a mount does anyway. It belongs
+to the session, like the other `REMOTE_DOCKER_NFS_*` variables, and it takes
+effect on volumes created after it: a share whose volume already exists keeps
+the options it was built with until that volume is removed.
+
+It is one setting for every share, not one per share. Linux keeps a single RPC
+transport per server address and every share of yours mounts from
+`127.0.0.1:<tunnel port>`, so all of them share one transport and this
+multiplies the connections behind all of them at once. What that buys is a
+higher ceiling on requests in flight: the file server bounds those per
+connection, so more connections is a bigger bound.
+
+**Whether it makes anything faster here is unmeasured.** Nothing in CI or in
+`test/bench.sh` has run with it on. If you turn it on and it helps, or does
+not, say so in an issue; that is what would turn it into a default.
+
 What is in this release, and what is still unproven:
 [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -517,6 +548,11 @@ again. What each option needs, and where that was read in the kernel source, is
 the table in `core/workspace/kernel_test.go`; a test fails on anything above the
 floor. Your own machine's kernel does not come into it, and neither does macOS
 or Windows: the client mounts nothing.
+
+The one option above the floor a share can be given is `nconnect`, and only
+because you asked for it by name with `REMOTE_DOCKER_NFS_NCONNECT`, which needs
+5.3 and is off by default. See
+[More connections behind a share](#more-connections-behind-a-share).
 
 Two things about an old workspace kernel that are *not* the floor:
 
@@ -1175,7 +1211,9 @@ cluster and CI cannot cover it.
 **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
 option newer than the supported floor passes CI and fails on the workspace, on
 every bind mount at once. `nconnect=8` did exactly that on a RHEL 7 workspace.
-What guards it is a table, not a test run.
+What guards it is a table, not a test run. `REMOTE_DOCKER_NFS_NCONNECT` is that
+same option offered as an opt-in, and **nothing measures whether it helps**: no
+suite and no benchmark has ever run with it on.
 **The Windows MSI is installed and uninstalled on a runner** when the installer
 changes, which is more than the zips get — nobody has ever unpacked one of
 those on a machine that did not build it. But no MSI from a real release has
