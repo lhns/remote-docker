@@ -3,15 +3,16 @@
 - Status: Accepted. Consolidates ADR 0011 (shared contract), ADR 0030 (tunnel in
   `core`) and ADR 0031 (the glue rule): stages of one decision, no longer
   separate records.
-- Date: 2026-08-07, last decided 2026-09-02, consolidated 2026-08-19
+- Date: 2026-08-07, last decided 2026-09-08, consolidated 2026-08-19
 - Current answer: **two axes**. Modules split by SIDE; packages inside `core`
-  split by FEATURE. Seven modules, of which one is test-only.
+  split by FEATURE. Eight modules, of which one is test-only.
 
 ## The decision
 
 ```
 github.com/lhns/remote-docker/core          SHARED: what both ends must agree on
 github.com/lhns/remote-docker/dircache      A CACHE ENGINE, usable on its own
+github.com/lhns/remote-docker/machine       PROVISIONING A MACHINE (ADR 0026)
 github.com/lhns/remote-docker/core-client   THE USER'S MACHINE, minus Docker
 github.com/lhns/remote-docker/core-agent    THE WORKSPACE, minus Docker
 github.com/lhns/remote-docker/client        the client binary: glue
@@ -61,9 +62,10 @@ Three rules place everything:
    forwards, file watching, unix accounts: wanted without Docker existing.
    Bind→volume rewriting, hijack detection, supervising dockerd, resolving an
    account to its daemon: not.
-3. **Its own module only if it is worth taking WITHOUT the rest of the one it
-   would otherwise sit in.** This is a claim about the dependency graph, not
-   about tidiness, and there is exactly one thing that meets it. See
+3. **Its own module only if there is a dependency worth REFUSING by name.** A
+   module is the only construct Go lets refuse one, so the boundary is bought
+   for a refusal that can be written as a command and run. Two things meet it:
+   `dircache` refuses everything, `machine` refuses this repository. See
    "The third question" below.
 
 Contents:
@@ -72,6 +74,7 @@ Contents:
 |---|---|
 | `core` | `workspace` (the names and numbers both ends derive, and the handshake), `notify` and `cache` (one protocol each, whole), `tunnel` (how bytes and datagrams cross a connection), `logx` |
 | `dircache` | the cache policy: fill order, invalidation, write-back |
+| `machine` | creating, locating, holding and destroying a WSL distribution or a Hyper-V VM, and the rootfs it is built from |
 | `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient` |
 | `core-agent` | `accounts`, `replay`, `netns`, `tunnelserver`, `union`, `wslisten` |
 | `client`, `agent` | everything that names Docker |
@@ -171,13 +174,14 @@ of which fail by *succeeding*:
 
 `ports` was expected to split and did not: *"splitting further invents an
 abstraction with one user."* That precedent reaches every candidate here except
-one, and the difference is not size or elegance.
+two, and the difference is not size or elegance.
 
-| | `ports` | `dircache` |
-|---|---|---|
-| what a second user would supply | a forward, which `tunnelclient` already is | a `Store`: somewhere files live |
-| what a package inside `core-client` would drag along | nothing; the caller is in `client` regardless | that module's seven third-party requires |
-| third-party requires of its own | n/a | **0** |
+| | `ports` | `dircache` | `machine` |
+|---|---|---|---|
+| what a second user would supply | a forward, which `tunnelclient` already is | a `Store`: somewhere files live | nothing; it is already a leaf |
+| what a package inside its old module would drag along | nothing; the caller is in `client` regardless | `core-client`'s seven third-party requires | `client`'s 191 docker packages |
+| third-party requires of its own | n/a | **0** | go-containerregistry, and 7 docker packages under it |
+| what the boundary refuses | n/a | every third party | every package in this repository |
 
 The cache engine decides what to copy, in what order, what a local change means
 for a cache, and what a cached change means for somebody's source tree. None of
@@ -196,6 +200,10 @@ module can. The property is checked rather than trusted:
 # A dot in the FIRST path element is a domain, which is what a third party is.
 # Matching a dot anywhere counts crypto/internal/entropy/v1.0.0, and reports 1.
 (cd dircache && go list -deps ./... | grep -v lhns/remote-docker | grep -cE '^[^/]+\.[^/]+/')  # 0
+
+# machine's is the opposite direction: third parties are fine, this repository
+# is not. Must print nothing.
+(cd machine && go list -deps ./... | grep 'lhns/remote-docker' | grep -v '/machine')
 ```
 
 **The two side-boundaries do not buy the same thing**, and it is worth saying
@@ -211,12 +219,46 @@ the module every other module imports, and they were imported by no Go file,
 linked into neither binary and shipped in nothing.
 
 What it cost, honestly: a module must be enumerated in `go.work`,
-`.github/dependabot.yml`, `.goreleaser.yaml`, four workflow files, this record,
-`docs/adr/README.md` and CLAUDE.md's layout and two loops. Two of those fail
-SILENTLY -- `integration.yml`'s change-detection regex, where a miss means the
-suite quietly stops running on changes to it, and the `cache-dependency-path`
-lists, where a miss is a cache miss nobody sees. `dircache` has no `go.sum` to
-list, because it has nothing to cache.
+`.github/dependabot.yml`, `.goreleaser.yaml`, `.github/actions/setup-go`, four
+workflow files, this record, `docs/adr/README.md` and CLAUDE.md's layout and two
+loops. `ci.yml` alone spells the set five times, and one of those is the Windows
+SUBSET, where a miss drops a platform's coverage rather than a module's. Two of
+them fail SILENTLY: `integration.yml`'s change-detection regex, where a miss
+means the suite quietly stops running on changes to it, and the
+`cache-dependency-path` lists, where a miss is a cache miss nobody sees.
+`dircache` has no `go.sum` to list, because it has nothing to cache.
+
+## `machine`, and what it does not buy
+
+Extracted 2026-09-08. `client/internal/machine` was already a leaf: 2,581 lines
+(1,586 code), the 4th largest package in `client`, and `go list -deps` named no
+package of this repository but itself. The seam is 15 exported identifiers
+across 5 files, four of them in `client/cmd/remote-docker` and one non-command
+consumer, `client/internal/session/conn.go`, which uses `Locate` and `Hold`.
+
+**It does not shrink the client binary's graph.** `client` imports `machine`
+unconditionally either way, so there is no `core-client`-shaped claim to make
+here: no "0 docker packages against 191". `machine`'s own graph is 241
+packages, 24 of them go-containerregistry (which turns the workspace image into
+a rootfs) and 7 docker.
+
+What it buys is rule 3, and only that: the leaf is now pinned as one. Reaching
+back into `config`, `session` or `core` compiled before and does not now, and
+the command above says so in one line rather than a reviewer having to notice.
+
+**Its packages became public API**, which `internal/` used to prevent. Accepted
+rather than worked around: hiding the implementation under `machine/internal/`
+would restore the restriction and cost a directory level for a module with one
+package, and this repository has no external consumer to constrain it (see
+above). Nothing here is versioned or tagged, so what "public" costs is the
+`replace` ordering recorded above.
+
+**`machine` is in the WINDOWS test job**, not only the Linux loops.
+`wsl_windows.go` and `hyperv_windows.go` are build-tagged `windows`: the
+cross-compile matrix builds them and runs nothing, and the lint loop never sees
+them, so `ci.yml`'s `test (windows)` job is the only place either file is
+executed. That is the inverse of the `GOOS=linux` passes `agent` and
+`core-agent` get.
 
 ## What could not be moved
 
@@ -276,10 +318,10 @@ that passes without proving anything.
 - **`core` has no third-party dependency at all.** Its `go.mod` carries no
   require; the `x/sys` it used to hold went to `test/probes` with the probes
   that read raw inotify.
-- **`./...` stops at every module boundary**, so the seven-module loop is the
+- **`./...` stops at every module boundary**, so the eight-module loop is the
   only thing that covers the repository. With no root module the naive command fails
   rather than passing.
-- **`golangci-lint` runs nine times**: one per module, plus `GOOS=linux` for
+- **`golangci-lint` runs ten times**: one per module, plus `GOOS=linux` for
   `agent` and `core-agent`, whose Linux-only files a host lint never sees.
 - **Dependabot needs one entry per module.** It does not discover nested modules;
   a directory missing from `dependabot.yml` stops being updated silently.
@@ -291,7 +333,8 @@ that passes without proving anything.
 - **Publishing gains an ordering constraint.** An outside consumer of a contract
   change needs a tag on `core` first; in-repo the `replace` hides it, which is
   how it will be forgotten.
-- **`internal/` became public API.** What moved out is no longer free to change.
+- **`internal/` became public API.** What moved out is no longer free to change,
+  `machine` included.
 - **The standing temptation**: putting helpers in `core` because both sides want
   them today. That is how a contract package becomes a utility dump. Both rules
   are narrow on purpose.

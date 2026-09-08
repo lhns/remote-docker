@@ -8,9 +8,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/client/internal/machine"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/machine"
 )
 
 // The workspaces in ~/.remote-docker.json.

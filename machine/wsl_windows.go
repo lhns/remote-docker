@@ -5,8 +5,8 @@ package machine
 // The WSL backend: the part that runs wsl.exe.
 //
 // Everything it decides lives in wsl.go and is tested on any platform. What is
-// here is argument assembly and process running, kept as thin as it can be
-// made, because this is the code that ships without anybody having run it.
+// here is process running, kept as thin as it can be made, and executed only in
+// ci.yml's `test (windows)` job and the `a machine on wsl` suite.
 
 import (
 	"context"
@@ -48,13 +48,11 @@ func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) 
 	distro := machineName(name)
 
 	// The exit status is deliberately not consulted. WSL exits NON-ZERO when
-	// there are no distributions at all -- "Windows Subsystem for Linux has no
-	// installed distributions" -- which is not a failure to look, it is the
-	// answer, and treating it as a failure made the very first `machine create`
-	// on a fresh WSL refuse with "cannot tell what is there".
-	//
-	// A real failure to reach WSL was already caught by Available, which ran
-	// immediately before this and asked the service directly.
+	// there are no distributions at all, which is the answer rather than a
+	// failure to look: treating it as one made the first `machine create` on a
+	// fresh WSL refuse with "cannot tell what is there". A real failure to
+	// reach WSL was already caught by Available, which asked the service
+	// directly.
 	raw, _ := b.wsl(ctx, "--list", "--verbose")
 
 	observed := observeWSL(parseWSLList(raw), distro, "")
@@ -62,11 +60,9 @@ func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) 
 		return observed, nil
 	}
 
-	// Read from inside the distribution, so that a machine somebody exported
-	// and re-imported carries its own answer. A read that fails leaves the
-	// generation empty, which Plan treats as a match rather than a mismatch --
-	// deliberately, because destroying a machine over an unreadable file would
-	// take somebody's containers with it.
+	// Read from inside the distribution, so a machine somebody exported and
+	// re-imported carries its own answer. A read that fails leaves the
+	// generation empty, which Plan treats as a match. See Observed.Generation.
 	if gen, err := b.wsl(ctx, wslReadGenerationArgs(distro)...); err == nil {
 		observed.Generation = strings.TrimSpace(decodeWSLOutput(gen))
 	}
@@ -74,11 +70,8 @@ func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) 
 }
 
 // Create imports a rootfs as a distribution and arranges for the agent to run
-// in it.
-//
-// The rootfs is the workspace image's filesystem, which is the whole reason
-// this is short: the thing being installed is the artifact CI builds and tests
-// on every push, and there is no package manager anywhere on this path.
+// in it. It is short because the rootfs is the workspace image's filesystem:
+// there is no package manager anywhere on this path.
 func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 	if spec.Rootfs == "" {
 		return fmt.Errorf("no rootfs to import: a machine is created from the workspace image's filesystem")
@@ -121,10 +114,9 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 
 // Enrol writes a public key where the agent's watcher will find it.
 //
-// The filename is the account name, which is the enrolment convention
-// everywhere else (ADR 0010), and the agent polls the directory as well as
-// watching it, so a key written into a running machine is picked up without
-// anything being restarted.
+// The filename is the account name, the enrolment convention everywhere else
+// (ADR 0010), and the agent polls the directory as well as watching it, so a
+// key written into a running machine is picked up without a restart.
 func (b wslBackend) Enrol(ctx context.Context, name, account, publicKey string) error {
 	path := "/etc/workspace/authorized_keys.d/" + account + ".pub"
 	// Backquoted, so the \n reaches printf as two characters for IT to
@@ -135,10 +127,9 @@ func (b wslBackend) Enrol(ctx context.Context, name, account, publicKey string) 
 	return err
 }
 
-// Start runs the distribution, which runs its boot command.
-//
-// `wsl -d <name> true` is the whole of it: WSL starts a distribution on first
-// use and there is no separate start verb.
+// Start runs the distribution, which runs its boot command. `wsl -d <name>
+// true` is the whole of it: WSL starts a distribution on first use and there is
+// no separate start verb.
 func (b wslBackend) Start(ctx context.Context, name string) error {
 	_, err := b.wsl(ctx, wslRunArgs(machineName(name), "true")...)
 	return err
