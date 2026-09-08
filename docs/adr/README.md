@@ -80,6 +80,7 @@ What the binary is, what it answers to, and where it can run.
 | [0023](0023-running-where-the-loader-is-not-us.md) | Running where the loader is not us |
 | [0024](0024-the-docker-cli-is-the-root.md) | The Docker CLI is the root |
 | [0040](0040-git-bash-mangles-argv.md) | Git Bash mangles argv, and the client undoes it |
+| [0048](0048-a-windows-installer.md) | A Windows installer, and it will not take the name `docker` |
 
 ## Sessions and connections
 

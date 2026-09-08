@@ -78,6 +78,33 @@ const (
 	SocketName  = "docker.sock"
 )
 
+// ExecRoot is dockerd's exec-root inside a daemon container, given a tmpfs of
+// its own so that nothing in it survives the container being restarted.
+//
+// A container's /run is part of its writable layer, so runtime state written
+// there outlives a kill, which on a real machine it never does. dind's
+// entrypoint deletes `docker*.pid` and containerd's file is `containerd.pid`,
+// so a daemon killed rather than stopped comes back with a stale
+// containerd/containerd.pid naming a pid from its previous life. dockerd then
+// starts containerd, refuses to record its pid because the file names a live
+// process, kills the containerd it just started, and exits:
+//
+//	failed to start containerd: libcontainerd: failed to save daemon pid to
+//	disk: process with PID 35 is still running
+//
+// It dies 16.125s in, which is dockerd's deliberate delay before the
+// unencrypted-listener warning and not a budget running out (issue #154).
+//
+// The same file kills the daemon a SECOND way, and a fix that answers only the
+// first is half a fix: dockerd can instead read the live pid, believe
+// containerd is already up, start nothing at all, and time out 15s later
+// waiting for it. containerd boots in 0.01s, so neither number is a timeout
+// that was too short.
+//
+// The pid is live only by coincidence, which is why this presented as a flake.
+// The invariant in CLAUDE.md carries both measurements.
+const ExecRoot = "/var/run/docker"
+
 // Labels identify a container as a daemon we manage, and whose.
 //
 // The workspace label carries an id persisted in the state directory, NOT the
@@ -132,6 +159,9 @@ type Spec struct {
 	Labels []string
 	Mounts []elevate.Mount
 	Env    []string
+
+	// Tmpfs are paths that must start empty every time. See ExecRoot.
+	Tmpfs []string
 
 	// Command is the dockerd invocation, including the sockets it listens on.
 	Command []string
@@ -241,6 +271,9 @@ func Plan(account string, opts Options) (Spec, error) {
 			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
 			{Type: "volume", Name: VolumeName(account), Destination: "/var/lib/docker"},
 		}, opts.Mounts...),
+		// exec because runc executes from the exec-root, and 0755 rather
+		// than docker's tmpfs default of 1777.
+		Tmpfs: []string{ExecRoot + ":rw,exec,mode=755"},
 		// TLS off: the only thing that can reach this daemon is the agent,
 		// over a unix socket in a directory only the agent and the account can
 		// enter. Certificates would secure a network path that does not exist.
@@ -270,6 +303,7 @@ func (s Spec) Args() []string {
 		Labels:     s.Labels,
 		Mounts:     s.Mounts,
 		Env:        s.Env,
+		Tmpfs:      s.Tmpfs,
 		Command:    s.Command,
 	}.Args()
 }

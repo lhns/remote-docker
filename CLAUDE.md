@@ -140,6 +140,11 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the volume lookup notify asks for
 
 image/                   the workspace container (Dockerfile only)
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
+                         Built ON WINDOWS: WiX loads on Linux and then says its
+                         behaviour is undefined, and means it. `docker.exe` is
+                         a Feature and a DuplicateFile, so the payload ships
+                         once
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
 charts/                  the Helm chart, for the same agent on Kubernetes
@@ -201,6 +206,16 @@ bash test/integration.sh
 # claim about speed has to come from. Run it from the `bench` label on a pull
 # request, or workflow_dispatch once it is on main.
 bash test/bench.sh
+
+# the Windows MSI. ON WINDOWS, and it is the one thing here that cannot be
+# built anywhere else (ADR 0048). The version must be major.minor.build, which
+# is what an MSI compares; build.ps1 refuses anything else rather than
+# truncating it into an upgrade that never fires.
+dotnet tool install --global wix --version 5.0.2
+wix extension add -g WixToolset.UI.wixext/5.0.2
+installer/windows/build.ps1 -Version 0.6.0 -Arch x64 `
+  -Binary dist/windows_amd64/remote-docker.exe `
+  -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
 
 # the chart, in eight seconds and without a cluster
 helm lint charts/remote-docker-workspace
@@ -859,6 +874,27 @@ premise of the project, and it applies to building it too. So:
   `docker rm -f` opener into `daemons`. elevate's child is a singleton whose
   state is worthless; this one holds somebody's containers, images and volumes.
   `Ensure` on a stopped daemon runs `docker start`.
+- **A per-account daemon's runtime state must not survive the container.** Its
+  `/run` is part of the writable layer, so a daemon that was KILLED rather than
+  stopped comes back with the last life's state still there, and the workspace
+  container restarting kills every one of them. dind's entrypoint deletes
+  `docker*.pid`, which `containerd.pid` does not match, and a stale one naming
+  a LIVE pid kills the daemon two ways, both seen in run `34240150838`:
+  `pidfile.Write` refuses to overwrite it, so dockerd starts containerd, kills
+  it and exits (`process with PID 35 is still running`), 16.125s in; or
+  `pidfile.Read` believes it, so dockerd starts NOTHING and times out 15s later
+  waiting for the containerd it never launched (`containerd is still running`,
+  then `timeout waiting for containerd to start`), 31.27s in. containerd boots
+  in 0.01s, so neither number is a budget that was too small, and a fix
+  answering only the first mode is half a fix. The exec-root is a tmpfs for
+  that reason (`daemons.ExecRoot`). Measured on a runner: 11 failures in 114
+  restarts without it, 0 in 50 clean stops, because a clean shutdown removes
+  the file itself. Seen since at least 2026-08-15 (runs `31853452966`,
+  `31852016220`), which is a floor: run history does not reach further back.
+  The SHARED daemon of ADR 0012 has the same exposure and no fix: it
+  runs the same entrypoint in the workspace container, whose `/run` is equally
+  a writable layer, so a `docker restart` of that container can leave the same
+  file behind. Nothing tests it and no deployment file mounts a tmpfs there.
 - **Adoption keys on the persisted workspace id, never a container id.** An id
   changes on every redeploy, so adopting by it orphans every account's daemon
   on the first `compose up -d` -- still running, unadoptable, holding their
@@ -910,6 +946,15 @@ non-zero container putting NOTHING on the terminal, and `docker wait`
 reporting 9 for a detached one. The status crosses the hijacked stream, where
 over-detecting a hijack exits 0 having printed nothing; the unit tests reach
 only as far as the mapping from `cli.StatusError`.
+
+An EXEC's status, in 6d, which is a second hijacked stream and a different
+endpoint (`/exec/<id>/start`, `/exec/<id>/json`): 11, 0, 13 with `-i`, and 21
+through the embedded CLI. An INTERRUPTED `docker run`, in 6e: 130 where the
+container re-raises the signal, its own 77 where it picks one, and 0 where its
+pid 1 has no handler, ignores the signal and runs to completion, which stock
+docker does too. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read
+`getExitCode` and `forceExitAfter3TerminationSignals` in
+`cmd/docker/docker.go`.)*
 
 Since the two axes (ADR 0042), the union (ADR 0044) and the prefetch policy
 (ADR 0045), on 2026-09-04 (PR 110): a `read=cached` mount reading a file and
@@ -990,12 +1035,36 @@ system with nothing naming it. It ends with GNU tar setting attributes on the
 files it wrote, a non-root uid creating a directory, and the conformance probe
 below run against a share backed by NTFS.
 
+`test/old-workspace.sh` is the only suite that does NOT build both ends. It
+pulls a PUBLISHED workspace image (`ghcr.io/lhns/remote-docker-workspace:0.5.1`
+by default, `WORKSPACE_IMAGE` to change it) and runs the current client against
+it. Every other suite has both ends knowing every command the other speaks, so
+none of them can see a client asking for a channel the workspace has never heard
+of, which is what hung a 0.6.0 client against a 0.5.1 workspace with nothing on
+screen. It proves the endpoint comes up at all, that a `write=through` mount
+reads this machine's file, that NOTHING is said about the cache channel while
+nobody asks for one, and that a `write=back` mount is refused by name with a
+remedy rather than hanging or being quietly downgraded. It needs network access
+to ghcr.io and nothing else.
+
 `test/fs-conformance.sh` runs `test/probes/fsprobe` inside a container against a
 plain bind mount on the runner and against a share, and fails on any difference
 not listed with a reason in `test/fs-conformance/deviations-*.txt`. The Linux
 leg is a suite in `integration.yml`; the Windows leg is the last step of
 `machine.yml`, diffed against the same oracle. The deviations that are
 deliberate are tabulated in README under "What differs from a bind mount".
+
+`test/msi.ps1` installs the Windows MSI on a runner: `remote-docker.exe` in
+Program Files, the install directory APPENDED to the system PATH and not
+prepended, `remote-docker remote --help` running from a shell whose PATH came
+from the registry rather than from this process, the `docker.exe` feature
+absent by default and working when `ADDLOCAL` asks for it, the refusal firing
+against a `docker.exe` in System32 with a message naming it, the override, and
+an uninstall that takes both names and the PATH entry with it. It is
+`msi.yml`, which runs on changes under `installer/windows/` rather than on
+every push -- a Windows runner per push answers the same question every time,
+which is the argument that keeps `bench.sh` behind a label. NOT on the release
+path: see the not-tested list below.
 
 ### NOT tested, and do not claim otherwise
 
@@ -1060,12 +1129,39 @@ its pure planning function was.
   it: no archive has been unpacked on a machine that did not build it, so the
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
-- **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
-  covers containers that exit on their own. Ctrl-C is not one: docker maps a
-  signal-terminated context to 128+signal through an error unexported in its own
-  package main, so this binary exits 1 instead of 130, which `exitCode`'s
-  comment says. No suite runs `docker exec ... sh -c 'exit 7'` either, which is
-  a second hijacked stream carrying a status.
+  The Windows MSI is the exception and only in part: `msi.yml` installs one on
+  a runner, runs the binary out of a fresh shell's PATH and uninstalls it, but
+  the MSI it installs is built by that workflow from a stand-in version. **No
+  MSI from a real tag release has been installed by anybody**, and `msi.yml` is
+  triggered by changes under `installer/windows/`, so a tag publishes without
+  waiting for it. The release path itself is unrun: `release.yml`'s `installers`
+  job is behind `github.ref_type == 'tag'`, so the `dist/artifacts.json` lookup
+  that finds goreleaser's Windows binaries and the `gh release upload` that
+  attaches the MSIs have executed nowhere, CI included.
+- **The arm64 MSI is built and never installed.** `msi.yml` builds both
+  architectures, so `wix build -arch arm64` failing is not a release-day
+  surprise, and installs only the amd64 one: GitHub offers no Windows arm64
+  runner. *(Checked 2026-09-08 at
+  <https://docs.github.com/en/actions/reference/runners/github-hosted-runners>;
+  re-check there, since no command asks.)*
+- **The MSI is unsigned, and nothing verifies it.** The repository has no
+  code-signing certificate; `GITHUB_TOKEN` is the only secret any workflow uses
+  (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's
+  warning is therefore expected rather than a symptom, and the MSIs are not in
+  `checksums.txt` either, because goreleaser writes that before they exist.
+- **The `docker.exe` refusal reads four directories, not PATH.** Windows
+  Installer's AppSearch cannot enumerate PATH (ADR 0048), so a `docker.exe`
+  anywhere but the two system directories or Docker Desktop's two locations is
+  not found and is shadowed. `test/msi.ps1` section 7 asserts the refusal
+  against a System32 stub, which is a real PATH directory and the only one it
+  can assert about. In a 64-bit MSI, `[SystemFolder]` is **SysWOW64** and
+  `[System64Folder]` is System32, which is the reverse of what the names say:
+  searching only the first builds, installs, and misses the directory people
+  mean. CI caught it because the runner had a `docker.exe` in each.
+- **A signal arriving anywhere but during an attached `docker run`.** 6e sends
+  SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
+  a `build` or a `pull`, or before the container starts; nothing tests SIGTERM
+  anywhere, and nothing tests any of this on Windows.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.

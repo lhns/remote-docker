@@ -127,9 +127,14 @@ type Rewriter struct {
 	Mode      workspace.Mode
 	ModePaths map[string]workspace.Mode
 
-	// Cache serves delegated shares as union mounts. Nil is a session that
-	// cannot reach the workspace's cache channel, and refuses the mode by name.
-	Cache Cache
+	// OpenCache reaches the workspace's cache channel, which serves delegated
+	// shares as union mounts.
+	//
+	// A function rather than a value because opening it is a round trip that
+	// must not happen until a mount needs one (session.ensureCacheChan). Its
+	// error is the tail of the sentence refusing the mount, written by whoever
+	// tried to open it. Nil is a session with no cache at all.
+	OpenCache func(ctx context.Context) (Cache, error)
 
 	// UnionReady is what the workspace reported about serving a union
 	// (workspace.Info.Union). A mode it cannot serve is refused before anything
@@ -406,7 +411,7 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.
 			return nil, err
 		}
 		parsed.Options = options
-		mode, err := r.resolveMode(modes, parsed.Source, asked, spelled)
+		mode, err := r.resolveMode(ctx, modes, parsed.Source, asked, spelled)
 		if err != nil {
 			return nil, err
 		}
@@ -552,7 +557,7 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace
 		if err != nil {
 			return err
 		}
-		mode, err := r.resolveMode(modes, source, asked, spelled)
+		mode, err := r.resolveMode(ctx, modes, source, asked, spelled)
 		if err != nil {
 			return err
 		}
@@ -694,14 +699,21 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: creating the cache for %s: %w", localPath, err)
 	}
 
-	merged, err := r.Cache.Prepare(ctx, export, cache, r.NFSPort, mode)
+	// Already opened by resolveMode for every mount of this container, so this
+	// is the session's memoised answer.
+	channel, err := r.openCache(ctx)
+	if err != nil {
+		return "", fmt.Errorf("rewrite: reaching the workspace's cache for %s: %w", localPath, err)
+	}
+
+	merged, err := channel.Prepare(ctx, export, cache, r.NFSPort, mode)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
 	}
 
 	// Asynchronous, and this is where the union earns its keep: the container
 	// starts now, against a cache that is empty and a lower that is right.
-	r.Cache.Attach(export, localPath, mode)
+	channel.Attach(export, localPath, mode)
 
 	return merged, nil
 }

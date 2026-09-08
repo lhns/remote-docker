@@ -59,10 +59,13 @@ func main() {
 // $?` has to answer what the container answered. Collapsing everything to 1
 // breaks any script that branches on it.
 //
-// One case is deliberately NOT handled. Docker maps a signal-terminated
-// context to 128+signal, but the error it uses for that is unexported in its
-// own package main, so it cannot be recognised from here without matching on
-// message text. Ctrl-C therefore exits 1 rather than 130.
+// Docker's own 128+signal mapping is not reproduced here and does not have to
+// be: `getExitCode` in its cmd/docker/docker.go reaches that branch only
+// through errCtxSignalTerminated, unexported in that package main, and what it
+// covers is a command with no container to carry a status, where this binary is
+// killed by the signal instead. An interrupted `docker run` gets its number
+// from the container, arriving here as a cli.StatusError like any other;
+// test/integration.sh section 6e pins it.
 func exitCode(err error) int {
 	if err == nil {
 		return 0
