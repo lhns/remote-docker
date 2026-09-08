@@ -26,8 +26,8 @@ type notifySink struct {
 
 // openNotify establishes the change-notification channel and completes the
 // version handshake (see greet).
-func openNotify(client *tunnelclient.Client) (*notifySink, error) {
-	stream, _, _, err := greet(client, notify.Command, notify.MaxFrame, notify.Version,
+func openNotify(ctx context.Context, client *tunnelclient.Client) (*notifySink, error) {
+	stream, _, _, err := greet(ctx, client, notify.Command, notify.MaxFrame, notify.Version,
 		func(frame notify.Frame) (int, bool) {
 			if frame.Hello == nil {
 				return 0, false
@@ -73,7 +73,7 @@ func (s *Session) startNotify(live *liveConn) {
 	if s.watch == nil {
 		return
 	}
-	sink, err := openNotify(live.ssh)
+	sink, err := openNotify(s.ctx, live.ssh)
 	if err != nil {
 		s.notifyOnce.Do(func() {
 			s.log().Warn("file watchers inside containers will not see your edits (see ADR 0014)", "err", err)

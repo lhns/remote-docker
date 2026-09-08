@@ -154,10 +154,8 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		// session has a watcher.
 		Watching: s.watch != nil,
 
-		// Opened lazily: a session that never mounts a union never opens the
-		// channel, and an older workspace refusing the command must not stop
-		// the session.
-		Cache:      s.shareCacheFor(live),
+		// Opened when a mount asks for it and not before: see ensureCacheChan.
+		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },
 		UnionReady: info.Union,
 
 		DockerVersion: info.Docker,
@@ -231,33 +229,31 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 }
 
 // ensureCacheChan opens the workspace's cache channel on first use, and
-// answers nil once it is known this workspace has none.
+// remembers the error so a refusal can tell a workspace that does not serve the
+// command from one that said nothing.
 //
-// Lazily, because the channel exists for one write mode: a session that never
-// mounts a union never opens it, and an older workspace refusing the command
-// is not a reason for the session to fail.
-func (s *Session) ensureCacheChan(l *liveConn) *cacheChannel {
+// Lazily, and load-bearing rather than an optimisation: the channel exists for
+// one write mode, so a session whose mounts are all write=through never asks
+// and is never told. That is the common case against an older workspace and it
+// must stay SILENT, which it cannot be if the answer is fetched at connect.
+// Once, so a failure stands for the life of this connection rather than costing
+// a handshake per container; the next connection asks again, which is the
+// reconnect after an idle release (ADR 0015).
+func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChannel, error) {
 	l.cacheOnce.Do(func() {
-		c, err := openCache(l.ssh)
-		if err != nil {
-			// Said once. The rewriter refuses the mode by name on its own, so
-			// this is the only place the channel's own reason is visible.
-			s.logQuiet(s.ctx, "opening the workspace's cache channel", "err", err)
-			return
-		}
-		l.cacheChan = c
+		l.cacheChan, l.cacheErr = openCache(ctx, l.ssh)
 	})
-	return l.cacheChan
+	return l.cacheChan, l.cacheErr
 }
 
-// shareCacheFor is what the rewriter is handed, and nil turns into a refusal
-// naming the mode.
-func (s *Session) shareCacheFor(l *liveConn) rewrite.Cache {
-	c := s.ensureCacheChan(l)
-	if c == nil {
-		return nil
+// shareCacheFor is what the rewriter opens the channel through, and the error
+// is the tail of the refusal a mount needing one gets.
+func (s *Session) shareCacheFor(ctx context.Context, l *liveConn) (rewrite.Cache, error) {
+	c, err := s.ensureCacheChan(ctx, l)
+	if err != nil {
+		return nil, cacheRefusal(err, l.info.Agent)
 	}
-	return shareCache{cacheChannel: c, session: s}
+	return shareCache{cacheChannel: c, session: s}, nil
 }
 
 // skew is the workspace's clock minus this machine's, as measured when the

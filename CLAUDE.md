@@ -1035,6 +1035,18 @@ system with nothing naming it. It ends with GNU tar setting attributes on the
 files it wrote, a non-root uid creating a directory, and the conformance probe
 below run against a share backed by NTFS.
 
+`test/old-workspace.sh` is the only suite that does NOT build both ends. It
+pulls a PUBLISHED workspace image (`ghcr.io/lhns/remote-docker-workspace:0.5.1`
+by default, `WORKSPACE_IMAGE` to change it) and runs the current client against
+it. Every other suite has both ends knowing every command the other speaks, so
+none of them can see a client asking for a channel the workspace has never heard
+of, which is what hung a 0.6.0 client against a 0.5.1 workspace with nothing on
+screen. It proves the endpoint comes up at all, that a `write=through` mount
+reads this machine's file, that NOTHING is said about the cache channel while
+nobody asks for one, and that a `write=back` mount is refused by name with a
+remedy rather than hanging or being quietly downgraded. It needs network access
+to ghcr.io and nothing else.
+
 `test/fs-conformance.sh` runs `test/probes/fsprobe` inside a container against a
 plain bind mount on the runner and against a share, and fails on any difference
 not listed with a reason in `test/fs-conformance/deviations-*.txt`. The Linux
