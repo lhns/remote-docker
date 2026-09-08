@@ -340,22 +340,11 @@ deletions are the honest gap, and what to do when the budget runs out are in
 
 Reading a project through the share costs a round trip per file, and the mount
 revalidates any attribute older than a second. Over a link with real latency
-that is the whole cost. Measured over 300 files by `test/bench.sh`, with the
-workspace's loopback shaped, reading them all:
-
-| RTT | `read=direct,write=through` (default) | `read=cached` |
-|---|---|---|
-| 0.1ms | 0.41s | 0.38s |
-| 20ms | 21.4s | 13.8s |
-| 40ms | 44.1s | 27.2s |
-| 160ms | 213.9s | 108.8s |
-| 0.3ms, 10mbit | 0.87s | 0.74s |
-
-One run, 2026-09-04, so the two columns are comparable with each other rather
-than assembled from separate ones. It predates the mount-option and server
-fixes in the unreleased notes and has not been repeated since, so read it as
-the shape of the cost rather than today's absolute seconds. Re-check with the
-`bench` label on a pull request.
+that is the whole cost, and it is latency rather than bandwidth: a thin link
+costs almost nothing and a distant one costs hundreds of times more. The
+measurements behind that, per link shape and per mode, are the table in
+[ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md); `test/bench.sh` is what
+produces them, from the `bench` label on a pull request.
 
 Latency, not bandwidth: a thin link costs almost nothing and a distant one
 costs 400x. Docker's own mount consistency is how you say a directory may be
