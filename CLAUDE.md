@@ -954,6 +954,13 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
+The shared daemon surviving an unclean restart, in `integration.sh` 20, which
+is LAST in that suite because it kills the workspace container: the exec-root
+is a tmpfs AND a mount of its own, pid 1 is planted in its `containerd.pid`,
+and the daemon must come back after `docker restart -t 0` with the planted pid
+gone. Both halves, because a daemon that happened to start would otherwise hide
+a missing mount until the next coincidence.
+
 A container's exit status reaching the user, in `integration.sh` 6c: `exit 7`
 giving the client 7 rather than 1 or 0, the same with stdin attached (`-i`),
 42 through the EMBEDDED CLI, which is the only place `exitCode` runs, a
