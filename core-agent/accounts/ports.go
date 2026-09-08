@@ -76,14 +76,11 @@ func (p *Ports) path() string { return filepath.Join(p.Dir, "clientports") }
 // workspace reached from one machine never allocates anything, and its volumes
 // and its `clientports` file both stay as they were.
 //
-// Preferred runs with NO lock held. It boots a cold dind under a 90s budget
+// Preferred runs with NO lock held: it can boot a cold dind under a 90s budget
 // (agent/cmd/remote-dockerd/serve.go), and Owns takes the same mutex on every
-// account's tcpip-forward check, so holding it across the question stalled
-// every forward on the workspace behind one machine's cold daemon.
-//
-// The port it names therefore crosses the lock boundary as a HINT, and decide
-// validates it again under the lock, which is what keeps ADR 0032's atomicity:
-// taken, free, allocate and the assignment are still one step.
+// account's tcpip-forward check. Its answer therefore crosses the lock
+// boundary as a HINT, and decide re-validates it, which is what keeps ADR
+// 0032's atomicity: taken, free, allocate and the assignment are one step.
 func (p *Ports) For(account string, uid int, client string) (int, error) {
 	base, err := p.Mapping.PortForUID(uid)
 	if err != nil {
@@ -123,7 +120,7 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 }
 
 // lookup answers for a machine the record already knows, which is every
-// ordinary connect. One acquisition, and Preferred is not reachable from it.
+// ordinary connect.
 func (p *Ports) lookup(key assignment) (port int, known bool, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -137,12 +134,11 @@ func (p *Ports) lookup(key assignment) (port int, known bool, err error) {
 
 // decide chooses this machine's port and records it, in one hold.
 //
-// want is the hint Preferred gave outside the lock and is re-validated here,
-// because the record may have moved on since. The narrow new risk that comes
-// with computing it outside: a machine whose want was handed to somebody else
-// in that window is given a different port with nothing said, and its volumes
-// then cannot mount. It needs a lost record AND both machines re-deriving the
-// same base, and Ports has no logger to say so with.
+// want is the hint Preferred gave outside the lock. The new risk that comes
+// with computing it there: a machine whose want was handed to somebody else in
+// the window is given a different port with nothing said, and its volumes then
+// cannot mount. It needs a lost record AND both machines re-deriving the same
+// base, and Ports has no logger to say so with.
 func (p *Ports) decide(account string, key assignment, base, want int) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -166,10 +162,9 @@ func (p *Ports) decide(account string, key assignment, base, want int) (int, err
 	}
 
 	// Reserved is a full account listing per call
-	// (agent/cmd/remote-dockerd/serve.go), and allocate walks down over ports
-	// free() has already asked about, so the answers are remembered for the
-	// length of this decision. It stays INSIDE the lock: ADR 0032 wants it in
-	// the atomic step.
+	// (agent/cmd/remote-dockerd/serve.go), and free(want) and allocate can meet
+	// the same port, so the answers are remembered for this decision. It stays
+	// inside the lock, in ADR 0032's atomic step.
 	reserved := p.memoReserved()
 
 	port := 0
@@ -196,7 +191,7 @@ func (p *Ports) decide(account string, key assignment, base, want int) (int, err
 }
 
 // memoReserved wraps Reserved so one decision asks about a uid at most once.
-// Nil Reserved answers false, which is what a test without one wants.
+// A nil Reserved answers false, which is the skip its field documents.
 func (p *Ports) memoReserved() func(uid int) bool {
 	if p.Reserved == nil {
 		return func(int) bool { return false }

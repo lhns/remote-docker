@@ -16,15 +16,15 @@ import (
 )
 
 // blockingPreferred parks until it is released, which is what a cold daemon
-// looks like from here.
+// looks like from here. Only the one machine off the record reaches it, so For
+// is called once.
 type blockingPreferred struct {
 	entered chan struct{}
 	release chan struct{}
-	once    sync.Once
 }
 
 func (b *blockingPreferred) For(string, string) (int, error) {
-	b.once.Do(func() { close(b.entered) })
+	close(b.entered)
 	<-b.release
 	return 0, nil
 }
