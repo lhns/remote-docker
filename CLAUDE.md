@@ -140,6 +140,11 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the volume lookup notify asks for
 
 image/                   the workspace container (Dockerfile only)
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
+                         Built ON WINDOWS: WiX loads on Linux and then says its
+                         behaviour is undefined, and means it. `docker.exe` is
+                         a Feature and a DuplicateFile, so the payload ships
+                         once
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
 charts/                  the Helm chart, for the same agent on Kubernetes
@@ -201,6 +206,16 @@ bash test/integration.sh
 # claim about speed has to come from. Run it from the `bench` label on a pull
 # request, or workflow_dispatch once it is on main.
 bash test/bench.sh
+
+# the Windows MSI. ON WINDOWS, and it is the one thing here that cannot be
+# built anywhere else (ADR 0048). The version must be major.minor.build, which
+# is what an MSI compares; build.ps1 refuses anything else rather than
+# truncating it into an upgrade that never fires.
+dotnet tool install --global wix --version 5.0.2
+wix extension add -g WixToolset.UI.wixext/5.0.2
+installer/windows/build.ps1 -Version 0.6.0 -Arch x64 `
+  -Binary dist/windows_amd64/remote-docker.exe `
+  -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
 
 # the chart, in eight seconds and without a cluster
 helm lint charts/remote-docker-workspace
@@ -997,6 +1012,18 @@ leg is a suite in `integration.yml`; the Windows leg is the last step of
 `machine.yml`, diffed against the same oracle. The deviations that are
 deliberate are tabulated in README under "What differs from a bind mount".
 
+`test/msi.ps1` installs the Windows MSI on a runner: `remote-docker.exe` in
+Program Files, the install directory APPENDED to the system PATH and not
+prepended, `remote-docker remote --help` running from a shell whose PATH came
+from the registry rather than from this process, the `docker.exe` feature
+absent by default and working when `ADDLOCAL` asks for it, the refusal firing
+against a `docker.exe` in System32 with a message naming it, the override, and
+an uninstall that takes both names and the PATH entry with it. It is
+`msi.yml`, which runs on changes under `installer/windows/` rather than on
+every push -- a Windows runner per push answers the same question every time,
+which is the argument that keeps `bench.sh` behind a label. NOT on the release
+path: see the not-tested list below.
+
 ### NOT tested, and do not claim otherwise
 
 Keep this list honest, and name the assertion rather than the area: "the
@@ -1060,6 +1087,35 @@ its pure planning function was.
   it: no archive has been unpacked on a machine that did not build it, so the
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
+  The Windows MSI is the exception and only in part: `msi.yml` installs one on
+  a runner, runs the binary out of a fresh shell's PATH and uninstalls it, but
+  the MSI it installs is built by that workflow from a stand-in version. **No
+  MSI from a real tag release has been installed by anybody**, and `msi.yml` is
+  triggered by changes under `installer/windows/`, so a tag publishes without
+  waiting for it. The release path itself is unrun: `release.yml`'s `installers`
+  job is behind `github.ref_type == 'tag'`, so the `dist/artifacts.json` lookup
+  that finds goreleaser's Windows binaries and the `gh release upload` that
+  attaches the MSIs have executed nowhere, CI included.
+- **The arm64 MSI is built and never installed.** `msi.yml` builds both
+  architectures, so `wix build -arch arm64` failing is not a release-day
+  surprise, and installs only the amd64 one: GitHub offers no Windows arm64
+  runner. *(Checked 2026-09-08 at
+  <https://docs.github.com/en/actions/reference/runners/github-hosted-runners>;
+  re-check there, since no command asks.)*
+- **The MSI is unsigned, and nothing verifies it.** The repository has no
+  code-signing certificate; `GITHUB_TOKEN` is the only secret any workflow uses
+  (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's
+  warning is therefore expected rather than a symptom, and the MSIs are not in
+  `checksums.txt` either, because goreleaser writes that before they exist.
+- **The `docker.exe` refusal reads four directories, not PATH.** Windows
+  Installer's AppSearch cannot enumerate PATH (ADR 0048), so a `docker.exe`
+  anywhere but the two system directories or Docker Desktop's two locations is
+  not found and is shadowed. `test/msi.ps1` section 7 asserts the refusal
+  against a System32 stub, which is a real PATH directory and the only one it
+  can assert about. In a 64-bit MSI, `[SystemFolder]` is **SysWOW64** and
+  `[System64Folder]` is System32, which is the reverse of what the names say:
+  searching only the first builds, installs, and misses the directory people
+  mean. CI caught it because the runner had a `docker.exe` in each.
 - **An interrupted `docker run`, and the status of `docker exec`.** Section 6c
   covers containers that exit on their own. Ctrl-C is not one: docker maps a
   signal-terminated context to 128+signal through an error unexported in its own
