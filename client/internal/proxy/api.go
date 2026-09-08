@@ -28,14 +28,13 @@ type APIClient struct {
 
 // do performs one request over a fresh connection to the daemon.
 //
-// The request is written by hand and read back with http.ReadResponse, so
-// there is no Transport to honour ctx and the context on the http.Request is
-// inert. Closing the connection is the only lever there is: DialDocker returns
-// an io.ReadWriteCloser, which through tunnelclient is an ssh.Session and a
-// pair of pipes with no deadline to set. So a watchdog closes it, and stops on
-// every path out of here -- a workspace that accepts and then says nothing
-// otherwise blocks the caller forever, which wedges watchPorts and
-// session.hasLiveDependents, and with it idle release.
+// The request is written by hand and read back with http.ReadResponse, so no
+// Transport honours ctx and the context on the http.Request is inert. The
+// connection is an io.ReadWriteCloser with no deadline to set, so closing it
+// is the only lever, and closeOnCancel is what pulls it. Without that, a
+// workspace that accepts and then says nothing blocks the caller forever:
+// watchPorts and session.hasLiveDependents both stall, and idle release with
+// them.
 func (c *APIClient) do(ctx context.Context, method, path string, body any) (*http.Response, io.Closer, error) {
 	conn, err := c.Dialer.DialDocker(ctx)
 	if err != nil {
@@ -76,17 +75,17 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 		return fail("proxy: reading response: %w", err)
 	}
 
-	// Stopped here rather than deferred, because the connection outlives this
-	// function: Events hands it back to the caller and goes on decoding from
-	// it, so the watchdog must cover the request and the response head only.
-	// The caller's own ctx is what ends that stream.
+	// Stopped here rather than deferred: the connection outlives this function
+	// (Events hands it back and goes on decoding from it), so the watchdog
+	// covers the request and the response head only.
 	stop()
 	return resp, conn, nil
 }
 
 // closeOnCancel closes conn when ctx is done, until stop is called. stop waits
-// for the goroutine, so a fast call leaves nothing parked until the session's
-// long-lived context is eventually cancelled.
+// for the goroutine to end, because these calls run every few seconds under
+// one long-lived session context: parking one each would leak until that
+// context is finally cancelled.
 func closeOnCancel(ctx context.Context, conn io.Closer) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})

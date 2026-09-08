@@ -40,9 +40,8 @@ func silentDaemon(t *testing.T) string {
 }
 
 // TestAPIRequestReturnsWhenTheContextExpires pins the deadline the context is
-// supposed to carry. do writes the request by hand and reads it back with
-// http.ReadResponse, so no Transport enforces that context and a daemon which
-// says nothing blocks the caller forever.
+// supposed to carry: nothing in do enforces it for us, so without the
+// watchdog a daemon that says nothing blocks the caller forever.
 func TestAPIRequestReturnsWhenTheContextExpires(t *testing.T) {
 	client := &APIClient{Dialer: &tcpDialer{addr: silentDaemon(t)}}
 
@@ -61,15 +60,13 @@ func TestAPIRequestReturnsWhenTheContextExpires(t *testing.T) {
 			t.Fatal("expected an error from a daemon that never answered")
 		}
 	case <-time.After(5 * time.Second):
-		// Deliberately not left to the test binary's own deadline: a wedged
-		// binary reports nothing about which call hung.
 		t.Fatal("ListContainers did not return after its context expired")
 	}
 }
 
-// TestAPIRequestLeavesNoWatchdogBehind: whatever enforces the deadline must end
-// when the call does, not when the context is eventually cancelled. A session
-// makes these calls every few seconds under one long-lived context.
+// TestAPIRequestLeavesNoWatchdogBehind: the watchdog must end when the call
+// does, not when the context is eventually cancelled. A session makes these
+// calls every few seconds under one long-lived context.
 func TestAPIRequestLeavesNoWatchdogBehind(t *testing.T) {
 	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
 		respondJSON(conn, http.StatusOK, `[]`)
@@ -108,10 +105,10 @@ func settle() {
 	}
 }
 
-// TestEventsStreamsAfterTheResponseHead: the deadline covers the request and
+// TestEventsStreamsAfterTheResponseHead: the watchdog covers the request and
 // the response head only. Events returns the connection to its caller and goes
-// on decoding from it, so anything holding that connection past do -- or
-// stopping by closing it -- ends the stream.
+// on decoding from it, so a watchdog still armed there would close the stream
+// under it.
 func TestEventsStreamsAfterTheResponseHead(t *testing.T) {
 	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
 		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")

@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// blockingDocker holds its answer until the test releases it, which is the gap
-// Reconcile leaves open: ListContainers is called outside m.mu, so a Close can
-// land while a reconciliation is in flight.
+// blockingDocker holds its answer until the test releases it, which opens the
+// gap Reconcile leaves: ListContainers runs outside m.mu, so a Close can land
+// while a reconciliation is in flight.
 type blockingDocker struct {
 	containers []Container
 	release    chan struct{}
@@ -21,11 +21,9 @@ func (d *blockingDocker) ListContainers(context.Context) ([]Container, error) {
 	return d.containers, nil
 }
 
-// TestReconcileOpensNothingAfterClose pins that Close ends the manager. It
-// closes every forward and empties the map, and a Reconcile that was already
-// listing containers then repopulated it -- opening real listeners, and a
-// goroutine each for udp, that nothing would ever close: session.liveConn.close
-// calls Close exactly once.
+// TestReconcileOpensNothingAfterClose pins that Close ends the manager: a
+// Reconcile already listing containers when it ran used to repopulate the map
+// it had just emptied, reopening listeners nothing would close again.
 func TestReconcileOpensNothingAfterClose(t *testing.T) {
 	docker := &blockingDocker{
 		containers: []Container{{ID: "a", Name: "web", Ports: []Published{tcp(8080, 80)}}},

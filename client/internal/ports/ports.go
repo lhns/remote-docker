@@ -94,13 +94,10 @@ type Manager struct {
 	mu     sync.Mutex
 	active map[string]*containerForwards
 
-	// closed is set by Close and stops Reconcile repopulating active.
-	//
-	// Reconcile lists containers OUTSIDE the lock, so one already in flight
-	// when Close runs would go on to open real listeners -- and for udp a
-	// net.ListenPacket and a goroutine with it -- that nothing ever closes:
-	// session.liveConn.close calls Close exactly once. Same flag, same lock
-	// and same shape as proxy.Proxy.shutdown and udpForward.closed.
+	// closed stops Reconcile repopulating active. Reconcile lists containers
+	// OUTSIDE the lock, so one in flight when Close runs would reopen real
+	// listeners (and for udp a goroutine each) that nothing ever closes:
+	// session.liveConn.close calls Close exactly once.
 	closed bool
 }
 
