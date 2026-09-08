@@ -2733,6 +2733,17 @@ else
     bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"
 fi
 
+# And a mount of its OWN. The filesystem type alone would also be satisfied by
+# an exec-root that is merely a directory on a /run somebody else made a tmpfs,
+# which is not the agent having mounted anything: st_dev against the parent is
+# the same question supervise.mountedAt asks.
+if outputs '^differ$' hostdocker exec "$CONTAINER" sh -c \
+        "if [ \"\$(stat -c %d $EXECROOT)\" = \"\$(stat -c %d $EXECROOT/..)\" ]; then echo same; else echo differ; fi"; then
+    ok "the exec-root is a mount of its own, not a directory on its parent"
+else
+    bad "nothing is mounted at $EXECROOT: [$LAST_OUTPUT]"
+fi
+
 if ! planted=$(hostdocker exec "$CONTAINER" \
         sh -c "mkdir -p $(dirname "$PIDFILE") && echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
     bad "could not plant a stale containerd pid in the workspace: [$planted]"
