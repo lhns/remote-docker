@@ -865,6 +865,11 @@ premise of the project, and it applies to building it too. So:
   the PARENT for the container's state first: exited, restarting, created or
   dead cannot be running anything. The old rule stands for a daemon that is up
   and slow to answer, where being wrong costs somebody's containers.
+- **The wait for a cold daemon is `WORKSPACE_DAEMON_READY_TIMEOUT`**, because
+  what a cold daemon costs belongs to the deployment: about a second on a
+  runner, and the 180s default is for a first start on fuse-overlayfs over Ceph.
+  A shell waits on it too, since `sshd/session.go` asks for the daemon before
+  opening one.
 - **A per-account daemon carries no restart policy** (ADR 0019). It used to,
   which made the parent dockerd a second supervisor with no backoff and nothing
   in our log. `Ensure` starts one when its account connects and that is the

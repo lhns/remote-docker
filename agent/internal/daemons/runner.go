@@ -76,6 +76,11 @@ type Manager struct {
 	// the tests and an unprefixed workspace need.
 	IDs func(account string) (uid, gid int, err error)
 
+	// ReadyTimeout is how long a cold daemon has to answer. Zero means
+	// DefaultReadyTimeout, which is what every caller but serve's env-var
+	// reader passes.
+	ReadyTimeout time.Duration
+
 	// docker builds the client for a daemon: the workspace's own when the host
 	// is empty, an account's when it is not. Nil is the real docker command,
 	// and injecting it is what lets this file be tested without one.
@@ -134,7 +139,21 @@ const aliveTTL = 2 * time.Second
 // user cannot act on. The agent is the only thing that starts a daemon
 // (ADR 0019), so the first account to ask pays for its own boot rather than
 // finding one already warmed at workspace start: CI measured 90 seconds short.
+//
+// WORKSPACE_DAEMON_READY_TIMEOUT overrides it, because what a cold daemon costs
+// is a property of the deployment rather than of this code: a workspace on
+// fuse-overlayfs over Ceph is not the runner this was measured on. Lowering it
+// buys a faster answer when a daemon is broken and risks refusing one that was
+// merely slow, and only the operator knows which they have.
 const DefaultReadyTimeout = 180 * time.Second
+
+// readyTimeout is the budget in force, with the zero value meaning the default.
+func (m *Manager) readyTimeout() time.Duration {
+	if m.ReadyTimeout > 0 {
+		return m.ReadyTimeout
+	}
+	return DefaultReadyTimeout
+}
 
 // ensure returns the account's daemon, starting or restarting it if needed.
 // Callers outside this package reach it through Ensure, which answers in the
@@ -212,7 +231,7 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 // workspace-info round trip instead of behind its first docker command.
 func (m *Manager) Warm(account string) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultReadyTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), m.readyTimeout())
 		defer cancel()
 		if _, err := m.Ensure(ctx, account); err != nil {
 			m.log().Warn("warming a daemon", "account", account, "err", err)
@@ -301,7 +320,8 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 // and the daemon answers a request. Only the last one is evidence.
 func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, error) {
 	socket := SocketPathFor(account)
-	deadline := time.Now().Add(DefaultReadyTimeout)
+	budget := m.readyTimeout()
+	deadline := time.Now().Add(budget)
 
 	for {
 		if _, err := os.Stat(socket); err == nil {
@@ -325,7 +345,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 			// Without them this is "did not answer", and the reason is in a
 			// log the account cannot reach.
 			return nil, fmt.Errorf("daemons: %s did not answer within %s.%s",
-				name, DefaultReadyTimeout, m.lastWords(ctx, name))
+				name, budget, m.lastWords(ctx, name))
 		}
 		select {
 		case <-ctx.Done():
