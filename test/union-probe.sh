@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Can a cache be a union mount, and does it behave the way the design needs?
 #
-# Stage 0 of the cache mode: every risk in that design that is a question about
-# the KERNEL rather than about our code, asked here, before any of it is built.
-# It runs plain docker and mount commands and none of this project's binaries
-# except the watch probe, so a failure here is the kernel's answer and not ours.
+# Every risk in the cache mode that is a question about the KERNEL rather than
+# about our code. It runs plain docker and mount commands and none of this
+# project's binaries except the watch probe, so a failure here is the kernel's
+# answer and not ours. Everything it learns is printed, failures included: a
+# measurement that only says PASS has thrown away what it was run for.
 #
 # The design under test: per share the workspace mounts
 #
@@ -13,18 +14,9 @@
 #     merged = the overlay a container binds
 #
 # so a read hits the cache or falls through, and the cache is filled in the
-# background. Two of the questions below decide whether that is possible at all:
-#
-#   section 4  a file written THROUGH the merged mount, after a container has
-#              already looked for it and missed. If the container cannot see it,
-#              a mounted cache cannot be filled and the design is dead.
-#   section 5  whether a watcher inside the container sees that write. If it
-#              does, ADR 0014 closes for these shares; if it does not, hot
-#              reload regresses against `cached` and the mode must say so.
-#
-# Everything it learns is printed, including the answers that are not failures:
-# this is a measurement, and a measurement that only says PASS has thrown away
-# what it was run for.
+# background. Section 4 decides whether that is possible at all: a file written
+# THROUGH the merged mount, after a container has already missed on it. If the
+# container cannot see it, a mounted cache cannot be filled.
 #
 # One section per risk, so the design's risk list and this script stay in step:
 #
@@ -49,9 +41,9 @@
 # fuse-overlayfs is in, and the workspace image carries it. Sections 6 and 6d
 # are where both are measured, and the record is where they are reasoned about.
 #
-# The risks NOT here are the ones that are about our code rather than the
-# kernel -- write-back conflicts, the collector taking a cache volume, the
-# backfill budget -- and those are unit and integration tests, not this.
+# What is NOT here is anything about our own code: write-back conflicts, the
+# collector taking a cache volume, the backfill budget. Those are unit and
+# integration tests.
 #
 # Needs: a Linux host with docker, sudo, and a kernel with NFS client support.
 # CI is the only place this runs; there is no Docker on the development machine.

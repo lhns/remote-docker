@@ -1,14 +1,10 @@
-# Shared mechanics for the integration suites.
+# Shared MECHANICS for the integration suites, and only those: nothing here
+# decides anything a suite exists to decide. The suites stay separate on
+# purpose, one per WORKSPACE_PER_USER_DIND mode, each stating its own.
 #
-# The suites stay separate on purpose -- one per WORKSPACE_PER_USER_DIND mode,
-# each stating its own mode -- and this file is deliberately only the
-# MECHANICS. Nothing here decides anything a suite exists to decide.
-#
-# It exists because the same bug kept landing in one suite and not the other.
-# One captured stderr on a failed assertion and the other sent it to /dev/null,
-# so a real failure printed nothing after the colon. One broke its wait loop
-# when the client died and the other waited six minutes. Those are the lines
-# worth sharing; the assertions are not.
+# What belongs here is the line that kept being got wrong in one suite and
+# right in the other: capturing stderr on a failed assertion, breaking a wait
+# loop when the client dies. The assertions do not.
 #
 # Sourced, not executed. The counters and `outputs` need nothing; the rest
 # needs the caller's REPO, WORK, IMAGE, CONTAINER and SSH_PORT.
@@ -29,12 +25,13 @@ info() { echo "  ....  $*"; }
 # fatal SIGPIPE (exit 141), so under `set -o pipefail` the assertion fails
 # BECAUSE it matched, depending only on scheduling. Measured 2026-08-13: a
 # producer still writing when grep exits gives 141 every time; Windows ignores
-# the failed write. It has not been seen to fire here, and section 17's
-# intermittent failures are NOT explained by it. The command substitution reads
-# to EOF, so there is no reader to close early.
+# the failed write. This is a hazard removed rather than a bug fixed: it has
+# not been seen to fire here, and section 17's intermittent failures are NOT
+# explained by it. The command substitution below reads to EOF, so there is no
+# reader to close early.
 #
-# Empty rather than unset, because the suites run under `set -u` and a failure
-# message may name it on a path where outputs never ran.
+# LAST_OUTPUT is empty rather than unset, because the suites run under `set -u`
+# and a failure message may name it on a path where outputs never ran.
 #
 # shellcheck disable=SC2034  # read by the suites that source this, not here.
 LAST_OUTPUT=""
@@ -72,12 +69,9 @@ dockerat() {
 hostdocker() { env -u DOCKER_HOST docker "$@"; }
 
 # build_image builds the workspace image from the repo root, because the image
-# builds the agent from source.
-#
-# The output is kept and printed on failure. It used to go to /dev/null with
-# -q, so a build that failed reported the Dockerfile line and NOTHING from the
-# compiler -- which cost a CI round trip to learn that the actual error was
-# never in the log at all. The build's own words are the whole diagnosis.
+# builds the agent from source. The output is kept and printed on failure: with
+# -q a failed build reports the Dockerfile line and NOTHING from the compiler,
+# and the build's own words are the whole diagnosis.
 build_image() {
     if docker build -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO"             >"$WORK/image-build.log" 2>&1; then
         return 0
@@ -156,12 +150,9 @@ ssh_account() {
         "$account@127.0.0.1" "$command" </dev/null
 }
 
-# start_workspace runs the workspace container.
-#
-# The dind mode is a REQUIRED argument with no default, and that is the whole
-# reason this function can be shared at all. Give it a default and the two
-# suites stop stating which mode they test -- which is one script with a flag,
-# the thing both of their headers explicitly refuse.
+# start_workspace runs the workspace container. The dind mode is REQUIRED with
+# no default, which is what lets this be shared at all: given one, the suites
+# stop stating which mode they test and become one script with a flag.
 start_workspace() {
     local per_user_dind=$1
     shift
@@ -181,11 +172,9 @@ start_workspace() {
         "$IMAGE" >/dev/null
 }
 
-# wait_provisioned waits for the agent to create the named accounts.
-#
-# Asked for the UNIX user, `rd-<account>`, which is what useradd made. Asking
-# for the account name would wait the full timeout on a workspace that had
-# provisioned everything correctly.
+# wait_provisioned waits for the agent to create the named accounts. Asked for
+# the UNIX user, `rd-<account>`, which is what useradd made; asking for the
+# account name waits the full timeout on a correctly provisioned workspace.
 wait_provisioned() {
     local seconds=${WAIT_PROVISION:-90} account
     for _ in $(seq 1 "$seconds"); do
@@ -200,26 +189,20 @@ wait_provisioned() {
 }
 
 # load_image_into_workspace copies an image from the RUNNER's daemon into the
-# workspace's own.
-#
-# They are different daemons with different image stores, which is easy to
-# forget: the suites build the workspace image on the runner, and a per-account
-# daemon is started by the WORKSPACE's dockerd (ADR 0019), which has never
-# heard of it. Without this it tries Docker Hub and fails with
-#
-#	pull access denied for remote-docker-workspace, repository does not exist
-#
-# naming a registry nobody meant to use. Real deployments pull the image from
-# one, so this is a CI-only step and not a gap in the product.
+# workspace's own. They are different image stores: the suites build the
+# workspace image on the runner, and the WORKSPACE's dockerd starts each
+# per-account daemon (ADR 0019) having never heard of it, so without this it
+# tries Docker Hub and fails with `pull access denied for
+# remote-docker-workspace`, naming a registry nobody meant to use. CI-only:
+# real deployments pull the image from one.
 load_image_into_workspace() {
     local image=$1
     hostdocker save "$image" | hostdocker exec -i "$CONTAINER" docker load >/dev/null 2>&1
 }
 
-# wait_parent_dockerd waits for the workspace's own daemon.
-#
-# Reports when it never arrives, rather than falling through. A silent timeout
-# here makes the next section fail for a reason nothing on screen explains.
+# wait_parent_dockerd waits for the workspace's own daemon, and REPORTS when it
+# never arrives: falling through silently makes the next section fail for a
+# reason nothing on screen explains.
 wait_parent_dockerd() {
     for _ in $(seq 1 90); do
         hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && return 0
@@ -249,12 +232,10 @@ start_session() {
     echo $!
 }
 
-# wait_endpoint waits for a client endpoint to answer.
-#
-# The optional second argument is a client pid: if that process dies, the wait
-# ends immediately instead of running to the full timeout. Without it a client
-# that failed at startup costs the suite its entire patience and then reports a
-# timeout, which names the symptom and not the cause.
+# wait_endpoint waits for a client endpoint to answer. The optional second
+# argument is a client pid: if that process dies the wait ends at once, rather
+# than spending the whole timeout and then reporting a timeout, which names the
+# symptom and not the cause.
 wait_endpoint() {
     local sock=$1 pid=${2:-}
     for _ in $(seq 1 120); do

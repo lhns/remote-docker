@@ -4,10 +4,9 @@
 #   test/elf.sh android dist/remote-docker-android_android_arm64/remote-docker
 #   test/elf.sh linux   dist/remote-docker_linux_arm64/remote-docker
 #
-# ADR 0023 says the check is three facts: ELF type, PT_TLS alignment and
-# PT_INTERP. It was run by hand once, and the claim it disproved had been
-# committed on the strength of grepping the binary for an interpreter string,
-# which found nothing because it was looking for the wrong thing.
+# Three facts, per ADR 0023: ELF type, PT_TLS alignment and PT_INTERP. Read off
+# the file with readelf, never by grepping the binary for an interpreter
+# string, which found nothing because it was looking for the wrong thing.
 #
 # Nothing executes either binary in CI, so this is the only assertion available
 # for them, and the two targets need opposite answers:
@@ -44,10 +43,9 @@ echo "== $GOOS: $BIN =="
 # while a static Go binary for Linux is ET_EXEC and expected to be.
 echo "  ....  $(echo "$headers" | grep -E '^  Type:' | tr -s ' ')"
 
-# PT_TLS is the segment bionic rejects when it is underaligned, which is what a
-# linux/arm64 PIE gets wrong. Printed rather than asserted: GOOS=android emits
-# none at all, so there is no alignment to compare, and the value is what a
-# toolchain change would move.
+# PT_TLS is the segment bionic rejects when underaligned, which a linux/arm64
+# PIE gets wrong. Printed rather than asserted, since GOOS=android emits none
+# at all and there is then no alignment to compare.
 if [[ "$headers" =~ TLS ]]; then
     echo "  ....  PT_TLS: $(echo "$headers" | grep -E '^  TLS' | tr -s ' ')"
 else
@@ -56,27 +54,25 @@ fi
 
 case "$GOOS" in
 android)
-    # Android has required position-independent executables since Android 5,
-    # and Go's default elsewhere is ET_EXEC, which is the "unexpected e_type: 2"
-    # a linux binary is refused with on a phone.
+    # Android has required PIEs since Android 5, and Go's default elsewhere is
+    # ET_EXEC: the "unexpected e_type: 2" a phone refuses a linux binary with.
     if [[ "$headers" =~ Type:[[:space:]]+DYN ]]; then
         ok "ELF type is DYN"
     else
         bad "ELF type is not DYN: $(echo "$headers" | grep -E '^  Type:' | tr -s ' ')"
     fi
 
-    # The loader the device actually has. A binary naming any other one is
-    # unloadable there, and says so as "no such file or directory" about a file
-    # that is present.
+    # The loader the device actually has. A binary naming another is unloadable
+    # there, and says so as "no such file or directory" about a file that is
+    # present.
     if [[ "$headers" =~ /system/bin/linker64 ]]; then
         ok "interpreter is /system/bin/linker64"
     else
         bad "interpreter is not the device's: $(echo "$headers" | grep -i interpreter || echo none)"
     fi
 
-    # The whole reason this target is built with cgo. Without libc there is no
-    # getaddrinfo, so Go uses its own resolver, which on Android has no
-    # configuration to read and resolves nothing.
+    # The whole reason this target is built with cgo: without libc there is no
+    # getaddrinfo, and Go's own resolver has nothing to read on Android.
     if [[ "$dynamic" =~ NEEDED.*libc\.so ]]; then
         ok "links libc.so, so DNS goes through bionic"
     else

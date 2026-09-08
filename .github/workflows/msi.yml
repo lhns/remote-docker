@@ -2,18 +2,15 @@ name: msi
 
 # The Windows installer, built and then actually installed.
 #
-# Not on every push, and deliberately: what this proves is a function of
-# installer/windows/** and of this file, not of the Go code. The binary inside
-# the MSI is a payload; renaming it, putting it on PATH and refusing to shadow
-# somebody else's docker.exe are decided entirely by the .wxs. So the paths
-# filter below is the trigger, on the same reasoning that keeps test/bench.sh
-# behind a label: a Windows runner on every push would be paid for constantly
-# and would answer the same question every time.
+# Triggered by paths rather than on every push. The binary inside the MSI is a
+# payload; the .wxs decides everything under test, which is the rename, the
+# PATH entry and the refusal to shadow another docker.exe. A Windows runner on
+# every push would answer the same question every time.
 #
-# What that costs: a change to the client that broke `remote --help` would not
-# be caught here. It is caught by ci.yml on every push. The release workflow
-# also builds and uploads the MSI without waiting for this, so a tag can publish
-# an installer this suite has not seen; ADR 0048 records both gaps.
+# What that costs, both recorded in ADR 0048: a client change breaking `remote
+# --help` is caught by ci.yml and not here, and release.yml builds and uploads
+# the MSI without waiting for this, so a tag can publish an installer this
+# suite has not seen.
 on:
   pull_request:
     paths:
@@ -48,8 +45,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-go
 
-      # Not goreleaser: this needs two Windows binaries and nothing else it
-      # does.
+      # Not goreleaser: this needs two Windows binaries and nothing else it does.
       - name: build the client for windows
         run: |
           set -eux

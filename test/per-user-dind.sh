@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # A daemon per account (ADR 0019), end to end, with TWO accounts.
 #
-# Separate from integration.sh rather than folded into it, because the claim
-# being tested needs a second enrolled account and a differently configured
-# workspace -- and because integration.sh must keep passing UNCHANGED in shared
-# mode, which is the escape hatch. Two scripts prove both modes; one script
-# with a flag would prove whichever branch it happened to take.
+# Separate from integration.sh, which must keep passing UNCHANGED in shared
+# mode: two scripts prove both modes, where one script with a flag would prove
+# whichever branch it happened to take.
 #
-# The claim is narrow and worth stating exactly: accounts stop seeing each
-# other's containers. It is NOT isolation. Each per-account daemon runs
-# privileged, so a determined account can still break out and reach another's;
-# what changes is that nobody does so by accident.
+# The claim is narrow: accounts stop seeing each other's containers. It is NOT
+# isolation. Each per-account daemon runs privileged, so a determined account
+# can still break out and reach another's; what changes is that nobody does so
+# by accident.
 #
 # Requires: docker, and a kernel with NFS client support.
 set -uo pipefail
@@ -46,14 +44,11 @@ wait_dind() {
     return 1
 }
 
-# dump_dind says why an account's daemon is not usable, in the two ways nothing
-# else here prints.
-#
-# The exit code and OOMKilled separate "it would not start" from "something
-# killed it", which is the difference between a bug in this workspace and a
-# runner that ran out of memory; the daemon's own log carries the reason for
-# the first. Both are asked of the PARENT daemon, which can see the container
-# from outside, because a daemon that is down cannot answer for itself.
+# dump_dind says why an account's daemon is not usable. The exit code and
+# OOMKilled separate "it would not start" from "something killed it", which is
+# a bug here against a runner out of memory; the daemon's own log carries the
+# reason for the first. Asked of the PARENT daemon, because a daemon that is
+# down cannot answer for itself.
 dump_dind() {
     local who=$1
     hostdocker exec "$CONTAINER" docker inspect "rd-dind-$who" --format \
@@ -82,13 +77,12 @@ ok "two keypairs staged as $A.pub and $B.pub"
 echo
 echo "== 3. start the workspace with a daemon per account =="
 # true, written here rather than defaulted in the library: this suite exists to
-# test that mode, and it says so in its own file.
+# test that mode, and says so in its own file.
 #
-# The extra mount stands in for the real case: a workspace with a private
-# registry mounts /etc/docker/daemon.json into its own daemon, and each
-# account's daemon needs the same file or a pull that works on the workspace
-# fails inside every account. A marker is used instead of a real daemon.json,
-# which would have to name a registry this suite does not have.
+# The extra mount stands in for a workspace with a private registry, which
+# mounts /etc/docker/daemon.json into its own daemon and needs the same file in
+# each account's. A marker, since a real daemon.json would have to name a
+# registry this suite does not have.
 mkdir -p "$WORK/dindconf"
 echo "reached the inner daemon" >"$WORK/dindconf/marker"
 
@@ -119,14 +113,12 @@ else
 fi
 
 # The shared `docker` group grants a socket reaching the PARENT daemon, which
-# holds every account's dind. In this mode nobody may be in it, or the
-# separation ends at the first shell.
+# holds every account's dind, so in this mode nobody may be in it.
 #
-# Asked of the UNIX user, which is `rd-<account>` and not the account name
-# (ADR 0025). Spelled `$account` this looked like it passed: `id` failed for a
-# user that does not exist, the grep found nothing, and "not in the docker
-# group" is what a missing user and a correct one produce alike. So the lookup
-# has to succeed before the membership means anything.
+# Asked of the UNIX user, `rd-<account>` and not the account name (ADR 0025).
+# Spelled `$account` this looked like it passed: `id` failed for a user that
+# does not exist, and "not in the docker group" is what a missing user and a
+# correct one produce alike. So the lookup must succeed first.
 for account in "$A" "$B"; do
     if ! groups=$(hostdocker exec "$CONTAINER" id -nG "rd-$account" 2>&1); then
         bad "no unix user rd-$account: $groups"
@@ -661,29 +653,25 @@ else
         bad "$B's daemon did not answer in 180s, so the probe below proves nothing"
         dump_dind "$B"
     else
-        # Printed rather than only waited on: this restart is the one place a
-        # healthy daemon's whole boot is timed, and it is the number any claim
-        # about daemon startup has to come from. It was 17.0s +/- 0.2 while
-        # dockerd slept at the unencrypted-listener warning, and 1s once no
-        # daemon bound TCP (2026-09-08). wait_dind polls every 2 seconds, so
-        # that is the resolution.
+        # Printed rather than only waited on: this is the one place a healthy
+        # daemon's whole boot is timed, and any claim about daemon startup has
+        # to come from it. 17.0s +/- 0.2 while dockerd slept at the
+        # unencrypted-listener warning, 1s once no daemon bound TCP
+        # (2026-09-08); wait_dind polls every 2s, which is the resolution.
         info "$B's daemon answered in $(( $(date +%s) - started_at ))s"
     fi
 
     for who in "$A" "$B"; do
-        # The exit status is kept, because an empty answer is two different
-        # failures needing two different actions and the output alone cannot
-        # tell them apart: `timeout` exits 124 when the shell never opened,
-        # which is what an account whose daemon will not start looks like, and
-        # 0 with no output is a probe that ran and said nothing. ssh's own
+        # The exit status is kept: an empty answer is two failures the output
+        # cannot tell apart, `timeout` exiting 124 because the shell never
+        # opened, and 0 from a probe that ran and said nothing. ssh's own
         # stderr goes to a file rather than into $reach, so a diagnostic line
-        # cannot be read as an answer by the cases below.
-        # 200 seconds, which is longer than daemons.DefaultReadyTimeout on
-        # purpose. Ensure waits 180s for a daemon that is not up and only THEN
-        # writes the one message that names the reason, the daemon's own log
-        # tail, to the session's stderr. At 120s this suite gave up 60 seconds
-        # before that message existed, so four CI failures reported an empty
-        # answer and none of them carried a cause.
+        # cannot be read as an answer below.
+        #
+        # 200s, longer than daemons.DefaultReadyTimeout on purpose: Ensure
+        # waits 180s for a daemon that is not up and only THEN writes the
+        # message naming the reason. At 120s four CI failures reported an empty
+        # answer and none carried a cause.
         reach=$(ssh_account "$WORK/state-$who/id_ed25519" "$who" 200 "$probe" \
             2>"$WORK/probe-$who.err" | tr -d '\015')
         status=$?
@@ -710,9 +698,8 @@ echo "== 13. a daemon that was killed rather than stopped starts again =="
 # Arranged rather than waited for: in the wild this arrives about once in
 # eighty runs (agent/internal/daemons.ExecRoot has the failure and the
 # measurement). A stale containerd.pid only stops dockerd while the pid it
-# names is alive, which in the wild is a coincidence; pid 1 is the daemon
-# container's own init and is alive in every incarnation, so planting that
-# makes it deterministic.
+# names is alive, so planting pid 1, the daemon container's own init, makes it
+# deterministic.
 EXECROOT=/var/run/docker
 PIDFILE=$EXECROOT/containerd/containerd.pid
 if ! planted=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \

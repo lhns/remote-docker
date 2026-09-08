@@ -9,16 +9,13 @@
 #                          ->  SSH channels to this machine
 #                          ->  the client's in-process NFS server
 #
-# Neither layer is ours to configure once a container is running. Docker's
+# Neither layer is ours to configure once a container is running: docker's
 # local driver calls mount(2) with the options we chose and never speaks to the
-# volume again; everything after that is the kernel's behaviour and our mount
-# options. So what a container SEES when a session drops, and whether it comes
-# back, is not something to reason about. It is something to measure.
+# volume again. So what a container SEES when a session drops is measured here
+# rather than reasoned about, and each section states what it expects before it
+# looks, so a wrong expectation is a finding rather than a red line.
 #
-# This suite is the measurement, and each section states what it expects before
-# it looks, so a wrong expectation is a finding rather than a red line.
-#
-# WHAT IS KNOWN, all of it measured here rather than reasoned about:
+# WHAT IS KNOWN, all of it measured here:
 #
 #   The share ROOT handle is the one that must survive a client restart. MOUNT
 #   issues it once and the kernel never mounts again, so a root that stops

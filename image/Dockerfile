@@ -1,14 +1,11 @@
 # syntax=docker/dockerfile:1
 #
-# The remote-docker workspace.
-#
-# A privileged Docker-in-Docker daemon reached over SSH. The client serves its
-# own files over NFS through a reverse tunnel, and this daemon mounts them per
-# container as ordinary volumes -- so a bind mount naming a path on the
-# client's machine resolves, wherever on that machine it lives.
+# The remote-docker workspace: a privileged Docker-in-Docker daemon reached
+# over SSH, mounting the client's own files as ordinary volumes from an NFS
+# export served back through a reverse tunnel.
 #
 # The build context is the REPOSITORY ROOT, not image/, because the agent is
-# built from source here. Build with:
+# built from source here:
 #     docker build -f image/Dockerfile .
 FROM golang:1.27-alpine AS build
 WORKDIR /src
@@ -20,14 +17,11 @@ ENV GOTOOLCHAIN=auto
 # Stamped by the release workflow. Without it a published image reports "dev",
 # which makes "which version is this workspace running" unanswerable.
 ARG VERSION=dev
-# Only the agent's module and the two it requires: core, and core-agent, which
-# is the workspace side with no Docker in it. The client's tree is not copied
-# and cannot be resolved from here, so this build cannot break because of a
-# dependency the binary never imported (ADR 0021).
-#
-# go.work is deliberately NOT copied. It would resolve this build through the
-# workspace instead of through agent/go.mod's own replace, so a missing require
-# would succeed here and fail only where there is no workspace.
+# Only the agent's module and the two it requires, so this build cannot break
+# because of a dependency the binary never imported (ADR 0021). go.work is
+# deliberately NOT copied: it would resolve this through the workspace rather
+# than through agent/go.mod's own replace, so a missing require would succeed
+# here and fail only where there is no workspace.
 COPY core/ ./core/
 COPY core-agent/ ./core-agent/
 COPY agent/ ./agent/
@@ -81,10 +75,9 @@ EXPOSE 2222
 VOLUME ["/var/lib/docker"]
 
 # tini warns whenever it is not PID 1, and the one dind's entrypoint starts for
-# dockerd never is: it runs under the agent. Nothing is wrong when it says so,
-# but the message reads like a fault and has been reported as one. This makes
-# the inner tini a subreaper so it collects its own subtree, and is a no-op for
-# the tini that is already PID 1.
+# dockerd never is: it runs under the agent. The message reads like a fault and
+# has been reported as one. As a subreaper the inner tini collects its own
+# subtree instead; a no-op for the tini that is already PID 1.
 ENV TINI_SUBREAPER=1
 
 # tini reaps the processes the agent forks per session. The agent is the
