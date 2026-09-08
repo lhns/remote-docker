@@ -715,9 +715,9 @@ premise of the project, and it applies to building it too. So:
   agent's namespace as well would put an unauthenticated NFS export in the
   namespace every shell runs in, which is exactly what a shared daemon (ADR
   0012) must do and why that mode rests on its trust assumption.
-  `per-user-dind.sh` section 12 asserts the absence, `integration.sh` section 11
-  measures the shared mode, and the threat model's flow 5 is where it is
-  reasoned about.
+  `per-user-dind.sh` section 12 asserts the absence, `integration.sh` section
+  11e refuses one account the other's reverse port, and the threat model's
+  flow 5 is where it is reasoned about.
 - **An `*Account` is immutable once it is in `accounts.Store.accounts`; a
   change means a new one, in a new map.** `Lookup` hands the pointer to the SSH
   authenticator, which ranges `Keys` with no synchronisation, so revoking by
