@@ -24,132 +24,110 @@ The port is gone rather than locked, and with it the sixteen seconds dockerd
 sleeps to make somebody read the warning about it. A per-account daemon that
 used to take about 17 seconds to answer now takes about 1.
 
-Each account's daemon container is recreated once to pick this up, and keeps
-its images, containers and volumes.
+### A daemon no longer fails to start after an unclean restart
+
+Runtime state from a daemon's previous life survived a restart that killed it
+rather than stopping it, and dockerd will not start over a stale
+`containerd.pid`. For a per-account daemon that was about one start in eighty:
+the account's shell waited three minutes for a daemon that was never coming,
+with nothing on screen saying why. The workspace's own daemon had the same
+defect one level up, reachable only after an unclean end and a restart reusing
+the same writable layer.
+
+Both exec-roots are a tmpfs now, as they are on any real machine, so nothing in
+them survives. An agent that cannot mount one says so and starts the daemon
+anyway, and one that finds a daemon already serving from that directory leaves
+it alone.
+
 ### The wait for a cold daemon is a setting, and a burst no longer pays it each
 
 `WORKSPACE_DAEMON_READY_TIMEOUT` is how many seconds a per-account daemon has
-to answer when it is started. The default is unchanged at 180, which is chosen
-for a first start on fuse-overlayfs over Ceph or NFS; a healthy daemon answers
-in about a second. Everything that account does waits on it, a shell included,
-so it is also how long somebody with a broken daemon waits for a prompt.
+to answer when it is started. The default is unchanged at 180, chosen for a
+first start on fuse-overlayfs over Ceph or NFS; a healthy daemon answers in
+about a second. Everything that account does waits on it, a shell included, so
+it is also how long somebody with a broken daemon waits for a prompt.
 
-A start that fails is also remembered for five seconds now. `docker compose up`
-is hundreds of API calls, every one of them asks for the daemon, and when the
-first attempt failed each of the others started over and paid the whole budget
-again, one after another.
-### More connections behind a share, if you ask for them
+A start that fails is remembered for five seconds. `docker compose up` is
+hundreds of API calls, every one of them asks for the daemon, and each used to
+start over and pay the whole budget again.
 
-`REMOTE_DOCKER_NFS_NCONNECT=2` to `16` tells the workspace's NFS client to open
-that many connections per share. Off unless you set it.
+### A large write to a share no longer fails, and a share is faster
 
-**It needs Linux 5.3 or newer on the workspace and nothing checks first.** This
-is the option that broke every bind mount on a RHEL 7 workspace when it was
-unconditional: an older NFS client refuses the whole option string over the one
-word it does not know, so `invalid argument` names a list whose every word is
-valid. Now nobody gets it without asking, and unsetting the variable is the fix.
+Writing a big file into a shared directory could fail with `Input/output
+error`, and `npm i` of a package carrying a large binary failed every time.
+Four things were behind it:
 
-It is one setting for all shares rather than one per share, because Linux keeps
-a single RPC transport per server address and every share mounts from the same
-one. More connections raises the ceiling on requests in flight, which the file
-server bounds per connection.
+- The mount asked for a three-second deadline where it meant thirty. `timeo` is
+  deciseconds, and it runs from transmit rather than detecting a stall, so
+  queueing more writes than the server could drain inside it failed all of them
+  at once. A share asks for the kernel's own TCP default of 60 seconds now, and
+  the file server answers eight requests at a time per connection rather than
+  one ([ADR 0047](docs/adr/0047-a-forked-go-nfs.md)).
+- A file was opened and closed once per megabyte, because NFS has no open file.
+  On Windows one of those opens took between 1.3 and 12.4 seconds while npm was
+  extracting the file, against 0.2ms once nothing else was writing it. A file
+  now stays open for a couple of seconds after the request that used it;
+  `REMOTE_DOCKER_NFS_FDCACHE` tunes how long, and `0` turns it off.
+- Every attribute lookup walked the whole path twice, five times over for a
+  single small file. On Windows against a share four directories deep, 4.79ms
+  per `Lstat` becomes 0.42ms.
+- Resolving a file handle got slower for as long as a session ran: 12us at the
+  start against 10.3ms once 50,000 files had been seen, which is 1.9 seconds of
+  pure CPU for one 256MB write, and the writes queued behind it ran out of the
+  mount's deadline.
 
-**Whether it is faster is unmeasured.** Nothing in CI or in the bench runs with
-it on. Turn it on, report what happened, and that is what would make it a
-default.
+Measured against a real workspace: `npm i -g opencode-ai` on a plain share,
+which had failed every time, completes in 120 seconds with the full 185MB
+binary rather than a truncated 27MB one; `npm i` of one 185MB package went from
+331 seconds to 13; and over a WAN link 300 small files went from 20.9s to 6.3s,
+with the CREATE round trip falling from 34ms to 9ms. That last one falls on
+every metadata operation, so a directory walk and `git status` were paying it
+too.
 
-### An account's daemon no longer fails to restart after the workspace does
+One caveat, because it is why the mount options can look like they did nothing:
+Linux keeps one RPC transport per server address, and every share of a machine
+mounts from the same one. `timeo` and `retrans` are taken from whichever share
+mounted first and ignored for the rest, until the workspace's daemon restarts.
 
-A workspace restart kills every account's daemon rather than stopping it, and
-about one time in eighty the daemon then refused to come back: runtime state
-from its previous life survived in the container, and dockerd will not start
-over it. The account's shell waited three minutes for a daemon that was never
-coming, with nothing on screen saying why.
+### A share behaves like a bind mount, and is measured against one
 
-The daemon's exec-root is a tmpfs now, as it is on any real machine, so nothing
-in it survives. Each account's daemon container is recreated once to pick this
-up, and keeps its images, containers and volumes: those are on a volume the
-container in front of it does not own.
+`test/probes/fsprobe` runs one fixed sequence of filesystem operations inside a
+container and prints a transcript; CI runs it against a plain bind mount and
+against a share from a Linux client and from a Windows client, and fails on any
+difference not listed with a reason in `test/fs-conformance/`. What it and a
+Windows client between them found, and what is fixed:
 
-### The shared daemon can no longer fail to start after an unclean restart
+- Removing or renaming a symlink through a share acted on its target: `rm link`
+  deleted the file the link pointed at.
+- A `chmod` that dropped the owner's write bit made the file unwritable for the
+  share itself, so every later write from the container failed with EACCES.
+- From a Windows host, names NTFS cannot spell (`< > : " | ? *`, a trailing dot
+  or space, `CON`, `NUL`) could be created and not deleted. They are refused
+  with EINVAL, as native Docker refuses them.
+- From a Windows client, a file a container had just created went stale on its
+  first attribute change, so GNU tar wrote every file and then failed every
+  utime, chown and chmod; and a create carrying a mode (tar as root, `cp -p`,
+  `install`) failed with EIO, because the share root was spelled with forward
+  slashes and compared raw against a backslash target.
+- A container running as a uid of the image's choosing could not write into a
+  `delegated` share. Every file in a share now reports mode 0666 and every
+  directory 0777, owned by the workspace account as before, and a union's upper
+  is created 0777
+  ([ADR 0046](docs/adr/0046-a-share-reports-wide-mode-bits.md)).
+- A share reported every file with one link; the real count is reported.
+- Through the go-nfs fork: rmdir and rename over a non-empty directory answer
+  ENOTEMPTY instead of EIO, rename over an empty directory works, a file renamed
+  while open keeps its handle, and a hard link request is parsed as one.
 
-The same stale `containerd.pid`, one level up. The workspace container's own
-`/run` is part of its writable layer, so a workspace that ended uncleanly and
-was started again on that layer could come back with a pid file from its
-previous life and a dockerd that either exits or waits forever. The agent
-mounts a tmpfs on the exec-root before it starts the daemon, so nothing there
-survives.
+Creating a symlink from a Windows client still fails unless Developer Mode is on
+or the client runs elevated, because Windows withholds the privilege. The
+container was told `EACCES` and nothing else, which is what `npm i` of any
+package with a bin entry ends on; the client now says what happened and what to
+do about it, once per share.
 
-Narrower than the per-account case, and the README's "Restarting a workspace
-container" says who was ever exposed: it needs an unclean end (`docker
-restart`, an OOM kill, a host reboot, a SIGKILL after the grace period) AND a
-restart reusing the writable layer. A clean stop removes the file, Kubernetes
-gets a fresh layer every time, and on a VM `/run` is already a tmpfs.
-
-An agent that cannot mount it says so and starts the daemon anyway, and one
-that finds a daemon already serving from that directory leaves it alone: a
-fresh tmpfs over a live daemon's runtime state would be worse than the bug.
-
-### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
-
-Reported from the field, and it deadlocked outright. The client opens the
-cache channel by asking for `workspace-cache` and reading a greeting; an agent
-predating that command has no case for it, falls through to running it as a
-shell command, and its `os/exec` then waits on a copy of the session's stdin
-which the client never closes because it is blocked reading the greeting. Both
-ends waited on the other, and nothing reached the terminal.
-
-- **Every handshake this client makes is bounded, at ten seconds.** The cache
-  channel, the change channel and `workspace-info`. Closing the stream is the
-  only lever an SSH channel gives, and that is what expiry does. This protects
-  the client against every workspace already deployed, including ones
-  predating whatever is added next; the agent side of the same deadlock was
-  fixed separately, and only helps agents built since.
-- **A mount that needs a capability the workspace does not serve is refused,
-  naming the mount.** `write=back` and `write=ephemeral` need the cache
-  channel; `read=cached` on its own does not. The refusal reports the agent's
-  version as context, and never uses it as the test: there is no minimum
-  version anywhere, because the handshake is built so either side can be
-  older. A workspace that answered nothing gets a different message, because
-  silence names no cause.
-- **An older workspace serving ordinary `write=through` mounts is silent and
-  unchanged.** The channel is now opened when a mount asks for one, so a
-  session that mounts nothing delegated never asks and is never told.
-
-### Five resources that were acquired and never handed back
-
-An audit for one defect shape: a resource whose release is conditional, or
-whose release path cannot reach the thing it is meant to release.
-
-- **Standing by released one file watch per share, not the tree.** `remote`
-  drops its watches when a session goes idle, which on a large project is the
-  only local resource worth having back. Only the share's top directory was
-  ever handed to the backend; every directory below it stayed registered, and
-  nothing could remove it again, because the map it was dropped from was the
-  only record of what had been added. Each one is a 64KB buffer on Windows and
-  an open descriptor per file on macOS. It also left a renamed directory's
-  subtree still reporting changes under its old path, which is the thing the
-  removal exists to stop.
-- **A released share kept its prefetch sender.** The share was forgotten and
-  the goroutine behind it was not: it went on ticking for the life of the
-  session, holding an entry per file in the tree, and sending the walk's
-  leftovers into a cache the workspace had released.
-- **A machine-backed workspace leaked a hold per failed connection.** The
-  `wsl.exe` session that keeps the machine from shutting down is released by
-  the connection that took it, and three failure paths returned before the
-  connection existed. The gate reopens on every request, so a workspace whose
-  agent was not answering leaked one hold per retry, each keeping the machine
-  awake.
-- **A reverse forward was closed by address rather than by identity.** The
-  reservation and the listener are given up on the same event, in no fixed
-  order, so a second session could hold the address by then and lose its
-  listener to the first session's teardown. An accept error other than the
-  close left the socket bound with nothing accepting on it and the entry
-  already deleted, so the port was refused to every reconnect for the life of
-  the agent.
-- **A WebSocket that died before it was accepted parked its handler forever.**
-  The keepalive gives up on a peer that stops answering, and the handler was
-  waiting to hand the connection over on a channel nobody would receive from.
+One consequence worth knowing: a share reports the workspace account as the
+owner, so git in a container refuses a repository on one as "detected dubious
+ownership" until `safe.directory` is set.
 
 ### A mount has two settings, `read=` and `write=`
 
@@ -162,132 +140,64 @@ docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,wr
 What each word does is the table under
 [Faster access to a shared directory](README.md#faster-access-to-a-shared-directory).
 A mount names one or both; the rest comes from `consistencyPaths`, then
-`consistency`, then the default. `ephemeral` is new: a build directory's
-writes stay in the workspace and go with it. `remote status` reports bytes
-sent per share.
-
-### A large write to a share no longer fails, and a share is faster
-
-Writing a big file into a shared directory could fail with `Input/output
-error`, and `npm i` of a package carrying a large binary failed every time.
-Four things were behind that, and all four are fixed:
-
-- **The mount's deadline was three seconds, not thirty.** `timeo` is
-  deciseconds, and it is not a stall detector: it runs from transmit and
-  includes the time a request spends queued behind others, so queueing more
-  writes than the server could drain inside it failed all of them at once.
-  Measured on a live workspace at `timeo=30`: 224 WRITEs in flight timing out
-  together at 9.07s, with the transport never reconnecting. A share now asks
-  for the kernel's own TCP default of 60 seconds, and the server, which
-  answered one request at a time per connection, now handles eight (ADR 0047).
-- **A file was opened and closed once per megabyte.** NFS has no open file, so
-  the server opened, seeked, wrote and CLOSED on every WRITE request: a 185MB
-  file at `wsize=1048576` was opened and closed 180 times. On Windows those
-  opens took between 1.3 and 12.4 seconds each while npm was extracting the
-  file, against 0.2ms for the same file once nothing was writing it, so the
-  cost grew with the file and was paid per megabyte. A file now stays open for
-  a couple of seconds after the request that used it and the next request
-  reuses it. `REMOTE_DOCKER_NFS_FDCACHE` tunes how long, and `0` turns it off.
-- **Every attribute lookup walked the whole path twice.** go-billy's `Lstat`
-  runs `filepath.EvalSymlinks` over the file's directory and over the share
-  root, and go-nfs stats a path several times per request, so creating one
-  small file paid it five times. It now resolves the way REMOVE and RENAME
-  already did: on Windows against a share four directories deep, 4.79ms per
-  `Lstat` becomes 0.42ms, where the `os.Lstat` under both is 0.09ms.
-- **Resolving a file handle got slower for as long as a session ran.** Each
-  request walked the handle cache, which holds an entry per path the workspace
-  has touched. With 50,000 files seen that was 10.3ms of pure CPU per request
-  against 12us at the start, which is 1.9 seconds of it for a single 256MB
-  write; the writes queued behind that ran out of the mount's deadline and
-  failed with EIO, on a share that had worked earlier in the same session, and
-  nothing logged it. The fix is in the forked server (ADR 0047).
-
-What that is worth, measured against a real workspace: `npm i -g opencode-ai`
-on a plain share, which had failed every time, completes in 120 seconds with
-no I/O errors and the full 185MB binary where a previous run had left a
-truncated 27MB one; `npm i` of one 185MB package went from 331 seconds to 13,
-with per-write latency falling from 35 seconds to 788ms; and over a WAN link
-300 small files went from 20.9s to 6.3s, with the CREATE round trip falling
-from 34ms to 9ms. That last one falls on every metadata operation and not only
-on writes, so a directory walk and `git status` were paying it too. Large
-files never were: they do not pay it per byte.
-
-One caveat, because it is why the mount options can look like they did
-nothing: Linux keeps one RPC transport per server address, and every share of
-a machine mounts from the same one. `timeo` and `retrans` are taken from
-whichever share mounted first and silently ignored for the rest, until the
-workspace's daemon is restarted.
-
-### A share behaves like a bind mount, and is measured against one
-
-`test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
-a container and prints a transcript; CI runs it against a plain bind mount,
-against a share from a Linux client and from a Windows client, and fails on
-any difference not listed with a reason in `test/fs-conformance/`. What the
-probe and a Windows client between them found, and what is fixed:
-
-- Removing or renaming a symlink through a share acted on its target: `rm
-  link` deleted the file the link pointed at. The bound filesystem resolved
-  the final path component; it resolves only the directory now.
-- A `chmod` that dropped the owner's write bit made the file unwritable for
-  the share itself, so every later write from the container failed with
-  EACCES. The owner's read and write bits are kept on this machine.
-- From a Windows host, names NTFS cannot spell (`< > : " | ? *`, a trailing
-  dot or space, `CON`, `NUL`, ...) could be created and not deleted. They are
-  refused with EINVAL, as native Docker refuses them.
-- A share reported every file with one link; the real count is reported.
-- From a Windows client, a file a container had just created went stale on its
-  first attribute change: GNU tar wrote every file and then failed every
-  utime, chown and chmod with `Stale file handle`. The CREATE reply carried a
-  fileid no later reply repeated.
-- Also from a Windows client, a create carrying a mode (tar as root, `cp -p`,
-  `install`) failed with EIO: the share root, spelled with forward slashes,
-  was compared raw against a backslash target and every name "left the share".
-- A container running as a uid of the image's choosing could not write into a
-  `delegated` share: the union's root was the agent's `0:0 0755`. Every file
-  in a share now reports mode 0666 and every directory 0777, owned by the
-  workspace account as before, and the union's upper is created 0777
-  (ADR 0046).
-- go-nfs (now `github.com/lhns/go-nfs`): rmdir and rename over a non-empty
-  directory answer ENOTEMPTY instead of EIO; rename over an empty directory
-  works; a file renamed while open keeps its handle instead of going stale;
-  a hard link request is parsed as one (it was parsed as a symlink).
-
-One consequence worth knowing: a share reports the workspace account as the
-owner, so git in a container refuses a repository on one as "detected dubious
-ownership" until `safe.directory` is set.
-
-### A refused symlink says why
-
-Creating a symlink through a share from a Windows client fails unless Developer
-Mode is on or the client runs elevated: Windows withholds the privilege. The
-container was told `EACCES` and nothing else, which is what `npm i` of any
-package with a bin entry ends on. The client now says what happened and what to
-do about it, once per share. Nothing stands in for the symlink itself, and
-`core-client/nfsserve/symlink.go` records why.
-
-### Prefetch, off by default
+`consistency`, then the default. `ephemeral` is new: a build directory's writes
+stay in the workspace and go with it. `remote status` reports bytes sent per
+share.
 
 `prefetch: eager` or `tree` (`REMOTE_DOCKER_PREFETCH`) fills a `read=cached`
-union ahead of reads: the whole tree smallest first, or what the container
-reads and its neighbourhood. Off because, measured on a shaped link, landing a
-file in the union costs more round trips than reading it: a cold union reads
-in the plain mount's time at every latency, and a sparse read is slower. The
-table is in ADR 0045.
+union ahead of reads, either the whole tree smallest first or what the container
+reads and its neighbourhood. It is off, because landing a file in the union
+costs more round trips than reading it: measured on a shaped link, a cold union
+reads in the plain mount's time at every latency, and a sparse read is slower.
+The table is in [ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md).
 
-### A slow share can be timed
+### A slow share can be timed, and can be given more connections
 
 `REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
 takes at least that long, with the operation, the path, and the running count
-and mean for that operation. Off by default and not installed at all when
-unset, so a share nobody is diagnosing pays nothing for it. Nothing else here
-measured latency: go-nfs reports errors and everything below Warn is dropped,
-so a request that was merely slow said nothing at any level and the only
-evidence was on the workspace, in the NFS client's counters.
+and mean for that operation. It is off by default and not installed at all when
+unset. Nothing else here measured latency: a request that was merely slow said
+nothing at any level, and the only evidence was on the workspace, in the NFS
+client's counters.
 
-The value is a duration or bare milliseconds. Anything else, and anything under
-`1ms`, is refused with a line saying so: the report rounds to milliseconds, so
-a smaller threshold prints `took=0s` for every call a share makes.
+`REMOTE_DOCKER_NFS_NCONNECT=2` to `16` tells the workspace's NFS client to open
+that many connections per share. It is one setting for all shares, because Linux
+keeps a single RPC transport per server address. **It needs Linux 5.3 or newer
+on the workspace and nothing checks first**, so it is off unless you ask for it,
+and unsetting it is the fix if a mount is then refused. Whether it is faster is
+unmeasured: nothing in CI or in the bench runs with it on.
+
+The supported workspace kernel is written down for the first time, 3.10, and
+every mount option this code emits is in the table in
+`core/workspace/kernel_test.go` with the kernel it needs. A test fails on one
+above that floor.
+
+### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
+
+Reported from the field. The client opens the cache channel and reads a
+greeting; an agent predating that command runs it as a shell command instead,
+and waits on a copy of the session's stdin, which the client never closes
+because it is blocked reading the greeting. Both ends waited on the other.
+
+Every handshake this client makes is bounded at ten seconds now, which protects
+it against every workspace already deployed. A mount needing a capability the
+workspace does not serve is refused by name instead: `write=back` and
+`write=ephemeral` need the cache channel, `read=cached` on its own does not. No
+version is ever the test, because the handshake is built so either side can be
+older, and an older workspace serving ordinary `write=through` mounts never
+opens the channel and is never told.
+
+### Every release now carries a Windows MSI
+
+One per architecture, beside the zips:
+`remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It installs
+into `C:\Program Files\remote-docker` and appends that to the system PATH. An
+optional feature, off by default, installs a second copy named `docker.exe`
+(`msiexec /i ... /qn ADDLOCAL=Main,DockerName`) and refuses when a `docker.exe`
+is already installed, naming the one it found; `ALLOWDOCKERSHADOW=1` overrides
+that. The MSI is unsigned, so SmartScreen will warn, and it is not in the
+release's `checksums.txt`. See
+[ADR 0048](docs/adr/0048-a-windows-installer.md).
 
 ### The chart upgrades across versions again
 
@@ -297,126 +207,93 @@ release whose storage was byte-identical: the volume claim templates carried
 `helm.sh/chart` and `app.kubernetes.io/version`, and a volumeClaimTemplate is
 immutable, labels included. They now carry only labels that do not move.
 
-An existing release still has the old labels, and removing them is itself a
-refused change, so the first upgrade past this needs the StatefulSet deleted
-once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
-StatefulSet adopts them.
+### Leaks, hangs and smaller fixes
 
-### Fixed
+Five resources were acquired and never handed back, found by auditing for one
+shape: a release that is conditional, or that cannot reach the thing it frees.
 
-- **Every bind mount failed on a workspace older than Linux 5.3.** The share's
-  mount asked for `nconnect=8`, which the NFS client has only since 5.3, and
-  the kernel refuses the WHOLE option string over one word it does not know, so
-  a workspace on RHEL 7 (`3.10.0-1160.119.1.el7.x86_64`) answered
-  `failed to mount local volume: ... invalid argument` against a list whose
-  every word is individually valid. `nconnect` is gone. It arrived and left
-  within this release cycle, so only a build from main ever asked for it. The
-  supported workspace kernel is now written down, 3.10, and every option this
-  code emits is in the table in `core/workspace/kernel_test.go` with the kernel
-  it needs; a test fails on one above that floor.
+- Standing by released one file watch per share rather than the tree, so every
+  directory below the top stayed registered with nothing able to remove it: a
+  64KB buffer each on Windows, an open descriptor per file on macOS. It also
+  left a renamed directory's subtree reporting changes under its old path.
+- A released share kept its prefetch sender ticking for the life of the session.
+- A machine-backed workspace leaked one `wsl.exe` hold per failed connection,
+  each keeping the machine awake.
+- A reverse forward was closed by address rather than by identity, so one
+  session's teardown could take a second session's listener, and an accept error
+  left the port refused to every reconnect for the life of the agent.
+- A WebSocket that died before it was accepted parked its handler forever.
 
-  **A volume already created with `nconnect=8` keeps it**, because a volume's
-  driver options are immutable. Creating a container replaces such a volume by
-  itself, so `docker run` is enough; a container that ALREADY EXISTS is only
-  started, and keeps the broken volume. For those, recreate the container:
+The rest:
 
-  ```bash
-  docker compose down && docker compose up -d   # or: docker rm -f <container>
-  ```
-
-  A volume left behind by a container that is gone is removed by
-  `remote-docker remote gc`, and rebuilt on the next run.
-- `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's
-  session, whichever machine was named.
-- `remote machine rebuild` and `status` ignored the CPU count, memory,
-  rootfs, port and account a machine was created with; unset flags now take
-  the recorded ones. `create` no longer inherits a stale record, while
-  `rebuild` and `status` use it.
-- Adding a named workspace to a config that had only an unnamed one carried
-  four of its fields across and left the rest, `machine` among them, as a base
-  under every entry. The new workspace inherited the old one's machine, so
-  `remote rm <new>` would destroy it. The whole entry moves now.
-- A non-pty `ssh workspace <command>` withheld its exit status until the
-  client closed its stdin, so `ssh workspace true` from a terminal hung
-  although the command had exited. The status follows the command now. Our own
-  client never tripped this: it sets no stdin, so x/crypto sends EOF at once.
 - A workspace that accepted a connection and then answered nothing wedged the
-  session until `remote restart`. The client's own Docker API calls carried a
-  context that nothing enforced, so one hung forever, taking port forwarding
-  and the idle-release check with it. They now return when their deadline
-  passes.
-- Closing a session could leave a local port open behind it. Port
-  reconciliation lists containers before it takes its lock, so one already
-  running when the session closed reopened the forwards that close had just
-  torn down, and nothing would close them again.
-- A share is rebuilt on every connect, and the descriptor cache it was built
-  with was left holding its files open until its idle timers expired. Bounded
-  rather than a leak, at up to 64 descriptors for two seconds each, and worth
-  fixing because one of them can be a file a container is mid-write, which is
-  the state the cache exists to avoid on Windows.
+  session until `remote restart`: the client's own Docker API calls carried a
+  context that nothing enforced, so one hung forever and took port forwarding
+  and the idle-release check with it.
+- A non-pty `ssh workspace <command>` withheld its exit status until the client
+  closed its stdin, so `ssh workspace true` from a terminal hung although the
+  command had exited. Our own client never tripped this.
+- Connecting waited out the workspace's 60-second key poll, because the account
+  store held its write lock across `useradd` for every enrolled account and
+  public-key authentication reads through that same lock. Revoking an account
+  could also change a key list another connection was reading.
+- One machine waiting on a cold daemon stalled every port forward on the
+  workspace: working out which port a machine's existing volumes need can take
+  90 seconds, and the port record was locked for the whole question.
 - Preparing a cache for one directory froze every other cache request on the
-  workspace, for every account, until that directory's union had mounted. The
-  first container on a cold share waits on an NFS mount over the client's link,
-  so the wait is a real one, and a fill, an invalidation or a write-back for any
-  other share queued behind it. They now run alongside it.
-- A workspace whose union server stopped answering accumulated a goroutine and
-  an OS thread every two seconds, for as long as the agent ran, and a fill or a
-  deletion against such a share waited for the SSH session's lifetime instead of
-  reporting the share as not serving.
+  workspace, for every account, until that directory's union had mounted. A
+  workspace whose union server stopped answering also accumulated a goroutine
+  and an OS thread every two seconds for as long as the agent ran.
+- Closing a session could leave a local port open behind it, and a share rebuilt
+  on connect left its descriptor cache holding files open, one of which can be a
+  file a container is mid-write.
 - A forwarded UDP flow lived until the container stopped, so a sender whose
   source port changes per datagram, which is what a resolver does, left a
   goroutine, a 64KB buffer and an SSH channel behind per datagram. A flow that
-  has carried nothing for two minutes is closed now (ADR 0038).
+  has carried nothing for two minutes is closed now
+  ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)).
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
-  presence and then asked the default one whether it was healthy, so a
-  deployment that moves its socket got an answer about neither.
-- Connecting waited for the workspace to finish reading its key directory. The
-  account store held its write lock across `useradd` for every enrolled
-  account, and public-key authentication reads through that same lock, so a
-  session opened during the 60-second key poll waited out the whole pass.
-  Revoking an account could also change a key list another connection was
-  reading at that moment.
-- One machine waiting on a cold daemon stalled every port forward on the
-  workspace. Working out which port a machine's existing volumes need can take
-  up to 90 seconds, because it starts that account's daemon to ask, and the port
-  record was locked for the whole question.
-
-### Changed
-
-- **Every release now carries a Windows MSI**, one per architecture, beside the
-  zips: `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It
-  installs into `C:\Program Files\remote-docker` and appends that to the system
-  PATH. An optional feature, off by default, installs a second copy named
-  `docker.exe` — `msiexec /i ... /qn ADDLOCAL=Main,DockerName` — and **refuses
-  when a `docker.exe` is already installed**, naming the one it found;
-  `ALLOWDOCKERSHADOW=1` overrides that. The MSI is unsigned, so SmartScreen
-  will warn, and it is not in the release's `checksums.txt`. See
-  [ADR 0048](docs/adr/0048-a-windows-installer.md).
+  presence and then asked the default one whether it was healthy.
+- `remote machine stop`, `start` and `rebuild` stopped the default workspace's
+  session whichever machine was named, and `rebuild` and `status` ignored the
+  CPU count, memory, rootfs, port and account a machine was created with.
+- Adding a named workspace to a config that had only an unnamed one carried four
+  of its fields across and left the rest, `machine` among them, as a base under
+  every entry, so `remote rm <new>` would destroy the old one's machine.
 - A share whose mode needs a union, on a workspace that cannot make one, is
-  refused naming the word that asked for it. `delegated` is
-  `read=cached,write=back`, so it is the one way to ask for a union without
-  typing `back`, and the refusal used to name a mode nobody had written. Every
-  one of these refusals now also offers `write=through`, which is the remedy
-  the person reading has in their own hands. The read axis needs nothing in the
-  workspace, so `read=cached` is unaffected.
-- `remote status`'s daemon row and the different-build warning now read
-  `a different build (session X, this binary Y)`.
-- `remote machine stop`, `start` and `rebuild` warn when a session
-  acknowledged the stop but its process lingers.
-- The session's status report, the JSON `remote status` reads, no longer
-  carries `workspace`, `host`, `user`, `endpoint`, `ports`, `watching` and
-  `shares`; nothing read them.
+  refused naming the word that asked for it rather than a mode nobody wrote, and
+  offers `write=through` as the remedy.
 
 ### Upgrading
 
 - Docker's own words still work, as aliases: `consistent` and `default` are
   `read=direct,write=through`, `cached` is `read=cached,write=through`,
   `delegated` is `read=cached,write=back`.
+- **Each account's daemon container is recreated once**, for the exec-root
+  tmpfs and the dropped TCP listener. Anything running inside it is killed. Its
+  images, containers and volumes are on a volume that container does not own,
+  and survive.
+- **A volume created by a build from `main` may carry `nconnect=8`**, which a
+  workspace older than Linux 5.3 refuses outright, and a volume's driver options
+  are immutable. `docker run` replaces such a volume by itself; a container that
+  already exists is only started, and keeps it:
+
+  ```bash
+  docker compose down && docker compose up -d   # or: docker rm -f <container>
+  ```
+
+  A volume left behind by a container that is gone is removed by
+  `remote-docker remote gc`, and rebuilt on the next run. No release ever asked
+  for `nconnect`.
+- **The first chart upgrade past this one needs the StatefulSet deleted once**
+  with `--cascade=orphan`: an existing release still carries the old volume
+  claim template labels, and removing them is itself a refused change. Pods and
+  PVCs survive it and the recreated StatefulSet adopts them.
 - **A union revalidates every 60 seconds rather than every second.** Its lower
   carries the share's read mode now instead of a fixed `actimeo=1`. An edit to
-  an existing file still arrives at once through the watcher; a file created
-  or deleted here can take up to a minute to appear in a listing unless
-  watching is `coarse`, as under `read=cached`.
+  an existing file still arrives at once through the watcher; a file created or
+  deleted here can take up to a minute to appear in a listing unless watching is
+  `coarse`, as under `read=cached`.
 
 ## 0.6.0 — 2026-09-03
 
