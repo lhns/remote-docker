@@ -2703,6 +2703,83 @@ else
     info "no openssl on this runner; the proxy section did not run"
 fi
 
+echo
+echo "== 20. the workspace daemon comes back from an unclean restart =="
+# LAST on purpose: it kills the workspace container, so everything above has
+# already run and nothing below depends on the session.
+#
+# The shared daemon's exec-root is in the container's writable layer, so
+# runtime state written there outlives a kill, which on a real machine it never
+# does. dind's entrypoint deletes docker*.pid and containerd's file is
+# containerd.pid, so a container that ended uncleanly and started again on the
+# same layer comes back with a stale containerd.pid naming a pid from its
+# previous life; dockerd then either refuses to record its containerd's pid or
+# believes containerd is already up and waits for something that never arrives.
+# agent/internal/daemons.ExecRoot has both failures and their measurements.
+#
+# Arranged rather than waited for, exactly as per-user-dind.sh section 13 does
+# for the other mode: a stale pid only stops dockerd while the number it names
+# is alive, which in the wild is a coincidence. Pid 1 in the workspace
+# container is the agent itself and is alive in every incarnation.
+EXECROOT=/var/run/docker
+PIDFILE=$EXECROOT/containerd/containerd.pid
+
+# The mechanism first, and asserted separately from the outcome: a daemon that
+# happened to start would otherwise hide a missing tmpfs until the next
+# coincidence.
+if outputs '^tmpfs$' hostdocker exec "$CONTAINER" stat -f -c %T "$EXECROOT"; then
+    ok "the shared daemon's exec-root is a tmpfs, so nothing in it survives a restart"
+else
+    bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"
+fi
+
+# And a mount of its OWN. The filesystem type alone would also be satisfied by
+# an exec-root that is merely a directory on a /run somebody else made a tmpfs,
+# which is not the agent having mounted anything: st_dev against the parent is
+# the same question supervise.mountedAt asks.
+if outputs '^differ$' hostdocker exec "$CONTAINER" sh -c \
+        "if [ \"\$(stat -c %d $EXECROOT)\" = \"\$(stat -c %d $EXECROOT/..)\" ]; then echo same; else echo differ; fi"; then
+    ok "the exec-root is a mount of its own, not a directory on its parent"
+else
+    bad "nothing is mounted at $EXECROOT: [$LAST_OUTPUT]"
+fi
+
+if ! planted=$(hostdocker exec "$CONTAINER" \
+        sh -c "mkdir -p $(dirname "$PIDFILE") && echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
+    bad "could not plant a stale containerd pid in the workspace: [$planted]"
+else
+    # -t 0 is SIGKILL with no grace period, which is the unclean end this is
+    # about: a clean stop removes the pid file and proves nothing. The
+    # writable layer is reused, which is what a restart on Kubernetes would
+    # not do.
+    if hostdocker restart -t 0 "$CONTAINER" >/dev/null 2>&1; then
+        ok "the workspace container was killed and started again on the same layer"
+    else
+        bad "could not restart the workspace container"
+    fi
+
+    if wait_parent_dockerd; then
+        ok "the shared daemon came back with a stale $PIDFILE behind it"
+    else
+        # wait_parent_dockerd reports its own failure.
+        dump_workspace_log 60
+    fi
+
+    # The tmpfs is what took the planted pid away, so the file now holds the
+    # new containerd's own pid or does not exist at all. Either says the
+    # directory did not survive; a `1` says it did.
+    if outputs '^1$' hostdocker exec "$CONTAINER" cat "$PIDFILE"; then
+        bad "the planted containerd pid survived the restart: [$LAST_OUTPUT]"
+    else
+        ok "the planted containerd pid did not survive the restart"
+    fi
+
+    if outputs '^tmpfs$' hostdocker exec "$CONTAINER" stat -f -c %T "$EXECROOT"; then
+        ok "the exec-root is a tmpfs again after the restart"
+    else
+        bad "the exec-root is not a tmpfs after the restart: [$LAST_OUTPUT]"
+    fi
+fi
 
 if [ "$FAIL" -ne 0 ]; then
     echo

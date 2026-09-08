@@ -26,6 +26,14 @@ type Dockerd struct {
 	// Socket is where the daemon is expected to appear.
 	Socket string
 
+	// ExecRoot is dockerd's --exec-root, given a tmpfs of its own before the
+	// daemon is first started so that nothing in it survives the workspace
+	// container being restarted. Empty means leave it alone, which is what
+	// every test here wants and what a caller who has not thought about it
+	// gets: see prepareExecRoot for why the mount is conditional and what it
+	// costs to get wrong.
+	ExecRoot string
+
 	// StartTimeout bounds how long to wait for the socket before reporting
 	// that the daemon did not come up.
 	StartTimeout time.Duration
@@ -60,6 +68,11 @@ const (
 // with it.
 func (d *Dockerd) Run(ctx context.Context) error {
 	d.applyDefaults()
+
+	// Once, before the first daemon and not between restarts: a tmpfs mounted
+	// under a daemon that is already serving from the exec-root would take its
+	// runtime state away mid-flight.
+	prepareExecRoot(d.ExecRoot, d.Socket, d.Log)
 
 	for ctx.Err() == nil {
 		if err := d.runOnce(ctx); err != nil && ctx.Err() == nil {

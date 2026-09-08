@@ -513,6 +513,21 @@ premise of the project, and it applies to building it too. So:
   union leaves behind. Reachable only where dockerd outlives the agent, so
   `test/vm.sh` is where it is asserted and a container deployment cannot show
   it: there the agent is pid 1 and takes every dind with it.
+- **A daemon's exec-root gets a tmpfs, and NEVER while a daemon is serving from
+  it.** The directory is in a container's writable layer, so runtime state
+  written there outlives a kill and dockerd will not start over a
+  `containerd.pid` naming a live pid -- the failure, both of its shapes and
+  their measurements are in `agent/internal/daemons.ExecRoot`. A per-account
+  daemon gets it as `--tmpfs`; the shared daemon (ADR 0012) gets it from the
+  agent, in `supervise.prepareExecRoot`, before dockerd starts. The refusals
+  are the load-bearing half, and are the same discipline as the union above: a
+  path already mounted is left alone, and a live containerd socket or docker
+  socket means a daemon is serving, so mounting would take its containerd
+  socket, its shim sockets and its runc state away while it kept running --
+  worse than the bug. Never answer this by DELETING a stale `containerd.pid`
+  instead: a SIGKILLed dockerd's containerd is reparented and may genuinely
+  still be running, and deleting the file orphans it. A mount that cannot be
+  made is a warning and a daemon that starts anyway, never a refusal to serve.
 - **A union that never mounted looks exactly like one that did, and every
   test passes against it.** Everything reaches a share through a PATH: the
   agent writes the cache through the merged path, the container binds it, an
@@ -975,6 +990,13 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 `COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
+
+The shared daemon surviving an unclean restart, in `integration.sh` 20, which
+is LAST in that suite because it kills the workspace container: the exec-root
+is a tmpfs AND a mount of its own, pid 1 is planted in its `containerd.pid`,
+and the daemon must come back after `docker restart -t 0` with the planted pid
+gone. Both halves, because a daemon that happened to start would otherwise hide
+a missing mount until the next coincidence.
 
 A container's exit status reaching the user, in `integration.sh` 6c: `exit 7`
 giving the client 7 rather than 1 or 0, the same with stdin attached (`-i`),
