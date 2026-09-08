@@ -72,7 +72,7 @@ func TestSpecLowerMount(t *testing.T) {
 	// kernel flags they would be dropped, and the lower would mount with the
 	// kernel's defaults while the volume recorded ours.
 	for _, want := range []string{"addr=127.0.0.1", "port=30001", "mountport=30001",
-		"nfsvers=3", "soft", "nolock", "rsize=1048576", "timeo=600", "nconnect=8"} {
+		"nfsvers=3", "soft", "nolock", "rsize=1048576", "timeo=600"} {
 		if !strings.Contains(options, want) {
 			t.Errorf("options %q are missing %q", options, want)
 		}

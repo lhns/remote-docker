@@ -401,12 +401,12 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.
 		// The mode words ride in the option list and are consumed here: they
 		// describe the mount this program makes, not one the daemon could act
 		// on, and the daemon rejects ours by name.
-		asked, options, err := splitMode(parsed.Options)
+		asked, spelled, options, err := splitMode(parsed.Options)
 		if err != nil {
 			return nil, err
 		}
 		parsed.Options = options
-		mode, err := r.resolveMode(modes, parsed.Source, asked)
+		mode, err := r.resolveMode(modes, parsed.Source, asked, spelled)
 		if err != nil {
 			return nil, err
 		}
@@ -548,11 +548,11 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace
 			continue
 		}
 
-		asked, err := takeMode(mount)
+		asked, spelled, err := takeMode(mount)
 		if err != nil {
 			return err
 		}
-		mode, err := r.resolveMode(modes, source, asked)
+		mode, err := r.resolveMode(modes, source, asked, spelled)
 		if err != nil {
 			return err
 		}

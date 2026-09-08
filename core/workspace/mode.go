@@ -60,6 +60,14 @@ var dockerWords = map[string]Mode{
 	"delegated":  {ReadCached, WriteBack},
 }
 
+// DockerWord reports whether a word is one of Docker's own consistency
+// values, each of which names BOTH axes. Read by the client's refusals, which
+// quote back the word the person actually wrote.
+func DockerWord(word string) bool {
+	_, ok := dockerWords[strings.TrimSpace(word)]
+	return ok
+}
+
 // The words a person may write on each axis, for error messages.
 const (
 	readWords  = "direct|cached"

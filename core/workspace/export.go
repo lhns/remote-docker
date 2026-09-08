@@ -301,13 +301,17 @@ func parseID(s string) (string, error) {
 // fork replaced: 224 WRITEs in flight timing out together at 9.07s, with the
 // transport never reconnecting.
 //
-// nconnect gives the mount eight TCP connections rather than one, and that
-// bound is a connection's own, so it is eight times the requests in service
-// and eight queues rather than one.
+// nconnect is NOT asked for, and nothing else here is newer than the supported
+// workspace kernel either: kernel_test.go is the table and the test. It needs
+// Linux 5.3, and the NFS client refuses the WHOLE option string over one word
+// it does not know, so on a RHEL 7 workspace (3.10.0-1160.119.1.el7.x86_64)
+// every bind mount failed as `invalid argument` against a list whose every word
+// is individually valid. Its benefit was never measured, unlike the timeo
+// above, and the CAVEAT below applied to it too, so measure before reaching for
+// it again.
 //
-// A CAVEAT covering both, and anything else transport-level: Linux keeps
-// one RPC transport per server address, and every share of a client mounts
-// from 127.0.0.1:<tunnel port>. So timeo, retrans and nconnect are taken from
+// That CAVEAT covers anything else transport-level: every share of a client
+// mounts from 127.0.0.1:<tunnel port>, so timeo and retrans are taken from
 // whichever share mounted FIRST and silently ignored for every share after it.
 // Changing them takes a workspace whose daemon has been restarted, not the
 // next mount, which is why a change here can look like it did nothing.
@@ -323,7 +327,7 @@ func NFSVolumeOptions(port int, exportPath string, read Read) map[string]string 
 		"addr=127.0.0.1",
 		fmt.Sprintf("port=%d", port),
 		fmt.Sprintf("mountport=%d", port),
-		"nfsvers=3", "nolock", "noacl", "soft", "timeo=600", "retrans=2", "nconnect=8",
+		"nfsvers=3", "nolock", "noacl", "soft", "timeo=600", "retrans=2",
 	}, attributeOptions(read)...)
 	options = append(options, "noatime", "rsize=1048576", "wsize=1048576")
 

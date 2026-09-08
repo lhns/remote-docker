@@ -103,7 +103,7 @@ func TestSplitMode(t *testing.T) {
 		// which understands more options than this program does.
 		{"rw,nocopy", workspace.ModeUnset, "rw,nocopy"},
 	} {
-		got, leftover, err := splitMode(c.options)
+		got, _, leftover, err := splitMode(c.options)
 		if err != nil {
 			t.Errorf("splitMode(%q): %v", c.options, err)
 			continue
@@ -115,11 +115,11 @@ func TestSplitMode(t *testing.T) {
 	}
 
 	// A word that looks like ours and is not is refused naming it.
-	if _, _, err := splitMode("ro,read=fast"); err == nil || !strings.Contains(err.Error(), "fast") {
+	if _, _, _, err := splitMode("ro,read=fast"); err == nil || !strings.Contains(err.Error(), "fast") {
 		t.Errorf("splitMode(read=fast) = %v, want the word named", err)
 	}
 	// A repeated axis in a list is refused, as it is in a configured value.
-	if _, _, err := splitMode("read=cached,write=through,read=direct"); err == nil || !strings.Contains(err.Error(), "twice") {
+	if _, _, _, err := splitMode("read=cached,write=through,read=direct"); err == nil || !strings.Contains(err.Error(), "twice") {
 		t.Errorf("splitMode(read twice) = %v, want a refusal naming the repeat", err)
 	}
 }
@@ -407,11 +407,18 @@ func TestAUnionIsRefusedWhereTheWorkspaceCannotServeIt(t *testing.T) {
 	}
 
 	for _, c := range []struct{ reported, want string }{
+		{workspace.UnionNoBinary, "fuse-overlayfs"},
 		{workspace.UnionNoBinary, "WORKSPACE_DIND_IMAGE"},
 		{workspace.UnionNoDevice, "/dev/fuse"},
 		{"", "update the workspace"},
+
+		// Every one of them offers the mode that needs none of this, because
+		// it is the remedy the person reading has in their own hands.
+		{workspace.UnionNoBinary, "write=through"},
+		{workspace.UnionNoDevice, "write=through"},
+		{"", "write=through"},
 	} {
-		r, _ := cachedRewriter()
+		r, volumes := cachedRewriter()
 		r.Cache = &fakeCache{}
 		r.UnionReady = c.reported
 
@@ -421,6 +428,40 @@ func TestAUnionIsRefusedWhereTheWorkspaceCannotServeIt(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q refused with %v, want it to name %q", c.reported, err, c.want)
+		}
+		// Refused BEFORE anything was created: a volume left behind by a mode
+		// that was never going to work is the failure half way through a
+		// `compose up` this refusal exists to replace.
+		if len(volumes.created) != 0 {
+			t.Errorf("%q was refused but created %v", c.reported, volumes.created)
+		}
+	}
+}
+
+// A refusal quotes the word the person wrote: `delegated` is Docker's spelling
+// of read=cached,write=back, and naming only write=back names something they
+// never typed.
+func TestARefusedUnionNamesTheWordThatAskedForIt(t *testing.T) {
+	for _, ask := range []string{
+		`{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`,
+		`{"Image":"alpine","HostConfig":{"Mounts":[{"Type":"bind","Source":"/home/alice/project",` +
+			`"Target":"/app","Consistency":"delegated"}]}}`,
+	} {
+		r, volumes := cachedRewriter()
+		r.Cache = &fakeCache{}
+		r.UnionReady = workspace.UnionNoBinary
+
+		_, err := r.ContainerCreate(t.Context(), []byte(ask))
+		if err == nil {
+			t.Fatalf("%s was served anyway", ask)
+		}
+		for _, want := range []string{"write=back", "delegated", "fuse-overlayfs", "/home/alice/project"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refused with %v, want it to name %q", err, want)
+			}
+		}
+		if len(volumes.created) != 0 {
+			t.Errorf("refused but created %v", volumes.created)
 		}
 	}
 }
