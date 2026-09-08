@@ -801,6 +801,42 @@ It is not the default because where overlay2 works it is the kernel doing the
 work and is markedly faster. fuse-overlayfs is a userspace filesystem, so
 every layer read crosses into a userspace process.
 
+### Restarting a workspace container
+
+A container's `/run` is part of its writable layer, so runtime state written
+there outlives the container being killed, which on a real machine it never
+does. dind's entrypoint deletes `docker*.pid` on startup and containerd's file
+is `containerd.pid`, which it misses. A workspace that ended **uncleanly** and
+is started again on the **same writable layer** therefore comes back with a
+stale `/var/run/docker/containerd/containerd.pid` naming a pid from its
+previous life, and if that number happens to be alive again dockerd either
+refuses to record its containerd's pid and exits, or believes containerd is
+already up, starts nothing, and times out. Either way the workspace runs,
+accepts SSH and answers nothing.
+
+The agent mounts a tmpfs on that directory before it starts dockerd, so
+nothing in it survives a restart. Nothing to configure, and it applies to
+compose, Swarm, Helm, a VM and any hand-rolled deployment alike.
+
+Worth knowing whether you were ever exposed to it:
+
+- **A clean stop is safe.** The agent stops dockerd with SIGTERM and a clean
+  shutdown removes the file: measured 0 failures in 50 clean stops, against 8%
+  for `docker kill`.
+- **An unclean end plus a restart on the same layer is the case**: `docker
+  restart` or `docker compose restart`, a host reboot under `restart:
+  unless-stopped`, an OOM kill, or a SIGKILL after the stop grace period.
+- **Kubernetes was never exposed**, because kubelet creates a container with a
+  fresh layer for every restart.
+- **A VM workspace was never exposed** ([ADR
+  0025](docs/adr/0025-a-vm-workspace.md)), because `/run` on a real machine is
+  already a tmpfs. There the operator starts dockerd, so the agent mounts
+  nothing.
+
+If the agent cannot mount it -- it is not privileged, or a daemon is already
+serving from that directory -- it says so and starts the daemon anyway. The
+workspace then behaves as it did before this existed.
+
 ### Enrolment
 
 Out of band: someone with access drops a `<name>.pub` into the keys directory,

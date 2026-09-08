@@ -144,6 +144,13 @@ func serve(addr, wsAddr string) error {
 	daemon := &supervise.Dockerd{
 		Args: dockerdArgs,
 		Log:  logger("dockerd"),
+		// The shared daemon's exec-root is the default one, and the constant
+		// and the failure it prevents live once, in daemons.ExecRoot. Set here
+		// rather than defaulted inside supervise so that the mount happens
+		// only where the agent is about to start a daemon itself: with
+		// WORKSPACE_ENABLE_DIND=false the operator starts dockerd, Run is
+		// never called, and this is a no-op (ADR 0025).
+		ExecRoot: daemons.ExecRoot,
 	}
 	if envOr(envEnableDind, "true") == "true" {
 		wg.Go(func() {

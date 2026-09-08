@@ -513,6 +513,21 @@ premise of the project, and it applies to building it too. So:
   union leaves behind. Reachable only where dockerd outlives the agent, so
   `test/vm.sh` is where it is asserted and a container deployment cannot show
   it: there the agent is pid 1 and takes every dind with it.
+- **A daemon's exec-root gets a tmpfs, and NEVER while a daemon is serving from
+  it.** The directory is in a container's writable layer, so runtime state
+  written there outlives a kill and dockerd will not start over a
+  `containerd.pid` naming a live pid -- the failure, both of its shapes and
+  their measurements are in `agent/internal/daemons.ExecRoot`. A per-account
+  daemon gets it as `--tmpfs`; the shared daemon (ADR 0012) gets it from the
+  agent, in `supervise.prepareExecRoot`, before dockerd starts. The refusals
+  are the load-bearing half, and are the same discipline as the union above: a
+  path already mounted is left alone, and a live containerd socket or docker
+  socket means a daemon is serving, so mounting would take its containerd
+  socket, its shim sockets and its runc state away while it kept running --
+  worse than the bug. Never answer this by DELETING a stale `containerd.pid`
+  instead: a SIGKILLed dockerd's containerd is reparented and may genuinely
+  still be running, and deleting the file orphans it. A mount that cannot be
+  made is a warning and a daemon that starts anyway, never a refusal to serve.
 - **A union that never mounted looks exactly like one that did, and every
   test passes against it.** Everything reaches a share through a PATH: the
   agent writes the cache through the merged path, the container binds it, an

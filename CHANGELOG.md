@@ -22,6 +22,26 @@ The daemon's exec-root is a tmpfs now, as it is on any real machine, so nothing
 in it survives. Each account's daemon container is recreated once to pick this
 up, and keeps its images, containers and volumes: those are on a volume the
 container in front of it does not own.
+
+### The shared daemon can no longer fail to start after an unclean restart
+
+The same stale `containerd.pid`, one level up. The workspace container's own
+`/run` is part of its writable layer, so a workspace that ended uncleanly and
+was started again on that layer could come back with a pid file from its
+previous life and a dockerd that either exits or waits forever. The agent
+mounts a tmpfs on the exec-root before it starts the daemon, so nothing there
+survives.
+
+Narrower than the per-account case, and the README's "Restarting a workspace
+container" says who was ever exposed: it needs an unclean end (`docker
+restart`, an OOM kill, a host reboot, a SIGKILL after the grace period) AND a
+restart reusing the writable layer. A clean stop removes the file, Kubernetes
+gets a fresh layer every time, and on a VM `/run` is already a tmpfs.
+
+An agent that cannot mount it says so and starts the daemon anyway, and one
+that finds a daemon already serving from that directory leaves it alone: a
+fresh tmpfs over a live daemon's runtime state would be worse than the bug.
+
 ### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
 
 Reported from the field, and it deadlocked outright. The client opens the
