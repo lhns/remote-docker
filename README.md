@@ -744,12 +744,29 @@ node. The socket is deliberately not passed to the privileged child.
 | `WORKSPACE_DIND_IMAGE` | the workspace's own image | image a per-account daemon runs |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
 | `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon, and the paths a bind may name; see below |
+| `WORKSPACE_DAEMON_READY_TIMEOUT` | `180` | seconds a cold per-account daemon has to answer; see below |
 | `WORKSPACE_SHELL` | `/bin/bash` | shell an SSH session lands in |
 | `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
 | `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; uid decides the rest |
 | `WORKSPACE_IMAGE` | | the service's own image, for Swarm elevation |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
+
+### How long a cold daemon has to start
+
+An account's daemon is started when that account connects, and everything that
+account does waits for it, a shell included: the agent asks for the daemon
+before it opens one, so an account whose daemon will not start gets no prompt
+until the wait is over.
+
+The wait is 180 seconds by default. A healthy daemon answers in about a second
+on a GitHub runner, so the rest of that budget is for a workspace slower than
+that one: a first start on fuse-overlayfs over Ceph or NFS is the case it was
+chosen for. `WORKSPACE_DAEMON_READY_TIMEOUT` is that budget in seconds.
+
+Lowering it makes a broken daemon say so sooner and risks giving up on a slow
+one, which costs the account a session that fails for a reason they cannot act
+on. An unusable value is logged once at startup and the default is used.
 
 ### A private or insecure registry
 
@@ -836,6 +853,42 @@ default to the workspace's own image.
 It is not the default because where overlay2 works it is the kernel doing the
 work and is markedly faster. fuse-overlayfs is a userspace filesystem, so
 every layer read crosses into a userspace process.
+
+### Restarting a workspace container
+
+A container's `/run` is part of its writable layer, so runtime state written
+there outlives the container being killed, which on a real machine it never
+does. dind's entrypoint deletes `docker*.pid` on startup and containerd's file
+is `containerd.pid`, which it misses. A workspace that ended **uncleanly** and
+is started again on the **same writable layer** therefore comes back with a
+stale `/var/run/docker/containerd/containerd.pid` naming a pid from its
+previous life, and if that number happens to be alive again dockerd either
+refuses to record its containerd's pid and exits, or believes containerd is
+already up, starts nothing, and times out. Either way the workspace runs,
+accepts SSH and answers nothing.
+
+The agent mounts a tmpfs on that directory before it starts dockerd, so
+nothing in it survives a restart. Nothing to configure, and it applies to
+compose, Swarm, Helm, a VM and any hand-rolled deployment alike.
+
+Worth knowing whether you were ever exposed to it:
+
+- **A clean stop is safe.** The agent stops dockerd with SIGTERM and a clean
+  shutdown removes the file: measured 0 failures in 50 clean stops, against 8%
+  for `docker kill`.
+- **An unclean end plus a restart on the same layer is the case**: `docker
+  restart` or `docker compose restart`, a host reboot under `restart:
+  unless-stopped`, an OOM kill, or a SIGKILL after the stop grace period.
+- **Kubernetes was never exposed**, because kubelet creates a container with a
+  fresh layer for every restart.
+- **A VM workspace was never exposed** ([ADR
+  0025](docs/adr/0025-a-vm-workspace.md)), because `/run` on a real machine is
+  already a tmpfs. There the operator starts dockerd, so the agent mounts
+  nothing.
+
+If the agent cannot mount it -- it is not privileged, or a daemon is already
+serving from that directory -- it says so and starts the daemon anyway. The
+workspace then behaves as it did before this existed.
 
 ### Enrolment
 

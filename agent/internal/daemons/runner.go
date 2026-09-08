@@ -76,6 +76,11 @@ type Manager struct {
 	// the tests and an unprefixed workspace need.
 	IDs func(account string) (uid, gid int, err error)
 
+	// ReadyTimeout is how long a cold daemon has to answer. Zero means
+	// DefaultReadyTimeout, which is what every caller but serve's env-var
+	// reader passes.
+	ReadyTimeout time.Duration
+
 	// docker builds the client for a daemon: the workspace's own when the host
 	// is empty, an account's when it is not. Nil is the real docker command,
 	// and injecting it is what lets this file be tested without one.
@@ -84,6 +89,13 @@ type Manager struct {
 	mu      sync.Mutex
 	byName  map[string]*Daemon
 	pending map[string]chan struct{}
+	failed  map[string]failure
+}
+
+// failure is the last start that did not work, and when it was given up on.
+type failure struct {
+	at  time.Time
+	err error
 }
 
 // docker is the part of the docker command this package uses.
@@ -127,6 +139,23 @@ func (m *Manager) client(host string) docker {
 // command is, costs one check rather than hundreds.
 const aliveTTL = 2 * time.Second
 
+// failTTL is how long a failed start is remembered, so that the callers behind
+// it fail fast instead of each paying the ready budget again.
+//
+// Five seconds, and the shape of the problem rather than the length of the
+// budget is what picks it. A burst arrives all at once -- every waiter is woken
+// by the leader closing its channel, within microseconds -- so any window at
+// all collapses the herd; what the window buys on top of that is the calls
+// still being made while the user reads the error. Short enough that somebody
+// who starts a daemon by hand and tries again is not told about the last
+// failure: the remedy for a broken daemon has to work on the next command, not
+// on the one after the timer.
+//
+// Deliberately not longer. A memo cannot tell a daemon that will never start
+// from one somebody has just repaired, and refusing a working daemon is the
+// worse of the two mistakes.
+const failTTL = 5 * time.Second
+
 // DefaultReadyTimeout is how long a cold daemon has to answer.
 //
 // Generous because the first start of a dind on fuse-overlayfs is slow, and
@@ -134,7 +163,21 @@ const aliveTTL = 2 * time.Second
 // user cannot act on. The agent is the only thing that starts a daemon
 // (ADR 0019), so the first account to ask pays for its own boot rather than
 // finding one already warmed at workspace start: CI measured 90 seconds short.
+//
+// WORKSPACE_DAEMON_READY_TIMEOUT overrides it, because what a cold daemon costs
+// is a property of the deployment rather than of this code: a workspace on
+// fuse-overlayfs over Ceph is not the runner this was measured on. Lowering it
+// buys a faster answer when a daemon is broken and risks refusing one that was
+// merely slow, and only the operator knows which they have.
 const DefaultReadyTimeout = 180 * time.Second
+
+// readyTimeout is the budget in force, with the zero value meaning the default.
+func (m *Manager) readyTimeout() time.Duration {
+	if m.ReadyTimeout > 0 {
+		return m.ReadyTimeout
+	}
+	return DefaultReadyTimeout
+}
 
 // ensure returns the account's daemon, starting or restarting it if needed.
 // Callers outside this package reach it through Ensure, which answers in the
@@ -171,6 +214,14 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 		}
 
 		m.mu.Lock()
+		// A start that just failed is answered from the record rather than
+		// attempted again. Without this every waiter woken by the leader's
+		// failure becomes the next leader and pays the whole budget itself,
+		// which for `docker compose up` is hundreds of callers serialised.
+		if f, ok := m.failed[account]; ok && time.Since(f.at) < failTTL {
+			m.mu.Unlock()
+			return nil, f.err
+		}
 		if wait, ok := m.pending[account]; ok {
 			// Somebody else is starting it. Wait for them rather than racing.
 			m.mu.Unlock()
@@ -198,6 +249,12 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 			}
 			started.checked = time.Now()
 			m.byName[account] = started
+			delete(m.failed, account)
+		} else {
+			if m.failed == nil {
+				m.failed = map[string]failure{}
+			}
+			m.failed[account] = failure{at: time.Now(), err: err}
 		}
 		m.mu.Unlock()
 		close(wait)
@@ -212,7 +269,7 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 // workspace-info round trip instead of behind its first docker command.
 func (m *Manager) Warm(account string) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultReadyTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), m.readyTimeout())
 		defer cancel()
 		if _, err := m.Ensure(ctx, account); err != nil {
 			m.log().Warn("warming a daemon", "account", account, "err", err)
@@ -301,7 +358,8 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 // and the daemon answers a request. Only the last one is evidence.
 func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, error) {
 	socket := SocketPathFor(account)
-	deadline := time.Now().Add(DefaultReadyTimeout)
+	budget := m.readyTimeout()
+	deadline := time.Now().Add(budget)
 
 	for {
 		if _, err := os.Stat(socket); err == nil {
@@ -325,7 +383,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 			// Without them this is "did not answer", and the reason is in a
 			// log the account cannot reach.
 			return nil, fmt.Errorf("daemons: %s did not answer within %s.%s",
-				name, DefaultReadyTimeout, m.lastWords(ctx, name))
+				name, budget, m.lastWords(ctx, name))
 		}
 		select {
 		case <-ctx.Done():
@@ -827,6 +885,9 @@ func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 
 	m.mu.Lock()
 	delete(m.byName, account)
+	// The record of the last failure goes with it: this command is exactly the
+	// repair the memo must not outlive.
+	delete(m.failed, account)
 	m.mu.Unlock()
 
 	if !purge {

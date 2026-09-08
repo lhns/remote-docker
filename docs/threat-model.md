@@ -318,6 +318,24 @@ can read. The answer is the ordinary one: do not give an image you do not trust
 host networking. *Covered by* `per-user-dind.sh` section 12, where the same
 probe is run from a host-networked container and from a shell.
 
+**E — the daemon's own API on a TCP port, now absent rather than locked (11,
+12).** Until 2026-09-08 every daemon here also bound `tcp://0.0.0.0:2375`, an
+unauthenticated Docker API: full control of that daemon, which is root in the
+container it starts. In the default mode it sat in the account's own dind
+namespace, so any container run with `--network host` reached it, and an
+untrusted image with host networking went from reading the export to creating
+privileged containers. In shared-daemon mode it sat in the namespace every
+account's shell runs in, where an ordinary connect asks no policy, so it was
+one account reaching everybody's daemon. It was never dialled by anything here:
+every path to a daemon is a unix socket named by `DOCKER_HOST`. It came from
+dind's entrypoint, which chooses dockerd's `--host` flags when the command
+begins with a flag, and the daemon command now names `dockerd` so that block
+never runs. The alternative was `--tlsverify` on 2376, which would have left an
+authenticated port nobody presents a certificate to and put certificate
+generation on every daemon's startup path. *Covered by* `per-user-dind.sh`
+section 14, which asserts what the daemon bound and what a container in its
+namespace can reach.
+
 **I — your registry credentials leave this machine (2-5).** The daemon does the
 pulling but has no logins of its own: the CLI resolves yours locally
 (`RetrieveAuthTokenFromImage` against this machine's config or keychain) and

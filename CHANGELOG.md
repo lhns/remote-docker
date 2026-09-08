@@ -10,6 +10,34 @@ software.
 
 ## Unreleased
 
+### No daemon binds an unauthenticated Docker API, and every one starts sooner
+
+Every dockerd here also listened on `tcp://0.0.0.0:2375` with no
+authentication: full control of that daemon for anything that could reach the
+namespace it sat in. With a daemon per account that is every container the
+account runs with `--network host`; with the shared daemon it is every
+account's shell. Nothing here ever dialled it. It came from dind's entrypoint,
+which supplies dockerd's `--host` flags when the command starts with one, and
+the daemon command now names `dockerd` so that block never runs.
+
+The port is gone rather than locked, and with it the sixteen seconds dockerd
+sleeps to make somebody read the warning about it. A per-account daemon that
+used to take about 17 seconds to answer now takes about 1.
+
+Each account's daemon container is recreated once to pick this up, and keeps
+its images, containers and volumes.
+### The wait for a cold daemon is a setting, and a burst no longer pays it each
+
+`WORKSPACE_DAEMON_READY_TIMEOUT` is how many seconds a per-account daemon has
+to answer when it is started. The default is unchanged at 180, which is chosen
+for a first start on fuse-overlayfs over Ceph or NFS; a healthy daemon answers
+in about a second. Everything that account does waits on it, a shell included,
+so it is also how long somebody with a broken daemon waits for a prompt.
+
+A start that fails is also remembered for five seconds now. `docker compose up`
+is hundreds of API calls, every one of them asks for the daemon, and when the
+first attempt failed each of the others started over and paid the whole budget
+again, one after another.
 ### More connections behind a share, if you ask for them
 
 `REMOTE_DOCKER_NFS_NCONNECT=2` to `16` tells the workspace's NFS client to open
@@ -42,6 +70,26 @@ The daemon's exec-root is a tmpfs now, as it is on any real machine, so nothing
 in it survives. Each account's daemon container is recreated once to pick this
 up, and keeps its images, containers and volumes: those are on a volume the
 container in front of it does not own.
+
+### The shared daemon can no longer fail to start after an unclean restart
+
+The same stale `containerd.pid`, one level up. The workspace container's own
+`/run` is part of its writable layer, so a workspace that ended uncleanly and
+was started again on that layer could come back with a pid file from its
+previous life and a dockerd that either exits or waits forever. The agent
+mounts a tmpfs on the exec-root before it starts the daemon, so nothing there
+survives.
+
+Narrower than the per-account case, and the README's "Restarting a workspace
+container" says who was ever exposed: it needs an unclean end (`docker
+restart`, an OOM kill, a host reboot, a SIGKILL after the grace period) AND a
+restart reusing the writable layer. A clean stop removes the file, Kubernetes
+gets a fresh layer every time, and on a VM `/run` is already a tmpfs.
+
+An agent that cannot mount it says so and starts the daemon anyway, and one
+that finds a daemon already serving from that directory leaves it alone: a
+fresh tmpfs over a live daemon's runtime state would be worse than the bug.
+
 ### A 0.6.0 client against a 0.5.1 workspace hung, printing nothing
 
 Reported from the field, and it deadlocked outright. The client opens the

@@ -75,6 +75,18 @@ const (
 	envDindImage   = "WORKSPACE_DIND_IMAGE"
 	envDindStorage = "WORKSPACE_DIND_STORAGE_DRIVER"
 
+	// envDindReady bounds how long a cold per-account daemon has to answer,
+	// in seconds. A shell waits on it (agent/internal/sshd/session.go calls
+	// Ensure before opening one), so it is also how long an account whose
+	// daemon will not start waits for a prompt.
+	//
+	// The default is 180s and a healthy daemon answers in about a second, so
+	// the whole budget is for a workspace slower than the one this was
+	// measured on. Lowering it makes a broken daemon report sooner and risks
+	// refusing a slow one; that trade is the operator's, which is why this is
+	// a setting rather than a constant.
+	envDindReady = "WORKSPACE_DAEMON_READY_TIMEOUT"
+
 	// envDindMounts adds bind mounts to every account's daemon, for
 	// configuration it can only be given as files: a daemon.json naming an
 	// insecure registry, or the certificates for a registry with a private CA.
@@ -144,6 +156,13 @@ func serve(addr, wsAddr string) error {
 	daemon := &supervise.Dockerd{
 		Args: dockerdArgs,
 		Log:  logger("dockerd"),
+		// The shared daemon's exec-root is the default one, and the constant
+		// and the failure it prevents live once, in daemons.ExecRoot. Set here
+		// rather than defaulted inside supervise so that the mount happens
+		// only where the agent is about to start a daemon itself: with
+		// WORKSPACE_ENABLE_DIND=false the operator starts dockerd, Run is
+		// never called, and this is a no-op (ADR 0025).
+		ExecRoot: daemons.ExecRoot,
 	}
 	if envOr(envEnableDind, "true") == "true" {
 		wg.Go(func() {
@@ -267,6 +286,7 @@ func serve(addr, wsAddr string) error {
 		}
 
 		manager := &daemons.Manager{
+			ReadyTimeout: readySeconds(log),
 			Options: daemons.Options{
 				Workspace:     id,
 				Image:         image,
@@ -503,6 +523,32 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// readySeconds reads WORKSPACE_DAEMON_READY_TIMEOUT.
+//
+// Read once at startup and complained about once, then left alone: a value
+// nobody can act on is worth a line in the log, and re-reading it per request
+// would put that line in front of every docker command. Anything unusable
+// falls back to the default rather than refusing to serve, which is what the
+// rest of these settings do -- a workspace that will not start says less than
+// one that starts with the documented number.
+func readySeconds(log *slog.Logger) time.Duration {
+	raw := os.Getenv(envDindReady)
+	if raw == "" {
+		return 0
+	}
+
+	secs, err := strconv.Atoi(raw)
+	if err != nil || secs <= 0 {
+		log.Warn("ignoring an unusable daemon-ready timeout",
+			"var", envDindReady, "value", raw, "using", daemons.DefaultReadyTimeout)
+		return 0
+	}
+
+	d := time.Duration(secs) * time.Second
+	log.Info("a cold daemon has this long to answer", "var", envDindReady, "timeout", d)
+	return d
 }
 
 func envInt(name string, fallback int) int {
