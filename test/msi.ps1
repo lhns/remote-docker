@@ -218,3 +218,4 @@ Remove-Item $stub -Force
 
 Write-Host ''
 Write-Host 'all sections passed' -ForegroundColor Green
+exit 0

@@ -23,16 +23,32 @@ vendor's tool.
 | | |
 |---|---|
 | tool | WiX v5, `dotnet tool install --global wix` |
-| built on | `ubuntu-latest`, in the existing `binaries` job, after goreleaser |
+| built on | `windows-latest`, in an `installers` job after the `binaries` one |
+| payload | the two Windows binaries goreleaser built, passed as an artifact |
 | scope | `perMachine`: Program Files, system PATH, elevated |
 | PATH | `Environment Part="last"` — appended, never prepended |
 | upgrades | `MajorUpgrade`, on a fixed `UpgradeCode` |
 | when | tag releases only |
 
-WiX v5 runs on .NET and builds an MSI on Linux, so the release job stays where
-it is. GoReleaser's own `msi` block is Pro-only (checked 2026-09-08 at
+**WiX only runs on Windows, whatever .NET says.** It was going to be built on
+the existing ubuntu job, which is why `binaries` hands the payload over as an
+artifact rather than the installer being made in place. WiX is a dotnet tool
+and loads on Linux perfectly well; it then prints
+
+```
+warning WIX0000: The WiX Toolset only supports Windows. ...
+  All behavior after this point is undefined.
+error WIX0389: The Directory/@Name attribute's value, 'remote-docker',
+  is not a relative path.
+```
+
+on a name that is plainly relative and that the same source builds on Windows.
+Measured on `ubuntu-latest`, 2026-09-08. So the build script is PowerShell and
+the job is a Windows one.
+
+GoReleaser's own `msi` block is Pro-only (checked 2026-09-08 at
 <https://goreleaser.com/customization/msi/>: "This feature is exclusively
-available with GoReleaser Pro"), so this is a step after goreleaser and a
+available with GoReleaser Pro"), so this is a job after goreleaser and a
 `gh release upload`, not a line in `.goreleaser.yaml`.
 
 **`docker.exe` is a WiX Feature, off by default.** `<CopyFile FileId=...>` is a
@@ -75,8 +91,8 @@ fires, which is silent for a release cycle.
   `docker.exe` elsewhere on PATH is not noticed and is shadowed, because the
   install directory is appended and therefore loses — the failure is that the
   user does not get what they asked for, not that they lose the other tool.
-  The alternative was a custom action DLL, which is a Windows build in a job
-  that has no Windows.
+  The alternative was a custom action DLL, which is a C project and a second
+  thing to build.
 - **The MSI is unsigned.** The repository has no code-signing certificate; the
   only secret any workflow uses is `GITHUB_TOKEN`. SmartScreen will warn. This
   is in the README and on CLAUDE.md's not-tested list.

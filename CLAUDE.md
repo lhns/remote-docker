@@ -122,10 +122,11 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the volume lookup notify asks for
 
 image/                   the workspace container (Dockerfile only)
-installer/windows/       the MSI (ADR 0048). A .wxs and a build.sh, no code:
-                         WiX v5 builds it on LINUX, which is why the release
-                         job stays on ubuntu. `docker.exe` is a Feature and a
-                         DuplicateFile, so the payload ships once
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
+                         Built ON WINDOWS: WiX loads on Linux and then says its
+                         behaviour is undefined, and means it. `docker.exe` is
+                         a Feature and a DuplicateFile, so the payload ships
+                         once
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
 charts/                  the Helm chart, for the same agent on Kubernetes
@@ -188,13 +189,15 @@ bash test/integration.sh
 # request, or workflow_dispatch once it is on main.
 bash test/bench.sh
 
-# the Windows MSI, on Linux. The version must be major.minor.build, which is
-# what an MSI compares; build.sh refuses anything else rather than truncating.
+# the Windows MSI. ON WINDOWS, and it is the one thing here that cannot be
+# built anywhere else (ADR 0048). The version must be major.minor.build, which
+# is what an MSI compares; build.ps1 refuses anything else rather than
+# truncating it into an upgrade that never fires.
 dotnet tool install --global wix --version 5.0.2
 wix extension add -g WixToolset.UI.wixext/5.0.2
-installer/windows/build.sh --version 0.6.0 --arch x64 \
-  --binary dist/remote-docker_windows_amd64_v1/remote-docker.exe \
-  --out dist/msi/remote-docker_0.6.0_windows_amd64.msi
+installer/windows/build.ps1 -Version 0.6.0 -Arch x64 `
+  -Binary dist/windows_amd64/remote-docker.exe `
+  -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
 
 # the chart, in eight seconds and without a cluster
 helm lint charts/remote-docker-workspace

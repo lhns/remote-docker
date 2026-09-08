@@ -284,10 +284,6 @@ jobs:
 
       - uses: ./.github/actions/setup-go
 
-      # WiX v5 builds an MSI on Linux, so the Windows installer is made here
-      # rather than on a Windows runner (ADR 0048).
-      - uses: ./.github/actions/setup-wix
-
       # What the embedded Compose reports as its version. Read from the module
       # graph so it cannot drift from go.mod.
       - name: compose version
@@ -334,30 +330,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The Windows installers, attached to the release goreleaser just made.
+      # The two Windows binaries, for the installers job below. goreleaser's
+      # dist directory is not visible outside this job, and the archives on the
+      # release page are zips rather than the bare exe.
       #
-      # A step of its own rather than a line in .goreleaser.yaml, because
-      # goreleaser's msi support is Pro-only (checked 2026-09-08:
-      # https://goreleaser.com/customization/msi/ says "Pro"). Named to match
-      # the archives beside them, so remote-docker_<v>_windows_amd64.zip and
-      # .msi sit next to each other on the release page.
-      #
-      # The binary paths come out of artifacts.json rather than being spelled
-      # out: goreleaser's per-build directory carries the amd64 and arm64
-      # variant suffixes, and a hardcoded one breaks silently on a goreleaser
-      # upgrade that changes them.
-      #
-      # NOT in checksums.txt, which goreleaser wrote before this step ran.
-      - name: windows installers
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Their paths come out of artifacts.json rather than being spelled out:
+      # goreleaser's per-build directory carries the amd64 and arm64 variant
+      # suffixes, and a hardcoded one breaks silently on a goreleaser upgrade
+      # that changes them.
+      - name: collect the windows binaries
         run: |
           set -eux
-          version="${GITHUB_REF_NAME#v}"
-
-          build_msi() {
-            goarch="$1"
-            wixarch="$2"
+          for goarch in amd64 arm64; do
             binary=$(jq -r --arg a "$goarch" \
               '.[] | select(.type == "Binary" and .goos == "windows" and .goarch == $a) | .path' \
               dist/artifacts.json)
@@ -365,12 +349,55 @@ jobs:
               echo "no windows/$goarch binary in dist/artifacts.json" >&2
               exit 1
             fi
-            bash installer/windows/build.sh \
-              --version "$version" --arch "$wixarch" --binary "$binary" \
-              --out "dist/msi/remote-docker_${version}_windows_${goarch}.msi"
+            mkdir -p "windows/$goarch"
+            cp "$binary" "windows/$goarch/remote-docker.exe"
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-binaries
+          path: windows/**/remote-docker.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # The Windows installers, attached to the release the job above just made.
+  #
+  # Its own job, and on Windows, because WiX only runs there: it loads on Linux
+  # and says "All behavior after this point is undefined", then refuses an
+  # ordinary Directory/@Name (ADR 0048). Not a line in .goreleaser.yaml either,
+  # because goreleaser's msi support is Pro-only (checked 2026-09-08:
+  # https://goreleaser.com/customization/msi/ says "exclusively available with
+  # GoReleaser Pro").
+  #
+  # Named to match the archives, so remote-docker_<v>_windows_amd64.zip and
+  # .msi sit next to each other on the release page. NOT in checksums.txt,
+  # which goreleaser wrote before this job ran.
+  installers:
+    name: windows installers (tags only)
+    needs: [binaries]
+    runs-on: windows-latest
+    if: github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-binaries
+          path: windows
+      - uses: ./.github/actions/setup-wix
+
+      - name: build them and attach them to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          foreach ($pair in @(@('amd64', 'x64'), @('arm64', 'arm64'))) {
+            ./installer/windows/build.ps1 -Version $version -Arch $pair[1] `
+              -Binary "windows/$($pair[0])/remote-docker.exe" `
+              -Out "dist/msi/remote-docker_${version}_windows_$($pair[0]).msi"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
           }
-
-          build_msi amd64 x64
-          build_msi arm64 arm64
-
-          gh release upload "$GITHUB_REF_NAME" dist/msi/*.msi --clobber
+          # An array expands to one argument per element for a native command.
+          $msis = @(Get-ChildItem dist/msi/*.msi | ForEach-Object { $_.FullName })
+          gh release upload $env:GITHUB_REF_NAME $msis --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }

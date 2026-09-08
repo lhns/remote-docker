@@ -2,10 +2,15 @@ name: setup wix
 description: >-
   WiX v5 as a dotnet global tool, with the UI extension the installer uses.
 
-# WiX v5 builds an MSI on Linux, which is the whole reason the release job can
-# stay on ubuntu-latest. Pinned, and pinned in one place: the extension version
-# has to match the toolset version, and two workflows naming them separately
-# would drift the first time one was bumped.
+# WINDOWS RUNNERS ONLY. WiX is a dotnet tool and loads anywhere .NET does, but
+# it warns "The WiX Toolset only supports Windows... All behavior after this
+# point is undefined" and then behaves that way: on ubuntu-latest it refused an
+# ordinary Directory/@Name as "not a relative path" (WIX0389, 2026-09-08).
+# ADR 0048 records that, and it is why the release workflow has a Windows job.
+#
+# Pinned, and pinned in one place: the extension version has to match the
+# toolset version, and two workflows naming them separately would drift the
+# first time one was bumped.
 inputs:
   version:
     description: WiX toolset version
@@ -19,14 +24,15 @@ runs:
       with:
         dotnet-version: "8.0.x"
 
-    - shell: bash
+    # pwsh throughout so the tools directory is a native path on either
+    # runner; Git Bash would hand `wix.exe` an MSYS path and hope.
+    - shell: pwsh
       run: |
-        set -eux
         dotnet tool install --global wix --version "${{ inputs.version }}"
-        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
-
-    - shell: bash
-      run: |
-        set -eux
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        $tools = Join-Path $HOME '.dotnet/tools'
+        Add-Content -Path $env:GITHUB_PATH -Value $tools
+        $env:PATH = $env:PATH + [IO.Path]::PathSeparator + $tools
         wix extension add -g "WixToolset.UI.wixext/${{ inputs.version }}"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
         wix --version

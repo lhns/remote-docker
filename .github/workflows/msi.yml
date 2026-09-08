@@ -11,8 +11,7 @@ name: msi
 # and would answer the same question every time.
 #
 # What that costs: a change to the client that broke `remote --help` would not
-# be caught here. It is caught by ci.yml on every push, which runs the unit
-# tests on Windows.
+# be caught here. It is caught by ci.yml on every push.
 #
 # The release workflow builds and uploads the MSI without waiting for this, so
 # a tag can publish an installer this suite has not seen. That is the one gap,
@@ -42,17 +41,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: build the installers
+  # The payload is cross-compiled here rather than on the Windows runner: the
+  # module cache is warm on ubuntu and the client's dependency graph is large.
+  # This is also the shape release.yml has, for the same reason.
+  binaries:
+    name: cross-compile the payload
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-go
-      - uses: ./.github/actions/setup-wix
 
       # Not goreleaser: this needs two Windows binaries and nothing else it
-      # does. The version is a stand-in, and has to be three numbers, which is
-      # the constraint build.sh enforces.
+      # does.
       - name: build the client for windows
         run: |
           set -eux
@@ -60,53 +60,63 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=windows GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w" \
-              -o "../dist/windows_${arch}/remote-docker.exe" ./cmd/remote-docker
+              -o "../windows/${arch}/remote-docker.exe" ./cmd/remote-docker
           done
-
-      # Both architectures, because `wix build -arch arm64` failing is a
-      # release-day failure otherwise. Only the amd64 one is installed below:
-      # GitHub has no Windows arm64 runner.
-      - name: build the msis
-        run: |
-          set -eux
-          bash installer/windows/build.sh --version 0.0.1 --arch x64 \
-            --binary dist/windows_amd64/remote-docker.exe \
-            --out dist/msi/remote-docker_0.0.1_windows_amd64.msi
-          bash installer/windows/build.sh --version 0.0.1 --arch arm64 \
-            --binary dist/windows_arm64/remote-docker.exe \
-            --out dist/msi/remote-docker_0.0.1_windows_arm64.msi
-
-      - name: a snapshot version is refused rather than truncated
-        run: |
-          set -eu
-          if bash installer/windows/build.sh --version 0.0.0-dev.9370b24 --arch x64 \
-               --binary dist/windows_amd64/remote-docker.exe --out /tmp/should-not-exist.msi; then
-            echo "build.sh accepted a snapshot version; it must refuse one"
-            exit 1
-          fi
-          echo "refused, as it must be"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: msi
-          path: dist/msi/*.msi
+          name: windows-binaries
+          path: windows/**/remote-docker.exe
           if-no-files-found: error
           retention-days: 1
 
-  install:
-    name: install it on windows
-    needs: [build]
+  installer:
+    name: build it and install it
+    needs: [binaries]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: msi
-          path: msi
+          name: windows-binaries
+          path: windows
+      - uses: ./.github/actions/setup-wix
+
+      # Both architectures, because `wix build -arch arm64` failing is a
+      # release-day failure otherwise. Only the amd64 one is installed below:
+      # GitHub has no Windows arm64 runner.
+      #
+      # The version is a stand-in, and has to be three numbers, which is the
+      # constraint build.ps1 enforces.
+      - name: build the msis
+        shell: pwsh
+        run: |
+          ./installer/windows/build.ps1 -Version 0.0.1 -Arch x64 `
+            -Binary windows/amd64/remote-docker.exe `
+            -Out dist/msi/remote-docker_0.0.1_windows_amd64.msi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ./installer/windows/build.ps1 -Version 0.0.1 -Arch arm64 `
+            -Binary windows/arm64/remote-docker.exe `
+            -Out dist/msi/remote-docker_0.0.1_windows_arm64.msi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: a snapshot version is refused rather than truncated
+        shell: pwsh
+        run: |
+          ./installer/windows/build.ps1 -Version 0.0.0-dev.9370b24 -Arch x64 `
+            -Binary windows/amd64/remote-docker.exe -Out dist/msi/should-not-exist.msi
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'build.ps1 accepted a snapshot version; it must refuse one'
+            exit 1
+          }
+          Write-Host 'refused, as it must be'
+          # GitHub's pwsh wrapper exits with $LASTEXITCODE, which is the 1 we
+          # just asked for and would fail the step.
+          exit 0
 
       - name: install, uninstall, and the docker.exe feature
         shell: pwsh
-        run: ./test/msi.ps1 -Msi msi/remote-docker_0.0.1_windows_amd64.msi
+        run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi
 
       # The suite prints the log of whichever msiexec run failed, but a job
       # that died some other way leaves them behind and they are the only
@@ -114,4 +124,9 @@ jobs:
       - name: the msiexec logs
         if: failure()
         shell: pwsh
-        run: Get-ChildItem "$env:TEMP\msi-logs" | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName }
+        run: |
+          if (Test-Path "$env:TEMP\msi-logs") {
+            Get-ChildItem "$env:TEMP\msi-logs" | ForEach-Object {
+              Write-Host "== $($_.Name)"; Get-Content $_.FullName
+            }
+          }
