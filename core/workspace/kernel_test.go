@@ -111,7 +111,7 @@ var minKernel = map[string]option{
 	// splits out for itself (core-agent/union, Spec.LowerMount). Older than
 	// anything else here, and in the table because this list is what is emitted
 	// rather than what the NFS client sees.
-	"noatime": {kernel{2, 6, 0}, "MS_NOATIME, a kernel mount flag rather than an NFS option"},
+	"noatime": {kernel{2, 6, 0}, "MS_NOATIME, a kernel mount flag rather than an NFS option; predates every other row, and the number here is a safe lower bound rather than a checked one"},
 
 	// NOT EMITTED, and this row is why. Added in 5.3, commit 28cc5cd8c68f;
 	// fs/nfs/super.c at v5.2 does not contain the string at all. `man 5 nfs`
