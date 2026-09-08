@@ -7,7 +7,7 @@ test/watchdir
 # the binary into the directory it runs in, and a 95MB artifact in client/ was
 # once one `git add -A` away from being committed.
 #
-# `rd` is the same output under the short name a hand-run build gives it.
+# `rd` is the same binary under a shorter name.
 #
 # NOT the bare name `remote-docker`: an unanchored pattern matches directories
 # too, so it swallowed client/cmd/remote-docker/ and every new source file in
