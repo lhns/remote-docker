@@ -197,11 +197,10 @@ func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (strin
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 
-	// Derived rather than measured, so the number in the message is the one the
-	// read was given rather than however long the scheduler took to report it.
-	// To the second, because this is a diagnosis and not a measurement, and a
-	// budget under half a second rounds to zero and is reported as no silence
-	// at all rather than as "said nothing for 0s".
+	// Derived rather than measured, so the message names the budget the read was
+	// given rather than however long the scheduler took to report it. To the
+	// second, because this is a diagnosis: a budget under half a second rounds
+	// to zero, and silentError is not raised for a wait of 0s.
 	deadline, _ := ctx.Deadline()
 	budget := time.Until(deadline).Round(time.Second)
 

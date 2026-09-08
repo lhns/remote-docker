@@ -278,58 +278,36 @@ func parseID(s string) (string, error) {
 }
 
 // NFSVolumeOptions returns the driver options for a Docker volume backed by
-// this client's NFS export. Docker's built-in "local" driver does the mount;
-// no volume plugin is involved.
+// this client's NFS export. Docker's built-in "local" driver does the mount, in
+// dockerd's own namespace when the container starts, so nothing has to
+// propagate and replacing a share is a container restart.
 //
-// dockerd mounts it in its own namespace when the container starts, which is
-// what makes per-bind volumes better than one host-side mount: nothing has to
-// propagate, and replacing a share is a container restart.
+// soft makes a dead tunnel surface as EIO rather than parking container
+// processes in uninterruptible sleep. nolock and noacl because the server
+// implements neither NLM nor the NFS_ACL sideband, and without noacl the client
+// probes for one on every mount and the server logs the refusal as an error.
+// port == mountport skips rpcbind.
 //
-// The options are not arbitrary. soft makes a dead tunnel surface as EIO
-// rather than parking container processes in uninterruptible sleep. nolock and
-// noacl because the server implements neither NLM nor the NFS_ACL sideband,
-// and without noacl the client probes for one on every mount and the server
-// logs the refusal as an error. port == mountport skips rpcbind.
+// timeo is DECISECONDS, so 600 is the kernel's own TCP default. It is not a
+// per-request service budget: the deadline runs from transmit and includes time
+// spent queued behind other requests, so a short timeo fails the whole queue at
+// once instead of detecting a stall. Measured at timeo=30: 224 WRITEs in flight
+// timing out together at 9.07s, with the transport never reconnecting.
 //
-// timeo is DECISECONDS, so 600 is the kernel's own TCP default and a 30 here
-// means 3 seconds rather than 30. It is not a per-request service budget: the
-// deadline runs from transmit and includes time spent queued behind other
-// requests, and a connection serves a bounded number at once (8, go-nfs's
-// DefaultMaxConcurrentRequests), so a client with more in flight than that
-// queues the rest and a short timeo fails the whole queue at once instead of
-// detecting a stall. Measured at timeo=30 against the serial server this
-// fork replaced: 224 WRITEs in flight timing out together at 9.07s, with the
-// transport never reconnecting.
+// Every word here except nconnect is older than the supported workspace kernel;
+// kernel_test.go is the table and the test. nconnect asks for that many
+// connections and is emitted only when a caller names one (nconnectOption).
 //
-// nconnect is the one word here newer than the supported workspace kernel, and
-// it is emitted ONLY when the caller asks for it (REMOTE_DOCKER_NFS_NCONNECT on
-// the client). Nothing else here is newer at all: kernel_test.go is the table
-// and the test. It needs Linux 5.3, and the NFS client refuses the WHOLE option
-// string over one word it does not know, so on a RHEL 7 workspace
-// (3.10.0-1160.119.1.el7.x86_64) asking for it fails every bind mount as
-// `invalid argument` against a list whose every word is individually valid, on
-// volumes whose driver options can never be changed. Nothing checks the
-// workspace's kernel first, which is acceptable only because nobody gets it
-// without naming it. Its benefit is UNMEASURED, unlike the timeo above.
+// The CAVEAT for anything transport-level: Linux keeps one RPC transport per
+// server address and every share mounts from 127.0.0.1:<tunnel port>, so all of
+// them SHARE one. nconnect, timeo and retrans therefore come from whichever
+// share mounts first and are silently ignored for every share after it, so a
+// change here can look like it did nothing until the workspace's daemon is
+// restarted. (Checked 2026-09-07: a volume recording timeo=600 whose container
+// had mounted timeo=30.)
 //
-// The CAVEAT that goes with it, and with anything else transport-level: Linux
-// keeps one RPC transport per server address and every share of a client mounts
-// from 127.0.0.1:<tunnel port>, so all of them SHARE one transport. nconnect
-// asked for by whichever share mounts first therefore multiplies the
-// connections behind every share at once, and cannot be varied per share. timeo
-// and retrans come from that same first mount and are silently ignored for
-// every share after it, so changing them takes a workspace whose daemon has
-// been restarted rather than the next mount, which is why a change here can
-// look like it did nothing. (Checked 2026-09-07 against a live workspace: a
-// volume recording timeo=600 whose container had mounted timeo=30.)
-//
-// The attribute caching is the one part that varies, and it is what the
-// read mode asks for (ADR 0042). Everything else is the same mount whatever
-// was asked for, which is what makes switching a volume recreation and nothing
-// more.
-//
-// nconnect is how many connections the mount asks for. Zero is the default and
-// asks for nothing; nconnectOption is what reaches the list.
+// The attribute caching is the one part that varies, and it is what the read
+// mode asks for (ADR 0042).
 func NFSVolumeOptions(port int, exportPath string, read Read, nconnect int) map[string]string {
 	options := append([]string{
 		"addr=127.0.0.1",
@@ -359,16 +337,16 @@ const NConnectMax = 16
 
 // nconnectOption is `nconnect=n` when a mount asks for more than one
 // connection, and NOTHING otherwise, which is what keeps the default option
-// list parseable by a kernel that has never heard of the word.
+// list parseable by a kernel that has never heard of the word (5.3 is where it
+// arrived).
 //
-// 1 is not emitted because it is already what the kernel does: an unset or a 1
-// nconnect opens no second transport (v6.6 net/sunrpc/clnt.c, rpc_create:
-// `args->nconnect <= 1` returns the single client). 0 is not emitted because
-// the parser REFUSES it and takes the rest of the option string with it, and so
-// is anything above NConnectMax. The caller validates and reports; a value
-// arriving here outside the range is dropped rather than turned into a mount
-// that cannot work. (Checked 2026-09-08, with the curl above and the same
-// against net/sunrpc/clnt.c.)
+// 1 is not emitted because an unset or a 1 nconnect opens no second transport
+// anyway (v6.6 net/sunrpc/clnt.c, rpc_create: `args->nconnect <= 1` returns the
+// single client). 0 and anything above NConnectMax are not emitted because the
+// parser refuses them and takes the rest of the option string with them; the
+// caller validates and reports, and a value arriving here out of range is
+// dropped rather than turned into a mount that cannot work. (Checked
+// 2026-09-08, with the curl above and the same against net/sunrpc/clnt.c.)
 func nconnectOption(n int) []string {
 	if n < 2 || n > NConnectMax {
 		return nil

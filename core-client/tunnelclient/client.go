@@ -53,14 +53,6 @@ type Config struct {
 	// that follows is the same either way.
 	Dial func(ctx context.Context) (net.Conn, error)
 
-	// Ciphers, if set, replaces the negotiated cipher list.
-	//
-	// aes128-gcm is the default for a reason worth keeping: AES-NI makes it
-	// several GB/s where ChaCha20 is markedly slower, and every byte of the
-	// NFS traffic crosses this connection. There is no double encryption to
-	// worry about, because NFS inside the tunnel is plaintext.
-	Ciphers []string
-
 	// KeepAlive is how often to probe a connection that is otherwise idle.
 	// A tunnel can be dead for a long time without either end noticing, and
 	// a dead tunnel means container I/O failing with EIO.
@@ -86,8 +78,13 @@ func (c Config) dial(ctx context.Context) (net.Conn, error) {
 	return conn, nil
 }
 
-// DefaultCiphers preferred, fastest first. See Config.Ciphers.
-var DefaultCiphers = []string{
+// defaultCiphers replaces the negotiated cipher list, fastest first.
+//
+// aes128-gcm for a reason worth keeping: AES-NI makes it several GB/s where
+// ChaCha20 is markedly slower, and every byte of the NFS traffic crosses this
+// connection. There is no double encryption to worry about, because NFS inside
+// the tunnel is plaintext.
+var defaultCiphers = []string{
 	"aes128-gcm@openssh.com",
 	"aes256-gcm@openssh.com",
 	"chacha20-poly1305@openssh.com",
@@ -128,9 +125,6 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.KeepAlive == 0 {
 		cfg.KeepAlive = defaultKeepAlive
 	}
-	if len(cfg.Ciphers) == 0 {
-		cfg.Ciphers = DefaultCiphers
-	}
 
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
@@ -138,7 +132,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		HostKeyCallback: cfg.HostKey,
 		Timeout:         cfg.Timeout,
 	}
-	clientCfg.Ciphers = cfg.Ciphers
+	clientCfg.Ciphers = defaultCiphers
 
 	conn, err := cfg.dial(ctx)
 	if err != nil {

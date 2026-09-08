@@ -145,7 +145,7 @@ func (t *tree) sync(shares []Share) {
 			// One watch, and no walk: the siblings in that directory are not
 			// exported and their subdirectories are not ours to spend the
 			// budget on.
-			t.addOne(r, r.local)
+			t.addOne(r.local)
 			continue
 		}
 		t.addTree(r, r.local, nil)
@@ -173,7 +173,7 @@ func (t *tree) addTree(r *shareRoot, dir string, emit func(path string, isDir bo
 		current := queue[0]
 		queue = queue[1:]
 
-		if !t.addOne(r, current) {
+		if !t.addOne(current) {
 			continue
 		}
 
@@ -216,7 +216,7 @@ func (t *tree) isExcluded(name string) bool {
 
 // addOne watches a single directory, honouring the budget. It reports whether
 // the walk should descend into it.
-func (t *tree) addOne(r *shareRoot, dir string) bool {
+func (t *tree) addOne(dir string) bool {
 	key := dirKey(t.goos, dir)
 	if _, ok := t.dirs[key]; ok {
 		return true

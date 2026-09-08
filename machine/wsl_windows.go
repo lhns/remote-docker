@@ -86,7 +86,7 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("preparing %s: %w", dir, err)
 	}
 
-	if _, err := b.wsl(ctx, wslImportArgs(distro, dir, spec.Rootfs, 2)...); err != nil {
+	if _, err := b.wsl(ctx, wslImportArgs(distro, dir, spec.Rootfs)...); err != nil {
 		return err
 	}
 

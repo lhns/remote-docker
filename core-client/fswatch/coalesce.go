@@ -147,8 +147,8 @@ func (c *coalescer) drop(export, p string) {
 }
 
 // overflow records a loss the caller detected elsewhere: a kernel queue
-// overflow, a full outbound queue, a refused watch. Same accounting, so there
-// is one degradation path rather than several that must agree.
+// overflow, a full outbound queue, a refused watch. Same accounting as a lost
+// event, so a notice reads the same whichever way the loss was found.
 func (c *coalescer) overflow(export, dir string, n int) {
 	l, ok := c.lost[export]
 	if !ok {
