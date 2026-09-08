@@ -34,6 +34,24 @@ import (
 // same answer the WSL backend arrived at by measurement.
 const hyperVSwitch = "Default Switch"
 
+// hyperVBuilding is the generation a machine carries between New-VM and the
+// notes psSetNotes writes once it is built.
+//
+// psNewVM used to write the Spec's own generation, so a create that died before
+// psSetNotes left a machine that already matched: Plan said Nothing, nothing
+// offered to rebuild it, and its notes carried no key, which hyperVEnrolment
+// reads as "assume match" -- a machine reporting healthy that nothing can log
+// into.
+//
+// Writing no generation at all does not fix that. An unreadable generation is
+// read as a MATCH rather than a mismatch (see Observed.Generation), which is
+// deliberate and must stay: recreating somebody's machine because a label could
+// not be read would destroy their work to satisfy our bookkeeping. So the
+// unfinished state is written down instead, as a generation no Spec can
+// produce -- Spec.Generation is 16 hex characters -- and Plan reads it as
+// Recreate, which `machine create` reports and `machine rebuild` acts on.
+const hyperVBuilding = "building"
+
 // hyperVNotes is what a machine records about itself, in the one place Hyper-V
 // offers for it.
 //
@@ -117,6 +135,25 @@ func parseVMState(raw string) State {
 	default:
 		return Stopped
 	}
+}
+
+// observeVM turns what look read into what Plan is asked about.
+//
+// A PowerShell failure is returned rather than folded into Absent. It says
+// nothing about whether the machine is there, and reporting it as absent made
+// `machine status` print `absent` for a machine that is running and sent
+// `machine create` at a name already taken, where the error names creation
+// rather than the fault that actually happened. Absence needs no error of its
+// own: psGetVM asks with -ErrorAction SilentlyContinue and prints nothing when
+// the VM is not there.
+func observeVM(state State, notes hyperVNotes, err error) (Observed, error) {
+	if err != nil {
+		return Observed{}, err
+	}
+	if state == Absent {
+		return Observed{State: Absent}, nil
+	}
+	return Observed{State: state, Generation: notes.Generation}, nil
 }
 
 // parseVMAddress picks the address to reach a machine at.
@@ -268,8 +305,10 @@ func psNewVM(vm, vhd, dir string, spec Spec) string {
 		fmt.Sprintf("New-VM -Name %s -Generation 2 -VHDPath %s -Path %s -SwitchName %s",
 			psQuote(vm), psQuote(vhd), psQuote(dir), psQuote(hyperVSwitch)),
 		fmt.Sprintf("Set-VMFirmware -VMName %s -EnableSecureBoot Off", psQuote(vm)),
+		// Marked as unfinished, not as built: psSetNotes is the single point
+		// at which a machine becomes "built". See hyperVBuilding.
 		fmt.Sprintf("Set-VM -Name %s -Notes %s -AutomaticStartAction Nothing -CheckpointType Disabled",
-			psQuote(vm), psQuote(encodeNotes(hyperVNotes{Generation: spec.Generation()}))),
+			psQuote(vm), psQuote(encodeNotes(hyperVNotes{Generation: hyperVBuilding}))),
 	}
 	// Zero means the platform's own default, which is a better number than one
 	// invented here.

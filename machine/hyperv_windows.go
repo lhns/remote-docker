@@ -91,11 +91,7 @@ func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNote
 }
 
 func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, error) {
-	state, notes, err := b.look(ctx, name)
-	if err != nil || state == Absent {
-		return Observed{State: Absent}, nil
-	}
-	return Observed{State: state, Generation: notes.Generation}, nil
+	return observeVM(b.look(ctx, name))
 }
 
 // Create builds the machine from a Flatcar image and one Ignition document.
@@ -142,8 +138,10 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("creating the machine: %w", err)
 	}
 
-	// Recorded after creation so a machine that failed halfway is not marked as
-	// built with a key it never received.
+	// The single point at which a machine becomes "built": recorded after
+	// creation, so one that failed halfway is not marked as built with a key it
+	// never received, nor as built from settings it only half matches. See
+	// hyperVBuilding for what it carries until then.
 	notes := hyperVNotes{Generation: spec.Generation(), Key: keyFingerprint(spec.PublicKey)}
 	if _, err := b.ps(ctx, psSetNotes(machineName(spec.Name), notes)); err != nil {
 		return err
