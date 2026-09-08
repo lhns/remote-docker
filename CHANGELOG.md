@@ -10,6 +10,32 @@ software.
 
 ## Unreleased
 
+### An account's daemon no longer fails to restart after the workspace does
+
+A per-account daemon dies with the dockerd that holds it, so a workspace
+restart kills every one of them rather than stopping them. About one time in
+eighty, the daemon then refused to come back: dockerd started containerd, would
+not record its pid, killed it again and exited, sixteen seconds in, with
+
+```
+failed to start containerd: libcontainerd: failed to save daemon pid to disk:
+process with PID 35 is still running
+```
+
+The account's shell then hung for three minutes waiting for a daemon that was
+never coming, and nothing on screen said why. The state behind it is
+`/var/run/docker/containerd/containerd.pid`, left over from the daemon's
+previous life: a container's `/run` is part of its writable layer, so it
+survives a kill, and dind's own cleanup deletes `docker*.pid`, which that name
+does not match. The pid it names is live again only when the new daemon's
+startup happens to reach the same number, which is what made it a coincidence
+rather than a permanent failure.
+
+The exec-root is a tmpfs now, as it is on any real machine, so nothing in it
+survives. Each account's daemon container is recreated once to pick this up,
+which keeps its images, containers and volumes: those are on a volume the
+container in front of it does not own.
+
 ### Five resources that were acquired and never handed back
 
 An audit for one defect shape: a resource whose release is conditional, or

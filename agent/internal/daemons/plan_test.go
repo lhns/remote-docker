@@ -322,3 +322,47 @@ func TestTheFingerprintChangesWithTheSpec(t *testing.T) {
 		t.Errorf("the fingerprint was not recorded: %v", base.Labels)
 	}
 }
+
+// The exec-root gets a tmpfs, which is what keeps a daemon startable after it
+// was killed rather than stopped.
+//
+// A container's /run is part of its writable layer, so runtime state survives a
+// stop; dind's entrypoint deletes `docker*.pid` and containerd's file is called
+// containerd.pid, so a stale one is left naming a pid from the daemon's
+// previous life. dockerd then refuses to record the containerd it just started
+// and exits. See the ExecRoot comment for the message and the measurement.
+func TestTheExecRootIsATmpfs(t *testing.T) {
+	args := plan(t, "alice", Options{}).Args()
+
+	i := slices.Index(args, "--tmpfs")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("no --tmpfs rendered: %v", args)
+	}
+	value := args[i+1]
+	path, options, _ := strings.Cut(value, ":")
+	if path != ExecRoot {
+		t.Errorf("the tmpfs is on %q, not on the exec-root %q", path, ExecRoot)
+	}
+	// runc executes from the exec-root, so exec is asked for rather than left
+	// to docker's tmpfs defaults.
+	if !strings.Contains(options, "exec") || strings.Contains(options, "noexec") {
+		t.Errorf("the exec-root tmpfs is not executable: %q", value)
+	}
+	// Before the image, or it is an argument to dockerd rather than a flag to
+	// docker run.
+	if image := slices.Index(args, DefaultImage); image >= 0 && i > image {
+		t.Errorf("--tmpfs rendered after the image: %v", args)
+	}
+}
+
+// A tmpfs on the exec-root must not be one on /run: the daemon's own
+// docker.sock lives directly in /run, and so does the directory the agent
+// binds its socket from.
+func TestTheExecRootTmpfsDoesNotCoverVarRun(t *testing.T) {
+	for _, entry := range plan(t, "alice", Options{}).Tmpfs {
+		path, _, _ := strings.Cut(entry, ":")
+		if path == "/run" || path == "/var/run" {
+			t.Errorf("the tmpfs covers %s, which holds the daemon's own socket", path)
+		}
+	}
+}

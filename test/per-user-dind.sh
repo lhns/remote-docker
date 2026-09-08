@@ -635,6 +635,62 @@ else
 fi
 
 echo
+echo "== 13. a daemon that was killed rather than stopped starts again =="
+# The failure this reproduces on purpose, because it otherwise arrives about
+# once in eighty runs (agent/internal/daemons.ExecRoot has the measurement).
+#
+# A container's /run is part of its writable layer, so a daemon that was killed
+# comes back with the runtime state of its previous life still there. dind's
+# entrypoint deletes `docker*.pid` and containerd's file is containerd.pid, so
+# that one survives, and dockerd refuses to record the containerd it just
+# started because the file names a live pid:
+#
+#	failed to start containerd: libcontainerd: failed to save daemon pid to
+#	disk: process with PID 35 is still running
+#
+# In the wild the pid is live only by coincidence. Here it is pid 1, the
+# daemon container's own init, which is alive in every incarnation, so the
+# coincidence is arranged and the failure is deterministic.
+PIDFILE=/var/run/docker/containerd/containerd.pid
+if ! planted=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
+        sh -c "echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
+    bad "could not plant a stale containerd pid in $B's daemon: [$planted]"
+else
+    # kill, not stop: this is what the workspace container restarting does to
+    # every per-account daemon, since they die with the dockerd holding them.
+    hostdocker exec "$CONTAINER" docker kill "rd-dind-$B" >/dev/null 2>&1
+    hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
+
+    answered=""
+    for _ in $(seq 1 60); do
+        if hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker version >/dev/null 2>&1; then
+            answered=yes
+            break
+        fi
+        sleep 2
+    done
+    if [ -n "$answered" ]; then
+        ok "$B's daemon came back with a stale containerd pid file behind it"
+    else
+        bad "$B's daemon did not come back after being killed with a stale $PIDFILE"
+        # Its own last words, which name the reason. Without them this reads as
+        # "slow" and costs a CI round trip to learn otherwise.
+        hostdocker exec "$CONTAINER" docker logs --tail 20 "rd-dind-$B" 2>&1 |
+            sed "s/^/    rd-dind-$B: /"
+    fi
+
+    # The mechanism, asserted separately from the outcome: a tmpfs is what
+    # makes the exec-root empty again, and a daemon that happened to start
+    # would otherwise hide its absence until the next coincidence.
+    if outputs '^tmpfs$' hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
+            stat -f -c %T /var/run/docker; then
+        ok "the exec-root is a tmpfs, so nothing in it survives a restart"
+    else
+        bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"
+    fi
+fi
+
+echo
 if [ "$FAIL" -ne 0 ]; then
     dump_workspace_log
 fi
