@@ -93,6 +93,10 @@ type RunSpec struct {
 	Mounts []Mount
 	Env    []string
 
+	// Tmpfs are --tmpfs values: a path, optionally followed by :options. Not
+	// Mounts, which renders source:destination and a tmpfs has no source.
+	Tmpfs []string
+
 	// Command follows the image.
 	Command []string
 }
@@ -131,6 +135,9 @@ func (s RunSpec) Args() []string {
 	}
 	for _, m := range s.Mounts {
 		args = append(args, "-v", m.Arg())
+	}
+	for _, t := range s.Tmpfs {
+		args = append(args, "--tmpfs", t)
 	}
 	args = append(args, s.Image)
 	return append(args, s.Command...)

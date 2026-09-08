@@ -322,3 +322,34 @@ func TestTheFingerprintChangesWithTheSpec(t *testing.T) {
 		t.Errorf("the fingerprint was not recorded: %v", base.Labels)
 	}
 }
+
+// The exec-root gets a tmpfs, which is what keeps a daemon startable after it
+// was killed rather than stopped. ExecRoot has the failure it prevents.
+func TestTheExecRootIsATmpfs(t *testing.T) {
+	args := plan(t, "alice", Options{}).Args()
+
+	i := slices.Index(args, "--tmpfs")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("no --tmpfs rendered: %v", args)
+	}
+	value := args[i+1]
+	path, options, _ := strings.Cut(value, ":")
+	if path != ExecRoot {
+		t.Errorf("the tmpfs is on %q, not on the exec-root %q", path, ExecRoot)
+	}
+	// The exec-root and not /run itself, which holds the daemon's own
+	// docker.sock and the directory the agent binds its socket from.
+	if path == "/run" || path == "/var/run" {
+		t.Errorf("the tmpfs covers %s, which holds the daemon's own socket", path)
+	}
+	// runc executes from the exec-root, so exec is asked for rather than left
+	// to docker's tmpfs defaults.
+	if !strings.Contains(options, "exec") || strings.Contains(options, "noexec") {
+		t.Errorf("the exec-root tmpfs is not executable: %q", value)
+	}
+	// Before the image, or it is an argument to dockerd rather than a flag to
+	// docker run.
+	if image := slices.Index(args, DefaultImage); image >= 0 && i > image {
+		t.Errorf("--tmpfs rendered after the image: %v", args)
+	}
+}

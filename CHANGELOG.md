@@ -10,6 +10,19 @@ software.
 
 ## Unreleased
 
+### An account's daemon no longer fails to restart after the workspace does
+
+A workspace restart kills every account's daemon rather than stopping it, and
+about one time in eighty the daemon then refused to come back: runtime state
+from its previous life survived in the container, and dockerd will not start
+over it. The account's shell waited three minutes for a daemon that was never
+coming, with nothing on screen saying why.
+
+The daemon's exec-root is a tmpfs now, as it is on any real machine, so nothing
+in it survives. Each account's daemon container is recreated once to pick this
+up, and keeps its images, containers and volumes: those are on a volume the
+container in front of it does not own.
+
 ### Five resources that were acquired and never handed back
 
 An audit for one defect shape: a resource whose release is conditional, or
