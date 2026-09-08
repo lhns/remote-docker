@@ -252,10 +252,41 @@ jobs:
           # one-shot `docker run` would take its hold with it when it exits and
           # prove nothing about a machine left alone.
           .\client\rd.exe remote start
-          Start-Sleep -Seconds 180
 
-          $state = (wsl -l -v | Out-String)
+          # Polled for `Stopped`, not slept for a fixed 180 seconds. The wait
+          # is two timers deep -- the session releases its connection after
+          # DefaultIdleTimeout, one minute (ADR 0015), and only then does WSL
+          # begin its own idle countdown on a machine nobody is in -- so a
+          # fixed sleep has to cover the worst of both and pays for it every
+          # run.
+          #
+          # It also asserts more than the sleep did. 180 seconds only proved
+          # that time passed; `Stopped` is the machine actually going away,
+          # which is the precondition the command after it is about. A
+          # machine that never stops now fails here, naming what wsl said,
+          # rather than quietly turning that command into a test of nothing.
+          #
+          # 300s is a bound on a failure rather than an expected duration:
+          # nothing waits for it once the machine has stopped.
+          $start = Get-Date
+          $deadline = $start.AddSeconds(300)
+          $state = ""
+          while ($true) {
+            # NULs stripped: wsl.exe writes UTF-16, and read as bytes that is
+            # text with a NUL between every character, against which every
+            # match silently fails.
+            $state = ((wsl -l -v | Out-String) -replace "`0", "")
+            if ($state -match 'rd-ci +Stopped') { break }
+            if ((Get-Date) -ge $deadline) { break }
+            Start-Sleep -Seconds 5
+          }
+          $waited = [int]((Get-Date) - $start).TotalSeconds
+          "waited ${waited}s for the machine to stop; wsl -l -v says:"
           $state
+          if ($state -notmatch 'rd-ci +Stopped') {
+            throw "the machine never stopped while idle, after ${waited}s. wsl -l -v: $state"
+          }
+
           $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
           $out
           if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }
