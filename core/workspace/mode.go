@@ -61,10 +61,8 @@ var dockerWords = map[string]Mode{
 }
 
 // DockerWord reports whether a word is one of Docker's own consistency
-// values, each of which names BOTH axes.
-//
-// Worth knowing for one thing: `delegated` is read=cached,write=back, so a
-// refusal that named only write=back would name a word the person never typed.
+// values, each of which names BOTH axes. Read by the client's refusals, which
+// quote back the word the person actually wrote.
 func DockerWord(word string) bool {
 	_, ok := dockerWords[strings.TrimSpace(word)]
 	return ok

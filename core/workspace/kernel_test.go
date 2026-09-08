@@ -21,10 +21,10 @@ import (
 // fs/nfs/fs_context.c returns -ENOPARAM, which vfs_parse_fs_param reports as
 // `Unknown parameter` and -EINVAL. (Checked 2026-09-08.)
 //
-// So the floor below is a decision, the table is a claim about the kernel, and
+// The floor below is a decision, the table is a claim about the kernel, and
 // this test is where the two meet. Nothing that RUNS can stand in for it: every
 // CI runner is 6.x, and there is no way to ask an NFS client which options it
-// parses -- it answers EINVAL and names nothing.
+// parses, since it answers EINVAL and names nothing.
 
 // kernel is a kernel version, compared component by component. Three of them,
 // because the answers here are 2.6.23 and 3.10 and a two-field version cannot
@@ -53,10 +53,7 @@ func (k kernel) atLeast(min kernel) bool {
 
 // minimumKernel is the oldest WORKSPACE kernel this project targets, and it is
 // 3.10 because RHEL 7 is known to be in use. README says the same where
-// deployment requirements live.
-//
-// Not the client's kernel, which mounts nothing: this is the machine the
-// daemon and its NFS client run on.
+// deployment requirements live. Not the client's kernel, which mounts nothing.
 var minimumKernel = kernel{major: 3, minor: 10}
 
 // option is one word this code can emit, and the first upstream kernel that
@@ -77,10 +74,10 @@ type option struct {
 //
 //	curl -s https://raw.githubusercontent.com/torvalds/linux/v3.10/fs/nfs/super.c | grep -n Opt_actimeo
 //
-// The empirical check, on a workspace rather than a source tree: mount with the
-// option and read /proc/mounts back. An unknown word gives EINVAL for the whole
-// mount with `NFS: unrecognized mount option '<word>'` in the kernel log, which
-// on 3.10 is a dfprintk and may not reach dmesg.
+// On a workspace rather than a source tree: mount with the option, and an
+// unknown word gives EINVAL for the whole mount with `NFS: unrecognized mount
+// option` in the kernel log, which on 3.10 is a dfprintk and may not reach
+// dmesg.
 //
 // One era rather than one release explains most of these: mount(2) with fstype
 // nfs took a binary struct nfs_mount_data until the text parser arrived.
@@ -136,10 +133,8 @@ var minKernel = map[string]option{
 // It covers the union's lower mount too, which is this same list split in two
 // (core-agent/union asks NFSVolumeOptions rather than copying it). It does NOT
 // cover fuse-overlayfs, which is a binary in the workspace rather than a mount
-// option: the client asks the workspace whether it has one (Info.Union) instead
-// of deriving it from a version, and a version could not answer it anyway --
-// fuse-overlayfs as root has no documented kernel floor and RHEL 7 ships it,
-// while the image a per-account daemon runs may not.
+// option, so the client asks the workspace whether it has one (Info.Union)
+// rather than deriving it from a version.
 func TestEmittedOptionsFitTheSupportedKernel(t *testing.T) {
 	for _, read := range []Read{ReadUnset, ReadDirect, ReadCached} {
 		opts := NFSVolumeOptions(30000, "/m/00112233445566ff", read)
@@ -161,16 +156,12 @@ func TestEmittedOptionsFitTheSupportedKernel(t *testing.T) {
 	}
 }
 
-// The floor is a number three other things are written against: README,
-// CLAUDE.md, and the row that keeps nconnect out. Changing it changes what this
-// project promises, so it fails here rather than being edited in passing.
+// README and CLAUDE.md are written against this number, so changing it changes
+// what the project promises and fails here rather than being edited in passing.
 func TestTheFloorIsRHEL7(t *testing.T) {
 	if minimumKernel != (kernel{major: 3, minor: 10}) {
 		t.Errorf("the supported floor is now %s, where README and CLAUDE.md say 3.10 "+
 			"and CHANGELOG names the RHEL 7 workspace it came from", minimumKernel)
-	}
-	if minimumKernel.atLeast(minKernel["nconnect"].needs) {
-		t.Error("nconnect reads as within the floor, which it cannot be: it needs 5.3")
 	}
 }
 

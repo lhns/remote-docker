@@ -301,16 +301,14 @@ func parseID(s string) (string, error) {
 // fork replaced: 224 WRITEs in flight timing out together at 9.07s, with the
 // transport never reconnecting.
 //
-// nconnect is NOT asked for, and this list holds nothing else newer than the
-// supported floor either: kernel_test.go is the table and the test.
-// It gave the mount eight TCP connections rather than one, and it needs Linux
-// 5.3; a workspace running RHEL 7 (3.10.0-1160.119.1.el7.x86_64) refused the
-// WHOLE option string over that one word, so every bind mount there failed as
-// `invalid argument` against a list whose every word is individually valid.
-// Two things say it is not worth reaching for again without measuring first:
-// its benefit was never measured, unlike the timeo above, which cites one; and
-// Linux keeps one RPC transport per server address, so it applied to whichever
-// share mounted first and to nothing after it.
+// nconnect is NOT asked for, and nothing else here is newer than the supported
+// workspace kernel either: kernel_test.go is the table and the test. It needs
+// Linux 5.3, and the NFS client refuses the WHOLE option string over one word
+// it does not know, so on a RHEL 7 workspace (3.10.0-1160.119.1.el7.x86_64)
+// every bind mount failed as `invalid argument` against a list whose every word
+// is individually valid. Its benefit was never measured, unlike the timeo
+// above, and the CAVEAT below applied to it too, so measure before reaching for
+// it again.
 //
 // That CAVEAT covers anything else transport-level: every share of a client
 // mounts from 127.0.0.1:<tunnel port>, so timeo and retrans are taken from

@@ -364,11 +364,10 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 
 The read axis is the mount itself and needs nothing in the workspace, so
 `read=cached` works wherever a share works. The write axis is what pulls in a
-union, and a union needs `fuse-overlayfs` in the image the account's daemon
-runs: `write=back`, `write=ephemeral`, and Docker's `delegated`, which means
-`read=cached,write=back` and is the one way to ask for a union without naming
-it. A workspace that cannot make one says so before anything is created, and
-names the word you wrote.
+union, which needs `fuse-overlayfs` where the account's daemon runs:
+`write=back`, `write=ephemeral`, and Docker's `delegated`, which means
+`read=cached,write=back`. A workspace that cannot make one says so before
+anything is created, and names the word you wrote.
 
 ```bash
 docker run -v ./project:/app:read=cached img                       # the one to reach for
@@ -468,7 +467,7 @@ Two things about an old workspace kernel that are *not* the floor:
   account's daemon runs, and that is asked of the workspace rather than guessed
   from a version. Mounted as root it has no documented kernel floor, and RHEL 7
   ships it (`fuse-overlayfs` in RHEL 7 Extras, [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222)),
-  so this is about the image and not the kernel. `read=cached` needs none of it.
+  so this is about the image and not the kernel.
 - **Docker itself has not been built for el7 since 26.1.4** (*checked 2026-09-08
   against `https://download.docker.com/linux/centos/7/x86_64/stable/Packages/`*),
   and [the install docs](https://docs.docker.com/engine/install/centos/) list

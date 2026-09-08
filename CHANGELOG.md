@@ -74,8 +74,6 @@ Four things were behind that, and all four are fixed:
   together at 9.07s, with the transport never reconnecting. A share now asks
   for the kernel's own TCP default of 60 seconds, and the server, which
   answered one request at a time per connection, now handles eight (ADR 0047).
-  It briefly asked for eight TCP connections as well, with `nconnect`; that is
-  gone again, under Fixed below.
 - **A file was opened and closed once per megabyte.** NFS has no open file, so
   the server opened, seeked, wrote and CLOSED on every WRITE request: a 185MB
   file at `wsize=1048576` was opened and closed 180 times. On Windows those
@@ -202,15 +200,14 @@ StatefulSet adopts them.
 
 - **Every bind mount failed on a workspace older than Linux 5.3.** The share's
   mount asked for `nconnect=8`, which the NFS client has only since 5.3, and
-  the kernel refuses the WHOLE option string over one word it does not know —
-  so a workspace on RHEL 7 (`3.10.0-1160.119.1.el7.x86_64`) answered
+  the kernel refuses the WHOLE option string over one word it does not know, so
+  a workspace on RHEL 7 (`3.10.0-1160.119.1.el7.x86_64`) answered
   `failed to mount local volume: ... invalid argument` against a list whose
-  every word is individually valid. `nconnect` is gone, and it is not coming
-  back without a measurement: its benefit was never measured, and Linux keeps
-  one RPC transport per server address, so it applied to whichever share
-  mounted first and to nothing after it. Every remaining option is in the
-  table in `core/workspace/kernel_test.go` with the kernel it needs, and a
-  test fails on one above the supported floor, which is now written down: 3.10.
+  every word is individually valid. `nconnect` is gone. It arrived and left
+  within this release cycle, so only a build from main ever asked for it. The
+  supported workspace kernel is now written down, 3.10, and every option this
+  code emits is in the table in `core/workspace/kernel_test.go` with the kernel
+  it needs; a test fails on one above that floor.
 
   **A volume already created with `nconnect=8` keeps it**, because a volume's
   driver options are immutable. Creating a container replaces such a volume by

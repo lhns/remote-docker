@@ -438,9 +438,9 @@ func TestAUnionIsRefusedWhereTheWorkspaceCannotServeIt(t *testing.T) {
 	}
 }
 
-// `delegated` is Docker's word for read=cached,write=back, so it is the one
-// way to ask for a union without typing the word `union` or `back`. A refusal
-// that named only write=back would name something the person never wrote.
+// A refusal quotes the word the person wrote: `delegated` is Docker's spelling
+// of read=cached,write=back, and naming only write=back names something they
+// never typed.
 func TestARefusedUnionNamesTheWordThatAskedForIt(t *testing.T) {
 	for _, ask := range []string{
 		`{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:delegated"]}}`,

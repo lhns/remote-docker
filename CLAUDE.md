@@ -1046,16 +1046,13 @@ its pure planning function was.
   are unit tested against a fake backend. Nothing has run a watcher over a
   10,000-directory tree, and the macOS backend (kqueue, one fd per *file*) has
   never been executed at all.
-- **Any workspace kernel but the runner's.** The suites make a real kernel NFS
-  mount, and every one of them makes it on a GitHub runner, which is 6.x. So
-  they prove the mount options against ONE kernel: a mount option newer than
-  the supported floor passes CI and fails in the field, on every bind mount,
-  with `invalid argument` against an option list whose every word is
-  individually valid. That is not hypothetical, it is what `nconnect=8` (Linux
-  5.3) did to a RHEL 7 workspace. The floor and what each option needs are the
-  table in `core/workspace/kernel_test.go`, which is a claim about the kernel
-  and not about this code: only reading the kernel's own source or `man 5 nfs`
-  re-checks it, and nothing in CI can.
+- **Any workspace kernel but the runner's.** Every suite that mounts a share
+  mounts it on a GitHub runner, which is 6.x, so the mount options are proven
+  against ONE kernel: an option newer than the floor passes CI and fails in the
+  field, which is what `nconnect=8` did to a RHEL 7 workspace. What guards it
+  is the table in `core/workspace/kernel_test.go`, a claim about the kernel
+  rather than about this code, so only reading the kernel source or `man 5 nfs`
+  re-checks a row.
 
 ## Conventions
 

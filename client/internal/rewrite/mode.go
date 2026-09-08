@@ -26,8 +26,8 @@ import (
 // export behind the volume is read-write, so that flag is the only thing
 // between a container and the user's files.
 //
-// Returns the mode, the word it was SPELLED as when that was one of Docker's
-// (see dockerSpelling), and the remaining options.
+// Returns the mode, the Docker word it was spelled as where it was one of
+// those (writeAsked quotes that back), and the remaining options.
 func splitMode(options string) (workspace.Mode, string, string, error) {
 	if options == "" {
 		return workspace.ModeUnset, "", "", nil
@@ -50,9 +50,8 @@ func splitMode(options string) (workspace.Mode, string, string, error) {
 	return mode, dockerSpelling(asked), strings.Join(kept, ","), nil
 }
 
-// dockerSpelling is the word to quote back at somebody, and "" when they
-// already wrote our own. Only one of Docker's whole-mode words qualifies:
-// anything else is what they typed and is in the mode itself.
+// dockerSpelling is the Docker word to quote back, and "" where the person
+// wrote our own words, which are already in the mode.
 func dockerSpelling(asked string) string {
 	if workspace.DockerWord(asked) {
 		return strings.TrimSpace(asked)
@@ -121,9 +120,8 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 // second EnsureVolume would recreate the volume the first just made, and both
 // containers would quietly run under the second answer.
 //
-// spelled is the word the mount actually used when it was one of Docker's,
-// which the refusals quote: `delegated` is write=back, and a message naming
-// only write=back names something nobody typed.
+// spelled is the Docker word the mount used, if it used one; writeAsked is
+// what the refusals put it through.
 func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, asked workspace.Mode, spelled string) (workspace.Mode, error) {
 	// An axis nobody named is Docker's default for it.
 	got := asked.Or(r.modeFor(source)).Or(workspace.DefaultMode)
@@ -171,8 +169,9 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 
 // writeAsked names the write mode a refusal is about, and where a Docker word
 // asked for it, that word too: somebody who wrote `delegated` is told
-// `write=back, which delegated means`, because the union is the write axis and
-// that word is the one way to reach it without naming it.
+// `write=back, which delegated means`. `delegated` is read=cached,write=back,
+// so it is the one way to ask for a union without typing `back`, and a message
+// naming only write=back would name a word nobody wrote.
 func writeAsked(write workspace.Write, spelled string) string {
 	if spelled == "" {
 		return "write=" + string(write)
