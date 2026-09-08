@@ -75,6 +75,12 @@ func (p *Ports) path() string { return filepath.Join(p.Dir, "clientports") }
 // which keeps every existing deployment on the port it already uses: a
 // workspace reached from one machine never allocates anything, and its volumes
 // and its `clientports` file both stay as they were.
+//
+// Preferred runs with NO lock held: it can boot a cold dind under a 90s budget
+// (agent/cmd/remote-dockerd/serve.go), and Owns takes the same mutex on every
+// account's tcpip-forward check. Its answer therefore crosses the lock
+// boundary as a HINT, and decide re-validates it, which is what keeps ADR
+// 0032's atomicity: taken, free, allocate and the assignment are one step.
 func (p *Ports) For(account string, uid int, client string) (int, error) {
 	base, err := p.Mapping.PortForUID(uid)
 	if err != nil {
@@ -86,23 +92,13 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 		return base, nil
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if err := p.load(); err != nil {
+	key := assignment{account: account, client: client}
+	port, known, err := p.lookup(key)
+	if err != nil {
 		return 0, err
 	}
-
-	key := assignment{account: account, client: client}
-	if port, ok := p.assigned[key]; ok {
+	if known {
 		return port, nil
-	}
-
-	// One walk of the record, since this machine is not in it: everything
-	// assigned belongs to somebody else.
-	taken := make(map[int]bool, len(p.assigned))
-	for _, v := range p.assigned {
-		taken[v] = true
 	}
 
 	// What this machine's volumes already expect, before anything is chosen for
@@ -115,22 +111,72 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// session that half works.
 	want := 0
 	if p.Preferred != nil {
-		var err error
 		if want, err = p.Preferred(account, client); err != nil {
 			return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
 		}
 	}
 
+	return p.decide(key, base, want)
+}
+
+// lookup answers for a machine the record already knows, which is every
+// ordinary connect.
+func (p *Ports) lookup(key assignment) (port int, known bool, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if err := p.load(); err != nil {
+		return 0, false, err
+	}
+	port, known = p.assigned[key]
+	return port, known, nil
+}
+
+// decide chooses this machine's port and records it, in one hold.
+//
+// want is the hint Preferred gave outside the lock. The new risk that comes
+// with computing it there: a machine whose want was handed to somebody else in
+// the window is given a different port with nothing said, and its volumes then
+// cannot mount. It needs a lost record AND both machines re-deriving the same
+// base, and Ports has no logger to say so with.
+func (p *Ports) decide(key assignment, base, want int) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if err := p.load(); err != nil {
+		return 0, err
+	}
+
+	// Another session of this machine may have decided while we were asking
+	// Preferred. Its answer is the one on record, and one machine must have one
+	// port: a second would leave the volumes built for the first unmountable.
+	if port, ok := p.assigned[key]; ok {
+		return port, nil
+	}
+
+	// One walk of the record, since this machine is not in it: everything
+	// assigned belongs to somebody else.
+	taken := make(map[int]bool, len(p.assigned))
+	for _, v := range p.assigned {
+		taken[v] = true
+	}
+
+	// Reserved is a full account listing per call
+	// (agent/cmd/remote-dockerd/serve.go), and free(want) and allocate can meet
+	// the same port, so the answers are remembered for this decision. It stays
+	// inside the lock, in ADR 0032's atomic step.
+	reserved := p.memoReserved()
+
 	port := 0
-	if want != 0 && !taken[want] && p.free(want) {
+	if want != 0 && !taken[want] && p.free(want, reserved) {
 		port = want
 	}
 
 	if port == 0 {
 		port = base
 		if taken[base] {
-			if port = p.allocate(taken); port == 0 {
-				return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", account)
+			if port = p.allocate(taken, reserved); port == 0 {
+				return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", key.account)
 			}
 		}
 	}
@@ -144,20 +190,34 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	return port, nil
 }
 
+// memoReserved wraps Reserved so one decision asks about a uid at most once.
+// A nil Reserved answers false, which is the skip its field documents.
+func (p *Ports) memoReserved() func(uid int) bool {
+	if p.Reserved == nil {
+		return func(int) bool { return false }
+	}
+	seen := map[int]bool{}
+	return func(uid int) bool {
+		answer, asked := seen[uid]
+		if !asked {
+			answer = p.Reserved(uid)
+			seen[uid] = answer
+		}
+		return answer
+	}
+}
+
 // free reports whether a port may be handed to somebody who does not derive it.
 //
 // The same rule allocate applies: in range, and not derived by an account that
 // EXISTS, because that account is entitled to its own port whether or not it
 // has ever connected.
-func (p *Ports) free(port int) bool {
+func (p *Ports) free(port int, reserved func(int) bool) bool {
 	if port < p.Mapping.PortBase || port > workspace.MaxPort {
 		return false
 	}
-	if p.Reserved == nil {
-		return true
-	}
 	uid, err := p.Mapping.UIDForPort(port)
-	return err != nil || !p.Reserved(uid)
+	return err != nil || !reserved(uid)
 }
 
 // allocate picks a free port, counting DOWN from the top of the range.
@@ -171,7 +231,7 @@ func (p *Ports) free(port int) bool {
 //
 // Deterministic rather than random, so an operator can predict the range and
 // a rerun of the same sequence produces the same file.
-func (p *Ports) allocate(taken map[int]bool) int {
+func (p *Ports) allocate(taken map[int]bool, reserved func(int) bool) int {
 	for port := workspace.MaxPort; port >= p.Mapping.PortBase; port-- {
 		if taken[port] {
 			continue
@@ -180,10 +240,8 @@ func (p *Ports) allocate(taken map[int]bool) int {
 		// entitled to it whether or not it has ever connected. Handing it out
 		// would work until they did, and then take a working tunnel away from
 		// somebody.
-		if p.Reserved != nil {
-			if uid, err := p.Mapping.UIDForPort(port); err == nil && p.Reserved(uid) {
-				continue
-			}
+		if uid, err := p.Mapping.UIDForPort(port); err == nil && reserved(uid) {
+			continue
 		}
 		return port
 	}
