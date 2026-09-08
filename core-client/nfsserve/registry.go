@@ -2,6 +2,7 @@ package nfsserve
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path"
@@ -80,6 +81,11 @@ type Registry struct {
 	traceOnce sync.Once
 	trace     time.Duration
 
+	// Neither map ever shrinks and there is no unregister, deliberately: a
+	// share removed leaves every container mounting it with `Stale file
+	// handle` against a mount that still looks fine. The reasoning is the
+	// "share registry never shrinks" invariant in CLAUDE.md. What a share
+	// HOLDS is released instead, by closeFS.
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
 	byPath map[string]*Share // keyed by canonical local path
@@ -153,6 +159,15 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		LocalPath:  localPath,
 		File:       file,
 		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
+	}
+	// Reached only by registering a DIFFERENT directory at an export path
+	// already taken, since a path already held returned its share above. The
+	// displaced share is unreachable, so it gives up what it holds and takes
+	// its byPath entry with it rather than leaving one pointing at a
+	// filesystem nothing serves.
+	if old, ok := r.shares[exportPath]; ok {
+		delete(r.byPath, workspace.CanonicalKey(old.LocalPath))
+		closeFS(old.fs)
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -258,8 +273,39 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 		if share.File != "" {
 			base = filepath.Dir(share.LocalPath)
 		}
+		outgoing := share.fs
 		share.fs = withAttrs(r.shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
+		closeFS(outgoing)
 	}
+}
+
+// closeFS gives up what a share's filesystem holds, which today is the
+// descriptor cache and nothing else. It walks the stack because every wrapper
+// embeds billy.Filesystem as an INTERFACE, so a Close on a layer below is not
+// promoted through the layers above it.
+func closeFS(fs billy.Filesystem) {
+	for fs != nil {
+		if c, ok := fs.(io.Closer); ok {
+			_ = c.Close()
+			return
+		}
+		fs = unwrapFS(fs)
+	}
+}
+
+// unwrapFS returns the layer under one of shareFS's wrappers, or nil at the
+// bottom. By concrete type, because shareFS leaves out either optional layer
+// when its switch says no, so a walk cannot assume what it will meet.
+func unwrapFS(fs billy.Filesystem) billy.Filesystem {
+	switch v := fs.(type) {
+	case *attrFS:
+		return v.Filesystem
+	case *singleFileFS:
+		return v.Filesystem
+	case *traceFS:
+		return v.Filesystem
+	}
+	return nil
 }
 
 // shareFS is a share's filesystem before attributes. The ONE place this is

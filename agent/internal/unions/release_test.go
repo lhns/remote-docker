@@ -12,12 +12,13 @@ import (
 )
 
 type fakeVolumes struct {
-	sources map[string]bool
-	err     error
+	mountpoint string
+	sources    map[string]bool
+	err        error
 }
 
-func (fakeVolumes) RawMountpoint(context.Context, string, string) (string, error) {
-	return "", nil
+func (f fakeVolumes) RawMountpoint(context.Context, string, string) (string, error) {
+	return f.mountpoint, nil
 }
 
 func (f fakeVolumes) MountSources(context.Context, string) (map[string]bool, error) {
