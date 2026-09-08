@@ -30,10 +30,8 @@ vendor's tool.
 | upgrades | `MajorUpgrade`, on a fixed `UpgradeCode` |
 | when | tag releases only |
 
-**WiX only runs on Windows, whatever .NET says.** It was going to be built on
-the existing ubuntu job, which is why `binaries` hands the payload over as an
-artifact rather than the installer being made in place. WiX is a dotnet tool
-and loads on Linux perfectly well; it then prints
+**WiX only runs on Windows, whatever .NET says.** It is a dotnet tool and loads
+on Linux; `wix build` there then prints
 
 ```
 warning WIX0000: The WiX Toolset only supports Windows. ...
@@ -42,9 +40,11 @@ error WIX0389: The Directory/@Name attribute's value, 'remote-docker',
   is not a relative path.
 ```
 
-on a name that is plainly relative and that the same source builds on Windows.
-Measured on `ubuntu-latest`, 2026-09-08. So the build script is PowerShell and
-the job is a Windows one.
+on a name that is relative and that the same source builds on Windows. Measured
+on `ubuntu-latest`, 2026-09-08; re-check by running the `wix build` line of
+`installer/windows/build.ps1` there. So the build script is PowerShell and the
+job is a Windows one, and the payload crosses from the ubuntu build as an
+artifact.
 
 GoReleaser's own `msi` block is Pro-only (checked 2026-09-08 at
 <https://goreleaser.com/customization/msi/>: "This feature is exclusively
@@ -52,9 +52,19 @@ available with GoReleaser Pro"), so this is a job after goreleaser and a
 `gh release upload`, not a line in `.goreleaser.yaml`.
 
 **`docker.exe` is a WiX Feature, off by default.** `<CopyFile FileId=...>` is a
-`DuplicateFile` row: the ~70MB binary ships once, the second name is made at
-install and removed at uninstall. No custom action, no second payload, and no
-code in the Go program — the name is the installation.
+`DuplicateFile` row: the binary ships once, the second name is made at install
+and removed at uninstall. No custom action, no second payload, and no code in
+the Go program — the name is the installation. So the option costs nothing to
+download, and the MSI is smaller than the binary it carries:
+
+| | bytes |
+|---|---|
+| amd64 binary | 74,101,248 |
+| amd64 MSI | 19,636,224 |
+| arm64 MSI | 17,940,480 |
+
+Measured in the `msi` workflow, 2026-09-08; re-check with `Get-ChildItem
+dist/msi` after a `build.ps1` run.
 
 - `Level="2"` against the default `INSTALLLEVEL=1`: visible in
   `WixUI_FeatureTree`, unselected. `Level="0"` would hide it entirely.
@@ -73,8 +83,8 @@ docker context we did not create is left completely alone.
 
 **Version.** An MSI `ProductVersion` is `major.minor.build`, and the installer
 compares only those: major and minor are one byte, build is two. A snapshot
-version (`0.0.0-dev.9370b24`) has no mapping to that at all, so
-`installer/windows/build.sh` validates the shape and the ranges and exits
+version (`sha-9370b24`) has no mapping to that at all, so
+`installer/windows/build.ps1` validates the shape and the ranges and exits
 naming the version. Truncating instead would produce an upgrade that never
 fires, which is silent for a release cycle.
 
@@ -91,10 +101,10 @@ fires, which is silent for a release cycle.
   `docker.exe`. In a 64-bit package `SystemFolder` is **SysWOW64** and
   `System64Folder` is **System32**, the reverse of what the names suggest;
   searching only the first builds, installs, and misses the directory that was
-  meant. A
-  `docker.exe` elsewhere on PATH is not noticed and is shadowed, because the
-  install directory is appended and therefore loses — the failure is that the
-  user does not get what they asked for, not that they lose the other tool.
+  meant. A `docker.exe` elsewhere on PATH is not noticed and is shadowed,
+  because the install directory is appended and therefore loses: the failure is
+  that the user does not get the name they asked for, not that they lose the
+  other tool.
   The alternative was a custom action DLL, which is a C project and a second
   thing to build.
 - **The MSI is unsigned.** The repository has no code-signing certificate; the
@@ -106,8 +116,12 @@ fires, which is silent for a release cycle.
 - **A tag can publish an installer no suite has installed.** `msi.yml` is
   triggered by changes under `installer/windows/`, not by tags, so the release
   path does not wait on a Windows runner. What closes it in practice: any
-  change to the installer touches those paths.
+  change to the installer touches those paths. The release path is unexercised
+  in the other direction too: the `installers` job, the `dist/artifacts.json`
+  lookup that finds goreleaser's Windows binaries and the `gh release upload`
+  are all behind `github.ref_type == 'tag'`, and none of them has ever run.
 - **Part of "installing a release has never been done" is closed.** A Windows
   runner now installs an MSI built from this repository, runs the binary out of
-  a fresh shell's PATH, and uninstalls it. The archives are still unproven, and
-  so is an MSI built by an actual tag release.
+  a fresh shell's PATH, and uninstalls it. Still unproven: the archives, an MSI
+  built by an actual tag release, and the arm64 MSI, which is built on every run
+  and installed by nothing, GitHub having no Windows arm64 runner.

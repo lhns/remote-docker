@@ -1074,7 +1074,16 @@ its pure planning function was.
   the MSI it installs is built by that workflow from a stand-in version. **No
   MSI from a real tag release has been installed by anybody**, and `msi.yml` is
   triggered by changes under `installer/windows/`, so a tag publishes without
-  waiting for it.
+  waiting for it. The release path itself is unrun: `release.yml`'s `installers`
+  job is behind `github.ref_type == 'tag'`, so the `dist/artifacts.json` lookup
+  that finds goreleaser's Windows binaries and the `gh release upload` that
+  attaches the MSIs have executed nowhere, CI included.
+- **The arm64 MSI is built and never installed.** `msi.yml` builds both
+  architectures, so `wix build -arch arm64` failing is not a release-day
+  surprise, and installs only the amd64 one: GitHub offers no Windows arm64
+  runner. *(Checked 2026-09-08 at
+  <https://docs.github.com/en/actions/reference/runners/github-hosted-runners>;
+  re-check there, since no command asks.)*
 - **The MSI is unsigned, and nothing verifies it.** The repository has no
   code-signing certificate; `GITHUB_TOKEN` is the only secret any workflow uses
   (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's

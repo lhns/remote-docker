@@ -75,7 +75,8 @@ Every release also carries an MSI per architecture, beside the zip:
 `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It installs
 `remote-docker.exe` into `C:\Program Files\remote-docker` and **appends** that
 directory to the system PATH, so a shell opened afterwards has it. Per machine,
-so it needs administrator rights.
+so it needs administrator rights. About 19 MB to download on amd64 and 18 on
+arm64, holding the same binary the zip does.
 
 ```powershell
 # with a UI, and a feature tree
