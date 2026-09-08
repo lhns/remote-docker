@@ -209,6 +209,10 @@ StatefulSet adopts them.
   four of its fields across and left the rest, `machine` among them, as a base
   under every entry. The new workspace inherited the old one's machine, so
   `remote rm <new>` would destroy it. The whole entry moves now.
+- A forwarded UDP flow lived until the container stopped, so a sender whose
+  source port changes per datagram, which is what a resolver does, left a
+  goroutine, a 64KB buffer and an SSH channel behind per datagram. A flow that
+  has carried nothing for two minutes is closed now (ADR 0038).
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.

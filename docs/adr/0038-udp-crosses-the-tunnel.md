@@ -1,12 +1,12 @@
 # 0038 — UDP crosses the tunnel
 
-- Status: Accepted and implemented 2026-08-19; extends
-  [ADR 0008](0008-published-ports-reach-the-client.md)
+- Status: Accepted and implemented 2026-08-19; amended 2026-09-08 with a flow
+  timeout; extends [ADR 0008](0008-published-ports-reach-the-client.md)
 - Date: 2026-08-19
-- Current answer: implemented. A channel of our own
+- Current answer: a channel of our own
   (`direct-udp@remote-docker.lhns.de`) with a two-byte length in front of each
-  datagram, one flow per source address, and an agent that refuses the channel
-  type as the version check.
+  datagram, one flow per source address, an agent that refuses the channel type
+  as the version check, and a flow closed after 2 minutes carrying nothing.
 
 > SSH forwards TCP, so a published UDP port was unreachable in every version of
 > this project. It is carried now, in a channel of our own with a length in
@@ -68,10 +68,27 @@ container port, so what comes back on it belongs to exactly one local sender.
 Anything else would need the source in every datagram and a demultiplexer at
 each end.
 
-**A flow lives as long as the forward**, which is the rule a TCP forward already
-follows: it ends when the container stops or stops publishing the port. No
-timeout, no bound, no eviction, because TCP has none and a second lifetime rule
-is a second thing to get wrong.
+**A flow ends with the forward, with its channel, or after 2 minutes idle**
+(amended 2026-09-08; `client/internal/session/udpforward.go`). The first two
+are the rule a TCP forward already follows. The third is what UDP needs and TCP
+does not:
+
+| | TCP forward | UDP forward |
+| --- | --- | --- |
+| what ends a flow | FIN or RST on the connection | nothing the protocol carries |
+| flows per exchange | one per connection | one per SOURCE PORT, and a resolver picks a new one per query |
+
+- **2 minutes**, on a per-flow `lastUsed` touched in both directions. The
+  workloads carried here are request/response shaped (resolver, syslog,
+  metrics), so a two-minute gap means the exchange is over; a sender that
+  speaks again costs one channel open.
+- **Swept every 30s**, the cadence `shareReconcileInterval` and the port
+  manager already use.
+- **Not a bound**, which the consequence below already ruled out: a cap evicts
+  a flow somebody is using, a timeout evicts one nobody is.
+- **A flow is dropped by IDENTITY, not by key.** A sweep may have expired a
+  source port and the sender may have opened another under the same address,
+  so `drop` refuses a flow the map no longer holds.
 
 **One path through the client, not two.** `Forwarder.Forward` takes the network,
 so the ports manager has no UDP code at all: the listener, the flows and the
@@ -93,11 +110,13 @@ none of this can be believed from a unit test.
   that is unremarkable; for anything latency-shaped it is a different service
   than the user thinks they have, which is why the README says so rather than
   only this record.
-- **A sender whose source port changes per datagram leaves a flow behind per
-  datagram**, since flows end with the forward. A resolver does exactly that.
-  Nothing in a dev workspace is expected to at volume, and the trigger for
-  revisiting is somebody watching the channel count climb: the fix then is a
-  timeout, not a bound.
+- **A sender whose source port changes per datagram costs a flow per datagram
+  for 2 minutes, not forever.** A resolver does exactly that. This was the
+  revisit trigger the record named, and the timeout above is the answer it
+  named.
+- **A flow that is quiet longer than 2 minutes and then speaks pays one channel
+  open.** A datagram is not lost by it: the flow is opened by the datagram that
+  finds none.
 - **Nothing carries datagrams the other way.** A container reaching a UDP
   service on the user's machine is a reverse forward, which nothing has asked
   for.
