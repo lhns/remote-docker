@@ -209,6 +209,10 @@ StatefulSet adopts them.
   four of its fields across and left the rest, `machine` among them, as a base
   under every entry. The new workspace inherited the old one's machine, so
   `remote rm <new>` would destroy it. The whole entry moves now.
+- A non-pty `ssh workspace <command>` withheld its exit status until the
+  client closed its stdin, so `ssh workspace true` from a terminal hung
+  although the command had exited. The status follows the command now. Our own
+  client never tripped this: it sets no stdin, so x/crypto sends EOF at once.
 - A workspace that accepted a connection and then answered nothing wedged the
   session until `remote restart`. The client's own Docker API calls carried a
   context that nothing enforced, so one hung forever, taking port forwarding
