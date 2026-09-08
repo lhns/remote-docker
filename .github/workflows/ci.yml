@@ -306,13 +306,17 @@ jobs:
       # measured on 2026-09-08 (runs 34212595098 and 34207467540) and both
       # were pure cost:
       #
-      #   - `cache-to: type=gha` wrote a cache this job could never read.
+      #   - `cache-to: type=gha` wrote a cache almost nothing could read.
       #     GitHub scopes a cache to the ref that wrote it, and a PR run reads
       #     only its own branch and the DEFAULT branch. This job is
-      #     `if: pull_request`, so it never runs on main and never writes the
-      #     one scope a later pull request could hit. Both runs report zero
-      #     CACHED steps and about 25s spent exporting the cache anyway.
-      #     Re-check with: does the log contain the word CACHED at all.
+      #     `if: pull_request`, so it never runs on main; release.yml does
+      #     build the image there but under `scope=image-<platform>`, which is
+      #     a different cache. So the only hit available is a second push to
+      #     the SAME pull request, and that was measured too (job 102037621528):
+      #     two CACHED steps, `WORKDIR` and one `COPY`, neither of which costs
+      #     anything, while `RUN apk add` and `RUN go build` both re-ran. A
+      #     first push gets zero. Export cost 6.5-20s every time.
+      #     Re-check with: how many times the word CACHED appears in the log.
       #   - `load: true` exports the built image as a tarball and imports it
       #     into the runner's daemon, which cost about 9s for an image no step
       #     in this job runs.
