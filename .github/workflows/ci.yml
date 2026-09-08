@@ -302,12 +302,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
+      # No layer cache, and nothing loaded into the daemon. Both were
+      # measured on 2026-09-08 (runs 34212595098 and 34207467540) and both
+      # were pure cost:
+      #
+      #   - `cache-to: type=gha` wrote a cache this job could never read.
+      #     GitHub scopes a cache to the ref that wrote it, and a PR run reads
+      #     only its own branch and the DEFAULT branch. This job is
+      #     `if: pull_request`, so it never runs on main and never writes the
+      #     one scope a later pull request could hit. Both runs report zero
+      #     CACHED steps and about 25s spent exporting the cache anyway.
+      #     Re-check with: does the log contain the word CACHED at all.
+      #   - `load: true` exports the built image as a tarball and imports it
+      #     into the runner's daemon, which cost about 9s for an image no step
+      #     in this job runs.
+      #
+      # What is asserted is unchanged: the image builds from this Dockerfile.
       - uses: docker/build-push-action@v7
         with:
           context: .
           file: image/Dockerfile
           push: false
-          load: true
           tags: remote-docker-workspace:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

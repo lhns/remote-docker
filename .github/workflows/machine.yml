@@ -45,7 +45,13 @@ jobs:
           # Gzipped, because that is what a release publishes and what somebody
           # downloads. `wsl --import` reads it directly, and this is where that
           # is proven rather than assumed.
-          docker export "$id" | gzip -9 > rootfs.tar.gz
+          #
+          # -1 rather than -9: the rootfs is around 400 MB and gzip is
+          # single-threaded, so -9 spent about a minute of this workflow's
+          # critical path buying bandwidth between two jobs on the same runner
+          # network. What is proven here is that wsl reads a gzipped tarball,
+          # and the level does not change that.
+          docker export "$id" | gzip -1 > rootfs.tar.gz
           docker rm "$id"
           ls -lh rootfs.tar.gz
 
@@ -71,6 +77,33 @@ jobs:
           wc -l transcript-native.txt
           docker save fsprobe:ci | gzip > fsprobe.tar.gz
           ls -lh fsprobe.tar.gz
+
+      # The Windows client, cross-compiled HERE rather than on the Windows
+      # runner. Not a convenience: actions/setup-go on windows-latest restores
+      # a 526 MB module and build cache, and extracting it costs between one
+      # and four minutes (measured 248s on 2026-09-08, run 34212595094) --
+      # every second of it on the critical path of the longest workflow this
+      # repository has, to compile one binary in seven seconds.
+      #
+      # CGO_ENABLED=0 is what .goreleaser.yaml ships for windows, so the
+      # binary under test here is now the one a user downloads. Building it on
+      # the runner picked up its gcc and produced a cgo binary nobody ships.
+      # That the client COMPILES on Windows natively is still covered, by
+      # ci.yml's `test (windows)` job, which builds every package it tests.
+      - name: cross-compile the windows client
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -o rd.exe ./cmd/remote-docker
+        working-directory: client
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-client
+          path: client/rd.exe
+          if-no-files-found: error
+          retention-days: 1
 
       - uses: actions/upload-artifact@v7
         with:
@@ -104,11 +137,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-go
-
+      # No setup-go on this runner. Everything Go here is built on the Linux
+      # job above and arrives as an artifact; see the cross-compile step there
+      # for what that is worth and what still covers the Windows build.
       - uses: actions/download-artifact@v8
         with:
           name: workspace-rootfs
+
+      # Into client/, which is where every step below already spells it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-client
+          path: client
 
       # State of its own for every step below, so nothing here depends on or
       # disturbs whatever the runner image already has. Set through GITHUB_ENV
@@ -124,10 +164,6 @@ jobs:
 
       - name: install wsl
         run: wsl --install --no-distribution
-
-      - name: build the client
-        run: go build -o rd.exe ./cmd/remote-docker
-        working-directory: client
 
       - name: create the machine
         shell: pwsh
