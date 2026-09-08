@@ -240,7 +240,13 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// Active lists the ports currently forwarded, for `remote-docker status`.
+// Active lists the ports currently forwarded.
+//
+// Nothing in the client calls it: the manager is driven by the daemon's
+// container list and reports to the log. It is how the tests see what the
+// manager holds, which is the only way to tell "forwarded" from "recorded",
+// and it said `remote-docker status` until somebody checked -- that command
+// has never reported ports.
 func (m *Manager) Active() []int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

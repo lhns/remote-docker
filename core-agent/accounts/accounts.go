@@ -159,7 +159,7 @@ func (s *Store) Sync() error {
 			continue
 		}
 		base := strings.TrimSuffix(e.Name(), ".pub")
-		if name, err := SanitizeName(base); err == nil && name == base {
+		if name, err := workspace.AccountName(base); err == nil && name == base {
 			exact = append(exact, e.Name())
 		} else {
 			folded = append(folded, e.Name())
@@ -175,7 +175,7 @@ func (s *Store) Sync() error {
 
 	for _, file := range names {
 		base := strings.TrimSuffix(file, ".pub")
-		name, err := SanitizeName(base)
+		name, err := workspace.AccountName(base)
 		if err != nil {
 			s.log().Warn("ignoring a key file", "file", file, "err", err)
 			continue

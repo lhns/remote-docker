@@ -294,13 +294,16 @@ func parseID(s string) (string, error) {
 // timeo is DECISECONDS, so 600 is the kernel's own TCP default and a 30 here
 // means 3 seconds rather than 30. It is not a per-request service budget: the
 // deadline runs from transmit and includes time spent queued behind other
-// requests, and go-nfs answers one at a time per connection, so a short one
-// fails a whole queue at once instead of detecting a stall. Measured at
-// timeo=30: 224 WRITEs in flight timing out together at 9.07s, with the
+// requests, and a connection serves a bounded number at once (8, go-nfs's
+// DefaultMaxConcurrentRequests), so a client with more in flight than that
+// queues the rest and a short timeo fails the whole queue at once instead of
+// detecting a stall. Measured at timeo=30 against the serial server this
+// fork replaced: 224 WRITEs in flight timing out together at 9.07s, with the
 // transport never reconnecting.
 //
-// nconnect gives the mount eight TCP connections against that same serial
-// service: one connection is one request at a time.
+// nconnect gives the mount eight TCP connections rather than one, and that
+// bound is a connection's own, so it is eight times the requests in service
+// and eight queues rather than one.
 //
 // A CAVEAT covering both, and anything else transport-level: Linux keeps
 // one RPC transport per server address, and every share of a client mounts

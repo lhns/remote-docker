@@ -38,9 +38,11 @@
 #   An idle release does not fire under a live mount: the container's own
 #   traffic keeps the connection leased (section 4).
 #
-#   A blocked port costs a mount about 180 SECONDS, not the ~60 that
-#   timeo=30,retrans=2 suggests. Those govern RPCs after a mount; the mount
-#   call retries on its own clock (section 7).
+#   A blocked port costs a mount about 180 SECONDS, and timeo and retrans are
+#   not where that comes from: they govern RPCs after a mount, and the mount
+#   call retries on its own clock (section 7). Which is why section 7's 300s
+#   budget did not move when timeo went from 30 to 600 (deciseconds, so 3s to
+#   60s -- core/workspace.NFSVolumeOptions).
 #
 #   A container holding a file OPEN across a client restart still gets ESTALE
 #   on that descriptor. There is no path lookup left to retry, and that is

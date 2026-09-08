@@ -27,6 +27,14 @@ test/watchdir
 *.test.exe
 coverage.out
 
+# The probes, for the same reason and by the same rule: `go build` inside a
+# probe's own directory writes the binary there. A 3.4MB linux ELF reached main
+# that way (#121). Anchored and named, never a bare pattern.
+/test/probes/fsprobe/fsprobe
+/test/probes/watchprobe/watchprobe
+/test/probes/pokeprobe/pokeprobe
+/test/probes/udpecho/udpecho
+
 # local deployment state -- host keys, uidmap, enrolled public keys
 deploy/state/
 deploy/authorized_keys.d/

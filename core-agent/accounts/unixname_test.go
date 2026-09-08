@@ -23,7 +23,7 @@ func TestUnixName(t *testing.T) {
 		{"the ordinary case", "rd-", "alice", "rd-alice"},
 		{"no prefix configured", "", "alice", "alice"},
 
-		// SanitizeName already caps the account at maxNameLength, so the
+		// workspace.AccountName already caps the account at maxNameLength, so the
 		// prefix has to come out of that budget rather than be added to it.
 		{"a name at the limit loses its tail", "rd-", long, "rd-" + strings.Repeat("a", maxNameLength-3)},
 
