@@ -556,9 +556,24 @@ Two things about an old workspace kernel that are *not* the floor:
 
 - **`write=back` and `write=ephemeral` need `fuse-overlayfs`** in the image the
   account's daemon runs, and that is asked of the workspace rather than guessed
-  from a version. Mounted as root it has no documented kernel floor, and RHEL 7
-  ships it (`fuse-overlayfs` in RHEL 7 Extras, [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222)),
-  so this is about the image and not the kernel.
+  from a version: the agent runs the binary itself, as root, so nothing here
+  reads a kernel version. Upstream's man page says fuse-overlayfs "works with
+  Linux 4.18 or newer" flatly, while upstream's README scopes 4.18 to running
+  **from a user namespace**, which is what rootless podman does and what a
+  per-account dind does not. Neither document states a floor for a root mount,
+  so treat 4.18 as the number to expect and the workspace's answer as the one
+  that decides. RHEL 7 shipping the package
+  (`fuse-overlayfs-0.7.2-6.el7_8` in Extras, [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222))
+  is **not** evidence that the floor is imaginary: Red Hat backported the
+  kernel side into their 3.10 branch for rootless podman and
+  [said so](https://www.redhat.com/en/blog/rhel-78-and-final-update-container-tools).
+  A RHEL kernel version string says very little about what the kernel can do.
+  *(Checked 2026-09-08 against
+  [the README](https://github.com/containers/fuse-overlayfs/blob/main/README.md)
+  and [the man page](https://github.com/containers/fuse-overlayfs/blob/main/fuse-overlayfs.1.md);
+  4.18 is Linux commit `4ad769f3c346`, "fuse: Allow fully unprivileged mounts".
+  Nothing here has run a root mount on a pre-4.18 kernel without a backport,
+  which is what would settle it.)*
 - **Docker itself has not been built for el7 since 26.1.4** (*checked 2026-09-08
   against `https://download.docker.com/linux/centos/7/x86_64/stable/Packages/`*),
   and [the install docs](https://docs.docker.com/engine/install/centos/) list
@@ -842,11 +857,21 @@ on every `docker create`. Nothing errors, `docker ps` stays instant, and
 `docker run` takes minutes. The agent logs it and `remote-docker remote status` shows
 it, because the cost of this one is entirely in how quiet it is.
 
-fuse-overlayfs needs a **4.18 kernel or newer** with `CONFIG_FUSE_FS`
-(`modprobe fuse` is enough), `/dev/fuse` in the container, and the
-`fuse-overlayfs` binary **in the image the daemon runs**. Stock `docker:dind`
-does not ship it; this workspace image does, which is why per-account daemons
-default to the workspace's own image.
+This needs `CONFIG_FUSE_FS` (`modprobe fuse` is enough), `/dev/fuse` in the
+container, and the `fuse-overlayfs` binary **in the image the daemon runs**.
+Stock `docker:dind` does not ship it; this workspace image does, which is why
+per-account daemons default to the workspace's own image.
+
+It also needs a kernel **reporting 4.18 or newer**, and that is dockerd's rule
+rather than fuse-overlayfs's: moby checks the version and nothing else
+(`CheckKernelVersion(4, 18, 0)` in
+`daemon/graphdriver/fuse-overlayfs/fuseoverlayfs.go`), so a backported kernel
+that can run fuse-overlayfs perfectly well is still refused, and refused as the
+silent fall-through to vfs described above. RHEL 7 is exactly that case
+([moby#42970](https://github.com/moby/moby/issues/42970)). This is a different
+gate from the one a `write=back` share passes through, where the agent runs the
+binary directly and dockerd is not asked. *(Checked 2026-09-08 against moby
+master; re-read that file.)*
 
 It is not the default because where overlay2 works it is the kernel doing the
 work and is markedly faster. fuse-overlayfs is a userspace filesystem, so
@@ -1003,6 +1028,19 @@ Every file in a share is reported as owned by the workspace account (uid
 its own user can read and write the share without matching any number. A
 `chown` inside the container is accepted and does nothing, and a read-only
 bind (`ro`) is still read-only. ADR 0046 has the reasoning.
+
+**A named volume is not a share, and gets none of that.** A fresh named volume
+takes its mode and ownership from the directory already in the image; where the
+image has no such directory, the daemon creates the mountpoint root-owned 0755
+and the volume is empty, so a container running as anyone but root gets EACCES
+on its first write. This is Docker's own rule and happens identically without
+us: `test/volume-ownership.sh` runs the same case against a plain daemon and
+through a session and asserts they agree. The tell is that the path is a volume
+rather than a bind. The fix is in the Dockerfile, before `USER`:
+
+```dockerfile
+RUN mkdir -p /home/app/.local/share/app && chown -R app:app /home/app/.local
+```
 
 ### What not to put on the share
 

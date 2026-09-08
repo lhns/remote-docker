@@ -146,6 +146,9 @@ jobs:
   #                   on the RUNNER, since it has no container to carry them.
   #   old-workspace   the only suite that does not build both ends; it needs
   #                   network access to ghcr.io.
+  #   volume-ownership  the only suite whose oracle is plain Docker, which
+  #                   is what separates Docker's rule about a fresh
+  #                   volume's mountpoint from a rewrite of a named one.
   suite:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -183,6 +186,10 @@ jobs:
             name: this client against a published older workspace
             container: remote-docker-oldworkspace
             timeout: 30
+          - suite: volume-ownership
+            name: who owns a named volume's mountpoint
+            container: remote-docker-volown
+            timeout: 20
     steps:
       - uses: actions/checkout@v7
 
