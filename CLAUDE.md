@@ -63,6 +63,25 @@ dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          the wire format are all on the other side of Store.
                          docs/caching.md is what it is FOR.
 
+machine/go.mod           PROVISIONING A WORKSPACE ON THIS MACHINE, and its
+                         lifecycle (ADR 0026): a WSL distribution or a Hyper-V
+                         VM, created, located, held open, destroyed, and the
+                         rootfs it is built from. A module because a module is
+                         the only thing that can REFUSE a dependency (ADR 0021).
+                         Third parties are fine here -- go-containerregistry
+                         turns the workspace image into a rootfs -- and THIS
+                         REPOSITORY is what it refuses, which is the membership
+                         test:
+                           go list -deps ./... | grep 'lhns/remote-docker' | grep -v '/machine'
+                         must print nothing, and membership_test.go asserts the
+                         same thing over the source so the windows-tagged files
+                         are covered too. It does NOT shrink the client binary:
+                         client imports it either way. What the boundary buys is
+                         that the leaf stays a leaf.
+                         Its windows-tagged files are executed in ONE place, the
+                         `test (windows)` job of ci.yml, so `machine` must stay
+                         in that job's subset.
+
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
                          claim this whole split was for, and it is measured.
@@ -80,7 +99,6 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    machine/             provisioning a workspace on this machine (ADR 0026)
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
     session/cached.go    what each fill sent, across sessions, so a deletion
@@ -122,6 +140,11 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the volume lookup notify asks for
 
 image/                   the workspace container (Dockerfile only)
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
+                         Built ON WINDOWS: WiX loads on Linux and then says its
+                         behaviour is undefined, and means it. `docker.exe` is
+                         a Feature and a DuplicateFile, so the payload ships
+                         once
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
 charts/                  the Helm chart, for the same agent on Kubernetes
@@ -138,16 +161,16 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# SEVEN MODULES (ADR 0021), and `./...` stops at a module boundary,
+# EIGHT MODULES (ADR 0021), and `./...` stops at a module boundary,
 # so the loop is the only thing that covers the repository. Running it at the
 # root fails outright, which is the point: there is no module there to build.
-for m in ./core ./dircache ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && go build ./... && go test ./...); done
+for m in ./core ./dircache ./machine ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && go build ./... && go test ./...); done
 
-# lint, nine passes: one per module, plus the agent AND core-agent under
+# lint, ten passes: one per module, plus the agent AND core-agent under
 # Linux. Both carry Linux-only files -- session handling, netns, the unix
 # provisioner, the inotify poker -- which a lint on the development machine
 # does not see at all. CI does, and will fail on what you did not lint.
-for m in ./core ./dircache ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && golangci-lint run ./...); done
+for m in ./core ./dircache ./machine ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && golangci-lint run ./...); done
 for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
@@ -184,12 +207,22 @@ bash test/integration.sh
 # request, or workflow_dispatch once it is on main.
 bash test/bench.sh
 
+# the Windows MSI. ON WINDOWS, and it is the one thing here that cannot be
+# built anywhere else (ADR 0048). The version must be major.minor.build, which
+# is what an MSI compares; build.ps1 refuses anything else rather than
+# truncating it into an upgrade that never fires.
+dotnet tool install --global wix --version 5.0.2
+wix extension add -g WixToolset.UI.wixext/5.0.2
+installer/windows/build.ps1 -Version 0.6.0 -Arch x64 `
+  -Binary dist/windows_amd64/remote-docker.exe `
+  -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
+
 # the chart, in eight seconds and without a cluster
 helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
-`go.work` ties the seven together for editors and local commands. CI and the
+`go.work` ties the eight together for editors and local commands. CI and the
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
@@ -988,6 +1021,18 @@ leg is a suite in `integration.yml`; the Windows leg is the last step of
 `machine.yml`, diffed against the same oracle. The deviations that are
 deliberate are tabulated in README under "What differs from a bind mount".
 
+`test/msi.ps1` installs the Windows MSI on a runner: `remote-docker.exe` in
+Program Files, the install directory APPENDED to the system PATH and not
+prepended, `remote-docker remote --help` running from a shell whose PATH came
+from the registry rather than from this process, the `docker.exe` feature
+absent by default and working when `ADDLOCAL` asks for it, the refusal firing
+against a `docker.exe` in System32 with a message naming it, the override, and
+an uninstall that takes both names and the PATH entry with it. It is
+`msi.yml`, which runs on changes under `installer/windows/` rather than on
+every push -- a Windows runner per push answers the same question every time,
+which is the argument that keeps `bench.sh` behind a label. NOT on the release
+path: see the not-tested list below.
+
 ### NOT tested, and do not claim otherwise
 
 Keep this list honest, and name the assertion rather than the area: "the
@@ -1051,6 +1096,35 @@ its pure planning function was.
   it: no archive has been unpacked on a machine that did not build it, so the
   thing unproven is the artifact, not the workflow that makes it.
   *(Checked 2026-09-06 with `gh release view v0.6.0 --json assets`.)*
+  The Windows MSI is the exception and only in part: `msi.yml` installs one on
+  a runner, runs the binary out of a fresh shell's PATH and uninstalls it, but
+  the MSI it installs is built by that workflow from a stand-in version. **No
+  MSI from a real tag release has been installed by anybody**, and `msi.yml` is
+  triggered by changes under `installer/windows/`, so a tag publishes without
+  waiting for it. The release path itself is unrun: `release.yml`'s `installers`
+  job is behind `github.ref_type == 'tag'`, so the `dist/artifacts.json` lookup
+  that finds goreleaser's Windows binaries and the `gh release upload` that
+  attaches the MSIs have executed nowhere, CI included.
+- **The arm64 MSI is built and never installed.** `msi.yml` builds both
+  architectures, so `wix build -arch arm64` failing is not a release-day
+  surprise, and installs only the amd64 one: GitHub offers no Windows arm64
+  runner. *(Checked 2026-09-08 at
+  <https://docs.github.com/en/actions/reference/runners/github-hosted-runners>;
+  re-check there, since no command asks.)*
+- **The MSI is unsigned, and nothing verifies it.** The repository has no
+  code-signing certificate; `GITHUB_TOKEN` is the only secret any workflow uses
+  (re-check with `grep -rn 'secrets\.' .github/workflows/`). SmartScreen's
+  warning is therefore expected rather than a symptom, and the MSIs are not in
+  `checksums.txt` either, because goreleaser writes that before they exist.
+- **The `docker.exe` refusal reads four directories, not PATH.** Windows
+  Installer's AppSearch cannot enumerate PATH (ADR 0048), so a `docker.exe`
+  anywhere but the two system directories or Docker Desktop's two locations is
+  not found and is shadowed. `test/msi.ps1` section 7 asserts the refusal
+  against a System32 stub, which is a real PATH directory and the only one it
+  can assert about. In a 64-bit MSI, `[SystemFolder]` is **SysWOW64** and
+  `[System64Folder]` is System32, which is the reverse of what the names say:
+  searching only the first builds, installs, and misses the directory people
+  mean. CI caught it because the runner had a `docker.exe` in each.
 - **A signal arriving anywhere but during an attached `docker run`.** 6e sends
   SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
   a `build` or a `pull`, or before the container starts; nothing tests SIGTERM

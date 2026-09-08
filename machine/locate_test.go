@@ -3,11 +3,9 @@ package machine
 // Locating and holding a machine, against a backend that records what was asked
 // of it.
 //
-// This is the part that cost five CI rounds to get right, and every one of the
-// mistakes was an ordering or a lifetime rather than a platform detail -- which
-// is to say all of them were reachable from here. The measurements behind the
-// assertions are in ADR 0026; what is pinned here is that the code still does
-// what they concluded.
+// Every mistake this pins was an ordering or a lifetime rather than a platform
+// detail, which is to say all of them were reachable from here. The
+// measurements behind the assertions are in ADR 0026.
 
 import (
 	"context"
@@ -32,7 +30,8 @@ func listening(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// nothingListening returns a port with nothing behind it.
+// nothingListening returns a port with nothing behind it: bound to learn a free
+// number, then closed.
 func nothingListening(t *testing.T) int {
 	t.Helper()
 
@@ -174,8 +173,7 @@ func TestLocateReportsAMachineThatWillNotStart(t *testing.T) {
 //
 // The bug this pins: Locate started the machine, returned its address and let
 // the caller dial immediately. A machine that was stopped is UP before its
-// agent is -- the agent generates a host key and waits for dockerd before it
-// listens -- so the first command after a machine had been left alone failed
+// agent is, so the first command after a machine had been left alone failed
 // with a refused connection and the second worked, which is how a deterministic
 // failure comes to look like a flaky one.
 func TestLocateWaitsForTheAgent(t *testing.T) {
@@ -185,9 +183,9 @@ func TestLocateWaitsForTheAgent(t *testing.T) {
 
 	// Shortened, or this test would take the three minutes a real machine is
 	// allowed. The duration itself is argued for where it is declared.
-	restore := AgentStartTimeout
-	AgentStartTimeout = 2 * time.Second
-	t.Cleanup(func() { AgentStartTimeout = restore })
+	restore := agentStartTimeout
+	agentStartTimeout = 2 * time.Second
+	t.Cleanup(func() { agentStartTimeout = restore })
 
 	_, err := Locate(context.Background(), "fake", "dev", port)
 	if err == nil {
@@ -207,9 +205,9 @@ func TestLocateReturnsAsSoonAsTheAgentAnswers(t *testing.T) {
 	fake := &fakeBackend{name: "fake", address: "127.0.0.1"}
 	register(t, fake)
 
-	restore := AgentStartTimeout
-	AgentStartTimeout = time.Minute
-	t.Cleanup(func() { AgentStartTimeout = restore })
+	restore := agentStartTimeout
+	agentStartTimeout = time.Minute
+	t.Cleanup(func() { agentStartTimeout = restore })
 
 	start := time.Now()
 	if _, err := Locate(context.Background(), "fake", "dev", listening(t)); err != nil {

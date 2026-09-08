@@ -1,0 +1,127 @@
+name: msi
+
+# The Windows installer, built and then actually installed.
+#
+# Not on every push, and deliberately: what this proves is a function of
+# installer/windows/** and of this file, not of the Go code. The binary inside
+# the MSI is a payload; renaming it, putting it on PATH and refusing to shadow
+# somebody else's docker.exe are decided entirely by the .wxs. So the paths
+# filter below is the trigger, on the same reasoning that keeps test/bench.sh
+# behind a label: a Windows runner on every push would be paid for constantly
+# and would answer the same question every time.
+#
+# What that costs: a change to the client that broke `remote --help` would not
+# be caught here. It is caught by ci.yml on every push. The release workflow
+# also builds and uploads the MSI without waiting for this, so a tag can publish
+# an installer this suite has not seen; ADR 0048 records both gaps.
+on:
+  pull_request:
+    paths:
+      - "installer/windows/**"
+      - "test/msi.ps1"
+      - ".github/workflows/msi.yml"
+      - ".github/actions/setup-wix/**"
+  push:
+    branches: [main]
+    paths:
+      - "installer/windows/**"
+      - "test/msi.ps1"
+      - ".github/workflows/msi.yml"
+      - ".github/actions/setup-wix/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msi-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  # The payload is cross-compiled here rather than on the Windows runner: the
+  # module cache is warm on ubuntu and the client's dependency graph is large.
+  # This is also the shape release.yml has, for the same reason.
+  binaries:
+    name: cross-compile the payload
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-go
+
+      # Not goreleaser: this needs two Windows binaries and nothing else it
+      # does.
+      - name: build the client for windows
+        run: |
+          set -eux
+          cd client
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=windows GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "../windows/${arch}/remote-docker.exe" ./cmd/remote-docker
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-binaries
+          path: windows/**/remote-docker.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  installer:
+    name: build it and install it
+    needs: [binaries]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-binaries
+          path: windows
+      - uses: ./.github/actions/setup-wix
+
+      # Both architectures, because `wix build -arch arm64` failing is a
+      # release-day failure otherwise. Only the amd64 one is installed below:
+      # GitHub has no Windows arm64 runner.
+      #
+      # The version is a stand-in and has to be three numbers, which is the
+      # constraint build.ps1 enforces.
+      - name: build the msis
+        shell: pwsh
+        run: |
+          foreach ($pair in @(@('amd64', 'x64'), @('arm64', 'arm64'))) {
+            ./installer/windows/build.ps1 -Version 0.0.1 -Arch $pair[1] `
+              -Binary "windows/$($pair[0])/remote-docker.exe" `
+              -Out "dist/msi/remote-docker_0.0.1_windows_$($pair[0]).msi"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: a snapshot version is refused rather than truncated
+        shell: pwsh
+        run: |
+          ./installer/windows/build.ps1 -Version 0.0.0-dev.9370b24 -Arch x64 `
+            -Binary windows/amd64/remote-docker.exe -Out dist/msi/should-not-exist.msi
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'build.ps1 accepted a snapshot version; it must refuse one'
+            exit 1
+          }
+          Write-Host 'refused, as it must be'
+          # GitHub's pwsh wrapper exits with $LASTEXITCODE, which is the 1 we
+          # just asked for and would fail the step.
+          exit 0
+
+      - name: install, uninstall, and the docker.exe feature
+        shell: pwsh
+        run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi
+
+      # The suite prints the log of whichever msiexec run failed, but a job
+      # that died some other way leaves them behind and they are the only
+      # record of what the installer did.
+      - name: the msiexec logs
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:TEMP\msi-logs") {
+            Get-ChildItem "$env:TEMP\msi-logs" | ForEach-Object {
+              Write-Host "== $($_.Name)"; Get-Content $_.FullName
+            }
+          }

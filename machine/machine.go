@@ -3,14 +3,13 @@
 //
 // The workspace itself is unchanged: once the machine exists, it is reached
 // over SSH and serves files back over NFS exactly as a workspace on another
-// continent does. There is no second data path, and that is the point -- what
-// this package adds is a lifecycle, not a second product.
+// continent does. What this package adds is a lifecycle, not a second data
+// path (ADR 0026).
 //
-// The decisions here are pure and the platform calls are behind Backend, which
-// is the shape agent/internal/elevate and agent/internal/daemons already use.
-// It matters more here than it did there: nobody working on this project has
-// WSL or Hyper-V, so anything that is not a pure function is code that ships
-// without having run.
+// Nobody working on this project has WSL or Hyper-V, so every decision here is
+// a pure function of a string and the platform calls are behind Backend. The
+// _windows.go files are all that is left outside that: wsl_windows.go runs in
+// CI on a Windows runner, and hyperv_windows.go runs nowhere at all.
 package machine
 
 import (
@@ -44,20 +43,17 @@ type Spec struct {
 	// Backend selects the implementation. See Backends.
 	Backend string
 
-	// Image is the workspace image this machine runs, by full reference. It is
-	// the artifact the whole design rests on: the same one the container
-	// deployment uses and CI builds on every push.
+	// Image is the workspace image this machine runs, by full reference: the
+	// same artifact the container deployment uses and CI builds on every push,
+	// which is what makes "nothing is installed at provisioning time" true.
 	Image string
 
-	// Rootfs is where the workspace image's filesystem comes from: a local
-	// path or a URL.
+	// Rootfs is where that image's filesystem comes from: a local path or a
+	// URL.
 	//
-	// A container image IS a rootfs, so this is the same artifact the container
-	// deployment runs and CI builds on every push -- which is what makes
-	// "nothing is installed at provisioning time" true rather than aspirational.
-	// It is not derived from Image here: getting a rootfs out of a reference
-	// needs either a docker daemon, which is the thing being installed, or a
-	// registry client, and the caller is where that decision belongs.
+	// Not derived from Image here. Getting a rootfs out of a reference needs
+	// either a docker daemon, which is the thing being installed, or a registry
+	// client, and the caller is where that decision belongs.
 	Rootfs string
 
 	// CPUs and MemoryMB are what the machine is given. Zero means the
@@ -77,7 +73,7 @@ type Spec struct {
 	// Part of the Spec because one backend needs it at creation: a Hyper-V
 	// machine has no door but the SSH this key opens, so the key goes into the
 	// Ignition document or it never gets in at all. The WSL backend writes it
-	// afterwards through Enrol, which is why this is not the only path.
+	// afterwards through Enrol.
 	//
 	// Deliberately NOT part of Generation. A rotated key would otherwise mean a
 	// rebuild deciding itself, and a rebuild discards every image in the
@@ -88,14 +84,12 @@ type Spec struct {
 // Generation identifies a Spec, so a machine built from older settings can be
 // recognised without inspecting it.
 //
-// The same trick daemons.reconcile uses for per-account daemons: the settings
-// are hashed, the hash is stored with the thing, and a mismatch is a fact
-// rather than a guess. It is what turns "the install is somehow broken" into a
-// state with a name.
+// The same trick agent/internal/daemons.reconcile uses for per-account
+// daemons: the settings are hashed, the hash is stored with the thing, and a
+// mismatch is a fact rather than a guess.
 //
-// Truncated to 16 hex characters. This identifies a local machine against its
-// own configuration; it is not a security boundary and the full digest would
-// only make the error messages harder to read.
+// Truncated to 16 hex characters. It identifies a local machine against its own
+// configuration and is not a security boundary.
 func (s Spec) Generation() string {
 	// Written out field by field rather than through a struct encoder, so that
 	// adding a field to Spec and forgetting it here is a compile error at the
@@ -211,34 +205,31 @@ type Backend interface {
 
 	// Enrol makes a public key able to log in as an account.
 	//
-	// Separate from Create so that rotating a key costs nothing. It is not part
-	// of the generation for the same reason: a new key would otherwise mean a
-	// rebuild, and a rebuild discards every image in the machine -- a heavy
-	// price for a thing people are supposed to do often.
+	// Separate from Create so that rotating a key costs nothing. Spec.PublicKey
+	// says why it is not part of the generation; hyperVEnrolment is the backend
+	// that can only report a mismatch rather than write a key.
 	Enrol(ctx context.Context, name, account, publicKey string) error
 	Start(ctx context.Context, name string) error
 
 	// Hold keeps the machine from going away, until the returned Closer is
 	// closed.
 	//
-	// A machine with nobody in it shuts down, and what counts as somebody is
-	// not what you would expect: WSL counts its own sessions, so a TCP
-	// connection from the host does not, and neither does a command that runs
-	// and exits. Poking one every ten seconds was measured failing exactly that
-	// way -- the machine started, ran for about thirty seconds, stopped, and
-	// started again on the next poke, so its dockerd never got far enough to be
-	// ready and its agent never opened a listener.
+	// A machine with nobody in it shuts down, and WSL counts only its own
+	// sessions as somebody: neither an open TCP connection from the host nor a
+	// command that runs and exits is one. Poking every ten seconds was measured
+	// (ADR 0026) starting a machine that stopped thirty seconds later, so its
+	// dockerd never became ready and its agent never opened a listener.
 	//
-	// So the hold is one session that stays open, and it is the caller's job to
+	// So the hold is one session that STAYS OPEN, and it is the caller's job to
 	// keep it for as long as the machine is needed.
 	Hold(ctx context.Context, name string) (io.Closer, error)
 
 	// Address is where this machine can be reached from here.
 	//
-	// Asked rather than assumed, and asked every time. A local machine is on a
-	// virtual network whose address it is given at boot, so the answer changes
-	// when it restarts and a stored one goes stale silently -- the connection
-	// is refused, or worse, reaches whatever has the address now.
+	// Asked every time, never stored. A local machine is on a virtual network
+	// whose address it is given at boot, so a stored one is wrong from the
+	// moment the machine restarts: the connection is refused, or worse, reaches
+	// whatever has the address now (ADR 0026).
 	Address(ctx context.Context, name string) (string, error)
 
 	Stop(ctx context.Context, name string) error
@@ -294,10 +285,9 @@ func firstIPv4(fields []string) string {
 
 // closerFunc makes a func into an io.Closer.
 //
-// Here rather than beside the backend that first needed it, because a test is
-// a platform too: a fake backend has to return a hold, and a helper compiled
-// only on Windows makes the test compile only on Windows -- which is how it
-// would go unrun on the machine it was written on and fail in CI.
+// Here rather than in a _windows.go file beside the backend that needed it
+// first: locate_test.go's fake backend returns a hold too, and a helper
+// compiled only on Windows makes that test compile only on Windows.
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
@@ -314,12 +304,11 @@ func Hold(ctx context.Context, backendName, name string) (io.Closer, error) {
 
 // Locate starts a machine if it is stopped and returns where to reach it.
 //
-// Both halves are why this exists, and neither is optional. A machine that
-// nobody is using goes away -- WSL shuts an idle distribution down, and a TCP
-// connection from the host is not use it counts -- so a workspace on a machine
-// cannot be dialled the way a workspace on another host is: the host is always
-// there and the machine is not. Starting is also what makes the address
-// answerable, since a stopped machine has none.
+// Both halves are why this exists, and neither is optional. A machine nobody
+// is using goes away, so a workspace on one cannot be dialled the way a
+// workspace on another host is: that host is always there and the machine is
+// not. Starting is also what makes the address answerable, since a stopped
+// machine has none.
 func Locate(ctx context.Context, backendName, name string, port int) (string, error) {
 	backend, err := Find(backendName)
 	if err != nil {
@@ -338,16 +327,11 @@ func Locate(ctx context.Context, backendName, name string, port int) (string, er
 		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
 	}
 
-	// And then waited for, because "located" has to mean "dialable". A machine
-	// that was stopped is up before its agent is: the agent generates a host
-	// key and waits for dockerd before it opens a listener. Returning the
-	// address at the moment the machine boots hands the caller a connection
-	// that is refused, and a second attempt a minute later works -- which is
-	// how a deterministic failure comes to look like a flaky one.
-	//
-	// It lives here rather than in each caller because there are three, and the
-	// one that forgot was the session: leave a machine-backed workspace alone
-	// for a few minutes and its first command failed.
+	// "Located" has to mean "dialable". A machine that was stopped is up before
+	// its agent is, since the agent generates a host key and waits for dockerd
+	// before it listens, so returning the address at boot hands the caller a
+	// refused connection that works on the next attempt. Here rather than in
+	// each of the three callers because the one that forgot was the session.
 	if err := waitForListener(ctx, addr, port); err != nil {
 		return "", fmt.Errorf("the %s machine %q is running but %w", backendName, name, err)
 	}
@@ -360,7 +344,7 @@ func Locate(ctx context.Context, backendName, name string, port int) (string, er
 // anything further is the session's job to report properly.
 func waitForListener(ctx context.Context, host string, port int) error {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	deadline := time.Now().Add(AgentStartTimeout)
+	deadline := time.Now().Add(agentStartTimeout)
 
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -377,14 +361,12 @@ func waitForListener(ctx context.Context, host string, port int) error {
 	return fmt.Errorf("its agent is not answering on %s", addr)
 }
 
-// AgentStartTimeout is how long the agent has to open its listener.
+// agentStartTimeout is how long the agent has to open its listener.
 //
-// Longer than the agent's own wait for dockerd, deliberately. It gives the
-// daemon ninety seconds and then serves anyway, on the argument that a
-// workspace somebody can log into beats one that took the evidence with it --
-// so a client that waits ninety seconds gives up at the exact moment the agent
-// would have started answering, and reports a machine that was about to work.
-var AgentStartTimeout = 3 * time.Minute
+// Longer than the agent's own ninety-second wait for dockerd, deliberately:
+// the agent serves anyway once that expires, so a client waiting the same
+// ninety seconds would give up at the exact moment the agent starts answering.
+var agentStartTimeout = 3 * time.Minute
 
 // Backends returns the backends compiled into this build, by name.
 //

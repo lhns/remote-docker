@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/client/internal/machine"
+	"github.com/lhns/remote-docker/machine"
 )
 
 func TestRemovingAMachineWithNoBackendRefuses(t *testing.T) {

@@ -5,11 +5,10 @@ package machine
 // The Hyper-V backend: the part that runs powershell.exe.
 //
 // Everything it decides lives in hyperv.go and is tested on any platform. What
-// is here is command assembly and process running, kept as thin as it can be
-// made -- more strictly than the WSL backend, because that one at least runs in
-// CI. This does not run anywhere: GitHub's runners do not offer Hyper-V and
-// nobody working on this has it, so `docs/testing-machines.md` is the whole of
-// its verification.
+// is here is process running, kept thinner than the WSL backend's because that
+// one at least runs in CI. This runs nowhere: GitHub's runners do not offer
+// Hyper-V and nobody working on this has it, so `docs/testing-machines.md` is
+// the whole of its verification.
 
 import (
 	"context"
@@ -47,12 +46,11 @@ func (hyperVBackend) ps(ctx context.Context, script string) (string, error) {
 
 // Available reports why this backend cannot be used, or nil.
 //
-// Two questions, and they have different answers. Hyper-V may not be installed,
-// which is a Windows edition and a feature the user has to enable and reboot
-// for; or it may be installed and this program not elevated, which is where ADR
-// 0026 records that the project's "nothing needs to be installed" premise stops
-// being true. Reported rather than elevated silently: a tool that asks for
-// administrator on its own is a tool people stop reading.
+// Two questions with different fixes: Hyper-V may not be installed, which needs
+// a Windows edition that has it and a reboot; or it may be installed and this
+// program not elevated. Reported rather than elevated silently, which is where
+// ADR 0026 records that the project's "nothing needs to be installed" premise
+// stops being true.
 func (b hyperVBackend) Available(ctx context.Context) error {
 	if _, err := exec.LookPath("powershell.exe"); err != nil {
 		return errors.New("PowerShell is not available, so Hyper-V cannot be managed from here")
@@ -76,11 +74,9 @@ func (b hyperVBackend) Available(ctx context.Context) error {
 	return nil
 }
 
-// look reads a machine's state and its recorded notes. See psGetVM, which asks
-// for both in one call.
-//
-// Absent with empty notes is a machine that is not there: Get-VM with
-// -ErrorAction SilentlyContinue says so by printing nothing.
+// look reads a machine's state and its recorded notes, in one call (psGetVM) so
+// the two cannot disagree. A machine that is not there prints nothing, because
+// psGetVM asks with -ErrorAction SilentlyContinue.
 func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNotes, error) {
 	out, err := b.ps(ctx, psGetVM(machineName(name)))
 	if err != nil {
@@ -95,19 +91,13 @@ func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNote
 }
 
 func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, error) {
-	state, notes, err := b.look(ctx, name)
-	if err != nil || state == Absent {
-		return Observed{State: Absent}, nil
-	}
-	return Observed{State: state, Generation: notes.Generation}, nil
+	return observeVM(b.look(ctx, name))
 }
 
 // Create builds the machine from a Flatcar image and one Ignition document.
 //
-// The image is a file the user downloaded, named by --image, exactly as the WSL
-// backend takes a rootfs. Nothing is fetched here: an installer that downloads
-// is an installer that can be halfway through, which is the state this whole
-// design exists to not have.
+// The image is a file the user downloaded, named by --rootfs, exactly as the
+// WSL backend takes a rootfs. Nothing is fetched here.
 func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	if spec.Rootfs == "" {
 		return errors.New("no image to build from: a Hyper-V machine is created from a Flatcar disk image\n" +
@@ -122,9 +112,9 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("preparing %s: %w", dir, err)
 	}
 
-	// Copied, not used in place. The machine writes to its disk, and a machine
-	// destroying the file the user downloaded -- which is also the file the
-	// next machine is built from -- is a surprise worth the disk space.
+	// Copied, not used in place. The machine writes to its disk, and destroying
+	// the file the user downloaded, which is also the file the next machine is
+	// built from, is a surprise worth the disk space.
 	vhd := filepath.Join(dir, "disk.vhdx")
 	if err := copyFile(spec.Rootfs, vhd); err != nil {
 		return fmt.Errorf("copying the disk image: %w", err)
@@ -148,8 +138,10 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("creating the machine: %w", err)
 	}
 
-	// Recorded after creation so a machine that failed halfway is not marked as
-	// built with a key it never received.
+	// The single point at which a machine becomes "built": recorded after
+	// creation, so one that failed halfway is not marked as built with a key it
+	// never received, nor as built from settings it only half matches. See
+	// hyperVBuilding for what it carries until then.
 	notes := hyperVNotes{Generation: spec.Generation(), Key: keyFingerprint(spec.PublicKey)}
 	if _, err := b.ps(ctx, psSetNotes(machineName(spec.Name), notes)); err != nil {
 		return err
@@ -157,11 +149,8 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	return b.Start(ctx, spec.Name)
 }
 
-// Enrol reports whether this key already reaches the machine.
-//
-// It cannot write one. A Hyper-V machine takes its key at creation, because
-// afterwards the only way in is the SSH that key is for -- PowerShell Direct is
-// Windows-guest only. See hyperVEnrolment.
+// Enrol reports whether this key already reaches the machine. It cannot write
+// one: see hyperVEnrolment.
 func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) error {
 	_, notes, err := b.look(ctx, name)
 	if err != nil {
@@ -175,10 +164,8 @@ func (b hyperVBackend) Start(ctx context.Context, name string) error {
 	return err
 }
 
-// Hold is nothing, and that is the whole of it.
-//
-// A Hyper-V machine runs until it is stopped. Unlike a WSL distribution it has
-// no idle timeout, so there is nothing to hold open and nothing to release.
+// Hold is nothing. A Hyper-V machine runs until it is stopped: unlike a WSL
+// distribution it has no idle timeout, so there is nothing to hold open.
 func (hyperVBackend) Hold(context.Context, string) (io.Closer, error) {
 	return closerFunc(func() error { return nil }), nil
 }
@@ -191,10 +178,9 @@ func (b hyperVBackend) Address(ctx context.Context, name string) (string, error)
 	return parseVMAddress(out), nil
 }
 
-// Stop shuts the machine down and waits for it.
-//
-// Stop-VM without -TurnOff, so the guest flushes its docker state. -Force means
-// "do not ask about signed-in users", not "pull the plug".
+// Stop shuts the machine down and waits for it. Stop-VM without -TurnOff, so
+// the guest flushes its docker state; -Force means "do not ask about signed-in
+// users", not "pull the plug".
 func (b hyperVBackend) Stop(ctx context.Context, name string) error {
 	_, err := b.ps(ctx, fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(machineName(name))))
 	return err

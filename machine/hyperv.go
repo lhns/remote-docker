@@ -2,17 +2,16 @@ package machine
 
 // The Hyper-V backend's decisions, separated from running anything.
 //
-// The same split as the WSL backend and for a stronger reason: nobody working
-// on this project has WSL, and NOBODY ANYWHERE can run this one in CI. GitHub's
-// runners do not offer Hyper-V, so `docs/testing-machines.md` is its whole
-// verification and every line that can be a pure function of a string is one.
+// The same split as the WSL backend and for a stronger reason: nobody anywhere
+// can run this one. GitHub's runners do not offer Hyper-V, so
+// `docs/testing-machines.md` is its whole verification and every line that can
+// be a pure function of a string is one.
 //
 // What runs here is Flatcar Container Linux with the workspace image as a
 // privileged container, which is the compose deployment unchanged (ADR 0026).
-// Flatcar is chosen for the property the whole design rests on: it has no
-// package manager, /usr is immutable, and its entire configuration is one
-// declarative Ignition file applied at first boot. There is no `apt install`
-// to be halfway through when the power goes.
+// Flatcar is chosen for the property the whole design rests on: no package
+// manager, an immutable /usr, and one declarative Ignition file applied at
+// first boot, so there is no `apt install` to be halfway through.
 // (Checked 2026-08-11: `curl -sI https://stable.release.flatcar-linux.net/\
 // amd64-usr/current/flatcar_production_hyperv_image.vhd.bz2` and
 // https://www.flatcar.org/docs/latest/installing/vms/hyper-v/. Fedora CoreOS is
@@ -35,14 +34,31 @@ import (
 // same answer the WSL backend arrived at by measurement.
 const hyperVSwitch = "Default Switch"
 
+// hyperVBuilding is the generation a machine carries between New-VM and the
+// notes psSetNotes writes once it is built.
+//
+// psNewVM used to write the Spec's own generation, so a create that died before
+// psSetNotes left a machine that already matched: Plan said Nothing, nothing
+// offered to rebuild it, and its notes carried no key, which hyperVEnrolment
+// reads as "assume match" -- a machine reporting healthy that nothing can log
+// into.
+//
+// Writing no generation at all does not fix that. An unreadable generation is
+// read as a MATCH rather than a mismatch (see Observed.Generation), which is
+// deliberate and must stay: recreating somebody's machine because a label could
+// not be read would destroy their work to satisfy our bookkeeping. So the
+// unfinished state is written down instead, as a generation no Spec can
+// produce -- Spec.Generation is 16 hex characters -- and Plan reads it as
+// Recreate, which `machine create` reports and `machine rebuild` acts on.
+const hyperVBuilding = "building"
+
 // hyperVNotes is what a machine records about itself, in the one place Hyper-V
 // offers for it.
 //
-// The VM's Notes field, because there is nowhere else. A Linux guest cannot be
-// read from the host the way `wsl -d x -- cat` reads a distribution: Hyper-V's
-// PowerShell Direct is Windows-guest only, so a file inside this machine is
-// unreachable until the machine is up and answering, which is exactly when the
-// question is already moot.
+// The VM's Notes field, because there is nowhere else. Hyper-V's PowerShell
+// Direct is Windows-guest only, so a file inside this Linux guest cannot be
+// read the way `wsl -d x -- cat` reads a distribution: it is unreachable until
+// the machine is up and answering, which is when the question is already moot.
 type hyperVNotes struct {
 	Generation string `json:"generation"`
 
@@ -53,12 +69,10 @@ type hyperVNotes struct {
 
 // encodeNotes and decodeNotes carry hyperVNotes through the Notes field.
 //
-// JSON on one line, because Notes is free text a person may also have typed in,
+// JSON on one line, because Notes is free text a person may also have typed in
 // and something obviously machine-written is kinder than key=value that reads
-// like prose. A Notes field that cannot be parsed is treated as a machine with
-// no generation, which Plan reads as a match -- deliberately, since recreating
-// somebody's machine over an unreadable string would take their containers with
-// it.
+// like prose. Notes that cannot be parsed become a machine with no generation,
+// which Plan reads as a match. See Observed.Generation.
 func encodeNotes(n hyperVNotes) string {
 	raw, err := json.Marshal(n)
 	if err != nil {
@@ -88,16 +102,11 @@ func keyFingerprint(publicKey string) string {
 
 // hyperVEnrolment says whether a key already reaches this machine.
 //
-// A Hyper-V machine takes its key at creation and cannot be given another one
-// later. There is no way in: the guest is Linux, so PowerShell Direct does not
-// apply, and the only door is the SSH the key is for. This is a real asymmetry
-// with the WSL backend, where enrolling is a file write, and it is reported
-// rather than papered over -- silently accepting a key that will not work is
-// the failure that succeeds.
-//
-// It is deliberately NOT part of the generation. A changed key would then mean
-// a rebuild happening on its own, and a rebuild discards every image in the
-// machine (ADR 0026).
+// A Hyper-V machine takes its key at creation and cannot be given another one:
+// PowerShell Direct is Windows-guest only, so the only door is the SSH the key
+// is for. That is a real asymmetry with the WSL backend, where enrolling is a
+// file write, and it is reported rather than papered over. Silently accepting a
+// key that cannot work is the failure that succeeds.
 func hyperVEnrolment(stored hyperVNotes, publicKey string) error {
 	want := keyFingerprint(publicKey)
 	if stored.Key == "" || stored.Key == want {
@@ -114,9 +123,9 @@ func hyperVEnrolment(stored hyperVNotes, publicKey string) error {
 // parseVMState reads the State column of `Get-VM`.
 //
 // Hyper-V has more states than this design has: Saved, Paused, Starting and
-// several others. Anything that is not plainly Running is reported Stopped,
-// because the only question asked is whether to start it, and Start on a saved
-// or paused machine resumes it correctly.
+// several others. Anything not plainly Running is reported Stopped, because the
+// only question asked is whether to start it and Start-VM resumes a saved or
+// paused machine correctly.
 func parseVMState(raw string) State {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
@@ -128,13 +137,30 @@ func parseVMState(raw string) State {
 	}
 }
 
+// observeVM turns what look read into what Plan is asked about.
+//
+// A PowerShell failure is returned rather than folded into Absent. It says
+// nothing about whether the machine is there, and reporting it as absent made
+// `machine status` print `absent` for a machine that is running and sent
+// `machine create` at a name already taken, where the error names creation
+// rather than the fault that actually happened. Absence needs no error of its
+// own: psGetVM asks with -ErrorAction SilentlyContinue and prints nothing when
+// the VM is not there.
+func observeVM(state State, notes hyperVNotes, err error) (Observed, error) {
+	if err != nil {
+		return Observed{}, err
+	}
+	if state == Absent {
+		return Observed{State: Absent}, nil
+	}
+	return Observed{State: state, Generation: notes.Generation}, nil
+}
+
 // parseVMAddress picks the address to reach a machine at.
 //
-// Get-VMNetworkAdapter reports every address the guest told Hyper-V about,
-// through the integration services: IPv4, IPv6, and often a link-local pair
-// that is useless from here. The first IPv4 that is not link-local is the
-// answer; link-local (169.254/16) means DHCP has not finished, which is a
-// machine that is up but not ready rather than one to connect to.
+// Get-VMNetworkAdapter reports every address the guest told Hyper-V about
+// through the integration services: IPv4, IPv6, and often a link-local pair.
+// firstIPv4 picks, and says why link-local is skipped.
 func parseVMAddress(raw string) string {
 	return firstIPv4(strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
@@ -143,16 +169,13 @@ func parseVMAddress(raw string) string {
 
 // ignition is the machine's entire configuration, applied at first boot.
 //
-// One declarative document and no second step: this is what makes a Hyper-V
-// machine defined by its Spec rather than by whatever happened to it since. It
-// starts the workspace image as a privileged container with host networking,
-// which is the compose deployment (ADR 0026) with the compose file spelled
-// differently.
+// One declarative document and no second step, which is what makes a Hyper-V
+// machine defined by its Spec rather than by whatever happened to it since.
 //
-// Host networking rather than a published port because the agent also binds a
-// port per enrolled account for its reverse tunnels (the uid->port formula),
-// and publishing a range that the formula decides would put the formula in two
-// places -- the mistake ADR 0021 exists to record.
+// Host networking rather than a published port: the agent also binds a port per
+// enrolled account for its reverse tunnels, from the uid->port formula, and
+// publishing a range that formula decides would put the formula in two places
+// (ADR 0021).
 func ignition(spec Spec, publicKey string) (string, error) {
 	unit := hyperVUnit(spec)
 
@@ -200,10 +223,11 @@ func ignition(spec Spec, publicKey string) (string, error) {
 func hyperVUnit(spec Spec) string {
 	image := spec.Image
 	if image == "" {
-		// Only when a Spec reached here without one, which createMachine does
-		// not allow. The unversioned tag is the honest fallback: nothing here
-		// knows which client asked.
-		image = DefaultImageRepo + ":latest"
+		// Only when a Spec reached here without one, which
+		// client/cmd/remote-docker's createMachine does not allow. The
+		// unversioned tag is the honest fallback: nothing here knows which
+		// client asked.
+		image = defaultImageRepo + ":latest"
 	}
 
 	return strings.Join([]string{
@@ -229,9 +253,9 @@ func hyperVUnit(spec Spec) string {
 
 // urlEncode percent-encodes for a data: URL.
 //
-// Written out rather than url.QueryEscape, which encodes a space as `+` -- and
-// a `+` in an SSH key is a different key. Ignition reads these as data URLs,
-// not as query strings.
+// Written out rather than url.QueryEscape, which encodes a space as `+`, and a
+// `+` in an SSH key is a different key. Ignition reads these as data URLs, not
+// as query strings.
 func urlEncode(s string) string {
 	const safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
 
@@ -248,10 +272,10 @@ func urlEncode(s string) string {
 
 // The PowerShell each operation runs.
 //
-// Built as strings here so the commands themselves are testable on a machine
-// with no Hyper-V, which is every machine this is developed on. Each takes the
-// VM name already prefixed: a bare name reaching Get-VM is a machine somebody
-// else made.
+// Built as strings here so the commands are testable on a machine with no
+// Hyper-V, which is every machine this is developed on. Each takes the VM name
+// already prefixed: a bare name reaching Get-VM is a machine somebody else
+// made.
 
 // psGetVM asks for a machine's state and its notes in one call.
 //
@@ -281,8 +305,10 @@ func psNewVM(vm, vhd, dir string, spec Spec) string {
 		fmt.Sprintf("New-VM -Name %s -Generation 2 -VHDPath %s -Path %s -SwitchName %s",
 			psQuote(vm), psQuote(vhd), psQuote(dir), psQuote(hyperVSwitch)),
 		fmt.Sprintf("Set-VMFirmware -VMName %s -EnableSecureBoot Off", psQuote(vm)),
+		// Marked as unfinished, not as built: psSetNotes is the single point
+		// at which a machine becomes "built". See hyperVBuilding.
 		fmt.Sprintf("Set-VM -Name %s -Notes %s -AutomaticStartAction Nothing -CheckpointType Disabled",
-			psQuote(vm), psQuote(encodeNotes(hyperVNotes{Generation: spec.Generation()}))),
+			psQuote(vm), psQuote(encodeNotes(hyperVNotes{Generation: hyperVBuilding}))),
 	}
 	// Zero means the platform's own default, which is a better number than one
 	// invented here.
@@ -316,9 +342,9 @@ func psRemoveVM(vm, dir string) string {
 
 // psQuote wraps a string as a PowerShell single-quoted literal.
 //
-// Doubling is how a single quote is escaped there, and it is the only escape
-// inside such a literal -- which is the point of using one: nothing in it is
-// expanded, so a `$` in a machine's notes stays a `$`.
+// Doubling is how a single quote is escaped there and the only escape such a
+// literal has, which is the point of using one: nothing in it is expanded, so a
+// `$` in a machine's notes stays a `$`.
 func psQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }

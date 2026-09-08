@@ -277,6 +277,15 @@ StatefulSet adopts them.
 
 ### Changed
 
+- **Every release now carries a Windows MSI**, one per architecture, beside the
+  zips: `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It
+  installs into `C:\Program Files\remote-docker` and appends that to the system
+  PATH. An optional feature, off by default, installs a second copy named
+  `docker.exe` — `msiexec /i ... /qn ADDLOCAL=Main,DockerName` — and **refuses
+  when a `docker.exe` is already installed**, naming the one it found;
+  `ALLOWDOCKERSHADOW=1` overrides that. The MSI is unsigned, so SmartScreen
+  will warn, and it is not in the release's `checksums.txt`. See
+  [ADR 0048](docs/adr/0048-a-windows-installer.md).
 - A share whose mode needs a union, on a workspace that cannot make one, is
   refused naming the word that asked for it. `delegated` is
   `read=cached,write=back`, so it is the one way to ask for a union without
