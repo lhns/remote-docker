@@ -46,6 +46,23 @@ wait_dind() {
     return 1
 }
 
+# dump_dind says why an account's daemon is not usable, in the two ways nothing
+# else here prints.
+#
+# The exit code and OOMKilled separate "it would not start" from "something
+# killed it", which is the difference between a bug in this workspace and a
+# runner that ran out of memory; the daemon's own log carries the reason for
+# the first. Both are asked of the PARENT daemon, which can see the container
+# from outside, because a daemon that is down cannot answer for itself.
+dump_dind() {
+    local who=$1
+    hostdocker exec "$CONTAINER" docker inspect "rd-dind-$who" --format \
+        'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} error={{.State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' \
+        2>&1 | sed "s/^/    rd-dind-$who: /"
+    hostdocker exec "$CONTAINER" docker logs --tail 30 "rd-dind-$who" 2>&1 |
+        sed "s/^/    rd-dind-$who: /"
+}
+
 echo "== 1. build =="
 if build_image && build_client; then
     ok "image and client build"
@@ -523,6 +540,10 @@ if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
     # The client's own log, which is where the reason is. Without it this
     # failure reads as "slow" and costs a CI round trip to learn otherwise.
     sed 's/^/    A: /' "$WORK/a2.log" | tail -20
+    # And the daemon the endpoint is waiting for. This is the first Ensure
+    # after the workspace container restarted, so it is where a daemon that
+    # will not come back shows first.
+    dump_dind "$A"
     dump_workspace_log 40
 fi
 
@@ -566,7 +587,10 @@ hostdocker exec "$CONTAINER" docker rm -f "rd-dind-$A" >/dev/null 2>&1
 
 A_SOCK="$WORK/a3.sock"
 CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a3.log" "$WORK/project-$A")
-wait_endpoint "$A_SOCK" "$CLIENT_A_PID" || bad "alice's endpoint never came back after her daemon was destroyed"
+if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
+    bad "alice's endpoint never came back after her daemon was destroyed"
+    dump_dind "$A"
+fi
 
 images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
 ' ' ')
@@ -621,21 +645,51 @@ else
     *) bad "the export did not answer inside $A's own namespace: [$inside]. The probes below prove nothing" ;;
     esac
 
-    # A shell waits for its account's daemon (the session sets DOCKER_HOST from
-    # Ensure), and $B has not reconnected since section 10 restarted the
-    # workspace. Without this the probe pays for a cold dind boot and times out
-    # reporting nothing, which looks nothing like what it tests.
+    # A shell WAITS for its account's daemon: agent/internal/sshd/session.go
+    # calls Ensure before it opens one, and Ensure spends up to
+    # daemons.DefaultReadyTimeout (180s) on a daemon that is not up. $B has not
+    # reconnected since section 10 restarted the workspace, so without this the
+    # probe pays for a cold dind boot rather than measuring what it is here to
+    # measure.
     info "starting $B's daemon, so the shell probe does not pay for its boot"
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
-    wait_dind "$B" 90 || info "$B's daemon never answered; the probe below pays for its boot"
+    if ! wait_dind "$B" 90; then
+        # Said HERE, while it is still about the daemon. Left to the probe, a
+        # daemon that will not stay up is reported as "the probe said nothing",
+        # which names the symptom and nothing that can be acted on.
+        bad "$B's daemon did not answer in 180s, so the probe below proves nothing"
+        dump_dind "$B"
+    fi
 
     for who in "$A" "$B"; do
-        reach=$(ssh_account "$WORK/state-$who/id_ed25519" "$who" 120 "$probe" \
-            2>/dev/null | tr -d '\015')
+        # The exit status is kept, because an empty answer is two different
+        # failures needing two different actions and the output alone cannot
+        # tell them apart: `timeout` exits 124 when the shell never opened,
+        # which is what an account whose daemon will not start looks like, and
+        # 0 with no output is a probe that ran and said nothing. ssh's own
+        # stderr goes to a file rather than into $reach, so a diagnostic line
+        # cannot be read as an answer by the cases below.
+        # 200 seconds, which is longer than daemons.DefaultReadyTimeout on
+        # purpose. Ensure waits 180s for a daemon that is not up and only THEN
+        # writes the one message that names the reason, the daemon's own log
+        # tail, to the session's stderr. At 120s this suite gave up 60 seconds
+        # before that message existed, so four CI failures reported an empty
+        # answer and none of them carried a cause.
+        reach=$(ssh_account "$WORK/state-$who/id_ed25519" "$who" 200 "$probe" \
+            2>"$WORK/probe-$who.err" | tr -d '\015')
+        status=$?
         case "$reach" in
         *CONNECTED*) bad "SECURITY: $who's shell reached the NFS export on $alice_port" ;;
         *REFUSED*)   ok "$who's shell cannot reach the export on $alice_port" ;;
-        *)           bad "the probe from $who's shell said nothing: [$reach]" ;;
+        *)
+            why="exit $status"
+            if [ "$status" = 124 ]; then
+                why="$why, the 200s timeout: the shell never opened"
+            fi
+            bad "the probe from $who's shell said nothing ($why): [$reach]"
+            sed 's/^/    ssh: /' "$WORK/probe-$who.err" | tail -5
+            dump_dind "$who"
+            ;;
         esac
     done
 
@@ -665,10 +719,7 @@ else
         ok "$B's daemon came back with a stale containerd pid file behind it"
     else
         bad "$B's daemon did not come back after being killed with a stale $PIDFILE"
-        # Its own last words, which name the reason. Without them this reads as
-        # "slow" and costs a CI round trip to learn otherwise.
-        hostdocker exec "$CONTAINER" docker logs --tail 20 "rd-dind-$B" 2>&1 |
-            sed "s/^/    rd-dind-$B: /"
+        dump_dind "$B"
     fi
 
     # The mechanism, asserted separately from the outcome: a daemon that
@@ -684,7 +735,12 @@ fi
 
 echo
 if [ "$FAIL" -ne 0 ]; then
-    dump_workspace_log
+    # 200 rather than the default 60. A per-account daemon that will not stay
+    # up makes the workspace's own dockerd log one identical "container is not
+    # running" line every 2 seconds, so 60 lines is under two minutes of that
+    # and nothing else: on 2026-09-08 the whole dump was 51 copies of one line,
+    # and the daemon's first failure was already off the top.
+    dump_workspace_log 200
 fi
 
 summary
