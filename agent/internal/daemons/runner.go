@@ -28,8 +28,8 @@ type Daemon struct {
 	// Reachable because the dind is a CHILD of the workspace's dockerd rather
 	// than a sibling on the host: nested pid namespaces mean the pid docker
 	// reports is one the agent can open under its own /proc. A sibling would
-	// need `pid: host` to be reachable at all, which would show every enrolled
-	// user's shell every process on the node.
+	// need `pid: host` to be reachable at all, and then every enrolled user's
+	// shell would see every process on the node.
 	PID int
 
 	// Socket is where the agent dials this daemon.

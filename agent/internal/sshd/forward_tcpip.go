@@ -31,7 +31,7 @@ type localPolicy struct{ s *Server }
 // workspace. This is where ADR 0010's claim is enforced.
 //
 // It RESERVES as well as permits, and returns the token that gives the
-// reservation up again; see ForwardPolicy.Bind for why by token.
+// reservation up again; see forward.go's reservation for why a token.
 func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64, bool) {
 	s := p.s
 	account, ok := accountFor(ctx)
