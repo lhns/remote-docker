@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 # THIS client against a PUBLISHED OLDER WORKSPACE, which is the only way the
-# compatibility claim can be checked at all.
+# compatibility claim can be checked at all: every other suite builds both ends
+# from this tree, so each always knows every command the other speaks. The
+# failure this exists for is a client asking for a channel the workspace has
+# never heard of, which HUNG a 0.6.0 client against a 0.5.1 workspace with
+# nothing on screen.
 #
-# Every other suite builds both ends from this tree, so both always know every
-# command the other speaks. The failure this exists for is the opposite: a
-# client asking for a channel the workspace has never heard of, which HUNG a
-# 0.6.0 client against a 0.5.1 workspace with nothing on screen.
-#
-# PULLED rather than built from the v0.5.1 tag: what is under test is what is
-# deployed, not what this checkout can build. ghcr's tag listing does not name
-# 0.5.1 at all and the tag is pullable regardless (checked 2026-09-08; re-check
-# with `docker pull ghcr.io/lhns/remote-docker-workspace:0.5.1`).
-#
-# WORKSPACE_IMAGE overrides the tag, so the same suite answers the question
-# again for whatever the oldest supported workspace becomes.
+# PULLED rather than built from the v0.5.1 tag, so what is under test is what is
+# deployed. ghcr's tag listing does not name 0.5.1 at all and the tag is
+# pullable regardless (checked 2026-09-08; re-check with `docker pull
+# ghcr.io/lhns/remote-docker-workspace:0.5.1`). WORKSPACE_IMAGE overrides it for
+# whatever the oldest supported workspace becomes.
 #
 # Requires: docker, a kernel with NFS client support, and network access to
 # ghcr.io.
@@ -75,8 +72,8 @@ wait_parent_dockerd
 SOCK="$WORK/client.sock"
 CLIENT_PID=$(start_session "$WORK/state" "$ACCOUNT" "$SOCK" "$WORK/client.log" "$WORK/project")
 
-# The whole bug, measured: the client used to reach this point and stop. With a
-# deadline the endpoint comes up whether or not the cache channel is served.
+# The bug: the client used to reach this point and stop. With a deadline the
+# endpoint comes up whether or not the cache channel is served.
 if wait_endpoint "$SOCK" "$CLIENT_PID"; then
     ok "the endpoint came up against a workspace that does not serve the cache channel"
 else
@@ -99,9 +96,8 @@ else
     bad "the container read: $saw"
 fi
 
-# The user's constraint, made testable. A workspace serving every mount it was
-# given is not doing anything wrong, and must not be told about a capability
-# nobody asked for.
+# A workspace serving every mount it was given is doing nothing wrong, and must
+# not be told about a capability nobody asked for.
 if grep -qiE "cache channel|does not serve" "$WORK/client.log"; then
     bad "the client said something about the cache channel anyway"
     grep -iE "cache channel|does not serve" "$WORK/client.log" | head -3 | sed 's/^/    /'
@@ -111,11 +107,9 @@ fi
 
 echo
 echo "== 4. a mount that needs the cache is refused, naming itself =="
-# Refused rather than quietly served as write=through: a silent downgrade moves
-# where somebody's writes live.
-#
-# Bounded by the docker timeout, so a client that hangs here fails the suite
-# instead of running out the job's whole budget.
+# Refused rather than quietly served as write=through, because a silent
+# downgrade moves where somebody's writes live. Bounded by the docker timeout,
+# so a client that hangs here fails the suite rather than the whole job.
 start=$(date +%s)
 outputs 'asks for write=back' d run --rm -v "$WORK/project:/w:read=cached,write=back" alpine:3 true
 refused=$?
@@ -127,11 +121,10 @@ if [ "$refused" -eq 0 ]; then
 else
     bad "the mount was not refused by name"
 fi
-# Either remedy, because which one this is depends on the agent and both are
-# correct. Measured on 2026-09-08 against the published 0.5.1 image, this is the
-# SILENT case: that agent never answers at all, so the refusal is the deadline
-# rather than anything the workspace said. One that runs the command and exits
-# gives the other remedy.
+# Either remedy: which one depends on the agent and both are correct. Measured
+# 2026-09-08 against the published 0.5.1 image, this is the SILENT case: that
+# agent never answers, so the refusal is the deadline rather than anything the
+# workspace said.
 if grep -qE 'fix: use write=through|fix: update the workspace' <<<"$LAST_OUTPUT"; then
     ok "the refusal carries a remedy"
 else
@@ -140,8 +133,7 @@ fi
 if grep -qE 'said nothing for' <<<"$LAST_OUTPUT"; then
     ok "a workspace that never answered is reported as never having answered"
 fi
-# Context, never the test: no version comparison gates anything, and the
-# workspace's own version is reported because it is what somebody acts on.
+# Context, never the test: no version comparison gates anything.
 if grep -qE 'remote-dockerd [0-9]' <<<"$LAST_OUTPUT"; then
     ok "the refusal names the workspace's version as context"
 else

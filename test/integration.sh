@@ -6,9 +6,9 @@
 # client, the proxy against real HTTP framing -- but the kernel NFS client,
 # the dind daemon, and the tunnel between them exist only here.
 #
-# Requires: docker, and a kernel with NFS client support. The nfs-capability
-# job in .github/workflows/integration.yml checks that separately, because a
-# failure there is about the runner rather than about this code.
+# Requires: docker, and a kernel with NFS client support. The `gate` job in
+# .github/workflows/integration.yml checks that separately, because a failure
+# there is about the runner rather than about this code.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -104,15 +104,11 @@ fi
 echo
 echo "== 4. start the workspace =="
 # Pinned to the SHARED daemon, explicitly, now that a daemon per account is the
-# default (ADR 0019). Two suites, one per mode, and each asks for its own:
-# this one is the evidence that the shared mode still works, and
-# test/per-user-dind.sh covers the other with the second account that mode is
-# actually about.
-#
-# Inheriting the default would have quietly turned this into a second, worse
-# test of per-user mode: several assertions below reach the client's containers
-# with `docker exec <workspace> docker ps`, which only finds them on the daemon
-# the agent itself runs.
+# default (ADR 0019): this suite is the evidence that mode still works, and
+# test/per-user-dind.sh covers the other. Inheriting the default would make
+# this a second, worse test of per-user mode, since several assertions below
+# reach the client's containers with `docker exec <workspace> docker ps`, which
+# only finds them on the daemon the agent itself runs.
 # The WebSocket listener is published as well, so section 19 can put a real
 # reverse proxy in front of it. The agent serves it by default; nothing else in
 # this suite touches it.
@@ -224,13 +220,10 @@ fi
 
 echo
 echo "== 6c. a container's exit status reaches the client =="
-# The status comes back over the HIJACKED stream through the proxy, which is
-# the path the "must not over-detect a hijack" invariant is about: read as an
+# The status comes back over the HIJACKED stream through the proxy: read as an
 # ordinary response, `docker run` exits 0 having printed nothing, which is a
-# failure reported as a success.
-#
-# Not the SSH session's exit status, which is a different mechanism and belongs
-# with the stock-ssh section (13b).
+# failure reported as a success. Not the SSH session's exit status, which is a
+# different mechanism and belongs with the stock-ssh section (13b).
 
 #   expect_status <description> <want> <cmd...>
 #
@@ -322,12 +315,11 @@ fi
 echo
 echo "== 6e. an interrupted docker run =="
 # What a script sees when somebody presses Ctrl-C. The number comes from the
-# container and not from here: the CLI catches every signal for the length of a
-# `run` (cli/command/container/run.go, notifyAllSignals) and forwards it, and
-# the container's status arrives as a cli.StatusError like any other. Docker's
-# own 128+N mapping covers commands with no container to carry a status, and is
-# unreachable from here anyway, errCtxSignalTerminated being unexported in its
-# package main.
+# CONTAINER and not from here: the CLI catches every signal for the length of a
+# `run` (cli/command/container/run.go, notifyAllSignals), forwards it, and the
+# container's status arrives as a cli.StatusError like any other. Docker's own
+# 128+N mapping is for commands with no container to carry a status, and is
+# unreachable here anyway (errCtxSignalTerminated is unexported).
 #
 #   run_interrupted <container name> <sh script>
 #
@@ -792,18 +784,16 @@ fi
 
 echo
 echo "== 11d. which syscall makes a container's watcher fire? (ADR 0014 spike) =="
-# 11b establishes that a client-side change notifies nobody. This asks the
-# follow-up: if the AGENT performs a minimal syscall on the same file inside
-# the workspace, does the container's watcher fire?
+# 11b establishes that a client-side change notifies nobody. This asks whether
+# a minimal syscall by the AGENT, on the same file inside the workspace, makes
+# the container's watcher fire.
 #
-# Linux has no way to inject a synthetic inotify event -- fanotify(7) says so
-# outright. The only mechanism available to anyone, Docker Desktop included,
-# is to perform a real VFS operation and let the kernel emit the event as a
-# side effect. So this measures WHICH operation produces WHICH event, one file
-# per primitive so the correlation is by name rather than by timing.
-#
-# Nothing is asserted as pass/fail except the setup: the point is to record
-# the matrix, and the design that follows depends on what it says.
+# Linux cannot inject a synthetic inotify event (fanotify(7) says so outright),
+# so the only mechanism available to anyone, Docker Desktop included, is a real
+# VFS operation with the kernel emitting the event as a side effect. This
+# measures WHICH operation produces WHICH event, one file per primitive so the
+# correlation is by name rather than by timing. Nothing but the setup is
+# asserted: the point is to record the matrix.
 POKEDIR="$WORK/poked"
 mkdir -p "$POKEDIR"
 
@@ -1096,11 +1086,10 @@ fi
 
 echo
 echo "== 12b. one compose service reaching another =="
-# Container-to-container traffic never touches this client: it happens on the
-# workspace's own docker network, between containers the workspace's own daemon
-# started. But we rewrite every bind mount and forward every published port, so
-# "did we disturb the network" is a fair question and it deserves an answer
-# rather than an assurance.
+# Container-to-container traffic never touches this client: it is the
+# workspace's own docker network, between containers its own daemon started.
+# But we rewrite every bind mount and forward every published port, so "did we
+# disturb the network" deserves an answer rather than an assurance.
 #
 # Four things at once, which is why this is one test and not four:
 #   - `client` resolves `web` by SERVICE NAME, so compose's DNS works
@@ -1224,13 +1213,11 @@ fi
 echo
 echo
 echo "== 13b. a stock ssh still gets a shell, and the embedded CLI =="
-# This is the ONLY test of the agent's exec/pty session, and it is deliberately
-# run with a stock ssh rather than anything of ours. `remote-docker shell` is
-# gone (ADR 0018) but serveExec and servePTY are not, because an enrolled key
-# still logging in is what server.go's argument for unrestricted local
-# forwarding rests on -- everything reachable that way is inside the workspace,
-# which the account can already reach with a shell. Delete this and ADR 0010's
-# central claim, one binary replacing sshd, has no coverage at all.
+# The ONLY test of the agent's exec/pty session, run with a stock ssh rather
+# than anything of ours: `remote-docker shell` is gone (ADR 0018) but serveExec
+# and servePTY are not, because an enrolled key still logging in is what
+# server.go's argument for unrestricted local forwarding rests on. Delete this
+# and ADR 0010's central claim, one binary replacing sshd, has no coverage.
 #
 # -tt forces a pty, so `tty` naming one proves the agent allocated it rather
 # than falling through to the non-pty branch.
@@ -1259,16 +1246,13 @@ else
     bad "the shell was not rd-$ACCOUNT: $(trim "$shellout")"
 fi
 
-# ...and can USE the shared daemon, which needs its supplementary groups.
-#
-# Go calls setgroups() with Credential.Groups whenever a Credential is set, so
-# leaving it nil CLEARS every supplementary group. An account correctly listed
-# in `docker` in /etc/group got a shell that was not in it, and `docker ps`
-# answered "permission denied while trying to connect to the Docker daemon
-# socket" -- which reads like a broken socket and is not one.
-#
-# Asserted by using it, not by reading `id`: the group file was checked, found
-# right, and believed, while the shell had a different view of it.
+# ...and can USE the shared daemon, which needs its supplementary groups. Go
+# calls setgroups() with Credential.Groups whenever a Credential is set, so
+# leaving it nil CLEARS them: an account correctly listed in `docker` in
+# /etc/group got a shell that was not in it, and `docker ps` answered
+# "permission denied ... Docker daemon socket", which reads like a broken
+# socket. Asserted by USING it rather than by reading `id`, which was checked,
+# found right and believed while the shell had a different view of it.
 if echo "$shellout" | grep -q "permission denied"; then
     bad "the shell cannot reach the shared daemon: $(trim "$shellout")"
 else
@@ -1610,14 +1594,14 @@ fi
 
 echo
 echo "== 15c. read=cached,write=back, which is a union =="
-# Docker's `delegated`, and here it is a UNION the workspace mounts: this
-# share's live NFS export underneath, a local cache on top, and the merged view
-# the container binds (ADR 0044).
+# Docker's `delegated`, and here a UNION the workspace mounts: the live NFS
+# export underneath, a local cache on top, the merged view the container binds
+# (ADR 0044).
 #
 # The assertion that matters is the fallthrough. A file created here AFTER the
-# cache was filled is not in the cache, and the container must still see it --
-# that is what makes an incomplete cache correct, and it is the whole reason
-# the cache can be filled in the background.
+# cache was filled is not in the cache and the container must still see it,
+# which is what makes an incomplete cache correct and lets it be filled in the
+# background.
 # Run against the WATCHING client section 15 started: invalidation rides the
 # watcher, because a cached copy of a file that changed here is the one way this
 # mode can be wrong rather than merely slow.
@@ -1781,23 +1765,16 @@ echo "== 15d. a linker finishing its output on a share =="
 #
 #   /usr/bin/ld: cmTC_438e8: final close failed: Stale file handle
 #
-# That is CMake's throwaway "does the compiler work" test, and its shape is the
-# whole diagnosis. COMPILING succeeds: the .o is created, written and closed on
-# the share. The LINK dies at close(). So writing to the export works and it is
-# specifically ld FINISHING an output file that does not, which makes it a
-# file-handle problem rather than a write problem.
+# Compiling succeeds, so writing to the export works; it is ld FINISHING an
+# output file that does not, which makes it a handle problem. ESTALE means the
+# server invalidated a handle the client still held: go-nfs maps a handle to a
+# PATH rather than an inode and drops it on REMOVE and RENAME, where a real
+# server keeps it valid for an open file, and an already-open descriptor cannot
+# be re-resolved the way a lookup can.
 #
-# ESTALE means the server invalidated a handle the client still held. go-nfs
-# maps a handle to a PATH rather than an inode and drops it outright on REMOVE
-# and RENAME, where a real server keeps a handle valid for an open file. An
-# already-open descriptor cannot be re-resolved by the kernel the way a lookup
-# can, so it surfaces to the application.
-#
-# Nothing in this suite had ever built a binary on a share, which is how this
-# shipped. If this section PASSES, that is worth reading rather than
-# celebrating: CI runs a dind on the same machine, while the report came from a
-# workspace on another host, and the difference would then be the next thing to
-# chase.
+# If this section PASSES that is worth reading rather than celebrating: CI runs
+# a dind on the same machine, while the report came from a workspace on another
+# host, and the difference would be the next thing to chase.
 LINKDIR="$WORK/linkdir"
 mkdir -p "$LINKDIR"
 cat >"$LINKDIR/hello.c" <<'CEOF'
@@ -2708,19 +2685,14 @@ echo "== 20. the workspace daemon comes back from an unclean restart =="
 # LAST on purpose: it kills the workspace container, so everything above has
 # already run and nothing below depends on the session.
 #
-# The shared daemon's exec-root is in the container's writable layer, so
-# runtime state written there outlives a kill, which on a real machine it never
-# does. dind's entrypoint deletes docker*.pid and containerd's file is
-# containerd.pid, so a container that ended uncleanly and started again on the
-# same layer comes back with a stale containerd.pid naming a pid from its
-# previous life; dockerd then either refuses to record its containerd's pid or
-# believes containerd is already up and waits for something that never arrives.
+# The shared daemon's exec-root is in the container's writable layer, so a
+# stale containerd.pid outlives an unclean end and stops dockerd two ways;
 # agent/internal/daemons.ExecRoot has both failures and their measurements.
 #
-# Arranged rather than waited for, exactly as per-user-dind.sh section 13 does
-# for the other mode: a stale pid only stops dockerd while the number it names
-# is alive, which in the wild is a coincidence. Pid 1 in the workspace
-# container is the agent itself and is alive in every incarnation.
+# Arranged rather than waited for, as per-user-dind.sh section 13 does for the
+# other mode: a stale pid only stops dockerd while the number it names is
+# alive, which in the wild is a coincidence. Pid 1 in the workspace container
+# is the agent itself and is alive in every incarnation.
 EXECROOT=/var/run/docker
 PIDFILE=$EXECROOT/containerd/containerd.pid
 

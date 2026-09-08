@@ -399,14 +399,13 @@ deletions are the honest gap, and what to do when the budget runs out are in
 Reading a project through the share costs a round trip per file, and the mount
 revalidates any attribute older than a second. Over a link with real latency
 that is the whole cost, and it is latency rather than bandwidth: a thin link
-costs almost nothing and a distant one costs hundreds of times more. The
-measurements behind that, per link shape and per mode, are the table in
-[ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md); `test/bench.sh` is what
+costs almost nothing and a distant one costs 400x. The measurements, per link
+shape and per mode, are the table in
+[ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md); `test/bench.sh`
 produces them, from the `bench` label on a pull request.
 
-Latency, not bandwidth: a thin link costs almost nothing and a distant one
-costs 400x. Docker's own mount consistency is how you say a directory may be
-cached, and every client already parses it:
+Docker's own mount consistency is how you say a directory may be cached, and
+every client already parses it:
 
 ```bash
 docker run -v ./project:/app:ro,cached
@@ -450,7 +449,7 @@ mean what Docker says they mean: `consistent` and `default` are
 ```
 
 **`read=cached` is the one to reach for on a slow link.** It halves the time
-in the table above and needs only the watcher.
+in ADR 0045's table and needs only the watcher.
 
 **`write=back` and `write=ephemeral` are write capture.** The share becomes
 a union on the workspace: the live mount underneath, a local layer on top
@@ -496,8 +495,7 @@ runs**, because that is what it is mounted with. The workspace's own image
 carries it, which is what a per-account daemon should be running anyway (see
 [the storage driver](#the-storage-driver-worth-getting-right-once)).
 
-A mount outranks a per-directory rule, which outranks the workspace setting,
-and switching costs a volume rebuild rather than a migration.
+Switching a directory's mode costs a volume rebuild rather than a migration.
 
 ### More connections behind a share
 

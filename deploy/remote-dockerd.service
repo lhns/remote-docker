@@ -12,10 +12,9 @@
 [Unit]
 Description=remote-docker workspace agent
 Documentation=https://github.com/lhns/remote-docker
-# The agent shells out to docker for everything it does, so it has nothing to
-# do until there is one. Wants rather than Requires: a docker that is slow to
-# start should delay us, not stop us, and the agent already serves without a
-# daemon so that somebody can log in and see why.
+# Wants rather than Requires: a docker that is slow to start should delay the
+# agent, not stop it, and the agent serves without a daemon so that somebody
+# can log in and see why.
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
@@ -36,11 +35,8 @@ User=root
 Restart=on-failure
 RestartSec=5s
 
-# No tini here. The image needs it because the agent is PID 1 there and has to
-# reap the processes it forks per session; under systemd those reparent to init
-# and are reaped for us.
-
-# Logs go to the journal, which is where an operator on a VM will look.
+# No tini here. The image needs it because the agent is PID 1 there and reaps
+# the processes it forks per session; under systemd those reparent to init.
 StandardOutput=journal
 StandardError=journal
 

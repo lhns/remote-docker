@@ -9,12 +9,12 @@ The release carries a zip per platform and nothing else. On Windows that means
 unpack it somewhere, put that somewhere on PATH by hand, and repeat both on
 every upgrade. An MSI is what Windows expects to be handed for that.
 
-The interesting part is not the packaging. ADR 0024 made the file's name the
-whole installation: rename the binary to `docker.exe` and `docker run` on this
-machine is this program, with no code behind it. An installer is the first
-thing in this project that could do that renaming for the user, on a machine
-whose PATH it also controls — which is the same power as shadowing another
-vendor's tool.
+The part that needs a decision is not the packaging. ADR 0024 made the file's
+name the whole installation: rename the binary to `docker.exe` and `docker run`
+on this machine is this program, with no code behind it. An installer is the
+first thing here that could do that renaming for the user, on a machine whose
+PATH it also controls, which is the same power as shadowing another vendor's
+tool.
 
 ## Decision
 
@@ -75,11 +75,11 @@ error custom action, after `CostFinalize` in both sequences, conditioned on
 `NOT Installed AND &DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW`.
 The message names the file it found, and `ALLOWDOCKERSHADOW=1` overrides it.
 
-Why refuse rather than win: the install directory is on PATH and a Windows
-machine commonly already has a `docker.exe` — this README points at
-`winget install Docker.DockerCLI` itself. Quietly getting in front of Docker
-Desktop's CLI is the larger version of a promise ADR 0024 already makes, that a
-docker context we did not create is left completely alone.
+Why refuse rather than win: a Windows machine commonly already has a
+`docker.exe`, and the README points at `winget install Docker.DockerCLI`
+itself. Quietly getting in front of Docker Desktop's CLI is the larger version
+of a promise ADR 0024 already makes, that a docker context we did not create is
+left completely alone.
 
 **Version.** An MSI `ProductVersion` is `major.minor.build`, and the installer
 compares only those: major and minor are one byte, build is two. A snapshot

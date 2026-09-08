@@ -1,21 +1,18 @@
 name: machine
 
-# The WSL backend, end to end, on a Windows runner.
+# The WSL backend, end to end, on a Windows runner. A GitHub Windows runner
+# runs real WSL2 and can import a rootfs (measured before this was written,
+# ADR 0026); without that the whole backend would ship having never run.
 #
-# This exists because of a measurement rather than a hope: a spike established
-# that a GitHub Windows runner runs real WSL2 and can import a rootfs
-# (ADR 0026). Without that, the whole backend would ship having never run.
+# Two jobs, because a Windows runner runs Windows containers and so cannot
+# build the Linux image: a Linux runner builds it and hands the rootfs over as
+# an artifact.
 #
-# It cannot be one job. A Windows runner runs Windows containers, so the Linux
-# image cannot be built there; a Linux runner builds it and hands the rootfs
-# over as an artifact. That split is the reason for the shape below and not an
-# accident of taste.
-#
-# Hyper-V gets no job at all. The runners do not offer it, and
+# Hyper-V gets no job: the runners do not offer it, and
 # docs/testing-machines.md is the whole of its verification.
 #
-# Every pull request, not only those touching the backend: the Windows client
-# is the one in CI, so every PR meets it.
+# Every pull request, not only those touching the backend: this is the one
+# Windows client in CI, so every PR meets it.
 on:
   pull_request:
   workflow_dispatch:
@@ -24,9 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  # A container image IS a rootfs, which is the whole reason the backend is
-  # short: what gets installed into the machine is the artifact CI already
-  # builds and tests on every push, and no package manager runs anywhere.
+  # A container image IS a rootfs, so what is installed into the machine is the
+  # artifact CI already builds and tests, and no package manager runs anywhere.
   rootfs:
     name: export the workspace image as a rootfs and record the probe oracle
     runs-on: ubuntu-latest
@@ -42,24 +38,20 @@ jobs:
         run: |
           set -eux
           id=$(docker create rd-workspace:ci)
-          # Gzipped, because that is what a release publishes and what somebody
-          # downloads. `wsl --import` reads it directly, and this is where that
-          # is proven rather than assumed. The LEVEL is not part of that: -9 on
-          # a 400 MB rootfs spent about a minute of single-threaded CPU on this
-          # workflow's critical path to save bandwidth between two jobs on the
-          # same runner network.
+          # Gzipped, because that is what a release publishes and what
+          # `wsl --import` is proven here to read directly. -1 rather than -9:
+          # -9 on a 400 MB rootfs spent about a minute of single-threaded CPU
+          # on this workflow's critical path to save bandwidth between two jobs
+          # on the same runner network.
           docker export "$id" | gzip -1 > rootfs.tar.gz
           docker rm "$id"
           ls -lh rootfs.tar.gz
 
-      # The filesystem conformance probe and its oracle. The probe is one
-      # static Linux binary that walks a directory through every operation a
-      # build tool uses and prints what happened; run against the runner's own
-      # disk it is the oracle, and the wsl job runs the same image against a
-      # share backed by an NTFS directory and diffs the two transcripts.
-      #
-      # build_probe from test/lib.sh, so the recipe for a probe binary lives in
-      # one place and this cannot drift from what test/fs-conformance.sh runs.
+      # The conformance probe walks a directory through every operation a build
+      # tool uses and prints what happened; against the runner's own disk that
+      # transcript is the ORACLE, and the wsl job diffs the same image's output
+      # over an NTFS-backed share against it. Built through build_probe from
+      # test/lib.sh, so it cannot drift from what test/fs-conformance.sh runs.
       - name: build the probe image and run the oracle
         run: |
           set -eux
@@ -76,17 +68,15 @@ jobs:
           ls -lh fsprobe.tar.gz
 
       # The Windows client, cross-compiled HERE rather than on the Windows
-      # runner. actions/setup-go on windows-latest restores a 526 MB module and
-      # build cache, and extracting it costs one to four minutes (measured 248s
-      # on 2026-09-08, run 34212595094), all of it on the critical path of the
-      # longest workflow this repository has, to compile one binary in seven
-      # seconds.
+      # runner: actions/setup-go there restores a 526 MB cache and untarring it
+      # costs one to four minutes (measured 248s on 2026-09-08, run
+      # 34212595094) on the critical path of the longest workflow here, to
+      # compile one binary in seven seconds.
       #
-      # CGO_ENABLED=0 is what .goreleaser.yaml ships for windows, so the binary
-      # under test is now the one a user downloads. Building on the runner
-      # picked up its gcc and produced a cgo binary nobody ships. That the
-      # client COMPILES on Windows natively is still covered by ci.yml's
-      # `test (windows)` job, which builds every package it tests.
+      # CGO_ENABLED=0 is what .goreleaser.yaml ships for windows, so this is
+      # the binary a user downloads; building on the runner picked up its gcc
+      # and produced a cgo binary nobody ships. That the client COMPILES on
+      # Windows natively stays covered by ci.yml's `test (windows)` job.
       - name: cross-compile the windows client
         env:
           CGO_ENABLED: "0"
@@ -215,16 +205,12 @@ jobs:
           .\client\rd.exe remote machine stop ci
           .\client\rd.exe remote machine start ci
 
-          # What is holding the endpoint, if anything, and what the client says
-          # about itself. An EOF on the local pipe names the wrong layer
-          # entirely, so this asks the two questions that separate "no session
-          # at all" from "a session whose machine went away underneath it".
+          # An EOF on the local pipe names the wrong layer entirely, so these
+          # separate "no session at all" from "a session whose machine went
+          # away underneath it": what holds the endpoint, and then the
+          # session's own log, which is the only place saying why.
           .\client\rd.exe remote status
           Get-Process rd -ErrorAction SilentlyContinue | Format-Table Id, StartTime
-
-          # The session's own log. `remote status` answering while a docker
-          # request gets EOF means the failure is inside the session rather
-          # than in reaching it, and this is the only place that says why.
           Get-Content "$env:REMOTE_DOCKER_STATE_DIR\logs\*.log" -Tail 40 -ErrorAction SilentlyContinue
 
           $out = (.\client\rd.exe ps -a --filter name=survivor --format '{{.Names}}') -join "`n"
@@ -232,16 +218,13 @@ jobs:
           if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
           .\client\rd.exe rm -f survivor
 
-      # Left alone, and then used again.
-      #
-      # A session that has been idle for DefaultIdleTimeout, one minute,
-      # disconnects on purpose (ADR 0015), which releases the machine and lets
-      # WSL start its own idle countdown on a machine nobody is in. All of that
-      # is correct, and the machine stopping here is not the failure -- the
-      # failure is the command after it. This found one: the machine was
-      # started again and dialled immediately, before its agent was listening,
-      # so the first command failed and the second worked, which reads as
-      # flakiness rather than as the deterministic bug it was.
+      # Left alone, and then used again. A session idle for
+      # DefaultIdleTimeout (one minute) disconnects on purpose (ADR 0015),
+      # which releases the machine and lets WSL stop it. The machine stopping
+      # is correct and is not the failure; the command AFTER it is. That found
+      # one: the machine was started again and dialled before its agent was
+      # listening, so the first command failed and the second worked, which
+      # reads as flakiness rather than as the deterministic bug it was.
       - name: a machine comes back after sitting idle
         shell: pwsh
         timeout-minutes: 8
@@ -251,16 +234,12 @@ jobs:
           # prove nothing about a machine left alone.
           .\client\rd.exe remote start
 
-          # Polled for `Stopped` rather than slept for a fixed 180 seconds.
-          # The machine stops at 106s (measured 2026-09-08), so the fixed sleep
-          # carried 74s of dead margin on every run, and it asserted only that
-          # time had passed. `Stopped` is the precondition the command after
-          # this one is about, so a machine that never stops fails here naming
-          # what wsl said, rather than turning that command into a test of
-          # nothing.
-          #
-          # 300s bounds a failure and is not an expected duration: nothing
-          # waits for it once the machine has stopped.
+          # Polled for `Stopped` rather than slept for a fixed 180s: the
+          # machine stops at 106s (measured 2026-09-08), so the sleep carried
+          # 74s of dead margin and asserted only that time had passed.
+          # `Stopped` is the precondition the next command is about, so a
+          # machine that never stops fails HERE naming what wsl said. The 300s
+          # bounds that failure and is not an expected duration.
           $start = Get-Date
           $deadline = $start.AddSeconds(300)
           $state = ""
@@ -353,13 +332,12 @@ jobs:
           wsl -d rd-ci --user root -- ps aux
           wsl -d rd-ci --user root -- sh -c "netstat -lnt 2>/dev/null || ss -lnt"
 
-          # Which address Windows can actually reach.
-          #
-          # The agent logged `listening on :2222` and Windows still refused the
-          # connection for three minutes, so the question is no longer whether
-          # the agent is up. WSL2 forwards localhost into the machine through a
-          # relay, and this asks whether that relay works here at all, or
-          # whether the machine is only reachable at its own address.
+          # Which address Windows can actually reach. The agent logged
+          # `listening on :2222` and Windows refused the connection for three
+          # minutes anyway, so the question is not whether the agent is up:
+          # WSL2 forwards localhost through a relay, and this asks whether that
+          # relay works here or the machine is reachable only at its own
+          # address.
           wsl --version
           # No shell and no awk: busybox's hostname has no -I, and a shell
           # pipeline here loses its $-fields to PowerShell's quoting. The

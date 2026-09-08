@@ -1,14 +1,12 @@
 name: kubernetes
 
 # The chart, installed on a real cluster and reached the way a person would
-# reach it: through an ingress, with the client binary.
+# reach it: through an ingress, with the client binary. Separate from
+# integration.yml because it needs a cluster.
 #
 # The pod runs dockerd inside a kind node, which is itself a container, so this
 # is docker inside docker inside docker. That it works at all was measured
 # before the chart was written (2026-08-14) rather than assumed.
-#
-# The suites in integration.yml need a kernel and a real NFS mount and get one
-# on the runner directly. This one needs a cluster, which is why it is separate.
 
 on:
   push:
@@ -41,17 +39,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The chart's own checks, folded in from a job of their own that did nine
-      # seconds of work (why a runner slot is worth that: ci.yml, the lint
-      # job). They run FIRST, ahead of everything expensive, so a chart that
-      # cannot render fails in twenty seconds rather than after an image build
-      # and a cluster. It costs this job about eighteen seconds it did not
-      # spend before, and that is the trade to undo first if runner slots stop
-      # being scarce.
+      # The chart's own checks, folded in from a job of their own that did 9s
+      # of work (why a runner slot is worth that: ci.yml, the lint job). They
+      # run FIRST, so a chart that cannot render fails in twenty seconds rather
+      # than after an image build and a cluster; it costs this job about 18s,
+      # and that is the trade to undo first if runner slots stop being scarce.
       #
-      # helm is pinned for the whole job now rather than only for the render
-      # checks. Installing the chart used whatever helm the runner image
-      # carried, which was one more thing that could move underneath a failure.
+      # helm is pinned for the whole job, installing the chart included: the
+      # runner image's own helm was one more thing that could move underneath
+      # a failure.
       - uses: azure/setup-helm@v5
         with:
           version: v3.16.3
@@ -160,14 +156,20 @@ jobs:
 
       # The failure this is worth pinning: an ingress with no host matches every
       # request that reaches the controller, so the chart refuses to render one.
+      #
+      # Captured and then matched, never `helm ... | grep -q`: grep exits at
+      # the first match, the producer's next write gets EPIPE, and a Go program
+      # turns that into a fatal SIGPIPE (why: test/lib.sh).
       - name: an ingress with no host is refused
         run: |
-          if helm template ws charts/remote-docker-workspace --kube-version 1.29.0 >/dev/null 2>&1; then
+          if out=$(helm template ws charts/remote-docker-workspace --kube-version 1.29.0 2>&1); then
             echo "an ingress with no host rendered; it should have been refused"
             exit 1
           fi
-          helm template ws charts/remote-docker-workspace --kube-version 1.29.0 2>&1 \
-            | grep -q "ingress.host is required"
+          case "$out" in
+            *"ingress.host is required"*) ;;
+            *) echo "refused, but not by name: $out"; exit 1 ;;
+          esac
 
       - uses: ./.github/actions/setup-go
 
@@ -201,25 +203,18 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
 
-      # The controller pod being ready is not the ADMISSION webhook answering,
-      # and neither is its endpoint being listed. Every Ingress creation is
-      # validated against that webhook, so `helm install` in the window between
-      # them fails with `connection refused` against the webhook service.
+      # Every Ingress creation is validated against the ADMISSION webhook, and
+      # neither the controller pod being ready nor its endpoint being listed
+      # means that webhook answers: on 2026-09-08 (issue #151) the pod reported
+      # `condition met`, the endpoint was listed as 10.244.0.7:8443, and
+      # `helm install` was refused `connection refused` against that same
+      # address 0.3s later.
       #
-      # Waiting for the endpoint to appear was the 2026-09-01 remedy and it does
-      # not close it: on 2026-09-08 (issue #151) the controller pod reported
-      # `condition met`, the endpoint was listed as 10.244.0.7:8443, and the
-      # refusal came back against that same address 0.3 seconds later.
-      #
-      # So ask the webhook itself. A server-side dry-run CREATE takes the exact
-      # path `helm install` takes: the API server calls
-      # validate.nginx.ingress.kubernetes.io over the network and reports what
-      # it got back. It is callable on a dry run at all because the webhook
-      # declares `sideEffects: None` (checked 2026-09-08 in the deploy.yaml
-      # pinned above), and it creates nothing, so the poll is free to repeat.
-      #
-      # Costs one API call, about a fifth of a second, when the webhook is
-      # already up.
+      # So ask the webhook itself, over the exact path `helm install` takes: a
+      # server-side dry-run CREATE makes the API server call
+      # validate.nginx.ingress.kubernetes.io and report what came back. Safe to
+      # repeat because the webhook declares `sideEffects: None` (checked
+      # 2026-09-08 in the deploy.yaml pinned above) and this creates nothing.
       - name: the admission webhook answers
         run: |
           set -eu
