@@ -93,10 +93,9 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 
 	c.mu.Lock()
 	if c.closed {
-		// This stack has been replaced (Registry.SetAttrs) and holds nothing
-		// any more. A request still on the old one is served uncached rather
-		// than refused: it is in flight, and billy's own descriptor is right
-		// for it because nothing holds that past the request.
+		// A request still holding the replaced stack is served uncached rather
+		// than refused: billy's own descriptor is right for it, nothing
+		// holding that past the request.
 		c.mu.Unlock()
 		return c.Filesystem.OpenFile(name, flag, perm)
 	}
@@ -229,15 +228,11 @@ func (c *fdCacheFS) evictEntry(e *cachedFD) {
 // Close gives up every descriptor this cache holds, and is what a share's
 // filesystem being replaced means (Registry.SetAttrs, on every connect).
 // Without it each rebuild orphans a cache that keeps files open until its idle
-// timers expire, which is exactly the state the cache exists to avoid on
-// Windows.
+// timers expire, which is the state the cache exists to avoid on Windows.
 //
 // A descriptor a request is still holding is dropped from the map and closed
-// by that request's release instead, which is the same path an eviction while
-// in use takes: the alternative is a write landing on a closed file. Timers
-// are stopped here, and one that fires anyway finds its entry gone from the
-// map and can only close a descriptor this already closed, which os.File
-// answers rather than repeats.
+// by that request's release instead, the same path an eviction while in use
+// takes: the alternative is a write landing on a closed file.
 func (c *fdCacheFS) Close() error {
 	c.mu.Lock()
 	c.closed = true

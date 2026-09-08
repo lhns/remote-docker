@@ -81,16 +81,11 @@ type Registry struct {
 	traceOnce sync.Once
 	trace     time.Duration
 
-	// Neither map ever shrinks and there is no unregister, deliberately. A
-	// share's root handle is derived from its export path (ADR 0033) and MOUNT
-	// issues it exactly once, so a share removed here leaves every running
-	// container with `Stale file handle` against a mount that still looks
-	// fine, and nothing on this side can tell which exports still have a live
-	// kernel mount. Shares also feeds the idle release and rewrite.Guard,
-	// where "in use" must not depend on who asked. Bounded by design: one
-	// entry per distinct path this process has exported, tens of bytes each,
-	// for the life of the client process. What a share HOLDS is released
-	// instead, by closeFS.
+	// Neither map ever shrinks and there is no unregister, deliberately: a
+	// share removed leaves every container mounting it with `Stale file
+	// handle` against a mount that still looks fine. The reasoning is the
+	// "share registry never shrinks" invariant in CLAUDE.md. What a share
+	// HOLDS is released instead, by closeFS.
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
 	byPath map[string]*Share // keyed by canonical local path
@@ -165,11 +160,11 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		File:       file,
 		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
 	}
-	// A registration of a path already held returns that share above, so the
-	// only way to build a second stack for one export is to register a
-	// DIFFERENT directory at an export path already taken. That share stops
-	// being reachable, so what it holds is given up and its own byPath entry
-	// goes with it, rather than pointing at a filesystem nothing serves.
+	// Reached only by registering a DIFFERENT directory at an export path
+	// already taken, since a path already held returned its share above. The
+	// displaced share is unreachable, so it gives up what it holds and takes
+	// its byPath entry with it rather than leaving one pointing at a
+	// filesystem nothing serves.
 	if old, ok := r.shares[exportPath]; ok {
 		delete(r.byPath, workspace.CanonicalKey(old.LocalPath))
 		closeFS(old.fs)
@@ -285,29 +280,32 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 }
 
 // closeFS gives up what a share's filesystem holds, which today is the
-// descriptor cache and nothing else.
-//
-// It walks the stack rather than asserting io.Closer on the top of it: every
-// wrapper embeds billy.Filesystem as an INTERFACE, so a Close on a layer below
-// is not promoted through it, and both optional layers are absent entirely
-// when their switch says no. Unwrapping by concrete type is therefore what
-// tolerates a missing layer, and the stack is built one function above.
+// descriptor cache and nothing else. It walks the stack because every wrapper
+// embeds billy.Filesystem as an INTERFACE, so a Close on a layer below is not
+// promoted through the layers above it.
 func closeFS(fs billy.Filesystem) {
-	for {
-		switch v := fs.(type) {
-		case io.Closer:
-			_ = v.Close()
-			return
-		case *attrFS:
-			fs = v.Filesystem
-		case *singleFileFS:
-			fs = v.Filesystem
-		case *traceFS:
-			fs = v.Filesystem
-		default:
+	for fs != nil {
+		if c, ok := fs.(io.Closer); ok {
+			_ = c.Close()
 			return
 		}
+		fs = unwrapFS(fs)
 	}
+}
+
+// unwrapFS returns the layer under one of shareFS's wrappers, or nil at the
+// bottom. By concrete type, because shareFS leaves out either optional layer
+// when its switch says no, so a walk cannot assume what it will meet.
+func unwrapFS(fs billy.Filesystem) billy.Filesystem {
+	switch v := fs.(type) {
+	case *attrFS:
+		return v.Filesystem
+	case *singleFileFS:
+		return v.Filesystem
+	case *traceFS:
+		return v.Filesystem
+	}
+	return nil
 }
 
 // shareFS is a share's filesystem before attributes. The ONE place this is

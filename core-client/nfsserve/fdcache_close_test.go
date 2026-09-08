@@ -13,24 +13,16 @@ import (
 )
 
 // fdCacheIn reports the descriptor cache inside a share's filesystem, and nil
-// when REMOTE_DOCKER_NFS_FDCACHE turned it off. Anywhere rather than
-// outermost, the way tracedLayer walks: attributes sit above it, and a
-// single-file share adds another layer.
+// when REMOTE_DOCKER_NFS_FDCACHE turned it off. It sits under the attribute
+// layer, and under another again for a single-file share.
 func fdCacheIn(fs billy.Filesystem) *fdCacheFS {
-	for {
-		switch v := fs.(type) {
-		case *fdCacheFS:
-			return v
-		case *singleFileFS:
-			fs = v.Filesystem
-		case *attrFS:
-			fs = v.Filesystem
-		case *traceFS:
-			fs = v.Filesystem
-		default:
-			return nil
+	for fs != nil {
+		if c, ok := fs.(*fdCacheFS); ok {
+			return c
 		}
+		fs = unwrapFS(fs)
 	}
+	return nil
 }
 
 // onlyEntry is the one descriptor the cache holds.
@@ -48,9 +40,7 @@ func onlyEntry(t *testing.T, c *fdCacheFS) *cachedFD {
 }
 
 // SetAttrs rebuilds every share's filesystem, and the stack it replaces holds
-// real descriptors. Left behind, an orphaned cache keeps a file the container
-// is writing open until its idle timers expire, which is the cost the cache
-// exists to avoid on Windows (fdcache.go).
+// real descriptors. What an orphaned one costs is on fdCacheFS.Close.
 func TestSetAttrsClosesTheOutgoingDescriptorCache(t *testing.T) {
 	// Long enough that nothing here can be closed by an idle timer instead.
 	t.Setenv("REMOTE_DOCKER_NFS_FDCACHE", "1h")
