@@ -252,11 +252,35 @@ func (s *Server) serveExec(session gssh.Session, account sessionAccount, command
 		return
 	}
 
-	cmd.Stdin = session
+	// stdin is copied in a goroutine and only the command is waited on, which
+	// is the shape servePTY below already has.
+	//
+	// session is a gssh.Session and not an *os.File, so cmd.Stdin = session
+	// makes os/exec create an os.Pipe with a copying goroutine, and cmd.Wait
+	// waits for that copier: it returns only once the CLIENT closes its stdin.
+	// `ssh workspace true` from a terminal, without -n, then withholds the
+	// exit status although the command exited immediately.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		_, _ = fmt.Fprintf(session.Stderr(), "cannot connect stdin: %v\n", err)
+		_ = session.Exit(1)
+		return
+	}
 	cmd.Stdout = session
 	cmd.Stderr = session.Stderr()
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		_ = session.Exit(exitCode(err))
+		return
+	}
+	// A command that genuinely reads stdin still gets it. The copy ends when
+	// the session closes, or when cmd.Wait closes the pipe under it.
+	go func() {
+		_, _ = io.Copy(stdin, session)
+		_ = stdin.Close()
+	}()
+
+	if err := cmd.Wait(); err != nil {
 		_ = session.Exit(exitCode(err))
 		return
 	}
