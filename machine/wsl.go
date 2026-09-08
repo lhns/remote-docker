@@ -142,9 +142,11 @@ func wslConf(spec Spec) string {
 		// refused connection.
 		//
 		// PATH and DOCKER_TLS_CERTDIR are the two with no default in the agent's
-		// own code. DOCKER_TLS_CERTDIR is EMPTY on purpose: it is how
-		// image/Dockerfile turns dind's TLS off, and unset is a different
-		// answer, under which dind generates certificates and listens on 2376.
+		// own code. DOCKER_TLS_CERTDIR is EMPTY rather than unset, which is
+		// still a different answer: the agent names `dockerd` itself, so the
+		// dind block that reads this never runs, but dind's docker-entrypoint.sh
+		// does, and a non-empty value there points a client with no DOCKER_HOST
+		// and no socket at tcp://docker:2376.
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"DOCKER_TLS_CERTDIR=",
 

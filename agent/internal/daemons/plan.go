@@ -64,6 +64,21 @@ const DefaultImage = "docker:28-dind"
 // in a loop, so a daemon looks fine until the workspace is restarted, which
 // is exactly when nobody is watching. The script is present in both candidate
 // images because the workspace's own is built FROM docker:dind.
+//
+// The script is two blocks and this project wants only the second. The first
+// supplies dockerd's --host flags, and it is entered when there is no argument
+// or the first one starts with a dash:
+//
+//	if [ "$#" -eq 0 ] || [ "${1#-}" != "$1" ]; then
+//	        ... --host=tcp://0.0.0.0:2375, or 2376 with --tlsverify
+//	if [ "$1" = 'dockerd' ]; then
+//	        ... delete stale docker*.pid, inject docker-init, set up iptables
+//
+// So a command of flags alone binds a TCP listener nothing here dials, and
+// naming `dockerd` first skips that while keeping the pid cleanup, tini and
+// the iptables setup. Plan does exactly that; see the command it builds.
+// (docker-library/docker `dockerd-entrypoint.sh`, read 2026-09-08; re-check
+// with `curl -s https://raw.githubusercontent.com/docker-library/docker/master/dockerd-entrypoint.sh`.)
 const Entrypoint = "dockerd-entrypoint.sh"
 
 // SocketDir is where the agent keeps one socket directory per account, and
@@ -92,8 +107,11 @@ const (
 //	failed to start containerd: libcontainerd: failed to save daemon pid to
 //	disk: process with PID 35 is still running
 //
-// It dies 16.125s in, which is dockerd's deliberate delay before the
-// unencrypted-listener warning and not a budget running out (issue #154).
+// It died 16.125s in, which was dockerd's deliberate sleep at the
+// unencrypted-listener warning and not a budget running out. That sleep is
+// gone now that no daemon binds TCP at all (see Entrypoint), so the same
+// failure arrives in a fraction of a second and the number is history rather
+// than something to expect again.
 //
 // The same file kills the daemon a SECOND way, and a fix that answers only the
 // first is half a fix: dockerd can instead read the live pid, believe
@@ -239,10 +257,17 @@ func Plan(account string, opts Options) (Spec, error) {
 		image = DefaultImage
 	}
 
-	// Flags only: dockerd itself is the entrypoint. Two listeners, the one the
-	// agent dials and the conventional path, so anything running inside the
-	// daemon's own container still works.
+	// `dockerd` is named FIRST, and that word is what keeps this daemon off
+	// TCP. See Entrypoint: dind's script only supplies its own --host flags
+	// when the first argument is absent or begins with a dash, and one of
+	// those flags is always tcp://0.0.0.0:2375 or, with certificates,
+	// tcp://0.0.0.0:2376. Naming the binary skips that block and keeps the
+	// one below it, which is the half that matters here.
+	//
+	// Two listeners, the one the agent dials and the conventional path, so
+	// anything running inside the daemon's own container still works.
 	command := []string{
+		"dockerd",
 		"-H", "unix://" + SocketMount + "/" + SocketName,
 		"-H", "unix:///var/run/docker.sock",
 	}
@@ -274,9 +299,14 @@ func Plan(account string, opts Options) (Spec, error) {
 		// exec because runc executes from the exec-root, and 0755 rather
 		// than docker's tmpfs default of 1777.
 		Tmpfs: []string{ExecRoot + ":rw,exec,mode=755"},
-		// TLS off: the only thing that can reach this daemon is the agent,
-		// over a unix socket in a directory only the agent and the account can
-		// enter. Certificates would secure a network path that does not exist.
+		// Empty, not unset, and it no longer decides anything about the
+		// daemon: naming `dockerd` in the command means the block that reads
+		// this variable never runs, and there is no TCP listener for a
+		// certificate to protect. What still reads it is dind's OTHER script,
+		// docker-entrypoint.sh, which a `docker exec` into this container goes
+		// through: with no DOCKER_HOST and no socket yet, a non-empty value
+		// sends that client to tcp://docker:2376, a host this deployment does
+		// not have.
 		Env:     []string{"DOCKER_TLS_CERTDIR="},
 		Command: command,
 	}

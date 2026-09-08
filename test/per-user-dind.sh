@@ -734,6 +734,38 @@ else
 fi
 
 echo
+echo "== 14. an account's daemon binds no TCP API =="
+# dind's entrypoint supplies dockerd's --host flags whenever the first argument
+# is absent or starts with a dash, and one of them is always
+# tcp://0.0.0.0:2375: an unauthenticated Docker API, bound in the account's own
+# network namespace, where every container that account runs can reach it.
+# Naming `dockerd` first skips that block (agent/internal/daemons.Entrypoint).
+#
+# Two assertions, because either alone can pass for the wrong reason: what the
+# daemon BOUND, and what a container can REACH.
+listeners=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$A" netstat -lnt 2>&1)
+case "$listeners" in
+*:2375*|*:2376*)
+    bad "SECURITY: $A's daemon is listening on a TCP port: [$listeners]" ;;
+*Active*|*Proto*)
+    ok "$A's daemon binds no Docker API on 2375 or 2376" ;;
+*)
+    # No header means netstat itself did not run, so the absence above is
+    # evidence of nothing.
+    bad "netstat said nothing inside $A's daemon, so no listener was measured: [$listeners]" ;;
+esac
+
+# --network host is the daemon's own namespace, which is where a published port
+# and the NFS export both live, so this is the reach a container really has.
+probe2375="nc -w 2 127.0.0.1 2375 </dev/null && echo CONNECTED || echo REFUSED"
+reach=$(da run --rm --network host alpine:3 sh -c "$probe2375" 2>/dev/null | tr -d '\015')
+case "$reach" in
+*CONNECTED*) bad "SECURITY: a container in $A's daemon reached a Docker API on 2375" ;;
+*REFUSED*)   ok "a container in $A's daemon finds nothing on 2375" ;;
+*)           bad "the 2375 probe said nothing, so it proves nothing: [$reach]" ;;
+esac
+
+echo
 if [ "$FAIL" -ne 0 ]; then
     # 200 rather than the default 60. A per-account daemon that will not stay
     # up makes the workspace's own dockerd log one identical "container is not
