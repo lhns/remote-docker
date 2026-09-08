@@ -21,28 +21,24 @@ import (
 )
 
 // What a client does when the workspace at the other end is older than the
-// channel it is asking for.
-//
-// The server here is x/crypto/ssh directly rather than the workspace agent,
+// channel it is asking for. x/crypto/ssh directly rather than the agent,
 // because what is under test is a workspace this repository can no longer
-// build: one that accepts the session, runs the command as a shell command and
-// then blocks forever reading a stdin the client never closes.
+// build.
 
 // silentWorkspace is an SSH server that accepts a session, answers the exec
-// request so the client believes the command started, and then does exactly
-// what it is told to do with the command.
-//
-// answer is what goes out on stdout. Returning false means the server writes
-// nothing and never exits, which is a v0.5.1 agent asked for workspace-cache:
-// its serveExec sets cmd.Stdin to the session, so os/exec's Wait blocks on a
-// copy that cannot finish, the exit status is never sent, and the channel stays
-// open with nothing on it.
+// request so the client believes the command started, and then does what
+// answer says: its string goes out on stdout, and false means the server writes
+// nothing and never exits. That is a v0.5.1 agent asked for workspace-cache,
+// whose os/exec Wait blocks on a copy of a stdin nobody closes, so the exit
+// status is never sent and the channel stays open with nothing on it.
 type silentWorkspace struct {
 	addr   net.Addr
 	answer func(cmd string) (string, bool)
 }
 
-func startWorkspace(t *testing.T, answer func(cmd string) (string, bool)) *silentWorkspace {
+// startWorkspace runs one and connects to it, which is all any test here wants
+// of it.
+func startWorkspace(t *testing.T, answer func(cmd string) (string, bool)) *tunnelclient.Client {
 	t.Helper()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -77,7 +73,7 @@ func startWorkspace(t *testing.T, answer func(cmd string) (string, bool)) *silen
 			go ws.serve(conn, cfg)
 		}
 	}()
-	return ws
+	return ws.dial(t)
 }
 
 func (w *silentWorkspace) serve(conn net.Conn, cfg *ssh.ServerConfig) {
@@ -180,8 +176,7 @@ func helloFor(t *testing.T) string {
 // stream with no deadline to set, against an agent whose own read of our stdin
 // could not finish either. The client printed nothing and hung.
 func TestAGreetingNobodySendsEndsAtTheDeadline(t *testing.T) {
-	ws := startWorkspace(t, func(string) (string, bool) { return "", false })
-	client := ws.dial(t)
+	client := startWorkspace(t, func(string) (string, bool) { return "", false })
 
 	// A deadline of its own, well under handshakeTimeout, so a regression is a
 	// clean failure here rather than a test binary wedged until go test's own
@@ -213,12 +208,10 @@ func TestAGreetingNobodySendsEndsAtTheDeadline(t *testing.T) {
 // workspace serving ordinary write=through mounts is not doing anything wrong,
 // and telling somebody about a channel they never asked for is noise.
 func TestACommandAnOlderWorkspaceDoesNotServe(t *testing.T) {
-	ws := startWorkspace(t, func(cmd string) (string, bool) {
-		// What `sh -c "workspace-cache"` leaves on stdout, which is nothing.
-		return "", true
-	})
+	// What `sh -c "workspace-cache"` leaves on stdout, which is nothing.
+	client := startWorkspace(t, func(string) (string, bool) { return "", true })
 
-	_, err := openCache(t.Context(), ws.dial(t))
+	_, err := openCache(t.Context(), client)
 	var notServed *notServedError
 	if !errors.As(err, &notServed) {
 		t.Fatalf("openCache = %v, want a notServedError", err)
@@ -227,9 +220,9 @@ func TestACommandAnOlderWorkspaceDoesNotServe(t *testing.T) {
 
 // A workspace that does serve it is unaffected by the deadline.
 func TestAGreetingArrivesWithinTheDeadline(t *testing.T) {
-	ws := startWorkspace(t, func(string) (string, bool) { return helloFor(t), true })
+	client := startWorkspace(t, func(string) (string, bool) { return helloFor(t), true })
 
-	c, err := openCache(t.Context(), ws.dial(t))
+	c, err := openCache(t.Context(), client)
 	if err != nil {
 		t.Fatalf("openCache: %v", err)
 	}
@@ -240,8 +233,7 @@ func TestAGreetingArrivesWithinTheDeadline(t *testing.T) {
 // goroutine per greeting, and one that outlived its greeting would be one per
 // connection for the life of the process.
 func TestTheFastPathLeavesNoGoroutineBehind(t *testing.T) {
-	ws := startWorkspace(t, func(string) (string, bool) { return helloFor(t), true })
-	client := ws.dial(t)
+	client := startWorkspace(t, func(string) (string, bool) { return helloFor(t), true })
 
 	// One first, so the connection's own goroutines are already up and are not
 	// counted as ours.

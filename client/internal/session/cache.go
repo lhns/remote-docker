@@ -74,11 +74,8 @@ func (e *notServedError) Error() string {
 }
 
 // silentError is a channel the workspace accepted and then said nothing on
-// before the deadline.
-//
-// Kept apart from notServedError because only one of the two is a statement
-// about the workspace at all: silence names no cause, so what is reported is
-// what was observed and nothing more.
+// before the deadline. Apart from notServedError because silence names no
+// cause: what is reported is what was observed and nothing more.
 type silentError struct {
 	command string
 	after   time.Duration
@@ -88,38 +85,28 @@ func (e *silentError) Error() string {
 	return fmt.Sprintf("the workspace accepted %q and then said nothing for %s", e.command, e.after)
 }
 
-// handshakeTimeout bounds every greeting this client waits for.
-//
-// The agent writes a greeting as it begins serving the command: it waits on no
-// daemon, no mount and no disk, so this is one round trip and nothing else. Ten
-// seconds is far more than any link this tunnel works over needs, and short
-// enough to read as a failure rather than as a hang. The same number as
+// handshakeTimeout bounds every greeting this client waits for. The agent
+// writes one as it begins serving the command, waiting on no daemon, no mount
+// and no disk, so this is a single round trip. The same number as
 // refusalReasonTimeout, for the same reason.
 //
-// Without it the client hangs outright against an agent predating a command
-// (measured against v0.5.1 and workspace-cache): that agent has no case for the
-// command, falls through to serveExec and runs it as a shell command, whose
-// exit is never reported because os/exec waits on a copy from the session's
-// stdin, which this client never closes. Both ends then block reading the
-// other, and nothing is printed. The agent side of that is fixed, but only for
-// agents built since; every workspace already deployed still behaves this way,
-// and it is equally the shape of any command added later, so the deadline is
-// the only protection the client can give itself.
+// Without it the client hangs outright and prints nothing (measured against
+// v0.5.1 asked for workspace-cache): an agent with no case for the command runs
+// it as a shell command, whose exit os/exec never reports because it is copying
+// a stdin this client will not close while it blocks on the greeting. The agent
+// side is fixed, but only for agents built since, and every command added later
+// has the same shape against every workspace already deployed.
 const handshakeTimeout = 10 * time.Second
 
 // cacheRefusal turns a cache channel that could not be opened into the tail of
 // the sentence refusing a mount that needs one, with its remedy under it.
 //
-// It reports only what was established, which is why the two cases are not one
-// message. A workspace that answered the command with something other than a
-// greeting does not serve it, and that is the sentence rewrite.unionAvailable
-// already gives for a workspace reporting no union, so the two arrive alike. A
-// workspace that answered nothing is reported as answering nothing: no version,
-// no age and no cause, because none was checked.
-//
-// The agent's version rides along as CONTEXT. It is the fact somebody acts on,
-// and it is never the test: what gates is this request needing a capability the
-// workspace does not serve, never a version compared against a table.
+// Two cases rather than one message, because only one is a statement about the
+// workspace: "does not serve it" is rewrite.unionAvailable's own sentence, so a
+// missing channel and a missing union arrive alike, while a workspace that
+// answered nothing is reported as answering nothing. The agent's version rides
+// along as CONTEXT and is never the test: what gates is a mount needing a
+// capability, never a version compared against a table.
 func cacheRefusal(err error, agent string) error {
 	var notServed *notServedError
 	if errors.As(err, &notServed) {
@@ -127,10 +114,9 @@ func cacheRefusal(err error, agent string) error {
 	}
 	var silent *silentError
 	if errors.As(err, &silent) {
-		// The remedy names only the thing that is known to work. "Try again"
-		// would be the obvious suggestion and is wrong for the case that
+		// "Try again" is the obvious remedy and is wrong for the case that
 		// produced this: measured against a real v0.5.1 workspace, which never
-		// answers, so retrying never succeeds.
+		// answers at all.
 		return fmt.Errorf("%w\n  fix: use write=%s, which is served by the mount itself",
 			silent, workspace.WriteThrough)
 	}
@@ -170,10 +156,10 @@ func greet[T any](ctx context.Context, client *tunnelclient.Client, command stri
 		}
 		if errors.Is(err, io.EOF) {
 			// A CLEAN end with nothing on it: the command ran and produced no
-			// greeting, which is what an agent that has no case for it does
-			// once its shell has exited. A link that broke ends in a reset or a
-			// closed pipe instead, and stays the error it was rather than
-			// becoming a claim about how old the workspace is.
+			// greeting, which is an agent with no case for it once its shell
+			// has exited. A broken link ends in a reset or a closed pipe
+			// instead, and stays the error it was rather than becoming a claim
+			// about the workspace's age.
 			return nil, nil, greeting, &notServedError{command: command}
 		}
 		return nil, nil, greeting, fmt.Errorf("no greeting from the workspace: %w", err)
@@ -194,13 +180,9 @@ func greet[T any](ctx context.Context, client *tunnelclient.Client, command stri
 	return stream, r, greeting, nil
 }
 
-// readGreeting reads the one line a greeting is, bounded.
-//
-// Closing the stream is the only lever, exactly as cacheChannel.do says of a
-// timed-out exchange: it is an SSH channel with no deadline to set. The close
-// fails the blocked read, so the goroutine ends on the slow path as well as on
-// the fast one, and the buffered channel means it never blocks handing its
-// result over to a caller that has already gone.
+// readGreeting reads the one line a greeting is, bounded. Closing the stream is
+// the only lever, for the reason cacheChannel.do gives: the close fails the
+// blocked read, so the goroutine ends on the slow path as well as the fast one.
 func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
@@ -463,9 +445,8 @@ func (s *Session) liveCache() *cacheChannel {
 	if !ok || live == nil {
 		return nil
 	}
-	// Only ever reached for a share that already has a union, so the channel is
-	// open by now and this is the memoised answer. The refusal a mount gets is
-	// where the reason is said; here there is nobody to say it to.
+	// Only reached for a share that already has a union, so this is the
+	// memoised answer. A mount's refusal is where the reason is said.
 	c, _ := s.ensureCacheChan(s.ctx, live)
 	return c
 }

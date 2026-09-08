@@ -219,8 +219,8 @@ type liveConn struct {
 	// workspace too old to serve it must not be asked twice per container.
 	cacheOnce sync.Once
 	cacheChan *cacheChannel
-	// cacheErr is why there is none, kept so a refusal can say which failure
-	// this was rather than name a cause nobody checked.
+	// cacheErr is why there is none, kept so a refusal names which failure this
+	// was rather than a cause nobody checked.
 	cacheErr error
 
 	// machine holds a local machine open, nil for a workspace that is simply
@@ -509,12 +509,9 @@ func (s *Session) isDormant() bool {
 	return s.dormant
 }
 
-// readInfo asks the workspace what it is, bounded.
-//
-// The same shape as the channel handshakes and for the same reason: this is one
-// command and one reply, and a caller's context is a docker command's, which
-// often has no deadline of its own. tunnelclient.Run honours the context, so
-// the deadline is all that was missing.
+// readInfo asks the workspace what it is, bounded like the channel handshakes:
+// one command and one reply, and the caller's context is a docker command's,
+// which often has no deadline of its own.
 func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info, error) {
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()

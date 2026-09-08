@@ -4,15 +4,13 @@
 #
 # Every other suite builds both ends from this tree, so both always know every
 # command the other speaks. The failure this exists for is the opposite: a
-# client asking for a channel the workspace has never heard of. A 0.6.0 client
-# against a 0.5.1 workspace HUNG, printing nothing, because the agent ran
-# `workspace-cache` as a shell command and then blocked reading a stdin the
-# client never closed, while the client blocked reading a greeting nobody would
-# send.
+# client asking for a channel the workspace has never heard of, which HUNG a
+# 0.6.0 client against a 0.5.1 workspace with nothing on screen.
 #
-# The workspace is PULLED rather than built. Building v0.5.1 from its tag would
-# prove something about this checkout; pulling the image proves something about
-# what is deployed, which is what the report was about.
+# PULLED rather than built from the v0.5.1 tag: what is under test is what is
+# deployed, not what this checkout can build. ghcr's tag listing does not name
+# 0.5.1 at all and the tag is pullable regardless (checked 2026-09-08; re-check
+# with `docker pull ghcr.io/lhns/remote-docker-workspace:0.5.1`).
 #
 # WORKSPACE_IMAGE overrides the tag, so the same suite answers the question
 # again for whatever the oldest supported workspace becomes.
@@ -77,9 +75,8 @@ wait_parent_dockerd
 SOCK="$WORK/client.sock"
 CLIENT_PID=$(start_session "$WORK/state" "$ACCOUNT" "$SOCK" "$WORK/client.log" "$WORK/project")
 
-# The whole bug, measured: the client used to reach this point and stop. It has
-# a deadline now, so the endpoint comes up whether or not the workspace serves
-# the cache channel.
+# The whole bug, measured: the client used to reach this point and stop. With a
+# deadline the endpoint comes up whether or not the cache channel is served.
 if wait_endpoint "$SOCK" "$CLIENT_PID"; then
     ok "the endpoint came up against a workspace that does not serve the cache channel"
 else
@@ -132,10 +129,9 @@ else
 fi
 # Either remedy, because which one this is depends on the agent and both are
 # correct. Measured on 2026-09-08 against the published 0.5.1 image, this is the
-# SILENT case: that agent runs `workspace-cache` as a shell command and then
-# blocks on a stdin the client never closes, so it never answers at all, and the
-# refusal is the deadline rather than a workspace that told us anything. An
-# agent that runs the command and exits gives the other one.
+# SILENT case: that agent never answers at all, so the refusal is the deadline
+# rather than anything the workspace said. One that runs the command and exits
+# gives the other remedy.
 if grep -qE 'fix: use write=through|fix: update the workspace' <<<"$LAST_OUTPUT"; then
     ok "the refusal carries a remedy"
 else

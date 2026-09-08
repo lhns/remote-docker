@@ -131,12 +131,9 @@ type Rewriter struct {
 	// shares as union mounts.
 	//
 	// A function rather than a value because opening it is a round trip that
-	// must not happen until a mount needs one: a session whose mounts are all
-	// write=through asks nothing and is told nothing, which is what keeps an
-	// older workspace working in silence. Its error is the tail of the sentence
-	// refusing the mount, written by whoever tried to open it, since only that
-	// side can tell a workspace that does not serve the channel from one that
-	// did not answer. Nil is a session with no cache at all.
+	// must not happen until a mount needs one (session.ensureCacheChan). Its
+	// error is the tail of the sentence refusing the mount, written by whoever
+	// tried to open it. Nil is a session with no cache at all.
 	OpenCache func(ctx context.Context) (Cache, error)
 
 	// UnionReady is what the workspace reported about serving a union
@@ -702,9 +699,8 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: creating the cache for %s: %w", localPath, err)
 	}
 
-	// Open rather than held: resolveMode has already been through this for
-	// every mount of this container, so the channel is up and this is the
-	// session's memoised answer.
+	// Already opened by resolveMode for every mount of this container, so this
+	// is the session's memoised answer.
 	channel, err := r.openCache(ctx)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)

@@ -154,8 +154,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		// session has a watcher.
 		Watching: s.watch != nil,
 
-		// Opened when a mount asks for it and not before: see ensureCacheChan
-		// for why that silence matters.
+		// Opened when a mount asks for it and not before: see ensureCacheChan.
 		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },
 		UnionReady: info.Union,
 
@@ -230,19 +229,16 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 }
 
 // ensureCacheChan opens the workspace's cache channel on first use, and
-// remembers why it could not be opened.
+// remembers the error so a refusal can tell a workspace that does not serve the
+// command from one that said nothing.
 //
-// Lazily, and that is load-bearing rather than an optimisation: the channel
-// exists for one write mode, so a session whose mounts are all write=through
-// never opens it and never learns whether this workspace serves one. That is
-// the common case against an older workspace and it must stay SILENT, which it
-// cannot be if the answer is fetched at connect time.
-//
-// The reason is kept because it is the only thing that can tell the two
-// failures apart later: a workspace that does not serve the command, and one
-// that said nothing at all. Once, so a failure stands for the life of this
-// connection rather than costing a handshake per container; the next connection
-// asks again, which is the reconnect after an idle release (ADR 0015).
+// Lazily, and load-bearing rather than an optimisation: the channel exists for
+// one write mode, so a session whose mounts are all write=through never asks
+// and is never told. That is the common case against an older workspace and it
+// must stay SILENT, which it cannot be if the answer is fetched at connect.
+// Once, so a failure stands for the life of this connection rather than costing
+// a handshake per container; the next connection asks again, which is the
+// reconnect after an idle release (ADR 0015).
 func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChannel, error) {
 	l.cacheOnce.Do(func() {
 		l.cacheChan, l.cacheErr = openCache(ctx, l.ssh)

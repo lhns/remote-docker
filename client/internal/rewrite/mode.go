@@ -129,9 +129,8 @@ func (r *Rewriter) resolveMode(ctx context.Context, modes map[string]workspace.M
 
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
-		// Here and nowhere earlier is where the workspace is asked whether it
-		// serves a cache at all: this is the first request that needs one, and
-		// a session that never gets here never asks.
+		// The first request that needs a cache is where the workspace is asked
+		// whether it serves one; a session that never gets here never asks.
 		if _, err := r.openCache(ctx); err != nil {
 			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for %s, and %w",
 				source, wants, err)
