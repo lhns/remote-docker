@@ -262,8 +262,8 @@ func (s *Session) Idle() any {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
-	quiet, safe := s.IdleFor(ctx)
-	return proxy.Idle{Safe: safe, Quiet: quiet.Round(time.Second).String()}
+	_, safe := s.IdleFor(ctx)
+	return proxy.Idle{Safe: safe}
 }
 
 // Shutdown asks the session to stop, satisfying proxy.Control.

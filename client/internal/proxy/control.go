@@ -154,7 +154,4 @@ type Idle struct {
 	// Never a guess. The check that produces it is the one guarding the idle
 	// timer, and it answers "cannot tell" as busy.
 	Safe bool `json:"safe"`
-
-	// Quiet is how long the session has had nothing to do.
-	Quiet string `json:"quiet"`
 }
