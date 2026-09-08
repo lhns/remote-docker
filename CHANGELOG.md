@@ -209,6 +209,33 @@ StatefulSet adopts them.
   four of its fields across and left the rest, `machine` among them, as a base
   under every entry. The new workspace inherited the old one's machine, so
   `remote rm <new>` would destroy it. The whole entry moves now.
+- A non-pty `ssh workspace <command>` withheld its exit status until the
+  client closed its stdin, so `ssh workspace true` from a terminal hung
+  although the command had exited. The status follows the command now. Our own
+  client never tripped this: it sets no stdin, so x/crypto sends EOF at once.
+- A workspace that accepted a connection and then answered nothing wedged the
+  session until `remote restart`. The client's own Docker API calls carried a
+  context that nothing enforced, so one hung forever, taking port forwarding
+  and the idle-release check with it. They now return when their deadline
+  passes.
+- Closing a session could leave a local port open behind it. Port
+  reconciliation lists containers before it takes its lock, so one already
+  running when the session closed reopened the forwards that close had just
+  torn down, and nothing would close them again.
+- A share is rebuilt on every connect, and the descriptor cache it was built
+  with was left holding its files open until its idle timers expired. Bounded
+  rather than a leak, at up to 64 descriptors for two seconds each, and worth
+  fixing because one of them can be a file a container is mid-write, which is
+  the state the cache exists to avoid on Windows.
+- Preparing a cache for one directory froze every other cache request on the
+  workspace, for every account, until that directory's union had mounted. The
+  first container on a cold share waits on an NFS mount over the client's link,
+  so the wait is a real one, and a fill, an invalidation or a write-back for any
+  other share queued behind it. They now run alongside it.
+- A workspace whose union server stopped answering accumulated a goroutine and
+  an OS thread every two seconds, for as long as the agent ran, and a fill or a
+  deletion against such a share waited for the SSH session's lifetime instead of
+  reporting the share as not serving.
 - A forwarded UDP flow lived until the container stopped, so a sender whose
   source port changes per datagram, which is what a resolver does, left a
   goroutine, a 64KB buffer and an SSH channel behind per datagram. A flow that

@@ -32,8 +32,9 @@ type fdCacheFS struct {
 	idle time.Duration
 	max  int
 
-	mu   sync.Mutex
-	open map[string]*cachedFD
+	mu     sync.Mutex
+	open   map[string]*cachedFD
+	closed bool
 }
 
 // fdCacheMax bounds how many descriptors are held at once.
@@ -91,6 +92,13 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		// A request still holding the replaced stack is served uncached rather
+		// than refused: billy's own descriptor is right for it, nothing
+		// holding that past the request.
+		c.mu.Unlock()
+		return c.Filesystem.OpenFile(name, flag, perm)
+	}
 	if e, ok := c.open[name]; ok {
 		e.refs++
 		if e.timer != nil {
@@ -125,6 +133,13 @@ func (c *fdCacheFS) OpenFile(name string, flag int, perm os.FileMode) (billy.Fil
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		// Closed while this one was in the filesystem. Nothing would ever
+		// close an entry added now, so hand back an uncached descriptor.
+		c.mu.Unlock()
+		_ = f.Close()
+		return c.Filesystem.OpenFile(name, flag, perm)
+	}
 	if e, ok := c.open[name]; ok {
 		// Another request opened it while this one was in the filesystem. Keep
 		// the first, so there is only ever one descriptor per path to order
@@ -208,6 +223,36 @@ func (c *fdCacheFS) evictEntry(e *cachedFD) {
 	if !inUse {
 		e.close()
 	}
+}
+
+// Close gives up every descriptor this cache holds, and is what a share's
+// filesystem being replaced means (Registry.SetAttrs, on every connect).
+// Without it each rebuild orphans a cache that keeps files open until its idle
+// timers expire, which is the state the cache exists to avoid on Windows.
+//
+// A descriptor a request is still holding is dropped from the map and closed
+// by that request's release instead, the same path an eviction while in use
+// takes: the alternative is a write landing on a closed file.
+func (c *fdCacheFS) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	idle := make([]*cachedFD, 0, len(c.open))
+	for path, e := range c.open {
+		delete(c.open, path)
+		if e.timer != nil {
+			e.timer.Stop()
+			e.timer = nil
+		}
+		if e.refs == 0 {
+			idle = append(idle, e)
+		}
+	}
+	c.mu.Unlock()
+
+	for _, e := range idle {
+		e.close()
+	}
+	return nil
 }
 
 // A name that stops existing, or stops meaning this file, must not be served

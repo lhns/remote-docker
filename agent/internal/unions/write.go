@@ -14,7 +14,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/lhns/remote-docker/core-agent/replay"
-	"github.com/lhns/remote-docker/core-agent/union"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -194,7 +193,7 @@ func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live
 	if !ok {
 		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first: %w", export, ErrNoShare)
 	}
-	if err := union.Alive(ctx, l.spec); err != nil {
+	if err := m.aliveErr(ctx, l.spec); err != nil {
 		return nil, "", err
 	}
 
