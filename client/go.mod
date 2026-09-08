@@ -11,7 +11,7 @@ require (
 	github.com/docker/buildx v0.37.0
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/compose/v5 v5.5.0
-	github.com/google/go-containerregistry v0.22.0
+	github.com/google/go-containerregistry v0.22.0 // indirect
 	github.com/klauspost/compress v1.20.0
 	github.com/lhns/remote-docker/core v0.0.0
 	github.com/lhns/remote-docker/core-client v0.0.0
@@ -280,8 +280,13 @@ replace github.com/lhns/remote-docker/core-client => ../core-client
 // transitive dependency. Excluding it forces a post-split version.
 exclude google.golang.org/genproto v0.0.0-20230306155012-7f2fa6fef1f4
 
-require github.com/lhns/remote-docker/dircache v0.0.0
+require (
+	github.com/lhns/remote-docker/dircache v0.0.0
+	github.com/lhns/remote-docker/machine v0.0.0
+)
 
 replace github.com/lhns/remote-docker/dircache => ../dircache
 
 replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260908082311-85d4b4a00436
+
+replace github.com/lhns/remote-docker/machine => ../machine

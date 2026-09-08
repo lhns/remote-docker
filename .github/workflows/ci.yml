@@ -56,7 +56,7 @@ jobs:
       - name: go vet
         run: |
           set -eux
-          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./test/probes; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./machine ./test/probes; do
             (cd "$mod" && go vet ./...)
           done
 
@@ -65,7 +65,7 @@ jobs:
       - name: go test
         run: |
           set -eux
-          for mod in core agent core-agent core-client client dircache test/probes; do
+          for mod in core agent core-agent core-client client dircache machine test/probes; do
             (cd "$mod" && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
           done
 
@@ -95,6 +95,13 @@ jobs:
   # Windows backend of its own and its NFS server serves this machine's files,
   # so this is the only job where either runs on the OS it was written for.
   #
+  # `machine` earns it harder: `wsl_windows.go` and `hyperv_windows.go` are
+  # build-tagged windows, so the Linux jobs above do not compile them and the
+  # lint loop never sees them. The cross-compile matrix builds them under
+  # GOOS=windows and runs nothing. This job is the only place either file is
+  # executed, so dropping `machine` from this list drops all testing of the
+  # most Windows-specific code in the repository, with nothing reporting it.
+  #
   # No -race: it needs cgo, and a C toolchain on this runner is a dependency
   # for a check the Linux job already performs on the same code.
   #
@@ -112,7 +119,7 @@ jobs:
         shell: bash
         run: |
           set -eux
-          for mod in core core-client client dircache; do
+          for mod in core core-client client dircache machine; do
             (cd "$mod" && go test ./...)
           done
 
@@ -135,7 +142,7 @@ jobs:
       - name: golangci-lint
         run: |
           set -eux
-          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./test/probes; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./machine ./test/probes; do
             (cd "$mod" && golangci-lint run --timeout 5m ./...)
           done
           # The agent and core-agent both carry Linux-only files (netns, the unix
@@ -200,7 +207,7 @@ jobs:
           if [ -n "${NDK_CC:-}" ]; then
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$NDK_CC"
           fi
-          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache; do
+          for mod in ./core ./agent ./core-agent ./core-client ./client ./dircache ./machine; do
             (cd "$mod" && go build ./...)
           done
 

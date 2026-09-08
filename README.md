@@ -1079,6 +1079,9 @@ core/                  what both ends must agree on
 dircache/              filling a local copy of a tree, and carrying writes
                        back. Depends on nothing, in-repo or out
 
+machine/               provisioning a workspace on this machine: a WSL
+                       distribution or a Hyper-V VM. Depends on nothing in-repo
+
 core-client/           this machine, minus Docker
   tunnelclient/        dialling the tunnel
   nfsserve/            the in-process NFSv3 server
@@ -1094,7 +1097,7 @@ core-agent/            the workspace, minus Docker
 
 client/                the client binary (docker/cli, buildx)
   cmd/remote-docker/   also answers to `docker`
-  internal/            api proxy, bind rewriting, ports, machines, session
+  internal/            api proxy, bind rewriting, ports, session
 
 agent/                 the agent binary (five direct third-party requires)
   cmd/remote-dockerd/  the workspace binary
@@ -1109,10 +1112,10 @@ docs/adr/              why everything is the way it is
 ## Development
 
 The repository root is not a module, and `./...` stops at a module boundary, so
-every command loops over the seven.
+every command loops over the eight.
 
 ```bash
-mods="./core ./dircache ./core-client ./core-agent ./agent ./client ./test/probes"
+mods="./core ./dircache ./machine ./core-client ./core-agent ./agent ./client ./test/probes"
 for m in $mods; do (cd $m && go build ./... && go test ./...); done
 for m in $mods; do (cd $m && golangci-lint run ./...); done
 bash test/integration.sh      # needs docker and NFS client support

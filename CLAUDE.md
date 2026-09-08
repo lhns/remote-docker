@@ -63,6 +63,25 @@ dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          the wire format are all on the other side of Store.
                          docs/caching.md is what it is FOR.
 
+machine/go.mod           PROVISIONING A WORKSPACE ON THIS MACHINE, and its
+                         lifecycle (ADR 0026): a WSL distribution or a Hyper-V
+                         VM, created, located, held open, destroyed, and the
+                         rootfs it is built from. A module because a module is
+                         the only thing that can REFUSE a dependency (ADR 0021).
+                         Third parties are fine here -- go-containerregistry
+                         turns the workspace image into a rootfs -- and THIS
+                         REPOSITORY is what it refuses, which is the membership
+                         test:
+                           go list -deps ./... | grep 'lhns/remote-docker' | grep -v '/machine'
+                         must print nothing, and membership_test.go asserts the
+                         same thing over the source so the windows-tagged files
+                         are covered too. It does NOT shrink the client binary:
+                         client imports it either way. What the boundary buys is
+                         that the leaf stays a leaf.
+                         Its windows-tagged files are executed in ONE place, the
+                         `test (windows)` job of ci.yml, so `machine` must stay
+                         in that job's subset.
+
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
                          claim this whole split was for, and it is measured.
@@ -80,7 +99,6 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
                          CLI; ours lives under `remote` (ADR 0024)
   internal/
     config/              settings precedence, state paths
-    machine/             provisioning a workspace on this machine (ADR 0026)
     proxy/               Docker API proxy + a small API client of our own
     rewrite/             binds -> NFS volumes, owner labelling, volume GC
     session/cached.go    what each fill sent, across sessions, so a deletion
@@ -138,16 +156,16 @@ docs/adr/                architecture decision records
 ## Build and test
 
 ```bash
-# SEVEN MODULES (ADR 0021), and `./...` stops at a module boundary,
+# EIGHT MODULES (ADR 0021), and `./...` stops at a module boundary,
 # so the loop is the only thing that covers the repository. Running it at the
 # root fails outright, which is the point: there is no module there to build.
-for m in ./core ./dircache ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && go build ./... && go test ./...); done
+for m in ./core ./dircache ./machine ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && go build ./... && go test ./...); done
 
-# lint, nine passes: one per module, plus the agent AND core-agent under
+# lint, ten passes: one per module, plus the agent AND core-agent under
 # Linux. Both carry Linux-only files -- session handling, netns, the unix
 # provisioner, the inotify poker -- which a lint on the development machine
 # does not see at all. CI does, and will fail on what you did not lint.
-for m in ./core ./dircache ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && golangci-lint run ./...); done
+for m in ./core ./dircache ./machine ./agent ./core-agent ./core-client ./client ./test/probes; do (cd $m && golangci-lint run ./...); done
 for m in agent core-agent; do (cd $m && GOOS=linux golangci-lint run ./... && CGO_ENABLED=0 GOOS=linux go build ./...); done
 
 # gofmt is a SEPARATE CI step and golangci-lint here does not cover it. It bites
@@ -189,7 +207,7 @@ helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
-`go.work` ties the seven together for editors and local commands. CI and the
+`go.work` ties the eight together for editors and local commands. CI and the
 image build deliberately ignore it and build one module at a time, so a missing
 `require` fails where it is wrong rather than being covered by the workspace.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
