@@ -25,9 +25,11 @@ import (
 // all. Every other option is carried through untouched, `ro` above all: the
 // export behind the volume is read-write, so that flag is the only thing
 // between a container and the user's files.
-func splitMode(options string) (workspace.Mode, string, error) {
+// Returns the mode, the word it was SPELLED as when that was one of Docker's
+// (see asWritten), and the remaining options.
+func splitMode(options string) (workspace.Mode, string, string, error) {
 	if options == "" {
-		return workspace.ModeUnset, "", nil
+		return workspace.ModeUnset, "", "", nil
 	}
 
 	var words []string
@@ -39,31 +41,42 @@ func splitMode(options string) (workspace.Mode, string, error) {
 			kept = append(kept, opt)
 		}
 	}
-	mode, err := workspace.ParseMode(strings.Join(words, ","))
+	asked := strings.Join(words, ",")
+	mode, err := workspace.ParseMode(asked)
 	if err != nil {
-		return workspace.ModeUnset, "", fmt.Errorf("rewrite: %w", err)
+		return workspace.ModeUnset, "", "", fmt.Errorf("rewrite: %w", err)
 	}
-	return mode, strings.Join(kept, ","), nil
+	return mode, dockerSpelling(asked), strings.Join(kept, ","), nil
+}
+
+// dockerSpelling is the word to quote back at somebody, and "" when they
+// already wrote our own. Only one of Docker's whole-mode words qualifies:
+// anything else is what they typed and is in the mode itself.
+func dockerSpelling(asked string) string {
+	if workspace.DockerWord(asked) {
+		return strings.TrimSpace(asked)
+	}
+	return ""
 }
 
 // takeMode reads and removes a `--mount` entry's Consistency field: Docker's
 // field, our values. The CLI splits `--mount` on commas, so both axes reach
 // it as one csv-quoted field: `"consistency=read=cached,write=back"`.
-func takeMode(mount map[string]json.RawMessage) (workspace.Mode, error) {
+func takeMode(mount map[string]json.RawMessage) (workspace.Mode, string, error) {
 	raw, ok := mount["Consistency"]
 	if !ok || string(raw) == "null" {
-		return workspace.ModeUnset, nil
+		return workspace.ModeUnset, "", nil
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return workspace.ModeUnset, fmt.Errorf("rewrite: decoding mount consistency: %w", err)
+		return workspace.ModeUnset, "", fmt.Errorf("rewrite: decoding mount consistency: %w", err)
 	}
 	mode, err := workspace.ParseMode(value)
 	if err != nil {
-		return workspace.ModeUnset, fmt.Errorf("rewrite: %w", err)
+		return workspace.ModeUnset, "", fmt.Errorf("rewrite: %w", err)
 	}
 	delete(mount, "Consistency")
-	return mode, nil
+	return mode, dockerSpelling(value), nil
 }
 
 // The remedies named more than once, so two spellings cannot drift.
@@ -106,16 +119,20 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 // things can only get one of them. Refused rather than silently resolved: the
 // second EnsureVolume would recreate the volume the first just made, and both
 // containers would quietly run under the second answer.
-func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, asked workspace.Mode) (workspace.Mode, error) {
+// spelled is the word the mount actually used when it was one of Docker's,
+// which the refusals quote: `delegated` is write=back, and a message naming
+// only write=back names something nobody typed.
+func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, asked workspace.Mode, spelled string) (workspace.Mode, error) {
 	// An axis nobody named is Docker's default for it.
 	got := asked.Or(r.modeFor(source)).Or(workspace.DefaultMode)
 
 	if got.Union() {
+		wants := writeAsked(got.Write, spelled)
 		if r.Cache == nil {
 			return workspace.ModeUnset, fmt.Errorf(
-				"rewrite: %s asks for write=%s, which needs a session that can reach the workspace's cache\n"+
+				"rewrite: %s asks for %s, which needs a session that can reach the workspace's cache\n"+
 					"  fix: use write=%s, which is served by the mount itself",
-				source, got.Write, workspace.WriteThrough)
+				source, wants, workspace.WriteThrough)
 		}
 		if !r.Watching {
 			// A stronger requirement than read=cached's, and for a stronger
@@ -123,12 +140,12 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 			// COPY of a file that changed here is stale until something
 			// removes it, and the watcher is what removes it (ADR 0044).
 			return workspace.ModeUnset, fmt.Errorf(
-				"rewrite: %s asks for write=%s, whose cache is kept honest by the watcher, and watching is off"+fixWatchOn,
-				source, got.Write)
+				"rewrite: %s asks for %s, whose cache is kept honest by the watcher, and watching is off"+fixWatchOn,
+				source, wants)
 		}
 		if err := unionAvailable(r.UnionReady); err != nil {
-			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for write=%s, and %w",
-				source, got.Write, err)
+			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for %s, and %w",
+				source, wants, err)
 		}
 	}
 	if got.Read == workspace.ReadCached && !r.Watching {
@@ -150,6 +167,17 @@ func (r *Rewriter) resolveMode(modes map[string]workspace.Mode, source string, a
 	return got, nil
 }
 
+// writeAsked names the write mode a refusal is about, and where a Docker word
+// asked for it, that word too: somebody who wrote `delegated` is told
+// `write=back, which delegated means`, because the union is the write axis and
+// that word is the one way to reach it without naming it.
+func writeAsked(write workspace.Write, spelled string) string {
+	if spelled == "" {
+		return "write=" + string(write)
+	}
+	return fmt.Sprintf("write=%s, which %s means", write, spelled)
+}
+
 // unionAvailable turns the workspace's answer into a remedy. An empty answer is
 // an agent predating workspace.Info.Union, and reads as "cannot": no workspace
 // served a union before that field existed.
@@ -159,11 +187,11 @@ func unionAvailable(reported string) error {
 		return nil
 	case workspace.UnionNoBinary:
 		return fmt.Errorf("the daemon serving it has no %s\n"+
-			"  fix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE",
+			"  fix: use write=through, or run the workspace's image for per-account daemons, with WORKSPACE_DIND_IMAGE",
 			"fuse-overlayfs")
 	case workspace.UnionNoDevice:
 		return fmt.Errorf("the daemon serving it has no /dev/fuse\n" +
-			"  fix: load the fuse module on the host, and run the daemon with the device")
+			"  fix: use write=through, or load the fuse module on the host and run the daemon with the device")
 	default:
 		return fmt.Errorf("this workspace does not serve it" + FixUpdateWorkspace)
 	}

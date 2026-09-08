@@ -178,11 +178,17 @@ func TestNFSVolumeOptions(t *testing.T) {
 		// Deciseconds, so this is the kernel's own 60s TCP default.
 		"timeo=600",
 		"retrans=2",
-		"nconnect=8",
 	} {
 		if !strings.Contains(o, want) {
 			t.Errorf("options %q are missing %q", o, want)
 		}
+	}
+
+	// nconnect was in this list and needs Linux 5.3, which cost a RHEL 7
+	// workspace every one of its mounts. The version rule is asserted for the
+	// whole list in kernel_test.go; this is the one word that has been wrong.
+	if strings.Contains(o, "nconnect") {
+		t.Errorf("options %q ask for nconnect, which the supported floor (%s) does not parse", o, minimumKernel)
 	}
 }
 

@@ -509,6 +509,17 @@ premise of the project, and it applies to building it too. So:
   `invalid argument`, about a list whose every word is individually valid. That
   is what kept the union from ever mounting. `Spec.LowerMount` does the split,
   and the error now prints the two halves so the next one names itself.
+- **A mount option is a claim about the WORKSPACE's kernel, and the floor is
+  3.10** (RHEL 7, known to be in use). The NFS client refuses the whole option
+  string over one word it does not know, and a docker volume's driver options
+  are IMMUTABLE, so an option too new is not a slower mount: it is every mount
+  on that workspace failing, forever, until somebody removes the volumes by
+  hand. `nconnect=8` needs 5.3 and did exactly that. Every option
+  `NFSVolumeOptions` emits is in the table in `core/workspace/kernel_test.go`
+  with the kernel it needs and where that was read; adding one means adding a
+  row, and a row above the floor fails the test. There is no way to ask the NFS
+  client what it parses -- it answers EINVAL and names nothing -- so the check
+  is the table, and CI cannot stand in for it: every runner is 6.x.
 - **Prefetch is OFF unless `prefetch: eager|tree` says otherwise, and large
   files are never in it** (ADR 0045). Under `tree`, every NFS READ on a share
   with a cache is a miss, reported by `nfsserve`'s observer to
@@ -1035,6 +1046,16 @@ its pure planning function was.
   are unit tested against a fake backend. Nothing has run a watcher over a
   10,000-directory tree, and the macOS backend (kqueue, one fd per *file*) has
   never been executed at all.
+- **Any workspace kernel but the runner's.** The suites make a real kernel NFS
+  mount, and every one of them makes it on a GitHub runner, which is 6.x. So
+  they prove the mount options against ONE kernel: a mount option newer than
+  the supported floor passes CI and fails in the field, on every bind mount,
+  with `invalid argument` against an option list whose every word is
+  individually valid. That is not hypothetical, it is what `nconnect=8` (Linux
+  5.3) did to a RHEL 7 workspace. The floor and what each option needs are the
+  table in `core/workspace/kernel_test.go`, which is a claim about the kernel
+  and not about this code: only reading the kernel's own source or `man 5 nfs`
+  re-checks it, and nothing in CI can.
 
 ## Conventions
 

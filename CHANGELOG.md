@@ -72,9 +72,10 @@ Four things were behind that, and all four are fixed:
   writes than the server could drain inside it failed all of them at once.
   Measured on a live workspace at `timeo=30`: 224 WRITEs in flight timing out
   together at 9.07s, with the transport never reconnecting. A share now asks
-  for the kernel's own TCP default of 60 seconds, and for eight connections
-  rather than one; the server, which answered one request at a time per
-  connection, now handles eight (ADR 0047).
+  for the kernel's own TCP default of 60 seconds, and the server, which
+  answered one request at a time per connection, now handles eight (ADR 0047).
+  It briefly asked for eight TCP connections as well, with `nconnect`; that is
+  gone again, under Fixed below.
 - **A file was opened and closed once per megabyte.** NFS has no open file, so
   the server opened, seeked, wrote and CLOSED on every WRITE request: a 185MB
   file at `wsize=1048576` was opened and closed 180 times. On Windows those
@@ -109,9 +110,9 @@ files never were: they do not pay it per byte.
 
 One caveat, because it is why the mount options can look like they did
 nothing: Linux keeps one RPC transport per server address, and every share of
-a machine mounts from the same one. `timeo`, `retrans` and `nconnect` are
-taken from whichever share mounted first and silently ignored for the rest,
-until the workspace's daemon is restarted.
+a machine mounts from the same one. `timeo` and `retrans` are taken from
+whichever share mounted first and silently ignored for the rest, until the
+workspace's daemon is restarted.
 
 ### A share behaves like a bind mount, and is measured against one
 
@@ -199,6 +200,29 @@ StatefulSet adopts them.
 
 ### Fixed
 
+- **Every bind mount failed on a workspace older than Linux 5.3.** The share's
+  mount asked for `nconnect=8`, which the NFS client has only since 5.3, and
+  the kernel refuses the WHOLE option string over one word it does not know —
+  so a workspace on RHEL 7 (`3.10.0-1160.119.1.el7.x86_64`) answered
+  `failed to mount local volume: ... invalid argument` against a list whose
+  every word is individually valid. `nconnect` is gone, and it is not coming
+  back without a measurement: its benefit was never measured, and Linux keeps
+  one RPC transport per server address, so it applied to whichever share
+  mounted first and to nothing after it. Every remaining option is in the
+  table in `core/workspace/kernel_test.go` with the kernel it needs, and a
+  test fails on one above the supported floor, which is now written down: 3.10.
+
+  **A volume already created with `nconnect=8` keeps it**, because a volume's
+  driver options are immutable. Creating a container replaces such a volume by
+  itself, so `docker run` is enough; a container that ALREADY EXISTS is only
+  started, and keeps the broken volume. For those, recreate the container:
+
+  ```bash
+  docker compose down && docker compose up -d   # or: docker rm -f <container>
+  ```
+
+  A volume left behind by a container that is gone is removed by
+  `remote-docker remote gc`, and rebuilt on the next run.
 - `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's
   session, whichever machine was named.
 - `remote machine rebuild` and `status` ignored the CPU count, memory,
@@ -215,6 +239,13 @@ StatefulSet adopts them.
 
 ### Changed
 
+- A share whose mode needs a union, on a workspace that cannot make one, is
+  refused naming the word that asked for it. `delegated` is
+  `read=cached,write=back`, so it is the one way to ask for a union without
+  typing `back`, and the refusal used to name a mode nobody had written. Every
+  one of these refusals now also offers `write=through`, which is the remedy
+  the person reading has in their own hands. The read axis needs nothing in the
+  workspace, so `read=cached` is unaffected.
 - `remote status`'s daemon row and the different-build warning now read
   `a different build (session X, this binary Y)`.
 - `remote machine stop`, `start` and `rebuild` warn when a session

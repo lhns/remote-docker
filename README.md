@@ -362,6 +362,14 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 | `cached` | trusts attributes for a minute | `back` | in a union on the workspace, carried back within seconds |
 | | | `ephemeral` | in a union on the workspace, never carried back |
 
+The read axis is the mount itself and needs nothing in the workspace, so
+`read=cached` works wherever a share works. The write axis is what pulls in a
+union, and a union needs `fuse-overlayfs` in the image the account's daemon
+runs: `write=back`, `write=ephemeral`, and Docker's `delegated`, which means
+`read=cached,write=back` and is the one way to ask for a union without naming
+it. A workspace that cannot make one says so before anything is created, and
+names the word you wrote.
+
 ```bash
 docker run -v ./project:/app:read=cached img                       # the one to reach for
 docker run -v ./project:/app:ro,read=cached img                    # beside ro, comma-joined
@@ -442,6 +450,32 @@ What is in this release, and what is still unproven:
 The workspace runs one binary, `remote-dockerd`. It supervises dockerd,
 provisions an account per enrolled key, and serves SSH itself. There is no
 sshd, no sudo and no shell scripts in the image.
+
+**The workspace kernel must be 3.10 or newer**, which is RHEL 7 and is the
+oldest thing this targets on purpose. It is a hard floor rather than a
+preference: a share is an NFS mount the workspace makes, the NFS client refuses
+the *whole* option string over one word it does not know, and a Docker volume's
+driver options cannot be changed after it is created, so an option too new
+fails every mount on that workspace and leaves volumes that can never mount
+again. What each option needs, and where that was read in the kernel source, is
+the table in `core/workspace/kernel_test.go`; a test fails on anything above the
+floor. Your own machine's kernel does not come into it, and neither does macOS
+or Windows: the client mounts nothing.
+
+Two things about an old workspace kernel that are *not* the floor:
+
+- **`write=back` and `write=ephemeral` need `fuse-overlayfs`** in the image the
+  account's daemon runs, and that is asked of the workspace rather than guessed
+  from a version. Mounted as root it has no documented kernel floor, and RHEL 7
+  ships it (`fuse-overlayfs` in RHEL 7 Extras, [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222)),
+  so this is about the image and not the kernel. `read=cached` needs none of it.
+- **Docker itself has not been built for el7 since 26.1.4** (*checked 2026-09-08
+  against `https://download.docker.com/linux/centos/7/x86_64/stable/Packages/`*),
+  and [the install docs](https://docs.docker.com/engine/install/centos/) list
+  only CentOS Stream. Docker's own documented minimum is still kernel 3.10, and
+  `overlay2` is documented as working on `3.10.0-514` and newer, so a workspace
+  there is plausible; nothing here has ever run one. RHEL 7 reached end of
+  maintenance on 2024-06-30.
 
 ### Behind a reverse proxy
 
@@ -1029,6 +1063,10 @@ push. **macOS has never been executed at all**, in CI or anywhere else.
 non-root mkdir and the conformance probe), on one runner image; nobody
 working on this has WSL on their own machine. Swarm itself needs a real
 cluster and CI cannot cover it.
+**Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
+option newer than the supported floor passes CI and fails on the workspace, on
+every bind mount at once. `nconnect=8` did exactly that on a RHEL 7 workspace.
+What guards it is a table, not a test run.
 **Android is built and inspected, and CI runs nothing on it**: it checks that
 the binary is loadable on a phone and links the system libc, which is what makes
 DNS work there. A session and a container were confirmed by hand from Termux on
