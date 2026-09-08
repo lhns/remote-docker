@@ -83,8 +83,24 @@ type Manager struct {
 	Volumes Volumes
 	Log     *slog.Logger
 
-	mu     sync.Mutex
+	mu sync.Mutex
+
 	shares map[string]*live
+
+	// pending is the share keys a Prepare is mounting, so a second Prepare for
+	// the same share waits rather than starting a union of its own. The shape
+	// is daemons.Manager.ensure's, and so is the rule it exists for: the slow
+	// work happens with m.mu released, because every other cache operation
+	// reaches m.share and would otherwise queue behind one cold union.
+	pending map[string]chan struct{}
+
+	// probe answers whether a union is serving, and onStart is told about each
+	// one this manager mounts. Both are nil in production, where the answers
+	// are union.Alive and nothing. A test sets them because no union can be
+	// mounted on a development machine, and because a second union started for
+	// one share replaces the first in m.shares and is otherwise invisible.
+	probe   func(context.Context, union.Spec) error
+	onStart func(union.Spec)
 }
 
 // live is one mounted union.
@@ -215,39 +231,105 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 		return "", err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.shares == nil {
-		m.shares = map[string]*live{}
-	}
-
 	k := key(account, req.Export)
-	if existing, ok := m.shares[k]; ok {
-		if m.alive(existing.spec) {
+	for {
+		existing, known := m.share(account, req.Export)
+
+		// Outside m.mu deliberately. A liveness check costs up to aliveTimeout
+		// against a wedged server and mounting costs up to readyTimeout, and
+		// every other cache operation for every other account reaches m.share:
+		// holding the lock across either stalls all of them behind one share.
+		if known && m.alive(existing.spec) {
 			return existing.spec.Merged(), nil
 		}
+
+		m.mu.Lock()
+		if wait, ok := m.pending[k]; ok {
+			// Somebody else is mounting this share. Wait for them rather than
+			// racing: two Prepares must not both start a union on one path.
+			m.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		wait := make(chan struct{})
+		if m.pending == nil {
+			m.pending = map[string]chan struct{}{}
+		}
+		m.pending[k] = wait
+		m.mu.Unlock()
+
+		merged, err := m.mount(ctx, k, d.Host, req.Cache, spec)
+
+		m.mu.Lock()
+		delete(m.pending, k)
+		m.mu.Unlock()
+		close(wait)
+
+		return merged, err
+	}
+}
+
+// mount replaces a share's union with a fresh one and waits for it to answer.
+//
+// The caller holds the share's pending entry rather than m.mu, so nothing else
+// mounts this share meanwhile and no other share waits on this one.
+func (m *Manager) mount(ctx context.Context, k, host, cacheVol string, spec union.Spec) (string, error) {
+	m.mu.Lock()
+	dead := m.shares[k]
+	m.mu.Unlock()
+	if dead != nil {
 		// Down rather than absent. Torn out here so the mount below is a fresh
 		// one; a container already bound to the dead mount is not repaired by
 		// this and cannot be, which is the rule CLAUDE.md states about a mount
 		// that has gone wrong.
-		m.stop(k, existing)
+		m.discard(k, dead)
 	}
 
-	l := m.start(spec, d.Host)
-	l.cache = req.Cache
+	m.mu.Lock()
+	if m.shares == nil {
+		m.shares = map[string]*live{}
+	}
+	l := m.start(spec, host)
+	l.cache = cacheVol
 	m.shares[k] = l
+	m.mu.Unlock()
 
 	if err := m.waitReady(ctx, spec); err != nil {
-		m.stop(k, l)
+		m.discard(k, l)
 		return "", err
 	}
 	return spec.Merged(), nil
+}
+
+// discard ends supervision of one union and waits for its supervisor, taking
+// the lock only for the removal.
+//
+// A no-op unless the share still holds this exact union: ReleaseAccount can
+// have taken it out while Prepare was waiting for it.
+func (m *Manager) discard(k string, l *live) {
+	m.mu.Lock()
+	ours := m.shares[k] == l
+	if ours {
+		m.remove(k, l)
+	}
+	m.mu.Unlock()
+
+	if ours {
+		drain(l)
+	}
 }
 
 // start runs the union's server and keeps running it.
 func (m *Manager) start(spec union.Spec, host string) *live {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &live{spec: spec, host: host, cancel: cancel, done: make(chan struct{})}
+	if m.onStart != nil {
+		m.onStart(spec)
+	}
 
 	go func() {
 		defer close(l.done)
@@ -354,9 +436,24 @@ func (m *Manager) waitReady(ctx context.Context, spec union.Spec) error {
 // alive reports whether the union answers. The mount is the truth, not the pid:
 // see union.Alive.
 func (m *Manager) alive(spec union.Spec) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), aliveTimeout)
+	return m.aliveErr(context.Background(), spec) == nil
+}
+
+// aliveErr asks whether a union is serving, within aliveTimeout whatever the
+// caller's context allows.
+//
+// The budget is not the caller's to skip. mergedRoot passes the cache session's
+// context, which gliderlabs builds with context.WithCancel and no deadline
+// (agent/internal/sshd/cache.go), so an Apply or a Drop against a wedged FUSE
+// server waited for as long as the SSH session lived.
+func (m *Manager) aliveErr(ctx context.Context, spec union.Spec) error {
+	ctx, cancel := context.WithTimeout(ctx, aliveTimeout)
 	defer cancel()
-	return union.Alive(ctx, spec) == nil
+
+	if m.probe != nil {
+		return m.probe(ctx, spec)
+	}
+	return union.Alive(ctx, spec)
 }
 
 // ReleaseAccount drops the shares an account holds that nothing is using,
@@ -472,10 +569,22 @@ func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 	return out
 }
 
-// stop ends supervision. The caller holds the lock.
+// stop ends supervision and waits for it. The caller holds the lock.
 func (m *Manager) stop(k string, l *live) {
+	m.remove(k, l)
+	drain(l)
+}
+
+// remove ends supervision and forgets the share. The caller holds the lock;
+// waiting for the supervisor is drain's, and must not happen under it.
+func (m *Manager) remove(k string, l *live) {
 	l.cancel()
 	delete(m.shares, k)
+}
+
+// drain waits for a stopped union's supervisor to finish, bounded so one wedged
+// child cannot hold up every other share.
+func drain(l *live) {
 	select {
 	case <-l.done:
 	case <-time.After(stopTimeout):
