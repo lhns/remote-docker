@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.7.0 — 2026-09-08
 
 ### Security: no daemon binds an unauthenticated Docker API
 
