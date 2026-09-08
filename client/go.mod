@@ -284,4 +284,4 @@ require github.com/lhns/remote-docker/dircache v0.0.0
 
 replace github.com/lhns/remote-docker/dircache => ../dircache
 
-replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260908071343-891a623c4923
+replace github.com/willscott/go-nfs => github.com/lhns/go-nfs v0.0.5-0.20260908082311-85d4b4a00436

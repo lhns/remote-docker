@@ -135,3 +135,89 @@ func TestTheCacheIsOnByDefaultAndCanBeTurnedOff(t *testing.T) {
 		}
 	}
 }
+
+// A descriptor evicted while a request still holds it must be closed when that
+// request lets go.
+//
+// Eviction drops the entry from the map so no later request finds a descriptor
+// about to stop meaning its name. That leaves the last release as the only
+// thing that can close it, and it used to set an idle timer that looked the
+// entry up by name instead — finding nothing, because the eviction had already
+// removed it. The descriptor stayed open for the life of the process,
+// unreachable, holding the file open on Windows.
+func TestADescriptorEvictedWhileInUseIsClosedByItsLastRelease(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.bin"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs, _ := cachedOver(t, dir, time.Minute)
+	cache := fs.(*fdCacheFS)
+
+	f, err := fs.OpenFile("f.bin", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	cache.mu.Lock()
+	held := cache.open["f.bin"]
+	cache.mu.Unlock()
+	if held == nil {
+		t.Fatal("the descriptor was not cached, so this test would prove nothing")
+	}
+
+	// Removing the name evicts it while the request still holds it.
+	if err := fs.Remove("f.bin"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// An open descriptor stats; a closed one cannot. Not compared against
+	// os.ErrClosed: openShared builds the file with os.NewFile on Windows, so
+	// a closed handle answers with the platform's own error instead.
+	if _, err := held.file.Stat(); err == nil {
+		t.Error("the evicted descriptor is still open after its last release")
+	}
+}
+
+// The idle timer must close the entry it was set for, not whatever holds that
+// name when it fires: a name reopened in between belongs to a live request.
+func TestTheIdleTimerClosesItsOwnDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.bin"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs, _ := cachedOver(t, dir, time.Minute)
+	cache := fs.(*fdCacheFS)
+
+	first, err := fs.OpenFile("f.bin", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.mu.Lock()
+	stale := cache.open["f.bin"]
+	cache.mu.Unlock()
+
+	cache.evict("f.bin") // the name is dropped, first still holds the descriptor
+	_ = first.Close()    // and closes it
+
+	second, err := fs.OpenFile("f.bin", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+
+	cache.mu.Lock()
+	live := cache.open["f.bin"]
+	cache.mu.Unlock()
+	if live == nil || live == stale {
+		t.Fatal("the reopen did not produce a new entry, so this test would prove nothing")
+	}
+
+	// Firing the first entry's eviction must leave the second alone.
+	cache.evictEntry(stale)
+	if _, err := live.file.Stat(); err != nil {
+		t.Errorf("the live descriptor was closed by another entry's eviction: %v", err)
+	}
+}
