@@ -888,6 +888,18 @@ premise of the project, and it applies to building it too. So:
   `cmd/dockerd/daemon.go`, `loadListeners`, read 2026-09-08).
   `per-user-dind.sh` section 14 asserts both halves: what the daemon bound, and
   what a container in its namespace can reach.
+- **A failed start is remembered for 5 seconds, and that is not a backoff.**
+  `ensure` single-flights, so a burst all waits on one leader -- and when the
+  leader failed it stored nothing, so every waiter woke, became the next leader
+  and paid the whole ready budget again. N callers against a daemon that will
+  not start was N x 180s, serialised, and `docker compose up` is hundreds of
+  calls. The memo answers them from the record instead. It must stay SHORT: a
+  memo cannot tell a daemon that will never start from one somebody has just
+  repaired by hand, and refusing a working daemon is the worse mistake, so
+  `Reset` clears it too. The budget itself is `WORKSPACE_DAEMON_READY_TIMEOUT`,
+  because what a cold daemon costs belongs to the deployment: about a second on
+  a runner, and the 180s default is for a first start on fuse-overlayfs over
+  Ceph.
 - **A per-account daemon carries no restart policy** (ADR 0019). It used to,
   which made the parent dockerd a second supervisor with no backoff and nothing
   in our log. `Ensure` starts one when its account connects and that is the

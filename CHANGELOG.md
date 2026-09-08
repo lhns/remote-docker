@@ -26,6 +26,18 @@ used to take about 17 seconds to answer now takes about 1.
 
 Each account's daemon container is recreated once to pick this up, and keeps
 its images, containers and volumes.
+### The wait for a cold daemon is a setting, and a burst no longer pays it each
+
+`WORKSPACE_DAEMON_READY_TIMEOUT` is how many seconds a per-account daemon has
+to answer when it is started. The default is unchanged at 180, which is chosen
+for a first start on fuse-overlayfs over Ceph or NFS; a healthy daemon answers
+in about a second. Everything that account does waits on it, a shell included,
+so it is also how long somebody with a broken daemon waits for a prompt.
+
+A start that fails is also remembered for five seconds now. `docker compose up`
+is hundreds of API calls, every one of them asks for the daemon, and when the
+first attempt failed each of the others started over and paid the whole budget
+again, one after another.
 
 ### An account's daemon no longer fails to restart after the workspace does
 

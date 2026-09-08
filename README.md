@@ -708,12 +708,29 @@ node. The socket is deliberately not passed to the privileged child.
 | `WORKSPACE_DIND_IMAGE` | the workspace's own image | image a per-account daemon runs |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
 | `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon, and the paths a bind may name; see below |
+| `WORKSPACE_DAEMON_READY_TIMEOUT` | `180` | seconds a cold per-account daemon has to answer; see below |
 | `WORKSPACE_SHELL` | `/bin/bash` | shell an SSH session lands in |
 | `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
 | `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; uid decides the rest |
 | `WORKSPACE_IMAGE` | | the service's own image, for Swarm elevation |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
+
+### How long a cold daemon has to start
+
+An account's daemon is started when that account connects, and everything that
+account does waits for it, a shell included: the agent asks for the daemon
+before it opens one, so an account whose daemon will not start gets no prompt
+until the wait is over.
+
+The wait is 180 seconds by default. A healthy daemon answers in about a second
+on a GitHub runner, so the rest of that budget is for a workspace slower than
+that one: a first start on fuse-overlayfs over Ceph or NFS is the case it was
+chosen for. `WORKSPACE_DAEMON_READY_TIMEOUT` is that budget in seconds.
+
+Lowering it makes a broken daemon say so sooner and risks giving up on a slow
+one, which costs the account a session that fails for a reason they cannot act
+on. An unusable value is logged once at startup and the default is used.
 
 ### A private or insecure registry
 
