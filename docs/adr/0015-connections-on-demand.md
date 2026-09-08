@@ -35,8 +35,8 @@ is one place rather than a policy scattered across the session.
 no request is in flight, *and* nothing on the workspace still depends on us:
 
 - a container holding one of our volumes has a **live NFS mount**; dropping the
-  tunnel gives it `EIO`. `soft,timeo=30` makes that a clean failure rather than
-  a hang (ADR 0002), but it is still a failure.
+  tunnel gives it `EIO`. `soft` makes that a clean failure rather than a hang
+  (ADR 0002), but it is still a failure.
 - a running container we created may have **published ports** whose local
   forwards exist only while we are connected.
 

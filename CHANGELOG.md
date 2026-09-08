@@ -25,72 +25,66 @@ A mount names one or both; the rest comes from `consistencyPaths`, then
 writes stay in the workspace and go with it. `remote status` reports bytes
 sent per share.
 
-### Prefetch, off by default
-
-`prefetch: eager` or `tree` (`REMOTE_DOCKER_PREFETCH`) fills a `read=cached`
-union ahead of reads: the whole tree smallest first, or what the container
-reads and its neighbourhood. Off because, measured on a shaped link, landing a
-file in the union costs more round trips than reading it: a cold union reads
-in the plain mount's time at every latency, and a sparse read is slower. The
-table is in ADR 0045.
-
-### A share stops getting slower the longer a session runs
-
-Every NFS request resolved its file handle through a cache walk, and the cache
-holds one entry per path the workspace has touched, so each request cost more
-than the last. With 50,000 files seen it was 10.3ms of pure CPU per request
-against 12us at the start, which is 1.9 seconds of it for a single 256MB
-write; the writes queued behind that ran out of the mount's timeout and the
-write failed with EIO, on a share that had worked earlier in the same session.
-Nothing logged it. The fix is in the fork (ADR 0047), and
-`core-client/nfsserve/handlecost_test.go` is the gate.
-
-### A share works for tar and for a container that is not root
-
-- From a Windows client, a file a container had just created went stale on
-  its first attribute change: GNU tar wrote every file and then failed every
-  utime, chown and chmod with `Stale file handle`. The CREATE reply carried a
-  fileid no later reply repeated.
-- Also from a Windows client, a create carrying a mode (tar as root, `cp -p`,
-  `install`) failed with EIO: the share root, spelled with forward slashes,
-  was compared raw against a backslash target and every name "left the
-  share".
-- A container running as a uid of the image's choosing could not write into a
-  `delegated` share: the union's root was the agent's `0:0 0755`. Every file
-  in a share now reports mode 0666 and every directory 0777, owned by the
-  workspace account as before, and the union's upper is created 0777
-  (ADR 0046).
-
 ### A large write to a share no longer fails, and a share is faster
 
 Writing a big file into a shared directory could fail with `Input/output
 error`, and `npm i` of a package carrying a large binary failed every time.
-The mount asked for `timeo=30`, which is 3 seconds, and that deadline is not a
-stall detector: it runs from transmit, includes the time a request spends
-queued behind others, and the server answers one request at a time per
-connection. Queueing more writes than it could drain in three seconds failed
-all of them at once. Measured on a live workspace: 224 WRITEs in flight timing
-out together at 9.07s, with the transport never reconnecting.
+Four things were behind that, and all four are fixed:
 
-A share now uses the kernel's own TCP default of 60 seconds and eight
-connections instead of one. `npm i -g opencode-ai` on a plain share, which had
-failed every time, completes in 120 seconds with no I/O errors, no WRITE
-timeouts and the full 185MB binary where a previous run had left a truncated
-27MB one.
+- **The mount's deadline was three seconds, not thirty.** `timeo` is
+  deciseconds, and it is not a stall detector: it runs from transmit and
+  includes the time a request spends queued behind others, so queueing more
+  writes than the server could drain inside it failed all of them at once.
+  Measured on a live workspace at `timeo=30`: 224 WRITEs in flight timing out
+  together at 9.07s, with the transport never reconnecting. A share now asks
+  for the kernel's own TCP default of 60 seconds, and for eight connections
+  rather than one; the server, which answered one request at a time per
+  connection, now handles eight (ADR 0047).
+- **A file was opened and closed once per megabyte.** NFS has no open file, so
+  the server opened, seeked, wrote and CLOSED on every WRITE request: a 185MB
+  file at `wsize=1048576` was opened and closed 180 times. On Windows those
+  opens took between 1.3 and 12.4 seconds each while npm was extracting the
+  file, against 0.2ms for the same file once nothing was writing it, so the
+  cost grew with the file and was paid per megabyte. A file now stays open for
+  a couple of seconds after the request that used it and the next request
+  reuses it. `REMOTE_DOCKER_NFS_FDCACHE` tunes how long, and `0` turns it off.
+- **Every attribute lookup walked the whole path twice.** go-billy's `Lstat`
+  runs `filepath.EvalSymlinks` over the file's directory and over the share
+  root, and go-nfs stats a path several times per request, so creating one
+  small file paid it five times. It now resolves the way REMOVE and RENAME
+  already did: on Windows against a share four directories deep, 4.79ms per
+  `Lstat` becomes 0.42ms, where the `os.Lstat` under both is 0.09ms.
+- **Resolving a file handle got slower for as long as a session ran.** Each
+  request walked the handle cache, which holds an entry per path the workspace
+  has touched. With 50,000 files seen that was 10.3ms of pure CPU per request
+  against 12us at the start, which is 1.9 seconds of it for a single 256MB
+  write; the writes queued behind that ran out of the mount's deadline and
+  failed with EIO, on a share that had worked earlier in the same session, and
+  nothing logged it. The fix is in the forked server (ADR 0047).
 
-A caveat worth knowing, because it is why this can look like it did nothing:
-Linux keeps one RPC transport per server address, and every share of a machine
-mounts from the same one. `timeo`, `retrans` and `nconnect` are taken from
-whichever share mounted first and silently ignored for the rest, until the
-workspace's daemon is restarted.
+What that is worth, measured against a real workspace: `npm i -g opencode-ai`
+on a plain share, which had failed every time, completes in 120 seconds with
+no I/O errors and the full 185MB binary where a previous run had left a
+truncated 27MB one; `npm i` of one 185MB package went from 331 seconds to 13,
+with per-write latency falling from 35 seconds to 788ms; and over a WAN link
+300 small files went from 20.9s to 6.3s, with the CREATE round trip falling
+from 34ms to 9ms. That last one falls on every metadata operation and not only
+on writes, so a directory walk and `git status` were paying it too. Large
+files never were: they do not pay it per byte.
 
-### A share is measured against a bind mount
+One caveat, because it is why the mount options can look like they did
+nothing: Linux keeps one RPC transport per server address, and every share of
+a machine mounts from the same one. `timeo`, `retrans` and `nconnect` are
+taken from whichever share mounted first and silently ignored for the rest,
+until the workspace's daemon is restarted.
+
+### A share behaves like a bind mount, and is measured against one
 
 `test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
 a container and prints a transcript; CI runs it against a plain bind mount,
 against a share from a Linux client and from a Windows client, and fails on
-any difference not listed with a reason in `test/fs-conformance/`. The first
-runs found and fixed:
+any difference not listed with a reason in `test/fs-conformance/`. What the
+probe and a Windows client between them found, and what is fixed:
 
 - Removing or renaming a symlink through a share acted on its target: `rm
   link` deleted the file the link pointed at. The bound filesystem resolved
@@ -102,6 +96,18 @@ runs found and fixed:
   dot or space, `CON`, `NUL`, ...) could be created and not deleted. They are
   refused with EINVAL, as native Docker refuses them.
 - A share reported every file with one link; the real count is reported.
+- From a Windows client, a file a container had just created went stale on its
+  first attribute change: GNU tar wrote every file and then failed every
+  utime, chown and chmod with `Stale file handle`. The CREATE reply carried a
+  fileid no later reply repeated.
+- Also from a Windows client, a create carrying a mode (tar as root, `cp -p`,
+  `install`) failed with EIO: the share root, spelled with forward slashes,
+  was compared raw against a backslash target and every name "left the share".
+- A container running as a uid of the image's choosing could not write into a
+  `delegated` share: the union's root was the agent's `0:0 0755`. Every file
+  in a share now reports mode 0666 and every directory 0777, owned by the
+  workspace account as before, and the union's upper is created 0777
+  (ADR 0046).
 - go-nfs (now `github.com/lhns/go-nfs`): rmdir and rename over a non-empty
   directory answer ENOTEMPTY instead of EIO; rename over an empty directory
   works; a file renamed while open keeps its handle instead of going stale;
@@ -110,6 +116,38 @@ runs found and fixed:
 One consequence worth knowing: a share reports the workspace account as the
 owner, so git in a container refuses a repository on one as "detected dubious
 ownership" until `safe.directory` is set.
+
+### A refused symlink says why
+
+Creating a symlink through a share from a Windows client fails unless Developer
+Mode is on or the client runs elevated: Windows withholds the privilege. The
+container was told `EACCES` and nothing else, which is what `npm i` of any
+package with a bin entry ends on. The client now says what happened and what to
+do about it, once per share. Nothing stands in for the symlink itself, and
+`core-client/nfsserve/symlink.go` records why.
+
+### Prefetch, off by default
+
+`prefetch: eager` or `tree` (`REMOTE_DOCKER_PREFETCH`) fills a `read=cached`
+union ahead of reads: the whole tree smallest first, or what the container
+reads and its neighbourhood. Off because, measured on a shaped link, landing a
+file in the union costs more round trips than reading it: a cold union reads
+in the plain mount's time at every latency, and a sparse read is slower. The
+table is in ADR 0045.
+
+### A slow share can be timed
+
+`REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
+takes at least that long, with the operation, the path, and the running count
+and mean for that operation. Off by default and not installed at all when
+unset, so a share nobody is diagnosing pays nothing for it. Nothing else here
+measured latency: go-nfs reports errors and everything below Warn is dropped,
+so a request that was merely slow said nothing at any level and the only
+evidence was on the workspace, in the NFS client's counters.
+
+The value is a duration or bare milliseconds. Anything else, and anything under
+`1ms`, is refused with a line saying so: the report rounds to milliseconds, so
+a smaller threshold prints `took=0s` for every call a share makes.
 
 ### The chart upgrades across versions again
 
@@ -124,66 +162,7 @@ refused change, so the first upgrade past this needs the StatefulSet deleted
 once with `--cascade=orphan`. Pods and PVCs survive it and the recreated
 StatefulSet adopts them.
 
-### Small files on a share are three times faster
-
-Every attribute lookup resolved its path through go-billy's bound filesystem,
-which runs `filepath.EvalSymlinks` twice for one `Lstat`: once over the file's
-directory and once over the share root, walking every component of an absolute
-path each time. go-nfs stats a path several times per request, so creating one
-small file paid it five times.
-
-It now resolves the way REMOVE and RENAME already did, through the containment
-this package uses for every other write. Measured on Windows against a share
-four directories deep: 4.79ms per `Lstat` before, 0.42ms after, where the
-`os.Lstat` under both is 0.09ms. Against a real workspace over a WAN link, 300
-small files went from 20.9s to 6.3s, and the CREATE round trip from 34ms to
-9ms. It falls on every metadata operation and not only on writes, so a
-directory walk and `git status` were paying it too.
-
-Large files are unaffected: they were never paying it per byte.
-### A refused symlink says why
-
-Creating a symlink through a share from a Windows client fails unless Developer
-Mode is on or the client runs elevated: Windows withholds the privilege. The
-container is told `EACCES` and nothing else, which is what `npm i` of any
-package with a bin entry ends on. The client now says what happened and what to
-do about it, once per share.
-
-Serving a hard link instead was built and measured, and it does not work over
-NFSv3: answering SYMLINK with success is answering that a symlink exists, and
-the client then serves the target it sent as the file's contents.
-`core-client/nfsserve/symlink.go` records why, so the next person does not
-rebuild it.
-### A slow share can be timed
-
-`REMOTE_DOCKER_NFS_TRACE=250ms` logs every filesystem call a share makes that
-takes at least that long, with the operation, the path, and the running count
-and mean for that operation. Off by default and not installed at all when
-unset, so a share nobody is diagnosing pays nothing for it. Nothing else here
-measured latency: go-nfs reports errors and everything below Warn is dropped,
-so a request that was merely slow said nothing at any level and the only
-evidence was on the workspace, in the NFS client's counters.
-
-The value is a duration or bare milliseconds. Anything else, and anything under
-`1ms`, is refused with a line saying so: the report rounds to milliseconds, so
-a smaller threshold prints `took=0s` for every call a share makes.
-### A share stops opening the same file once per megabyte
-
-NFS has no open file, so the server opened, seeked, wrote and CLOSED on every
-WRITE request: a 185MB file at `wsize=1048576` was opened and closed 180 times.
-On Windows that was the whole cost of a large write. Measured on a live
-workspace while npm extracted a 185MB executable, 173 opens of that one file
-took between 1.3 and 12.4 seconds EACH, while opening the same file once it is
-finished takes 0.2ms: a scanner re-reads the file after each close and the next
-open waits behind it, so the cost grew with the file and was paid per megabyte.
-
-The file now stays open for a couple of seconds after the request that used it,
-and the next request reuses it. `npm i` of one 185MB package went from 331
-seconds to 13, with per-write latency falling from 35 seconds to 788ms.
-
-`REMOTE_DOCKER_NFS_FDCACHE` tunes how long, and `0` turns it off.
-
-### Fixed on the way through a cleanup
+### Fixed
 
 - `remote machine stop`, `start` and `rebuild` stopped the DEFAULT workspace's
   session, whichever machine was named.
@@ -191,9 +170,6 @@ seconds to 13, with per-write latency falling from 35 seconds to 788ms.
   rootfs, port and account a machine was created with; unset flags now take
   the recorded ones. `create` no longer inherits a stale record, while
   `rebuild` and `status` use it.
-- With no `watchExclude` set, prefetch walked `.git` and `node_modules`,
-  which the watcher never invalidates; the cache now takes the watcher's
-  default list.
 - Adding a named workspace to a config that had only an unnamed one carried
   four of its fields across and left the rest, `machine` among them, as a base
   under every entry. The new workspace inherited the old one's machine, so
@@ -201,9 +177,6 @@ seconds to 13, with per-write latency falling from 35 seconds to 788ms.
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.
-- A share released by the workspace kept its prefetch tree and its sender, so
-  attaching that directory again with prefetch off still filled it, and each
-  released share leaked a goroutine.
 
 ### Changed
 

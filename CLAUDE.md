@@ -987,11 +987,14 @@ its pure planning function was.
   `core-client/nfsserve/symlink.go` for why a hard link cannot.
   *(Checked 2026-09-07 on an unelevated account here: `os.Symlink` returns
   errno 1314. Re-check with a two-line `os.Symlink` under `go run`.)*
-- **A share against a file over 4 GiB, and Unicode normalisation.**
-  `test/probes/fsprobe` has no step that writes one: its largest is a 1-byte
-  pwrite at a 1 GiB offset (`sparse`), which is about allocation and not size.
-  Nothing anywhere asks whether a name written NFD comes back NFC.
-  *(Checked 2026-09-06: `grep -n 'g.run(' test/probes/fsprobe/groups.go`.)*
+- **A share against a file over 4 GiB.** `test/probes/fsprobe` has no step that
+  writes one: its largest is a 1-byte pwrite at a 1 GiB offset (`sparse`),
+  which is about allocation and not size. Unicode normalisation IS covered, on
+  the two clients CI runs: `names/nfc` and `names/nfd` create, list and unlink
+  a composed and a decomposed name, and neither is a listed deviation, so
+  neither client alters the bytes. macOS is not one of those clients and is
+  untested entirely, so nothing here says what an APFS client does.
+  *(Checked 2026-09-08: `grep -n 'one("nf' test/probes/fsprobe/groups.go`.)*
 - **Installing a release.** The pipeline runs: ten releases through `v0.6.0`,
   each with an archive per target for client and agent, an SBOM beside each and
   the chart. What has never happened is somebody downloading one and running
