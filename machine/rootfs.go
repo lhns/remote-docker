@@ -2,19 +2,14 @@ package machine
 
 // Getting the filesystem a machine is built from.
 //
-// A machine IS the workspace image's filesystem (ADR 0026), so there is nothing
-// to publish for it: the image is already in a registry, already multi-platform,
-// already built and tested on every push. This pulls that image and flattens it,
-// which is what `docker export` does and what `wsl --import` wants.
+// A machine IS the workspace image's filesystem, so there is nothing to publish
+// for it: this pulls the image already in the registry and flattens it, which
+// is what `docker export` does and what `wsl --import` wants. ADR 0026 records
+// why a second artifact was removed.
 //
-// Doing it here rather than shipping a second artifact is what makes ADR 0026's
-// claim literally true -- the unit of change is the image named in the machine's
-// configuration, and nothing else names a version. A published tarball would be
-// a second name for the same thing, able to disagree with it.
-//
-// This is not a package manager and must not become one. It fetches ONE image by
-// digest, writes it whole or not at all, and offers no upgrade path: a machine
-// changes version by being built again from a different reference.
+// This is not a package manager and must not become one. It fetches ONE image
+// by digest, writes it whole or not at all, and offers no upgrade path: a
+// machine changes version by being built again from a different reference.
 
 import (
 	"compress/gzip"
@@ -33,21 +28,20 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-// DefaultImageRepo is the published workspace image.
-const DefaultImageRepo = "ghcr.io/lhns/remote-docker-workspace"
+// defaultImageRepo is the published workspace image.
+const defaultImageRepo = "ghcr.io/lhns/remote-docker-workspace"
 
 // DefaultImage is the image a machine runs when nothing names one.
 //
 // Pinned to the client's own version when it has one, so a machine matches the
-// binary that built it. An untagged build -- "dev", a commit sha, whatever a
-// local build reports -- takes `latest`, because somebody running a development
-// build wants a machine to try it against and refusing them one for having no
-// tag would be pedantry.
+// binary that built it. An untagged build ("dev", a commit sha, whatever a
+// local build reports) takes `latest`: somebody running a development build
+// wants a machine to try it against.
 func DefaultImage(version string) string {
 	if tag, ok := releaseTag(version); ok {
-		return DefaultImageRepo + ":" + tag
+		return defaultImageRepo + ":" + tag
 	}
-	return DefaultImageRepo + ":latest"
+	return defaultImageRepo + ":latest"
 }
 
 // releaseTag turns a client version into an image tag.
@@ -66,9 +60,8 @@ func releaseTag(version string) (string, bool) {
 //
 // Cached by DIGEST rather than by reference, which is the whole reason this is
 // short. A digest names one build forever, so a file already there is the right
-// file and cannot be the wrong one -- where a tag can move, and `latest` does.
-// Resolving the digest is one small request; the layers are only fetched when
-// nothing has that digest already.
+// file, where a tag can move and `latest` does. Resolving the digest is one
+// small request; the layers are fetched only when nothing has that digest.
 func EnsureRootfs(ctx context.Context, image string, out io.Writer) (string, error) {
 	ref, err := name.ParseReference(image)
 	if err != nil {
@@ -118,12 +111,11 @@ func EnsureRootfs(ctx context.Context, image string, out io.Writer) (string, err
 
 // extract flattens an image into a gzipped tar, whole or not at all.
 //
-// Through a temporary file in the same directory and a rename: an interrupted
-// pull leaves a partial file that is never mistaken for the real one, so there
-// is no half-installed state to be in even though something is being installed.
+// Through a temporary file in the same directory and a rename, so an
+// interrupted pull leaves nothing that can be mistaken for the real file.
 //
-// Gzipped because that is what `wsl --import` reads and what the machine job
-// proves on every run, and because this file is kept.
+// Gzipped because that is what `wsl --import` reads, and because this file is
+// kept.
 func extract(img v1.Image, path string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".rootfs-*")
 	if err != nil {

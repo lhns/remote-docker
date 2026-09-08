@@ -1,8 +1,8 @@
 package machine
 
 // The whole of the decision-making, which is deliberately all of the part that
-// can be tested at all. Nobody working on this has WSL or Hyper-V, so anything
-// not covered here is covered by somebody running docs/testing-machines.md.
+// can be tested at all. Anything not covered here is covered by somebody
+// running docs/testing-machines.md.
 
 import (
 	"path/filepath"
@@ -107,6 +107,15 @@ func TestFindWithoutABackend(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "remote create") {
 		t.Errorf("the error does not say what to do instead:\n%v", err)
+	}
+}
+
+// A distribution list and a VM list are both the user's own namespace, holding
+// their Ubuntu, their Docker Desktop distributions, whatever else. Taking a
+// bare name there is the mistake ADR 0025 records for unix accounts.
+func TestMachineName(t *testing.T) {
+	if got := machineName("dev"); got != "rd-dev" {
+		t.Errorf("machineName(dev) = %q", got)
 	}
 }
 

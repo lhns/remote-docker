@@ -251,7 +251,7 @@ rather than worked around: hiding the implementation under `machine/internal/`
 would restore the restriction and cost a directory level for a module with one
 package, and this repository has no external consumer to constrain it (see
 above). Nothing here is versioned or tagged, so what "public" costs is the
-`replace` ordering already recorded below.
+`replace` ordering recorded above.
 
 **`machine` is in the WINDOWS test job**, not only the Linux loops.
 `wsl_windows.go` and `hyperv_windows.go` are build-tagged `windows`: the

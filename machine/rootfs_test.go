@@ -1,10 +1,8 @@
 package machine
 
-// Which image a machine is built from, and where the filesystem is kept.
-//
-// The pull itself is go-containerregistry's, and the flattening is
-// mutate.Extract, which is what `docker export` does. What is ours and pinned
-// here is which image gets asked for and how the result is cached.
+// Which image a machine is built from, and where the filesystem is kept. The
+// pull and the flattening are go-containerregistry's; what is pinned here is
+// which image gets asked for and where the result lands.
 
 import (
 	"path/filepath"
@@ -16,14 +14,14 @@ func TestDefaultImage(t *testing.T) {
 	// A tagged build takes its own version, so a machine matches the binary
 	// that built it -- and, because the image is part of the Spec, a client on
 	// a new version builds a new machine rather than adopting an old one.
-	if got := DefaultImage("v0.2.0"); got != DefaultImageRepo+":0.2.0" {
+	if got := DefaultImage("v0.2.0"); got != defaultImageRepo+":0.2.0" {
 		t.Errorf("DefaultImage(v0.2.0) = %q", got)
 	}
 
 	// An untagged build takes latest rather than being refused a machine for
 	// having no tag.
 	for _, version := range []string{"dev", "", "1a2b3c4", "v1"} {
-		if got := DefaultImage(version); got != DefaultImageRepo+":latest" {
+		if got := DefaultImage(version); got != defaultImageRepo+":latest" {
 			t.Errorf("DefaultImage(%q) = %q, want latest", version, got)
 		}
 	}

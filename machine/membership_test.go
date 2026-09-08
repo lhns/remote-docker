@@ -12,15 +12,14 @@ import (
 
 // This module imports nothing from this repository, which is what makes it a
 // module rather than a package (ADR 0021). A test rather than a line in a
-// document, because the property is one an ordinary edit takes away silently:
-// adding an import of `client/internal/config` compiles, passes, and quietly
-// puts docker/cli back in the graph the module exists to keep out.
+// document, because an import of `client/internal/config` compiles and passes
+// while quietly putting docker/cli back in the graph the boundary exists for.
 //
 // Reading the source rather than running `go list -deps` covers every GOOS at
-// once, which matters here: `wsl_windows.go` and `hyperv_windows.go` are
-// build-tagged, so a dependency added in one of them is invisible to a `go
-// list` on the machine running it. Direct imports are the whole test, because
-// nothing outside this repository can import back into it.
+// once: `wsl_windows.go` and `hyperv_windows.go` are build-tagged, so a
+// dependency added in one of them is invisible to a `go list` run on Linux.
+// Direct imports are the whole test, since nothing outside this repository can
+// import back into it.
 func TestImportsNothingFromThisRepository(t *testing.T) {
 	const repo = "github.com/lhns/remote-docker/"
 
