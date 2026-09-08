@@ -46,7 +46,12 @@ func TestTheContainerdSocketAlsoCounts(t *testing.T) {
 func TestASocketNothingListensOnIsNotADaemon(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "docker.sock")
+	// A file where the socket was: closing a unix listener unlinks it, and
+	// what is being tested is a path that EXISTS and answers nothing.
 	listen(t, sock)()
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if mount, why := execRootAction(dir, []string{sock}); !mount {
 		t.Errorf("declined a dead socket: %s", why)
