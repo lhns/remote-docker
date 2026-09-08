@@ -227,6 +227,15 @@ StatefulSet adopts them.
   rather than a leak, at up to 64 descriptors for two seconds each, and worth
   fixing because one of them can be a file a container is mid-write, which is
   the state the cache exists to avoid on Windows.
+- Preparing a cache for one directory froze every other cache request on the
+  workspace, for every account, until that directory's union had mounted. The
+  first container on a cold share waits on an NFS mount over the client's link,
+  so the wait is a real one, and a fill, an invalidation or a write-back for any
+  other share queued behind it. They now run alongside it.
+- A workspace whose union server stopped answering accumulated a goroutine and
+  an OS thread every two seconds, for as long as the agent ran, and a fill or a
+  deletion against such a share waited for the SSH session's lifetime instead of
+  reporting the share as not serving.
 - `remote-dockerd healthcheck --docker-socket` tested the named socket for
   presence and then asked the default one whether it was healthy, so a
   deployment that moves its socket got an answer about neither.
