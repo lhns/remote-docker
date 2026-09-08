@@ -18,7 +18,7 @@ module github.com/lhns/remote-docker/machine
 
 go 1.26.3
 
-require github.com/google/go-containerregistry v0.22.0
+require github.com/google/go-containerregistry v0.22.1
 
 require (
 	github.com/docker/cli v29.7.2+incompatible // indirect
