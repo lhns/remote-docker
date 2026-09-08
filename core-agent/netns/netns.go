@@ -3,16 +3,17 @@
 // The agent needs this because each user's dockerd lives in its own network
 // namespace (ADR 0019). Two things have to cross that boundary: the reverse
 // tunnel the client's NFS export answers on, which must be reachable from
-// inside the user's daemon and from nowhere else, and a local forward to a
+// inside that user's daemon and nowhere else, and a local forward to a
 // published port, which must be dialled from inside it.
 //
 // The alternatives were both worse. Joining the agent's own namespace
 // (`--network container:<agent>`) puts two dockerds on one bridge, collides
 // every user's published ports, and lands them all in the namespace where
 // every user's shell runs. Giving the agent an address on a per-user bridge
-// network means relaxing the loopback rule in forward.go, which is the single
-// thing standing between an unauthenticated NFS export and everybody --
-// docker's isolation blocks bridge-to-bridge traffic, not container-to-host.
+// network means relaxing the loopback rule in sshd's ForwardPolicy, which is
+// the single thing standing between an unauthenticated NFS export and
+// everybody: docker's isolation blocks bridge-to-bridge traffic, not
+// container-to-host.
 package netns
 
 import (
@@ -24,14 +25,10 @@ import (
 //
 // An EMPTY path means this process's own namespace, and fn simply runs. That
 // is not a convenience: it is what lets the shared-daemon mode (ADR 0012) and
-// the per-account mode (ADR 0019) be the same code path with a different
-// value, instead of an `if manager == nil` at every call site. Those branches
-// were the thing most likely to route one account's traffic into another's
-// namespace, because getting it wrong does not fail. It succeeds, somewhere
-// else.
-//
-// It also means Listen and Dial work on the development machine for the shared
-// case, where entering a NAMED namespace is unsupported.
+// the per-account mode (ADR 0019) be one code path with a different value,
+// instead of an `if manager == nil` at every call site. It also means Listen
+// and Dial work on the development machine for the shared case, where entering
+// a NAMED namespace is unsupported.
 func Do(path string, fn func() error) error {
 	if path == "" {
 		return fn()

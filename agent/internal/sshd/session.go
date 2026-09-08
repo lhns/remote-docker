@@ -111,19 +111,14 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 	_ = session.Exit(0)
 }
 
-// serveDockerSocket connects the session to the daemon.
+// serveDockerSocket connects the session to the daemon, which is what the
+// workspace exists to provide.
 //
-// This is what the workspace exists to provide, and it is where an account is
-// bound to A daemon, which of the two depends on the mode.
-//
-// Which daemon is decided here, and with a daemon per account (ADR 0019) that
+// Which daemon is decided here, and with one per account (ADR 0019) that
 // decision is the only thing between one user's session and another user's
-// containers. It does not fail when it is wrong. It succeeds, against somebody
-// else's daemon, with nothing logged.
-//
-// So ask the resolver rather than branching on the mode: in shared mode it
-// answers with the one socket (ADR 0012), which leaves one code path that
-// cannot disagree with itself.
+// containers: it does not fail when it is wrong, it succeeds against somebody
+// else's daemon with nothing logged. Hence the resolver rather than a branch
+// on the mode; see daemons.Targets.
 func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount) {
 	target, err := s.cfg.Daemons.Ensure(session.Context(), account.Name())
 	if err != nil {
@@ -153,13 +148,10 @@ func (s *Server) serveDockerSocket(session gssh.Session, account sessionAccount)
 // notify.Event.Validate, which both sides call.
 func (s *Server) serveNotify(session gssh.Session, account sessionAccount) {
 	// The volume being replayed into belongs to THIS account's daemon, and the
-	// mountpoint that daemon reports is a path in ITS filesystem. Both have to
-	// be redirected, and both are resolved per call rather than captured: the
-	// daemon restarts, and a stale root would silently name a path in nothing.
-	//
-	// One expression serves both arrangements: in shared mode the resolver
-	// answers with an empty host and "/", which mean "no redirection", so
-	// there is no mode to branch on here.
+	// mountpoint that daemon reports is a path in ITS filesystem. Both are
+	// resolved per call rather than captured: the daemon restarts, and a stale
+	// root would silently name a path in nothing. In shared mode the resolver
+	// answers with an empty host and "/", so there is no mode to branch on.
 	name := account.Name()
 	target := func() (daemons.Target, error) {
 		return s.cfg.Daemons.Ensure(session.Context(), name)

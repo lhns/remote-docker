@@ -35,19 +35,20 @@ import (
 // hand has no way to supply the namespace it needs.
 const Command = "union-serve"
 
-// Binary is what performs the union. Not built in: it is a mature
-// implementation of exactly this, it is already in the workspace image for the
-// Ceph storage driver, and the kernel's own overlay cannot be used here at all
-// -- an overlay whose lower is NFS is readable only from the mount namespace
-// that created it, so a container gets EOPNOTSUPP on every file it should have
-// fallen through to (measured, test/union-probe.sh).
+// Binary is what performs the union, and the kernel's own overlay is not an
+// option: an overlay whose lower is NFS is readable only from the mount
+// namespace that created it, so a container gets EOPNOTSUPP on every file it
+// should have fallen through to (measured, test/union-probe.sh). This is
+// already in the workspace image for the Ceph storage driver.
 const Binary = "fuse-overlayfs"
 
 // Root is where a share's mountpoints live inside the daemon's namespace.
 //
-// Under /run, which is a tmpfs: these are mountpoints and nothing else, and
-// losing them when the daemon restarts is right, because the mounts are gone
-// then too.
+// These are mountpoints and nothing else, so nothing here needs to survive:
+// when the daemon restarts the mounts are gone too, and an empty directory
+// left behind costs nothing. Not a tmpfs, and it must not be assumed to be
+// one -- a dind's /run is part of its writable layer, which is the whole
+// premise of agent/internal/daemons.ExecRoot.
 const Root = "/run/rd-union"
 
 // Spec is one share's union, fully resolved. Everything in it is a path or a
@@ -116,9 +117,8 @@ func (s Spec) Dirs() []string {
 // Split, because that option list is written for DOCKER, which separates the
 // two before it calls mount(2) and we have to as well. `noatime` is a kernel
 // mount flag rather than something the NFS client parses, so passing the list
-// through whole makes the NFS parser reject the lot -- and it reports that as
-// EINVAL, which surfaces as `invalid argument` against a mount whose options
-// are, one at a time, all valid.
+// through whole makes the NFS parser reject the lot, as EINVAL, against a
+// mount whose options are one at a time all valid.
 func (s Spec) LowerMount() (source, fstype, data string, flags []string) {
 	// No nconnect: REMOTE_DOCKER_NFS_NCONNECT is the client's, and nothing
 	// carries it across, so a union's lower opens one connection whatever the
@@ -138,12 +138,11 @@ func (s Spec) LowerMount() (source, fstype, data string, flags []string) {
 }
 
 // mountFlags are the option words the KERNEL takes as flags rather than
-// handing to the filesystem.
+// handing to the filesystem, turned into MS_ constants in the Linux file.
 //
-// Only the ones NFSVolumeOptions can produce today plus the ones a share could
-// plausibly gain, so a `ro` added there later is carried rather than passed to
-// the NFS parser, which would refuse it and take the mount down with it. Turned
-// into MS_ constants where that is possible, which is the Linux file.
+// Wider than NFSVolumeOptions produces today, so a `ro` added there later is
+// carried rather than passed to the NFS parser, which would refuse it and take
+// the mount down with it.
 var mountFlags = map[string]bool{
 	"noatime": true, "atime": true, "relatime": true, "strictatime": true,
 	"ro": true, "rw": true,
@@ -167,9 +166,9 @@ func (s Spec) Args() []string {
 
 // Validate refuses a spec that could not describe a real share.
 //
-// The client's request is validated separately and first; this is about what
-// the agent itself assembled, and it exists because every field below becomes
-// a privileged mount inside somebody's daemon.
+// The client's request is validated separately and first; this is what the
+// agent itself assembled, and every field below becomes a privileged mount
+// inside somebody's daemon.
 func (s Spec) Validate() error {
 	if err := workspace.ValidExport(s.Export); err != nil {
 		return fmt.Errorf("union: %w", err)

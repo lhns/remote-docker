@@ -28,9 +28,8 @@ type Daemon struct {
 	// Reachable because the dind is a CHILD of the workspace's dockerd rather
 	// than a sibling on the host: nested pid namespaces mean the pid docker
 	// reports is one the agent can open under its own /proc. A sibling would
-	// have a host pid that does not exist here, and making it exist would need
-	// `pid: host`, so every enrolled user's shell would see every process on
-	// the node. That is worse than the problem being solved.
+	// need `pid: host` to be reachable at all, which would show every enrolled
+	// user's shell every process on the node.
 	PID int
 
 	// Socket is where the agent dials this daemon.
@@ -64,13 +63,11 @@ type Manager struct {
 
 	// IDs resolves an account to the uid and gid that must own its socket.
 	//
-	// Injected, because this package cannot work it out. The unix user behind
-	// an account is `rd-<account>` (ADR 0025) or, on a workspace older than
-	// that, the bare name -- and the accounts store already holds the answer
-	// for both. Deriving it here would put the naming rule in a second place,
-	// which is how the socket came to be left owned by root: user.Lookup of
-	// the ACCOUNT name found nothing, the chown never happened, and every
-	// account got "permission denied" from its own daemon.
+	// Injected, because this package cannot work it out: the unix user behind
+	// an account is `rd-<account>` (ADR 0025) or, on an older workspace, the
+	// bare name, and only the accounts store knows which. Deriving it here put
+	// the naming rule in a second place and left the socket owned by root,
+	// which every account read as "permission denied" from its own daemon.
 	//
 	// Nil falls back to looking the account name up directly, which is what
 	// the tests and an unprefixed workspace need.
@@ -140,35 +137,23 @@ func (m *Manager) client(host string) docker {
 const aliveTTL = 2 * time.Second
 
 // failTTL is how long a failed start is remembered, so that the callers behind
-// it fail fast instead of each paying the ready budget again.
+// it fail fast instead of each paying the ready budget again. This is not a
+// backoff: ensure single-flights, so the herd is already collapsed, and what
+// the window buys is the calls made while the user reads the error.
 //
-// Five seconds, and the shape of the problem rather than the length of the
-// budget is what picks it. A burst arrives all at once -- every waiter is woken
-// by the leader closing its channel, within microseconds -- so any window at
-// all collapses the herd; what the window buys on top of that is the calls
-// still being made while the user reads the error. Short enough that somebody
-// who starts a daemon by hand and tries again is not told about the last
-// failure: the remedy for a broken daemon has to work on the next command, not
-// on the one after the timer.
-//
-// Deliberately not longer. A memo cannot tell a daemon that will never start
-// from one somebody has just repaired, and refusing a working daemon is the
-// worse of the two mistakes.
+// Deliberately SHORT. A memo cannot tell a daemon that will never start from
+// one somebody has just repaired by hand, and refusing a working daemon is the
+// worse of the two mistakes. Reset clears it for the same reason.
 const failTTL = 5 * time.Second
 
 // DefaultReadyTimeout is how long a cold daemon has to answer.
 //
-// Generous because the first start of a dind on fuse-overlayfs is slow, and
-// because the cost of being early is a session that fails for a reason the
-// user cannot act on. The agent is the only thing that starts a daemon
-// (ADR 0019), so the first account to ask pays for its own boot rather than
-// finding one already warmed at workspace start: CI measured 90 seconds short.
-//
-// WORKSPACE_DAEMON_READY_TIMEOUT overrides it, because what a cold daemon costs
-// is a property of the deployment rather than of this code: a workspace on
-// fuse-overlayfs over Ceph is not the runner this was measured on. Lowering it
-// buys a faster answer when a daemon is broken and risks refusing one that was
-// merely slow, and only the operator knows which they have.
+// Generous because a first start of a dind on fuse-overlayfs is slow (CI
+// measured 90 seconds short) and because the cost of being early is a session
+// that fails for a reason the user cannot act on. A healthy daemon answers in
+// about a second, so the rest of the budget is for a deployment slower than
+// the runner this was measured on -- which is why
+// WORKSPACE_DAEMON_READY_TIMEOUT can override it.
 const DefaultReadyTimeout = 180 * time.Second
 
 // readyTimeout is the budget in force, with the zero value meaning the default.
@@ -197,9 +182,8 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 		// The common case by far, and it must cost nothing. EVERY Docker API
 		// request from the client opens its own dial-stdio session and lands
 		// here (`docker compose up` is hundreds), so a `docker inspect` per
-		// call would add a subprocess to every request. Never check while the
-		// manager's lock is held either: that serialises every account's
-		// requests behind one exec.
+		// call would add a subprocess to every request -- and doing it under
+		// m.mu would serialise every account's requests behind one exec.
 		if fresh {
 			return d, nil
 		}
@@ -215,9 +199,8 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 
 		m.mu.Lock()
 		// A start that just failed is answered from the record rather than
-		// attempted again. Without this every waiter woken by the leader's
-		// failure becomes the next leader and pays the whole budget itself,
-		// which for `docker compose up` is hundreds of callers serialised.
+		// attempted again: without this every waiter woken by the leader's
+		// failure becomes the next leader and pays the whole budget itself.
 		if f, ok := m.failed[account]; ok && time.Since(f.at) < failTTL {
 			m.mu.Unlock()
 			return nil, f.err
@@ -347,15 +330,10 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 // The difference is the whole function. dockerd binds its socket early and
 // initialises its storage afterwards, so a daemon that dies on
 // "several valid graphdrivers ... please cleanup" leaves a socket file behind
-// looking exactly like a healthy one. Treating that as ready handed the client
-// a socket nothing was listening on, and every command failed with a bare
-//
-//	error during connect: Get "http://.../_ping": EOF
-//
-// which names neither the daemon nor the reason.
-//
-// So readiness is a round trip: the socket exists, the container reports a pid,
-// and the daemon answers a request. Only the last one is evidence.
+// looking exactly like a healthy one, and every client command then fails with
+// a bare `Get "http://.../_ping": EOF`, naming neither the daemon nor the
+// reason. So readiness is a round trip: the socket exists, the container
+// reports a pid, and the daemon answers. Only the last is evidence.
 func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, error) {
 	socket := SocketPathFor(account)
 	budget := m.readyTimeout()
@@ -398,11 +376,9 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 const lastWordsTimeout = 5 * time.Second
 
 // gaveUp names the daemon and carries its own last words, for when the
-// CALLER's patience ran out rather than this loop's.
-//
-// Both budgets are the same duration, so the caller's context expires first and
-// this is the path almost always taken. ctx.Err() alone is "context deadline
-// exceeded", which names no daemon and no reason while one crash-loops.
+// CALLER's patience ran out rather than this loop's. Almost always the path
+// taken, since both budgets are the same duration; ctx.Err() alone is "context
+// deadline exceeded", which names no daemon and no reason.
 func (m *Manager) gaveUp(ctx context.Context, name string) error {
 	// A fresh context, because the caller's is spent and `docker logs` on a
 	// cancelled one returns nothing at all.
@@ -425,11 +401,10 @@ func (m *Manager) answers(ctx context.Context, d *Daemon) bool {
 // lastWords is the tail of a daemon's own log, for an error the account can
 // act on.
 //
-// A per-account daemon that will not start is the one failure an account can
-// neither diagnose nor fix: the log belongs to a daemon it deliberately cannot
-// reach. Carrying a few lines back through the error is the difference between
-// "did not answer" and "several valid graphdrivers: vfs, fuse-overlayfs;
-// please cleanup".
+// A daemon that will not start is the one failure an account can neither
+// diagnose nor fix, because the log belongs to a daemon it deliberately cannot
+// reach. These lines are the difference between "did not answer" and "several
+// valid graphdrivers: vfs, fuse-overlayfs; please cleanup".
 func (m *Manager) lastWords(ctx context.Context, name string) string {
 	out, err := m.parent().Output(ctx, "logs", "--tail", "8", name)
 	if err != nil || len(bytes.TrimSpace(out)) == 0 {
@@ -445,18 +420,15 @@ func (m *Manager) lastWords(ctx context.Context, name string) string {
 // dead socket produces a connection error that names nothing.
 //
 // THE PID IS PART OF "usable". A daemon restarted by an operator, or by
-// Ensure's `docker start` after it stopped, comes back as the same container
-// with the same name, the same socket path and the same "running" status, and
-// a DIFFERENT pid. Everything here that crosses into it goes through
-// /proc/<pid>: the reverse tunnel carrying the client's NFS export (netns), and
-// the volume mountpoints replay writes into (root). Against a stale pid those
-// name a namespace that no longer exists, so the daemon answers Docker API
-// calls perfectly while no container it starts can mount anything, and a
-// client that requires its file server refuses to start at all, with nothing
-// pointing at the daemon having restarted.
+// Ensure's `docker start`, comes back as the same container with the same
+// name, socket and "running" status, and a DIFFERENT pid. Everything that
+// crosses into it goes through /proc/<pid>: the reverse tunnel carrying the
+// client's NFS export (netns), and the volume mountpoints replay writes into
+// (root). Against a stale pid the daemon answers Docker API calls perfectly
+// while no container it starts can mount anything.
 //
 // Reported as not-alive rather than repaired in place: Ensure then goes through
-// start, which finds the container already running and re-reads the pid, so the
+// start, which finds the container running and re-reads the pid, so the
 // self-healing path is the one that already exists.
 func (m *Manager) alive(ctx context.Context, d *Daemon) bool {
 	if d == nil {
@@ -514,11 +486,13 @@ func (m *Manager) inspect(ctx context.Context, name, format string) (string, err
 // parent is the workspace's own daemon, which hosts every per-account one.
 func (m *Manager) parent() docker { return m.client("") }
 
-// Adopt takes ownership of daemons left running by a previous agent.
+// Adopt takes ownership of daemons left running by a previous agent, and
+// REGISTERS them rather than counting them.
 //
-// Called at startup. Without it a restarted agent would find every name taken
-// and every user's running work unreachable, and `docker run --name` fails
-// on a conflict rather than replacing, so it would stay that way.
+// Called at startup. A daemon running but not in the map is worse than one not
+// running at all: Ensure finds the name taken, `docker run --name` fails on a
+// conflict rather than replacing, and the account cannot reach the daemon
+// holding its own containers.
 //
 // Deliberately NOT elevate's `docker rm -f <name>` opener. That is right for a
 // singleton whose state is worthless and catastrophic for a daemon holding a
@@ -536,21 +510,13 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			continue
 		}
 
-		// Registered, not merely counted. A daemon that is running but not in
-		// the map is worse than one that is not running at all: Ensure would
-		// find the name taken, `docker run --name` fails on a conflict rather
-		// than replacing, and the account would be unable to use the daemon
-		// holding its own containers.
 		pid, err := m.pid(ctx, ContainerName(account))
 		if err != nil || pid <= 0 {
-			// Not running yet, and that is the ordinary case rather than a
-			// problem. Either the daemon was stopped, or the parent dockerd
-			// is still bringing it back after a restart: this runs the moment
-			// the agent starts, which is a race it cannot win and does not
-			// need to. Ensure does the work on demand.
-			//
-			// Left alone deliberately either way: starting every account's
-			// daemon at boot would wake daemons for people who are not here.
+			// Not running yet, and that is ordinary: the daemon was stopped,
+			// or the parent dockerd is still bringing it back while this runs.
+			// Left alone either way, because starting every account's daemon
+			// at boot would wake daemons for people who are not here. Ensure
+			// does the work on demand.
 			m.log().Info("an account has a daemon that is not running; it will start when they connect",
 				"account", account)
 			continue
@@ -638,20 +604,16 @@ func (m *Manager) lookup(ctx context.Context, account string) (*Daemon, bool) {
 
 // warnIfSlowStorage says so when a daemon came up on vfs.
 //
-// vfs has no copy-on-write: it copies the entire image on every container
-// create. Nothing fails, so nothing is reported. `docker ps` stays instant
-// while `docker create debian` takes a minute and a half, which reads as a
-// hang rather than as a storage driver.
+// dockerd chooses vfs silently when the graph filesystem refuses overlay2,
+// which is what a Ceph- or NFS-backed data directory does. It has no
+// copy-on-write, so it copies the whole image on every container create:
+// nothing fails, `docker ps` stays instant, and `docker create debian` takes a
+// minute and a half, which reads as a hang rather than as a storage driver.
 //
-// dockerd chooses it silently when the graph filesystem refuses overlay2,
-// which is exactly what a Ceph- or NFS-backed data directory does. The
-// workspace's own dockerd is given --storage-driver=fuse-overlayfs for that
-// reason, and a per-account daemon now inherits it, but a deployment can
-// still arrive here, so it should arrive loudly.
-// Runs on its own goroutine with its own context, because it is only a
-// warning and it is reached while this account's start is holding the gate:
-// every other request for the same account waits behind it, and `docker info`
-// against a daemon that has just booted is not always quick.
+// On its own goroutine and context, because it is only a warning and it is
+// reached while this account's start holds the gate: every other request for
+// the account waits behind it, and `docker info` against a daemon that has
+// just booted is not always quick.
 func (m *Manager) warnIfSlowStorage(d *Daemon) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -669,10 +631,9 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 
 // reconcile brings a daemon created from older settings up to date.
 //
-// The container is disposable and the graph volume is the data: removing and
-// re-running the container keeps every image and container the account owns,
-// which the suite proves by destroying it on purpose. So applying a new image,
-// a new flag or a new mount is safe, as long as nothing is running inside.
+// The container is disposable and the graph volume is the data, so applying a
+// new image, flag or mount by recreating the container keeps every image and
+// container the account owns, as long as nothing is running inside.
 //
 // Two things it will NOT do on its own, and both matter:
 //
@@ -728,14 +689,11 @@ func (m *Manager) storageChanged(ctx context.Context, name string) bool {
 // idle reports whether a daemon may be replaced without taking somebody's work
 // with it.
 //
-// Two questions, and the order matters. A daemon that cannot say what it is
-// running counts as busy, because the cost of being wrong is an account's
-// containers. But one that is not RUNNING cannot be running anything, and
-// asking it was how a crash-looping daemon counted as busy forever and was
-// never replaced, under a log line that said "has containers running".
-//
-// So the parent is asked first: it can see the container from outside, which is
-// what the account's own daemon cannot do for itself.
+// The PARENT is asked first, and the order is the point. A daemon that cannot
+// say what it is running counts as busy, because the cost of being wrong is an
+// account's containers -- but one that is not RUNNING cannot be running
+// anything, and asking it was how a crash-looping daemon counted as busy
+// forever, under a log line that said "has containers running".
 func (m *Manager) idle(ctx context.Context, account, name string) bool {
 	// An empty state is no such container, which is nothing to protect either.
 	if state := m.state(ctx, name); state != "running" {
@@ -793,14 +751,12 @@ func (m *Manager) managed(ctx context.Context) ([]managedRow, error) {
 
 // StopStrays stops per-account daemons that nothing is routing to.
 //
-// Called when the workspace serves one daemon for everybody (ADR 0012): every
-// account is sent to the shared socket, so a daemon left from per-account mode
-// answers nobody, and a broken one restarts forever with nothing supervising it.
-//
-// Only reachable on a VM (ADR 0025), where the agent restarts while the
-// machine's dockerd keeps running. Compose and Swarm change the mode by
-// recreating the workspace container, which restarts the parent dockerd, and a
-// daemon with no restart policy stays down by itself.
+// Called when the workspace serves one daemon for everybody (ADR 0012), where
+// a daemon left from per-account mode answers nobody. Only reachable on a VM
+// (ADR 0025), where the agent restarts while the machine's dockerd keeps
+// running: compose and Swarm change the mode by recreating the workspace
+// container, which restarts the parent dockerd, and a daemon with no restart
+// policy stays down by itself.
 //
 // STOPPED, never removed: the volume behind the container holds that account's
 // images and containers, and both come back if the mode changes back.
@@ -860,13 +816,11 @@ func (m *Manager) runningInside(ctx context.Context, account string) int {
 
 // Reset removes an account's daemon so the next connection builds a fresh one.
 //
-// The container always goes; the graph volume only when asked. That split is
-// the whole point: the container is disposable and recreating it keeps
-// everything the account owns, so a reset that only replaces the container
-// costs nothing. Purging is the other thing entirely: every image and
-// container that account has. It is needed for one case, a change of storage
-// driver, because a graph written by one driver cannot be
-// read by another.
+// The container always goes; the graph volume only when asked. The container
+// is disposable and recreating it keeps everything the account owns, so a
+// reset without purge costs nothing. Purging is every image and container that
+// account has, and is needed for one case: a change of storage driver, because
+// a graph written by one driver cannot be read by another.
 //
 // An account is not asked to be offline first. Removing a daemon stops what it
 // was running, which is why this is a command somebody runs rather than

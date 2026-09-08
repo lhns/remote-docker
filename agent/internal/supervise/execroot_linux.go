@@ -15,8 +15,8 @@ func mountTmpfs(path string) error {
 
 // mountedAt reports whether anything is mounted at path, by asking whether the
 // path and its parent are on the same device. core-agent/union's mountedAt is
-// the same question and carries the reasoning; it is unexported there, and
-// that module holds the union's concerns rather than this one's.
+// the same question, unexported there because that module holds the union's
+// concerns rather than this one's.
 func mountedAt(path string) bool {
 	var here, up syscall.Stat_t
 	if err := syscall.Lstat(path, &here); err != nil {

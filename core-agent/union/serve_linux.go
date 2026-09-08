@@ -17,9 +17,9 @@ import (
 //
 // Why a separate process at all is in this package's doc; why the union is a
 // child rather than an exec is at that call. The order matters for one more
-// reason: steps 3 and 4 need the daemon's filesystem, which the agent cannot
-// see, and fuse-overlayfs is resolved there — which is why the image a daemon
-// runs has to carry it (agent/internal/daemons, DefaultImage).
+// reason: the layers and the mount need the daemon's filesystem, which the
+// agent cannot see, and fuse-overlayfs is resolved there, so the image a daemon
+// runs has to carry it (daemons.DefaultImage).
 func Serve(spec Spec) error {
 	if err := spec.Validate(); err != nil {
 		return err

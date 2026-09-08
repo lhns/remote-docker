@@ -90,8 +90,8 @@ type Manager struct {
 	// pending is the share keys a Prepare is mounting, so a second Prepare for
 	// the same share waits rather than stacking a second fuse-overlayfs on one
 	// upper (ADR 0044). Single-flighted rather than locked, in the shape of
-	// daemons.Manager.ensure, because mounting takes up to readyTimeout and
-	// every other cache operation reaches m.share: under m.mu they would all
+	// daemons.Manager.ensure: mounting takes up to readyTimeout, and every
+	// other cache operation reaches m.share, so under m.mu they would all
 	// queue behind one cold union.
 	pending map[string]chan struct{}
 
@@ -116,14 +116,11 @@ type live struct {
 	// union, by path.
 	//
 	// The cache is written through the merged mount (ADR 0044), so the filled
-	// copy of every file is in the cache LAYER, which is what Changes reads --
-	// and without this an idle session is told about the whole tree every few
-	// seconds forever. The client checks the same thing against its own
-	// manifest, and that check is the rule; this one keeps the answer
-	// proportional to what actually changed.
-	//
-	// Lost on an agent restart, which costs one oversized reply and no
-	// correctness: the client's manifest still decides.
+	// copy of every file sits in the cache LAYER beside the container's own
+	// writes, which is what Changes reads. Without this an idle session is
+	// told about the whole tree every few seconds forever. The client's
+	// manifest is the rule; this keeps the answer proportional, and losing it
+	// on an agent restart costs one oversized reply and no correctness.
 	appliedMu sync.Mutex
 	applied   map[string]applied
 }
@@ -279,10 +276,9 @@ func (m *Manager) mount(ctx context.Context, k, host, cacheVol string, spec unio
 	dead := m.shares[k]
 	m.mu.Unlock()
 	if dead != nil {
-		// Down rather than absent. Torn out here so the mount below is a fresh
-		// one; a container already bound to the dead mount is not repaired by
-		// this and cannot be, which is the rule CLAUDE.md states about a mount
-		// that has gone wrong.
+		// Down rather than absent, and torn out so the mount below is a fresh
+		// one. A container already bound to the dead mount is not repaired by
+		// this and cannot be.
 		m.discard(k, dead)
 	}
 
@@ -331,17 +327,15 @@ func (m *Manager) start(spec union.Spec, host string) *live {
 	go func() {
 		defer close(l.done)
 		for ctx.Err() == nil {
-			// Adopted rather than replaced. After an agent restart the child
-			// is an orphan whose mount is still serving every container bound
-			// to it, and mounting over that would strand them: a container
-			// keeps the mount it already has, and a second one stacked on the
-			// path cannot repair it. So the supervisor waits for a serving
-			// mount to go before it makes another.
+			// Adopted rather than replaced (ADR 0044). After an agent
+			// restart the child is an orphan whose mount is still serving
+			// every container bound to it, and mounting over that strands
+			// them: they keep the mount they have, and a second one stacked
+			// on the path cannot repair it.
 			//
-			// Safe only because "alive" means MOUNTED rather than "the path is
-			// there" (ADR 0044). Against a stat this would wait forever on the
-			// empty directory a dead union leaves behind, and the share would
-			// never come back.
+			// Safe only because "alive" means MOUNTED rather than "the path
+			// is there". Against a stat this would wait forever on the empty
+			// directory a dead union leaves behind.
 			if m.awaitGone(ctx, spec) {
 				continue
 			}
@@ -414,11 +408,9 @@ func (m *Manager) waitReady(ctx context.Context, spec union.Spec) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			// How long, because the budget is the likeliest thing to be wrong:
-			// the lower is an NFS mount over the client's link, and a slow one
-			// takes longer to mount than a fast one. Without the number the
-			// message reads as a union that cannot work rather than one that
-			// was not given time.
+			// How long, because the budget is the likeliest thing to be wrong
+			// and without the number this reads as a union that cannot work
+			// rather than one that was not given time.
 			return fmt.Errorf("unions: the union for %s did not come up in %s",
 				spec.Export, time.Since(started).Round(time.Second))
 		}
@@ -469,11 +461,9 @@ func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
 			continue
 		}
 		if held[l.spec.Merged()] {
-			// A container is still bound to it. Unmounting now frees nothing --
-			// the container keeps the mount it already has, and keeps it BROKEN,
-			// because a mount that has gone wrong stays wrong until the last
-			// container lets go of it. Released instead the next time the account
-			// disconnects with nothing holding this share.
+			// Unmounting now frees nothing: the container keeps the mount it
+			// already has, and keeps it BROKEN. Released instead the next time
+			// the account disconnects with nothing holding this share.
 			continue
 		}
 		specs = append(specs, l.spec)
@@ -493,11 +483,10 @@ func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
 // container is still bound to.
 //
 // A union is bound into a container by PATH rather than as a volume, so nothing
-// else in the workspace knows the two are related and the daemon is the only
-// thing that can say. On any doubt this answers "held": keeping a mount nobody
-// needs costs a process, while taking one that is in use costs somebody's
-// container permanently, since a mount that has gone wrong stays wrong until
-// the last container lets go of it.
+// else in the workspace relates the two and the daemon is the only thing that
+// can say. On any doubt this answers "held": keeping a mount nobody needs costs
+// a process, while taking one that is in use breaks somebody's container
+// permanently.
 func (m *Manager) heldByContainers(ctx context.Context, account string) map[string]bool {
 	m.mu.Lock()
 	hosts := map[string]bool{}
@@ -535,13 +524,13 @@ func (m *Manager) heldByContainers(ctx context.Context, account string) map[stri
 // reports it unused and the collector empties it under a running container
 // (ADR 0044).
 //
-// Answered from the FILESYSTEM as well as from this process's own record, and
-// the filesystem is the half that matters. A union outlives the agent that
-// started it, so after a restart the mounts are serving and this manager knows
-// nothing about them -- and a truthful "none mounted" then costs somebody the
-// contents of a cache their container is still reading. The share ids come from
-// the mounts; the client digest comes from the key that authenticated, so the
-// names are this machine's own and no other machine's are named.
+// Answered from the FILESYSTEM as well as from this process's own record,
+// because a union outlives the agent that started it: after a restart the
+// mounts are serving while this manager knows nothing about them, and a
+// truthful "none mounted" costs somebody the contents of a cache their
+// container is still reading. The share ids come from the mounts and the
+// client digest from the key that authenticated, so only this machine's
+// volumes are named.
 func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 	names := map[string]bool{}
 

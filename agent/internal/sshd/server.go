@@ -31,15 +31,10 @@ type Config struct {
 	Accounts *accounts.Store
 	Mapping  workspace.Mapping
 
-	// Daemons resolves an account to the daemon that serves it: its socket, its
-	// DOCKER_HOST, its network namespace and its filesystem root.
-	//
-	// ONE field, with the implementation chosen once by the caller:
-	// daemons.Shared for ADR 0012's single daemon, a *daemons.Manager for ADR
-	// 0019's one per account. Never reintroduce a nil check at the use sites --
-	// that is the shape a routing mistake hides in, because sending a session
-	// to the wrong daemon does not fail, it succeeds against somebody else's
-	// containers.
+	// Daemons resolves an account to the daemon that serves it. ONE field, with
+	// the implementation chosen once by the caller: daemons.Shared (ADR 0012)
+	// or a *daemons.Manager (ADR 0019). Never reintroduce a nil check at a use
+	// site; see daemons.Targets.
 	Daemons daemons.Targets
 
 	// Ports decides which port serves which of an account's machines, and
@@ -121,9 +116,9 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// A nil allocator is not an error: with nowhere to remember, every client
-	// of an account gets the uid-derived port, which is what every version
-	// before ADR 0029 did and is right for the one-machine case. Defaulted
-	// here so that nothing downstream has to ask whether it has one.
+	// of an account gets the uid-derived port, which is right for the
+	// one-machine case (ADR 0029). Defaulted here so nothing downstream has to
+	// ask whether it has one.
 	if cfg.Ports == nil {
 		cfg.Ports = &accounts.Ports{Mapping: cfg.Mapping}
 	}

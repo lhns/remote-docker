@@ -73,7 +73,7 @@ func (l *Listener) pingEvery() time.Duration {
 // proxy is configured to send the tunnel.
 func (l *Listener) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A plain request -- a browser, a health check -- is answered rather
+		// A plain request, a browser or a health check, is answered rather
 		// than left to hang.
 		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			http.Error(w, "remote-docker: this is an ssh tunnel endpoint; connect with ws:// or wss://",
