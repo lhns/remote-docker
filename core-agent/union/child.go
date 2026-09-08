@@ -9,6 +9,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/lhns/remote-docker/core-agent/netns"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -96,6 +97,48 @@ func (s Spec) Root() string { return netns.Root(s.PID) }
 // stop being given.
 var errNotAMount = errors.New("nothing is mounted there")
 
+// prober answers whether a union is serving, with at most one Lstat in flight
+// per merged path.
+//
+// mountedAt's Lstat blocks uninterruptibly on a wedged FUSE server, so it
+// outlives the context that gave up waiting for it and pins an OS thread until
+// it returns. A caller arriving meanwhile learns nothing from a second one:
+// "has not answered yet" is already the answer. Unbounded, unions.awaitGone
+// polls this every restartDelay for the whole life of an adopted mount and
+// leaks a goroutine and a thread every two seconds, forever.
+//
+// The zero value is ready, and it is safe for concurrent use.
+type prober struct {
+	mu       sync.Mutex
+	inflight map[string]*probe
+
+	// mounted is mountedAt, indirected so a test can hold a probe open. Set at
+	// construction and never reassigned: the goroutine below reads it, so a
+	// later write races with a probe still blocked in the previous one. Nil in
+	// production, since there is no way to wedge a FUSE server on a
+	// development machine.
+	mounted func(string) bool
+}
+
+// at reports whether anything is mounted at path.
+func (p *prober) at(path string) bool {
+	if p.mounted != nil {
+		return p.mounted(path)
+	}
+	return mountedAt(path)
+}
+
+// probe is one Lstat and whatever it eventually answered. Waiters read err
+// after done closes.
+type probe struct {
+	done chan struct{}
+	err  error
+}
+
+// defaultProber is the process's, because what is being bounded is an OS thread
+// and there is one pool of those.
+var defaultProber prober
+
 // Alive reports whether the union answers, and it is the ONLY definition of
 // "up" this package offers.
 //
@@ -104,30 +147,70 @@ var errNotAMount = errors.New("nothing is mounted there")
 // why it is not a stat, is on mountedAt. Read through /proc/<pid>/root, which
 // resolves in the daemon's namespace without entering it.
 //
-// A context because a wedged server answers nothing at all: mountedAt's Lstat
-// of the merged path blocks on the FUSE server behind it, so it runs on a
-// goroutine of its own and every caller asking does not wait with it.
+// A context because a wedged server answers nothing at all: the Lstat blocks on
+// the FUSE server behind it, so it runs on a goroutine of its own and every
+// caller asking does not wait with it. Bounding that goroutine is prober's.
 func Alive(ctx context.Context, spec Spec) error {
+	return defaultProber.alive(ctx, spec)
+}
+
+// alive is Alive against this prober's in-flight set.
+func (p *prober) alive(ctx context.Context, spec Spec) error {
 	merged := path.Join(spec.Root(), spec.Merged())
 
-	done := make(chan error, 1)
-	go func() {
-		if !mountedAt(merged) {
-			done <- errNotAMount
-			return
-		}
-		done <- nil
-	}()
+	pr, ours := p.begin(merged)
+	if ours {
+		go func() {
+			var err error
+			if !p.at(merged) {
+				err = errNotAMount
+			}
+			p.finish(merged, pr, err)
+		}()
+	}
 
 	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("union: %s is not serving: %w", spec.Export, err)
+	case <-pr.done:
+		if pr.err != nil {
+			return fmt.Errorf("union: %s is not serving: %w", spec.Export, pr.err)
 		}
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("union: %s did not answer: %w", spec.Export, ctx.Err())
 	}
+}
+
+// begin joins the probe already in flight for merged, or claims the right to
+// make one.
+func (p *prober) begin(merged string) (*probe, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pr, ok := p.inflight[merged]; ok {
+		return pr, false
+	}
+	if p.inflight == nil {
+		p.inflight = map[string]*probe{}
+	}
+	pr := &probe{done: make(chan struct{})}
+	p.inflight[merged] = pr
+	return pr, true
+}
+
+// finish publishes an answer and clears the way for the next probe.
+//
+// Cleared BEFORE the answer goes out, so an Lstat that returns after minutes of
+// blocking is never handed to a later caller as a fresh reading: that caller
+// starts its own.
+func (p *prober) finish(merged string, pr *probe, err error) {
+	pr.err = err
+
+	p.mu.Lock()
+	if p.inflight[merged] == pr {
+		delete(p.inflight, merged)
+	}
+	p.mu.Unlock()
+
+	close(pr.done)
 }
 
 // MountedShares names the share ids that have a union mounted, reading the

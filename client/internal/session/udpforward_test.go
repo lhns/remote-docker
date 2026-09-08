@@ -263,3 +263,141 @@ func TestCloseEndsEveryFlow(t *testing.T) {
 		t.Error("a flow outlived the forward")
 	}
 }
+
+// countFlows is the number of flows the forward holds right now.
+func (f *udpForward) countFlows() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.flows)
+}
+
+// forwardWithClock hands back a forward on a clock the test drives, so nothing
+// here waits out udpFlowIdle. The returned function moves that clock forward.
+func forwardWithClock(t *testing.T, d *dialer) (*udpForward, func(time.Duration)) {
+	t.Helper()
+	fwd := forwardTo(t, d)
+
+	var mu sync.Mutex
+	base := time.Now()
+	offset := time.Duration(0)
+
+	// Set under the forward's own lock: serve reads now while holding it, and
+	// the race detector counts a plain assignment here as a write against that.
+	fwd.mu.Lock()
+	fwd.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return base.Add(offset)
+	}
+	fwd.mu.Unlock()
+
+	return fwd, func(by time.Duration) {
+		mu.Lock()
+		offset += by
+		mu.Unlock()
+	}
+}
+
+// A flow that goes quiet is closed (ADR 0038).
+func TestAQuietFlowExpires(t *testing.T) {
+	d := &dialer{}
+	fwd, advance := forwardWithClock(t, d)
+	sender := senderTo(t, fwd)
+
+	if _, err := sender.Write([]byte("query")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the flow to open", func() bool { return d.count() == 1 })
+
+	fwd.sweep()
+	if d.flow(0).isClosed() {
+		t.Fatal("a flow was closed before its idle window had passed")
+	}
+
+	advance(2 * udpFlowIdle)
+	fwd.sweep()
+
+	if !d.flow(0).isClosed() {
+		t.Error("a flow that carried nothing for twice udpFlowIdle is still open")
+	}
+	if n := fwd.countFlows(); n != 0 {
+		t.Errorf("the forward still holds %d flows", n)
+	}
+}
+
+// A flow still carrying datagrams is not expired underneath its sender.
+func TestABusyFlowSurvivesASweep(t *testing.T) {
+	d := &dialer{}
+	fwd, advance := forwardWithClock(t, d)
+	sender := senderTo(t, fwd)
+
+	if _, err := sender.Write([]byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the flow to open", func() bool { return d.count() == 1 })
+
+	// Past udpFlowIdle, then used again: the sweep that follows must find it
+	// fresh.
+	advance(2 * udpFlowIdle)
+	if _, err := sender.Write([]byte("second")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the second datagram", func() bool { return len(d.flow(0).sent()) == 2 })
+
+	fwd.sweep()
+	if d.flow(0).isClosed() {
+		t.Fatal("a flow was closed while it was still carrying datagrams")
+	}
+
+	// A reply counts as use too: the container answering is the other direction
+	// of the same exchange.
+	advance(2 * udpFlowIdle)
+	d.flow(0).replies <- []byte("answer")
+	buf := make([]byte, 64)
+	if err := sender.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.Read(buf); err != nil {
+		t.Fatalf("the reply never arrived: %v", err)
+	}
+
+	fwd.sweep()
+	if d.flow(0).isClosed() {
+		t.Error("a flow was closed although a reply had just come back through it")
+	}
+}
+
+// Close while a sweep is running is clean, which is only visible under -race.
+func TestCloseDuringASweep(t *testing.T) {
+	d := &dialer{}
+	fwd, advance := forwardWithClock(t, d)
+
+	senders := make([]net.Conn, 0, 8)
+	for range 8 {
+		s := senderTo(t, fwd)
+		senders = append(senders, s)
+		if _, err := s.Write([]byte("query")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "every flow to open", func() bool { return d.count() == len(senders) })
+	advance(2 * udpFlowIdle)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			fwd.sweep()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_ = fwd.Close()
+	}()
+	wg.Wait()
+
+	if n := fwd.countFlows(); n != 0 {
+		t.Errorf("the forward still holds %d flows after Close", n)
+	}
+}
