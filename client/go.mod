@@ -8,8 +8,8 @@ go 1.26.3
 
 require (
 	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29
-	github.com/docker/buildx v0.37.0
-	github.com/docker/cli v29.8.0+incompatible
+	github.com/docker/buildx v0.37.1
+	github.com/docker/cli v29.8.1+incompatible
 	github.com/docker/compose/v5 v5.5.1
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/klauspost/compress v1.20.0
