@@ -7,67 +7,37 @@ updates:
   # nothing reports it. The client is where the weight is: 861 lines of
   # go.sum against the agent's 28 and the shared module's none at all
   # (2026-09-06; re-check with `wc -l */go.sum`).
-  # ONE entry for all eight Go modules (ADR 0021), not one each, because a
-  # dependency shared between modules has to move in ALL of them or the build
-  # breaks. `directories` plus `group-by: dependency-name` is what makes that
-  # one pull request instead of four that each half-break the tree.
-  #
-  # Four incidents said this before the config did, every one the same shape:
-  # dependabot bumped one module, a dependent kept the old version, `go.work`
-  # hid it locally, and it failed only where CI and image/Dockerfile build a
-  # module alone. #159 sortorder and moby/moby into client, #161 x/sys into
-  # agent, #170 go-containerregistry into client, #180 x/crypto into agent --
-  # that last one turned one missing require into eight red integration jobs.
-  #
-  # 20 dependencies span two or more modules: x/sys is in five, and x/crypto,
-  # fsnotify and coder/websocket are in four each (2026-09-21; re-check with
-  # the loop in the PR that added this).
+  # One entry for all eight Go modules (ADR 0021), not one each: a dependency
+  # several modules require has to move in ALL of them, and dependabot bumping
+  # one at a time broke the build four times (#159, #161, #170, #180). go.work
+  # hides it locally, so it fails only where CI and image/Dockerfile build a
+  # module alone. `group-by: dependency-name` puts every directory needing a
+  # dependency in one PR.
   #
   # Dependabot does not discover nested modules, so a directory missing here
-  # silently stops being updated and nothing reports it.
+  # silently stops being updated.
   - package-ecosystem: gomod
     directories:
-      # The contract, the tunnel and the log handler. No third-party
-      # dependency at all, which is the property worth keeping.
       - /core
-      # The cache engine, whose go.mod has no require at all: that is what
-      # makes it a module rather than a package, so a PR adding one is refused.
       - /dircache
-      # Provisioning a workspace on this machine (ADR 0026). Its weight is
-      # go-containerregistry; what it refuses is a dependency on this repo.
       - /machine
-      # The two core modules: the mechanisms with no Docker in them (ADR 0021).
       - /core-agent
-      # core-client carries the NFS server and the watchers, so it is the one
-      # of the two with third-party weight.
       - /core-client
       - /agent
-      # Where the weight is: 861 lines of go.sum against the agent's 28 and
-      # the shared module's none at all.
       - /client
-      # The integration suites' instruments. Not linked into anything and not
-      # shipped; it carries x/sys because it reads raw inotify.
       - /test/probes
     schedule:
       interval: weekly
-    # Stated because the default is five, and one dependency per pull request
-    # across eight modules reaches five quickly. The github-actions entry below
-    # carries the same note for the same reason.
+    # The default is five, which withholds bumps silently once five are open.
     open-pull-requests-limit: 15
     groups:
-      # cli, buildx and buildkit pin each other, so one PR tests a
-      # combination as a combination. No `group-by` here deliberately: these
-      # have to move TOGETHER, which is the opposite of one PR per dependency.
-      # They live in /client alone, so this stays one PR either way.
+      # cli, buildx and buildkit pin each other, so they move together: no
+      # `group-by`, which would split them into a PR each.
       docker:
         patterns:
           - "github.com/docker/*"
           - "github.com/moby/*"
           - "github.com/containerd/*"
-      # Everything else, ONE PR PER DEPENDENCY, spanning every directory that
-      # requires it. That is the whole point: the PR is consistent across
-      # modules, so the per-module build cannot break on a version only some
-      # of them moved to.
       shared:
         group-by: dependency-name
         patterns:
