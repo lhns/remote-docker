@@ -7,73 +7,75 @@ updates:
   # nothing reports it. The client is where the weight is: 861 lines of
   # go.sum against the agent's 28 and the shared module's none at all
   # (2026-09-06; re-check with `wc -l */go.sum`).
+  # ONE entry for all eight Go modules (ADR 0021), not one each, because a
+  # dependency shared between modules has to move in ALL of them or the build
+  # breaks. `directories` plus `group-by: dependency-name` is what makes that
+  # one pull request instead of four that each half-break the tree.
+  #
+  # Four incidents said this before the config did, every one the same shape:
+  # dependabot bumped one module, a dependent kept the old version, `go.work`
+  # hid it locally, and it failed only where CI and image/Dockerfile build a
+  # module alone. #159 sortorder and moby/moby into client, #161 x/sys into
+  # agent, #170 go-containerregistry into client, #180 x/crypto into agent --
+  # that last one turned one missing require into eight red integration jobs.
+  #
+  # 20 dependencies span two or more modules: x/sys is in five, and x/crypto,
+  # fsnotify and coder/websocket are in four each (2026-09-21; re-check with
+  # the loop in the PR that added this).
+  #
+  # Dependabot does not discover nested modules, so a directory missing here
+  # silently stops being updated and nothing reports it.
   - package-ecosystem: gomod
-    directory: /client
+    directories:
+      # The contract, the tunnel and the log handler. No third-party
+      # dependency at all, which is the property worth keeping.
+      - /core
+      # The cache engine, whose go.mod has no require at all: that is what
+      # makes it a module rather than a package, so a PR adding one is refused.
+      - /dircache
+      # Provisioning a workspace on this machine (ADR 0026). Its weight is
+      # go-containerregistry; what it refuses is a dependency on this repo.
+      - /machine
+      # The two core modules: the mechanisms with no Docker in them (ADR 0021).
+      - /core-agent
+      # core-client carries the NFS server and the watchers, so it is the one
+      # of the two with third-party weight.
+      - /core-client
+      - /agent
+      # Where the weight is: 861 lines of go.sum against the agent's 28 and
+      # the shared module's none at all.
+      - /client
+      # The integration suites' instruments. Not linked into anything and not
+      # shipped; it carries x/sys because it reads raw inotify.
+      - /test/probes
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Stated because the default is five, and one dependency per pull request
+    # across eight modules reaches five quickly. The github-actions entry below
+    # carries the same note for the same reason.
+    open-pull-requests-limit: 15
     groups:
       # cli, buildx and buildkit pin each other, so one PR tests a
-      # combination as a combination.
+      # combination as a combination. No `group-by` here deliberately: these
+      # have to move TOGETHER, which is the opposite of one PR per dependency.
+      # They live in /client alone, so this stays one PR either way.
       docker:
         patterns:
           - "github.com/docker/*"
           - "github.com/moby/*"
           - "github.com/containerd/*"
-      golang-x:
+      # Everything else, ONE PR PER DEPENDENCY, spanning every directory that
+      # requires it. That is the whole point: the PR is consistent across
+      # modules, so the per-module build cannot break on a version only some
+      # of them moved to.
+      shared:
+        group-by: dependency-name
         patterns:
-          - "golang.org/x/*"
-
-  - package-ecosystem: gomod
-    directory: /agent
-    schedule:
-      interval: weekly
-
-  # The two core modules: the mechanisms with no Docker in them (ADR 0021).
-  # core-client carries the NFS server and the watchers, so it is the one of
-  # the two with third-party weight.
-  - package-ecosystem: gomod
-    directory: /core-client
-    schedule:
-      interval: weekly
-    groups:
-      golang-x:
-        patterns:
-          - "golang.org/x/*"
-
-  - package-ecosystem: gomod
-    directory: /core-agent
-    schedule:
-      interval: weekly
-
-  # The shared module: the contract, the tunnel and the log handler. It has no
-  # third-party dependency at all, which is the property worth keeping.
-  - package-ecosystem: gomod
-    directory: /core
-    schedule:
-      interval: weekly
-
-  # The cache engine, whose go.mod has no require at all: that is what makes
-  # it a module rather than a package, so a PR adding one is refused.
-  - package-ecosystem: gomod
-    directory: /dircache
-    schedule:
-      interval: weekly
-
-  # Provisioning a workspace on this machine (ADR 0026). Its third-party
-  # weight is go-containerregistry, which turns the workspace image into a
-  # rootfs; what it refuses is a dependency on the rest of this repository.
-  - package-ecosystem: gomod
-    directory: /machine
-    schedule:
-      interval: weekly
-
-  # The integration suites' instruments. Not linked into anything and not
-  # shipped; it carries x/sys because it reads raw inotify.
-  - package-ecosystem: gomod
-    directory: /test/probes
-    schedule:
-      interval: weekly
+          - "*"
+        exclude-patterns:
+          - "github.com/docker/*"
+          - "github.com/moby/*"
+          - "github.com/containerd/*"
 
   - package-ecosystem: github-actions
     directory: /
