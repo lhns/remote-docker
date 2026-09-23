@@ -1,14 +1,8 @@
 name: bench
 
-# On request only. This reports numbers rather than passing or failing, and it
-# takes minutes: a measurement, not a gate. Run it when a change claims to make
-# a mounted directory faster, and paste the table into the record that claims
-# it.
-#
-# Two ways in, because workflow_dispatch only exists for a workflow already on
-# the default branch -- which a branch developing the thing being measured is
-# not. Labelling the pull request `bench` is how it runs before then, and
-# re-labelling is how it runs again.
+# A measurement, not a gate: run it when a change claims a mounted directory is
+# faster, and paste the table into the record that claims it. The `bench` label
+# runs it on a pull request, since workflow_dispatch exists only on main.
 on:
   pull_request:
     types: [labeled]
@@ -30,8 +24,7 @@ on:
         description: "workloads, from dense subtree sparse dense3 parallel write"
         default: "dense subtree sparse dense3 parallel write"
 
-# Never cancelled by a newer run, and each run is its own group: a bench cut
-# off by a push loses the whole measurement.
+# Never cancelled: a bench cut off by a push loses the whole measurement.
 concurrency:
   group: bench-${{ github.sha }}
   cancel-in-progress: false
@@ -48,13 +41,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # One job per shape, in parallel, since all shapes in one job would not
-      # fit its six hours. The rows of one shape are still measured in ONE
-      # job, which is what makes a policy comparable with another (ADR 0044).
+      # One job per shape, since all would not fit six hours. The rows of a
+      # shape share ONE job, which keeps them comparable (ADR 0044).
       matrix:
         shape: ${{ fromJSON(inputs.shapes || '["0ms:0", "10ms:0", "20ms:0", "80ms:0", "0ms:10mbit"]') }}
-    # Two hours for a shape; 60 minutes was cut off partway and reported as
-    # "cancelled".
+    # 60 minutes cut a shape off partway.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -67,15 +58,10 @@ jobs:
       - name: measure
         env:
           BENCH_SHAPES: ${{ matrix.shape }}
-          # Empty on a label run, which falls through to bench.sh's defaults.
-          # The one default repeated here is the shapes, because the matrix
-          # cannot be built from a value the script holds.
+          # Empty on a label run, which takes bench.sh's defaults. Only the
+          # shapes default is repeated, for the matrix.
           BENCH_FILES: ${{ inputs.files }}
           BENCH_MODES: ${{ inputs.modes }}
           BENCH_PREFETCH: ${{ inputs.prefetch }}
           BENCH_WORKLOADS: ${{ inputs.workloads }}
         run: bash test/bench.sh
-
-      - name: workspace logs
-        if: always()
-        run: docker logs remote-docker-bench 2>&1 | tail -100 || true

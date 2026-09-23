@@ -1,16 +1,8 @@
 name: msi
 
-# The Windows installer, built and then actually installed.
-#
-# Triggered by paths rather than on every push. The binary inside the MSI is a
-# payload; the .wxs decides everything under test, which is the rename, the
-# PATH entry and the refusal to shadow another docker.exe. A Windows runner on
-# every push would answer the same question every time.
-#
-# What that costs, both recorded in ADR 0048: a client change breaking `remote
-# --help` is caught by ci.yml and not here, and release.yml builds and uploads
-# the MSI without waiting for this, so a tag can publish an installer this
-# suite has not seen.
+# The Windows installer, built and installed. Path-triggered: the .wxs decides
+# everything under test, and the binary is a payload. The cost (ADR 0048): a tag
+# can publish an MSI this has not seen.
 on:
   pull_request:
     paths:
@@ -35,9 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The payload is cross-compiled here rather than on the Windows runner: the
-  # module cache is warm on ubuntu and the client's dependency graph is large.
-  # This is also the shape release.yml has, for the same reason.
+  # Cross-compiled on ubuntu, where the module cache is warm, as release.yml does.
   binaries:
     name: cross-compile the payload
     runs-on: ubuntu-latest
@@ -75,12 +65,8 @@ jobs:
           path: windows
       - uses: ./.github/actions/setup-wix
 
-      # Both architectures, because `wix build -arch arm64` failing is a
-      # release-day failure otherwise. Only the amd64 one is installed below:
-      # GitHub has no Windows arm64 runner.
-      #
-      # The version is a stand-in and has to be three numbers, which is the
-      # constraint build.ps1 enforces.
+      # Both architectures are built; only amd64 can be installed (no Windows
+      # arm64 runner). The version is a three-number stand-in.
       - name: build the msis
         shell: pwsh
         run: |
@@ -109,9 +95,7 @@ jobs:
         shell: pwsh
         run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi
 
-      # The suite prints the log of whichever msiexec run failed, but a job
-      # that died some other way leaves them behind and they are the only
-      # record of what the installer did.
+      # For a job that died outside the suite, which prints its own.
       - name: the msiexec logs
         if: failure()
         shell: pwsh

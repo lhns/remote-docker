@@ -120,7 +120,7 @@ type Targets interface {
 - The shared `docker` group goes, including for accounts that already exist —
   provisioning returns early for those, so changing what new accounts join would
   have fixed nothing on a workspace that had users.
-- `notify.DockerVolumes` gains `Host` and `Root`; `notify.go` is untouched, since
+- `dockercli.Volumes` gains `Host` and `Root`; `core-agent/replay` is untouched, since
   its promise ("the directory in the agent's filesystem holding this export")
   stays true.
 
@@ -238,7 +238,7 @@ position. The code does not differ; the blast radius does.)*
   the one that was wrong.
 - **`Lookup` versus `Ensure` is a contract, not a habit.** `workspace-info` is the
   client's first round trip and must not wait for a cold dind.
-  `notify.DockerVolumes.Host` is lazy for the same reason.
+  `dockercli.Volumes.Host` is lazy for the same reason.
 - **A zero `sshd.Config` no longer means "shared".** A `Server` built by hand with
   no resolver panics on its first session rather than quietly serving the wrong
   daemon.

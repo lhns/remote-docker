@@ -78,7 +78,7 @@ Contents:
 | `core-client` | `nfsserve`, `fswatch`, `keys`, `tunnelclient` |
 | `core-agent` | `accounts`, `replay`, `netns`, `tunnelserver`, `union`, `wslisten` |
 | `client`, `agent` | everything that names Docker |
-| `test/probes` | `watchprobe`, `pokeprobe`, `udpecho` |
+| `test/probes` | `watchprobe`, `pokeprobe`, `udpecho`, `fsprobe` |
 
 Two things did NOT become feature packages, and the reasons are the useful part:
 
@@ -179,7 +179,7 @@ two, and the difference is not size or elegance.
 | | `ports` | `dircache` | `machine` |
 |---|---|---|---|
 | what a second user would supply | a forward, which `tunnelclient` already is | a `Store`: somewhere files live | nothing; it is already a leaf |
-| what a package inside its old module would drag along | nothing; the caller is in `client` regardless | `core-client`'s seven third-party requires | `client`'s 191 docker packages |
+| what a package inside its old module would drag along | nothing; the caller is in `client` regardless | `core-client`'s eight third-party requires | `client`'s 191 docker packages |
 | third-party requires of its own | n/a | **0** | go-containerregistry, and 7 docker packages under it |
 | what the boundary refuses | n/a | every third party | every package in this repository |
 
@@ -206,9 +206,9 @@ module can. The property is checked rather than trusted:
 (cd machine && go list -deps ./... | grep 'lhns/remote-docker' | grep -v '/machine')
 ```
 
-**The two side-boundaries do not buy the same thing**, and it is worth saying
-which is which. `core-client` isolates real weight: 54 `go.sum` lines against
-`client`'s 861, which is `docker/cli` plus buildx plus compose. `core-agent`
+**The two side-boundaries do not buy the same thing.** `core-client` isolates
+real weight: 54 `go.sum` lines against `client`'s 854 (2026-09-23;
+`wc -l */go.sum`), which is `docker/cli` plus buildx plus compose. `core-agent`
 isolates none -- `agent` has 28 lines in total -- so what that boundary enforces
 is LAYERING, not weight. Both are worth keeping; only one is worth keeping for
 the reason above.
@@ -280,7 +280,7 @@ The test is AGREEMENT, not "looks like infrastructure".
   identity; the hint names a file in the workspace's `authorized_keys.d`, which is
   policy.
 - Also not shared: `envOr`/`envInt` (small, differently shaped), and the
-  path-containment helpers — `notify.relocate` guards untrusted daemon output and
+  path-containment helpers — `replay.Relocate` guards untrusted daemon output and
   the client's lookalike is unrelated.
 
 ## The membership test, and why the obvious one fails

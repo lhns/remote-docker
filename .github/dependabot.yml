@@ -2,20 +2,12 @@
 # suite runs both daemon modes end to end before a bump is taken.
 version: 2
 updates:
-  # One entry per module (ADR 0021). Dependabot does not discover nested
-  # modules, so a module missing here silently stops being updated, and
-  # nothing reports it. The client is where the weight is: 861 lines of
-  # go.sum against the agent's 28 and the shared module's none at all
-  # (2026-09-06; re-check with `wc -l */go.sum`).
   # One entry for all eight Go modules (ADR 0021), not one each: a dependency
-  # several modules require has to move in ALL of them, and dependabot bumping
-  # one at a time broke the build four times (#159, #161, #170, #180). go.work
-  # hides it locally, so it fails only where CI and image/Dockerfile build a
-  # module alone. `group-by: dependency-name` puts every directory needing a
-  # dependency in one PR.
-  #
-  # Dependabot does not discover nested modules, so a directory missing here
-  # silently stops being updated.
+  # several modules require has to move in ALL of them, and bumping one at a
+  # time broke the image build four times (#159, #161, #170, #180).
+  # `group-by: dependency-name` puts every directory needing a dependency in
+  # one PR. Dependabot does not discover nested modules, so a directory
+  # missing here silently stops being updated.
   - package-ecosystem: gomod
     directories:
       - /core

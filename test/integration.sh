@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# End-to-end: a real workspace container, a real client binary, real NFS.
-#
-# This is the only place the whole thing is exercised together. Everything
-# below the client is unit tested -- the NFS wire protocol against a real NFS
-# client, the proxy against real HTTP framing -- but the kernel NFS client,
-# the dind daemon, and the tunnel between them exist only here.
+# End-to-end: a real workspace container, a real client binary, real NFS. The
+# kernel NFS client, the dind daemon and the tunnel between them meet only here.
 #
 # Requires: docker, and a kernel with NFS client support. The `gate` job in
-# .github/workflows/integration.yml checks that separately, because a failure
-# there is about the runner rather than about this code.
+# .github/workflows/integration.yml checks that separately, as a runner fault.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,22 +17,16 @@ ACCOUNT=itest
 # The docker timeout is lib.sh's default, 120s.
 
 # PIN_SH keeps a container alive only while its mount still works, so the
-# container's own survival IS the assertion. Used by three sections, all of
-# which depend on /w/marker being the same file -- which is why it is written
-# once rather than three times.
-#
-# The script only, not the `sh -c`: quoting a whole command in one variable
-# passes it as a single argument.
+# container's survival IS the assertion. Only the script, not the `sh -c`: a
+# whole command quoted in one variable passes as a single argument.
 PIN_SH='while true; do cat /w/marker >/dev/null || exit 1; sleep 1; done'
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-# expect_output runs a container and compares its stdout to a literal.
-#
-# An empty capture is reported as its own case rather than as a content
-# mismatch: "got []" reads as the wrong answer when it means the container
-# produced no answer at all, and telling those apart is why this exists.
+# expect_output runs a container and compares its stdout to a literal. An empty
+# capture is its own case: "got []" reads as a wrong answer when the container
+# produced no answer at all.
 #
 #   expect_output <description> <expected> -- <docker run args...>
 expect_output() {
@@ -86,9 +75,7 @@ export REMOTE_DOCKER_HOST=127.0.0.1
 export REMOTE_DOCKER_PORT=$SSH_PORT
 export REMOTE_DOCKER_USER=$ACCOUNT
 export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
-# Idle release is a real behaviour worth testing (ADR 0015), but the default
-# minute meant sleeping 75 seconds to observe it -- a quarter of this suite's
-# runtime spent waiting for a timer we control.
+# Idle release (ADR 0015) at the default minute cost a 75s sleep to observe.
 export REMOTE_DOCKER_IDLE_TIMEOUT=8s
 
 echo
@@ -103,19 +90,13 @@ fi
 
 echo
 echo "== 4. start the workspace =="
-# Pinned to the SHARED daemon, explicitly, now that a daemon per account is the
-# default (ADR 0019): this suite is the evidence that mode still works, and
-# test/per-user-dind.sh covers the other. Inheriting the default would make
-# this a second, worse test of per-user mode, since several assertions below
-# reach the client's containers with `docker exec <workspace> docker ps`, which
-# only finds them on the daemon the agent itself runs.
-# The WebSocket listener is published as well, so section 19 can put a real
-# reverse proxy in front of it. The agent serves it by default; nothing else in
-# this suite touches it.
-# WORKSPACE_DIND_MOUNTS declares which paths the workspace's own daemon
-# resolves, which section 9d then binds (ADR 0041). This suite runs the SHARED
-# daemon, so the source side is what the daemon sees -- there is no dind to
-# mount into -- and both of these exist inside the workspace container.
+# Pinned to the SHARED daemon (ADR 0012); test/per-user-dind.sh covers the
+# per-account default (ADR 0019). Several assertions below find the client's
+# containers with `docker exec <workspace> docker ps`, which only sees the
+# agent's own daemon.
+# The WebSocket port is published for section 19's reverse proxy.
+# WORKSPACE_DIND_MOUNTS declares paths the workspace daemon resolves, which 9d
+# binds (ADR 0041). With the shared daemon the source side is what it sees.
 if start_workspace false -p "$WS_PORT:2280" \
     -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro; then
     ok "workspace container started"
@@ -145,14 +126,10 @@ echo "from the project directory" >"$PROJECT/marker"
 echo "from an unrelated directory" >"$OUTSIDE/data"
 
 cd "$PROJECT" || exit 1
-# Wrapped in a timeout: a command that hangs here reports where it stopped
-# instead of consuming the whole job budget in silence. This caught a real
-# deadlock -- Close waiting on background goroutines that only stopped when
-# the caller's context was cancelled, which for a one-shot command it never
-# was.
-# No session is running yet, so the verdict is "no session" and that is
-# correct. What this proves is that the workspace answered: the account row
-# only exists when it did.
+# A timeout, so a hang reports where it stopped instead of eating the job
+# budget (it once caught Close waiting on a context a one-shot command never
+# cancels). No session runs yet, so "no session" is correct; the account row
+# exists only if the workspace answered.
 if timeout 90 "$WORK/remote-docker" remote status >"$WORK/status.log" 2>&1 &&
     grep -q "^status " "$WORK/status.log" &&
     grep -q "tunnel port" "$WORK/status.log"; then
@@ -165,10 +142,8 @@ else
     exit 1
 fi
 
-# The agent's build, which is the question worth being able to answer when a
-# workspace behaves oddly and is not the same question as the client's build.
-# It is reported even when the workspace is too old to send one, because
-# silence there is indistinguishable from a failure to answer.
+# The agent's build is reported even by a workspace too old to send one,
+# because silence there looks the same as a failure to answer.
 if grep -qE "^versions .*agent [^ ,]+" "$WORK/status.log"; then
     ok "status reports the agent's version"
 else
@@ -177,9 +152,7 @@ fi
 
 echo
 echo "== 6. open a session =="
-# --foreground because the suite wants the session as a child it can kill and
-# whose log it can read. `start` on its own detaches, which is right for a
-# person and wrong for a test that needs to end it deterministically.
+# --foreground: the suite needs a child it can kill and whose log it can read.
 "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 
@@ -222,15 +195,12 @@ fi
 
 echo
 echo "== 6c. a container's exit status reaches the client =="
-# The status comes back over the HIJACKED stream through the proxy: read as an
-# ordinary response, `docker run` exits 0 having printed nothing, which is a
-# failure reported as a success. Not the SSH session's exit status, which is a
-# different mechanism and belongs with the stock-ssh section (13b).
+# The status crosses the HIJACKED stream through the proxy: read as an ordinary
+# response, `docker run` exits 0 having printed nothing. The SSH session's exit
+# status is a different mechanism, tested in 13b.
 
 #   expect_status <description> <want> <cmd...>
-#
-# stdin is the caller's, because whether stdin is attached is half of what
-# this section tests.
+# stdin is the caller's: whether it is attached is half of what 6c tests.
 expect_status() {
     local what=$1 want=$2
     shift 2
@@ -289,12 +259,9 @@ fi
 
 echo
 echo "== 6d. an exec's exit status reaches the client =="
-# A second status-carrying hijacked stream: 6c reads /containers/<id>/attach
-# and /containers/<id>/wait, this reads /exec/<id>/start and /exec/<id>/json,
-# and one working says nothing about the other. A distinct code per case, so a
-# collapse to 1 still names which one broke.
-#
-# 6d and 6e are guards on behaviour that already works, not regression tests.
+# A second hijacked stream: /exec/<id>/start and /exec/<id>/json, where 6c
+# reads attach and wait. A distinct code per case, so a collapse to 1 still
+# names which one broke.
 if dockert run -d --name itest-exec alpine:3 sleep 300 >/dev/null 2>&1; then
     expect_status "an exec's non-zero exit reaches the client" 11 \
         dockert exec itest-exec sh -c 'exit 11' </dev/null
@@ -316,18 +283,14 @@ fi
 
 echo
 echo "== 6e. an interrupted docker run =="
-# What a script sees when somebody presses Ctrl-C. The number comes from the
-# CONTAINER and not from here: the CLI catches every signal for the length of a
-# `run` (cli/command/container/run.go, notifyAllSignals), forwards it, and the
-# container's status arrives as a cli.StatusError like any other. Docker's own
-# 128+N mapping is for commands with no container to carry a status, and is
-# unreachable here anyway (errCtxSignalTerminated is unexported).
+# Ctrl-C. The number comes from the CONTAINER: the CLI catches every signal
+# during a `run` (cli/command/container/run.go, notifyAllSignals), forwards it,
+# and the status arrives as a cli.StatusError. Docker's own 128+N mapping is
+# unreachable here (errCtxSignalTerminated is unexported).
 #
 #   run_interrupted <container name> <sh script>
-#
-# Leaves the client's exit status in INTERRUPTED_STATUS, and fails if the
-# container never started. The signal goes in only once the container is
-# running: earlier it lands mid-create, which is a different case.
+# Leaves the client's status in INTERRUPTED_STATUS; fails if the container
+# never started. The signal goes in once it runs: earlier lands mid-create.
 run_interrupted() {
     local name=$1 script=$2
     INTERRUPTED_STATUS=
@@ -351,12 +314,10 @@ run_interrupted() {
         docker rm -f "$name" >/dev/null 2>&1
         return 1
     fi
-    # Running is not ready: the script's trap is installed a moment later, and
-    # a signal before that hits the pid-1 rule the third case below is about.
-    #
-    # The scripts `sleep 60 & wait` rather than sleeping in the foreground: a
-    # shell waiting on a foreground command defers its trap until that command
-    # returns, so the answer would arrive a minute late.
+    # Running is not ready: the trap is installed a moment later, and a signal
+    # before it hits the pid-1 rule of the third case below. The scripts use
+    # `sleep 60 & wait` because a shell defers a trap until a foreground
+    # command returns.
     sleep 2
 
     # A client that catches the signal and then waits forever would hang the
@@ -397,12 +358,9 @@ if run_interrupted itest-interrupt-status 'trap "exit 77" INT; sleep 60 & wait';
     fi
 fi
 
-# A container whose pid 1 has no handler IGNORES the signal, so one Ctrl-C
-# stops nothing: it runs to completion and this binary faithfully reports its
-# 0. That is the kernel's rule for pid 1 in a namespace, not anything here, and
-# stock docker does the same; its escape hatch is a third signal, which exits 1.
-# Measured 2026-09-08 (run 34242976755) with a `sleep 60` here, which ran its
-# full minute after the client was interrupted.
+# A container whose pid 1 has no handler IGNORES the signal (the kernel's rule
+# for pid 1; stock docker does the same), so it runs to completion and its 0 is
+# reported. A `sleep 60` here ran its full minute (run 34242976755).
 if run_interrupted itest-interrupt-ignored 'sleep 10'; then
     if [ "$INTERRUPTED_STATUS" -eq 0 ]; then
         ok "a container that ignores the signal runs on, and its status is reported"
@@ -417,7 +375,6 @@ expect_output "the container read this machine's file through the tunnel" "from 
 
 echo
 echo "== 8. a bind mount OUTSIDE the working directory =="
-# The case the previous single-mount design could not express at all.
 expect_output "an unrelated local directory resolved" "from an unrelated directory" -- --rm -v "$OUTSIDE:/d" alpine:3 cat /d/data
 
 echo
@@ -434,19 +391,11 @@ fi
 
 echo
 echo "== 9b. a read-only bind mount stays read-only =="
-# `-v src:/w:ro` says the container must not write. Every bind here is rewritten
-# into an NFS volume the workspace daemon mounts for itself (ADR 0006), and the
-# export is read-write, so the ONLY thing standing between a container and this
-# machine's files is that the read-only flag survived the rewrite and the daemon
-# honoured it.
-#
-# Section 9 above is the control: writes do land when they are allowed, so a
-# pass here is the flag working rather than writes being broken.
-#
-# Both spellings, because they take different paths through the rewriter: `-v`
-# arrives as HostConfig.Binds, a string whose options are carried verbatim, and
-# `--mount` as HostConfig.Mounts, a JSON object whose ReadOnly field has to
-# survive the type being changed from bind to volume.
+# Every bind becomes an NFS volume over a read-write export (ADR 0006), so the
+# read-only flag surviving the rewrite is ALL that protects this machine's
+# files. Section 9 is the control. Both spellings, because they take different
+# rewriter paths: `-v` is a Binds string carried verbatim, `--mount` a Mounts
+# object whose ReadOnly must survive the type changing from bind to volume.
 before=$(ls "$PROJECT" | sort | tr '\n' ' ')
 
 if dockert run --rm -v "$PROJECT:/w:ro" alpine:3 \
@@ -483,20 +432,14 @@ fi
 
 echo
 echo "== 9c. a single file can be bind mounted =="
-# `-v ./nginx.conf:/etc/nginx/nginx.conf` is ordinary in compose and was refused
-# outright until ADR 0039. A file has no directory to export, so the client
-# exports a SYNTHESISED directory holding only that file and the mount names it
-# as a volume subpath. Two things have to hold, and only a real daemon can say:
-# the subpath resolves to a FILE rather than a directory, and it resolves out of
-# an NFS-backed volume.
+# A file has no directory to export, so the client exports a SYNTHESISED
+# directory holding only it and names it as a volume subpath (ADR 0039).
 mkdir -p "$PROJECT/conf"
 echo "the file the container asked for" >"$PROJECT/conf/wanted.conf"
 echo "TOKEN=secret" >"$PROJECT/conf/sibling.env"
 
-# One run answers three questions, because each needs a container start: the
-# target is a FILE (a volume mounted whole would put a directory there, which
-# looks fine until something opens it), it holds what this machine holds, and
-# the sibling that was never asked for did not come with it.
+# One run, three questions: the target is a FILE (a volume mounted whole puts a
+# directory there), it holds this machine's content, and its sibling stayed out.
 out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3 sh -c '
     test -f /etc/app.conf && echo is-a-file
     cat /etc/app.conf
@@ -554,13 +497,8 @@ fi
 
 echo
 echo "== 9d. a bind may name a path the workspace owns =="
-# kind builds `-v /lib/modules:/lib/modules:ro` itself, and its flags are not the
-# user's to edit. A path the workspace declared is therefore resolved by the
-# DAEMON rather than exported from this machine (ADR 0041).
-#
-# /etc/workspace exists in the workspace container and NOT on this runner, so a
-# successful read is the passthrough working: had the client tried to export it,
-# there would be nothing here to export.
+# A declared path is resolved by the DAEMON, not exported from here (ADR 0041).
+# /etc/workspace exists only in the workspace container, so a read proves it.
 if out=$(dockert run --rm -v /etc/workspace:/w:ro alpine:3 ls /w 2>&1) &&
     echo "$out" | grep -q "authorized_keys.d"; then
     ok "a declared path was resolved by the workspace"
@@ -607,12 +545,9 @@ case "$published" in
     bad "could not read the workspace-side port: [$published]" ;;
 esac
 
-# The clash moved here: the daemon no longer refuses anything, so the client
-# has to, in the wording the daemon itself uses, because that is what it replaces.
-#
-# Two accounts colliding cannot be shown from one client, because this refusal
-# comes first. What is proven above is that no requested number is ever bound
-# on the workspace, which is what makes that collision impossible.
+# The daemon no longer refuses a clash, so the client does, in the daemon's
+# wording. Two accounts colliding cannot be shown from one client; what makes it
+# impossible is that no requested number is bound on the workspace, proven above.
 if out=$(dockert run -d --name itest-web2 -p 18080:80 nginx:alpine 2>&1); then
     bad "a second container took a local port this session already forwards"
     docker rm -f itest-web2 >/dev/null 2>&1
@@ -631,9 +566,7 @@ docker rm -f itest-web >/dev/null 2>&1
 # numbers work whichever way round they were matched.
 if ! twice=$(dockert run -d --name itest-twice -p 18082:80 -p 18083:80 \
     -v "$PROJECT:/usr/share/nginx/html" nginx:alpine 2>&1); then
-    # head, not tail: docker ends a failure with "Run 'docker run --help' for
-    # more information", so the last line is boilerplate and the first is what
-    # went wrong. Taking the last one cost a CI round trip.
+    # head, not tail: docker's last line is "Run 'docker run --help'...".
     bad "a container publishing one port twice was refused: $(echo "$twice" | head -2 | tr '\n' ' ')"
 fi
 
@@ -642,9 +575,7 @@ for port in 18082 18083; do
         ok "one container port published twice is reachable at $port"
     else
         bad "$port never became reachable"
-        # What the daemon published and what this machine opened, which is the
-        # pair that has to line up. Printed because the failure is otherwise
-        # one line with nothing to act on.
+        # What the daemon published against what this machine opened.
         dockert port itest-twice 2>&1 | sed 's/^/        published: /'
         dockert ps --all --filter name=itest-twice --format '{{.Status}}' 2>&1 | sed 's/^/        state: /'
         sed 's/^/        /' "$WORK/up.log" | tail -8
@@ -654,14 +585,9 @@ docker rm -f itest-twice >/dev/null 2>&1
 
 echo
 echo "== 10b. a published UDP port answers here =="
-# SSH forwards TCP, so this was unreachable until ADR 0038 put a length in
-# front of each datagram and carried them in a channel of their own. What is
-# asserted is the round trip: a datagram sent to the port asked for HERE
-# reaches a container in the workspace and its answer comes back.
-#
-# The probe is both ends deliberately. Nothing in alpine echoes UDP, and the
-# two netcats disagree about -u and -w, so a test built on whichever one a
-# runner has fails for a reason it is not about.
+# UDP over SSH (ADR 0038): a datagram sent to the port asked for HERE reaches
+# the container and its answer comes back. The probe is both ends because
+# nothing in alpine echoes UDP and the two netcats disagree about -u and -w.
 if ! build_probe udpecho "$PROJECT/udpecho"; then
     bad "could not build the udp echo probe"
 elif ! dockert run -d --name itest-udp -p 15353:5353/udp \
@@ -717,31 +643,20 @@ docker volume rm itest-named >/dev/null 2>&1
 
 echo
 echo "== 11b. does a file watcher see client-side changes? =="
-# The question that decides how honest the central claim can be. A real
-# filesystem rather than a sync is only better than a sync if changes are
-# NOTICED, and NFS carries no change notification -- so a watcher inside the
-# container may see nothing while the file is plainly there.
-#
-# Two observations at once: inotify (what every hot-reload tool uses) and
-# polling (the control). If polling sees nothing either, the mount is broken
-# and the inotify result means nothing.
-#
-# See docs/adr/0014. This test records the behaviour rather than demanding a
-# particular answer, so if a future change makes inotify work, it says so.
+# NFS carries no change notification, so a watcher in the container may see
+# nothing while the file is plainly there (ADR 0014). Polling is the control:
+# if it sees nothing, the mount is broken and the inotify result means nothing.
+# Recorded rather than demanded, so inotify starting to work would say so.
 WATCHDIR="$WORK/watched"
 mkdir -p "$WATCHDIR"
 
-# No image build: a static binary placed on the share runs fine under plain
-# alpine. That keeps this test about file watching rather than about whether
-# `docker build` works through the proxy, and avoids shipping $WORK -- which
-# holds the private key and a live socket -- as a build context.
-# Built once, here, and copied onto the share by every section that runs it.
+# A static binary on the share rather than an image build, which keeps this
+# about watching and avoids shipping $WORK (the private key, a live socket) as a
+# build context. Built once here and copied onto the share by each user.
 WATCHPROBE="$WORK/watchprobe"
 if build_probe watchprobe "$WATCHPROBE" && cp "$WATCHPROBE" "$PROJECT/watchprobe"; then
-    # The error is NOT swallowed. The first run of this test produced an
-    # empty log and no explanation, which cost a CI round trip to diagnose:
-    # the binary was on the share with a synthesised mode 0644 and could not
-    # be executed.
+    # The error is NOT swallowed: a probe the share would not execute
+    # otherwise leaves an empty log and no explanation.
     if ! dockert run -d --name itest-watch \
         -v "$PROJECT:/probe:ro" \
         -v "$WATCHDIR:/data" \
@@ -762,10 +677,8 @@ if build_probe watchprobe "$WATCHPROBE" && cp "$WATCHPROBE" "$PROJECT/watchprobe
 
     echo "        $(echo "$probe" | grep '^RESULT' || echo 'RESULT missing')"
 
-    # An empty capture is NOT a negative result. The probe failing to start,
-    # or producing nothing, used to fall through to the assertion below and be
-    # reported as "the mount itself is not working" -- a confident diagnosis
-    # pointing at NFS when the fault was `docker run`.
+    # An empty capture is NOT a negative result: a probe that never ran would
+    # otherwise be reported as "the mount itself is not working".
     if [ -z "$probe" ]; then
         bad "the watch probe produced no output; nothing below can be concluded"
     elif echo "$probe" | grep -q "POLL created-after-watch.txt"; then
@@ -786,25 +699,18 @@ fi
 
 echo
 echo "== 11d. which syscall makes a container's watcher fire? (ADR 0014 spike) =="
-# 11b establishes that a client-side change notifies nobody. This asks whether
-# a minimal syscall by the AGENT, on the same file inside the workspace, makes
-# the container's watcher fire.
-#
-# Linux cannot inject a synthetic inotify event (fanotify(7) says so outright),
-# so the only mechanism available to anyone, Docker Desktop included, is a real
-# VFS operation with the kernel emitting the event as a side effect. This
-# measures WHICH operation produces WHICH event, one file per primitive so the
-# correlation is by name rather than by timing. Nothing but the setup is
-# asserted: the point is to record the matrix.
+# Which syscall by the AGENT, on the same file inside the workspace, makes the
+# container's watcher fire. Linux cannot inject a synthetic inotify event
+# (fanotify(7)), so the only mechanism is a real VFS operation. One file per
+# primitive, so correlation is by name, not timing. Only the setup is asserted:
+# the point is to record the matrix.
 POKEDIR="$WORK/poked"
 mkdir -p "$POKEDIR"
 
 if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe pokeprobe "$PROJECT/pokeprobe"; then
 
-    # The files each primitive acts on. Pre-created on the client where the
-    # primitive needs an existing file; 'create' and 'unlink' are handled
-    # separately below because their whole question is about a file that has
-    # just appeared or just gone.
+    # Pre-created where the primitive needs an existing file; 'create' and
+    # 'unlink' are about a file just appearing or going, so handled below.
     for p in openclose mtime touch dirmtime procroot; do
         echo "before the watch" >"$POKEDIR/poke-$p.txt"
     done
@@ -823,12 +729,10 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
             bad "the watcher never reported READY"
         fi
 
-        # Where the workspace has this share mounted. dockerd's local driver
-        # mounts each rd-<id> NFS volume once and bind-mounts it into every
-        # container using it -- and a bind mount shares the superblock, hence
-        # the inode an inotify mark sits on. If that holds, poking the volume
-        # mountpoint is seen by a watcher inside the container, with no
-        # namespace entering at all.
+        # dockerd's local driver mounts each rd-<id> volume once and
+        # bind-mounts it into every container, sharing the superblock and so
+        # the inode an inotify mark sits on: poking the mountpoint should reach
+        # the container's watcher without entering any namespace.
         vol=$(docker inspect itest-poke \
             --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null)
         mp=$(docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null)
@@ -840,16 +744,13 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
         else
             hostdocker cp "$PROJECT/pokeprobe" "$CONTAINER:/pokeprobe" >/dev/null 2>&1
 
-            # Do the two views of the same file share a device? If st_dev
-            # differs they are separate superblocks, separate inodes, and no
-            # poke through the mountpoint can ever notify the container.
+            # A different st_dev means separate superblocks and inodes, and no
+            # poke through the mountpoint could ever notify the container.
             dev_ws=$(hostdocker exec "$CONTAINER" /pokeprobe stat "$mp/poke-openclose.txt" 2>&1)
             dev_ct=$(docker exec itest-poke /probe/pokeprobe stat /data/poke-openclose.txt 2>&1)
             info "workspace: $dev_ws"
             info "container: $dev_ct"
-            # Compares dev AND ino, which is the stronger claim and the one
-            # that matters: an inotify mark lives on the inode, so identical
-            # dev+ino means a poke through either path reaches the same mark.
+            # dev AND ino, because an inotify mark lives on the inode.
             ids_ws=${dev_ws##*ok dev=}
             ids_ct=${dev_ct##*ok dev=}
             if [ "$ids_ws" != "$dev_ws" ] && [ "$ids_ws" = "$ids_ct" ]; then
@@ -870,8 +771,7 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
             info "$(hostdocker exec "$CONTAINER" /pokeprobe create "$mp/poke-create.txt" 2>&1)"
 
             # unlink: gone on the client, so the REMOVE has nothing to remove.
-            # Whether this can ever fire IN_DELETE is the least certain row in
-            # the matrix and decides whether deletes are representable at all.
+            # The least certain row; it decides whether deletes are representable.
             rm -f "$POKEDIR/poke-unlink.txt"
             info "$(hostdocker exec "$CONTAINER" /pokeprobe unlink "$mp/poke-unlink.txt" 2>&1)"
 
@@ -889,10 +789,8 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
         echo "        --- poke matrix: which primitive produced which events ---"
         for p in openclose mtime touch create unlink dirmtime procroot; do
             seen=$(echo "$poke" | grep "^INOTIFY .* poke-$p\.txt$" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
-            # dirmtime acts on the watched directory itself, which the probe
-            # reports under the directory's own basename rather than a
-            # filename -- that distinction is exactly what the coarse
-            # fallback would rely on.
+            # dirmtime acts on the watched directory, reported under its own
+            # basename, which is what the coarse fallback relies on.
             if [ "$p" = dirmtime ]; then
                 seen=$(echo "$poke" | grep "^INOTIFY .* data/$" | awk '{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')
             fi
@@ -901,9 +799,7 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
         echo
         echo "        $(echo "$poke" | grep '^RESULT' || echo 'RESULT missing')"
 
-        # The one row that is near-certain from kernel source, so a failure
-        # here means the experiment itself is wrong rather than the answer
-        # being no.
+        # Near-certain from kernel source: a miss means the experiment is wrong.
         if echo "$poke" | grep -q "^INOTIFY .*IN_CLOSE_WRITE.* poke-openclose\.txt$"; then
             ok "open(O_WRONLY)+close() reaches the container's watcher"
         else
@@ -917,26 +813,17 @@ fi
 
 echo
 echo "== 11c. idle release, and what must survive it =="
-# Two claims, in this order: a release actually happens when nothing depends on
-# us, and one does NOT happen while a container does.
-#
-# The order is what makes the second mean anything. A probe container created
-# THROUGH this client carries our owner label and holds one of our volumes, so
-# hasLiveDependents is true from the first check, no release ever happens, and
-# "the container is still alive" is trivially true -- which leaves the reconnect
-# path ADR 0015 calls load-bearing unexercised.
+# A release happens when nothing depends on us, and does NOT while a container
+# does. In that order: run first, the container would pin the session from the
+# start and leave the reconnect path (ADR 0015) unexercised.
 
 # (a) nothing running -> the connection must be released and reopen on demand.
-#
-# 12 seconds against the 8-second timer set at the top of this file: a 1.5x
-# margin, and no longer, since every second here is spent on every run.
+# 12s against the 8s timer: a 1.5x margin, no more, since every run pays it.
 sleep 12
 expect_output "the client reconnects after an idle release" "after-idle" -- --rm alpine:3 echo after-idle
 
-# (b) a container holding one of our volumes must pin the connection: it has a
-# live NFS mount, and dropping the tunnel underneath gives it EIO. The loop
-# exits non-zero if the mount stops working, so the container's own survival is
-# the assertion.
+# (b) a container holding one of our volumes must pin the connection: dropping
+# the tunnel under its NFS mount gives it EIO. PIN_SH makes survival the check.
 if dockert run -d --name itest-idle -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
 
     sleep 12
@@ -964,12 +851,8 @@ fi
 
 echo
 echo "== 11e. one account cannot bind another's NFS port =="
-# ADR 0010's entire justification, and untested until now. Under sshd this
-# depended on a permitlisten string generated correctly into every key's
-# authorized_keys; under the agent it is a comparison.
-#
-# Enrol a second account, then have it ask for the FIRST account's reverse
-# port. It must be refused.
+# ADR 0010: a second account asks for the FIRST account's reverse port and
+# must be refused.
 OTHER=itest2
 cp "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub" "$WORK/keys/$OTHER.pub"
 
@@ -977,8 +860,7 @@ if ! wait_provisioned "$OTHER"; then
     bad "the second account was never provisioned"
     hostdocker logs "$CONTAINER" 2>&1 | tail -15 | sed 's/^/        /' 
 else
-    # `status` prints a human table, not KEY=VALUE -- the wire format is what
-    # the client parses, not what it displays.
+    # `status` prints a human table, not KEY=VALUE.
     first_port=$(awk '/^account/ {print $NF}' "$WORK/status.log")
     if [ -z "$first_port" ]; then
         bad "could not determine the first account's port"
@@ -996,19 +878,12 @@ else
             ok "one account cannot bind another's NFS port"
         fi
 
-        # And cannot DIAL it either, which is the other half and was missing.
-        #
-        # This suite runs the shared daemon (ADR 0012), where every account
-        # lives in the agent's network namespace, so 127.0.0.1:<their port> is
-        # genuinely reachable from another account's session. What answers is
-        # an NFS export with AuthFlavorNull, so reaching it is read and write
-        # access to the files on that person's machine.
-        #
-        # The forward has to be USED, not merely requested: ssh opens the local
-        # listener straight away and asks for the channel only when something
-        # connects, so a test that just starts `ssh -L` passes whatever the
-        # server decides. The refusal appears on ssh's stderr as
-        # "administratively prohibited" when the connection is made.
+        # And cannot DIAL it. With the shared daemon (ADR 0012) the port is
+        # reachable from any account's session, and what answers is an NFS
+        # export with AuthFlavorNull: read and write access to that person's
+        # files. The forward must be USED: ssh opens the local listener at once
+        # and asks for the channel only on connect, so merely starting `ssh -L`
+        # passes whatever the server decides.
         local_port=$((first_port + 5000))
         timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -1029,15 +904,11 @@ else
             sed 's/^/        /' "$WORK/reach.log"
         fi
 
-        # The dial refusal above covers ssh -L. It does not cover a shell:
-        # with one daemon for everybody the export binds in the agent's own
-        # network namespace, which is where every account's shell runs, so a
-        # socket opened there passes through no forwarding policy. A daemon per
-        # account (ADR 0019, the default) binds inside that account's namespace
-        # instead, and test/per-user-dind.sh asserts a shell cannot reach it.
-        #
-        # Reported rather than asserted, because it follows from this mode
-        # rather than from a defect in it. The threat model records it.
+        # That covers ssh -L, not a shell: with the shared daemon the export
+        # binds in the agent's namespace, where every shell runs, and a socket
+        # there asks no forwarding policy. A daemon per account (ADR 0019) binds
+        # in its own namespace, asserted by test/per-user-dind.sh. Reported, not
+        # asserted: it follows from this mode, and the threat model records it.
         shell_reach=$(ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$OTHER" 60 \
             "nc -w 2 127.0.0.1 $first_port </dev/null && echo CONNECTED || echo REFUSED" \
             2>/dev/null | tr -d '\015')
@@ -1054,14 +925,9 @@ fi
 
 echo
 echo "== 12. docker compose =="
-# Compose is the reason ADR 0005 put the translation at the API rather than in
-# a command wrapper: it speaks the Engine API directly and never shells out to
-# `docker`, so a wrapper could not have covered it at all.
-#
-# It also exercises relative path resolution, which is the original bug
-# (docker/compose#8484): compose expands ./html to an absolute path on THIS
-# machine before sending it, and that path means nothing to the remote daemon
-# until the proxy rewrites it.
+# Compose speaks the Engine API and never shells out to `docker`, which is why
+# ADR 0005 translates at the API. It expands ./html to an absolute path on THIS
+# machine (docker/compose#8484), meaningless remotely until the proxy rewrites it.
 mkdir -p "$PROJECT/html"
 echo "served by compose" >"$PROJECT/html/index.html"
 cat >"$PROJECT/compose.yaml" <<'COMPOSE'
@@ -1094,22 +960,15 @@ fi
 
 echo
 echo "== 12b. one compose service reaching another =="
-# Container-to-container traffic never touches this client: it is the
-# workspace's own docker network, between containers its own daemon started.
-# But we rewrite every bind mount and forward every published port, so "did we
-# disturb the network" deserves an answer rather than an assurance.
-#
-# Four things at once, which is why this is one test and not four:
-#   - `client` resolves `web` by SERVICE NAME, so compose's DNS works
-#   - it connects to it over TCP, so the network works
-#   - what `web` serves is a file from THIS machine, through a rewritten bind
-#   - `client` writes the result to ANOTHER bind, which this test then reads
-#     from the client side -- so the answer comes back over NFS rather than
-#     being asserted inside the workspace where a mistake could hide
-#
-# depends_on + condition: service_healthy rather than a retry loop, because it
-# is how somebody would actually write this, and because a loop that never
-# succeeds looks the same as one that was never scheduled.
+# Container-to-container traffic never touches this client, but every bind is
+# rewritten and every port forwarded, so "did we disturb the network" gets an
+# answer. One test, four claims:
+#   - `client` resolves `web` by SERVICE NAME (compose's DNS)
+#   - it connects over TCP (the network)
+#   - `web` serves a file from THIS machine through a rewritten bind
+#   - the result comes back through ANOTHER bind and is read from this side
+# service_healthy rather than a retry loop: a loop that never succeeds looks
+# the same as one never scheduled.
 mkdir -p "$PROJECT/net/html" "$PROJECT/net/out"
 echo "served from the client machine" >"$PROJECT/net/html/index.html"
 cat >"$PROJECT/net/compose.yaml" <<'COMPOSE'
@@ -1170,16 +1029,9 @@ fi
 
 echo
 echo "== 12c. the compose INSIDE this binary =="
-# Sections 12 and 12b use the runner's own docker CLI. This one uses ours, and
-# it is a different claim: that a machine with no docker installed at all can
-# run `docker compose up`.
-#
-# ADR 0009 could not have this. Compose v2 pinned docker/cli back a major
-# version and buildx back seven minors, which would have cost BuildKit, so the
-# record said to revisit when compose finished the moby/moby migration. It has,
-# and this is what checks that the two stay compatible: a version bump on
-# either side that breaks the pairing fails here rather than in somebody's
-# terminal.
+# Sections 12 and 12b use the runner's docker CLI; this uses ours, so a machine
+# with no docker installed can run `docker compose up` (ADR 0009). A version
+# bump on either side that breaks the pairing fails here.
 mkdir -p "$PROJECT/embedded"
 echo "served by the embedded compose" >"$PROJECT/embedded/index.html"
 cat >"$PROJECT/embedded/compose.yaml" <<'COMPOSE'
@@ -1221,14 +1073,11 @@ fi
 echo
 echo
 echo "== 13b. a stock ssh still gets a shell, and the embedded CLI =="
-# The ONLY test of the agent's exec/pty session, run with a stock ssh rather
-# than anything of ours: `remote-docker shell` is gone (ADR 0018) but serveExec
-# and servePTY are not, because an enrolled key still logging in is what
-# server.go's argument for unrestricted local forwarding rests on. Delete this
-# and ADR 0010's central claim, one binary replacing sshd, has no coverage.
-#
-# -tt forces a pty, so `tty` naming one proves the agent allocated it rather
-# than falling through to the non-pty branch.
+# The ONLY test of the agent's exec/pty session, with a stock ssh rather than
+# anything of ours: `remote-docker shell` is gone (ADR 0018) but serveExec and
+# servePTY are not. An enrolled key still getting a session is ADR 0010's claim
+# that one binary replaces sshd, and nothing else covers it.
+# -tt forces a pty, so `tty` naming one proves the agent allocated it.
 shellout=$(ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$ACCOUNT" 60 \
     'tty; id -un; docker ps --format {{.Names}} 2>&1 | head -3' -tt 2>&1)
 
@@ -1241,34 +1090,27 @@ else
     bad "no pty from the agent: $(trim "$shellout")"
 fi
 
-# `id -un` names the UNIX user, which is not the account name: an enrolled
-# `alice` logs in as `alice` and the unix user behind it is `rd-alice`
-# (ADR 0025), so that the workspace does not take a name in the machine's own
-# passwd file. This is the only assertion anywhere that sees the unix side, and
-# it is the end-to-end proof of the prefix.
+# `id -un` names the UNIX user, `rd-<account>` (ADR 0025): the only assertion
+# anywhere that sees the unix side.
 if echo "$shellout" | grep -q "^rd-$ACCOUNT"; then
     ok "the shell runs as the unix user behind the enrolled account"
 else
     bad "the shell was not rd-$ACCOUNT: $(trim "$shellout")"
 fi
 
-# ...and can USE the shared daemon, which needs its supplementary groups. Go
-# calls setgroups() with Credential.Groups whenever a Credential is set, so
-# leaving it nil CLEARS them: an account correctly listed in `docker` in
-# /etc/group got a shell that was not in it, and `docker ps` answered
-# "permission denied ... Docker daemon socket", which reads like a broken
-# socket. Asserted by USING it rather than by reading `id`, which was checked,
-# found right and believed while the shell had a different view of it.
+# ...and can USE the shared daemon, which needs supplementary groups: Go calls
+# setgroups() whenever a Credential is set, so a nil Credential.Groups CLEARS
+# them and `docker ps` answers "permission denied ... Docker daemon socket".
+# Asserted by use, because `id` looked right while the shell's view differed.
 if echo "$shellout" | grep -q "permission denied"; then
     bad "the shell cannot reach the shared daemon: $(trim "$shellout")"
 else
     ok "and it can use the shared docker daemon"
 fi
 
-# The exit status must follow the COMMAND, not the client's stdin. Every other
-# ssh assertion in these suites goes through ssh_account, which redirects
-# </dev/null and so EOFs at once: that cannot show the hang, so this one holds
-# stdin OPEN through a fifo, which is what a terminal is.
+# The exit status must follow the COMMAND, not stdin. ssh_account redirects
+# </dev/null, which cannot show the hang; this holds stdin OPEN through a fifo,
+# as a terminal does.
 stdin_fifo="$WORK/ssh-stdin-open"
 rm -f "$stdin_fifo"
 mkfifo "$stdin_fifo"
@@ -1301,10 +1143,9 @@ else
     bad "the embedded docker CLI failed: $(echo "$out" | tail -2)"
 fi
 
-# `status` while `up` holds the export port. An account has exactly ONE
-# reverse-tunnel port, so a session that needlessly reserves it fails the
-# moment `up` is running -- which is exactly when someone would run another
-# command. This is the case that broke.
+# `status` while a session holds the reverse-tunnel port. The port is per client
+# machine (ADR 0029) and its reservation belongs to one session (ADR 0028), so a
+# command that needlessly reserved it would fail whenever a session is running.
 if out=$(timeout 60 "$WORK/remote-docker" remote status 2>&1); then
     ok "status works while up is running"
 else
@@ -1324,15 +1165,9 @@ fi
 
 echo
 echo "== 13c. docker build, and whether COPY sees this machine's files =="
-# The question worth settling: a Dockerfile COPYs from the build context, and
-# the context is on THIS machine while the daemon is on the workspace. Nothing
-# is mounted for a build -- no volume, no NFS -- so the only reason this can
-# work is that the docker CLI tars the directory and uploads it, which is what
-# "Sending build context to Docker daemon" means.
-#
-# It does work, and this is the only test of it. Asserted through the CONTENT
-# of a file written here, so a build that somehow read a stale or empty context
-# fails rather than passing on an image that exists.
+# Nothing is mounted for a build: the CLI uploads the context from THIS machine.
+# Asserted through the CONTENT of a file written here, so a stale or empty
+# context fails rather than passing on an image that exists.
 BUILDCTX="$WORK/buildctx"
 mkdir -p "$BUILDCTX/sub"
 echo "content-from-the-client-machine" >"$BUILDCTX/marker.txt"
@@ -1345,15 +1180,10 @@ RUN cat /marker.txt /sub/nested.txt
 DOCKERFILE
 
 if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" build -t itest-build . 2>&1); then
-    # THE builder assertion: is this BuildKit, or the classic builder wearing
-    # its name?
-    #
-    # `build` being present says nothing -- it was present before, and it
-    # silently used the pre-BuildKit path because buildx was not vendored, even
-    # with DOCKER_BUILDKIT=1. So the two builders are told apart by what they
-    # SAY, and both directions are asserted: a fallback would keep passing
-    # every other check in this section while quietly losing cache mounts,
-    # parallel stages and incremental context transfer.
+    # BuildKit, or the classic builder wearing its name? Without buildx
+    # vendored, `build` silently took the classic path even with
+    # DOCKER_BUILDKIT=1 and passed every other check here. So the builders are
+    # told apart by what they SAY, in both directions.
     if echo "$out" | grep -qE "exporting to image|\[internal\] load build definition"; then
         ok "docker build goes through BuildKit"
     else
@@ -1385,9 +1215,8 @@ fi
 expect_output "the built image runs and carries the copied file" \
     "content-from-the-client-machine" -- --rm itest-build cat /marker.txt
 
-# A file the context excludes must NOT reach the daemon. This is the only
-# thing standing between a build and uploading whatever else is in the
-# directory -- a .git, a node_modules, somebody's secrets.
+# A file the context excludes must NOT reach the daemon: a .git, a
+# node_modules, somebody's secrets.
 echo "must-not-be-uploaded" >"$BUILDCTX/secret.txt"
 printf 'secret.txt\n' >"$BUILDCTX/.dockerignore"
 cat >"$BUILDCTX/Dockerfile" <<'DOCKERFILE'
@@ -1409,13 +1238,10 @@ timeout 60 docker rmi -f itest-build itest-ignore >/dev/null 2>&1
 
 echo
 echo "== 14. elevate =="
-# Swarm cannot run privileged tasks, so the service starts unprivileged and
-# relaunches itself (ADR 0013). Swarm itself is not worth standing up here --
-# the mechanism under test is `docker run`, which is exactly what runs below.
-#
-# The assertion that matters is the last one: the privileged child must NOT
-# inherit the host's Docker socket, or every enrolled workspace user has root
-# on the node.
+# Swarm cannot run privileged tasks, so the service relaunches itself with
+# `docker run` (ADR 0013), which is what runs here; no Swarm is needed. The
+# assertion that matters is the last: a child inheriting the host's Docker
+# socket gives every enrolled user root on the node.
 ELEV=remote-docker-elev
 hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
 
@@ -1471,18 +1297,14 @@ hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
 
 echo
 echo "== 15. does replay make a container's watcher fire? =="
-# The payoff, and it goes last because it restarts the client.
+# 11b shows a client-side change notifies nobody, 11d which syscall would; this
+# runs the whole path (client watcher, SSH channel, agent replay). The client is
+# restarted with watching on, and sections 15b onwards keep it.
 #
-# 11b shows a client-side change notifies nobody; 11d shows which syscall
-# would; this runs the whole path -- client watcher, SSH channel, agent
-# replay -- and asks whether an ordinary edit here is noticed there.
-#
-# It has to be the SAME client, not a second one alongside. A session is the file
-# server for this account and there is one NFS port per account, so two would
-# collide. And the connection is established on demand (ADR 0015), so a client
-# that never issues a Docker request never connects and therefore never opens
-# the notification channel at all -- which is why the probe container is
-# started through this client rather than the previous one.
+# Restarted rather than run beside the first: both would want this machine's
+# one reverse-tunnel port (ADR 0029). The probe starts through the new client
+# because a session connects on demand (ADR 0015), and one that never connects
+# never opens the notification channel.
 kill "$CLIENT_PID" 2>/dev/null
 wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
@@ -1549,11 +1371,8 @@ fi
 
 echo
 echo "== 15b. the cached consistency =="
-# Docker's own word for it, applied to the NFS mount: the container may cache
-# read data and directory structure, so the kernel stops revalidating every
-# attribute (ADR 0042). What makes that safe is the watcher, which is why this
-# section runs against the watching client section 15 started and why asking
-# for it without one is refused.
+# `cached` gives the NFS mount a long attribute cache (ADR 0042), made safe by
+# the watcher: hence section 15's watching client, and a refusal without one.
 CACHEDIR="$WORK/cachedir"
 mkdir -p "$CACHEDIR"
 echo "first" >"$CACHEDIR/marker"
@@ -1578,9 +1397,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "volume $vol options: [$LAST_OUTPUT]"
         fi
 
-        # The part a long attribute cache would break. actimeo=60 means the
-        # kernel may trust what it has for a minute, so without the watcher's
-        # poke this reads "first" until it expires.
+        # actimeo=60 lets the kernel trust its copy for a minute: without the
+        # watcher's poke this reads "first" until then.
         echo "second" >"$CACHEDIR/marker"
         seen=""
         for _ in $(seq 1 20); do
@@ -1604,39 +1422,29 @@ fi
 
 echo
 echo "== 15c. read=cached,write=back, which is a union =="
-# Docker's `delegated`, and here a UNION the workspace mounts: the live NFS
-# export underneath, a local cache on top, the merged view the container binds
-# (ADR 0044).
+# Docker's `delegated`: a UNION the workspace mounts, the live NFS export under
+# a local cache (ADR 0044). The assertion that matters is the fallthrough: a
+# file created after the fill must still be seen. Invalidation rides the
+# watcher, hence section 15's watching client.
 #
-# The assertion that matters is the fallthrough. A file created here AFTER the
-# cache was filled is not in the cache and the container must still see it,
-# which is what makes an incomplete cache correct and lets it be filled in the
-# background.
-# Run against the WATCHING client section 15 started: invalidation rides the
-# watcher, because a cached copy of a file that changed here is the one way this
-# mode can be wrong rather than merely slow.
-# Everything worth seeing when a union assertion fails: what the session thinks
-# it has cached, what the client logged, and what the WORKSPACE logged, which
-# the workflow's own log step cannot show because the suite has torn the
-# container down by the time it runs.
+# share_diagnostics prints the session's cache state, the client log and the
+# WORKSPACE log, which the workflow's log step cannot show: the suite has torn
+# the container down by then.
 share_diagnostics() {
     "$WORK/remote-docker" remote status 2>&1 |
         grep -iE "cache|watch" | sed 's/^/        client: /'
     grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
         tail -12 | sed 's/^/        client: /'
-    # dump_workspace_log, because `docker` here is the CLIENT's endpoint and
-    # the workspace container is not one of ITS containers -- asking it for the
-    # workspace's log is a question about a container that does not exist, which
-    # answers nothing and looks like a workspace that logged nothing.
+    # Not `docker logs`: `docker` here is the CLIENT's endpoint, where the
+    # workspace container does not exist and would look like it logged nothing.
     dump_workspace_log 25
 }
 
 UNIONDIR="$WORK/write-back"
 mkdir -p "$UNIONDIR"
 echo "first" >"$UNIONDIR/marker"
-# Deleted in section 16 while no client is running, which is the one deletion
-# nothing can observe: no watcher sees it, so the fill cannot carry it and only
-# the record of what the last fill sent can explain it.
+# Deleted in section 16 with no client running: no watcher sees it, so only the
+# record of what the last fill sent can take it out of the cache.
 echo "here before the fill" >"$UNIONDIR/while-down.txt"
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
@@ -1658,11 +1466,9 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             share_diagnostics
         fi
 
-        # And the cache really was filled, which the read above does NOT show:
-        # a miss falls through to the live export and returns the same bytes,
-        # so that assertion passes just as well with an empty cache. This is
-        # also what write-back is gated on, so a fill that quietly did nothing
-        # would otherwise present much later as a write that never arrived.
+        # The read above passes with an empty cache too, since a miss falls
+        # through. Write-back is gated on a complete fill, so a fill that did
+        # nothing would otherwise surface later as a write that never arrived.
         filled=""
         for _ in $(seq 1 20); do
             if outputs "$UNIONDIR: .*, cached\$" "$WORK/remote-docker" remote status; then
@@ -1677,13 +1483,9 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "the share never reported a complete cache: [$LAST_OUTPUT]"
         fi
 
-        # THE assertion. This file did not exist when the cache was filled, so
-        # it can only be coming from the live export underneath.
-        # Retried, because two caches sit between the two sides -- the NFS
-        # attribute cache under the union and libfuse's own entry cache, both
-        # about a second -- so reading once measures those rather than the
-        # fallthrough. The time it took is the answer to "when does a new file
-        # appear", so it is reported.
+        # THE assertion: this file postdates the fill, so it can only come from
+        # the live export. Retried because the NFS attribute cache and libfuse's
+        # entry cache (about a second each) sit in between; the time is reported.
         echo "arrived after the fill" >"$UNIONDIR/late.txt"
         fell=""
         for i in $(seq 1 15); do
@@ -1708,19 +1510,15 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "the mount source is [$LAST_OUTPUT], want a union"
         fi
 
-        # And a write goes into the cache rather than through to this machine,
-        # which is what "the container is authoritative" means until write-back
-        # exists.
+        # A write lands in the container's own view first.
         docker exec itest-deleg sh -c 'echo "from the container" >/w/written-there' >/dev/null 2>&1
         if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
             ok "the container can write into its own view"
         else
             bad "writing into the union: [$LAST_OUTPUT]"
         fi
-        # Write-back: the container's write reaches this machine, because the
-        # cache layer of an overlay IS the record of what it changed (ADR 0044).
-        # Polled, so it takes a few seconds rather than being instant, which is
-        # the cost of the mode and is stated as such.
+        # Write-back: an overlay's cache layer IS the record of what the
+        # container changed (ADR 0044). Polled, so it takes seconds.
         if back=$(wait_for_content "$UNIONDIR/written-there" "from the container" 30); then
             ok "a container's write reaches this machine"
         else
@@ -1737,11 +1535,9 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             [ "$seen" = "edited here" ] && break
             sleep 1
         done
-        # The lower is now mounted with the share's read mode -- cached, so
-        # actimeo=60 -- and this is the assertion that the watcher's replayed
-        # SETATTR still refreshes the changed inode under it: the edit must
-        # arrive in seconds, not in a minute. The time is printed so a pass at
-        # nineteen seconds is visible for what it is.
+        # The lower carries the share's read mode (actimeo=60), so the edit
+        # arriving in seconds proves the watcher's replayed SETATTR refreshes
+        # it. The time is printed so a pass at nineteen seconds shows as such.
         if [ "$seen" = "edited here" ]; then
             ok "an edit here reaches a running write=back container (${edit_i}s, under actimeo=60)"
         else
@@ -1749,9 +1545,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             share_diagnostics
         fi
 
-        # And a DELETION, which no mode in this project has managed before: a
-        # cached copy of a file that is gone would shadow its absence, and the
-        # Docker API cannot remove a path from a volume at all.
+        # And a DELETION: a cached copy would shadow the file's absence, and
+        # the Docker API cannot remove a path from a volume.
         rm -f "$UNIONDIR/marker"
         if wait_gone docker itest-deleg /w/marker 20; then
             ok "a file deleted here disappears from the container"
@@ -1764,29 +1559,21 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         sed 's/^/        /' "$WORK/deleg-run.log"
         dump_workspace_log 40
     fi
-    # itest-deleg is deliberately LEFT RUNNING. Section 16 restarts the client,
-    # which closes every channel this session had, and the container's share has
-    # to survive that -- see the assertion there.
+    # itest-deleg is LEFT RUNNING: section 16 asserts its share survives a
+    # client restart.
 else
     bad "no client is running, so the union could not be tested"
 fi
 
 echo
 echo "== 15d. a linker finishing its output on a share =="
-# The failure this exists for, verbatim from a build on a real workspace:
-#
+# From a build on a real workspace:
 #   /usr/bin/ld: cmTC_438e8: final close failed: Stale file handle
-#
-# Compiling succeeds, so writing to the export works; it is ld FINISHING an
-# output file that does not, which makes it a handle problem. ESTALE means the
-# server invalidated a handle the client still held: go-nfs maps a handle to a
-# PATH rather than an inode and drops it on REMOVE and RENAME, where a real
-# server keeps it valid for an open file, and an already-open descriptor cannot
-# be re-resolved the way a lookup can.
-#
-# If this section PASSES that is worth reading rather than celebrating: CI runs
-# a dind on the same machine, while the report came from a workspace on another
-# host, and the difference would be the next thing to chase.
+# Compiling succeeds; ld FINISHING an output file fails, so it is a handle
+# problem. go-nfs maps a handle to a PATH and drops it on REMOVE and RENAME,
+# where a real server keeps it valid for an open file, and an open descriptor
+# cannot be re-resolved the way a lookup can. A PASS here is worth reading: CI
+# runs dind on the same machine, and the report came from another host.
 LINKDIR="$WORK/linkdir"
 mkdir -p "$LINKDIR"
 cat >"$LINKDIR/hello.c" <<'CEOF'
@@ -1794,9 +1581,7 @@ int main(void) { return 0; }
 CEOF
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
-    # Exit codes rather than one boolean, so a failure names which of the two
-    # steps died. The reported bug passes the first and fails the second, and a
-    # section that could not tell them apart would not have caught it.
+    # Exit codes name the step: the reported bug compiles and fails to link.
     link_rc=0
     dockert run --rm -v "$LINKDIR:/src" -w /src alpine:3 sh -c '
         apk add --no-cache gcc musl-dev >/dev/null 2>&1 || exit 97
@@ -1816,22 +1601,17 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             sed 's/^/        /' "$WORK/link.log" ;;
         99) bad "LINKING on a share failed, which is the reported bug"
             sed 's/^/        /' "$WORK/link.log"
-            # The server sends no STALE for this -- every NFS3ERR_STALE in
-            # go-nfs comes from FromHandle, and instrumenting that logged
-            # nothing. So the CLIENT decided the file was gone, and the Linux
-            # NFS client says why in the kernel log when it does: an inode
-            # number that changed under a handle reads as the file having been
-            # replaced.
+            # go-nfs sends no STALE here (every NFS3ERR_STALE comes from
+            # FromHandle, which logged nothing), so the CLIENT decided, and its
+            # kernel log says why: e.g. an inode number changed under a handle.
             echo "        -- kernel, nfs client --"
             sudo dmesg 2>/dev/null | grep -iE "nfs|stale|fileid|inode number" | tail -20 | sed 's/^/        /' ;;
         *)  bad "linking on a share ended with $link_rc"
             sed 's/^/        /' "$WORK/link.log" ;;
     esac
 
-    # Which operation, narrowed. ld finishes by sizing and permissioning the
-    # file it just wrote, so each step below is one part of that shape and the
-    # first to fail names the operation rather than the build. Numbered exits
-    # because "the container failed" would tell us nothing we do not know.
+    # Narrowed: ld finishes by sizing and permissioning the file it wrote, so
+    # each step is one part of that shape and the first to fail names it.
     narrow_rc=0
     dockert run --rm -v "$LINKDIR:/src" -w /src alpine:3 sh -c '
         echo hi > p1                                    || exit 91
@@ -2012,11 +1792,9 @@ fi
 echo
 echo "== 15f. a container that is not root, and a tar that sets attributes =="
 # A share reports the account as owner with wide bits, and a union's upper is
-# wide too (ADR 0046): a plain mount is granted by ACCESS whatever the mode,
-# a union checks the copied mode locally. GNU tar sets utime, owner and mode
-# on the descriptor it just wrote, which the kernel cannot retry; the two
-# defects behind that showed only from a Windows client and are pinned by
-# fileid_abs_test.go, resolve_test.go and machine.yml.
+# wide too (ADR 0046). GNU tar sets utime, owner and mode on the descriptor it
+# just wrote; the defects behind that showed only from a Windows client and are
+# pinned by fileid_abs_test.go, resolve_test.go and machine.yml.
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     USERDIR="$WORK/non-root"
     mkdir -p "$USERDIR/sub"
@@ -2063,27 +1841,20 @@ fi
 
 echo
 echo "== 16. a background session, with no terminal held open =="
-# `start --foreground` IS the daemon body, so this is the same session the rest
-# of the suite used -- started detached, stopped by asking rather than by
-# signalling, and reclaiming itself when nothing needs it.
-#
-# The suite's own session is stopped first: one endpoint has one owner now,
-# which is the point of the lock.
+# `start --foreground` IS the daemon body, so this is the same session detached,
+# stopped by asking rather than signalling, and reclaiming itself when idle.
+# The suite's own session stops first: an endpoint has one owner.
 kill "$CLIENT_PID" 2>/dev/null
 wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
 sleep 2
 
-# WHILE NOTHING IS RUNNING, which is the whole point: no watcher sees this, so
-# no invalidation carries it, and the fill that comes next only overwrites and
-# adds. The cache still holds the file, and the container still sees it, until
-# the record of what the last fill sent says it may go (ADR 0044).
+# WHILE NOTHING IS RUNNING: no watcher sees this and a fill only overwrites and
+# adds, so only the record of what the last fill sent removes it (ADR 0044).
 rm -f "$UNIONDIR/while-down.txt"
 
-# Watching on, because this session has to serve the write=back share section
-# 15c left running and start a container against another. The mode refuses to
-# run without it, by design: its cache holds copies, and the watcher is the
-# only thing that keeps them honest (ADR 0044).
+# Watching on: this session serves 15c's write=back share, a mode refused
+# without a watcher because only it keeps the cached copies honest (ADR 0044).
 if REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start >"$WORK/start.log" 2>&1; then
     ok "start returned without holding a terminal"
     sed 's/^/        /' "$WORK/start.log"
@@ -2096,13 +1867,10 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
     if [ "$out" = "through-the-daemon" ]; then
         ok "docker works through the background session"
 
-        # The union outlives the channel that asked for it (ADR 0044). The
-        # client was killed and started again above, so every channel this
-        # share was prepared on is gone -- and the container bound to it is
-        # still running. Reading a file the CONTAINER wrote proves both the
-        # mount and its cache layer are the same ones as before: a union
-        # released with a container on it cannot be repaired, so this is the
-        # difference between a working share and one broken for good.
+        # The union outlives the channel that asked for it (ADR 0044): every
+        # channel it was prepared on died with the client, and its container
+        # still runs. A file the CONTAINER wrote proves mount and cache layer
+        # are the same; a union released under a container cannot be repaired.
         if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
             ok "a container's union survives the client restarting"
         else
@@ -2120,14 +1888,9 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         fi
         docker rm -f itest-cached-eph >/dev/null 2>&1
 
-        # And the deletion made while nothing was running. A NEW container,
-        # because the reconcile happens when a share is next filled: one that
-        # is already running keeps what its cache holds until then, which is a
-        # narrower gap and a deliberate one.
-        #
-        # Polled, because the fill and the reconcile it starts with are
-        # asynchronous by design -- the container does not wait for either, and
-        # what the cache does not hold yet is served from the live export.
+        # And the deletion made while nothing ran. A NEW container, because the
+        # reconcile happens at the next fill; polled, because the fill is
+        # asynchronous and the container does not wait for it.
         if dockert run -d --name itest-reconcile -v "$UNIONDIR:/w:read=cached,write=back" \
             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
             if wait_gone docker itest-reconcile /w/while-down.txt 20; then
@@ -2142,8 +1905,7 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
             sed 's/^/        /' "$WORK/reconcile-run.log"
         fi
 
-        # And the verdict, which is the whole point of `status`. A session is
-        # demonstrably up: the command above went through it.
+        # And the verdict: the command above went through a live session.
         if outputs "^status  *ready" "$WORK/remote-docker" remote status; then
             ok "status says ready while a session is serving"
         else
@@ -2163,10 +1925,8 @@ else
     bad "a second start did not recognise the running session; it said: $LAST_OUTPUT"
 fi
 
-# The endpoint has exactly one owner, and it must refuse rather than steal --
-# which on Unix it silently used to do, unlinking the socket and leaving the
-# first session accepting on an inode nobody could reach.
-#
+# The endpoint has one owner and must refuse rather than steal: on Unix it once
+# unlinked the socket, leaving the first session on an unreachable inode.
 if out=$("$WORK/remote-docker" remote start --foreground 2>&1); then
     bad "a second session took the endpoint from the running one"
 else
@@ -2176,9 +1936,7 @@ else
     esac
 fi
 
-# A detached container must outlive the command that started it. This is what
-# the in-process session could not do: it died with the command and took the
-# container's mount with it.
+# A detached container keeps its mount after the command that started it exits.
 if dockert run -d --name itest-detached -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
     sleep 10
     if [ "$(docker inspect -f '{{.State.Running}}' itest-detached 2>/dev/null)" = "true" ]; then
@@ -2203,18 +1961,13 @@ else
     bad "stopping twice did not report it was not running; it said: $LAST_OUTPUT"
 fi
 
-# The sequence a person actually types, with nothing between the commands.
-#
-# `start` returns only once the endpoint answers, and `stop` only once the
-# process is gone -- so this must work with no sleep anywhere. It is the whole
-# claim of both commands, and it was not tested: the assertions above prove
-# `stop` SAYS "stopped", not that anything could run afterwards.
-#
-# `stop && start` is the half that used to race. stop waited for the endpoint
-# to go quiet, which is where Session.Close STARTS its teardown -- the SSH
-# connection, the reverse tunnel and the NFS export go afterwards. An account
-# has exactly one export port (ADR 0003), so a start that overtook the release
-# failed on a port the workspace had not let go of yet.
+# The sequence a person types, with no sleep: `start` returns once the endpoint
+# answers and `stop` once the process is gone. The checks above prove only that
+# `stop` SAYS "stopped".
+# `stop && start` raced: stop waited for the endpoint to go quiet, which is where
+# Session.Close STARTS tearing down the tunnel and the export. This machine has
+# one reverse-tunnel port (ADR 0029), so a start that overtook the release asked
+# for a port the workspace had not let go of yet.
 if "$WORK/remote-docker" remote start >/dev/null 2>&1 &&
     dockert run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker >"$WORK/after-start.txt" 2>&1 &&
     grep -q "from the project directory" "$WORK/after-start.txt"; then
@@ -2235,11 +1988,8 @@ fi
 "$WORK/remote-docker" remote stop >/dev/null 2>&1
 
 # A session from a different build is replaced when nothing depends on it and
-# reported when something does: a stale session serves the endpoint, so an
-# updated client would otherwise talk to the OLD build, silently.
-#
-# Two binaries, same source, different stamps: the versions cannot be ordered.
-# The name says what it is, THIS build wearing another version, not "-old".
+# reported when something does; otherwise an updated client silently talks to
+# the OLD build. Same source, different stamps, so versions cannot be ordered.
 if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-otherbuild" \
     -o "$WORK/remote-docker-otherbuild" ./cmd/remote-docker); then
 
@@ -2289,14 +2039,9 @@ else
     bad "could not build a second client for the version test"
 fi
 
-# Standby is the tier that does NOT end the session: it drops the workspace
-# connection and the file watches and keeps serving the endpoint, so every
-# Docker client pointed at it goes on working.
-#
-# The whole point is what does NOT happen, which is why this asserts through
-# the endpoint rather than at the log: a run after standby proves the socket
-# survived AND that the next request woke the session and rebuilt what it let
-# go of. Watching for "standing by" alone would pass with the endpoint dead.
+# Standby drops the workspace connection and the watches but keeps serving the
+# endpoint. Asserted through the endpoint, not the log: a run afterwards proves
+# the socket survived AND the request woke the session.
 if REMOTE_DOCKER_DAEMON_STANDBY=5s "$WORK/remote-docker" remote start >/dev/null 2>&1; then
     # Longer than the standby and its poll, which runs at a quarter of it.
     sleep 12
@@ -2328,9 +2073,8 @@ else
     bad "could not start a session for the standby test"
 fi
 
-# It reclaims itself. A session that has never been used is the case that
-# should go soonest, and the one that used to be unable to: with no last-use
-# time, it reported zero idle and could never expire.
+# It reclaims itself, including a session never used: with no last-use time,
+# one once reported zero idle and never expired.
 if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" remote start >/dev/null 2>&1; then
     reclaimed=false
     for _ in $(seq 1 6); do
@@ -2353,15 +2097,11 @@ fi
 
 echo
 echo "== 17. the workspace lifecycle, and the docker context that follows it =="
-# `workspace` and `context` used to be two commands doing one job (ADR 0018).
-# A context is a side effect now, so the thing to prove is that it appears and
-# disappears WITH the workspace rather than on request.
-#
-# The config file is $HOME/.remote-docker.json, which is real state on whatever
-# machine this runs on, so it is saved and put back. Everything else in the
-# suite is driven by environment variables, and this section runs last for the
-# same reason: setting a default workspace changes what every other command
-# would resolve.
+# A docker context is a side effect of a workspace (ADR 0018): it appears and
+# disappears WITH it. $HOME/.remote-docker.json is real state on this machine,
+# so it is saved and restored before section 18: a default workspace changes
+# what every later command resolves, which is why the rest of the suite runs on
+# environment variables.
 WSFILE="$HOME/.remote-docker.json"
 WSBACKUP="$WORK/remote-docker.json.bak"
 [ -f "$WSFILE" ] && cp "$WSFILE" "$WSBACKUP"
@@ -2388,10 +2128,8 @@ else
     bad "no docker context appeared for the workspace"
 fi
 
-# Captured, not just tested. This assertion failed intermittently in CI and
-# said nothing but "did not show the workspace" -- so the first two occurrences
-# bought a re-run and no diagnosis. What ls printed, and what is actually in the
-# file it reads, are the whole answer, and they cost two lines.
+# Captured: this fails intermittently in CI, so a failure prints what ls said
+# and what the file it reads holds.
 wsls=$("$WORK/remote-docker" remote ls 2>&1)
 if echo "$wsls" | grep -q "itest-ws"; then
     ok "workspace ls shows it"
@@ -2419,13 +2157,9 @@ else
     info "ls said: $(echo "$LAST_OUTPUT" | tr '\n' ' ')"
 fi
 
-# And docker's own current context, which is the half that was missing. Our
-# default is read by this binary alone; everything else on the machine resolves
-# `currentContext`, so a `use` that set only ours left compose, buildx and the
-# rest talking to whatever was selected before.
-#
-# Asked of the CONTEXT STORE rather than of a docker command, because
-# DOCKER_HOST is exported here and would mask which context is selected.
+# And docker's own current context: only this binary reads our default, and
+# compose, buildx and the rest resolve `currentContext`. Asked of the CONTEXT
+# STORE, because the exported DOCKER_HOST would mask the selection.
 current=$(hostdocker context show 2>/dev/null)
 if [ "$current" = "itest-ws" ]; then
     ok "workspace use selects the docker context too"
@@ -2433,17 +2167,11 @@ else
     bad "docker's current context is $current, want itest-ws"
 fi
 
-# A context we did NOT create must be left entirely alone.
-#
-# The endpoint is arranged before cobra parses anything, and it used to do so by
-# setting DOCKER_HOST, which outranks --context in docker's own resolution. So
-# every foreign context on the machine silently resolved to us. There is no way
-# to see that from inside the process, which is why it is asserted here: the
-# command must FAIL to reach a daemon that is not there, rather than succeed
-# against ours.
-#
-# The context has to EXIST for the refusal below to mean anything: a command
-# naming a context that was never created fails too, and reports a pass.
+# A context we did NOT create must be left entirely alone. Arranging the
+# endpoint by setting DOCKER_HOST, which outranks --context, silently resolved
+# every foreign context to us, and nothing inside the process can see that: the
+# command must FAIL against a daemon that is not there. The context must EXIST,
+# or naming it fails anyway and reports a pass.
 if ! hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/dev/null 2>&1; then
     bad "could not create a foreign context, so nothing was asked of one"
 elif out=$(timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps 2>&1); then
@@ -2476,10 +2204,8 @@ else
     bad "workspace rm failed: $(echo "$out" | tail -2)"
 fi
 
-# rm's own account of what it did to the context, printed either way. The
-# assertion below can fail three different ways -- the context was never
-# recognised as ours, the docker command refused, or it was removed and
-# something put it back -- and they are indistinguishable from the outside.
+# rm's own account, printed either way: a context never recognised as ours, a
+# refused docker command, and one removed then recreated look alike from outside.
 info "workspace rm said: $(echo "$out" | tr '\n' '; ')"
 
 if outputs '^itest-ws$' hostdocker context ls --format '{{.Name}}'; then
@@ -2489,9 +2215,8 @@ else
     ok "removing the workspace removed its docker context"
 fi
 
-# `remote` has to be FINDABLE. It is the only way in to everything this program
-# does that docker does not, and the root's help is sixty commands long, so a
-# command that is present but unlisted is a command nobody will type.
+# `remote` must be FINDABLE: the root's help is sixty commands long, and an
+# unlisted command is one nobody types.
 if outputs '^  remote ' "$WORK/remote-docker" --help; then
     ok "remote is listed in the help"
 else
@@ -2503,14 +2228,9 @@ trap cleanup EXIT
 
 echo
 echo "== 18. the client under the name docker =="
-# The claim is that a machine with no Docker installed can type `docker run`.
-# It rests on one thing -- the binary looking at the name it was invoked by --
-# and the only way to test that is to invoke it by that name.
-#
-# Deliberately with NO DOCKER_HOST and no session running: that is the state a
-# person is in after renaming the binary, and everything it has to do for
-# itself (resolve the workspace, start a session, point the CLI at it) happens
-# in this one command or not at all.
+# A machine with no Docker installed types `docker run`. With NO DOCKER_HOST and
+# no session, as after renaming the binary, so resolving the workspace, starting
+# a session and pointing the CLI at it all happen in this one command.
 ALIASDIR="$WORK/aliasbin"
 mkdir -p "$ALIASDIR"
 ln -sf "$WORK/remote-docker" "$ALIASDIR/docker"
@@ -2531,13 +2251,10 @@ else
     bad "docker ps failed under the plain name"
 fi
 
-# A docker command that reaches no daemon must not open a session. This is not
-# tidiness: once `docker` on PATH is this binary, `workspace create` writing a
-# context spawns US, and a session to write a line of JSON means an SSH
-# connection, an NFS server and a reverse tunnel -- torn down again immediately.
-#
-# Asserted through `stop`, which says "not running" when there is nothing to
-# stop and "stopped" when there was.
+# A docker command that reaches no daemon must not open a session: once
+# `docker` on PATH is us, `remote create` writing a context spawns us, and a
+# session means SSH, an NFS server and a reverse tunnel for a line of JSON.
+# Asserted through `stop`, which says "not running" when there is nothing.
 if outputs "stopped" "$WORK/remote-docker" remote stop; then
     ok "the session the alias started was there to stop"
 else
@@ -2551,11 +2268,8 @@ else
     "$WORK/remote-docker" remote stop >/dev/null 2>&1
 fi
 
-# A COPY of the binary named `docker`, which is the documented installation now
-# that there is no shim: the root is the Docker CLI, so the file's name is the
-# whole of it. A copy rather than the symlink above, because they are different
-# claims -- a symlink could be resolved back to the original somewhere, and this
-# one cannot be.
+# A COPY named `docker`, the documented installation (ADR 0024). A copy as well
+# as the symlink above, because a symlink can be resolved back to the original.
 COPYDIR="$WORK/copybin"
 mkdir -p "$COPYDIR"
 cp "$WORK/remote-docker" "$COPYDIR/docker"
@@ -2576,14 +2290,9 @@ fi
 
 echo
 echo "== 19. through a real reverse proxy, over wss =="
-# The claim is that a workspace can be reached through an ordinary HTTP reverse
-# proxy on 443, with no SSH port involved. Only a real proxy tests that: the
-# upgrade, the TLS the agent deliberately does not do, and a long-lived
-# connection through something that normally serves web pages.
-#
-# nginx on the host network, so it reaches the published WebSocket port and the
-# client reaches it back, with a certificate generated here and given to the
-# client. The agent serves plain ws and knows nothing about any of this.
+# A workspace reached through an ordinary HTTPS reverse proxy, no SSH port: the
+# upgrade, the TLS the agent does not do, and a long-lived connection. nginx on
+# the host network with a certificate generated here; the agent serves plain ws.
 if command -v openssl >/dev/null 2>&1; then
     mkdir -p "$WORK/proxy"
     openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -2630,8 +2339,8 @@ NGINX
         sleep 1
     done
 
-    # A session of its own: the reverse-tunnel port belongs to one session at a
-    # time (ADR 0029), so this cannot run beside the one above.
+    # A session of its own: this machine's reverse-tunnel port (ADR 0029) is
+    # reserved by one session at a time (ADR 0028).
     wsenv() {
         env REMOTE_DOCKER_HOST="wss://localhost:8443/tunnel" \
             REMOTE_DOCKER_PORT= \
@@ -2667,16 +2376,11 @@ NGINX
         sed 's/^/        /' "$WORK/ws-up.log"
     fi
 
-    # A proxy that stops passing traffic without closing anything is the case
-    # TCP keepalives cannot see, and the reason wslisten pings. Pausing the
-    # container black-holes it exactly that way.
-    #
-    # A container holding a mount first, because the connection has to still be
-    # OPEN when the proxy stops carrying it. Without one the client releases it
-    # as idle after REMOTE_DOCKER_IDLE_TIMEOUT, and a connection closed cleanly
-    # is one the agent has nothing to notice about: the assertion then fails
-    # for the opposite of the reason it is testing. A mounted container keeps
-    # the connection leased, measured in test/nfs-resilience.sh section 4.
+    # A proxy that stops passing traffic without closing anything is invisible
+    # to TCP keepalives, hence wslisten's pings; pausing the container does
+    # exactly that. A container holding a mount keeps the connection OPEN
+    # (test/nfs-resilience.sh section 4): released as idle after
+    # REMOTE_DOCKER_IDLE_TIMEOUT, it would close cleanly and leave nothing to notice.
     timeout 60 docker -H "unix://$WORK/ws.sock" run -d --name itest-ws-hold \
         -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1
 
@@ -2701,33 +2405,25 @@ fi
 
 echo
 echo "== 20. the workspace daemon comes back from an unclean restart =="
-# LAST on purpose: it kills the workspace container, so everything above has
-# already run and nothing below depends on the session.
-#
+# LAST on purpose: it kills the workspace container.
 # The shared daemon's exec-root is in the container's writable layer, so a
-# stale containerd.pid outlives an unclean end and stops dockerd two ways;
-# agent/internal/daemons.ExecRoot has both failures and their measurements.
-#
-# Arranged rather than waited for, as per-user-dind.sh section 13 does for the
-# other mode: a stale pid only stops dockerd while the number it names is
-# alive, which in the wild is a coincidence. Pid 1 in the workspace container
-# is the agent itself and is alive in every incarnation.
+# stale containerd.pid outlives an unclean end and stops dockerd two ways
+# (agent/internal/daemons.ExecRoot). Arranged, as per-user-dind.sh section 13
+# does: a stale pid stops dockerd only while the pid it names is alive, and
+# pid 1, the agent, always is.
 EXECROOT=/var/run/docker
 PIDFILE=$EXECROOT/containerd/containerd.pid
 
-# The mechanism first, and asserted separately from the outcome: a daemon that
-# happened to start would otherwise hide a missing tmpfs until the next
-# coincidence.
+# The mechanism, asserted apart from the outcome: a daemon that happened to
+# start would otherwise hide a missing tmpfs.
 if outputs '^tmpfs$' hostdocker exec "$CONTAINER" stat -f -c %T "$EXECROOT"; then
     ok "the shared daemon's exec-root is a tmpfs, so nothing in it survives a restart"
 else
     bad "the exec-root is not a tmpfs: [$LAST_OUTPUT]"
 fi
 
-# And a mount of its OWN. The filesystem type alone would also be satisfied by
-# an exec-root that is merely a directory on a /run somebody else made a tmpfs,
-# which is not the agent having mounted anything: st_dev against the parent is
-# the same question supervise.mountedAt asks.
+# And a mount of its OWN, not a directory on a /run somebody else made a tmpfs:
+# st_dev against the parent, as supervise.mountedAt asks.
 if outputs '^differ$' hostdocker exec "$CONTAINER" sh -c \
         "if [ \"\$(stat -c %d $EXECROOT)\" = \"\$(stat -c %d $EXECROOT/..)\" ]; then echo same; else echo differ; fi"; then
     ok "the exec-root is a mount of its own, not a directory on its parent"
@@ -2739,10 +2435,8 @@ if ! planted=$(hostdocker exec "$CONTAINER" \
         sh -c "mkdir -p $(dirname "$PIDFILE") && echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
     bad "could not plant a stale containerd pid in the workspace: [$planted]"
 else
-    # -t 0 is SIGKILL with no grace period, which is the unclean end this is
-    # about: a clean stop removes the pid file and proves nothing. The
-    # writable layer is reused, which is what a restart on Kubernetes would
-    # not do.
+    # -t 0 is SIGKILL, the unclean end: a clean stop removes the pid file. The
+    # writable layer is reused, which a restart on Kubernetes would not do.
     if hostdocker restart -t 0 "$CONTAINER" >/dev/null 2>&1; then
         ok "the workspace container was killed and started again on the same layer"
     else
@@ -2756,9 +2450,8 @@ else
         dump_workspace_log 60
     fi
 
-    # The tmpfs is what took the planted pid away, so the file now holds the
-    # new containerd's own pid or does not exist at all. Either says the
-    # directory did not survive; a `1` says it did.
+    # The file now holds the new containerd's pid or is absent; a `1` means
+    # the directory survived.
     if outputs '^1$' hostdocker exec "$CONTAINER" cat "$PIDFILE"; then
         bad "the planted containerd pid survived the restart: [$LAST_OUTPUT]"
     else

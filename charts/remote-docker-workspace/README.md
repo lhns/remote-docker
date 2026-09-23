@@ -49,7 +49,7 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 |---|---|---|
 | `image.repository` | `ghcr.io/lhns/remote-docker-workspace` | |
 | `image.tag` | `""` | the chart's appVersion |
-| `authorizedKeys` | `{}` | one entry per account; **the entry name is the unix account** |
+| `authorizedKeys` | `{}` | one entry per account; **the entry name is the account a client logs in as** (unix user `rd-<name>`) |
 | `existingSecret` | `""` | use a Secret you manage instead |
 | `perUserDind` | `true` | a dockerd per account (ADR 0019), or one shared (ADR 0012) |
 | `dockerdArgs` | `--storage-driver=fuse-overlayfs` | see below |

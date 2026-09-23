@@ -1,18 +1,9 @@
 name: machine
 
-# The WSL backend, end to end, on a Windows runner. A GitHub Windows runner
-# runs real WSL2 and can import a rootfs (measured before this was written,
-# ADR 0026); without that the whole backend would ship having never run.
-#
-# Two jobs, because a Windows runner runs Windows containers and so cannot
-# build the Linux image: a Linux runner builds it and hands the rootfs over as
-# an artifact.
-#
-# Hyper-V gets no job: the runners do not offer it, and
-# docs/testing-machines.md is the whole of its verification.
-#
-# Every pull request, not only those touching the backend: this is the one
-# Windows client in CI, so every PR meets it.
+# The WSL backend end to end on a Windows runner, which runs real WSL2 (ADR
+# 0026). A Linux job builds the image, since a Windows runner cannot, and hands
+# the rootfs over. Hyper-V has no job: docs/testing-machines.md is its whole
+# verification. Every pull request, because this is the one Windows client in CI.
 on:
   pull_request:
   workflow_dispatch:
@@ -21,8 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  # A container image IS a rootfs, so what is installed into the machine is the
-  # artifact CI already builds and tests, and no package manager runs anywhere.
+  # A container image IS a rootfs, so the machine gets the image CI tests.
   rootfs:
     name: export the workspace image as a rootfs and record the probe oracle
     runs-on: ubuntu-latest
@@ -38,20 +28,15 @@ jobs:
         run: |
           set -eux
           id=$(docker create rd-workspace:ci)
-          # Gzipped, because that is what a release publishes and what
-          # `wsl --import` is proven here to read directly. -1 rather than -9:
-          # -9 on a 400 MB rootfs spent about a minute of single-threaded CPU
-          # on this workflow's critical path to save bandwidth between two jobs
-          # on the same runner network.
+          # Gzipped, as a release publishes it. -1: -9 cost a minute of CPU on
+          # the critical path to save bandwidth between two runners.
           docker export "$id" | gzip -1 > rootfs.tar.gz
           docker rm "$id"
           ls -lh rootfs.tar.gz
 
-      # The conformance probe walks a directory through every operation a build
-      # tool uses and prints what happened; against the runner's own disk that
-      # transcript is the ORACLE, and the wsl job diffs the same image's output
-      # over an NTFS-backed share against it. Built through build_probe from
-      # test/lib.sh, so it cannot drift from what test/fs-conformance.sh runs.
+      # The conformance probe's transcript against the runner's own disk is the
+      # ORACLE the wsl job diffs an NTFS-backed share against. build_probe is
+      # lib.sh's, so it cannot drift from test/fs-conformance.sh.
       - name: build the probe image and run the oracle
         run: |
           set -eux
@@ -67,16 +52,11 @@ jobs:
           docker save fsprobe:ci | gzip > fsprobe.tar.gz
           ls -lh fsprobe.tar.gz
 
-      # The Windows client, cross-compiled HERE rather than on the Windows
-      # runner: actions/setup-go there restores a 526 MB cache and untarring it
-      # costs one to four minutes (measured 248s on 2026-09-08, run
-      # 34212595094) on the critical path of the longest workflow here, to
-      # compile one binary in seven seconds.
-      #
-      # CGO_ENABLED=0 is what .goreleaser.yaml ships for windows, so this is
-      # the binary a user downloads; building on the runner picked up its gcc
-      # and produced a cgo binary nobody ships. That the client COMPILES on
-      # Windows natively stays covered by ci.yml's `test (windows)` job.
+      # Cross-compiled HERE: setup-go on the Windows runner restores a 526 MB
+      # cache in one to four minutes (248s, run 34212595094, 2026-09-08) to
+      # compile one binary in seven seconds. CGO_ENABLED=0 is what
+      # .goreleaser.yaml ships for windows; ci.yml's `test (windows)` still
+      # compiles natively.
       - name: cross-compile the windows client
         env:
           CGO_ENABLED: "0"
@@ -117,16 +97,13 @@ jobs:
     name: a machine on wsl
     runs-on: windows-latest
     needs: rootfs
-    # Fifty, not thirty: creating a machine, importing the rootfs, waiting out
-    # an idle disconnect and the conformance probe's five thousand files over
-    # the share do not fit in thirty.
+    # Machine creation, an idle disconnect and 5,000 probe files over the share
+    # do not fit in thirty.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
 
-      # No setup-go on this runner. Everything Go here is built on the Linux
-      # job above and arrives as an artifact; see the cross-compile step there
-      # for what that is worth and what still covers the Windows build.
+      # No setup-go here: everything Go arrives from the Linux job.
       - uses: actions/download-artifact@v8
         with:
           name: workspace-rootfs
@@ -137,12 +114,9 @@ jobs:
           name: windows-client
           path: client
 
-      # State of its own for every step below, so nothing here depends on or
-      # disturbs whatever the runner image already has. Set through GITHUB_ENV
-      # rather than the job's `env:`, where the `runner` context is NOT
-      # available: naming it there makes the whole file invalid, no pull
-      # request run is created at all, and the only sign is a push-event run
-      # with no jobs, named by the path of the file.
+      # Through GITHUB_ENV, not the job's `env:`: the `runner` context is not
+      # available there, and naming it makes the whole file invalid with no
+      # pull-request run created at all.
       - name: a state directory of its own
         shell: pwsh
         run: |
@@ -165,20 +139,17 @@ jobs:
         shell: pwsh
         run: |
           "from the runner" | Out-File -Encoding ascii marker
-          # Joined before matching. PowerShell's -match on an ARRAY is a filter
-          # rather than a test: it returns the lines that matched, so -notmatch
-          # on multi-line output returns the other lines and is truthy whether
-          # or not the thing being looked for is there. It failed a step whose
-          # command had printed exactly what the step demanded.
+          # Joined before matching: -notmatch on an ARRAY filters lines and is
+          # truthy whether or not the text is there.
           $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
           $out
           if ($out -notmatch 'from the runner') { throw "the bind mount did not resolve" }
 
       - name: GNU tar sets attributes on files it wrote, and a non-root uid can mkdir
         shell: pwsh
-        # The one Windows client in CI. GNU tar sets attributes on the
-        # descriptor it just wrote, which the kernel cannot retry after ESTALE;
-        # both defects that broke it showed only from a Windows client.
+        # GNU tar sets attributes on the descriptor it just wrote, which the
+        # kernel cannot retry after ESTALE; both defects that broke it showed
+        # only from a Windows client.
         run: |
           $probe = 'apk add -q tar >/dev/null 2>&1 && cd /w && mkdir -p src && echo x >src/a && tar -cf t.tar src && rm -r src && tar -xf t.tar && chmod 600 src/a && echo TAR-OK'
           $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 sh -c $probe) -join "`n"
@@ -195,9 +166,7 @@ jobs:
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
 
-      # The machine is a machine: it stops, starts, and what was inside it is
-      # still inside it. A rebuild is the only thing that discards, and a stop
-      # that quietly did the same would be found by nobody until it had.
+      # A stop must not discard what is inside the machine; only a rebuild does.
       - name: it survives being stopped and started
         shell: pwsh
         run: |
@@ -205,10 +174,8 @@ jobs:
           .\client\rd.exe remote machine stop ci
           .\client\rd.exe remote machine start ci
 
-          # An EOF on the local pipe names the wrong layer entirely, so these
-          # separate "no session at all" from "a session whose machine went
-          # away underneath it": what holds the endpoint, and then the
-          # session's own log, which is the only place saying why.
+          # An EOF on the pipe names the wrong layer, so print what holds the
+          # endpoint and the session's own log.
           .\client\rd.exe remote status
           Get-Process rd -ErrorAction SilentlyContinue | Format-Table Id, StartTime
           Get-Content "$env:REMOTE_DOCKER_STATE_DIR\logs\*.log" -Tail 40 -ErrorAction SilentlyContinue
@@ -218,35 +185,24 @@ jobs:
           if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
           .\client\rd.exe rm -f survivor
 
-      # Left alone, and then used again. A session idle for
-      # DefaultIdleTimeout (one minute) disconnects on purpose (ADR 0015),
-      # which releases the machine and lets WSL stop it. The machine stopping
-      # is correct and is not the failure; the command AFTER it is. That found
-      # one: the machine was started again and dialled before its agent was
-      # listening, so the first command failed and the second worked, which
-      # reads as flakiness rather than as the deterministic bug it was.
+      # An idle session disconnects after a minute (ADR 0015) and WSL stops
+      # the machine. What is under test is the command AFTER that, which once
+      # dialled before the restarted agent listened and read as flakiness.
       - name: a machine comes back after sitting idle
         shell: pwsh
         timeout-minutes: 8
         run: |
-          # A background session, which is the thing holding the machine. A
-          # one-shot `docker run` would take its hold with it when it exits and
-          # prove nothing about a machine left alone.
+          # A background session holds the machine; a one-shot run would not.
           .\client\rd.exe remote start
 
-          # Polled for `Stopped` rather than slept for a fixed 180s: the
-          # machine stops at 106s (measured 2026-09-08), so the sleep carried
-          # 74s of dead margin and asserted only that time had passed.
-          # `Stopped` is the precondition the next command is about, so a
-          # machine that never stops fails HERE naming what wsl said. The 300s
-          # bounds that failure and is not an expected duration.
+          # Polled for `Stopped` (106s, measured 2026-09-08), so a machine that
+          # never stops fails here naming what wsl said. 300s bounds that.
           $start = Get-Date
           $deadline = $start.AddSeconds(300)
           $state = ""
           while ($true) {
-            # NULs stripped: wsl.exe writes UTF-16, and read as bytes that is
-            # text with a NUL between every character, against which every
-            # match silently fails.
+            # NULs stripped: wsl.exe writes UTF-16, which read raw matches
+            # nothing.
             $state = ((wsl -l -v | Out-String) -replace "`0", "")
             if ($state -match 'rd-ci +Stopped') { break }
             if ((Get-Date) -ge $deadline) { break }
@@ -264,10 +220,8 @@ jobs:
           if ($out -notmatch 'from the runner') { throw "an idle machine did not come back" }
           .\client\rd.exe remote stop
 
-      # The same probe the Linux leg runs (test/fs-conformance.sh), against a
-      # share whose other end is an NTFS directory. The transcript is compared
-      # with the oracle recorded on the ubuntu runner, and a difference the
-      # deviations file does not name fails the job.
+      # test/fs-conformance.sh's probe against an NTFS-backed share, diffed
+      # against the ubuntu oracle; an unlisted deviation fails the job.
       - uses: actions/download-artifact@v8
         with:
           name: fsprobe-image
@@ -285,9 +239,8 @@ jobs:
 
       - name: run the probe against a share backed by NTFS
         shell: pwsh
-        # Out-File with an explicit encoding, because `>` in Windows PowerShell
-        # writes UTF-16. The runner's pwsh is 7, whose utf8 carries no BOM;
-        # 5.1's does, and the diff step strips one either way.
+        # An explicit encoding, since `>` in Windows PowerShell writes UTF-16.
+        # The diff step strips a BOM either way.
         run: |
           New-Item -ItemType Directory share | Out-Null
           .\client\rd.exe run --rm -v "${PWD}\share:/w" fsprobe:ci /w | Out-File -Encoding utf8 transcript-windows.txt
@@ -311,9 +264,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # rm destroys the machine as well as the entry, and leaving a
-      # distribution behind is the failure worth catching: it is a running
-      # Linux system with nothing naming it.
+      # A distribution left behind is a running Linux system nothing names.
       - name: rm takes the machine with it
         shell: pwsh
         run: |
@@ -332,16 +283,11 @@ jobs:
           wsl -d rd-ci --user root -- ps aux
           wsl -d rd-ci --user root -- sh -c "netstat -lnt 2>/dev/null || ss -lnt"
 
-          # Which address Windows can actually reach. The agent logged
-          # `listening on :2222` and Windows refused the connection for three
-          # minutes anyway, so the question is not whether the agent is up:
-          # WSL2 forwards localhost through a relay, and this asks whether that
-          # relay works here or the machine is reachable only at its own
-          # address.
+          # Which address Windows can reach: WSL2's localhost relay has refused
+          # while the agent listened, and the machine's own address worked.
           wsl --version
-          # No shell and no awk: busybox's hostname has no -I, and a shell
-          # pipeline here loses its $-fields to PowerShell's quoting. The
-          # parsing happens on this side, where it can be seen.
+          # Parsed on this side: busybox's hostname has no -I, and a shell
+          # pipeline loses its $-fields to PowerShell's quoting.
           $addr = (wsl -d rd-ci --user root -- ip -4 -o addr show eth0) -join ' '
           "eth0: $addr"
           $ip = ([regex]::Match($addr, 'inet\s+(\d+\.\d+\.\d+\.\d+)')).Groups[1].Value
@@ -350,8 +296,5 @@ jobs:
           if ($ip) { Test-NetConnection -ComputerName $ip -Port 2222 -InformationLevel Detailed }
           Get-Content "$env:USERPROFILE\.wslconfig" -ErrorAction SilentlyContinue
 
-          # SIGQUIT makes a Go program print every goroutine's stack before it
-          # dies, which is the one thing that says where an agent that is
-          # running but not listening actually is. It kills the agent, so it
-          # goes last and only on the failure path.
+          # SIGQUIT dumps every goroutine's stack, and kills the agent: last.
           wsl -d rd-ci --user root -- sh -c "pkill -QUIT -f remote-dockerd; sleep 3; cat /var/log/remote-dockerd.log"

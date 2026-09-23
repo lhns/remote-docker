@@ -73,8 +73,8 @@ guards the map, and it is deliberately none of the things it might look like:
 - **Never zero.** It is pre-incremented, so the first is 1, and `Bind` returns
   0 when it refuses. A caller that released without checking whether it got a
   reservation therefore cannot match anybody's entry. That is load-bearing:
-  the failure path in `handleForwardRequest` is exactly where the original bug
-  lived.
+  the failure path, now `tunnelserver.Forwards.open`, is exactly where the
+  original bug lived.
 
 An agent restart resets the counter, but it empties the map too, so no old
 token can collide with anything.

@@ -46,9 +46,9 @@ with no path translation and no volume driver in the way.
   decision and the reason it outranks the alternatives.
 - The container must be privileged. dind runs its own daemon, sets up its own
   bridge and iptables rules, and mounts filesystems in its own namespace.
-- Swarm cannot run privileged tasks, so a Swarm deployment needs a launcher
-  that starts the real container through the node's own `docker.sock`. See
-  `deploy/swarm-launcher.yml`.
+- Swarm cannot run privileged tasks, so the agent starts the real container
+  through the node's own `docker.sock` itself (`elevate`, ADR 0013). See
+  `deploy/swarm.yml`.
 - `/var/lib/docker` wants real local disk. On CephFS- or NFS-backed storage
   `overlay2` refuses outright and `vfs` copies every layer, which is why
   `fuse-overlayfs` is baked into the image and selected with

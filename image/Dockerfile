@@ -9,19 +9,13 @@
 #     docker build -f image/Dockerfile .
 FROM golang:1.27-alpine AS build
 WORKDIR /src
-# The golang images set GOTOOLCHAIN=local, which turns a go.mod asking for a
-# newer Go than this base image into a build failure naming the toolchain
-# rather than the dependency that raised the directive. `auto` fetches what
-# go.mod asks for; the tag above still tracks it, so that is normally a no-op.
+# The golang images set GOTOOLCHAIN=local, which fails on a go.mod asking for a
+# newer Go; `auto` fetches it, normally a no-op since the tag tracks go.mod.
 ENV GOTOOLCHAIN=auto
-# Stamped by the release workflow. Without it a published image reports "dev",
-# which makes "which version is this workspace running" unanswerable.
+# Stamped by the release workflow; otherwise the image reports "dev".
 ARG VERSION=dev
-# Only the agent's module and the two it requires, so this build cannot break
-# because of a dependency the binary never imported (ADR 0021). go.work is
-# deliberately NOT copied: it would resolve this through the workspace rather
-# than through agent/go.mod's own replace, so a missing require would succeed
-# here and fail only where there is no workspace.
+# Only the agent's module and the two it requires (ADR 0021). Not go.work, so
+# agent/go.mod resolves on its own and a missing require fails here.
 COPY core/ ./core/
 COPY core-agent/ ./core-agent/
 COPY agent/ ./agent/
@@ -33,11 +27,9 @@ RUN cd agent && CGO_ENABLED=0 go build -trimpath \
 
 FROM docker:29-dind
 
-# shadow STAYS. The agent shells out to useradd rather than editing
-# /etc/passwd, because the shadow tools handle the locking between passwd,
-# group and gshadow that hand-editing gets wrong. openssh-client is for a
-# developer shell wanting git-over-ssh; the agent is its own SSH server and
-# needs no openssh-server, no sudo and no inotify-tools.
+# shadow STAYS: the agent shells out to useradd, which gets the locking
+# between passwd, group and gshadow right. openssh-client is for cloning over
+# ssh in a shell; the agent is its own SSH server.
 RUN apk add --no-cache \
         bash \
         coreutils \
@@ -74,14 +66,12 @@ EXPOSE 2222
 # overlay2 will not work -- set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs
 VOLUME ["/var/lib/docker"]
 
-# tini warns whenever it is not PID 1, and the one dind's entrypoint starts for
-# dockerd never is: it runs under the agent. The message reads like a fault and
-# has been reported as one. As a subreaper the inner tini collects its own
-# subtree instead; a no-op for the tini that is already PID 1.
+# The tini that dind's entrypoint starts for dockerd runs under the agent, not
+# as PID 1, and warns about it in words that read like a fault. As a subreaper
+# it does not.
 ENV TINI_SUBREAPER=1
 
-# tini reaps the processes the agent forks per session. The agent is the
-# entrypoint and `serve` the default, so `command: ["elevate"]` in a Swarm
-# deployment selects the other mode without overriding anything else.
+# tini reaps what the agent forks per session. `command: ["elevate"]` selects
+# the Swarm mode without overriding anything else.
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/remote-dockerd"]
 CMD ["serve"]

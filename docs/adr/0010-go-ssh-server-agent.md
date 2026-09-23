@@ -47,20 +47,20 @@ than a rewrite.
 | helpers deriving state from `$SUDO_USER` | a method on the authenticated session |
 | `workspace-info` as text the client parses | a typed value |
 | `key-watcher` + `authorized_keys` files | in-process public-key auth |
-| generated `permitlisten` strings | `if !mapping.OwnsPort(uid, port) { reject }` |
+| generated `permitlisten` strings | a policy the agent asks before binding (today `reversePolicy.Allow`) |
 
 ## Consequences
 
 - **Port ownership becomes structural.** The agent owns the listener, so a
   cross-user bind is refused by construction rather than by an option string
-  that has to be generated correctly. `Mapping.OwnsPort` is the entire policy
-  and it is unit-tested.
+  that has to be generated correctly. The policy is `reversePolicy.Allow`
+  (`agent/internal/sshd/forward_tcpip.go`) over `accounts.Ports`, unit-tested.
 - The whole `sudo` surface disappears — no `sudoers` file, no argument pinning,
   no `$SUDO_USER` derivation, and none of the invariants that guarded them.
-- Server behaviour becomes testable without root. `test/key-watcher.sh` needs
-  real `useradd` and therefore real privileges, which is why it cannot run in
-  ordinary CI; account provisioning behind an interface can be faked in unit
-  tests and exercised for real only in integration.
+- Server behaviour becomes testable without root. The shell key watcher's test
+  needed real `useradd` and so could not run in ordinary CI; account
+  provisioning behind an interface is faked in unit tests and exercised for
+  real only in integration.
 - **We give up a hardened, audited SSH implementation and own authentication
   ourselves.** This is the real cost of the decision and it should not be
   glossed. `gliderlabs/ssh` is widely deployed for exactly this shape of
@@ -69,10 +69,8 @@ than a rewrite.
 - The agent must implement a PTY session. It was written to keep
   `remote-docker shell` working; that command is gone
   ([ADR 0018](0018-one-way-to-do-each-thing.md)) and the PTY is not, because a
-  stock `ssh` with an enrolled key is now the way in -- and because the
-  argument for unrestricted local forwarding in `server.go` rests on the
-  account being able to reach a shell. The library supports it and `bash` is in
-  the image.
+  stock `ssh` with an enrolled key is now the way in. The library supports it
+  and `bash` is in the image.
 - Behaviour that must survive the rewrite, because it was learned the hard way:
   **poll the keys directory as well as watching it** — inotify never fires for
   changes made on another host when that directory is CephFS- or NFS-backed;

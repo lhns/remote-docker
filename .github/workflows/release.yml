@@ -1,10 +1,6 @@
 name: build and release
 
-# Named for what it does rather than for its rarest job. Every push to main
-# comes through here: it runs the whole of ci.yml first, then publishes. Only
-# the GitHub Release part is tag-only.
-#
-# Two things ship from here, on different schedules:
+# Every push to main runs ci.yml, then publishes. Two schedules:
 #
 #   the workspace image   every push to main as sha-<short>, and on a v* tag
 #                         as <version> and latest
@@ -19,24 +15,17 @@ on:
 permissions:
   contents: write
   packages: write
-  # cosign signs keyless, with a short-lived certificate bound to this
-  # workflow's identity, so there is no key to hold or rotate.
+  # cosign signs keyless, so there is no key to hold.
   id-token: write
 
-# Deliberately not cancel-in-progress: a superseded publish should still
-# finish, because the tag it was pushing is the only thing that will ever
-# carry that commit.
+# A superseded publish still finishes: its tag is the only one for that commit.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # Nothing is published until this passes. It is the whole of ci.yml -- tests,
-  # lint, the cross-compile matrix, shellcheck -- run at this exact ref.
-  #
-  # Without it a tag published from code no workflow had ever checked: ci.yml
-  # has no tag trigger, so `git push --tags` went straight to a GitHub Release
-  # and to :latest.
+  # Nothing is published until all of ci.yml passes at this ref; ci.yml has no
+  # tag trigger of its own.
   ci:
     uses: ./.github/workflows/ci.yml
 
@@ -66,19 +55,13 @@ jobs:
             SHORT="$(git rev-parse --short HEAD)"
             echo "image_tags=${IMG}:sha-${SHORT}" >> "$GITHUB_OUTPUT"
             echo "version=sha-${SHORT}" >> "$GITHUB_OUTPUT"
-            # A chart version has to be SemVer, which an image tag does not:
-            # `helm package --version sha-735a07c` fails outright. So a commit
-            # build gets a prerelease version, which also sorts below every
-            # release, so `helm install` without --version never picks one up.
+            # A chart version must be SemVer. A prerelease also sorts below
+            # every release, so `helm install` never picks one up by default.
             echo "chart_version=0.0.0-dev.${SHORT}" >> "$GITHUB_OUTPUT"
           fi
 
-  # One job per architecture, each on a runner of that architecture. Building
-  # both under QEMU cost more than everything else in the workflow put together
-  # (5m25s against 1m40s for the whole test suite), and native arm runners are
-  # free for public repositories. Each pushes by digest only and the manifest
-  # job below joins them under the real tags, which is what lets the two build
-  # at the same time.
+  # One native runner per architecture: QEMU cost 5m25s against 1m40s for all
+  # the tests. Each pushes by digest; `manifest` joins them under the tags.
   image:
     name: image (${{ matrix.platform }})
     needs: [ci, meta]
@@ -104,24 +87,21 @@ jobs:
         id: build
         uses: docker/build-push-action@v7
         with:
-          # Context is the repository root, not image/: the agent is compiled
-          # from source here.
+          # The repository root: the agent is compiled from source.
           context: .
           file: image/Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: |
             VERSION=${{ needs.meta.outputs.version }}
           outputs: type=image,name=${{ needs.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          # Scoped per architecture: one cache shared between them would have
-          # each build evicting the other's layers on every run.
+          # Per architecture, or each build evicts the other's layers.
           cache-from: type=gha,scope=image-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=image-${{ matrix.platform }}
 
       - name: Export the digest
         run: |
           mkdir -p /tmp/digests
-          # The sha256: prefix has to come off: an artifact filename may not
-          # contain a colon, and upload-artifact refuses the whole upload.
+          # No colon in an artifact filename.
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
@@ -132,8 +112,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Joins the per-architecture digests into one multi-arch tag. Cheap: it moves
-  # no layers, only writes a manifest list.
+  # The per-architecture digests under one multi-arch tag.
   manifest:
     name: workspace image
     needs: [image, meta]
@@ -160,7 +139,8 @@ jobs:
             TAGS="$TAGS -t $tag"
           done
           # shellcheck disable=SC2086
-          docker buildx imagetools create $TAGS             $(printf "${{ needs.meta.outputs.image }}@sha256:%s " *)
+          docker buildx imagetools create $TAGS \
+            $(printf "${{ needs.meta.outputs.image }}@sha256:%s " *)
         working-directory: /tmp/digests
 
       - name: Show what was published
@@ -173,9 +153,8 @@ jobs:
         with:
           syft-version: v1.14.0
 
-      # The manifest list, by digest. Signing a tag would sign a name that can
-      # be moved; signing the per-platform digests would leave what `docker
-      # pull` actually resolves unsigned.
+      # The manifest list by digest: a tag can move, and per-platform digests
+      # leave what `docker pull` resolves unsigned.
       - name: Sign the image and attest its contents
         env:
           COSIGN_YES: "true"
@@ -189,19 +168,15 @@ jobs:
           syft "$REF" -o spdx-json=workspace-image.sbom.spdx.json
           cosign attest --predicate workspace-image.sbom.spdx.json --type spdx "$REF"
 
-  # The chart is published to the same registry as the image and signed the same
-  # way, so `helm install oci://...` and `cosign verify` are one habit rather
-  # than two.
+  # The chart, in the same registry as the image and signed the same way.
   chart:
     name: helm chart
     needs: [ci, meta]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # cosign pushes the signature to ghcr itself, and reads the docker
-      # credential store to do it. `helm registry login` below writes helm's
-      # own file, so without this the chart pushes and then fails to sign with
-      # UNAUTHORIZED on a registry it had just written to.
+      # cosign reads the docker credential store, not helm's: without this the
+      # chart pushes and then fails to sign with UNAUTHORIZED.
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -220,8 +195,7 @@ jobs:
       - name: Package and push
         id: push
         env:
-          # The app version is the image tag this chart installs by default,
-          # so the two travel together and a dev chart installs its own commit.
+          # The app version is the image tag the chart installs by default.
           VERSION: ${{ needs.meta.outputs.version }}
           CHART_VERSION: ${{ needs.meta.outputs.chart_version }}
         run: |
@@ -244,9 +218,7 @@ jobs:
           set -eux
           REF="ghcr.io/lhns/charts/remote-docker-workspace@${{ steps.push.outputs.digest }}"
           cosign sign "$REF"
-          # syft cannot read a Helm chart in a registry (it does not know the
-          # layer media type), so it reads the tarball helm packaged, which is
-          # byte for byte what was pushed.
+          # syft cannot read a chart in a registry, so it reads the pushed tarball.
           syft "remote-docker-workspace-${{ steps.push.outputs.chart_version }}.tgz" \
             -o spdx-json=workspace-chart.sbom.spdx.json
           cosign attest --predicate workspace-chart.sbom.spdx.json --type spdx "$REF"
@@ -259,10 +231,8 @@ jobs:
             remote-docker-workspace-*.tgz
             workspace-chart.sbom.spdx.json
 
-  # Tags only: this publishes a GitHub Release, which per-commit would be
-  # noise, and `goreleaser release` needs a tag. Per-commit binaries are not
-  # missing. ci.yml builds them from this same .goreleaser.yaml and uploads
-  # them as workflow artifacts.
+  # Tags only. Per-commit binaries are ci.yml's artifacts, from the same
+  # .goreleaser.yaml.
   binaries:
     name: release binaries (tags only)
     needs: [ci]
@@ -271,28 +241,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # goreleaser builds the changelog from history, which a shallow
-          # clone does not have.
+          # goreleaser reads history, which a shallow clone lacks.
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-go
 
-      # What the embedded Compose reports as its version. Read from the module
-      # graph so it cannot drift from go.mod.
+      # What the embedded Compose reports, read from the module graph.
       - name: compose version
         run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
 
-      # goreleaser's sboms block shells out to syft, so it has to be here as
-      # well as in the image and chart jobs. Same pin as those.
+      # goreleaser's sboms block shells out to syft.
       - uses: anchore/sbom-action/download-syft@v0
         with:
           syft-version: v1.14.0
 
-      # The release description is the CHANGELOG's section for this version
-      # rather than goreleaser's default commit list. Falls back to that list
-      # when the changelog has no section for the tag, so a release is never
-      # blocked by a missing entry, and says so in the log rather than
-      # silently publishing a commit dump.
+      # The release body is the CHANGELOG's section for the tag, falling back
+      # to goreleaser's commit list with a warning rather than blocking.
       - id: notes
         name: release notes from the changelog
         run: |
@@ -320,11 +284,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The two Windows binaries, for the installers job below: goreleaser's
-      # dist directory is not visible outside this job and the release page
-      # carries zips rather than the bare exe. Their paths come out of
-      # artifacts.json because goreleaser's per-build directory names carry
-      # variant suffixes, and a hardcoded one breaks silently on an upgrade.
+      # The two Windows binaries for `installers`, located through
+      # artifacts.json: goreleaser's directory names carry variant suffixes.
       - name: collect the windows binaries
         run: |
           set -eux
@@ -347,14 +308,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The Windows installers, attached to the release the job above just made.
-  # Its own job on Windows, and a gh upload rather than a line in
-  # .goreleaser.yaml, for the two reasons ADR 0048 records: WiX only runs on
-  # Windows, and goreleaser's msi block is Pro-only.
-  #
-  # Named to match the archives, so remote-docker_<v>_windows_amd64.zip and
-  # .msi sit next to each other on the release page. NOT in checksums.txt,
-  # which goreleaser wrote before this job ran.
+  # The MSIs, attached to the release above. A Windows job and a gh upload,
+  # not goreleaser (ADR 0048). Named to sit beside the zips; not in
+  # checksums.txt, which goreleaser wrote first.
   installers:
     name: windows installers (tags only)
     needs: [binaries]

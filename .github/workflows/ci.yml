@@ -12,10 +12,8 @@ on:
 permissions:
   contents: read
 
-# Per SHA and never cancelled: the same commit triggered twice still runs once,
-# and a later push does not destroy an earlier commit's answer. A cancelled
-# job's conclusion is not "success", so anything scanning results reads it as a
-# failure.
+# Per SHA and never cancelled: a later push must not destroy an earlier
+# commit's answer, and a cancelled job reads as a failure.
 concurrency:
   group: ci-${{ github.sha }}
   cancel-in-progress: false
@@ -63,20 +61,11 @@ jobs:
             */coverage.out
             test/probes/coverage.out
 
-  # The code that has no counterpart on Linux, on the OS it was written for.
-  # The endpoint is a named PIPE here and a unix socket there, `processAlive`
-  # asks GetExitCodeProcess a question with no meaning on Unix, core-client's
-  # fswatch has a Windows backend, and `machine`'s wsl_windows.go and
-  # hyperv_windows.go are build-tagged windows: the Linux jobs never compile
-  # them and the cross-compile matrix builds them without running them. Drop a
-  # module from this list and its Windows-specific code is tested nowhere.
-  #
-  # Not the agent or core-agent: both are Linux-only by design (useradd, netns,
-  # inotify), and the cross-compile matrix keeps their `_other.go` stubs honest.
-  #
-  # No -race, which needs cgo and a C toolchain for a check the Linux job
-  # already makes; no gofmt, which `.gitattributes` makes a test of git's line
-  # endings rather than of the source.
+  # The Windows-only code (the named-pipe endpoint, processAlive, fswatch's
+  # Windows backend, machine's wsl/hyperv files) runs nowhere else: drop a
+  # module from this list and its Windows code is tested nowhere. Not agent or
+  # core-agent, which are Linux-only. No -race (needs cgo) and no gofmt
+  # (.gitattributes makes that a test of git's line endings).
   test-windows:
     name: test (windows)
     runs-on: windows-latest
@@ -93,25 +82,21 @@ jobs:
             (cd "$mod" && go test ./...)
           done
 
-  # Go and shell in one job. A job costs a runner slot plus 20-30s of
-  # scheduling whatever it does, and shellcheck alone was 17s of work: this
-  # account runs twenty jobs at once and one pull request asks for twenty-six.
+  # Go and shell in one job: a job costs a runner slot and 20-30s of
+  # scheduling, and one pull request already asks for twenty-six.
   lint:
     name: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-go
-      # Built from source with this project's own toolchain rather than taken
-      # from the action, whose pinned binary is compiled against an older Go
-      # and refuses to load a module targeting a newer one.
+      # Built with this project's toolchain: the action's pinned binary is
+      # compiled against an older Go and refuses a module targeting a newer one.
       - name: install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
-      # Per module, and the agent and core-agent TWICE: both carry Linux-only
-      # files (session handling, netns, the unix provisioner, the inotify
-      # poker) that a lint on the runner's own GOOS does not see at all, which
-      # is how a QF1002 reached CI once already.
+      # The agent and core-agent twice more under GOOS=linux, for their
+      # Linux-only files.
       - name: golangci-lint
         run: |
           set -eux
@@ -124,11 +109,8 @@ jobs:
       - name: install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      # -x follows `source`, so the suites are read against the real
-      # test/lib.sh; without it every helper it defines is invisible here and
-      # half of each suite goes unchecked. Each glob is guarded because an
-      # unmatched pattern is passed through verbatim and shellcheck then fails
-      # on a file that does not exist, which is how deleting client/ broke this.
+      # -x follows `source` into test/lib.sh. Each glob is guarded: an
+      # unmatched one reaches shellcheck verbatim as a file that does not exist.
       - name: shellcheck
         run: |
           set -eux
@@ -170,11 +152,9 @@ jobs:
 
       - uses: ./.github/actions/setup-go
 
-      # Every package of every module, not just the binary goreleaser builds
-      # below: a dependency that quietly needs cgo, or a build-tagged file with
-      # no counterpart for this platform, fails here rather than at release
-      # time. The agent is included though it only runs on Linux, because this
-      # is what keeps its `_other.go` stubs honest.
+      # Every package of every module, not just the binary: a dependency that
+      # needs cgo or a build-tagged file with no counterpart fails here, not at
+      # release. The agent too, which keeps its `_other.go` stubs honest.
       - name: go build
         env:
           CGO_ENABLED: ${{ matrix.cgo || 0 }}
@@ -183,9 +163,8 @@ jobs:
           NDK_CC: ${{ matrix.cc }}
         run: |
           set -eux
-          # ANDROID_NDK_HOME is set on the runner image, so nothing is
-          # downloaded. Unset it and this fails naming the compiler, which is
-          # better than a binary that builds and cannot resolve a hostname.
+          # ANDROID_NDK_HOME is on the runner image; without it this fails
+          # naming the compiler rather than building a binary with no DNS.
           if [ -n "${NDK_CC:-}" ]; then
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$NDK_CC"
           fi
@@ -193,15 +172,12 @@ jobs:
             (cd "$mod" && go build ./...)
           done
 
-      # What the embedded Compose reports as its version. Read from the module
-      # graph so it cannot drift from go.mod.
+      # What the embedded Compose reports, read from the module graph.
       - name: compose version
         run: echo "COMPOSE_VERSION=$(cd client && go list -m -f '{{.Version}}' github.com/docker/compose/v5)" >> "$GITHUB_ENV"
 
-      # The shippable binary, from .goreleaser.yaml: same file, flags and
-      # naming a tagged release uses, so only the version string differs. No CC
-      # here, because .goreleaser.yaml derives it from ANDROID_NDK_HOME itself
-      # and a release and this build cannot then disagree about the compiler.
+      # The shippable binary, built exactly as a release builds it. No CC:
+      # .goreleaser.yaml derives it from ANDROID_NDK_HOME itself.
       - uses: goreleaser/goreleaser-action@v7
         env:
           CGO_ENABLED: ${{ matrix.cgo || 0 }}
@@ -218,10 +194,8 @@ jobs:
         if: matrix.goos == 'android' || matrix.goos == 'linux'
         run: bash test/elf.sh "${{ matrix.goos }}" "$(find dist -type f -name remote-docker | head -1)"
 
-      # One artifact per platform: GitHub zips an artifact whole, so a combined
-      # one means downloading every platform to get one. The paths are exact
-      # rather than `remote-docker*`, which also matched `remote-dockerd` and
-      # swept the AGENT into the client's artifact, where nobody could find it.
+      # One artifact per platform, since GitHub zips an artifact whole. Exact
+      # paths: `remote-docker*` also matches `remote-dockerd`.
       - uses: actions/upload-artifact@v7
         with:
           name: remote-docker-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -229,13 +203,9 @@ jobs:
             dist/**/remote-docker
             dist/**/remote-docker.exe
           if-no-files-found: error
-          # Short: six binaries per commit, and the tagged releases are the
-          # ones worth keeping.
           retention-days: 14
 
-      # The agent, on the platforms it has (ADR 0025). Its own artifact: an
-      # operator setting up a VM workspace wants 6MB of agent, not 70MB of
-      # Docker CLI wrapped around it.
+      # The agent on its own (ADR 0025): 6MB, not 70MB of Docker CLI around it.
       - uses: actions/upload-artifact@v7
         if: matrix.goos == 'linux'
         with:
