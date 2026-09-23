@@ -2,11 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-09-01, last amended 2026-09-04
-- Supersedes the retired 0043, whose answer — that `delegated` is a copy —
-  stands only in the sense that a cache contains one
+- Supersedes the retired 0043 (`delegated` as a copy), which stands only in
+  the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
-  union**, and for the first time as the event rather than an approximation of
-  one
+  union**, with the real event rather than an approximation
 - Current answer: a share with `write != through` ([ADR 0042](0042-mount-consistency-modes.md))
   is a union whose lower is the live export, mounted with the share's read
   mode, and whose upper is a local layer the agent alone writes; the page
@@ -14,12 +13,10 @@
 
 ## What forced it
 
-ADR 0042's measurement left one number unexplained. `cached` removes every
-attribute revalidation and still takes 98.1s to read 300 files at 160ms RTT,
-because 300 READs and 422 ACCESSes remain: the file's own bytes and the
-permission check, which no attribute cache can avoid. Removing them means not
-mounting — and a snapshot of the tree did exactly that, reaching 0.06s by
-giving up everything else:
+`cached` (ADR 0042) removes every attribute revalidation and still takes 98.1s
+to read 300 files at 160ms RTT: 300 READs and 422 ACCESSes remain, which no
+attribute cache can avoid. Removing them means not mounting, and a snapshot of
+the tree did that, reaching 0.06s by giving up everything else:
 
 | | `cached` | `delegated` as a snapshot |
 |---|---|---|
@@ -28,248 +25,191 @@ giving up everything else:
 | an edit here | visible | **never** |
 | a container's write | reaches this machine | **never** |
 
-All three failures are the same mistake: a copy has no way to answer for what
-it does not hold.
+A copy has no way to answer for what it does not hold.
 
 ## The decision
 
 **A union, not a copy.** Per share the workspace mounts the live NFS export as
 the lower layer and a local cache as the upper, and the container binds the
 merged view. A read the cache holds costs the workspace's own disk; a read it
-does not falls through and is **correct**.
-
-That single property is what the whole design rests on. These are all the same
-state, and all correct:
-
-- the fill is still running
-- the budget stopped it short
-- the path is excluded, so it is never cached
-- the scan has not reached that directory
+does not falls through and is **correct**. So these are one state, and all
+correct: the fill is still running, the budget stopped it short, the path is
+excluded, the scan has not reached that directory.
 
 ### Where the policy lives
 
-The policy is `dircache`, a module of its own with **no third-party requires at
-all** (ADR 0021). What to copy and in what order, what a local change means for
-a cache, what a cached change means for somebody's source tree: none of it names
-a transport or a storage.
+`dircache`, a module with **no requires at all** (ADR 0021): what to copy and
+in what order, what a local change means for a cache, what a cached change
+means for somebody's source tree, naming no transport and no storage.
 
 | | where | knows |
 |---|---|---|
 | policy | `dircache` | nothing of SSH, Docker, tar, zstd, overlayfs |
-| the wire | `core/workspace`, `client/internal/session/cache.go` | the frame, the codec, the tar |
+| the wire | `core/cache`, `client/internal/session/cache.go`, `agent/internal/sshd/cache.go` | the frame, the codec, the tar |
 | the mount | `core-agent/union`, `agent/internal/unions` | fuse-overlayfs, the namespaces, the volume |
 
-`dircache.Store` is the seam, and it is four operations: apply a batch, drop
-paths, ask what changed, fetch files. It hands FILES rather than an archive in
-both directions, which is what keeps the encoding on the transport's side of the
-line: the channel builds the tar going out and unpacks the one coming back, and
-the policy has never seen one.
-
-The consequence worth stating, because it is what the split was for: the engine
-can be taken without `core-client`'s websocket, fsnotify, go-nfs, go-billy,
-gliderlabs/ssh and x/crypto. A package inside that module could not offer this.
+`dircache.Store` is the seam: apply a batch, drop paths, ask what changed,
+fetch files. It hands FILES rather than an archive both ways, so the channel
+builds and unpacks the tar and the policy never sees one. What the split buys:
+the engine can be taken without `core-client`'s websocket, fsnotify, go-nfs,
+go-billy, gliderlabs/ssh and x/crypto, which a package inside that module could
+not offer.
 
 ### The union is fuse-overlayfs, and that was measured
 
-The kernel's own overlay cannot be used. An overlay whose lower is NFS is
-readable **only from the mount namespace that created it**: a container gets
-EOPNOTSUPP on every lower-backed file while upper-backed files work, and so does
-the host in a plain `unshare --mount` with no container involved. Binding the
-lower in beside it does not help, so it is namespace identity rather than
-visibility, and a volume of `type=overlay` fails the same way whoever mounts it.
-docker's own overlay2 escapes this because its lower is ext4.
+The kernel's overlay cannot be used. An overlay whose lower is NFS is readable
+**only from the mount namespace that created it**: a container gets EOPNOTSUPP
+on every lower-backed file (upper-backed files work), and so does the host
+under a plain `unshare --mount`. Binding the lower in beside it does not help,
+so it is namespace identity rather than visibility, and a `type=overlay` volume
+fails the same way whoever mounts it. docker's overlay2 escapes this because
+its lower is ext4.
 
-fuse-overlayfs has none of that, because its lower reads happen in its own
-daemon's namespace. It costs 0.01s for 200 cached reads against 0.00s for the
-kernel union — nothing beside one 160ms round trip — and the workspace image
-already ships it for the Ceph storage driver. All of this is
-`test/union-probe.sh`, which runs on every pull request.
+fuse-overlayfs does its lower reads in its own daemon's namespace. It costs
+0.01s for 200 cached reads against 0.00s for the kernel union, and the
+workspace image already ships it for the Ceph storage driver. Both are
+`test/union-probe.sh` sections 6 to 6d, on every pull request; the kernel
+union's refusal is recorded there, not asserted.
 
 ### The agent is the only writer, and always through the union
 
-overlayfs leaves the result **undefined** when a layer changes underneath a
-mounted union, and it is not theoretical: a file written straight into the cache
-layer stays invisible to a container that had already looked for it and missed.
-The obvious implementation — fill the cache volume from a second container — is
-therefore a silent bug, and the probe asserts both halves so it cannot come
-back.
+overlayfs leaves the result **undefined** when a layer changes under a mounted
+union, and in practice a file written straight into the cache layer stays
+invisible to a container that already missed on it. So filling the cache volume
+from a second container is a silent bug. `test/union-probe.sh` section 4
+asserts that a write THROUGH the merged mount is seen after a miss, and records
+(does not assert) the write into the layer.
 
-Everything the agent does goes through the merged mount instead, which has the
-consequence the whole feature turns on: **the write is a real filesystem
-operation in the container's own view, so its inotify fires natively.** Measured
-through the union: `IN_MODIFY`, `IN_CLOSE_WRITE`, and — for the first time in
-this project — `IN_DELETE`.
+Everything the agent does goes through the merged mount, so **the write is a
+real filesystem operation in the container's own view and its inotify fires
+natively**: `IN_MODIFY`, `IN_CLOSE_WRITE` and, for the first time here,
+`IN_DELETE` (sections 5 and 6d).
 
-Two kernel facts force the mounting into a child process: `setns(CLONE_NEWNS)`
-refuses a caller that shares filesystem state, which every Go thread does,
-because entering a mount namespace also replaces the caller's root; and entering
-the mount namespace alone leaves the process holding a pid from the agent's
-namespace while reading the daemon's `/proc`, so `/proc/self` resolves to
-nothing and libfuse fails with an ENOENT it reports as a missing upper
-directory. The child enters the **pid** namespace as well and runs
-fuse-overlayfs as its own child, since `setns(CLONE_NEWPID)` decides where
-children are born rather than moving the caller.
+### The child enters three namespaces
+
+Mounting is done by a child that enters the daemon's **pid**, **network** and
+**mount** namespaces, in that order:
+
+- `setns(CLONE_NEWNS)` refuses a caller that shares filesystem state, which
+  every Go thread does, hence a child.
+- The mount namespace alone leaves an agent-namespace pid reading the daemon's
+  `/proc`, so `/proc/self` resolves to nothing and libfuse fails with an ENOENT
+  reported as a missing upper directory. So the child enters **pid** too and
+  runs fuse-overlayfs as its own child (`setns(CLONE_NEWPID)` decides where
+  children are born).
+- **network**: with a daemon per account the reverse forward carrying the
+  export is bound inside that daemon's netns (ADR 0019), so a lower mounted
+  from the agent's namespace has no server.
 
 ### The union is a landing zone, not a cache (amended 2026-09-04)
 
 - Coherent caching of what HAS been read is `cached`'s: page cache for the
-  bytes, `actimeo=60` for the attributes, the watcher's replayed SETATTR to
-  refresh the one inode that changed. A union adds nothing to a re-read.
-- What it adds is a place a file can be put BEFORE it is read, that merges
-  with the live view. The first read of a small file is two serial round
-  trips no server can merge; a batch over the cache channel is one.
-- The fill is opt-in (`prefetch: eager|tree`, off by default since
-  2026-09-04) and follows the reads under `tree`; the policy, the rules and
-  the walk that yields are [ADR 0045](0045-prefetch-follows-the-reads.md).
-  The smallest-first walk this record used to describe is `eager`.
-- **The lower carries the share's read mode.** It was mounted `consistent`,
-  `actimeo=1`, from the first version of this record to 2026-09-04, so every
-  file the fill had not reached revalidated every second under a mode whose
-  point was not to. `Spec.Read` now names it, the child round-trips it as
-  `RD_UNION_READ`, and `union_test.go` pins the option string. A
-  `read=cached` union therefore revalidates every 60s.
+  bytes, `actimeo=60` for the attributes, the watcher's replayed SETATTR for
+  the one inode that changed. A union adds nothing to a re-read.
+- It adds a place a file can be put BEFORE it is read that merges with the
+  live view: the first read of a small file is two serial round trips, a
+  batch over the cache channel is one.
+- The fill is opt-in (`prefetch: eager|tree`, off by default); policy, rules
+  and walk are [ADR 0045](0045-prefetch-follows-the-reads.md). The
+  smallest-first walk this record used to describe is `eager`.
+- **The lower carries the share's read mode.** Until 2026-09-04 it was
+  mounted `consistent`, `actimeo=1`, so every file the fill had not reached
+  revalidated every second. `Spec.Read` names it, the child receives it as
+  `RD_UNION_READ`, and `union_test.go` pins the option string.
 
 **The budget bounds what is copied, never whether the mode runs.** "The budget
-ran out" is the same state as "the fill has not reached it yet", so there is no
-project size at which a union stops working.
+ran out" is the same state as "the fill has not reached it yet".
 
 ### Compression is a negotiation, not a format
 
-The payload is a byte stream, so a codec wraps it with no protocol change —
-which is exactly what the frame's codec field has been there for since version
-1. The agent announces what it can read in its greeting and the client picks
-from THAT list, never from what it can produce: a workspace older than
-compression names no codecs, and a client that chose for itself would send one
-it would refuse.
-
-**zstd, and it costs the agent a dependency.** ADR 0021 keeps that side's graph
-small and states the number, and this takes it from 24 `go.sum` lines to 28. Paid
-deliberately: the fill is the one bulk transfer this protocol makes, and zstd
-compresses a source tree harder and faster than the standard library's gzip. The
-point of stating the count was never that it must not grow, but that growing it
-is a decision somebody made rather than something that happened.
-
-It applies to the client's direction only, which is where the bulk is: the fill
-sends the whole tree, and invalidation sends whatever an editor or a checkout
-touched. Write-back carries what one container wrote since the last round, which
-is small by nature, so it stays a plain tar rather than paying a compressor per
-poll.
+- A codec wraps the payload byte stream with no protocol change; the frame's
+  codec field has been there since version 1.
+- The agent announces what it reads in its greeting and the client picks from
+  THAT list: a workspace older than compression names none, and a client
+  choosing for itself would send what it refuses.
+- **zstd, which cost the agent a dependency**: 24 `go.sum` lines to 28 (ADR
+  0021 carries the count). Paid deliberately, since the fill is the one bulk
+  transfer and zstd compresses a source tree harder and faster than gzip.
+- Client-to-agent only. Write-back carries what one container wrote since the
+  last round, so it stays a plain tar rather than paying a compressor per poll.
 
 ### The cache is a subset of what is watched
 
-A cached copy of a file that changed here is the one way this mode can be
-**wrong** rather than merely slow, and it is worse than a stale attribute:
-`cached` goes stale for at most `actimeo`, an uninvalidated cache entry until
-something removes it. So the fill honours the watcher's exclude list, and a path
-the watcher cannot cover is served live — slower and right, rather than fast and
-wrong.
+A cached copy of a file that changed here is the one way this mode is
+**wrong** rather than slow: `cached` is stale for at most `actimeo`, an
+uninvalidated cache entry until something removes it. So the fill honours the
+watcher's exclude list, and a path the watcher cannot cover is served live.
 
 Invalidation rides the watcher, which hands the cache every change **before**
-the mode strips anything. That distinction is the point: a deletion cannot be
-replayed faithfully over NFS, which is what `partial` is about, but it can be
-applied to a cache exactly — and it is the one event the cache must not miss.
-The Docker API cannot help here at all: it can write into a volume and never
-remove from one, which is the whole reason the agent needs a channel.
-
-### The child enters three namespaces
-
-**pid**, **network** and **mount**, in that order. The network one is the
-lower's: with a daemon per account the reverse forward carrying the NFS export
-is bound inside that daemon's netns and reaches nowhere else (ADR 0019), so a
-mount attempted from the agent's namespace has no server to talk to.
+the mode strips anything: a deletion cannot be replayed over NFS (the
+`partial` gap), but it can be applied to a cache exactly. The Docker API can
+write into a volume and never remove from one, which is why the agent needs a
+channel.
 
 ### The lower's options are not a mount(2) argument
 
-`workspace.NFSVolumeOptions` builds the list docker's local volume driver takes,
-and that driver splits kernel FLAGS out of it before calling mount(2). Passed
-whole as filesystem data, `noatime` — which is `MS_NOATIME` and not something
-the NFS client parses — makes the parser refuse the entire list. It reports
-EINVAL, printed as `invalid argument`, about a list whose every word is valid on
-its own. `Spec.LowerMount` returns the two halves, and the error prints both.
-
-This is what kept the union from ever mounting until 2026-09-04.
+`workspace.NFSVolumeOptions` is the list docker's local driver takes, and that
+driver splits kernel FLAGS out before calling mount(2). Passed whole,
+`noatime` (`MS_NOATIME`, not an NFS option) makes the NFS parser refuse the
+entire list with EINVAL, printed as `invalid argument`, about a list whose
+every word is valid. `Spec.LowerMount` returns the two halves and the error
+prints both. This kept the union from ever mounting until 2026-09-04.
 
 ### "Up" means MOUNTED, not that the path exists
 
-A union's directories are made before it is mounted and outlive it, so a stat
-says yes for a share that never mounted and for one whose server has died. Both
-then read as serving — and because everything here reaches a share through a
-path, the whole mode keeps working against the bare directory: the agent writes
-the cache into it, the container reads it, an edit here is written into it, a
-deletion removes from it. Only the lower is missing, so a read that should fall
-through returns nothing and the container's writes land where nothing looks.
-
-The suites assert that a container's share reports fuse-overlayfs rather than
-the daemon's own disk, which is the one thing a bare directory cannot fake.
+A union's directories exist before the mount and outlive it, so a stat says
+yes for a share that never mounted or whose server died. Everything reaches a
+share by path, so the mode keeps "working" against the bare directory; only
+the lower is missing, so a fallthrough read returns nothing and the container's
+writes land where nothing looks. The suites assert that a container's share
+reports fuse-overlayfs, the one thing a bare directory cannot fake.
 
 ### A deletion nobody observed
 
-A cache volume outlives the session that filled it, and a fill only ever
-overwrites and adds — it has no way to notice what is GONE. So a file deleted
-here while nothing was running is still in the cache, and still in every
-container, with no event anywhere to explain it.
+A cache volume outlives its session, and a fill only overwrites and adds. A
+file deleted here while nothing ran stays in the cache and in every container,
+with no event to explain it.
 
-The client keeps a record of what each fill sent, per workspace, bound to the
-machine and account that wrote it. At the next fill it stats those paths and
-drops the ones this machine no longer has. Only paths a fill put there are ever
-considered, and that is what makes it safe: a path in the cache that no fill
-sent is a container's own file, and this must never remove one.
-
-A watcher overflow is the same problem inside a session — the events it dropped
-may have been deletions — so `fswatch.Observer` is told, and answers with the
-same reconcile rather than a log line.
-
-What it does NOT cover: a container already running when the client restarts
-keeps what its cache holds until that share is filled again. Narrower, and
-deliberate.
+- The client records what each fill sent (`client/internal/session/cached.go`),
+  per workspace, bound to machine and account. The next fill stats those paths
+  and drops the ones gone here. Only paths a fill put there are considered: a
+  path no fill sent is a container's own file and is never removed.
+- A watcher overflow is the same problem inside a session, so
+  `fswatch.Observer.Lost` answers it with the same reconcile.
+- Not covered, deliberately: a container already running when the client
+  restarts keeps what its cache holds until that share is filled again.
 
 ### The collector cannot see a cache volume in use
 
-A union is bound into a container by path, so nothing ever references the volume
-holding its layer and the daemon reports it unused for as long as it exists.
-Collecting it does not fail and does not unmount anything: it empties the
-directory under a live mount, so the container keeps running and the files it
-wrote are gone.
+A union is bound by path, so the daemon reports the volume holding its layer
+unused for as long as it exists. Collecting it empties the directory under a
+live mount: the container keeps running and the files it wrote are gone.
 
-`rewrite.Guard` answers this for the shares a session prepared. It cannot answer
-for one prepared by an earlier session, which is precisely the container left
-running across a client restart — and that is what `OpMounted` is for. Cannot
-ask means keep: an uncollected cache costs disk, a collected one in use costs
-somebody's work.
-
-The agent answers that from the filesystem rather than from its own record, and
-the filesystem is the half that matters. A union outlives the agent that started
-it, so after an agent restart the mounts are serving and the manager knows
-nothing about them; "none mounted" would be truthful and would delete the cache
-under a running container. The ids come from the mounts under `/run/rd-union`
-and the client digest from the key that authenticated, so a machine is told
-about its own caches and never another's.
+- `rewrite.Guard` covers the shares this session prepared, not a container
+  left running across a client restart. `OpMounted` covers that; cannot ask
+  means keep.
+- The agent answers from the filesystem, not its own record: after an agent
+  restart the unions are still serving and the manager knows nothing, so a
+  truthful "none mounted" would delete the cache under a running container.
+  The ids come from the mounts under `/run/rd-union` and the client digest from
+  the authenticated key, so a machine hears only of its own caches.
 
 ### A union outlives the channel that asked for it
 
-The cache channel rides the SSH connection, and that connection is released
-whenever the session goes idle and reopened on the next request (ADR 0015). The
-union must not follow it: a container binds the merged PATH, so unmounting under
-a running container does not free anything and does not stop it either — it
-leaves that container holding a mount that can never be repaired, which is the
-same refcount rule that makes `compose down` cure a broken mount where
-restarting the session does not.
-
-So a share is released only when no container is bound to it. The daemon is the
-only thing that can say, because a union is bound by path rather than as a
-volume and nothing else in the workspace relates the two. On any doubt the mount
-is KEPT: one nobody needs costs a process, and one taken while in use costs
-somebody's container for as long as it runs.
+The cache channel rides the SSH connection, which is released when the session
+goes idle (ADR 0015). Unmounting with it frees nothing and leaves a running
+container a mount that can never be repaired (docker's local driver
+refcounts mounts; `test/nfs-resilience.sh` section 6b).
+So a share is released only when no container is bound to it. Only the daemon
+can say, since a union is bound by path rather than as a volume; on any doubt
+the mount is KEPT.
 
 ### Write-back: baselines first, clocks last
 
-The upper layer is where everything written through the union lands — which is
-the container's writes **and the fill's own copies**, because the fill goes
-through the union too. So the layer alone does not say who wrote what, and the
-manifest is what does: what the fill sent, with each file's size and time as it
-was **here**. An entry matching its baseline exactly is the copy the fill put
-there; anything else is the container's. That makes both sides answerable
-separately:
+The upper holds the container's writes **and the fill's own copies**, since
+the fill goes through the union too. The manifest separates them: what the fill
+sent, with each file's size and time as it was **here**. An entry matching its
+baseline is the fill's copy; anything else is the container's.
 
 | your file vs manifest | cached file vs manifest | outcome |
 |---|---|---|
@@ -281,30 +221,22 @@ separately:
 | not in the manifest | anything | left alone |
 | unchanged | identical to the manifest | the fill wrote it; nothing happened |
 
-Only the last-writer case needs a clock, and the offset between the two machines
-is measured through `workspace-info` rather than assumed away. Every conflict is
-reported by path whichever way it resolves.
-
-The fill's own copies are filtered on **both** ends, and the two failures are
-different sizes. The client's check is the rule, and being wrong there costs a
-file written back with the bytes it already has, which settles on the next round.
-The agent keeps its own record of what it applied so the reply stays proportional
-to what changed; without it a fully cached tree is listed in one reply every five
-seconds for as long as the session runs.
-
-**Nothing is written back while the cache is incomplete.** A file the fill never
-sent looks exactly like one the container created, and the cost of that
-confusion is content appearing in somebody's source tree that they never wrote.
+- Only last-writer-wins needs a clock; the offset between the machines is
+  measured through `workspace-info`. Every conflict is reported by path.
+- The fill's copies are filtered on **both** ends. The client's check is the
+  rule; wrong there, a file is written back with the bytes it already has and
+  settles next round. The agent's record of what it applied keeps the reply
+  proportional; without it a fully cached tree is listed every five seconds.
+- **Nothing is written back while the cache is incomplete.** A file the fill
+  never sent looks exactly like one the container created, and the cost is
+  content appearing in somebody's source tree that they never wrote.
 
 ## What it measured
 
-`test/bench.sh` on a GitHub runner, 2026-09-01, 300 files, one shaped link per
-row, ALL ROWS FROM ONE RUN so the modes are comparable with each other. Seconds,
-and `nfs_ops` is what the mount was asked for during the read. Re-check with the
-`bench` label on a pull request.
-
-ADR 0042's table is a different run and its absolute numbers differ; compare
-within a table, never across the two.
+`test/bench.sh` on a GitHub runner, 2026-09-01, 300 files, ALL ROWS FROM ONE
+RUN. Seconds; `nfs_ops` is what the mount was asked for during the read.
+Re-check with the `bench` label on a pull request. ADR 0042's table is a
+different run: compare within a table, never across.
 
 | RTT | mode | start | walk | read 300 | write | nfs_ops during the read |
 |---|---|---|---|---|---|---|
@@ -319,53 +251,39 @@ within a table, never across the two.
 | 160ms | `read=cached,write=back` | **0.15** | **0.06** | **0.08** | **0.08** | **none** |
 | 10mbit | `read=cached,write=back` | 0.14 | 0.06 | 0.08 | 0.08 | none |
 
-The union rows are a union AFTER its fill has landed. What they show is that
-once the upper holds the tree the wall clock stops tracking the latency knob:
-0.08s at 160ms RTT against 98.12s and 164.47s for the two mounted modes, while
-remaining a live mount, and the `nfs_ops` column is the proof, since nothing
-is asked of the mount at all where `read=cached` still pays 300 READs and 422
-ACCESSes. Start does not grow either, 0.15s at 160ms against 1.10s, because a
-container never waits for the fill. What a COLD union costs, and how long the
-fill takes to land, is ADR 0045's table.
-
-The cache's own `cold`/`settle`/`warm` table is retired: `settle` is
-meaningless for a fill driven by reads. `test/bench.sh` now runs policies x
-shapes x modes x workloads; its table and pass criteria are in ADR 0045, run
-2026-09-04; it failed them (ADR 0045).
+The union rows are AFTER the fill has landed. Once the upper holds the tree
+the wall clock stops tracking latency: 0.08s at 160ms against 98.12s and
+164.47s for the mounted modes, and `nfs_ops` shows nothing asked of the mount
+where `read=cached` still pays 300 READs and 422 ACCESSes. Start stays 0.15s
+against 1.10s because a container never waits for the fill. A COLD union, and
+how long the fill takes to land, is ADR 0045's table (2026-09-04, which failed
+its criteria). The old `cold`/`settle`/`warm` table is retired: `settle` means
+nothing for a fill driven by reads.
 
 ## Consequences
 
-- **A union requires the watcher**, exactly as `read=cached` does, and for a
-  stronger reason: without it the cache goes stale rather than merely lagging.
-- **It requires `fuse-overlayfs` where the account's daemon runs.** In
-  per-account mode that is the dind's image, which is why the workspace's own
-  image is the right one to run there — already this project's recommendation
-  for the storage driver (`daemons.DefaultImage`). The workspace reports whether
-  it can serve a union, and the client refuses the mode by name, before creating
-  anything, naming the remedy.
-- **A container's write reaches this machine after a delay**, not immediately.
-  That is the one guarantee a plain mount has and this does not, and it belongs
-  in the README rather than a footnote.
-- **A FUSE daemon per share is a process to supervise.** It fails loudly —
-  ENOTCONN — and "up" means the MOUNT answers, never that the process is
-  running: after an agent restart the server is an orphan whose mount still
-  serves, and a killed server leaves a mount that answers nothing.
-- **A mount that has gone wrong stays wrong until the last container lets go of
-  it**, which CLAUDE.md already says of every mount here. Remounting at the same
-  path does not repair a container already bound to the dead one.
-
-  So a live union is ADOPTED rather than replaced: the supervisor waits for a
-  serving mount to go before it makes another. That rests on "alive" meaning
-  MOUNTED rather than "the path is there" — against a stat it would wait forever
-  on the empty directory a dead union leaves behind. st_dev against the parent
-  answers that from outside the namespace as well as inside (measured
-  2026-09-01, `test/union-probe.sh` section 12: an unmounted directory reads dev
-  59 against parent 59, a mounted one 63 against 59).
-
-  Reachable only where dockerd outlives the agent, which is the VM deployment
-  (ADR 0025). With the agent in a container it is pid 1, so restarting it takes
-  its dockerd and every dind with it and there is nothing left to adopt — which
-  is why `test/vm.sh` is where this is asserted, by counting union servers for a
-  share across an agent restart.
+- **A union requires the watcher**, as `read=cached` does, and more so:
+  without it the cache goes stale rather than lagging.
+- **It requires `fuse-overlayfs` where the account's daemon runs.** Per
+  account that is the dind's image, so it must be the workspace's own
+  (`elevate.ImageEnv`, `WORKSPACE_IMAGE`); `daemons.DefaultImage`
+  (`docker:28-dind`) is the last resort and lacks it. The workspace reports
+  whether it can serve a union (`workspace.Info.Union`), and the client refuses
+  the mode by name, before creating anything, naming the remedy.
+- **A container's write reaches this machine after a delay.** The one
+  guarantee a plain mount has and this does not; the README says so.
+- **A FUSE daemon per share is a process to supervise.** It fails loudly
+  (ENOTCONN), and "up" means the MOUNT answers, never that the process runs:
+  after an agent restart the server is an orphan whose mount still serves.
+- **A mount gone wrong stays wrong until the last container lets go of it**,
+  so remounting at the same path repairs nothing. A live union is ADOPTED: the
+  supervisor waits for a serving mount to go before making another. That is
+  safe only because "alive" means MOUNTED; against a stat it would wait forever
+  on the empty directory a dead union leaves. st_dev against the parent answers
+  from outside the namespace too (2026-09-01, `test/union-probe.sh` section 12:
+  unmounted dev 59 against parent 59, mounted 63 against 59). Reachable only
+  where dockerd outlives the agent (the VM deployment, ADR 0025; in a container
+  the agent is pid 1 and takes every dind with it), so `test/vm.sh` section 5b
+  asserts it by counting union servers across an agent restart.
 - **Disk**: one cache per share per client, growing with what the container
   writes as well as with the tree.

@@ -5,29 +5,22 @@
 
 ## Context
 
-ADR 0014 measured that a container watching a directory on the share sees
-**zero** inotify events when the user edits a file on their own machine. NFS
-carries no change notification, so the container's kernel is never told. Every
-hot-reload workflow silently does nothing while appearing to work, and that
-narrowed the honest description of this project to "builds, tests and one-shot
-tooling, not the edit-reload loop".
-
-The obvious shape of a fix is: the client watches its own filesystem, where the
-changes actually happen and where notification works natively, and tells the
-workspace what changed. The question was what the workspace can then *do* with
-that information.
+A container watching the share sees **zero** inotify events for an edit made
+on the user's machine ([ADR 0014](0014-inotify-does-not-see-client-changes.md)),
+so every hot-reload workflow silently does nothing. The client can watch its
+own filesystem, where notification works, and tell the workspace; the question
+is what the workspace can then *do*.
 
 ## What is not possible
 
-**Linux offers no way to inject a synthetic inotify or fanotify event.** There
-is no syscall, no ioctl, and no rejected proposal to point at. `fanotify(7)`
-states it outright: fanotify "reports only events that a user-space program
-triggers through the filesystem API. As a result, it does not catch remote
-events that occur on network filesystems." The only in-kernel entry points are
-the `fsnotify_*()` inlines in `include/linux/fsnotify.h`, callable only from
-VFS code.
+**Linux offers no way to inject a synthetic inotify or fanotify event**: no
+syscall, no ioctl, no rejected proposal. `fanotify(7)`: fanotify "reports only
+events that a user-space program triggers through the filesystem API. As a
+result, it does not catch remote events that occur on network filesystems."
+The only entry points are the `fsnotify_*()` inlines in
+`include/linux/fsnotify.h`, callable only from VFS code.
 
-Two apparent escape hatches were checked and are not real:
+Two apparent escape hatches are not real:
 
 - **SMB2 `CHANGE_NOTIFY`** is implemented by cifs.ko, but delivered to
   userspace through a private ioctl (`CIFS_IOC_NOTIFY`). It is not wired into
@@ -37,10 +30,9 @@ Two apparent escape hatches were checked and are not real:
   of June 2025, and even those route nothing into inotify. Waiting for the
   protocol to solve this is not a plan.
 
-So a real VFS operation, performed inside the workspace, is the only mechanism
-available — to us or to anyone. Docker Desktop reached the same conclusion and
-ships it as "Event Injection": the host watches, forwards over gRPC, and a
-thread inside the VM replays the operation so the kernel emits the event.
+So a real VFS operation inside the workspace is the only mechanism, for anyone.
+Docker Desktop ships the same as "Event Injection": the host watches, forwards
+over gRPC, and a thread in the VM replays the operation.
 
 ## Decision
 
@@ -53,39 +45,29 @@ non-destructive syscall** on the file as the workspace sees it.
 dockerd's `local` driver mounts each `rd-<id>` NFS volume once at
 `/var/lib/docker/volumes/rd-<id>/_data` and bind-mounts it into every container
 using it. A bind mount shares the superblock, and inotify marks live on the
-**inode**, not the path or the mount — so a poke at the volume mountpoint
-reaches the same mark a watcher inside the container set.
-
-Measured, rather than assumed:
+**inode**, so a poke at the volume mountpoint reaches the mark a watcher in the
+container set. Measured:
 
 ```
 workspace: POKE stat /var/lib/docker/volumes/rd-1ff11cc0dcd1bd6a/_data/poke-openclose.txt ok dev=54 ino=12898025653570747775
 container: POKE stat /data/poke-openclose.txt                                            ok dev=54 ino=12898025653570747775
 ```
 
-Same device, same inode. So there is no container enumeration, no PID lookup,
-no `setns` and no `nsenter` — which is just as well, since `util-linux` is not
-in the image. `/proc/<pid>/root/...` was tested as a fallback and also works,
-but is not needed.
+So no container enumeration, no PID lookup, no `setns`, no `nsenter` (and
+`util-linux` is not in the image).
 
 > **Amended by [ADR 0019](0019-a-dockerd-per-account.md).** With a dockerd per
-> account, the mountpoint is reported by *that* daemon and names a path in its
-> own filesystem, so `/proc/<pid>/root/...` stops being a fallback and becomes
-> the route. Everything above still holds inside one daemon; what changes is
-> which filesystem the path is resolved in.
->
-> It also changes what the mountpoint *is*: the account is root inside its own
-> daemon's container, so the path is attacker-controlled input to a root
-> process. `relocate` checks that the result stays under the daemon's root
-> rather than trusting `path.Join`, and the `O_NOFOLLOW` /
-> `AT_SYMLINK_NOFOLLOW` below stop being tidiness — they are what prevents a
-> symlink planted in a filesystem the agent does not control from redirecting
-> a poke.
+> account the mountpoint is reported by *that* daemon, in its own filesystem,
+> so `/proc/<pid>/root/...` becomes the route. The account is root inside that
+> daemon, so the path is attacker-controlled input to a root process:
+> `replay.Relocate` (`core-agent/replay/relocate.go`) checks the result stays
+> under the daemon's root rather than trusting `path.Join`, and `O_NOFOLLOW` /
+> `AT_SYMLINK_NOFOLLOW` stop a planted symlink redirecting a poke.
 
 ### Which syscalls, and why those
 
-The matrix, measured in CI against a real dind daemon and a real kernel NFS
-mount (`test/integration.sh` section 11d, `test/probes/pokeprobe`):
+Measured in CI against a real dind daemon and a real kernel NFS mount
+(`test/integration.sh` section 11d, `test/probes/pokeprobe`):
 
 | poke | events the container's watcher saw |
 |---|---|
@@ -109,109 +91,88 @@ else if (ia_valid & ATTR_MTIME)   mask |= FS_MODIFY;
 ```
 
 Omitting atime drops `ATTR_ATIME` from `ia_valid`, falls to the third branch,
-and produces a real `IN_MODIFY`. Setting *both* times — what `touch` does, and
-what every touch-based workaround in the wild does — takes the first branch and
-produces `IN_ATTRIB`, which most watchers ignore. The third row above is in the
-suite as a control precisely so that asymmetry stays measured rather than
-remembered. mtime is written back as its own current value, so nothing
-observable changes and no build system sees a newer file.
+and produces a real `IN_MODIFY`. Setting *both* times, which is what `touch`
+and every touch-based workaround does, produces `IN_ATTRIB`, which most
+watchers ignore. That row stays in the suite as a control so the asymmetry is
+measured rather than remembered. mtime is written back as its current value,
+so no build system sees a newer file.
 
-**`open(O_WRONLY)` + `close()` is free.** The close event's mask comes from
-`f_mode`, not from whether anything was written, so `IN_CLOSE_WRITE` costs no
-bytes. `O_TRUNC` would also produce it and would destroy the file; it is never
-correct here.
+**`open(O_WRONLY)` + `close()` is free.** The close mask comes from `f_mode`,
+not from whether anything was written. `O_TRUNC` would also produce it and
+destroy the file; it is never correct here.
 
-**Creates work, which was not expected.** `open(O_CREAT)` on a file the client
-had just created still fired `IN_CREATE` — the container's dcache holds a
-negative dentry for a path it has looked up and not found, so the create goes
-to the wire and the VFS treats it as a creation.
+**`O_CREAT` would give a real `IN_CREATE`, and is not used.** The container's
+dcache holds a negative dentry for the new path, so the create goes to the
+wire and the VFS treats it as a creation. But the file may have been deleted
+again since the client saw it, and `O_CREAT` would then create it in the
+user's project. So a create is replayed as a poke of the file plus its parent
+directory (`core-agent/replay/replay.go`): a watcher keyed on the file sees a
+write, one keyed on the directory rescans.
 
-**Deletes do not work, and this is the honest gap.** `unlink()` of a name the
-client already removed fails with `ENOENT` before any event is generated. ADR
-0014 therefore stays **open**, narrowed to exactly this.
+**Deletes do not work.** `unlink()` of a name the client already removed
+fails with `ENOENT` before any event is generated. ADR 0014 stays **open**,
+narrowed to exactly this.
 
 ### Three states, defaulting to off
 
 `REMOTE_DOCKER_WATCH` is `off` (default), `partial` or `coarse`.
 
-`partial` replays only what can be synthesised faithfully — writes and creates
-— and never fires an event that did not happen. `coarse` adds a
-directory-level poke for deletes and renames, which produces
-`IN_MODIFY|IN_ISDIR` on the parent: enough for a watcher that rescans, and a
-lie about the event *kind* for one that does not. That is the user's trade to
-make, which is why it is a setting and not a heuristic.
+- `partial` replays only what can be synthesised faithfully (writes, creates)
+  and never fires an event that did not happen.
+- `coarse` adds a directory poke for deletes and renames: `IN_MODIFY|IN_ISDIR`
+  on the parent, enough for a watcher that rescans and a lie about the event
+  *kind* for one that does not. The user's trade, so a setting, not a
+  heuristic.
 
-**Default off, deliberately, not provisionally.** inotify is not recursive:
-`inotify_add_watch` covers one directory and reports only its direct entries,
-so a tree costs one watch per directory. macOS is worse -- fsnotify's kqueue
-backend opens a file descriptor per *file*, not per directory, which is why the
-budget there is 512 against Linux's 4096. Build outputs are deliberately not
-excluded, so a Rust or Java tree exhausts the budget inside `target/`, and the
-first thing such a user would meet is a warning naming that directory.
+**Default off, deliberately, not provisionally.** inotify is not recursive, so
+a tree costs one watch per directory; fsnotify's kqueue backend on macOS opens
+one descriptor per *file*, hence a budget of 512 there against 4096 on Linux
+(`core-client/fswatch/backend.go`). Build outputs are not excluded, so a Rust
+or Java tree exhausts the budget inside `target/` and the user's first sight
+of the feature is a warning. Fine for someone who wants hot reload, a poor
+introduction for everyone else.
 
-That is an acceptable cost for someone who wants hot reload and a poor
-introduction for everyone else, so it is opt-in. Turning it on is one
-environment variable.
-
-Worth recording because it was got wrong once: fsnotify *does* implement
-recursive watching on Windows, where `ReadDirectoryChangesW` supports it
-natively -- `backend_windows.go` passes `watch.recurse` straight through. It is
-simply not reachable: "Recursive watching is not currently enabled through
-fsnotify's public API; the recursive code path is gated and only exercised by
-fsnotify's own tests." So on Windows the per-directory cost is a library
-limitation rather than an OS one, and a future fsnotify release could remove it
-without any change here.
+On Windows the per-directory cost is fsnotify's, not the OS's:
+`backend_windows.go` implements recursion over `ReadDirectoryChangesW`, but
+"Recursive watching is not currently enabled through fsnotify's public API", so
+a future release could remove the cost with no change here. *(Checked
+2026-09-23 against fsnotify v1.10.1: `grep -n 'Recursive watching'
+fsnotify.go` in the module cache.)*
 
 ### Closing the echo loop
 
-The container writes → our NFS server applies it to the client's disk → the
-client's watcher reports it → we ship it back → the agent pokes → the
-container's watcher fires for its own write. If the poke itself travels back
-over NFS, it loops forever.
+A container write reaches the client's disk through our NFS server, the
+client's watcher reports it, the agent pokes, and the container's watcher fires
+for its own write. If the poke travelled back over NFS it would loop forever.
+Owning the NFS server closes it:
 
-Two properties close it, and both fall out of owning the NFS server:
+- `open(O_WRONLY)` + `close()` produces **no NFS traffic**: NFSv3 has no OPEN.
+- The `utimensat` poke writes mtime back as its existing value, so the
+  `SETATTR` is an identity the server declines to apply.
 
-- `open(O_WRONLY)` + `close()` produces **no NFS traffic at all**. NFSv3 is
-  stateless and has no OPEN operation, so this primitive cannot echo by
-  construction.
-- the `utimensat` poke writes mtime back as its existing value, so the
-  resulting `SETATTR` is an identity the server declines to apply. Not a lie —
-  there is genuinely nothing to change.
-
-Docker Desktop solves the same problem by having its FUSE client lie to a
-well-known PID. Owning both ends of the protocol is a better position than
-owning one end and a marker.
+Docker Desktop instead has its FUSE client lie to a well-known PID; owning both
+ends is a better position than one end and a marker.
 
 ## Consequences
 
 - **The edit-reload loop works for writes and creates**, which is most of it:
-  editors save, and save-as-create is the atomic-save idiom. This is the first
-  time the "real filesystem, not a sync" claim buys anything for hot reload.
-- **Deletes remain unrepresentable** in `partial`, and are a directory-level
-  approximation in `coarse`. ADR 0014 stays open on exactly that and nothing
-  else.
-- **No file contents ever cross this channel.** The bytes are already in the
-  container through the NFS mount; only the notification was missing. If that
-  ever changes, this stops being a filesystem and becomes a sync, and the
-  project's central claim changes with it.
-- The agent gains a second thing it does with paths from the client, so
-  `notify.Event.Validate` is checked on **both** sides — this stream tells a root
-  process which path to touch, and neither end may assume the other checked.
-- `test/probes/watchprobe` reads raw inotify rather than using fsnotify, permanently.
-  fsnotify's inotify mask omits `IN_OPEN` and `IN_CLOSE_WRITE`, so the library
-  cannot observe the primitive this record is chiefly about. A probe that
-  cannot see the thing under test reports "nothing happened" and is believed.
-- **Nothing is delivered until the session connects**, which is on the first
-  Docker request (ADR 0015), not when `up` starts. This is a consequence of
-  lazy connections rather than a decision here, and it is benign for the
-  reason ADR 0015 already gives: `hasLiveDependents` holds the connection open
-  while any owned container runs, and a hot-reload workflow has a running
-  container by definition. Edits made before the first connection are counted
-  and announced as a `disconnected` notice rather than dropped in silence.
-  It did cost a CI round trip, because the first version of the integration
-  test started a second client purely to watch -- which never issued a Docker
-  request, never connected, and would have collided on the account's single
-  NFS port if it had.
-- The matrix stays in the integration suite rather than being deleted as
-  scaffolding. It is cheap, and it is the only thing that would notice a kernel
-  or dockerd change quietly taking one of these primitives away.
+  editors save, and save-as-create is the atomic-save idiom.
+- **Deletes remain unrepresentable** in `partial` and approximated in `coarse`;
+  ADR 0014 stays open on exactly that.
+- **No file contents ever cross this channel.** The bytes are already there
+  through NFS. If that changes, this is a sync, and the project's central claim
+  changes with it.
+- `notify.Event.Validate` is checked on **both** sides: this stream tells a
+  root process which path to touch, and neither end may assume the other
+  checked.
+- `test/probes/watchprobe` reads raw inotify, permanently. fsnotify's mask
+  omits `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
+  primitive under test and reports "nothing happened", and is believed.
+- **Nothing is delivered until the session connects**, on the first Docker
+  request (ADR 0015). Benign: `hasLiveDependents` holds the connection while
+  any owned container runs, and hot reload has one by definition. Edits before
+  the first connection are counted and announced as a `disconnected` notice. A
+  client started only to watch never connects, since it issues no Docker
+  request.
+- The matrix stays in the suite: it is the only thing that would notice a
+  kernel or dockerd change taking one of these primitives away.

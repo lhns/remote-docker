@@ -14,56 +14,39 @@
 
 ## Context
 
-Somebody enrolled one account and used it from a phone and a PC. The second
-machine was refused:
+One account used from a phone and a PC at once. The second machine was refused:
 
 ```
 reserving 127.0.0.1:30001 on the workspace:
   ssh: tcpip-forward request denied by peer
 ```
 
-That refusal was not a policy: `Allow` compared the holder by account name and
-so permitted a second session of one account. It was the operating system, since
-the first machine's listener genuinely held the port, and the message was
-`x/crypto`'s fixed string for a failed global request, which can carry no
-reason at all.
+Not a policy (`Allow` compared by account name and permitted it) but the OS:
+the first machine's listener held the port, and the message is `x/crypto`'s
+fixed string for a failed global request, which carries no reason. Behind the
+port, three more things could not have worked even if the bind had:
 
-Behind the port were three more reasons the arrangement could not have worked
-even if the bind had:
+- **The port is in every managed volume's driver options**, and `EnsureVolume`
+  treats create as idempotent, so a volume keeps the port it was made with.
+  *Amended 2026-08-13:* `proxy.replaceIfStale` repairs one, but only from
+  `/containers/create`, and `compose up` on a container that ALREADY EXISTS
+  never creates one, so the mount fails with `connection refused` against an
+  unexplained port. The answer ([ADR 0032](0032-the-workspace-is-the-record.md))
+  makes **the volumes the durable record of a machine's port** and
+  `clientports` a cache: the agent reads the port back off a machine's own
+  volumes (attributable by `workspace.ClientLabel`) before choosing one for a
+  machine it has forgotten. **Do not read `connection refused` as evidence of
+  this**: a port held by a session nobody noticed dying looks the same, and
+  `compose down && up` cures a broken mount for a third reason (the local
+  driver refcounts mounts). ADR 0032 separates them.
+- **Volume names were per account**, so both machines derive `rd-cwd` and the
+  second create silently returns the first's volume.
+- **The collector deletes any unheld `rd-` volume with this account's owner
+  label**, so each machine would collect the other's, and the daemon then
+  recreates the missing named volume as an empty local one: the container
+  starts with an empty directory where the project should be.
 
-- the port is written into every managed volume's driver options, and
-  `EnsureVolume` treats create as idempotent, so a volume keeps the port it was
-  made with;
-
-  **Amended 2026-08-13.** This was named and only half answered.
-  `proxy.replaceIfStale` repairs such a volume, but it is reachable only from
-  `EnsureVolume` <- the rewriter <- `/containers/create`, and `compose up` on a
-  container that ALREADY EXISTS never creates one. So the repair is skipped by
-  the commonest way of meeting the problem, and the mount fails with
-  `connection refused` against a port nothing on screen explains.
-
-  **Do not read a `connection refused` as evidence of this.** The same symptom
-  comes from a port held by a session the workspace never noticed dying, with
-  nothing drifted at all; and `compose down && up` cures a broken mount for a
-  third reason, docker's local driver refcounting mounts, so `down` is what
-  unmounts a bad one. ADR 0032 carries the distinction in full.
-
-  The resolution reverses which record is authoritative: a volume keeps its port
-  forever and cannot be re-pointed, so **the volumes are the durable statement
-  of what port a machine needs** and `clientports` is a cache of something
-  already written down. The agent now reads the port back off a machine's own
-  volumes (`workspace.ClientLabel` is what makes them attributable) before
-  choosing a port for a machine its record has forgotten. A lost `clientports`
-  therefore costs nothing, where it used to cost every volume that machine had.
-- volume names were per account, so both machines derive `rd-cwd` for their own
-  working directory and the second create silently returns the first's volume;
-- the collector deletes any `rd-` volume carrying this account's owner label
-  that no container holds, so each machine would garbage-collect the other's,
-  and losing one is not a tidy failure: the daemon recreates a missing named
-  volume as an empty local one, so the container starts with an empty directory
-  where the project should be.
-
-Sequential use was always correct. Concurrent use was the problem.
+Sequential use was always correct; concurrent use was the problem.
 
 ## Decision
 
@@ -83,38 +66,30 @@ they are not on both.
 ### The client is the fingerprint of its enrolled key
 
 `workspace.ClientID` is 8 hex characters of the SHA-256 of the public key the
-workspace has **already authenticated**. That makes it:
+workspace has **already authenticated**, taken as wire bytes so `core` still
+depends on nothing (ADR 0021). That makes it:
 
-- **stable per machine by construction.** The key is created once per machine
-  and reused by every later session, and it changes exactly when that machine's
-  enrolment changes, which is precisely when the workspace should treat it as a
-  different client;
-- **authenticated rather than asserted.** An id the client sent would have to be
-  taken on trust, and a client could then claim another machine's port or
-  another machine's volumes. The agent derives it from the key that just passed;
-- **free of new state.** Nothing to keep, lose or migrate.
-
-It takes the key's wire bytes rather than an `ssh.PublicKey`, so the shared
-module goes on depending on nothing (ADR 0021).
+- **stable per machine**: the key is made once per machine and changes exactly
+  when its enrolment does, which is when it should be a different client;
+- **authenticated, not asserted**: an id the client sent would let it claim
+  another machine's port or volumes;
+- **free of new state**: nothing to keep, lose or migrate.
 
 ### The port is derived for the first machine and allocated for the rest
 
-The uid decides an account's **first** port, exactly as ADR 0003 says, so a
-workspace anybody reaches from one computer is on the port it always was and
-allocates nothing. `space/accounts.Ports` hands out the rest, records
-them in `clientports` beside `uidmap`, and answers `Owns`, which the forward
-policy now asks instead of recomputing `PortForUID`. A rule that recomputed
-would refuse a port the agent had itself just handed out.
-
-Allocation counts **down** from the top of the range. The mapping is a bijection
-over the whole space above `PortBase`, so every port up there is spoken for by
-some hypothetical uid and there is no gap to allocate from; starting at the far
-end means an allocated port meets a derived one only after tens of thousands of
-accounts, and `Reserved` refuses to take a port an account that actually exists
-derives.
-
-The client needed no change at all: it has always read `NFSPort` off the wire
-from `workspace-info` and never computed it.
+- The uid decides an account's **first** port (ADR 0003), so a single-machine
+  account is on the port it always was and allocates nothing.
+- `core-agent/accounts.Ports` hands out the rest, records them in
+  `clientports` beside `uidmap`, and answers `Owns`, which the forward policy
+  asks instead of recomputing `PortForUID`: recomputing would refuse a port the
+  agent just handed out.
+- Allocation counts **down** from `workspace.MaxPort`. The uid mapping is a
+  bijection over everything above `PortBase`, so there is no gap to allocate
+  from; from the far end an allocated port meets a derived one only after tens
+  of thousands of accounts, and `Reserved` refuses a port an existing account
+  derives.
+- The client needed no change: it has always read `NFSPort` from
+  `workspace-info`.
 
 ### Concurrent sessions, end to end
 
@@ -133,82 +108,57 @@ from `workspace-info` and never computed it.
 
 ## Consequences
 
-**A container's files belong to the machine that started it.** A container the
-PC created holds a mount to the PC's export. From the phone you can list, stop
-and follow it, but you cannot make its files come from the phone, and if the PC
-goes away its I/O returns EIO. This is inherent to the files being on one
-machine, and is documented rather than engineered around.
+- **A container's files belong to the machine that started it.** From the
+  phone you can list, stop and follow a container the PC created, but its
+  mount is the PC's export, and if the PC goes away its I/O returns EIO.
+  Inherent, and documented rather than engineered around.
+- **ADR 0003's coordination-free property is given up**; its stability
+  property is kept, re-based from the uid to the client.
+- **A volume with no client label predates this** and is left alone by the
+  collector: "no label" is not "mine", and an older session of the other
+  machine may be using it.
+- **The same key on two machines makes them one client** (a synced config
+  directory), and they collide as two sessions on one machine would. The
+  remedy is a key each.
+- **Rejected: a second account for the phone.** Works with no code, and
+  splits the daemon: two image caches, two sets of containers, and the phone
+  cannot see what the PC started, which is most of the value.
 
-**ADR 0003's coordination-free property is given up**, deliberately; its
-stability property is kept, re-based from the uid to the client. That ADR is
-amended to say so.
+### An account's machines share one compose project namespace
 
-**A volume with no client label predates this.** It is left alone by the
-collector rather than assumed to be ours, because "no label" is not "mine": an
-older session of the other machine may still be using it.
+Compose names a project after its directory, so the same compose file on two
+machines is one set of container names, one network and one set of project
+labels on the shared daemon. A container carries the client that made it, but
+nothing reads that before acting on another machine's.
 
-**The same key on two machines makes them one client.** That is a synced
-configuration directory, and it collides exactly as two sessions on one machine
-would. The remedy is a key each, which is also what enrolment means.
+| paths on the two machines | what happens |
+|---|---|
+| different (the ordinary case) | the bind source is in compose's config hash, so each machine recreates the other's containers, killing a running service and re-pointing it at its own volumes; `compose down` on either takes the whole project |
+| the same | the hash matches, the second machine reports everything up to date, and the FIRST machine's containers go on serving the FIRST machine's files. Nobody is told |
 
-**REQUIRED, and not yet built: an account's machines must not share a compose
-project.** Compose names a project after the directory it runs in, so the same
-compose file on two machines produces one set of container names, one network
-and one set of project labels on the daemon they share. Nothing here notices,
-because a container carries the client that made it and no code reads that
-before acting on somebody else's.
+It is the failure `VolumeNameForID` prevents for volumes, one level up.
 
-Both outcomes are bad, and the second is worse for being quiet:
+**Preliminary decision, 2026-08-18: neither fix is built, and the limitation is
+accepted.** The remedy is a convention: `COMPOSE_PROJECT_NAME` or
+`compose -p`, different per machine, as the README explains.
 
-- **Different absolute paths on the two machines**, which is the ordinary case.
-  The bind source is part of compose's config hash, so each machine sees the
-  other's containers as out of date and recreates them, killing a running
-  service and re-pointing it at its own volumes. The other machine then does the
-  same. `compose down` on either takes the whole project with it.
-- **The same absolute path on both**, which happens whenever two machines share
-  a layout. The hash matches, so the second machine reports everything up to
-  date and leaves the first machine's containers running, serving the FIRST
-  machine's files through the first machine's tunnel. Nobody typed anything
-  wrong and nobody is told.
-
-This is the failure `VolumeNameForID` already prevents for volumes, one level
-up: the volume carries the client in its NAME precisely because the daemon is
-shared while the files are not. Container and project names must be separated
-the same way.
-
-**Preliminary decision, 2026-08-18: neither is built, and the limitation is
-accepted.** Two answers were considered and both rejected for now.
-
-*Namespacing* the names, by mangling them per client on the way in and
-unmangling them on the way out, is the general fix and is a virtualisation of
-the daemon's namespace: it touches responses as well as requests, and leaves
-`only /containers/create is ever decoded` behind, which is the property that
-makes this proxy easy to trust.
-
-*Detection* is weaker than it sounds. The signal exists, since every container
-carries its client, but the quiet case never reaches a create at all: compose
-lists a project, decides everything is up to date, and stops. So a check would
-have to sit on the list, where it is compose-shaped rather than general, and its
-warning would land in the background session's log rather than in the terminal
-somebody just typed in. A warning nobody reads is not detection.
-
-The remedy is therefore a convention: `COMPOSE_PROJECT_NAME`, or `compose -p`,
-set differently on each machine, which the README explains. It is written down
-in both places so that somebody meeting this has a name for it, and so the next
-person to open this record does not rediscover it from scratch.
-
-**Rejected: a second account for the phone.** It works today with no code, and
-it splits the daemon too: two image caches, two sets of containers, and the
-phone cannot see what the PC started, which is most of the value.
+- *Rejected: namespacing* names per client on the way in and out. It
+  virtualises the daemon's namespace, touches responses as well as requests,
+  and gives up "only `/containers/create` is ever decoded", which is what makes
+  the proxy easy to trust.
+- *Rejected: detection.* The quiet case never reaches a create: compose lists
+  the project, finds it up to date, and stops. A check on the list would be
+  compose-shaped, and its warning would land in the background session's log
+  rather than the terminal. A warning nobody reads is not detection.
 
 ## Verification
 
-Unit, with no docker and no daemon: `ports_test.go` covers the first machine
-keeping the derived port, a second getting its own, both surviving a restart,
-and an allocation skipping a port an existing account derives.
-`TestASecondMachineBindsItsOwnPort` covers the policy. `TestVolumeNamesCarryThe
-Client` and `TestParseVolumeName` cover the naming, including the old shape.
-
-End to end this needs two clients against one account, which is
-`test/two-clients.sh`. Until that has run, this record describes something
-proven in parts and not as a whole.
+- Unit, no daemon: `core-agent/accounts/ports_test.go` (first machine keeps
+  the derived port, a second gets its own, both survive a restart, allocation
+  skips a derived port); `TestASecondMachineBindsItsOwnPort` (policy,
+  `agent/internal/sshd`); `TestVolumeNamesCarryTheClient` and
+  `TestParseVolumeName` (naming, including the old shape, `core/workspace`).
+- End to end: `test/two-clients.sh`, a suite in `integration.yml`: sections 4
+  (neither refused its tunnel), 5 (a port each, remembered), 6 (each mounts its
+  own files), 7 (both see one daemon) and 8 (neither collects the other's
+  volumes).
