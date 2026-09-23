@@ -73,7 +73,7 @@ func TestSetAttrsClosesTheOutgoingDescriptorCache(t *testing.T) {
 	held := onlyEntry(t, cache)
 
 	// One connect: the uid is known and every share is rebuilt.
-	r.SetAttrs(DefaultAttrs)
+	r.SetAttrs(accountAttrs)
 
 	// Read rather than Stat: on Windows a Stat goes to the handle and reports
 	// the OS error, while every read and write path answers os.ErrClosed.
@@ -85,6 +85,35 @@ func TestSetAttrsClosesTheOutgoingDescriptorCache(t *testing.T) {
 	cache.mu.Unlock()
 	if n != 0 {
 		t.Errorf("the replaced share's cache still holds %d descriptors, want 0", n)
+	}
+}
+
+// accountAttrs is what a connect reports, different from DefaultAttrs so that
+// SetAttrs has something to change.
+var accountAttrs = Attrs{UID: 1000, GID: 1000, FileMode: 0o644, DirMode: 0o755}
+
+// A reconnect reports the same account, and must leave the stack alone. go-nfs
+// caches every handle it issued with the filesystem it came from, across
+// reconnects, so each mount made before one kept resolving to the replaced
+// stack, whose descriptor cache SetAttrs had closed.
+func TestSetAttrsWithTheSameAttrsKeepsTheStack(t *testing.T) {
+	t.Setenv("REMOTE_DOCKER_NFS_FDCACHE", "1h")
+
+	r := registryFor(t, t.TempDir())
+	r.SetAttrs(accountAttrs)
+	share, _, ok := r.Lookup(workspace.ExportCWD)
+	if !ok {
+		t.Fatal("the working directory share is not registered")
+	}
+	issued := share.fs
+
+	r.SetAttrs(accountAttrs)
+
+	if share.fs != issued {
+		t.Error("a reconnect with unchanged attributes rebuilt the share's filesystem")
+	}
+	if c := fdCacheIn(issued); c == nil || c.closed {
+		t.Error("a reconnect closed the descriptor cache every handle issued before it still resolves to")
 	}
 }
 
@@ -166,7 +195,7 @@ func TestSetAttrsRebuildsWithLayersAbsent(t *testing.T) {
 				t.Fatal("the working directory share is not registered")
 			}
 
-			r.SetAttrs(DefaultAttrs)
+			r.SetAttrs(accountAttrs)
 
 			f, err := share.fs.Open("kept.txt")
 			if err != nil {

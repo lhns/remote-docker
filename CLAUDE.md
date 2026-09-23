@@ -640,9 +640,11 @@ premise of the project, and it applies to building it too. So:
   who asked. Bounded by design: one entry per distinct path this process has
   exported, tens of bytes each, for the life of the client process. What a
   share HOLDS is a different question, and is released. `SetAttrs` rebuilds
-  every share's filesystem on every connect, so the stack it replaces is closed
-  (`closeFS`), or its descriptor cache goes on holding files open until its
-  idle timers expire.
+  every share's filesystem when the account's attributes change, so the stack
+  it replaces is closed (`closeFS`), or its descriptor cache goes on holding
+  files open until its idle timers expire. It rebuilds NOTHING on a reconnect
+  that reports the same account: go-nfs resolves every handle issued before it
+  to the stack it came from, which would then serve with its cache closed.
 
 - **A WebSocket connection carries its own liveness.**
   `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection

@@ -71,7 +71,7 @@ type attrFS struct {
 	// export is which share this filesystem serves, so a handle can name it
 	// (ADR 0033). Carried here because go-nfs hands the handler a filesystem
 	// and nothing else, and because the POINTER cannot be the identity:
-	// SetAttrs rebuilds every share's filesystem on each connect.
+	// SetAttrs rebuilds every share's filesystem when the account changes.
 	export string
 
 	// prefix is where this filesystem sits inside the share: "" for the root,

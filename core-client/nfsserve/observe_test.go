@@ -105,7 +105,7 @@ func TestNoObserverIsNoCost(t *testing.T) {
 	}
 }
 
-// SetAttrs rebuilds every share's filesystem on every connect. For a
+// SetAttrs rebuilds every share's filesystem. For a
 // single-file share it rebuilt it as a directory rooted at the FILE, dropping
 // the wrapper that hides the file's siblings and rooting osfs at something
 // that is not a directory.
