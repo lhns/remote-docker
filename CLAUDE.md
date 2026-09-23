@@ -222,9 +222,10 @@ helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
-`go.work` ties the eight together for editors and local commands. CI and the
-image build deliberately ignore it and build one module at a time, so a missing
-`require` fails where it is wrong rather than being covered by the workspace.
+`go.work` ties the eight together, and being committed, it is what every CI
+step resolves through too. So a missing `require` builds everywhere except the
+image build, which copies no `go.work`, and `ci.yml`'s `GOWORK=off` step, which
+exists to fail on it first. Locally: `GOWORK=off go list -C <module> -deps -test ./...`.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
 agent imports must be added there or the image build fails on it alone. CI reads
 its Go version from `core/go.mod`, and `.goreleaser.yaml` tidies in `core/`:
