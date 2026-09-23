@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,6 +225,55 @@ func TestAPeerThatStopsAnsweringIsDropped(t *testing.T) {
 	}
 	if waited := time.Since(start); waited > 5*time.Second {
 		t.Errorf("took %v to drop a silent peer; the ping is not driving it", waited)
+	}
+}
+
+// lockedBuffer is a log destination the handler and the test can share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Closing the accepted connection is how every session ends, and it has to end
+// the handler's wait too. It did not: the next ping failed on the closed
+// connection and every ordinary disconnect was logged as a peer that stopped
+// answering, one ping interval later.
+func TestClosingTheConnectionIsNotADeadPeer(t *testing.T) {
+	l := newListener(t, 50*time.Millisecond)
+	var logged lockedBuffer
+	l.log = slog.New(slog.NewTextHandler(&logged, nil))
+	url := serveWS(t, l)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	wc, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer wc.CloseNow()
+	wc.CloseRead(ctx) // answers pings, as a live client does
+
+	conn, err := l.Accept()
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	_ = conn.Close()
+
+	time.Sleep(10 * l.ping)
+	if strings.Contains(logged.String(), "stopped answering") {
+		t.Errorf("an ordinary close was logged as a dead peer:\n%s", logged.String())
 	}
 }
 
