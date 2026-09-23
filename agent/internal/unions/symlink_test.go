@@ -84,3 +84,46 @@ func TestPullDoesNotReadThroughASymlinkOutOfTheShare(t *testing.T) {
 		t.Errorf("a pull followed a symlink out of the share and returned %s", h.Name)
 	}
 }
+
+// The same three against an ordinary tree, so the refusals above are not
+// bought by refusing everything.
+func TestExtractPullAndRemoveInsideTheShare(t *testing.T) {
+	root := t.TempDir()
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	var batch bytes.Buffer
+	tw := tar.NewWriter(&batch)
+	_ = tw.WriteHeader(&tar.Header{Name: "pkg", Typeflag: tar.TypeDir, Mode: 0o755})
+	_ = tw.WriteHeader(&tar.Header{Name: "pkg/lib.go", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2, ModTime: at})
+	_, _ = tw.Write([]byte("go"))
+	_ = tw.Close()
+
+	var landed []string
+	if err := extract(root, &batch, func(name string, info os.FileInfo) {
+		landed = append(landed, name)
+		if !info.ModTime().Equal(at) {
+			t.Errorf("%s landed at %v, want %v", name, info.ModTime(), at)
+		}
+	}); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(landed) != 1 || landed[0] != "/pkg/lib.go" {
+		t.Errorf("landed = %v, want [/pkg/lib.go]", landed)
+	}
+
+	out, err := pull(root, []string{"/pkg/lib.go"})
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	h, err := tar.NewReader(bytes.NewReader(out)).Next()
+	if err != nil || h.Name != "pkg/lib.go" || h.Size != 2 {
+		t.Errorf("pull returned %+v, %v", h, err)
+	}
+
+	if err := remove(root, []string{"/pkg/lib.go"}, func(string) {}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "pkg", "lib.go")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the file is still there after remove: %v", err)
+	}
+}
