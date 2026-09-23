@@ -448,16 +448,24 @@ echo "== 9b. a read-only bind mount stays read-only =="
 before=$(ls "$PROJECT" | sort | tr '
 ' ' ')
 
-if dockert run --rm -v "$PROJECT:/w:ro" alpine:3         sh -c 'echo nope > /w/ro-v' >/dev/null 2>&1; then
+# A refusal counts only as EROFS: a container that failed to start refuses
+# every write too.
+if out=$(dockert run --rm -v "$PROJECT:/w:ro" alpine:3 \
+        sh -c 'echo nope > /w/ro-v' 2>&1); then
     bad "a container wrote through a -v ...:ro mount"
-else
+elif [[ $out == *"Read-only file system"* ]]; then
     ok "-v with :ro refused the write"
+else
+    bad "the -v :ro container failed for some other reason: [$out]"
 fi
 
-if dockert run --rm --mount "type=bind,source=$PROJECT,target=/w,readonly" alpine:3         sh -c 'echo nope > /w/ro-mount' >/dev/null 2>&1; then
+if out=$(dockert run --rm --mount "type=bind,source=$PROJECT,target=/w,readonly" alpine:3 \
+        sh -c 'echo nope > /w/ro-mount' 2>&1); then
     bad "a container wrote through a --mount readonly mount"
-else
+elif [[ $out == *"Read-only file system"* ]]; then
     ok "--mount with readonly refused the write"
+else
+    bad "the --mount readonly container failed for some other reason: [$out]"
 fi
 
 # The assertion that matters. A refused command proves the daemon reported an
@@ -531,10 +539,13 @@ fi
 
 # Read-only has to survive this path too, for the reason section 9b gives: the
 # export behind it is read-write.
-if dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf:ro" alpine:3     sh -c 'echo nope > /etc/app.conf' >/dev/null 2>&1; then
+if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf:ro" alpine:3 \
+        sh -c 'echo nope > /etc/app.conf' 2>&1); then
     bad "a container wrote through a read-only single-file mount"
-else
+elif [[ $out == *"Read-only file system"* ]]; then
     ok "a read-only single-file mount refused the write"
+else
+    bad "the read-only single-file container failed for some other reason: [$out]"
 fi
 if [ "$(cat "$PROJECT/conf/wanted.conf")" = "edited after the mount" ]; then
     ok "the file on this machine is unchanged"
@@ -853,7 +864,7 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
             if [ "$ids_ws" != "$dev_ws" ] && [ "$ids_ws" = "$ids_ct" ]; then
                 ok "the volume mountpoint and the container see the same inode"
             else
-                ok "INODES DIFFER -- the design must use /proc/<pid>/root instead"
+                bad "the volume mountpoint and the container see different inodes, so a poke through one misses the other's watch"
             fi
 
             for p in openclose mtime touch dirmtime; do
@@ -902,10 +913,23 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe" && build_probe
         # The one row that is near-certain from kernel source, so a failure
         # here means the experiment itself is wrong rather than the answer
         # being no.
-        if echo "$poke" | grep -q "^INOTIFY .*IN_CLOSE_WRITE.* poke-openclose\.txt$"; then
+        if grep -q "^INOTIFY .*IN_CLOSE_WRITE.* poke-openclose\.txt$" <<<"$poke"; then
             ok "open(O_WRONLY)+close() reaches the container's watcher"
         else
-            ok "open(O_WRONLY)+close() did NOT reach the watcher -- replay is not viable this way"
+            bad "open(O_WRONLY)+close() did NOT reach the watcher"
+        fi
+
+        # The asymmetry replay rests on (ADR 0016): utimensat with atime
+        # omitted is IN_MODIFY, with both times set it is IN_ATTRIB.
+        if grep -q "^INOTIFY IN_MODIFY .*poke-mtime\.txt$" <<<"$poke"; then
+            ok "utimensat(atime=UTIME_OMIT) fires IN_MODIFY"
+        else
+            bad "utimensat(atime=UTIME_OMIT) did not fire IN_MODIFY: [$(grep 'poke-mtime' <<<"$poke" | tr -s '[:space:]' ' ')]"
+        fi
+        if grep -q "^INOTIFY IN_ATTRIB .*poke-touch\.txt$" <<<"$poke"; then
+            ok "utimensat with both times set fires IN_ATTRIB"
+        else
+            bad "utimensat with both times set did not fire IN_ATTRIB: [$(grep 'poke-touch' <<<"$poke" | tr -s '[:space:]' ' ')]"
         fi
     fi
     rm -f "$PROJECT/watchprobe" "$PROJECT/pokeprobe"
@@ -984,11 +1008,16 @@ else
         # -R on the OTHER account, targeting the FIRST account's port.
         hijack=$(timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519"             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             -o ExitOnForwardFailure=yes -o BatchMode=yes             -p "$SSH_PORT" -N -R "127.0.0.1:$first_port:127.0.0.1:1"             "$OTHER@127.0.0.1" 2>&1 </dev/null; echo "rc=$?")
 
-        if echo "$hijack" | grep -q "rc=0"; then
-            bad "SECURITY: $OTHER bound $ACCOUNT's NFS port $first_port"
-        else
-            ok "one account cannot bind another's NFS port"
-        fi
+        # -N holds an ACCEPTED forward open until the timeout, so success is
+        # rc=124 and never rc=0; only ssh's own refusal counts as a pass.
+        case "$hijack" in
+        *"remote port forwarding failed"*rc=255)
+            ok "one account cannot bind another's NFS port" ;;
+        *rc=124)
+            bad "SECURITY: $OTHER bound $ACCOUNT's NFS port $first_port: [$hijack]" ;;
+        *)
+            bad "the bind attempt ended without a refusal: [$hijack]" ;;
+        esac
 
         # And cannot DIAL it either, which is the other half and was missing.
         #
@@ -1222,12 +1251,10 @@ echo "== 13b. a stock ssh still gets a shell, and the embedded CLI =="
 # -tt forces a pty, so `tty` naming one proves the agent allocated it rather
 # than falling through to the non-pty branch.
 shellout=$(ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$ACCOUNT" 60 \
-    'tty; id -un; docker ps --format {{.Names}} 2>&1 | head -3' -tt 2>&1)
+    'tty; id -un; if docker ps >/dev/null 2>&1; then echo DOCKER-OK; else docker ps 2>&1 | head -3; fi' -tt 2>&1)
 
-# tr squeezes the pty's CRLF out so a failure prints as one readable line.
-trim() { echo "$1" | tr -d '
-' | tail -3 | tr '
-' ' '; }
+# The pty's CRLF out, so a failure prints as one readable line.
+trim() { echo "$1" | tr -d '\r' | tail -3 | tr '\n' ' '; }
 
 if echo "$shellout" | grep -q '/dev/pts/'; then
     ok "a stock ssh gets an interactive shell on a pty"
@@ -1253,10 +1280,10 @@ fi
 # "permission denied ... Docker daemon socket", which reads like a broken
 # socket. Asserted by USING it rather than by reading `id`, which was checked,
 # found right and believed while the shell had a different view of it.
-if echo "$shellout" | grep -q "permission denied"; then
-    bad "the shell cannot reach the shared daemon: $(trim "$shellout")"
-else
+if grep -q "DOCKER-OK" <<<"$shellout"; then
     ok "and it can use the shared docker daemon"
+else
+    bad "the shell cannot use the shared daemon: $(trim "$shellout")"
 fi
 
 # The exit status must follow the COMMAND, not the client's stdin. Every other
@@ -1741,10 +1768,10 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # cached copy of a file that is gone would shadow its absence, and the
         # Docker API cannot remove a path from a volume at all.
         rm -f "$UNIONDIR/marker"
-        if wait_gone docker itest-deleg /w/marker 20; then
+        if wait_gone dockert itest-deleg /w/marker 20; then
             ok "a file deleted here disappears from the container"
         else
-            bad "a deleted file is still visible through the union"
+            bad "a deleted file is still visible through the union: [$LAST_OUTPUT]"
             share_diagnostics
         fi
     else
@@ -1896,10 +1923,10 @@ union_corner() {
     fi
 
     rm -f "$dir/marker"
-    if wait_gone docker "$name" /w/marker 20; then
+    if wait_gone dockert "$name" /w/marker 20; then
         ok "$mode: a file deleted here disappears from the container"
     else
-        bad "$mode: a deleted file is still visible through the union"
+        bad "$mode: a deleted file is still visible through the union: [$LAST_OUTPUT]"
         share_diagnostics
     fi
     return 0
@@ -2117,10 +2144,10 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         # asynchronous by design -- the container does not wait for either, and
         # what the cache does not hold yet is served from the live export.
         if dockert run -d --name itest-reconcile -v "$UNIONDIR:/w:read=cached,write=back"             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
-            if wait_gone docker itest-reconcile /w/while-down.txt 20; then
+            if wait_gone dockert itest-reconcile /w/while-down.txt 20; then
                 ok "a file deleted while the session was down is gone from the cache"
             else
-                bad "a file deleted while the session was down is still in the cache"
+                bad "a file deleted while the session was down is still in the cache: [$LAST_OUTPUT]"
                 share_diagnostics
             fi
             docker rm -f itest-reconcile >/dev/null 2>&1
