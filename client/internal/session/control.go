@@ -22,6 +22,10 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
+// dependentsTimeout bounds asking the workspace what still depends on us. A
+// variable so a test need not wait for it.
+var dependentsTimeout = 10 * time.Second
+
 // sweepIdle releases the connection when nothing needs it.
 func (s *Session) sweepIdle() {
 	interval := max(s.opts.IdleTimeout/2, time.Second)
@@ -55,6 +59,13 @@ func (s *Session) sweepIdle() {
 // accounts' volumes, and one of those pins this connection open forever: an
 // idle release that can never fire, waiting on a dependency that is not ours.
 func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
+	// Bounded here, because every caller runs on a context that is never
+	// cancelled: a daemon that stops answering while the tunnel stays up
+	// would otherwise stall the idle sweep, Standby and the daemon's expiry
+	// for good.
+	ctx, cancel := context.WithTimeout(ctx, dependentsTimeout)
+	defer cancel()
+
 	containers, err := live.api.ListContainers(ctx)
 	if err != nil {
 		return false, err
@@ -259,10 +270,7 @@ func (s *Session) Status() any {
 // Idle reports whether this session could be ended without breaking anything,
 // satisfying proxy.Control.
 func (s *Session) Idle() any {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-
-	_, safe := s.IdleFor(ctx)
+	_, safe := s.IdleFor(s.ctx)
 	return proxy.Idle{Safe: safe}
 }
 
