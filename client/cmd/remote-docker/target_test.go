@@ -182,3 +182,40 @@ func TestOurContextIsNotOverriddenByDockerHost(t *testing.T) {
 		t.Error("DOCKER_HOST would have been set, overriding the context we honoured")
 	}
 }
+
+// The scan reads a command line before docker's own flags do, so it has to
+// read it the way they will. pflag also takes a value joined to a shorthand
+// (`-cci`) and a value-taking shorthand at the end of a cluster (`-Dc ci`).
+// Read as booleans, `docker -cci ps` made a session for the DEFAULT workspace
+// while docker went to ci's endpoint, which nothing was serving.
+func TestScanReadsTheRootFlagsAsDockerDoes(t *testing.T) {
+	for _, args := range [][]string{
+		{"-cci", "ps"},
+		{"-c=ci", "ps"},
+		{"-Dcci", "ps"},
+		{"-Dc", "ci", "ps"},
+		{"-Dc=ci", "ps"},
+		{"-ldebug", "--context", "ci", "ps"},
+		{"-Htcp://10.0.0.1:2375", "ps"},
+		{"-D", "ps"},
+	} {
+		flags := newTestRoot(t).Flags()
+		flags.SetInterspersed(false)
+		if err := flags.Parse(args); err != nil {
+			t.Fatalf("%q: docker's flags refuse it: %v", args, err)
+		}
+		scan := scanRootArgs(args)
+
+		if want := flags.Arg(0); scan.verb != want {
+			t.Errorf("%q: verb %q, docker reads %q", args, scan.verb, want)
+		}
+		context, asked := scan.flags["--context"]
+		if want := flags.Lookup("context"); asked != want.Changed || context != want.Value.String() {
+			t.Errorf("%q: context %q (given %v), docker reads %q (given %v)",
+				args, context, asked, want.Value.String(), want.Changed)
+		}
+		if _, asked := scan.flags["--host"]; asked != flags.Lookup("host").Changed {
+			t.Errorf("%q: host given %v, docker reads %v", args, asked, !asked)
+		}
+	}
+}
