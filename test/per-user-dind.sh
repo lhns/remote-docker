@@ -96,7 +96,10 @@ echo "reached the inner daemon" >"$WORK/dindconf/marker"
 # It has to be LOADED into the workspace's daemon as well, below: the image was
 # built on the runner, and the daemon that starts each account's dind is the
 # workspace's own.
-if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"     -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
+if start_workspace true \
+    -v "$WORK/dindconf:/etc/rd-test:ro" \
+    -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro" \
+    -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
     bad "workspace container failed to start"
@@ -284,7 +287,8 @@ echo "== 7b. a read=cached,write=back share, which is a union mounted inside the
 #
 # It also proves the two accounts stay separate at this layer: each union is
 # mounted in its own daemon's namespace, so alice's cache cannot be bob's.
-if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=back"     alpine:3 sleep 120 2>&1); then
+if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=back" \
+    alpine:3 sleep 120 2>&1); then
     ok "a container starts against a union inside alice's own daemon"
 
     # a bare directory passes every other check here (ADR 0044)
@@ -455,8 +459,7 @@ if echo "$shell_out" | grep -q "permission denied"; then
 elif echo "$shell_out" | grep -qx alice-secret; then
     ok "and a shell can actually use it"
 else
-    bad "a shell could not list its own containers: $(echo "$shell_out" | tail -2 | tr '
-' ' ')"
+    bad "a shell could not list its own containers: $(echo "$shell_out" | tail -2 | tr '\n' ' ')"
 fi
 
 # The storage driver, which is the difference between `docker run` taking a
@@ -486,8 +489,7 @@ echo "== 10. the workspace restarts and a daemon comes back when its account con
 # the account's containers nor the daemon itself has one: the agent is the only
 # supervisor (ADR 0019), so the daemon starts when its account next connects and
 # brings its graph with it.
-before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
-' ' ')
+before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
 dind_before=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
 
 kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
@@ -517,7 +519,8 @@ fi
 # moment it starts, while the parent dockerd is still bringing the daemons
 # back up, so it legitimately finds nothing running to adopt and Ensure does
 # the work on demand instead. The outcome is what the design promises.
-count=$(hostdocker exec "$CONTAINER" docker ps --all     --filter "name=^/rd-dind-$A$" --format '{{.Names}}' 2>/dev/null | grep -c .)
+count=$(hostdocker exec "$CONTAINER" docker ps --all \
+    --filter "name=^/rd-dind-$A$" --format '{{.Names}}' 2>/dev/null | grep -c .)
 if [ "$count" = "1" ]; then
     ok "exactly one daemon for $A after the restart, not a second one beside it"
 else
@@ -539,8 +542,7 @@ if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
     dump_workspace_log 40
 fi
 
-after=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
-' ' ')
+after=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
 if [ -n "$before" ] && [ "$before" = "$after" ]; then
     ok "alice's containers survived the restart"
 else
@@ -569,8 +571,7 @@ else
     bad "the graph volume carries no label; a prune would take it with nothing naming it"
 fi
 
-images_before=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
-' ' ')
+images_before=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '\n' ' ')
 
 # Remove the daemon CONTAINER, keeping the volume -- which is what an upgrade
 # does, and what adoption does after a redeploy.
@@ -584,8 +585,7 @@ if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
     dump_dind "$A"
 fi
 
-images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
-' ' ')
+images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '\n' ' ')
 if [ -n "$images_before" ] && [ "$images_before" = "$images_after" ]; then
     ok "alice's images survived her daemon container being destroyed"
 else

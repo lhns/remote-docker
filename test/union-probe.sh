@@ -69,7 +69,8 @@ start_dind() {
     local name=$1 extra=${2:-}
     docker rm -f "$name" >/dev/null 2>&1
     # shellcheck disable=SC2086  # extra is a flag list, and word splitting is the point
-    docker run -d --name "$name" --privileged $extra -e DOCKER_TLS_CERTDIR=         docker:28-dind >/dev/null 2>&1 || return 1
+    docker run -d --name "$name" --privileged $extra -e DOCKER_TLS_CERTDIR= \
+        docker:28-dind >/dev/null 2>&1 || return 1
     for _ in $(seq 1 30); do
         docker exec "$name" docker info >/dev/null 2>&1 && return 0
         sleep 2
@@ -295,11 +296,16 @@ fi
 # reading NFS mounts in every integration run, so if a plain bind of the same
 # mount works, NFS in a container is fine and the fault is specific to reading
 # an NFS LOWER through an overlay from another mount namespace.
-report "a container reading the NFS mount directly, no overlay"     docker run --rm -v "$LOWER:/n" alpine:3 cat /n/pristine-root.txt
-report "a container reading the merged mount, privileged"     docker run --rm --privileged -v "$MERGED:/w" alpine:3 cat /w/pristine-root.txt
-report "a container reading the merged mount, host network and pid"     docker run --rm --network host --pid host -v "$MERGED:/w" alpine:3 cat /w/pristine-root.txt
-report "the same open from the host, in a private mount namespace"     sudo unshare --mount sh -c "cat $MERGED/pristine-root.txt"
-report "what the kernel said while that was happening"     sh -c "sudo dmesg | tail -15"
+report "a container reading the NFS mount directly, no overlay" \
+    docker run --rm -v "$LOWER:/n" alpine:3 cat /n/pristine-root.txt
+report "a container reading the merged mount, privileged" \
+    docker run --rm --privileged -v "$MERGED:/w" alpine:3 cat /w/pristine-root.txt
+report "a container reading the merged mount, host network and pid" \
+    docker run --rm --network host --pid host -v "$MERGED:/w" alpine:3 cat /w/pristine-root.txt
+report "the same open from the host, in a private mount namespace" \
+    sudo unshare --mount sh -c "cat $MERGED/pristine-root.txt"
+report "what the kernel said while that was happening" \
+    sh -c "sudo dmesg | tail -15"
 
 # Only now, the coherence question: the client edits a file the cache does not
 # hold, which is the case the invalidation channel does NOT cover because there
@@ -316,7 +322,8 @@ report "container, a lower file created underneath" docker exec "$HOLDER" cat /w
 # namespace, then putting it there should repair it -- and that is a fix we can
 # actually ship, because the rewriter decides what a container mounts. Cheap to
 # ask, and the answer is either a repair or a rule out.
-report "the container with the LOWER bound in beside the merged mount"     docker run --rm -v "$MERGED:/w" -v "$LOWER:/rd-lower:ro" alpine:3 cat /w/pristine-root.txt
+report "the container with the LOWER bound in beside the merged mount" \
+    docker run --rm -v "$MERGED:/w" -v "$LOWER:/rd-lower:ro" alpine:3 cat /w/pristine-root.txt
 
 
 echo "== 6b. the shape the design actually ships =="
@@ -325,10 +332,13 @@ echo "== 6b. the shape the design actually ships =="
 # itself -- moby's local driver has no type whitelist, so this is expressible --
 # and that is a different code path. If the daemon's own mount behaves
 # differently from this script's, the daemon's is the one that matters.
-if docker volume create --name union-probe-vol --opt type=overlay --opt device=overlay     --opt "o=lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" >/dev/null 2>"$WORK/vol.err"; then
+if docker volume create --name union-probe-vol --opt type=overlay --opt device=overlay \
+    --opt "o=lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" >/dev/null 2>"$WORK/vol.err"; then
     ok "the local driver accepted a volume of type overlay"
-    report "a container reading the LOWER through that volume"         docker run --rm -v union-probe-vol:/w alpine:3 cat /w/pristine-root.txt
-    report "a container reading the CACHE through that volume"         docker run --rm -v union-probe-vol:/w alpine:3 cat /w/late.txt
+    report "a container reading the LOWER through that volume" \
+        docker run --rm -v union-probe-vol:/w alpine:3 cat /w/pristine-root.txt
+    report "a container reading the CACHE through that volume" \
+        docker run --rm -v union-probe-vol:/w alpine:3 cat /w/late.txt
     docker volume rm union-probe-vol >/dev/null 2>&1
 else
     bad "the local driver refused a volume of type overlay: $(cat "$WORK/vol.err")"
@@ -349,18 +359,22 @@ echo "== 6c. fuse-overlayfs, where the union lives in userspace =="
 if command -v fuse-overlayfs >/dev/null 2>&1 ||
     sudo apt-get install -y -qq fuse-overlayfs >/dev/null 2>&1; then
     mkdir -p "$WORK/fuse-merged"
-    if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR"         "$WORK/fuse-merged" 2>"$WORK/fuse.err"; then
+    if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" \
+        "$WORK/fuse-merged" 2>"$WORK/fuse.err"; then
         ok "fuse-overlayfs mounted over an NFS lower"
-        report "the host reading the lower through it"             cat "$WORK/fuse-merged/pristine-root.txt"
+        report "the host reading the lower through it" \
+            cat "$WORK/fuse-merged/pristine-root.txt"
 
         # THE assertion this script exists for, now that the kernel union is
         # ruled out: a container reading a file that is only in the lower.
-        if outputs '^pristine at the root$'             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/pristine-root.txt; then
+        if outputs '^pristine at the root$' \
+            docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/pristine-root.txt; then
             ok "a container reads the LOWER through the userspace union"
         else
             bad "THE DESIGN IS DEAD: no union is readable from a container: [$LAST_OUTPUT]"
         fi
-        if outputs '^arrived through the union$'             docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/late.txt; then
+        if outputs '^arrived through the union$' \
+            docker run --rm -v "$WORK/fuse-merged:/w" alpine:3 cat /w/late.txt; then
             ok "a container reads the CACHE through the userspace union"
         else
             bad "a container could not read the cache: [$LAST_OUTPUT]"
@@ -419,7 +433,9 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     if build_probe watchprobe "$WORK/watchprobe"; then
         sudo mkdir -p "$FUSE_MERGED/fusewatch"
         echo "before" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
-        if docker run -d --name union-probe-fusewatch -v "$FUSE_MERGED:/w"             -v "$WORK/watchprobe:/watchprobe" alpine:3             /watchprobe -timeout 25s /w/fusewatch >/dev/null 2>&1; then
+        if docker run -d --name union-probe-fusewatch -v "$FUSE_MERGED:/w" \
+            -v "$WORK/watchprobe:/watchprobe" alpine:3 \
+            /watchprobe -timeout 25s /w/fusewatch >/dev/null 2>&1; then
             wait_ready union-probe-fusewatch 15
             sleep 1
             echo "edited through the userspace union" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null
@@ -440,13 +456,15 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     # What a container-side deletion leaves behind, which is what write-back
     # reads to learn about it.
     sudo rm -f "$FUSE_MERGED/pristine-root.txt"
-    report "what a delete through the userspace union left in the upper"         sudo sh -c "ls -l $UPPER/pristine-root.txt 2>&1; getfattr -d -m - $UPPER/pristine-root.txt 2>&1 | head -5"
+    report "what a delete through the userspace union left in the upper" \
+        sudo sh -c "ls -l $UPPER/pristine-root.txt 2>&1; getfattr -d -m - $UPPER/pristine-root.txt 2>&1 | head -5"
 
     # The new failure mode a userspace union brings: a daemon that can die.
     if docker run -d --name union-probe-fusehold -v "$FUSE_MERGED:/w" alpine:3 sleep 60 >/dev/null 2>&1; then
         sudo pkill -f "fuse-overlayfs.*$FUSE_MERGED"
         sleep 2
-        report "a container reading after the fuse daemon was killed"             docker exec union-probe-fusehold sh -c "cat /w/c1 2>&1; echo exit=\$?"
+        report "a container reading after the fuse daemon was killed" \
+            docker exec union-probe-fusehold sh -c "cat /w/c1 2>&1; echo exit=\$?"
         docker rm -f union-probe-fusehold >/dev/null 2>&1
     fi
     sudo umount "$FUSE_MERGED" 2>/dev/null
@@ -466,7 +484,8 @@ else
     info "docker:28-dind does NOT carry fuse-overlayfs; the agent would have to"
     info "supply it, or the per-account dind would have to be a different image"
 fi
-report "what the dind has under /dev/fuse"     docker run --rm --privileged docker:28-dind sh -c "ls -l /dev/fuse 2>&1"
+report "what the dind has under /dev/fuse" \
+    docker run --rm --privileged docker:28-dind sh -c "ls -l /dev/fuse 2>&1"
 
 
 echo "== 7. does the lower cost a d_type fallback? =="
@@ -481,7 +500,8 @@ merged_walk=$( { time -p find "$MERGED" -type f >"$WORK/merged.list"; } 2>&1 | a
 # fastest walk there is.
 info "lower: $(wc -l <"$WORK/lower.list") files in ${lower_walk}s"
 info "merged: $(wc -l <"$WORK/merged.list") files in ${merged_walk}s"
-report "the same walk from inside the container"     docker exec "$HOLDER" sh -c "find /w -type f | wc -l"
+report "the same walk from inside the container" \
+    docker exec "$HOLDER" sh -c "find /w -type f | wc -l"
 report "what the kernel said about the lower" sh -c "sudo dmesg 2>/dev/null | grep -i 'overlayfs' | tail -5"
 
 echo
@@ -565,21 +585,28 @@ if start_dind "$DIND2" "--network host"; then
         # there. The first run of this section did exactly that and got
         # "cannot read upper dir", which is the design's own constraint
         # arriving as a probe bug.
-        sudo nsenter -t "$pid2" -m -- mkdir -p /rd/lower /rd/merged             /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work
-        if sudo nsenter -t "$pid2" -m -- mount -t nfs 127.0.0.1:"$EXPORT_DIR" /rd/lower             -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2 2>"$WORK/dindnfs.err"; then
+        sudo nsenter -t "$pid2" -m -- mkdir -p /rd/lower /rd/merged \
+            /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work
+        if sudo nsenter -t "$pid2" -m -- mount -t nfs 127.0.0.1:"$EXPORT_DIR" /rd/lower \
+            -o nfsvers=3,nolock,noacl,soft,timeo=30,retrans=2 2>"$WORK/dindnfs.err"; then
             ok "the lower mounts inside the dind"
             # The first two attempts both failed with "cannot read upper dir"
             # for a directory that stat had just answered for, which cannot
             # both be true. So both views are printed: what the namespace we
             # mount from sees, and what the container itself sees.
-            report "the upper, as the mount namespace sees it"                 sudo nsenter -t "$pid2" -m -- sh -c "stat -f -c %T /var/lib/docker/rd-union/upper; ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work"
-            report "the upper, as the dind itself sees it"                 docker exec "$DIND2" sh -c "ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper 2>&1"
-            report "which fuse-overlayfs, and which version"                 sudo nsenter -t "$pid2" -m -- sh -c "command -v fuse-overlayfs; fuse-overlayfs --version 2>&1 | head -3"
+            report "the upper, as the mount namespace sees it" \
+                sudo nsenter -t "$pid2" -m -- sh -c "stat -f -c %T /var/lib/docker/rd-union/upper; ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper /var/lib/docker/rd-union/work"
+            report "the upper, as the dind itself sees it" \
+                docker exec "$DIND2" sh -c "ls -lad /var/lib/docker/rd-union /var/lib/docker/rd-union/upper 2>&1"
+            report "which fuse-overlayfs, and which version" \
+                sudo nsenter -t "$pid2" -m -- sh -c "command -v fuse-overlayfs; fuse-overlayfs --version 2>&1 | head -3"
             # ls and fuse-overlayfs disagreed about a directory that both of
             # them were shown -- but in SEPARATE nsenter invocations, which
             # leaves the process and the namespace entry confounded. One shell,
             # both commands, settles which.
-            report "ls and the mount, in one namespace entry"                 sudo nsenter -t "$pid2" -m -- sh -c                 "ls -la /var/lib/docker/rd-union/upper && echo ---- && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged; echo exit=\$?"
+            report "ls and the mount, in one namespace entry" \
+                sudo nsenter -t "$pid2" -m -- sh -c \
+                "ls -la /var/lib/docker/rd-union/upper && echo ---- && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged; echo exit=\$?"
 
             # The suspect. nsenter -m enters the MOUNT namespace only, so the
             # process sees the dind's /proc -- a procfs tied to the dind's PID
@@ -587,19 +614,23 @@ if start_dind "$DIND2" "--network host"; then
             # then resolves to nothing, and libfuse uses /proc/self/fd heavily.
             # ENOENT is exactly what that would produce, and exactly what
             # fuse-overlayfs reports.
-            report "what /proc/self is, entering the mount namespace only"                 sudo nsenter -t "$pid2" -m -- sh -c "readlink /proc/self; ls /proc/self/fd 2>&1 | head -3"
+            report "what /proc/self is, entering the mount namespace only" \
+                sudo nsenter -t "$pid2" -m -- sh -c "readlink /proc/self; ls /proc/self/fd 2>&1 | head -3"
             # nsenter here cannot fork into the pid namespace -- it has neither
             # -f nor --fork -- so the invocation this project actually uses
             # cannot be spelled with it. Our own child does it directly:
             # setns(CLONE_NEWPID), setns(CLONE_NEWNS), then run fuse-overlayfs
             # as a CHILD, which is the same set of namespaces the dind gets when
             # it runs the binary itself. That is what the assertion below uses.
-            report "whether this nsenter can enter the pid namespace at all"                 sudo nsenter -t "$pid2" -m -p --fork -- true
+            report "whether this nsenter can enter the pid namespace at all" \
+                sudo nsenter -t "$pid2" -m -p --fork -- true
 
             # And the same mount asked for by the dind ITSELF, which enters all
             # of its own namespaces the way docker does rather than the way
             # nsenter does.
-            report "the same mount, run by the dind itself"                 docker exec "$DIND2" sh -c                 "mkdir -p /rd2 && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd2 2>&1; echo exit=\$?"
+            report "the same mount, run by the dind itself" \
+                docker exec "$DIND2" sh -c \
+                "mkdir -p /rd2 && fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd2 2>&1; echo exit=\$?"
 
             # THE assertion, in the namespaces the union really runs in. The
             # agent's child enters the dind's pid AND mount namespaces and then
@@ -610,9 +641,12 @@ if start_dind "$DIND2" "--network host"; then
             # namespace alone, which fails with ENOENT about a directory that
             # is plainly there, because /proc/self resolves to nothing when the
             # pid namespace was left behind and libfuse leans on /proc/self/fd.
-            if docker exec "$DIND2" sh -c                 "fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged"                 2>"$WORK/dindfuse.err"; then
+            if docker exec "$DIND2" sh -c \
+                "fuse-overlayfs -o lowerdir=/rd/lower,upperdir=/var/lib/docker/rd-union/upper,workdir=/var/lib/docker/rd-union/work /rd/merged" \
+                2>"$WORK/dindfuse.err"; then
                 ok "fuse-overlayfs mounts inside the dind"
-                if outputs 'pristine and nested' docker exec "$DIND2"                     docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then
+                if outputs 'pristine and nested' docker exec "$DIND2" \
+                    docker run --rm -v /rd/merged:/w alpine:3 cat /w/pkg/pristine-nested.txt; then
                     ok "a container on the account own daemon reads the lower through the union"
                 else
                     bad "the shipping shape does not work: [$LAST_OUTPUT]"

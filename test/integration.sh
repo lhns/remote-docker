@@ -116,7 +116,8 @@ echo "== 4. start the workspace =="
 # resolves, which section 9d then binds (ADR 0041). This suite runs the SHARED
 # daemon, so the source side is what the daemon sees -- there is no dind to
 # mount into -- and both of these exist inside the workspace container.
-if start_workspace false -p "$WS_PORT:2280"     -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro; then
+if start_workspace false -p "$WS_PORT:2280" \
+    -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro; then
     ok "workspace container started"
 else
     bad "workspace container failed to start"
@@ -194,7 +195,8 @@ export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
 info "pulling test images through the workspace"
 for image in alpine:3 nginx:alpine; do
-    timeout 300 docker pull -q "$image" >/dev/null 2>&1         || info "could not pre-pull $image; the test may be slower"
+    timeout 300 docker pull -q "$image" >/dev/null 2>&1 \
+        || info "could not pre-pull $image; the test may be slower"
 done
 
 echo
@@ -445,16 +447,17 @@ echo "== 9b. a read-only bind mount stays read-only =="
 # arrives as HostConfig.Binds, a string whose options are carried verbatim, and
 # `--mount` as HostConfig.Mounts, a JSON object whose ReadOnly field has to
 # survive the type being changed from bind to volume.
-before=$(ls "$PROJECT" | sort | tr '
-' ' ')
+before=$(ls "$PROJECT" | sort | tr '\n' ' ')
 
-if dockert run --rm -v "$PROJECT:/w:ro" alpine:3         sh -c 'echo nope > /w/ro-v' >/dev/null 2>&1; then
+if dockert run --rm -v "$PROJECT:/w:ro" alpine:3 \
+    sh -c 'echo nope > /w/ro-v' >/dev/null 2>&1; then
     bad "a container wrote through a -v ...:ro mount"
 else
     ok "-v with :ro refused the write"
 fi
 
-if dockert run --rm --mount "type=bind,source=$PROJECT,target=/w,readonly" alpine:3         sh -c 'echo nope > /w/ro-mount' >/dev/null 2>&1; then
+if dockert run --rm --mount "type=bind,source=$PROJECT,target=/w,readonly" alpine:3 \
+    sh -c 'echo nope > /w/ro-mount' >/dev/null 2>&1; then
     bad "a container wrote through a --mount readonly mount"
 else
     ok "--mount with readonly refused the write"
@@ -462,8 +465,7 @@ fi
 
 # The assertion that matters. A refused command proves the daemon reported an
 # error; only the directory proves nothing reached this machine.
-after=$(ls "$PROJECT" | sort | tr '
-' ' ')
+after=$(ls "$PROJECT" | sort | tr '\n' ' ')
 if [ "$before" = "$after" ]; then
     ok "nothing new appeared on this machine"
 else
@@ -476,8 +478,7 @@ if out=$(dockert run --rm -v "$PROJECT:/w:ro" alpine:3 cat /w/marker 2>&1) &&
     echo "$out" | grep -q "from the project directory"; then
     ok "a read-only mount is still readable"
 else
-    bad "a read-only mount could not be read: $(echo "$out" | tail -2 | tr '
-' ' ')"
+    bad "a read-only mount could not be read: $(echo "$out" | tail -2 | tr '\n' ' ')"
 fi
 
 echo
@@ -504,14 +505,12 @@ out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3 sh 
 if echo "$out" | grep -q "is-a-file"; then
     ok "the target is a file, not a directory"
 else
-    bad "the target is not a regular file: $(echo "$out" | head -2 | tr '
-' ' ')"
+    bad "the target is not a regular file: $(echo "$out" | head -2 | tr '\n' ' ')"
 fi
 if echo "$out" | grep -q "the file the container asked for"; then
     ok "a single file mounted at the path the container asked for"
 else
-    bad "a single-file bind did not read back: $(echo "$out" | head -2 | tr '
-' ' ')"
+    bad "a single-file bind did not read back: $(echo "$out" | head -2 | tr '\n' ' ')"
 fi
 if echo "$out" | grep -q "TOKEN=secret"; then
     bad "a file beside the exported one was reachable"
@@ -522,16 +521,17 @@ fi
 # An edit here reaches the container, which is the case people actually want:
 # edit nginx.conf, reload the service.
 echo "edited after the mount" >"$PROJECT/conf/wanted.conf"
-if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3     cat /etc/app.conf 2>&1) && echo "$out" | grep -q "edited after the mount"; then
+if out=$(dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf" alpine:3 \
+    cat /etc/app.conf 2>&1) && echo "$out" | grep -q "edited after the mount"; then
     ok "an edit on this machine is visible through a single-file mount"
 else
-    bad "the mount served a stale file: $(echo "$out" | head -2 | tr '
-' ' ')"
+    bad "the mount served a stale file: $(echo "$out" | head -2 | tr '\n' ' ')"
 fi
 
 # Read-only has to survive this path too, for the reason section 9b gives: the
 # export behind it is read-write.
-if dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf:ro" alpine:3     sh -c 'echo nope > /etc/app.conf' >/dev/null 2>&1; then
+if dockert run --rm -v "$PROJECT/conf/wanted.conf:/etc/app.conf:ro" alpine:3 \
+    sh -c 'echo nope > /etc/app.conf' >/dev/null 2>&1; then
     bad "a container wrote through a read-only single-file mount"
 else
     ok "a read-only single-file mount refused the write"
@@ -545,11 +545,11 @@ fi
 # The --mount spelling reaches the rewriter differently: a JSON object whose
 # type changes from bind to volume, rather than a string that leaves Binds
 # entirely.
-if out=$(dockert run --rm --mount "type=bind,source=$PROJECT/conf/wanted.conf,target=/etc/app.conf"     alpine:3 cat /etc/app.conf 2>&1) && echo "$out" | grep -q "edited after the mount"; then
+if out=$(dockert run --rm --mount "type=bind,source=$PROJECT/conf/wanted.conf,target=/etc/app.conf" \
+    alpine:3 cat /etc/app.conf 2>&1) && echo "$out" | grep -q "edited after the mount"; then
     ok "--mount of a single file works too"
 else
-    bad "--mount of a single file failed: $(echo "$out" | head -2 | tr '
-' ' ')"
+    bad "--mount of a single file failed: $(echo "$out" | head -2 | tr '\n' ' ')"
 fi
 
 echo
@@ -565,8 +565,7 @@ if out=$(dockert run --rm -v /etc/workspace:/w:ro alpine:3 ls /w 2>&1) &&
     echo "$out" | grep -q "authorized_keys.d"; then
     ok "a declared path was resolved by the workspace"
 else
-    bad "a declared path did not resolve: $(echo "$out" | head -2 | tr '
-' ' ')"
+    bad "a declared path did not resolve: $(echo "$out" | head -2 | tr '\n' ' ')"
 fi
 
 # And the other half of the rule: THIS machine wins when it has the path too.
@@ -630,12 +629,12 @@ docker rm -f itest-web >/dev/null 2>&1
 # One container port published twice, which is the case that cannot be paired
 # back and does not need to be: both assigned ports front port 80, so both
 # numbers work whichever way round they were matched.
-if ! twice=$(dockert run -d --name itest-twice -p 18082:80 -p 18083:80     -v "$PROJECT:/usr/share/nginx/html" nginx:alpine 2>&1); then
+if ! twice=$(dockert run -d --name itest-twice -p 18082:80 -p 18083:80 \
+    -v "$PROJECT:/usr/share/nginx/html" nginx:alpine 2>&1); then
     # head, not tail: docker ends a failure with "Run 'docker run --help' for
     # more information", so the last line is boilerplate and the first is what
     # went wrong. Taking the last one cost a CI round trip.
-    bad "a container publishing one port twice was refused: $(echo "$twice" | head -2 | tr '
-' ' ')"
+    bad "a container publishing one port twice was refused: $(echo "$twice" | head -2 | tr '\n' ' ')"
 fi
 
 for port in 18082 18083; do
@@ -665,9 +664,9 @@ echo "== 10b. a published UDP port answers here =="
 # runner has fails for a reason it is not about.
 if ! build_probe udpecho "$PROJECT/udpecho"; then
     bad "could not build the udp echo probe"
-elif ! dockert run -d --name itest-udp -p 15353:5353/udp     -v "$PROJECT:/probe:ro" alpine:3 /probe/udpecho :5353 >"$WORK/udp-run.log" 2>&1; then
-    bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '
-' ' ')"
+elif ! dockert run -d --name itest-udp -p 15353:5353/udp \
+    -v "$PROJECT:/probe:ro" alpine:3 /probe/udpecho :5353 >"$WORK/udp-run.log" 2>&1; then
+    bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '\n' ' ')"
 else
     # The daemon publishes where it likes (ADR 0008): the number above is this
     # machine's, and these two must not be the same.
@@ -743,7 +742,10 @@ if build_probe watchprobe "$WATCHPROBE" && cp "$WATCHPROBE" "$PROJECT/watchprobe
     # empty log and no explanation, which cost a CI round trip to diagnose:
     # the binary was on the share with a synthesised mode 0644 and could not
     # be executed.
-    if ! dockert run -d --name itest-watch             -v "$PROJECT:/probe:ro"             -v "$WATCHDIR:/data"             alpine:3 /probe/watchprobe /data >"$WORK/watch-run.log" 2>&1; then
+    if ! dockert run -d --name itest-watch \
+        -v "$PROJECT:/probe:ro" \
+        -v "$WATCHDIR:/data" \
+        alpine:3 /probe/watchprobe /data >"$WORK/watch-run.log" 2>&1; then
         bad "the watch probe container would not start"
         sed 's/^/        /' "$WORK/watch-run.log"
         probe=""
@@ -982,7 +984,11 @@ else
         bad "could not determine the first account's port"
     else
         # -R on the OTHER account, targeting the FIRST account's port.
-        hijack=$(timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519"             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null             -o ExitOnForwardFailure=yes -o BatchMode=yes             -p "$SSH_PORT" -N -R "127.0.0.1:$first_port:127.0.0.1:1"             "$OTHER@127.0.0.1" 2>&1 </dev/null; echo "rc=$?")
+        hijack=$(timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ExitOnForwardFailure=yes -o BatchMode=yes \
+            -p "$SSH_PORT" -N -R "127.0.0.1:$first_port:127.0.0.1:1" \
+            "$OTHER@127.0.0.1" 2>&1 </dev/null; echo "rc=$?")
 
         if echo "$hijack" | grep -q "rc=0"; then
             bad "SECURITY: $OTHER bound $ACCOUNT's NFS port $first_port"
@@ -1078,7 +1084,9 @@ if timeout 180 docker compose -f "$PROJECT/compose.yaml" up -d >"$WORK/compose.l
         sed 's/^/        /' "$WORK/compose.log" | tail -20
     fi
 
-    timeout 120 docker compose -f "$PROJECT/compose.yaml" down -v >/dev/null 2>&1         && ok "compose tore the stack down"         || bad "compose down failed"
+    timeout 120 docker compose -f "$PROJECT/compose.yaml" down -v >/dev/null 2>&1 \
+        && ok "compose tore the stack down" \
+        || bad "compose down failed"
 else
     bad "compose up failed"
     sed 's/^/        /' "$WORK/compose.log" | tail -20
@@ -1225,9 +1233,7 @@ shellout=$(ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$ACCOUNT" 60 \
     'tty; id -un; docker ps --format {{.Names}} 2>&1 | head -3' -tt 2>&1)
 
 # tr squeezes the pty's CRLF out so a failure prints as one readable line.
-trim() { echo "$1" | tr -d '
-' | tail -3 | tr '
-' ' '; }
+trim() { echo "$1" | tr -d '\n' | tail -3 | tr '\n' ' '; }
 
 if echo "$shellout" | grep -q '/dev/pts/'; then
     ok "a stock ssh gets an interactive shell on a pty"
@@ -1372,19 +1378,18 @@ if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" build -t itest-buil
         bad "ADD did not carry the subdirectory"
     fi
 else
-    bad "docker build failed: $(echo "$out" | tail -5 | tr '
-' ' ')"
+    bad "docker build failed: $(echo "$out" | tail -5 | tr '\n' ' ')"
 fi
 
 # And the image is real: it runs, and what COPY put there is still there.
-expect_output "the built image runs and carries the copied file"     "content-from-the-client-machine" -- --rm itest-build cat /marker.txt
+expect_output "the built image runs and carries the copied file" \
+    "content-from-the-client-machine" -- --rm itest-build cat /marker.txt
 
 # A file the context excludes must NOT reach the daemon. This is the only
 # thing standing between a build and uploading whatever else is in the
 # directory -- a .git, a node_modules, somebody's secrets.
 echo "must-not-be-uploaded" >"$BUILDCTX/secret.txt"
-printf 'secret.txt
-' >"$BUILDCTX/.dockerignore"
+printf 'secret.txt\n' >"$BUILDCTX/.dockerignore"
 cat >"$BUILDCTX/Dockerfile" <<'DOCKERFILE'
 FROM alpine:3
 COPY . /ctx
@@ -1397,8 +1402,7 @@ if out=$(cd "$BUILDCTX" && timeout 300 "$WORK/remote-docker" build -t itest-igno
         ok ".dockerignore keeps a file out of the build context"
     fi
 else
-    bad "the .dockerignore build failed: $(echo "$out" | tail -5 | tr '
-' ' ')"
+    bad "the .dockerignore build failed: $(echo "$out" | tail -5 | tr '\n' ' ')"
 fi
 
 timeout 60 docker rmi -f itest-build itest-ignore >/dev/null 2>&1
@@ -1415,7 +1419,9 @@ echo "== 14. elevate =="
 ELEV=remote-docker-elev
 hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
 
-if hostdocker run -d --name "$ELEV"         -v /var/run/docker.sock:/var/run/host-docker.sock         "$IMAGE" elevate >/dev/null 2>&1; then
+if hostdocker run -d --name "$ELEV" \
+    -v /var/run/docker.sock:/var/run/host-docker.sock \
+    "$IMAGE" elevate >/dev/null 2>&1; then
 
     elevated=false
     for _ in $(seq 1 60); do
@@ -1494,7 +1500,10 @@ if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe"; then
     if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
         bad "the watching client never came up"
         sed 's/^/        /' "$WORK/watch-up.log"
-    elif ! dockert run -d --name itest-replay             -v "$PROJECT:/probe:ro"             -v "$REPLAYDIR:/data"             alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/replay-run.log" 2>&1; then
+    elif ! dockert run -d --name itest-replay \
+        -v "$PROJECT:/probe:ro" \
+        -v "$REPLAYDIR:/data" \
+        alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/replay-run.log" 2>&1; then
         bad "the replay probe container would not start"
         sed 's/^/        /' "$WORK/replay-run.log"
     else
@@ -1550,7 +1559,8 @@ mkdir -p "$CACHEDIR"
 echo "first" >"$CACHEDIR/marker"
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
-    if dockert run -d --name itest-cached -v "$CACHEDIR:/w:cached"         alpine:3 sleep 300 >"$WORK/cached-run.log" 2>&1; then
+    if dockert run -d --name itest-cached -v "$CACHEDIR:/w:cached" \
+        alpine:3 sleep 300 >"$WORK/cached-run.log" 2>&1; then
         ok "a container starts against a cached mount"
 
         if outputs '^first$' docker exec itest-cached cat /w/marker; then
@@ -1630,7 +1640,8 @@ echo "first" >"$UNIONDIR/marker"
 echo "here before the fill" >"$UNIONDIR/while-down.txt"
 
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
-    if dockert run -d --name itest-deleg -v "$UNIONDIR:/w:read=cached,write=back"         alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
+    if dockert run -d --name itest-deleg -v "$UNIONDIR:/w:read=cached,write=back" \
+        alpine:3 sleep 900 >"$WORK/deleg-run.log" 2>&1; then
         ok "a container starts against a write=back union"
 
         if outputs '^first$' docker exec itest-deleg cat /w/marker; then
@@ -1690,7 +1701,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
 
         # What the container mounts is the union, in the daemon's namespace,
         # rather than a volume of its own.
-        if outputs '/run/rd-union/' docker inspect             -f '{{range .Mounts}}{{.Source}}{{end}}' itest-deleg; then
+        if outputs '/run/rd-union/' docker inspect \
+            -f '{{range .Mounts}}{{.Source}}{{end}}' itest-deleg; then
             ok "the container binds the union the workspace mounted"
         else
             bad "the mount source is [$LAST_OUTPUT], want a union"
@@ -2116,7 +2128,8 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         # Polled, because the fill and the reconcile it starts with are
         # asynchronous by design -- the container does not wait for either, and
         # what the cache does not hold yet is served from the live export.
-        if dockert run -d --name itest-reconcile -v "$UNIONDIR:/w:read=cached,write=back"             alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
+        if dockert run -d --name itest-reconcile -v "$UNIONDIR:/w:read=cached,write=back" \
+            alpine:3 sleep 120 >"$WORK/reconcile-run.log" 2>&1; then
             if wait_gone docker itest-reconcile /w/while-down.txt 20; then
                 ok "a file deleted while the session was down is gone from the cache"
             else
@@ -2227,7 +2240,8 @@ fi
 #
 # Two binaries, same source, different stamps: the versions cannot be ordered.
 # The name says what it is, THIS build wearing another version, not "-old".
-if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-otherbuild"         -o "$WORK/remote-docker-otherbuild" ./cmd/remote-docker); then
+if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-otherbuild" \
+    -o "$WORK/remote-docker-otherbuild" ./cmd/remote-docker); then
 
     "$WORK/remote-docker-otherbuild" remote start >/dev/null 2>&1
 
@@ -2297,8 +2311,7 @@ if REMOTE_DOCKER_DAEMON_STANDBY=5s "$WORK/remote-docker" remote start >/dev/null
         grep -q "from the project directory" "$WORK/after-standby.txt"; then
         ok "the endpoint still serves after standby, and the request woke it"
     else
-        bad "a container run after standby failed: $(tail -2 "$WORK/after-standby.txt" 2>/dev/null | tr '
-' ' ')"
+        bad "a container run after standby failed: $(tail -2 "$WORK/after-standby.txt" 2>/dev/null | tr '\n' ' ')"
     fi
 
     # Standing by and waking must be repeatable, not a one-shot.
@@ -2307,8 +2320,7 @@ if REMOTE_DOCKER_DAEMON_STANDBY=5s "$WORK/remote-docker" remote start >/dev/null
         grep -q "from the project directory" "$WORK/after-standby2.txt"; then
         ok "it stands by and wakes again"
     else
-        bad "a second standby did not wake: $(tail -2 "$WORK/after-standby2.txt" 2>/dev/null | tr '
-' ' ')"
+        bad "a second standby did not wake: $(tail -2 "$WORK/after-standby2.txt" 2>/dev/null | tr '\n' ' ')"
     fi
 
     "$WORK/remote-docker" remote stop >/dev/null 2>&1
@@ -2395,8 +2407,7 @@ inspected=$("$WORK/remote-docker" remote inspect itest-ws 2>&1)
 if echo "$inspected" | grep -q "docker context" && echo "$inspected" | grep -q "endpoint"; then
     ok "workspace inspect reports the endpoint and the docker context together"
 else
-    bad "workspace inspect was incomplete: $(echo "$inspected" | tr '
-' ' ')"
+    bad "workspace inspect was incomplete: $(echo "$inspected" | tr '\n' ' ')"
 fi
 
 if used=$("$WORK/remote-docker" remote use itest-ws 2>&1) &&
@@ -2437,8 +2448,7 @@ if ! hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/d
     bad "could not create a foreign context, so nothing was asked of one"
 elif out=$(timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps 2>&1); then
     bad "a foreign context was redirected to our daemon"
-    info "output: $(echo "$out" | head -2 | tr '
-' '; ')"
+    info "output: $(echo "$out" | head -2 | tr '\n' '; ')"
 else
     ok "a docker context we did not create is left alone"
 fi
@@ -2470,13 +2480,11 @@ fi
 # assertion below can fail three different ways -- the context was never
 # recognised as ours, the docker command refused, or it was removed and
 # something put it back -- and they are indistinguishable from the outside.
-info "workspace rm said: $(echo "$out" | tr '
-' '; ')"
+info "workspace rm said: $(echo "$out" | tr '\n' '; ')"
 
 if outputs '^itest-ws$' hostdocker context ls --format '{{.Name}}'; then
     bad "the docker context outlived the workspace"
-    info "context metadata: $(hostdocker context inspect itest-ws --format '{{.Metadata.Description}}' 2>&1 | tr '
-' ' ')"
+    info "context metadata: $(hostdocker context inspect itest-ws --format '{{.Metadata.Description}}' 2>&1 | tr '\n' ' ')"
 else
     ok "removing the workspace removed its docker context"
 fi
@@ -2578,7 +2586,10 @@ echo "== 19. through a real reverse proxy, over wss =="
 # client. The agent serves plain ws and knows nothing about any of this.
 if command -v openssl >/dev/null 2>&1; then
     mkdir -p "$WORK/proxy"
-    openssl req -x509 -newkey rsa:2048 -nodes -days 1         -keyout "$WORK/proxy/key.pem" -out "$WORK/proxy/cert.pem"         -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"         >/dev/null 2>&1
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+        -keyout "$WORK/proxy/key.pem" -out "$WORK/proxy/cert.pem" \
+        -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+        >/dev/null 2>&1
     chmod 644 "$WORK/proxy/key.pem" "$WORK/proxy/cert.pem"
 
     cat >"$WORK/proxy/nginx.conf" <<'NGINX'
@@ -2605,7 +2616,10 @@ http {
 NGINX
 
     hostdocker rm -f itest-proxy >/dev/null 2>&1
-    if hostdocker run -d --name itest-proxy --network host         -v "$WORK/proxy:/etc/proxy:ro"         -v "$WORK/proxy/nginx.conf:/etc/nginx/nginx.conf:ro"         nginx:alpine >/dev/null 2>&1; then
+    if hostdocker run -d --name itest-proxy --network host \
+        -v "$WORK/proxy:/etc/proxy:ro" \
+        -v "$WORK/proxy/nginx.conf:/etc/nginx/nginx.conf:ro" \
+        nginx:alpine >/dev/null 2>&1; then
         ok "a reverse proxy is in front of the workspace"
     else
         bad "could not start the reverse proxy"
@@ -2619,14 +2633,17 @@ NGINX
     # A session of its own: the reverse-tunnel port belongs to one session at a
     # time (ADR 0029), so this cannot run beside the one above.
     wsenv() {
-        env REMOTE_DOCKER_HOST="wss://localhost:8443/tunnel"             REMOTE_DOCKER_PORT=             REMOTE_DOCKER_CA_FILE="$WORK/proxy/cert.pem"             REMOTE_DOCKER_ENDPOINT="$WORK/ws.sock"             "$@"
+        env REMOTE_DOCKER_HOST="wss://localhost:8443/tunnel" \
+            REMOTE_DOCKER_PORT= \
+            REMOTE_DOCKER_CA_FILE="$WORK/proxy/cert.pem" \
+            REMOTE_DOCKER_ENDPOINT="$WORK/ws.sock" \
+            "$@"
     }
 
     if outputs "tunnel port" wsenv timeout 90 "$WORK/remote-docker" remote status; then
         ok "the workspace answers over wss, through the proxy"
     else
-        bad "no answer over wss: $(echo "$LAST_OUTPUT" | tail -2 | tr '
-' ' ')"
+        bad "no answer over wss: $(echo "$LAST_OUTPUT" | tail -2 | tr '\n' ' ')"
     fi
 
     # The reverse forward is the half a proxy is most likely to break: it is the
@@ -2635,7 +2652,8 @@ NGINX
     WS_PID=$!
     if wait_endpoint "$WORK/ws.sock" "$WS_PID"; then
         ok "the endpoint came up over wss"
-        if out=$(timeout 120 docker -H "unix://$WORK/ws.sock" run --rm             -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
+        if out=$(timeout 120 docker -H "unix://$WORK/ws.sock" run --rm \
+            -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
             if [ "$out" = "from the project directory" ]; then
                 ok "a bind mount resolves through the proxy, so the reverse forward works"
             else
@@ -2659,7 +2677,8 @@ NGINX
     # is one the agent has nothing to notice about: the assertion then fails
     # for the opposite of the reason it is testing. A mounted container keeps
     # the connection leased, measured in test/nfs-resilience.sh section 4.
-    timeout 60 docker -H "unix://$WORK/ws.sock" run -d --name itest-ws-hold         -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1
+    timeout 60 docker -H "unix://$WORK/ws.sock" run -d --name itest-ws-hold \
+        -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1
 
     hostdocker pause itest-proxy >/dev/null 2>&1
     info "the proxy is paused; waiting for the agent to notice"

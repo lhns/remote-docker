@@ -73,7 +73,8 @@ hostdocker() { env -u DOCKER_HOST docker "$@"; }
 # -q a failed build reports the Dockerfile line and NOTHING from the compiler,
 # and the build's own words are the whole diagnosis.
 build_image() {
-    if docker build -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO"             >"$WORK/image-build.log" 2>&1; then
+    if docker build -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" \
+        >"$WORK/image-build.log" 2>&1; then
         return 0
     fi
     echo "--- image build output ---"
@@ -227,7 +228,15 @@ start_session() {
     shift 5
     (
         cd "$dir" || exit 1
-        exec env             REMOTE_DOCKER_STATE_DIR="$statedir"             REMOTE_DOCKER_HOST=127.0.0.1             REMOTE_DOCKER_PORT="$SSH_PORT"             REMOTE_DOCKER_USER="$user"             REMOTE_DOCKER_ENDPOINT="$endpoint"             REMOTE_DOCKER_WATCH=partial             "$@"             "$WORK/remote-docker" remote start --foreground
+        exec env \
+            REMOTE_DOCKER_STATE_DIR="$statedir" \
+            REMOTE_DOCKER_HOST=127.0.0.1 \
+            REMOTE_DOCKER_PORT="$SSH_PORT" \
+            REMOTE_DOCKER_USER="$user" \
+            REMOTE_DOCKER_ENDPOINT="$endpoint" \
+            REMOTE_DOCKER_WATCH=partial \
+            "$@" \
+            "$WORK/remote-docker" remote start --foreground
     ) >"$log" 2>&1 &
     echo $!
 }

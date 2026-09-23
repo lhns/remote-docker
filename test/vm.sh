@@ -117,7 +117,8 @@ session() {
     local log=$1
     # Watching on for the same reason lib.sh's start_session has it: a
     # delegated share refuses to run without it (ADR 0044).
-    (cd "$WORK/project" && exec env REMOTE_DOCKER_WATCH=partial         "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
+    (cd "$WORK/project" && exec env REMOTE_DOCKER_WATCH=partial \
+        "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
     CLIENT_PID=$!
 }
 
@@ -323,7 +324,8 @@ else
         UNIONDIR="$WORK/uniondir"
         mkdir -p "$UNIONDIR"
         echo "served from the machine" >"$UNIONDIR/marker"
-        if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg         -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
+        if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg \
+            -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
             ok "a container starts against a delegated union"
 
             if union_is_fuse rd vm-deleg; then
@@ -357,7 +359,8 @@ else
             # again. Without adoption the supervisor mounts a second fuse-overlayfs on
             # the same path, over the same upper and work directories -- which
             # overlayfs does not allow and which nothing else here would notice.
-            if timeout 300 "$WORK/remote-docker" run --rm             -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
+            if timeout 300 "$WORK/remote-docker" run --rm \
+                -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
                 ok "a second container prepares the same share after the restart"
             else
                 bad "the share could not be prepared again: $(tail -2 "$WORK/deleg2.log" | tr -s '[:space:]' ' ')"
