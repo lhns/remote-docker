@@ -99,6 +99,22 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+// A file the fill sent, changed in the container and deleted here. decide read
+// the missing local file's mtime and panicked, in a write-back goroutine that
+// nothing recovers, which took the client down. The changed side wins, as it
+// does when the container deleted and you changed.
+func TestDecideDeletedHereChangedThere(t *testing.T) {
+	manifest := map[string]baseline{"/gone.go": {Size: 10, ModTime: sentAt}}
+	missing := func(string) (fs.FileInfo, bool) { return nil, false }
+	changes := []Change{{Path: "/gone.go", Size: 20, ModTime: laterHere.UnixNano()}}
+
+	actions := decide(manifest, changes, missing, 0, true)
+
+	if len(actions) != 1 || actions[0].kind != kindConflict || !actions[0].Wins {
+		t.Errorf("decided %+v, want one conflict the container's version wins", actions)
+	}
+}
+
 // Nothing is written back from a cache that is not complete. A file the fill
 // never sent looks exactly like one the container created, and the cost of
 // that mistake is content appearing in somebody's source tree that they never

@@ -103,7 +103,14 @@ type Manager struct {
 
 type containerForwards struct {
 	name     string
-	forwards map[int]Forward // keyed by the LOCAL port, which is what this machine opened
+	forwards map[listener]Forward
+}
+
+// listener is what this machine opened: the LOCAL port, and the protocol,
+// since 53/tcp and 53/udp are two listeners on one number.
+type listener struct {
+	network string
+	port    int
 }
 
 // Reconcile brings the set of forwards in line with what is running now.
@@ -148,18 +155,18 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.closeContainerLocked(id, existing)
 			continue
 		}
-		keep := map[int]bool{}
+		keep := map[listener]bool{}
 		for _, p := range published(container) {
 			for _, local := range m.localPorts(container, p) {
-				keep[local] = true
+				keep[listener{network(p), local}] = true
 			}
 		}
-		for port, fwd := range existing.forwards {
-			if !keep[port] {
+		for l, fwd := range existing.forwards {
+			if !keep[l] {
 				_ = fwd.Close()
-				delete(existing.forwards, port)
+				delete(existing.forwards, l)
 				m.log().Info("closed a forward: the container no longer publishes it",
-					"addr", bindAddr, "port", port, "container", existing.name)
+					"addr", bindAddr, "port", l.port, "network", l.network, "container", existing.name)
 			}
 		}
 	}
@@ -179,12 +186,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		container := wanted[id]
 		existing, ok := m.active[id]
 		if !ok {
-			existing = &containerForwards{name: container.Name, forwards: map[int]Forward{}}
+			existing = &containerForwards{name: container.Name, forwards: map[listener]Forward{}}
 			m.active[id] = existing
 		}
 		for _, p := range published(container) {
 			for _, local := range m.localPorts(container, p) {
-				if _, already := existing.forwards[local]; already {
+				if _, already := existing.forwards[listener{network(p), local}]; already {
 					continue
 				}
 				m.openLocked(existing, container, p, local)
@@ -212,7 +219,7 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 		m.log().Warn("could not forward", "addr", local, "container", container.Name, "err", err)
 		return
 	}
-	entry.forwards[localPort] = fwd
+	entry.forwards[listener{network(p), localPort}] = fwd
 	m.log().Info("forwarding", "from", fwd.LocalAddr(), "container", container.Name, "port", p.PrivatePort)
 }
 
@@ -228,10 +235,10 @@ func (m *Manager) localPorts(c Container, p Published) []int {
 }
 
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
-	for port, fwd := range entry.forwards {
+	for l, fwd := range entry.forwards {
 		_ = fwd.Close()
 		m.log().Info("closed a forward: the container stopped",
-			"addr", bindAddr, "port", port, "container", entry.name)
+			"addr", bindAddr, "port", l.port, "network", l.network, "container", entry.name)
 	}
 	delete(m.active, id)
 }
@@ -262,8 +269,8 @@ func (m *Manager) Active() []int {
 
 	var out []int
 	for _, entry := range m.active {
-		for port := range entry.forwards {
-			out = append(out, port)
+		for l := range entry.forwards {
+			out = append(out, l.port)
 		}
 	}
 	sort.Ints(out)
@@ -317,8 +324,8 @@ func (m *Manager) log() *slog.Logger {
 	return logx.Or(m.Log)
 }
 
-// Forwarding reports whether this manager already holds a local listener on a
-// port.
+// Forwarding reports whether this manager already holds a local TCP listener
+// on a port.
 //
 // Asked before a container is created: the workspace daemon chooses the
 // published port now, so the number the user typed is claimed on this machine
@@ -329,7 +336,7 @@ func (m *Manager) Forwarding(local int) bool {
 	defer m.mu.Unlock()
 
 	for _, entry := range m.active {
-		if _, ok := entry.forwards[local]; ok {
+		if _, ok := entry.forwards[listener{"tcp", local}]; ok {
 			return true
 		}
 	}

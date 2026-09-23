@@ -53,13 +53,19 @@ func TarFilesFrom(root string, names []string) []TarFile {
 // container removed between being listed and being read. Either way one absent
 // file is better than a batch nobody gets.
 func WriteTar(files []TarFile, w io.Writer) error {
+	return WriteTarFrom(os.Open, files, w)
+}
+
+// WriteTarFrom is WriteTar opening each Path with open, for a caller that must
+// not follow a symlink out of a directory: the agent passes os.Root.Open.
+func WriteTarFrom(open func(string) (*os.File, error), files []TarFile, w io.Writer) error {
 	tw := tar.NewWriter(w)
 
 	for _, file := range files {
 		// Opened BEFORE its header is written. Once the header is out the entry
 		// has to be filled with something, and what it would be filled with is
 		// NULs: a file that is there and is wrong.
-		f, err := os.Open(file.Path)
+		f, err := open(file.Path)
 		if err != nil {
 			continue
 		}

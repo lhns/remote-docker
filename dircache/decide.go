@@ -156,6 +156,14 @@ func decide(
 			continue
 		}
 
+		if !here {
+			actions = append(actions, action{
+				Path: change.Path, kind: kindConflict, Wins: true,
+				Why: "you deleted it and the container changed it; its version is kept",
+			})
+			continue
+		}
+
 		// Both sides changed, which is the only case a clock enters. Last
 		// writer wins, as a plain mount would have behaved -- with the offset
 		// applied rather than pretending the two clocks agree.
