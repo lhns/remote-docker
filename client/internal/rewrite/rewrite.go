@@ -649,6 +649,13 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspa
 	if err != nil {
 		return "", "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
 	}
+	if file != "" && mode.Union() {
+		// A union is bound by path and a file is mounted by subpath, and the
+		// two do not combine: the result is a volume named after a path, or
+		// a bind carrying VolumeOptions, and the daemon refuses both.
+		return "", "", fmt.Errorf("rewrite: mounting the single file %s with write=%s is not supported%s",
+			localPath, mode.Write, fixMountTheDirectory)
+	}
 	if file != "" && !supportsSubpath(r.DockerVersion) {
 		return "", "", fmt.Errorf(
 			"rewrite: mounting the single file %s needs Docker %d or newer on the workspace, which reports %s%s",
