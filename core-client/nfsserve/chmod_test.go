@@ -156,9 +156,11 @@ func TestChmodOnASymlinkDoesNotReachItsTarget(t *testing.T) {
 
 	target := mountCWD(t, share)
 
+	// Not 0777: that is what a link reports, and go-nfs skips a chmod to the
+	// mode a file already has.
 	var sattr nfsclient.Sattr3
 	sattr.Mode.SetIt = true
-	sattr.Mode.Mode = 0o777
+	sattr.Mode.Mode = 0o640
 	reply := target.Setattr("escape", sattr)
 
 	info, err := os.Stat(outside)
