@@ -127,3 +127,27 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 		t.Errorf("claimed %s, which belongs to another session", theirs)
 	}
 }
+
+// The guard answers for a share's cache volume as well. The collector asks the
+// workspace which caches are mounted BEFORE taking the guard, so a union being
+// prepared in between was answered "not mounted" and then removed under the
+// guard, which knew only the share volume.
+func TestTheGuardCoversAShareCache(t *testing.T) {
+	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs())}
+	share, err := s.registry.Register(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	volume, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !s.exportsVolume(workspace.CacheVolumeName(volume)) {
+		t.Errorf("the cache over an exported share, %s, is not covered", workspace.CacheVolumeName(volume))
+	}
+	theirs := workspace.VolumeNameForID("", workspace.ShareID("/somebody/elses/project"))
+	if s.exportsVolume(workspace.CacheVolumeName(theirs)) {
+		t.Error("claimed the cache over a share this session does not export")
+	}
+}

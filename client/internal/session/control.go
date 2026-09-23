@@ -228,14 +228,21 @@ func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
 }
 
 // exportsVolume reports whether a managed volume backs a directory this
-// session is exporting right now.
+// session is exporting right now, or is the cache over one.
 //
 // The registry is the only place that knows: the volume exists on the
 // workspace from the moment a bind is rewritten, and the daemon does not call
 // it in use until a container names it. Everything between those two is a
-// volume that must survive collection.
+// volume that must survive collection. A cache volume is created and its union
+// prepared in that same window, after the workspace was asked which caches it
+// has mounted.
 func (s *Session) exportsVolume(volume string) bool {
-	return s.ourVolumes()[volume]
+	for name := range s.ourVolumes() {
+		if volume == name || volume == workspace.CacheVolumeName(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Status answers the control endpoint, satisfying proxy.Control.
