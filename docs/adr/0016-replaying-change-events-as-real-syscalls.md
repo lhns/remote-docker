@@ -195,7 +195,7 @@ owning one end and a marker.
   ever changes, this stops being a filesystem and becomes a sync, and the
   project's central claim changes with it.
 - The agent gains a second thing it does with paths from the client, so
-  `FSEvent.Validate` is checked on **both** sides — this stream tells a root
+  `notify.Event.Validate` is checked on **both** sides — this stream tells a root
   process which path to touch, and neither end may assume the other checked.
 - `test/probes/watchprobe` reads raw inotify rather than using fsnotify, permanently.
   fsnotify's inotify mask omits `IN_OPEN` and `IN_CLOSE_WRITE`, so the library
