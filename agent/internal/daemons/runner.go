@@ -233,7 +233,9 @@ func (m *Manager) ensure(ctx context.Context, account string) (*Daemon, error) {
 			started.checked = time.Now()
 			m.byName[account] = started
 			delete(m.failed, account)
-		} else {
+		} else if ctx.Err() == nil {
+			// Not when this caller gave up: that says nothing about the
+			// daemon, and the waiters behind it still have time of their own.
 			if m.failed == nil {
 				m.failed = map[string]failure{}
 			}
