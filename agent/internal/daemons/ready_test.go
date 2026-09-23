@@ -1,6 +1,7 @@
 package daemons
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -40,6 +41,27 @@ func TestAFailedStartIsRememberedSoTheNextCallerDoesNotPayForItAgain(t *testing.
 
 	if f, ok := m.failed["not a name"]; !ok || f.err != err {
 		t.Errorf("the failure was not recorded: %+v", m.failed)
+	}
+}
+
+// A start whose caller gave up says nothing about the daemon, so it is not
+// recorded: every session context is one somebody can cancel with Ctrl-C, and
+// recording it told every other caller for failTTL that THEIR daemon "did not
+// start before the caller gave up: context canceled".
+func TestAStartWhoseCallerGaveUpIsNotRemembered(t *testing.T) {
+	m := manager(fakeDocker{})
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, first := m.ensure(gone, "not a name")
+	if first == nil {
+		t.Fatal("ensure accepted an unusable account name")
+	}
+	if _, ok := m.failed["not a name"]; ok {
+		t.Error("a start whose caller gave up was recorded as the daemon's failure")
+	}
+	if _, again := m.ensure(t.Context(), "not a name"); again == first { //nolint:errorlint // identity is the point
+		t.Error("a caller with time left was answered from a caller that gave up")
 	}
 }
 
