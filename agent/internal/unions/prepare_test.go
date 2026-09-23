@@ -54,8 +54,8 @@ func hold(m *Manager, account, export string) {
 	done := make(chan struct{})
 	close(done)
 	m.mu.Lock()
-	m.shares[key(account, export)] = &live{
-		spec:   union.Spec{Export: export, Port: 30001, CacheDir: "/var/lib/docker/volumes/rd-cache/_data"},
+	m.shares[key(account, thisClient, export)] = &live{
+		spec:   union.Spec{Export: export, Client: thisClient, Port: 30001, CacheDir: "/var/lib/docker/volumes/rd-cache/_data"},
 		cancel: func() {},
 		done:   done,
 	}
@@ -98,7 +98,7 @@ func TestPrepareDoesNotStallAnotherShare(t *testing.T) {
 	}
 
 	answered := make(chan error, 1)
-	go func() { answered <- m.Drop(context.Background(), "bob", warmExport, nil) }()
+	go func() { answered <- m.Drop(context.Background(), "bob", thisClient, warmExport, nil) }()
 
 	select {
 	case err := <-answered:
@@ -172,7 +172,7 @@ func TestApplyGivesUpOnAWedgedUnion(t *testing.T) {
 
 	answered := make(chan error, 1)
 	go func() {
-		answered <- m.Apply(context.Background(), "alice", warmExport, cache.CodecNone, strings.NewReader(""))
+		answered <- m.Apply(context.Background(), "alice", thisClient, warmExport, cache.CodecNone, strings.NewReader(""))
 	}()
 
 	select {
@@ -182,5 +182,48 @@ func TestApplyGivesUpOnAWedgedUnion(t *testing.T) {
 		}
 	case <-time.After(aliveTimeout + 5*time.Second):
 		t.Errorf("Apply waited past %s on a context with no deadline", aliveTimeout)
+	}
+}
+
+// Two machines of one account share a daemon (ADR 0029) and, for /cwd or two
+// identical paths, a share id. The files behind each are on its own machine,
+// so each needs its own union: handed the first one's, the second machine's
+// container reads the first machine's files and its fill writes into them.
+func TestPrepareGivesEachMachineItsOwnUnion(t *testing.T) {
+	m := manager(t)
+
+	var mu sync.Mutex
+	mounted := map[string]bool{}
+	m.onStart = func(spec union.Spec) {
+		mu.Lock()
+		defer mu.Unlock()
+		mounted[spec.Merged()] = true
+	}
+	m.probe = func(_ context.Context, spec union.Spec) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !mounted[spec.Merged()] {
+			return errors.New("union: nothing is mounted there")
+		}
+		return nil
+	}
+
+	var merged []string
+	for i, client := range []string{thisClient, "11223344"} {
+		vol, err := workspace.CacheVolumeForExport(client, warmExport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := cache.Request{Op: cache.OpPrepare, Export: warmExport, Port: 30001 + i,
+			Cache: vol, Read: string(workspace.ReadCached)}
+		got, err := m.Prepare(context.Background(), "alice", client, Daemon{}, req)
+		if err != nil {
+			t.Fatalf("Prepare for %s: %v", client, err)
+		}
+		merged = append(merged, got)
+	}
+
+	if merged[0] == merged[1] {
+		t.Errorf("two machines were handed one union, %s", merged[0])
 	}
 }

@@ -35,8 +35,8 @@ import (
 // that names an encoding this version does not have must not be handed to the
 // archive reader, which would fail somewhere inside it with a message about a
 // corrupt header instead of about the codec.
-func (m *Manager) Apply(ctx context.Context, account, export, codec string, body io.Reader) error {
-	l, root, err := m.mergedRoot(ctx, account, export)
+func (m *Manager) Apply(ctx context.Context, account, client, export, codec string, body io.Reader) error {
+	l, root, err := m.mergedRoot(ctx, account, client, export)
 	if err != nil {
 		// The payload still has to be drained, or the next frame is read out
 		// of the middle of a tar. The caller cannot do it: only here is it
@@ -167,8 +167,8 @@ func decoded(codec string, body io.Reader) (io.Reader, func(), error) {
 // Removing through the union leaves overlayfs's whiteout, which is correct
 // here: the lower has lost the file too, so there is nothing the whiteout could
 // wrongly hide.
-func (m *Manager) Drop(ctx context.Context, account, export string, paths []string) error {
-	l, root, err := m.mergedRoot(ctx, account, export)
+func (m *Manager) Drop(ctx context.Context, account, client, export string, paths []string) error {
+	l, root, err := m.mergedRoot(ctx, account, client, export)
 	if err != nil {
 		return err
 	}
@@ -188,8 +188,8 @@ func (m *Manager) Drop(ctx context.Context, account, export string, paths []stri
 
 // mergedRoot is where a share's union can be written, as the AGENT can reach
 // it, and it refuses a share that is not serving.
-func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live, string, error) {
-	l, ok := m.share(account, export)
+func (m *Manager) mergedRoot(ctx context.Context, account, client, export string) (*live, string, error) {
+	l, ok := m.share(account, client, export)
 	if !ok {
 		return nil, "", fmt.Errorf("unions: %s has no cache; prepare it first: %w", export, ErrNoShare)
 	}
