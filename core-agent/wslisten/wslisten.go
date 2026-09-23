@@ -99,7 +99,7 @@ func (l *Listener) Handler() http.Handler {
 		// The connection outlives this request, so it gets a context of its own
 		// rather than the request's, which the server cancels on return.
 		ctx, cancel := context.WithCancel(context.Background())
-		conn := websocket.NetConn(ctx, c, websocket.MessageBinary)
+		conn := closing{websocket.NetConn(ctx, c, websocket.MessageBinary), cancel}
 		go l.keepAlive(ctx, cancel, c)
 
 		select {
@@ -118,6 +118,21 @@ func (l *Listener) Handler() http.Handler {
 			_ = c.Close(websocket.StatusGoingAway, "shutting down")
 		}
 	})
+}
+
+// closing ends the handler's context when the accepting side closes the
+// connection. websocket.NetConn's Close cancels only contexts of its own, so
+// the handler waited for the next ping to fail and logged every ordinary
+// disconnect as a peer that stopped answering.
+type closing struct {
+	net.Conn
+	cancel context.CancelFunc
+}
+
+func (c closing) Close() error {
+	err := c.Conn.Close()
+	c.cancel()
+	return err
 }
 
 // keepAlive drops a connection that stops answering. See peerTimeout.
