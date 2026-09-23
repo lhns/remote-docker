@@ -52,25 +52,32 @@ func (m *Manager) Apply(ctx context.Context, account, export, codec string, body
 	}
 	defer done()
 
-	tr := tar.NewReader(decoded)
+	return extract(root, decoded, func(name string, info os.FileInfo) {
+		l.noteApplied(name, info.Size(), info.ModTime())
+	})
+}
+
+// extract writes a tar into the share rooted at root, telling landed about
+// each regular file as it LANDED rather than as it was asked for: a filesystem
+// keeping coarser timestamps than the tar would otherwise match nothing, and
+// every filled file would read as a container write for the rest of the
+// session.
+func extract(root string, body io.Reader, landed func(name string, info os.FileInfo)) error {
+	tr := tar.NewReader(body)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("unions: reading the batch for %s: %w", export, err)
+			return fmt.Errorf("unions: reading a batch: %w", err)
 		}
 		info, err := writeEntry(root, header, tr)
 		if err != nil {
 			return err
 		}
 		if info != nil {
-			// As it LANDED, not as it was asked for: a filesystem that keeps
-			// coarser timestamps than the tar carries would otherwise make
-			// this record match nothing, and every filled file would be
-			// reported as a container write for the rest of the session.
-			l.noteApplied("/"+strings.TrimPrefix(header.Name, "/"), info.Size(), info.ModTime())
+			landed("/"+strings.TrimPrefix(header.Name, "/"), info)
 		}
 	}
 }
@@ -173,15 +180,20 @@ func (m *Manager) Drop(ctx context.Context, account, export string, paths []stri
 		return err
 	}
 
+	return remove(root, paths, l.forgetApplied)
+}
+
+// remove deletes paths from the share rooted at root, telling gone about each.
+func remove(root string, paths []string, gone func(string)) error {
 	for _, p := range paths {
 		target, err := within(root, p)
 		if err != nil {
 			return err
 		}
 		if err := os.RemoveAll(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("unions: dropping %s from %s: %w", p, export, err)
+			return fmt.Errorf("unions: dropping %s: %w", p, err)
 		}
-		l.forgetApplied(p)
+		gone(p)
 	}
 	return nil
 }

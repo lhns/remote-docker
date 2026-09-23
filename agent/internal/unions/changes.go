@@ -99,7 +99,11 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 	if err != nil {
 		return nil, err
 	}
+	return pull(upper, paths)
+}
 
+// pull is the named paths under upper as a tar.
+func pull(upper string, paths []string) ([]byte, error) {
 	// Resolved one at a time rather than through TarFilesFrom, because each
 	// path comes from the client and `within` is what refuses one that leaves
 	// the share. A file that has gone since it was reported is skipped by
