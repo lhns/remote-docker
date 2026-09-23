@@ -1,11 +1,6 @@
-// What the session says about itself, and when it may be let go.
-//
-// Two audiences and one answer. The idle sweeper asks whether the CONNECTION
-// can be dropped; `remote-docker status` and the daemon's own expiry ask
-// whether the PROCESS can end. Both come down to hasLiveDependents, and the
-// consequences differ by a lot: a dropped connection reopens on the next
-// request, an ended process takes the NFS export with it and a running
-// container's filesystem with that.
+// What the session says about itself, and when it may be let go: the
+// connection (idle sweep) or the process (status, expiry). Both ask
+// hasLiveDependents.
 
 package session
 
@@ -38,22 +33,11 @@ func (s *Session) sweepIdle() {
 	}
 }
 
-// hasLiveDependents reports whether anything running still needs us.
-//
-// Two things can, and both must be checked. A container holding one of our
-// volumes has a live NFS mount that dropping the tunnel would break, and a
-// running container of ours may have published ports whose forwards exist only
-// while we are connected.
-//
-// Interactive sessions are deliberately NOT counted here. Every stream holds
-// its gate lease for its whole life, and the sweep stops at users > 0 long
-// before it asks this, so a separate counter would state an intent the gate
-// already enforces.
-//
-// The volume match is scoped to volumes WE created, never to the `rd-` prefix
-// alone. On a shared daemon (ADR 0012) that prefix also matches other
-// accounts' volumes, and one of those pins this connection open forever: an
-// idle release that can never fire, waiting on a dependency that is not ours.
+// hasLiveDependents reports whether a running container of ours (published
+// ports) or one holding our volumes (NFS mounts) still needs the connection.
+// Streams are counted by their gate lease, not here. Volumes are matched
+// against ours, never the `rd-` prefix, which on a shared daemon (ADR 0012)
+// matches other accounts' and would pin the connection forever.
 func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
 	containers, err := live.api.ListContainers(ctx)
 	if err != nil {
@@ -61,14 +45,9 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 	}
 	ours := s.ourVolumes()
 	for _, c := range containers {
-		// This account's containers, started from THIS machine. Scoped by
-		// client as well, because one account used from two computers labels
-		// both the same: without it, machine A could never release its
-		// connection while machine B had anything running, which is ADR 0015's
-		// idle release quietly becoming unreachable.
-		//
-		// A container with no client label was started before machines were
-		// named, and counts: it may well be this one's.
+		// Scoped to this machine too, or another machine's containers would
+		// block this one's idle release (ADR 0029). No client label predates
+		// machine names and counts.
 		if c.Labels[workspace.OwnerLabel] == live.info.User {
 			if client := c.Labels[workspace.ClientLabel]; client == "" || client == s.clientID {
 				return true, nil
@@ -83,11 +62,8 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 	return false, nil
 }
 
-// ourVolumes names the volumes backing this session's shares.
-//
-// Derived rather than remembered: share ids are a pure function of the local
-// path (ADR 0007), so the registry already knows the exact set and no round
-// trip is needed to ask.
+// ourVolumes names the volumes backing this session's shares, derived from
+// the registry (ADR 0007).
 func (s *Session) ourVolumes() map[string]bool {
 	shares := s.registry.Shares()
 	out := make(map[string]bool, len(shares))
@@ -115,8 +91,7 @@ func (live *liveConn) close() {
 	_ = live.ssh.Close()
 	live.wg.Wait()
 
-	// Last: the machine may go away once nothing is holding it, and everything
-	// above wanted it there.
+	// Last: the machine may shut down once nothing holds it.
 	if live.machine != nil {
 		_ = live.machine.Close()
 	}
@@ -124,12 +99,8 @@ func (live *liveConn) close() {
 
 // CollectOptions widens what a collection is allowed to remove.
 type CollectOptions struct {
-	// Orphans also removes unused share volumes that name no machine.
-	//
-	// Those are what a version before machines were named left behind, or what
-	// this machine left when its key was replaced. Asked for rather than
-	// assumed, because "names no machine" is not "mine": another of this
-	// account's machines running an older build may still be using one.
+	// Orphans also removes unused share volumes that name no machine. Opt-in:
+	// another machine on an older build may still use one.
 	Orphans bool
 }
 
@@ -142,9 +113,7 @@ func (s *Session) Collect(ctx context.Context, opts CollectOptions) (int, error)
 	defer done()
 
 	collector := s.collector(live)
-	// Widened to volumes naming no machine, and NOT to every machine's:
-	// clearing Client entirely would collect the other computer's, which is
-	// the failure the scoping exists to prevent.
+	// Never clear Client: that would collect other machines' volumes.
 	collector.Orphans = opts.Orphans
 
 	n, err := collector.Collect(ctx)
@@ -154,12 +123,7 @@ func (s *Session) Collect(ctx context.Context, opts CollectOptions) (int, error)
 	return n, err
 }
 
-// pruneShareRecord drops what this workspace no longer has a volume for.
-//
-// The record exists to answer a mount, so an entry whose volume is gone can
-// never be asked for again. Best effort and after the collection: failing to
-// tidy a record is not a reason to report a collection that happened as a
-// failure.
+// pruneShareRecord drops record entries whose volume is gone. Best effort.
 func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
 	if s.shares == nil {
 		return
@@ -193,12 +157,9 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 	}
 }
 
-// mountedCaches asks the workspace which cache volumes it has a union on.
-//
-// The collector's one question about a cache volume that neither the daemon nor
-// this session can answer: a union is bound by path, so no container references
-// the volume, and a share prepared by an EARLIER session is not in this one's
-// registry at all (ADR 0044).
+// mountedCaches asks the workspace which cache volumes it has a union on:
+// the daemon never calls one in use, and an earlier session's share is not
+// in this registry (ADR 0044).
 func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
 	live := s.liveCache()
 	if live == nil {
@@ -216,27 +177,17 @@ func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
 	return mounted, nil
 }
 
-// exportsVolume reports whether a managed volume backs a directory this
-// session is exporting right now.
-//
-// The registry is the only place that knows: the volume exists on the
-// workspace from the moment a bind is rewritten, and the daemon does not call
-// it in use until a container names it. Everything between those two is a
-// volume that must survive collection.
+// exportsVolume reports whether a volume backs a share this session exports.
+// The daemon calls it in use only once a container names it, and it must
+// survive collection before that.
 func (s *Session) exportsVolume(volume string) bool {
 	return s.ourVolumes()[volume]
 }
 
-// Status answers the control endpoint, satisfying proxy.Control.
-//
-// Deliberately does NOT connect. `status` connecting is its own decision --
-// reporting what the workspace says is that command's whole job, but a
-// daemon asked to describe itself must not go and establish a connection it
-// had let go, which would make asking the question change the answer.
+// Status answers the control endpoint, satisfying proxy.Control. It never
+// connects: asking must not change the answer.
 func (s *Session) Status() any {
-	// currentLive, not current: a session holding a connection that has died
-	// is not connected, and saying so is the difference between `status`
-	// reporting the truth and reporting a field.
+	// currentLive: a held connection that has died is not connected.
 	live, connected := s.gate.currentLive()
 	st := proxy.Status{
 		Version:   s.opts.Version,
@@ -266,47 +217,30 @@ func (s *Session) Idle() any {
 	return proxy.Idle{Safe: safe}
 }
 
-// Shutdown asks the session to stop, satisfying proxy.Control.
-//
-// Returns immediately and stops in the background, because the caller is the
-// control request still holding a connection that Close is about to shut.
+// Shutdown asks the session to stop, satisfying proxy.Control. It returns at
+// once: the caller's control connection is what Close shuts.
 func (s *Session) Shutdown() {
 	go func() {
 		s.stopOnce.Do(func() { close(s.stopped) })
 	}()
 }
 
-// IdleFor reports how long this session has had nothing to do, and whether it
-// would be safe to end the process now.
-//
-// Safe means the same thing it means for releasing a connection, because the
-// consequence is worse: a released connection reopens on the next request, and
-// an ended process takes the NFS export with it and a running container's
-// filesystem with that.
-//
-// The disjunction is the load-bearing part. If no connection is held, the gate
-// only let it go BECAUSE nothing depended on it, so there is nothing to ask
-// and nothing to break. If one is held, ask, and "unable to tell" counts as
-// busy, exactly as it does for a release.
+// IdleFor reports how long this session has been idle and whether ending the
+// process is safe. No connection held means the gate released it because
+// nothing depended on it; a held one is asked, and cannot-tell means busy.
 func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	last, inUse := s.gate.lastUse()
 	if inUse {
 		return 0, false
 	}
-	// Never used means idle since the session began, not idle for no time at
-	// all. Reading the zero time as "just now" meant a daemon that had served
-	// nothing could never expire, which is the case where reclaiming it is most
-	// obviously right, and the case `start` leaves behind every time somebody
-	// opens a session and then does not use it.
+	// Never used: idle since the start, or an unused daemon never expires.
 	if last.IsZero() {
 		last = s.started
 	}
 	quiet := time.Since(last)
 
-	// currentLive, so a dead connection takes the "nothing depends on this"
-	// branch instead of being asked over a transport that cannot answer.
-	// Asking it anyway is what makes `remote restart` refuse on exactly the
-	// session that most needs restarting, leaving --force as the only way out.
+	// A dead connection is not asked whether it is busy: it cannot answer, and
+	// `remote restart` would refuse the session that most needs it.
 	live, connected := s.gate.currentLive()
 	if !connected {
 		return quiet, true
@@ -319,8 +253,7 @@ func (s *Session) IdleFor(ctx context.Context) (time.Duration, bool) {
 	return quiet, true
 }
 
-// Stopped is closed when something has asked this session to stop. `up` waits
-// on it alongside its signal context.
+// Stopped is closed when something has asked this session to stop.
 func (s *Session) Stopped() <-chan struct{} { return s.stopped }
 
 // Close tears the session down.
@@ -343,11 +276,7 @@ func (s *Session) Close() error {
 	return nil
 }
 
-// humanBytes is a size somebody can read at a glance.
-//
-// A byte count is the more useful half of "how much of this is cached": a share
-// can be most of its files and a fraction of its bytes, or the other way round,
-// and which one it is decides whether the cache is worth anything.
+// humanBytes formats a byte count for reading at a glance.
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -361,11 +290,7 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
-// cacheStatus is one line per delegated share, saying how much of it is cached.
-//
-// A fraction rather than a verdict: over the budget, still filling, and
-// complete are all states a share works in, and the difference between them is
-// how much of it is local rather than whether it is right.
+// cacheStatus is one line per delegated share, saying how much is cached.
 func (s *Session) cacheStatus() []string {
 	if s.cache == nil {
 		return nil
@@ -383,22 +308,15 @@ func (s *Session) cacheStatus() []string {
 		case stats.Complete():
 			what = "cached"
 		default:
-			// Over the budget, or a walk that could not read part of the tree.
-			// The rest is served from the live mount, which is slower and
-			// right, and saying so is the only way anybody would know.
+			// Over budget or partly unreadable: the rest is read live.
 			what = "cached in part; the rest is read live"
 		}
 
-		// "N of M" only once M is known. Stats lands when the walk finishes, so
-		// while a fill runs TotalFiles is 0 and the fraction reads "512 of 0
-		// files" -- a number that looks like a bug in the thing it is
-		// reporting on.
+		// "N of M" only once the walk has finished and M is known.
 		if r.Done {
 			line := fmt.Sprintf("%s: %d of %d files, %s of %s, %s sent, %s",
 				local, r.Sent, stats.TotalFiles,
 				humanBytes(stats.Bytes), humanBytes(stats.TotalBytes), humanBytes(r.Bytes), what)
-			// A cache that mysteriously omits .git is worth being able to
-			// explain, which is the only reason the walk counts these.
 			if stats.Excluded > 0 {
 				line += fmt.Sprintf(" (%d excluded)", stats.Excluded)
 			}

@@ -1,16 +1,8 @@
 package main
 
-// What `status` answers, and in what order.
-//
-// The verdict first, then rows grouped by the question they answer: is it up
-// and how do tools reach it, what is on the other end, what versions are in
-// play.
-//
-// The order is the point, not a preference. This is the command somebody runs
-// when they are unsure whether anything is working, so a list of correct facts
-// that never says yes or no leaves them exactly as unsure as they started.
-// Keep the verdict on the first line, and keep new rows inside the group whose
-// question they answer rather than appending them.
+// `status`: the verdict on the first line, then rows grouped by question (is
+// it up, what is on the other end, which versions). Add rows to their group,
+// never at the end.
 
 import (
 	"context"
@@ -29,24 +21,19 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// facts is everything status found, gathered before anything is printed.
-//
-// Collected rather than printed as it goes, because the verdict is a function
-// of all of it and has to appear first.
+// facts is everything status found, gathered first because the verdict,
+// printed first, depends on all of it.
 type facts struct {
 	cfg      config.Config
 	endpoint string
 
-	// serving is whether anything answers the endpoint, and local is what the
-	// session says about itself. A session that serves but will not answer is
-	// its own state, not a missing one.
+	// serving: something answers the endpoint. answering: it reports local.
 	serving   bool
 	answering bool
 	local     proxy.Status
 
-	// info is what the workspace reports, and infoErr is why it does not.
-	// Unreachable is a state to report, not a reason to print nothing: this is
-	// the command somebody runs when the workspace is unreachable.
+	// infoErr is reported, not fatal: an unreachable workspace is when
+	// somebody runs this.
 	info    workspace.Info
 	infoErr error
 }
@@ -74,11 +61,7 @@ func (f *facts) askWorkspace() {
 	})
 }
 
-// verdict is the one line somebody came for.
-//
-// The FIRST problem, not a summary of all of them: a reader acts on one thing
-// at a time, and the rows below carry the detail. Warnings that do not stop
-// anything working are appended to "ready" rather than replacing it.
+// verdict is the first problem, or "ready" with any non-fatal warning.
 func (f facts) verdict() string {
 	switch {
 	case f.infoErr != nil:
@@ -105,38 +88,28 @@ func reportStatus(out io.Writer, f facts) {
 	// Is it up, and how does anything else reach it.
 	_, _ = fmt.Fprintln(out)
 	row(out, "session", f.sessionLine())
-	// The DOCKER_HOST spelling rather than the raw path, because that is the
-	// form anything else has to be given.
 	row(out, "endpoint", proxy.DockerHost(f.endpoint))
 	row(out, "docker", dockerReach(f.cfg))
 
-	// What is on the other end. Skipped entirely when there is no other end:
-	// the verdict already carries the reason, and repeating it as a row says
-	// the same thing twice to somebody who has read it once.
+	// What is on the other end; the verdict already says if unreachable.
 	if f.infoErr == nil {
 		_, _ = fmt.Fprintln(out)
 		row(out, "daemon", daemonLine(f.info))
 		rowf(out, "account", "%s (uid %d), tunnel port %d", f.info.User, f.info.UID, f.info.NFSPort)
 	}
 
-	// How much of a delegated share is local (ADR 0044). One row each, because
-	// a share cached in part is not a failure and has nothing else to show for
-	// itself: it works, and the part that did not fit is simply read over the
-	// mount.
+	// How much of each cached share is local (ADR 0044).
 	for _, cache := range f.local.Caches {
 		row(out, "cache", cache)
 	}
 
-	// What is in play, which is the question when something behaves oddly.
+	// Which builds are in play.
 	_, _ = fmt.Fprintln(out)
 	row(out, "versions", versionsLine(f))
 }
 
-// sessionLine is what the background session is doing, in one row's worth.
-//
-// Here rather than in daemon.go because `workspace inspect` asks the same
-// question, and two copies of the reachable/answering rules would drift into
-// two different answers about one session.
+// sessionLine is what the background session is doing, shared with
+// `workspace inspect`.
 func (f facts) sessionLine() string {
 	switch {
 	case !f.serving:
@@ -154,8 +127,7 @@ func (f facts) sessionLine() string {
 	}
 }
 
-// times reads "once" or "3 times", because "reconnected 1 times" is the kind
-// of thing that makes a reader doubt the number.
+// times reads "once" or "3 times".
 func times(n int) string {
 	if n == 1 {
 		return "once"
@@ -163,11 +135,8 @@ func times(n int) string {
 	return fmt.Sprintf("%d times", n)
 }
 
-// dockerReach is what a tool that is not this binary will talk to.
-//
-// The docker context is read from docker's own config rather than asked of a
-// docker command: it is one file, and spawning a CLI to read it would cost
-// half a second on a command that is otherwise instant.
+// dockerReach is what a tool that is not this binary will talk to. The context
+// is read from docker's config file: spawning a CLI costs half a second.
 func dockerReach(cfg config.Config) string {
 	if host := os.Getenv("DOCKER_HOST"); host != "" {
 		return "DOCKER_HOST=" + host + " (overrides any context)"
@@ -201,9 +170,7 @@ func currentDockerContext() string {
 	return cf.CurrentContext
 }
 
-// daemonLine folds the three facts about the far side into one row: which
-// arrangement, which docker, and the storage driver that decides whether a
-// container starts in a second or a minute.
+// daemonLine is the daemon mode, docker version and storage driver.
 func daemonLine(info workspace.Info) string {
 	parts := []string{}
 	if info.Mode != "" {
@@ -225,8 +192,7 @@ func daemonLine(info workspace.Info) string {
 	return strings.Join(parts, ", ")
 }
 
-// versionsLine puts the three builds side by side, because "it behaves like
-// the old one" is answered by comparing them and by nothing else.
+// versionsLine puts client, agent and session builds side by side.
 func versionsLine(f facts) string {
 	parts := []string{"client " + orUnknown(version)}
 
@@ -243,8 +209,7 @@ func versionsLine(f facts) string {
 	return strings.Join(parts, ", ")
 }
 
-// firstLine keeps a verdict to one line. A session failure can be a paragraph,
-// and the rows below have room for the rest.
+// firstLine keeps a verdict to one line.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return strings.TrimSpace(s[:i])
@@ -269,8 +234,6 @@ somebody is most likely to be running it.`,
 			if err != nil {
 				return err
 			}
-			// The one thing worth failing on: with no host there is no
-			// workspace to have a status.
 			if err := cfg.RequireHost(); err != nil {
 				return err
 			}
@@ -283,10 +246,8 @@ somebody is most likely to be running it.`,
 	}
 }
 
-// row prints one aligned "key    value" line.
-//
-// `status` and `workspace inspect` print one table each and share this width,
-// so a row added to one lines up in the other.
+// row prints one aligned "key    value" line, shared by `status` and
+// `workspace inspect`. An empty value prints nothing.
 func row(out io.Writer, key, value string) {
 	if value != "" {
 		_, _ = fmt.Fprintf(out, "%-20s %s\n", key, value)

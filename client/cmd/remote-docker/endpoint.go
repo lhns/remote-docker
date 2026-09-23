@@ -1,9 +1,7 @@
 package main
 
-// Which workspace, and where its Docker API is served locally.
-//
-// The endpoint is derived from the workspace rather than stored beside it, so
-// there is one spelling and no pair to disagree.
+// Which workspace, and where its Docker API is served locally. The endpoint is
+// derived from the workspace, never stored.
 
 import (
 	"fmt"
@@ -26,12 +24,8 @@ func exportLine(endpoint string) string {
 	return fmt.Sprintf("export DOCKER_HOST=%s", endpoint)
 }
 
-// endpointOf is where this workspace's Docker API is served locally.
-//
-// The base is the argument that matters, and passing an empty one is the way
-// to get this wrong: see config.EndpointFor. Neither Windows nor the suites
-// can show it -- the pipe name is a real constant, and the suites set an
-// endpoint explicitly.
+// endpointOf is where this workspace's Docker API is served locally. Never pass
+// EndpointFor an empty base (see config.EndpointFor); no test would notice.
 func endpointOf(cfg config.Config) string {
 	return cfg.EndpointFor(proxy.DefaultEndpoint())
 }

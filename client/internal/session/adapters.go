@@ -1,10 +1,3 @@
-// The adapters between this package's neighbours.
-//
-// Each one exists because the packages on either side are deliberately not
-// coupled: ports does not know about ssh, fswatch does not know about the NFS
-// server, and rewrite does not know about either. The conversions are small and
-// they belong together, away from the session's own logic.
-
 package session
 
 import (
@@ -17,11 +10,9 @@ import (
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 )
 
-// shareRegistrar adapts the NFS registry to the rewriter's Sharer.
-//
-// It is also where a newly shared directory becomes a watched one: every bind
-// rewrite funnels through here, so the watcher learns about a share the moment
-// it exists rather than up to a reconcile interval later.
+// shareRegistrar adapts the NFS registry to the rewriter's Sharer. Every bind
+// rewrite passes through it, so it records the share for later sessions and
+// tells the watcher at once.
 type shareRegistrar struct {
 	registry *nfsserve.Registry
 	shares   *shareStore
@@ -33,9 +24,6 @@ func (s shareRegistrar) Share(localPath string) (exportPath, file string, err er
 	if err != nil {
 		return "", "", err
 	}
-	// Recorded here because this is the one funnel every rewrite goes through,
-	// and the record is what lets a container STARTED in some later session
-	// still be served.
 	s.shares.remember(share.ExportPath, share.LocalPath)
 	if s.changed != nil {
 		s.changed()
@@ -47,9 +35,7 @@ func (s shareRegistrar) Share(localPath string) (exportPath, file string, err er
 type sshForwarder struct{ client *tunnelclient.Client }
 
 func (f sshForwarder) Forward(network, local, remote string) (ports.Forward, error) {
-	// Datagrams take the other channel type and their own listener, and
-	// everything about that lives in udpForward: the manager has one path
-	// (ADR 0038).
+	// The manager has one path for both protocols (ADR 0038).
 	if network == "udp" {
 		return newUDPForward(local, remote, f.client.DialRemoteUDP)
 	}

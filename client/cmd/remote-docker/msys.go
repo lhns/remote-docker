@@ -34,11 +34,8 @@ func msysFrom(getenv func(string) string) msys {
 	return msys{root: root, temp: slashed(getenv("TEMP"))}
 }
 
-// slashed normalises a Windows path for comparison.
-//
-// NOT path/filepath, which follows the HOST's rules: on Linux a backslash is an
-// ordinary character, so filepath.Dir of a Windows path is "." and every
-// comparison here silently stops working. CI caught it.
+// slashed normalises a Windows path for comparison. Not path/filepath, which
+// follows the host's rules and on Linux treats a backslash as a character.
 func slashed(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 
 // parent is the directory holding p, in slash form.
@@ -80,8 +77,7 @@ func (m msys) repairArgs(args []string) ([]string, []string) {
 	return out, notes
 }
 
-// repair is one value and whatever it has to say, so the two spellings of the
-// flag do not each spell out the same three steps.
+// repair restores one value, appending any note.
 func (m msys) repair(value string, notes []string) (string, []string) {
 	fixed, note, ok := m.unmangleBind(value)
 	if note != "" {
@@ -93,11 +89,8 @@ func (m msys) repair(value string, notes []string) (string, []string) {
 	return fixed, notes
 }
 
-// unmangleBind restores one bind specification.
-//
-// Two conditions trigger it, never one: a `;`, which a real bind never has, AND
-// a target this converts back. `;` alone proves nothing, since NTFS permits it
-// in a file name.
+// unmangleBind restores one bind specification. It needs a `;` AND a target
+// that converts back: NTFS allows `;` in a file name.
 func (m msys) unmangleBind(value string) (repaired, note string, ok bool) {
 	if !strings.Contains(value, ";") {
 		return "", "", false
@@ -109,8 +102,6 @@ func (m msys) unmangleBind(value string) (repaired, note string, ok bool) {
 
 	target, note := m.unmangleTarget(fields[1])
 	if target == "" {
-		// Nothing to repair, but there may still be something to say: a target
-		// this program cannot invert is worth reporting rather than dropping.
 		return "", note, false
 	}
 	fields[1] = target
@@ -147,13 +138,9 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 	return "", ""
 }
 
-// posixSource reports the POSIX path a converted path may have been, and "" when
-// it is not one MSYS could have produced.
-//
-// A candidate, never a correction: `C:\Program Files\Git\etc` is what MSYS makes
-// of BOTH `/etc` and `/c/Program Files/Git/etc`. Only the caller can break that
-// tie -- see rewrite.ownedByDaemon, which takes it only when the workspace
-// declares the path and this machine does not have it (ADR 0041).
+// posixSource reports the POSIX path a converted path may have been, or "".
+// A candidate only: `C:\Program Files\Git\etc` is both `/etc` and
+// `/c/Program Files/Git/etc` (rewrite.ownedByDaemon decides, ADR 0041).
 func (m msys) posixSource(p string) string {
 	p = slashed(p)
 	switch {

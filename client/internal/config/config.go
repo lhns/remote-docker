@@ -22,172 +22,98 @@ const DefaultSSHPort = 2222
 
 // Config is everything needed to open a session.
 type Config struct {
-	// Name identifies the workspace among several. Empty means the single
-	// unnamed workspace of a flat config file.
+	// Name identifies the workspace among several; empty for a flat file.
 	Name string
 
-	// Host is the workspace's address. There is no default; without it there
-	// is nothing to connect to.
 	Host string
 
-	// Port is the workspace's SSH port. Optional: a host carrying a scheme and
-	// a port says it there instead, and Transport refuses the two disagreeing.
+	// Port is the SSH port. A host with a scheme may carry it instead, and
+	// Transport refuses the two disagreeing.
 	Port int
 
-	// CAFile verifies a ws:// endpoint's proxy against a private CA instead of
-	// the system roots. Ignored for ssh, which has its own known_hosts.
+	// CAFile verifies a ws:// endpoint's proxy against a private CA.
 	CAFile string
 
-	// Insecure accepts any certificate from a ws:// endpoint's proxy. It gives
-	// up knowing WHICH proxy answered and nothing else: SSH inside the tunnel
-	// still authenticates both ends. Per workspace, never global.
+	// Insecure accepts any certificate from a ws:// endpoint's proxy. SSH
+	// inside still authenticates both ends. Per workspace, never global.
 	Insecure bool
 
-	// Machine is the local machine this workspace runs on, or nil for a
-	// workspace somewhere else.
-	//
-	// Carried this far because a machine has to be located before it can be
-	// dialled: it is started on demand and its address is given to it at boot,
-	// so Host is not the answer for one and a stored address goes stale when it
-	// restarts.
+	// Machine is the local machine this workspace runs on, or nil. Its
+	// address is assigned at boot, so it is located on every connect.
 	Machine *Machine
 
-	// User is the workspace account, which is also the name of the .pub file
-	// enrolled for this machine.
+	// User is the workspace account, also the name of the enrolled .pub file.
 	User string
 
-	// Endpoint is where the local Docker API is served. Empty means the
-	// platform default.
+	// Endpoint is where the local Docker API is served; empty is the default.
 	Endpoint string
 
-	// Watch is how much of this machine's filesystem activity to replay into
-	// the workspace, so watchers in containers notice edits made here:
-	// "off" (the default), "partial" or "coarse". See ADR 0016.
-	//
-	// Held as the raw string rather than a parsed mode so this package stays
-	// the lowest layer, depending on nothing above it. The command parses and
-	// reports a bad value.
+	// Watch is "off", "partial" or "coarse" (ADR 0016). This and the other
+	// mode strings stay raw: the command parses and reports a bad value.
 	Watch string
 
-	// WatchBudget caps how many directories are watched at once. Zero means
-	// the per-platform default, which differs because the limit that binds
-	// differs: inotify watches on Linux, buffers on Windows, file descriptors
-	// on macOS.
+	// WatchBudget caps directories watched at once; zero is the platform
+	// default.
 	WatchBudget int
 
-	// CacheFiles and CacheBytes cap what a delegated share's cache is filled
-	// with. Zero means dircache's defaults.
-	//
-	// A ceiling rather than a refusal: what the fill does not copy is served
-	// from the live export underneath, so a project over it is cached in part
-	// and works (ADR 0044). Raise them for a large repository whose reads are
-	// worth the copy; lower them on a metered link.
+	// CacheFiles and CacheBytes cap a delegated share's cache fill; zero is
+	// dircache's default. What does not fit is served live (ADR 0044).
 	CacheFiles int
 	CacheBytes int64
 
-	// Prefetch is whether a union with read=cached is filled ahead of reads,
-	// and how: "off" (the default), "eager" (the whole tree smallest first)
-	// or "tree" (what is read, and its neighbourhood) (ADR 0045).
+	// Prefetch is "off", "eager" or "tree" (ADR 0045).
 	Prefetch string
 
-	// WatchExclude replaces the default list of directory names never
-	// watched. Empty means the default.
+	// WatchExclude replaces the default list of directory names never watched.
 	WatchExclude []string
 
-	// Consistency is what a share's mount gets on each axis the mount itself
-	// left unset: `read=<direct|cached>,write=<through|back|ephemeral>`, with
-	// Docker's `consistent`, `cached` and `delegated` accepted as aliases
-	// (ADR 0042). Unset is read=direct,write=through.
-	//
-	// ConsistencyPaths overrides it for one directory and everything under it,
-	// which is the common case of one slow tree among fast ones.
-	//
-	// Both held as raw strings for the same reason as Watch: this package is
-	// the lowest layer and the command reports a bad value.
+	// Consistency fills the axes a mount left unset (ADR 0042); unset is
+	// read=direct,write=through. ConsistencyPaths overrides it per directory
+	// tree.
 	Consistency      string
 	ConsistencyPaths map[string]string
 
-	// IdleTimeout is how long the workspace connection may sit unused before
-	// being released (ADR 0015). Zero means the default; negative never
-	// releases. Configurable chiefly so the integration suite can exercise
-	// idle release without sleeping past a fixed minute, but a slow link is a
-	// fair reason to raise it too.
+	// IdleTimeout releases an unused workspace connection (ADR 0015). Zero is
+	// the default; negative never releases.
 	IdleTimeout time.Duration
 
-	// DaemonIdle is how long a background session may sit with nothing to do
-	// before it exits. Zero uses DefaultDaemonIdle; negative never exits.
-	//
-	// Longer than IdleTimeout by a lot, and doing something different: that
-	// one drops a connection which reopens on the next request, this one ends
-	// a process that cannot come back on its own. It never fires while
-	// anything depends on the session.
-	//
-	// Setting it is a choice, not a tuning knob: the exit takes the ENDPOINT,
-	// and every other Docker client pointed at it then fails with ENOENT and
-	// cannot recover.
+	// DaemonIdle ends an unused background session. Zero is DefaultDaemonIdle;
+	// negative never. The exit takes the endpoint, which every other Docker
+	// client pointed at it then cannot reach.
 	DaemonIdle time.Duration
 
-	// DaemonStandby is how long a background session may sit with nothing to
-	// do before it lets go of the workspace: the connection is dropped and the
-	// file watches are released. Zero uses DefaultDaemonStandby; negative
-	// never stands by.
-	//
-	// The endpoint stays bound throughout, so this reclaims what a reclaim is
-	// for without breaking the Docker clients pointed at it. DaemonIdle is the
-	// tier above, and ends the process.
+	// DaemonStandby drops the connection and file watches of an unused
+	// background session while keeping the endpoint bound. Zero is
+	// DefaultDaemonStandby; negative never.
 	DaemonStandby time.Duration
 }
 
-// DefaultDaemonIdle is how long a background session outlives its last use.
-//
-// Never, because the reclaim takes the ENDPOINT with it, and the endpoint is
-// what compose, buildx, Testcontainers and IDE plugins connect to. They know
-// nothing of sessions, so only a remote-docker command can rebuild one.
-//
-// It reclaims little in return: Session.sweepIdle already releases the
-// connection on its own timer and reopens it per request, invisibly.
-//
-// Still honoured when set, which is reasonable on a laptop.
+// DefaultDaemonIdle is never: exiting takes the endpoint that compose, buildx
+// and IDEs connect to, and only a remote-docker command can bring it back.
 const DefaultDaemonIdle = DaemonIdleNever
 
 // DaemonIdleNever is any non-positive duration; idleExpired treats <= 0 as
-// "no reclaim". Spelled once so the default and the config agree.
+// "no reclaim".
 const DaemonIdleNever = -1 * time.Second
 
 // DefaultDaemonStandby is how long a session holds the workspace unused.
-//
-// Half an hour: long enough that stepping away and coming back finds it warm,
-// short enough that a workspace opened once last week is not still holding a
-// connection and a few thousand watches.
 const DefaultDaemonStandby = 30 * time.Minute
 
-// File is the on-disk form, ~/.remote-docker.json.
-//
-// Two shapes are accepted. A flat one describes a single workspace:
+// File is the on-disk form, ~/.remote-docker.json, flat for one workspace or
+// keyed for several:
 //
 //	{"host": "dev.example", "user": "alice"}
-//
-// and a keyed one describes several:
-//
 //	{"workspaces": {"dev": {...}, "ci": {...}}, "default": "dev"}
-//
-// The flat form is not deprecated. Most people have one workspace, and making
-// them nest it under a name to say so would be a poor trade.
 type File struct {
-	// Embedded so the flat form IS a workspace, and encoding/json inlines an
-	// embedded struct's fields, tags and all, so the file format is the same.
+	// Embedded, so the flat form's fields are a Workspace's.
 	Workspace
 
 	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
 	Default    string               `json:"default,omitempty"`
 }
 
-// Workspace is one entry in the keyed form.
-//
-// The two durations are held as strings because that is what the file says --
-// "90s", "45m", and encoding/json has no idea what a time.Duration is. They
-// are parsed in applyWorkspace, where a malformed one is ignored rather than
-// fatal, exactly as the environment's are.
+// Workspace is one entry in the keyed form. Durations are strings ("90s"),
+// parsed in applyWorkspace, where a malformed one is ignored.
 type Workspace struct {
 	Host        string `json:"host,omitempty"`
 	Port        int    `json:"port,omitempty"`
@@ -198,8 +124,7 @@ type Workspace struct {
 	Watch       string `json:"watch,omitempty"`
 	Consistency string `json:"consistency,omitempty"`
 
-	// Keyed by a path on this machine; the value applies to it and to
-	// everything under it.
+	// Keyed by a local path; applies to everything under it.
 	ConsistencyPaths map[string]string `json:"consistencyPaths,omitempty"`
 
 	WatchBudget   int      `json:"watchBudget,omitempty"`
@@ -211,49 +136,32 @@ type Workspace struct {
 	DaemonIdle    string   `json:"daemonIdle,omitempty"`
 	DaemonStandby string   `json:"daemonStandby,omitempty"`
 
-	// Machine is set when this program provisioned the Linux system the
-	// workspace runs on, rather than being pointed at one that already
-	// existed.
-	//
-	// Its presence is what makes a machine-backed workspace an ordinary
-	// workspace everywhere else: `ls` lists it, `use` selects it, a session
-	// reaches it over SSH like any other. The one place it changes anything is
-	// `rm`, which has a machine to destroy as well as an entry to delete --
-	// leaving that behind would strand a running Linux system on somebody's
-	// laptop with nothing in the config naming it.
+	// Machine is set when this program provisioned the workspace's Linux
+	// system. It is the only record one was built, which is why `rm` refuses
+	// to drop the entry without destroying the machine (ADR 0026).
 	Machine *Machine `json:"machine,omitempty"`
 }
 
-// Machine records what this program built, so that it can be recognised,
-// rebuilt identically, and taken away again.
-//
-// Everything here is an input to the build. Nothing describes the machine's
-// current state: that is asked of the backend, because a cached answer about a
-// thing the user can stop from outside this program is a lie waiting to
-// happen.
+// Machine records the inputs of a build, never the machine's current state,
+// which is always asked of the backend.
 type Machine struct {
 	// Backend is "wsl" or "hyperv".
 	Backend string `json:"backend"`
 
-	// Name is what the machine is called on the host, which is not the
-	// workspace's name.
+	// Name is the machine's name on the host, not the workspace's.
 	Name string `json:"name"`
 
-	// Image is the workspace image it runs, by full reference. Pinned rather
-	// than floating: a machine that quietly became a different version on
-	// restart is the failure this whole design is arranged to avoid.
+	// Image is the workspace image, by full pinned reference.
 	Image string `json:"image,omitempty"`
 
-	// Rootfs is where that image's filesystem came from, so a rebuild starts
-	// from the same one rather than from whatever is current.
+	// Rootfs is where the image's filesystem came from, for an identical
+	// rebuild.
 	Rootfs string `json:"rootfs,omitempty"`
 
 	CPUs     int `json:"cpus,omitempty"`
 	MemoryMB int `json:"memoryMb,omitempty"`
 
-	// Generation is the hash of the settings it was built from. A mismatch
-	// against the current ones is how "this machine is out of date" is known
-	// without inspecting it.
+	// Generation hashes the build settings; a mismatch means out of date.
 	Generation string `json:"generation,omitempty"`
 }
 
@@ -267,11 +175,8 @@ func (f File) Names() []string {
 	return names
 }
 
-// selected picks which workspace a request refers to.
-//
-// An explicit name wins; then the file's stated default; then, only when there
-// is exactly one, that one, because with a single workspace configured, not
-// naming it is unambiguous rather than lazy.
+// selected picks which workspace a request refers to: the name given, else
+// the file's default, else the only one.
 func (f File) selected(want string) (string, Workspace, error) {
 	if len(f.Workspaces) == 0 {
 		if want != "" {
@@ -377,19 +282,8 @@ func Resolve(o Overrides, path string) (Config, error) {
 	return cfg, nil
 }
 
-// readRetries is how many times a read is attempted before its error is
-// believed.
-//
-// Windows only, in practice, and for a specific transient: while Save renames
-// the new file over the old one, an opener can be refused with a sharing
-// violation. It is brief and it clears; reporting it would mean
-// `remote-docker status` failing because a session happened to be writing its
-// config at that instant.
-//
-// Deliberately small, and deliberately not applied to a MISSING file, which is
-// answered immediately as the empty config it means. Retrying a real
-// permission problem three times over 30ms costs nothing and tells the user
-// the same thing in the end.
+// A read is retried because on Windows a concurrent Save's rename can refuse
+// an opener with a transient sharing violation. A missing file is not retried.
 const (
 	readRetries = 3
 	readBackoff = 10 * time.Millisecond
@@ -428,13 +322,8 @@ func Load(path string) (File, error) {
 	return file, nil
 }
 
-// applyWorkspace overlays a workspace's settings, leaving anything it does not
-// set alone.
-//
-// Called twice: once for the file's flat fields, then once for the named entry
-// on top, so shared settings can sit at the top level and be specialised per
-// entry. One function applied twice rather than two with the same clauses --
-// two would let the levels disagree about what overrides what.
+// applyWorkspace overlays the settings a workspace sets. Applied to the flat
+// fields, then to the named entry on top.
 func applyWorkspace(cfg *Config, ws Workspace) {
 	if ws.Host != "" {
 		cfg.Host = ws.Host
@@ -492,12 +381,8 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	}
 }
 
-// duration parses a setting written the way a person writes one ("90s", "45m",
-// "-1s" for never) and reports whether it said anything usable.
-//
-// Malformed is "said nothing", not an error, for the same reason a malformed
-// port in the environment is: this is the lowest layer and it is consulted by
-// every command, including the ones that connect to nothing.
+// duration parses "90s", "-1s" and the like. Malformed means unset, never an
+// error: every command reads config, including ones that connect to nothing.
 func duration(v string) (time.Duration, bool) {
 	if v == "" {
 		return 0, false
@@ -514,9 +399,7 @@ func applyEnv(cfg *Config) {
 		cfg.Host = v
 	}
 	if v := os.Getenv(EnvPort); v != "" {
-		// A malformed port in the environment is ignored rather than fatal:
-		// it would otherwise break every command including enroll, which does
-		// not connect to anything.
+		// Malformed numbers here are ignored, as in duration.
 		if port, err := strconv.Atoi(v); err == nil {
 			cfg.Port = port
 		}
@@ -531,8 +414,7 @@ func applyEnv(cfg *Config) {
 		cfg.CAFile = v
 	}
 	if v := os.Getenv(EnvInsecure); v != "" {
-		// Anything but an explicit falsehood turns it on: this is a switch, and
-		// somebody who set it to "yes" meant yes.
+		// Anything but "0" or "false" turns it on.
 		cfg.Insecure = v != "0" && !strings.EqualFold(v, "false")
 	}
 	if v := os.Getenv(EnvWatch); v != "" {
@@ -542,9 +424,6 @@ func applyEnv(cfg *Config) {
 		cfg.Consistency = v
 	}
 	if v := os.Getenv(EnvWatchBudget); v != "" {
-		// Ignored rather than fatal if malformed, for the same reason as the
-		// port: it would otherwise break every command, including the ones
-		// that connect to nothing.
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.WatchBudget = n
 		}
@@ -576,10 +455,7 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-// splitList reads a comma- or os.PathListSeparator-separated list, so
-// REMOTE_DOCKER_WATCH_EXCLUDE can be written either way. A semicolon list is
-// what a Windows shell user reaches for; a comma list is what a Dockerfile or
-// compose file does.
+// splitList reads a comma- or os.PathListSeparator-separated list.
 func splitList(v string) []string {
 	fields := strings.FieldsFunc(v, func(r rune) bool {
 		return r == ',' || r == os.PathListSeparator
@@ -608,29 +484,21 @@ func applyOverrides(cfg *Config, o Overrides) {
 	}
 }
 
-// EndpointFor is where this workspace's Docker API is served.
-//
-// Derived from the workspace name so several sessions can run at once, each
-// answering on its own endpoint and each addressable as its own docker
-// context. An explicitly configured endpoint always wins.
+// EndpointFor is where this workspace's Docker API is served: the configured
+// endpoint, else base suffixed with the workspace name.
 func (c Config) EndpointFor(base string) string {
 	if c.Endpoint != "" {
 		return c.Endpoint
 	}
 	if c.Name == "" || base == "" {
-		// An empty base cannot be joined to: joining one names a socket
-		// relative to the working directory. Returned as it is, which means
-		// the platform default.
+		// Suffixing "" would name a relative path.
 		return base
 	}
 	return joinEndpoint(base, sanitizeUser(c.Name))
 }
 
-// ContextName is the docker context this workspace installs.
-//
-// The workspace's own name, so `docker --context dev ps` reads naturally.
-// Nothing else is prefixed onto it, so an install must check the context is
-// one of ours before replacing it.
+// ContextName is the docker context this workspace installs: its bare name,
+// so an install must check a context is ours before replacing it.
 func (c Config) ContextName() string {
 	if c.Name == "" {
 		return "remote-docker"
@@ -680,12 +548,8 @@ func KeyPath() string { return filepath.Join(StateDir(), "id_ed25519") }
 // KnownHostsPath records workspace host keys.
 func KnownHostsPath() string { return filepath.Join(StateDir(), "known_hosts") }
 
-// SharesPath records which local directories a workspace has been asked to
-// export.
-//
-// Per workspace, because the volumes naming those exports live on that
-// workspace's daemon, and one workspace's record must never answer another's
-// mount.
+// SharesPath records which local directories a workspace has exported. Per
+// workspace, so one workspace's record never answers another's mount.
 func SharesPath(workspace string) string {
 	if workspace == "" {
 		workspace = "default"
@@ -693,11 +557,8 @@ func SharesPath(workspace string) string {
 	return filepath.Join(StateDir(), "shares", workspace+".json")
 }
 
-// CachedPath records which files a delegated share's cache was filled with.
-//
-// Per workspace for the same reason SharesPath is: a cache lives on one
-// workspace's daemon, and another's record must never decide what to remove
-// from it.
+// CachedPath records which files a delegated share's cache was filled with,
+// per workspace like SharesPath.
 func CachedPath(workspace string) string {
 	if workspace == "" {
 		workspace = "default"
@@ -705,13 +566,8 @@ func CachedPath(workspace string) string {
 	return filepath.Join(StateDir(), "caches", workspace+".json")
 }
 
-// KeyComment identifies this machine on the key it generates.
-//
-// It is the only thing distinguishing one file from another in a workspace's
-// authorized_keys.d, so whoever enrols a key can tell whose machine it came
-// from. Lives here rather than in session because enroll needs it too, and the
-// two disagreeing meant the comment depended on which command happened to
-// generate the key.
+// KeyComment identifies this machine on the key it generates, so whoever
+// enrols it can tell whose machine it came from.
 func KeyComment() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -741,12 +597,8 @@ func DefaultUser() string {
 	return "user"
 }
 
-// sanitizeUser reduces a local username to what the workspace will accept as
-// an account name. The derivation is the workspace's own, asked of it rather
-// than copied, because the two ends must land on the same name.
-//
-// A username nothing can be derived from becomes "user", which is a guess the
-// user can correct, where the workspace refuses the key file instead.
+// sanitizeUser reduces a name to a workspace account name, by the workspace's
+// own rule, or "user" if nothing can be derived.
 func sanitizeUser(name string) string {
 	account, err := workspace.AccountName(name)
 	if err != nil {
@@ -755,12 +607,7 @@ func sanitizeUser(name string) string {
 	return account
 }
 
-// Save writes the config file, creating its directory if needed.
-//
-// Written to a temporary file in the same directory and renamed over the
-// original, so an interrupted write leaves the previous config intact rather
-// than a truncated one. This file is the only record of how to reach a
-// workspace; half of it is worse than none.
+// Save writes the config file atomically, creating its directory if needed.
 func Save(file File, path string) error {
 	if path == "" {
 		path = DefaultPath()
@@ -775,13 +622,8 @@ func Save(file File, path string) error {
 	return WriteAtomic(path, data, 0)
 }
 
-// WriteAtomic replaces a file with new contents, or leaves it as it was.
-//
-// Shared rather than copied, because what follows is the part that is easy to
-// get subtly wrong and this client writes more than one file that must never
-// be read half-written. A mode of 0 keeps whatever the temporary file had,
-// which is what the config wants; a file naming local directories asks for
-// 0o600.
+// WriteAtomic replaces a file with new contents, or leaves it as it was. A
+// mode of 0 keeps the temporary file's.
 func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -808,18 +650,9 @@ func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 			return fmt.Errorf("config: %w", err)
 		}
 	}
-	// Renamed straight over the old file, NEVER unlinked first.
-	//
-	// Unlinking opens a window where the config does not exist, and Load reads
-	// a missing file as an empty config with no error: `workspace ls` in that
-	// window prints nothing and exits 0. os.Rename does not need the unlink
-	// anyway, since MoveFileEx replaces on Windows too.
-	//
-	// Retried rather than forced. A rename can fail with a sharing violation
-	// while a reader has the file open, which is transient and loud; unlinking
-	// to make room trades that for a brief absence, which is silent. The test
-	// beside this catches an unlinking version within a couple of hundred
-	// iterations, fallback included.
+	// Rename over the old file, NEVER unlink first: Load reads a missing file
+	// as an empty config with no error. A sharing violation from a reader is
+	// retried instead, and finally reported with the old file intact.
 	for attempt := range renameRetries {
 		if err = os.Rename(tmpName, path); err == nil {
 			return nil
@@ -828,14 +661,9 @@ func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 			time.Sleep(readBackoff)
 		}
 	}
-	// Reported rather than forced. A save that fails is recoverable: the old
-	// config is intact and the user is told. A config file that disappeared is
-	// not.
 	return fmt.Errorf("config: replacing %s: %w", path, err)
 }
 
-// renameRetries bounds how long Save waits for a reader to let go. Generous
-// enough to outlast reading a small JSON file many times over.
 const renameRetries = 10
 
 // Set adds or replaces a workspace.
@@ -885,9 +713,7 @@ func (f *File) Remove(name string) bool {
 	if f.Default != name {
 		return true
 	}
-	// The default pointed at what was just removed. Promote the only
-	// remaining workspace if there is exactly one, because then the choice is
-	// unambiguous; otherwise leave it unset rather than picking for the user.
+	// Promote the only remaining workspace; never pick among several.
 	f.Default = ""
 	if names := f.Names(); len(names) == 1 {
 		f.Default = names[0]

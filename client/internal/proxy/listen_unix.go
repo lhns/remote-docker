@@ -10,21 +10,9 @@ import (
 )
 
 // DefaultEndpoint is where the proxy listens when nothing else is asked for.
-//
-// A function rather than a constant, because on this platform the answer is
-// not known until it is asked: it comes from the user's runtime directory.
-// It must be the real path, never the empty string resolved later inside
-// Listen. Callers derive a NAMED workspace's endpoint by appending to this,
-// and appending to "" gives the RELATIVE path "-dev": a socket in whatever
-// directory the process happens to be in, and a docker context pointing at
-// unix://-dev.
+// Never "": callers append to it for a named workspace, and "" + "-dev" is a
+// relative path. Deliberately not /var/run/docker.sock, which is root-owned.
 func DefaultEndpoint() string { return defaultSocketPath() }
-
-// Deliberately NOT /var/run/docker.sock, the path the official CLI uses by
-// default. It is root-owned, so serving it would need privileges this client
-// otherwise never asks for, and it would collide with any local daemon. The
-// docker context `remote create` writes needs none and behaves the same on
-// every platform.
 
 // Listen binds the local Docker endpoint on a unix socket.
 func Listen(endpoint string) (net.Listener, error) {
@@ -35,9 +23,8 @@ func Listen(endpoint string) (net.Listener, error) {
 		return nil, fmt.Errorf("proxy: creating socket directory: %w", err)
 	}
 
-	// The lock is what earns the right to clear the socket: holding it means
-	// the only socket that can be cleared here is a dead one. See lock.go and
-	// ADR 0017.
+	// Clear the socket only once the lock is held, or this unlinks a running
+	// process's socket (ADR 0017).
 	lock, err := acquireLock(endpoint)
 	if err != nil {
 		return nil, err
@@ -55,9 +42,7 @@ func Listen(endpoint string) (net.Listener, error) {
 	}
 	l = &lockedListener{Listener: l, lock: lock}
 
-	// Anything able to reach this endpoint can start containers that read and
-	// write this machine's filesystem through the NFS export, so it is the
-	// owner's alone.
+	// Whoever reaches it can mount this machine's files.
 	if err := os.Chmod(endpoint, 0o600); err != nil {
 		l.Close()
 		return nil, fmt.Errorf("proxy: securing socket: %w", err)

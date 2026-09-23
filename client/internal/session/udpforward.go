@@ -11,35 +11,24 @@ import (
 )
 
 // dialDatagrams opens one datagram flow to an address inside the workspace.
-// An interface so the forward below can be tested without a workspace.
 type dialDatagrams func(remoteAddr string) (io.ReadWriteCloser, error)
 
-// udpFlowIdle is how long a flow may go without carrying a datagram in either
-// direction before it is closed, and udpFlowSweepInterval how often that is
-// looked for. Both are reasoned about in ADR 0038.
+// A flow quiet in both directions for udpFlowIdle is closed (ADR 0038).
 const (
 	udpFlowIdle          = 2 * time.Minute
 	udpFlowSweepInterval = 30 * time.Second
 )
 
 // udpForward carries datagrams that arrive on a local port to a published UDP
-// port inside the workspace (ADR 0038).
-//
-// One flow per SOURCE ADDRESS, because that is what makes a reply routable: the
-// workspace's socket is connected to the container's port, so everything that
-// comes back on it belongs to exactly one local sender.
-//
-// A flow ends with the forward, with its channel, or after udpFlowIdle without
-// a datagram. The last of those is what keeps a sender whose source port
-// changes per datagram, a resolver being one, from leaving a channel behind
-// per datagram.
+// port inside the workspace (ADR 0038), one flow per source address so each
+// reply has one sender to go back to. The idle expiry stops a resolver, whose
+// source port changes per query, leaving a channel behind per datagram.
 type udpForward struct {
 	conn   net.PacketConn
 	remote string
 	dial   dialDatagrams
 
-	// now is a field so a test can reach udpFlowIdle without waiting for it.
-	now func() time.Time
+	now func() time.Time // a field for tests
 
 	mu     sync.Mutex
 	flows  map[string]*udpFlow
@@ -78,8 +67,7 @@ func newUDPForward(localAddr, remoteAddr string, dial dialDatagrams) (*udpForwar
 
 func (f *udpForward) LocalAddr() net.Addr { return f.conn.LocalAddr() }
 
-// serve reads from the local socket forever, which is the only way to learn
-// that a new sender exists: a datagram socket has no accept.
+// serve reads the local socket, opening a flow per new sender.
 func (f *udpForward) serve() {
 	defer f.wg.Done()
 
@@ -92,9 +80,7 @@ func (f *udpForward) serve() {
 
 		flow, err := f.flowFor(from)
 		if err != nil {
-			// Reported by the caller's logger, not here: one workspace that
-			// cannot carry datagrams must not fill a log with one line per
-			// datagram.
+			// Not logged: that would be a line per datagram.
 			continue
 		}
 		if _, err := flow.ch.Write(buf[:n]); err != nil {
@@ -103,8 +89,6 @@ func (f *udpForward) serve() {
 	}
 }
 
-// flowFor is the flow belonging to a sender, opening one the first time it is
-// seen.
 func (f *udpForward) flowFor(from net.Addr) (*udpFlow, error) {
 	key := from.String()
 
@@ -126,8 +110,7 @@ func (f *udpForward) flowFor(from net.Addr) (*udpFlow, error) {
 	}
 
 	f.mu.Lock()
-	// Somebody else may have opened one while this was dialling, and two flows
-	// for one sender would split its replies between them.
+	// Another may have been opened while dialling; two would split the replies.
 	if existing, ok := f.flows[key]; ok {
 		existing.lastUsed = f.now()
 		f.mu.Unlock()
@@ -159,8 +142,6 @@ func (f *udpForward) replies(to net.Addr, flow *udpFlow) {
 		if err != nil {
 			return
 		}
-		// A reply is use as much as a datagram sent: flowFor stamps the one
-		// direction, this stamps the other.
 		f.mu.Lock()
 		flow.lastUsed = f.now()
 		f.mu.Unlock()
@@ -171,9 +152,8 @@ func (f *udpForward) replies(to net.Addr, flow *udpFlow) {
 	}
 }
 
-// drop removes a flow and closes it, but only while the map still holds THIS
-// flow. A sweep may have expired it already and the sender may have opened
-// another under the same key, which dropping by name alone would close.
+// drop removes and closes flow only if the map still holds this one, not a
+// newer flow the same sender opened after a sweep.
 func (f *udpForward) drop(key string, flow *udpFlow) {
 	f.mu.Lock()
 	if current, ok := f.flows[key]; !ok || current != flow {
@@ -202,10 +182,8 @@ func (f *udpForward) sweepLoop() {
 	}
 }
 
-// sweep closes every flow that has carried nothing for udpFlowIdle. The
-// selection and the removal are one critical section, as gate.go's sweep is;
-// only the closes are outside the lock, and closing a channel is what ends the
-// replies goroutine reading it.
+// sweep closes every flow that has carried nothing for udpFlowIdle, which also
+// ends its replies goroutine.
 func (f *udpForward) sweep() {
 	cutoff := f.now().Add(-udpFlowIdle)
 

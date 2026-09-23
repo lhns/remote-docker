@@ -76,8 +76,8 @@ func TestGateDoesNotConnectUntilUsed(t *testing.T) {
 	if got := f.openCount(); got != 0 {
 		t.Fatalf("opened %d connections before any request", got)
 	}
-	if _, ok := f.gate.current(); ok {
-		t.Error("current() reports a connection before one was needed")
+	if _, ok := f.gate.currentLive(); ok {
+		t.Error("currentLive() reports a connection before one was needed")
 	}
 
 	_, release, err := f.gate.acquire(t.Context())
@@ -122,8 +122,8 @@ func TestGateReleasesWhenIdleAndReconnects(t *testing.T) {
 	if !f.conns[0].closed.Load() {
 		t.Error("the connection was dropped but never shut")
 	}
-	if _, ok := f.gate.current(); ok {
-		t.Error("current() still reports a connection after release")
+	if _, ok := f.gate.currentLive(); ok {
+		t.Error("currentLive() still reports a connection after release")
 	}
 
 	_, release2, err := f.gate.acquire(t.Context())
@@ -222,7 +222,7 @@ func TestGatePropagatesOpenFailures(t *testing.T) {
 		t.Error("a connection failure was not reported")
 	}
 	// And a failure must not leave the gate believing it holds one.
-	if _, ok := f.gate.current(); ok {
+	if _, ok := f.gate.currentLive(); ok {
 		t.Error("a failed connection was recorded as held")
 	}
 }
@@ -454,7 +454,10 @@ func TestCurrentLive(t *testing.T) {
 	if _, ok := f.gate.currentLive(); ok {
 		t.Error("a dead connection was reported live")
 	}
-	if _, ok := f.gate.current(); !ok {
-		t.Error("current stopped reporting what is held")
+	f.gate.mu.Lock()
+	held := f.gate.held
+	f.gate.mu.Unlock()
+	if !held {
+		t.Error("currentLive dropped the dead connection; only acquire and sweep may")
 	}
 }

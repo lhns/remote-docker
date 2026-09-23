@@ -12,16 +12,12 @@ import (
 )
 
 func main() {
-	// Before anything reads them: an exec wrapper may have left this binary's
-	// own path in the arguments (see self.go). os.Args rather than cobra's
-	// SetArgs, because the embedded Docker CLI reads os.Args in its own right
-	// and would still see the extra word.
+	// Both repairs rewrite os.Args, not cobra's SetArgs: the embedded Docker CLI
+	// reads os.Args itself. self.go explains the first.
 	self, _ := selfPath()
 	os.Args = dropSelfArgument(os.Args, self)
 
-	// Git Bash rewrites `-v` before this program starts, and only the container
-	// side of it is wrong (ADR 0040). Here for the same reason as the line
-	// above: the embedded Docker CLI reads os.Args in its own right.
+	// Git Bash mangles the container side of `-v` (ADR 0040).
 	if runtime.GOOS == "windows" {
 		var notes []string
 		os.Args, notes = msysFrom(os.Getenv).repairArgs(os.Args)
@@ -36,43 +32,22 @@ func main() {
 		return
 	}
 
-	// An EMPTY message means print nothing. That is not defensiveness: it is
-	// how the Docker CLI returns a container's exit status. `docker run`
-	// finishing returns cli.StatusError with only a StatusCode, and its
-	// Error() is deliberately "" -- so printing unconditionally puts a bare
-	// "remote-docker:" on the terminal after every container that exits
-	// non-zero.
-	//
-	// The prefix is the name this binary was installed as, because that is the
-	// name the user typed. A message beginning "remote-docker:" from a command
-	// they spelled `docker` names a program they may not know they have.
+	// A container's non-zero exit arrives as a cli.StatusError whose message is
+	// "", which must print nothing.
 	if msg := err.Error(); msg != "" {
 		fmt.Fprintln(os.Stderr, programName()+":", msg)
 	}
 	os.Exit(exitCode(err))
 }
 
-// exitCode is the status this process exits with for err.
-//
-// A container's exit code reaches here as cli.StatusError and must be passed
-// through: this binary IS the Docker CLI (ADR 0024), so `docker run ... ; echo
-// $?` has to answer what the container answered. Collapsing everything to 1
-// breaks any script that branches on it.
-//
-// Docker's own 128+signal mapping is not reproduced here and does not have to
-// be: `getExitCode` in its cmd/docker/docker.go reaches that branch only
-// through errCtxSignalTerminated, unexported in that package main, and what it
-// covers is a command with no container to carry a status, where this binary is
-// killed by the signal instead. An interrupted `docker run` gets its number
-// from the container, arriving here as a cli.StatusError like any other;
-// test/integration.sh section 6e pins it.
+// exitCode passes a container's status through, as the Docker CLI does.
+// Docker's 128+signal mapping is not needed: an interrupted `docker run` gets
+// its status from the container too (test/integration.sh section 6e).
 func exitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	// Zero is excluded because it is not an exit status a failure can have:
-	// docker sets StatusCode only when it means it, and a zero would turn a
-	// real error into a success.
+	// A zero StatusCode on an error would turn the failure into a success.
 	var status cli.StatusError
 	if errors.As(err, &status) && status.StatusCode != 0 {
 		return status.StatusCode

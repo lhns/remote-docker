@@ -9,25 +9,13 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// NConnectEnv asks the workspace's NFS client to open several TCP connections
-// behind every share of this machine. OFF unless it is set, and it raises the
-// ceiling on requests in flight (go-nfs Server.MaxConcurrentRequests bounds them
-// per connection) rather than anything measured.
-//
-// It needs Linux 5.3 on the WORKSPACE and nothing checks that before mounting,
-// so an older one fails every bind mount (workspace.nconnectOption). Being
-// opt-in is what makes that acceptable, which is why this is an environment
-// variable with no config-file key: a kernel gate, and a default other than off,
-// are for whoever measures it first. It is not per share either, for the reason
-// workspace.NFSVolumeOptions gives.
+// NConnectEnv sets nconnect on every NFS mount of this machine. Off unless
+// set: it needs Linux 5.3 on the workspace, unchecked, and an older kernel
+// fails every bind mount (workspace.nconnectOption).
 const NConnectEnv = "REMOTE_DOCKER_NFS_NCONNECT"
 
-// NConnect is what NConnectEnv asks for: 0 when it is unset, empty, or names one
-// connection, which is what the mount does anyway.
-//
-// The error is for a value that cannot be honoured, and the caller logs it and
-// carries on with 0 rather than failing the command: a variable a person set on
-// a whim must not stop them running a container.
+// NConnect is what NConnectEnv asks for, 0 when unset. On error the caller
+// logs and carries on with 0.
 func NConnect() (int, error) {
 	v := strings.TrimSpace(os.Getenv(NConnectEnv))
 	if v == "" {

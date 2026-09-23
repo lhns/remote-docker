@@ -1,19 +1,11 @@
 package main
 
-// Which file this binary is, and how to run it again.
-//
-// Both are ordinary questions everywhere except Termux, where Android refuses
-// to execute files in app data directories at all. Programs there are run as
-// `linker64 <absolute path> <args>`, so the process really IS the system
-// linker. libtermux-exec papers over that in libc, and a Go binary loads
-// neither, so it sees the arrangement raw:
-//
+// Which file this binary is, and how to run it again. Termux runs programs as
+// `linker64 <absolute path> <args>` (Android will not exec app data files), and
+// a Go binary skips the libc shim that hides it, so:
 //   - /proc/self/exe, which os.Executable reads, is the linker
-//   - the binary's path arrives as an argument, because Go takes argv off the
-//     initial stack rather than from the linker, which shifts past it for C
-//   - the file cannot be exec'd directly, whatever path it is given
-//
-// Each one failed somewhere else entirely, naming the linker or nothing.
+//   - the binary's path arrives as argv[1]
+//   - the file cannot be exec'd directly
 
 import (
 	"fmt"
@@ -25,16 +17,9 @@ import (
 // termuxSelfExeEnv is what Termux sets to the path of the running program.
 const termuxSelfExeEnv = "TERMUX_EXEC__PROC_SELF_EXE"
 
-// selfPath is this binary's path on disk.
-//
-// The environment variable is preferred only where os.Executable disagrees
-// with it and the file is really there, so an ordinary machine keeps the
-// kernel's answer and a stale variable cannot redirect anything.
-//
-// Always absolute: the variable holds the path as it was typed. Installing this
-// binary as `docker` makes a link that has to resolve from elsewhere (ADR 0024),
-// and the respawn below sets the child's directory, so a relative path would
-// find nothing there.
+// selfPath is this binary's absolute path on disk. The Termux variable wins
+// only when os.Executable disagrees and the file exists, so a stale variable
+// redirects nothing. Made absolute because the respawn sets its own directory.
 func selfPath() (string, error) {
 	exe, err := os.Executable()
 
@@ -52,19 +37,9 @@ func selfPath() (string, error) {
 	return abs, nil
 }
 
-// selfCommand builds a command that runs this binary again.
-//
-// Not exec.Command(selfPath()), which `start` used and which Android denies
-// outright:
-//
-//	starting the background session: fork/exec .../remote-docker:
-//	permission denied
-//
-// So it re-execs the way it was itself exec'd: through whatever loader is
-// running this process, which os.Executable names. That is why no linker path
-// appears anywhere here -- hardcoding /system/bin/linker64 would be a guess
-// about a platform nothing tests. Where the two agree this is an ordinary exec
-// of an ordinary file.
+// selfCommand runs this binary again through whatever loader runs this process
+// (os.Executable), since Android denies exec of the file itself with
+// "permission denied". No linker path is hardcoded; elsewhere this is a plain exec.
 func selfCommand(args ...string) (*exec.Cmd, error) {
 	self, err := selfPath()
 	if err != nil {
@@ -77,24 +52,9 @@ func selfCommand(args ...string) (*exec.Cmd, error) {
 	return exec.Command(self, args...), nil
 }
 
-// dropSelfArgument removes a first argument that is this binary.
-//
-// `remote-docker status` arrives as [<argv0>, /abs/path/remote-docker, status],
-// so the first word the CLI reads as a command is its own path and every
-// command is refused as unknown:
-//
-//	remote-docker: "/data/data/com.termux/files/home/.../remote-docker"
-//	is not a remote-docker command
-//
-// Absolute first, because the linker requires an absolute path and so that is
-// what gets inserted. It is also what keeps this off the hot path: a
-// subcommand is a bare word, so an ordinary `docker ps` never reaches the
-// filesystem. os.SameFile after it, because the inserted path is absolute
-// whatever was typed and the spellings would not match.
-//
-// Not conditioned on GOOS. An argument has to BE this executable and at
-// position one, which cannot happen by accident, and a rule that runs only on
-// the platform nobody develops on is a rule that rots.
+// dropSelfArgument removes an argv[1] that is this binary, which the Termux
+// linker inserts (always absolute, so the IsAbs check keeps `docker ps` off the
+// filesystem). Deliberately not conditioned on GOOS, so it is exercised everywhere.
 func dropSelfArgument(args []string, self string) []string {
 	if len(args) < 2 || self == "" || !filepath.IsAbs(args[1]) || !sameFile(args[1], self) {
 		return args

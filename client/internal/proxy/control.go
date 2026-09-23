@@ -9,35 +9,21 @@ import (
 	"strings"
 )
 
-// The control channel rides the Docker endpoint rather than a socket of its
-// own.
-//
-// One endpoint means one lock, one ACL and one thing to find. A second socket
-// would need all three again, and would need them to agree, and the Docker
-// endpoint's permissions already say exactly who may drive this session,
-// because anyone who can reach it can already start containers that read and
-// write this machine's filesystem.
-//
-// The prefix cannot collide with the Docker API: every real path begins
-// /vX.YZ/ or one of the documented roots, and no version of the Engine API has
-// ever served anything under a leading underscore.
+// ControlPrefix is the session's own API, served on the Docker endpoint so it
+// shares that endpoint's lock and ACL. No Engine API path starts with an
+// underscore.
 const ControlPrefix = "/_remote-docker/"
 
-// Control answers the session's own endpoints. Nil disables them, which is
-// what a session that is not the daemon wants.
+// Control answers the session's own endpoints. Nil disables them.
 type Control interface {
-	// Status describes the session for `remote-docker status`.
 	Status() any
 
-	// Shutdown asks the session to stop. It must return promptly and do the
-	// stopping in the background: the caller is still holding the connection
-	// that the shutdown is about to close.
+	// Shutdown must return promptly and stop in the background: the caller
+	// still holds the connection the shutdown will close.
 	Shutdown()
 
-	// Idle reports whether the session could be ended without breaking
-	// anything. Separate from Status because answering it costs a round trip
-	// to the workspace, and Status is asked far more often than the answer is
-	// needed.
+	// Idle is separate from Status because it costs a round trip to the
+	// workspace.
 	Idle() any
 }
 
@@ -66,10 +52,7 @@ func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 				map[string]string{"message": "shutdown must be POSTed"})
 			return
 		}
-		// Answered before acting. Shutdown closes this very connection, so
-		// replying afterwards would be replying into a socket we just closed
-		// and the caller would see an unexplained EOF instead of an
-		// acknowledgement.
+		// Reply first: Shutdown closes this connection.
 		writeControl(client, http.StatusOK, map[string]string{"status": "stopping"})
 		p.Control.Shutdown()
 
@@ -85,9 +68,8 @@ func writeControl(w io.Writer, status int, body any) {
 		encoded = []byte(`{"message":"encoding the response failed"}`)
 		status = http.StatusInternalServerError
 	}
-	// Connection: close, because a control call is a one-shot and leaving the
-	// connection open would have the caller's transport hold it idle, which
-	// for `stop` means holding the very session it just asked to end.
+	// Connection: close, or the caller's transport holds it idle, which for
+	// `stop` pins the session it asked to end.
 	_, _ = fmt.Fprintf(w,
 		"HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
 		status, http.StatusText(status), len(encoded), encoded)
@@ -95,22 +77,12 @@ func writeControl(w io.Writer, status int, body any) {
 
 // Status is what the daemon reports about itself.
 type Status struct {
-	// Version is the build the daemon is running.
-	//
-	// Compared, never ordered. A sha build says which commit and nothing about
-	// when: "sha-a7634c0" and "sha-95e42ac" cannot be put in sequence, and a
-	// release version cannot be compared with either. So a difference is
-	// reported as a difference, never as "outdated": claiming an order this
-	// cannot know would be worse than saying nothing.
+	// Version is compared, never ordered: sha builds have no sequence, so a
+	// difference is reported as a difference, never as "outdated".
 	Version string `json:"version"`
 
-	// Storage is the graph driver of the daemon this session is talking to, and
-	// Tracing whether the session was started with TraceEnv set.
-	//
-	// Both are here because the session is the only thing that has spoken to
-	// the workspace, so an ordinary `docker` command can only warn about them
-	// through this. Without it they are reachable by running `status` on
-	// purpose, which nobody does while wondering why a container is slow.
+	// Storage is the workspace daemon's graph driver; Tracing whether TraceEnv
+	// was set. Carried here so an ordinary `docker` command can warn about them.
 	Storage string `json:"storage,omitempty"`
 	Tracing bool   `json:"tracing,omitempty"`
 
@@ -118,17 +90,10 @@ type Status struct {
 	Connected bool   `json:"connected"`
 	Since     string `json:"since"`
 
-	// Caches is one line per delegated share saying how much of it is cached
-	// (ADR 0044). A partly cached share is not a failure and has nothing else
-	// to show for itself: it works, and is simply slower for the part that did
-	// not fit. A share still filling reads the same way, which is the point.
+	// Caches is one line per delegated share saying how much is cached (ADR 0044).
 	Caches []string `json:"caches,omitempty"`
 
-	// Drops is how many times this session has found its connection dead and
-	// opened another, and LastDrop when it last did. Reconnecting is invisible
-	// otherwise, and one that does it every few minutes is a link worth looking
-	// at; the time is carried so "twice, an hour ago" reads differently from
-	// "twice, just now".
+	// Drops counts reconnects after a dead connection; otherwise invisible.
 	Drops    int    `json:"drops,omitempty"`
 	LastDrop string `json:"lastDrop,omitempty"`
 }
@@ -136,9 +101,6 @@ type Status struct {
 // Idle is what the daemon reports about whether it can be ended.
 type Idle struct {
 	// Safe means nothing depends on this session: no container of ours
-	// running, no stream open, no shell. Restarting it would lose nothing.
-	//
-	// Never a guess. The check that produces it is the one guarding the idle
-	// timer, and it answers "cannot tell" as busy.
+	// running, no stream, no shell. "Cannot tell" answers false.
 	Safe bool `json:"safe"`
 }

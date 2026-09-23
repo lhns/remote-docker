@@ -16,24 +16,15 @@ import (
 	"maps"
 )
 
-// APIClient makes Docker API calls of our own: creating the volumes that
-// back rewritten binds, and reading container state for port forwarding.
-//
-// It is deliberately tiny rather than the official SDK: we need three calls,
-// and the SDK would pull in a dependency tree to make them. Everything the
-// user's own tooling does still goes through the proxy untouched.
+// APIClient makes Docker API calls of our own. Deliberately tiny rather than
+// the SDK, which would pull in a dependency tree for a handful of calls.
 type APIClient struct {
 	Dialer Dialer
 }
 
-// do performs one request over a fresh connection to the daemon.
-//
-// The request is written by hand and read back with http.ReadResponse, so no
-// Transport honours ctx and the context on the http.Request is inert. The
-// connection has no deadline to set either, so closeOnCancel closing it is the
-// only lever. Without it a workspace that accepts and then says nothing blocks
-// the caller forever: watchPorts and session.hasLiveDependents both stall, and
-// idle release with them.
+// do performs one request over a fresh connection to the daemon. No Transport
+// honours ctx here, so closeOnCancel is the only thing stopping a silent
+// workspace from blocking the caller (and idle release) forever.
 func (c *APIClient) do(ctx context.Context, method, path string, body any) (*http.Response, io.Closer, error) {
 	conn, err := c.Dialer.DialDocker(ctx)
 	if err != nil {
@@ -74,17 +65,13 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 		return fail("proxy: reading response: %w", err)
 	}
 
-	// Stopped here rather than deferred: the connection outlives this function
-	// (Events hands it back and goes on decoding from it), so the watchdog
-	// covers the request and the response head only.
+	// Not deferred: the connection outlives this call (Events keeps reading).
 	stop()
 	return resp, conn, nil
 }
 
 // closeOnCancel closes conn when ctx is done, until stop is called. stop waits
-// for the goroutine to end, because these calls run every few seconds under
-// one long-lived session context: parking one each would leak until that
-// context is finally cancelled.
+// for the goroutine, or one would leak per call under the session's context.
 func closeOnCancel(ctx context.Context, conn io.Closer) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
@@ -102,20 +89,8 @@ func closeOnCancel(ctx context.Context, conn io.Closer) (stop func()) {
 	}
 }
 
-// EnsureVolume creates an NFS-backed volume, replacing one whose definition no
-// longer matches.
-//
-// Docker's volume create is idempotent in a way that is easy to read as more
-// than it is: given a name that exists it returns THAT volume and ignores the
-// options entirely, reporting success. So a volume goes on carrying the port
-// and the export path it was made with, however far those have since drifted,
-// and the only sign is a container that mounts something unexpected or fails to
-// mount at all.
-//
-// A mismatch is therefore checked for and replaced. Never while the volume is
-// in use: removing it under a running container would take its filesystem away,
-// so that case is reported instead, naming the volume so the remedy is
-// obvious.
+// EnsureVolume creates an NFS-backed volume, replacing one whose options have
+// drifted: volume create on an existing name silently ignores the options.
 func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, labels map[string]string) error {
 	if err := c.replaceIfStale(ctx, name, driverOpts); err != nil {
 		return err
@@ -125,10 +100,7 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 		"Name":       name,
 		"Driver":     "local",
 		"DriverOpts": driverOpts,
-		// The labels mark the volume as ours, so garbage collection can find
-		// it and (more importantly) can tell it apart from a volume the
-		// user created, which is never ours to remove.
-		"Labels": labels,
+		"Labels":     labels,
 	}
 
 	resp, conn, err := c.do(ctx, http.MethodPost, "/volumes/create", body)
@@ -144,15 +116,11 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 	return nil
 }
 
-// replaceIfStale removes a managed volume whose driver options have changed.
-//
-// Only ours, and only when unused. Anything else is left exactly as it is: a
-// volume the user made is never ours to remove, and one a container holds is
-// worse to remove than to leave wrong.
+// replaceIfStale removes a managed volume whose driver options have changed,
+// only if it is ours and no container holds it.
 func (c *APIClient) replaceIfStale(ctx context.Context, name string, want map[string]string) error {
 	existing, ok := c.inspectVolume(ctx, name)
 	if !ok {
-		// Not there, or not answerable. Create will say what is wrong.
 		return nil
 	}
 	if existing.Labels[workspace.ManagedLabel] != workspace.ManagedShare {
@@ -170,18 +138,13 @@ func (c *APIClient) replaceIfStale(ctx context.Context, name string, want map[st
 	return c.RemoveVolume(ctx, name)
 }
 
-// volumeDetail is what inspecting a volume tells us that listing does not.
 type volumeDetail struct {
 	Options map[string]string `json:"Options"`
 	Labels  map[string]string `json:"Labels"`
 }
 
-// inspectVolume returns a volume's definition, and whether there is one to
-// report.
-//
-// No error, because there is nothing a caller could do with one. Every reason
-// this fails -- absent, unreachable, unparseable -- means the same thing here:
-// go on and let create answer, which is what says something useful anyway.
+// inspectVolume returns a volume's definition. Any failure is just false:
+// volume create will report what is wrong.
 func (c *APIClient) inspectVolume(ctx context.Context, name string) (volumeDetail, bool) {
 	var detail volumeDetail
 
@@ -212,9 +175,8 @@ type Container struct {
 	}
 	Labels map[string]string
 
-	// Mounts says which volumes a container currently holds. Used to decide
-	// whether the connection can be released: a running container with one of
-	// our volumes has a live NFS mount that would break.
+	// Mounts decides idle release: a running container on one of our volumes
+	// holds a live NFS mount.
 	Mounts []struct {
 		Type string
 		Name string
@@ -222,9 +184,6 @@ type Container struct {
 }
 
 // ListContainers returns the running containers.
-//
-// Used to reconcile port forwards after a dropped event stream: without it,
-// forwards leak and containers started during the gap are never forwarded.
 func (c *APIClient) ListContainers(ctx context.Context) ([]Container, error) {
 	resp, conn, err := c.do(ctx, http.MethodGet, "/containers/json", nil)
 	if err != nil {
@@ -268,8 +227,6 @@ func (c *APIClient) Events(ctx context.Context) (<-chan Event, io.Closer, error)
 		defer close(events)
 		defer resp.Body.Close()
 
-		// The daemon streams one JSON object per event with no wrapping array,
-		// so a streaming decoder is the right shape here.
 		decoder := json.NewDecoder(resp.Body)
 		for {
 			var event Event
@@ -287,8 +244,7 @@ func (c *APIClient) Events(ctx context.Context) (<-chan Event, io.Closer, error)
 	return events, conn, nil
 }
 
-// apiError extracts the daemon's own message, which is far more useful than
-// the status code alone.
+// apiError extracts the daemon's own message.
 func apiError(resp *http.Response) string {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 
@@ -317,9 +273,6 @@ func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
 		return nil, fmt.Errorf("proxy: listing volumes: %s", apiError(resp))
 	}
 
-	// Decoded straight into the type the caller wants. Declaring a proxy.Volume
-	// here would duplicate rewrite.Volume field for field and buy only a loop
-	// converting between two spellings of one struct.
 	var payload struct {
 		Volumes []rewrite.Volume
 	}
@@ -344,11 +297,8 @@ func (c *APIClient) RemoveVolume(ctx context.Context, name string) error {
 	return nil
 }
 
-// VolumesInUse names the volumes referenced by a container, running or not.
-//
-// Stopped containers count. A volume removed from under a stopped container
-// would make it fail to start again with a mount error, which is a confusing
-// way to discover that garbage collection was too eager.
+// VolumesInUse names the volumes referenced by any container, stopped ones
+// included: removing one would fail that container's next start.
 func (c *APIClient) VolumesInUse(ctx context.Context) (map[string]bool, error) {
 	resp, conn, err := c.do(ctx, http.MethodGet, "/containers/json?all=true", nil)
 	if err != nil {

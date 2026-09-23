@@ -8,16 +8,9 @@ import (
 	"github.com/lhns/remote-docker/client/internal/session"
 )
 
-// idleExpired closes its channel once the session has had nothing to do for
-// the given period AND nothing depends on it.
-//
-// Both conditions, always. Ending the process takes the NFS export with it,
-// and a container holding one of our volumes loses its filesystem, so this
-// asks the same question a connection release asks, for the same reason, and
-// treats "cannot tell" as a reason to stay.
-//
-// A negative period disables it, matching how IdleTimeout spells the same
-// idea.
+// idleExpired closes its channel once the session has been quiet for idle AND
+// nothing depends on it: exiting takes the NFS export from any container using
+// it. "Cannot tell" means stay. A non-positive period disables it.
 func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-chan struct{} {
 	expired := make(chan struct{})
 	if idle <= 0 {
@@ -25,10 +18,6 @@ func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-
 	}
 
 	go func() {
-		// Checked several times per period rather than once at the end, so
-		// the answer is at most a fraction of the period stale. Bounded below
-		// because a very short period (which is what a test sets) must not
-		// become a busy loop.
 		interval := max(idle/4, time.Second)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -50,10 +39,8 @@ func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-
 }
 
 // daemonIdle is how long a background session may sit with nothing to do.
-//
-// Zero means the DEFAULT and negative means NEVER, which have been mistaken for
-// each other: a deployment that wanted "never" set 0, got thirty minutes, and
-// lost its endpoint.
+// Zero means the DEFAULT and negative means NEVER; setting 0 for "never" is
+// a known mistake.
 func daemonIdle(configured time.Duration) time.Duration {
 	if configured == 0 {
 		return config.DefaultDaemonIdle
@@ -62,8 +49,7 @@ func daemonIdle(configured time.Duration) time.Duration {
 }
 
 // daemonStandby is how long a session holds the workspace with nothing to do.
-//
-// Zero means the default and negative means never, as with daemonIdle.
+// Zero and negative as for daemonIdle.
 func daemonStandby(configured time.Duration) time.Duration {
 	if configured == 0 {
 		return config.DefaultDaemonStandby
@@ -71,12 +57,8 @@ func daemonStandby(configured time.Duration) time.Duration {
 	return configured
 }
 
-// standbyWhenIdle lets go of the workspace once nothing has needed it.
-//
-// Unlike the shutdown tier this does not end anything, so it keeps watching:
-// a session may stand by, be woken by a request, and stand by again any number
-// of times. Session.Standby is idempotent, which is what lets this stay a
-// plain poll.
+// standbyWhenIdle lets go of the workspace whenever nothing has needed it,
+// repeatedly: Session.Standby is idempotent and a request wakes the session.
 func standbyWhenIdle(ctx context.Context, s *session.Session, standby time.Duration) {
 	if standby <= 0 {
 		return
