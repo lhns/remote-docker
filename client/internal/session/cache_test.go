@@ -98,7 +98,7 @@ func (s *stalled) Close() error {
 // the session.
 func TestCacheChannelHonoursItsContext(t *testing.T) {
 	stream := &stalled{closed: make(chan struct{})}
-	c := &cacheChannel{stream: stream, r: bufio.NewReaderSize(stream, cache.MaxFrame)}
+	c := newCacheChannel(stream, bufio.NewReaderSize(stream, cache.MaxFrame))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -121,6 +121,40 @@ func TestCacheChannelHonoursItsContext(t *testing.T) {
 	case <-stream.closed:
 	default:
 		t.Error("the timed-out exchange left the channel open")
+	}
+}
+
+// A request's deadline covers its wait for the channel too. The collector's
+// Mounted carries none, so one the workspace never answers held the channel,
+// and every request queued behind it waited past its own deadline.
+func TestCacheChannelDeadlineCoversTheWaitForItsTurn(t *testing.T) {
+	stream := &stalled{closed: make(chan struct{})}
+	defer stream.Close()
+	c := newCacheChannel(stream, bufio.NewReaderSize(stream, cache.MaxFrame))
+
+	holding := make(chan struct{})
+	go func() {
+		close(holding)
+		_, _ = c.Mounted(context.Background())
+	}()
+	<-holding
+	time.Sleep(50 * time.Millisecond) // let Mounted take the channel
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Changes(ctx, workspace.ExportCWD)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("err = %v, want it to carry the deadline", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a request with a 100ms deadline was still waiting after 2s behind one that never ends")
 	}
 }
 
