@@ -409,13 +409,15 @@ go-billy validating only where a link is placed, and never where it points, does
 not become an escape. *Covered by* `nfsserve/symlink_test.go`, which creates one
 through the export and writes through it.
 
-**Known gap: `attrChange` resolves paths server-side and follows links.** The
-one place that reasoning does not reach. `os.Chmod` follows a symlink and the
-containment check is lexical, so a client asking to chmod a link inside a share
--- rather than resolving it first, as a kernel does -- changes the mode of
-whatever it points at. It needs a crafted NFS client rather than an ordinary
-mount, is bounded by the client's own uid, and reaches permission bits rather
-than content. `core-agent/replay` solved the same shape with `O_NOFOLLOW`.
+**T — a SETATTR on a symlink's own handle (10, 11).** The one place the server
+acts on a resolved path. `os.Chmod` follows a final symlink, so a crafted client
+asking on a link's handle, rather than resolving it first as a kernel does,
+changed the mode of whatever it pointed at, outside the share included.
+`attrChange.Chmod` now refuses a symlink (ENOTSUP, as lchmod on Linux); size is
+already refused on a link by go-nfs, and ownership and times are never applied.
+What remains is the race every containment check here shares: a directory or
+leaf swapped for a link between the check and the syscall. *Covered by*
+`nfsserve/chmod_test.go`.
 
 **I — the fileid is the real inode now (11).** A share reports device and inode
 (volume and file reference on Windows) rather than a hash of the path, because a
@@ -1064,9 +1066,8 @@ Stated here rather than buried, because each is a deliberate trade.
   validates where a link is placed and never where it points. It holds anyway: the server never resolves a link, NFSv3 leaving
   that to the client in its own namespace. `symlink_test.go` asserts it rather
   than leaving it to reasoning.
-- **`attrChange` follows links server-side**, the one path that reasoning does
-  not cover. Recorded rather than fixed: it needs a crafted client, is bounded
-  by the user's own uid, and reaches permission bits only.
+- **`attrChange` no longer chmods through a symlink.** A SETATTR mode on a
+  link's own handle is refused rather than applied to its target.
 - **The limit of `AllowDial`, written down and tested.** A shell reaches what a
   forwarding rule cannot gate. The default mode's namespace is what actually
   prevents it, so `per-user-dind.sh` now asserts a shell cannot reach the export
