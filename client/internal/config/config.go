@@ -847,27 +847,25 @@ func (f *File) Set(name string, ws Workspace) error {
 	if name == "" {
 		return fmt.Errorf("config: a workspace needs a name")
 	}
-	if f.Workspaces == nil {
-		f.Workspaces = map[string]Workspace{}
-	}
-	if f.Host != "" {
+	// Only while there are no keyed entries is the flat form a workspace of
+	// its own. Beside keyed entries it is the base applyWorkspace lays under
+	// each of them, and moving it would take it away from every one.
+	if f.Host != "" && len(f.Workspaces) == 0 {
 		// The WHOLE entry moves, not the four fields that name the address.
-		// The flat form describes one workspace, so its watch mode, its
-		// consistency rules and above all its `machine` belong to that
-		// workspace; left at the top level they become a base that
-		// applyWorkspace lays under every keyed entry, and the new workspace
-		// silently inherits a machine it does not have.
-		existing := f.Workspace
+		// Its watch mode, its consistency rules and above all its `machine`
+		// belong to that workspace; left at the top level they become a base,
+		// and the new workspace silently inherits a machine it does not have.
 		flat := f.Default
 		if flat == "" {
 			flat = f.Host
 		}
 		if flat != name {
-			if _, taken := f.Workspaces[flat]; !taken {
-				f.Workspaces[flat] = existing
-			}
+			f.Workspaces = map[string]Workspace{flat: f.Workspace}
 		}
 		f.Workspace = Workspace{}
+	}
+	if f.Workspaces == nil {
+		f.Workspaces = map[string]Workspace{}
 	}
 	f.Workspaces[name] = ws
 	if f.Default == "" {

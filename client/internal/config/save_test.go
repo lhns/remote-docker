@@ -57,6 +57,30 @@ func TestSaveDoesNotDestroyOnRewrite(t *testing.T) {
 	}
 }
 
+// Beside keyed entries the flat fields are their shared base, and adding a
+// workspace must leave it under the ones already there.
+func TestSetKeepsTheSharedBase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	f := File{
+		Workspace:  Workspace{Host: "shared.example", Watch: "partial"},
+		Workspaces: map[string]Workspace{"dev": {User: "alice"}},
+		Default:    "dev",
+	}
+	if err := f.Set("ci", Workspace{Host: "ci.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(f, path); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Resolve(Overrides{Workspace: "dev"}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "shared.example" || cfg.Watch != "partial" {
+		t.Errorf("dev after adding ci: host %q watch %q, want the shared base", cfg.Host, cfg.Watch)
+	}
+}
+
 // A file written by hand often describes one workspace with no name. Adding a
 // second has to move the first into the keyed form, or the top-level fields
 // would shadow it and it would silently stop being reachable.
