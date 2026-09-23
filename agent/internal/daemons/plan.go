@@ -1,31 +1,19 @@
 // Package daemons gives each enrolled account its own Docker daemon, behind
-// the same single SSH port (ADR 0019).
+// the same single SSH port (ADR 0019). SEPARATION, NOT ISOLATION: each runs
+// privileged, so a determined account can still reach another's.
 //
-// Say this out loud, because it will otherwise be believed: THIS IS
-// SEPARATION, NOT ISOLATION. Each per-user daemon runs privileged, and
-// privileged is root on whatever hosts it, so a determined user can still
-// reach another's. What changes is that nobody sees anyone else's work by
-// accident. Genuine isolation is still one workspace container per account.
-//
-// The plan is pure and lives next to the runner for the same reason elevate's
-// does: the difference between a correct and a catastrophic invocation is one
-// flag, and it belongs in a test rather than in a command line.
+// The plan is pure, because the difference between a correct and a
+// catastrophic invocation is one flag, and that belongs in a test.
 package daemons
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/lhns/remote-docker/agent/internal/elevate"
 )
-
-// ErrUnsupported is returned by the parts that need a unix account database.
-// The agent is Linux-only; this exists so the module still builds on the
-// development machine.
-var ErrUnsupported = errors.New("daemons: per-account daemons are Linux-only")
 
 // DefaultImage is the dind image each account's daemon runs when nothing else
 // is known.
@@ -39,35 +27,20 @@ var ErrUnsupported = errors.New("daemons: per-account daemons are Linux-only")
 // decided it needs; see elevate.ImageEnv.
 const DefaultImage = "docker:28-dind"
 
-// Entrypoint is what a per-account daemon runs.
-//
-// Set explicitly because the image is the workspace's own, whose entrypoint is
-// the agent. Left alone, the daemon container would run `remote-dockerd`
-// handed dockerd's flags.
-//
-// It is dind's OWN entrypoint script, not `dockerd`, because the script does
-// setup dockerd does not do for itself: removing a stale /var/run/docker.pid.
-// Without it the FIRST start works and every RESTART dies with
-//
-//	failed to start daemon, ensure docker is not running or delete
-//	/var/run/docker.pid: process with PID 1 is still running
-//
-// so a daemon looks fine until the workspace is restarted, which is exactly
-// when nobody is watching. Both candidate images have it, since the
-// workspace's own is built FROM docker:dind. What the script does with its
-// FIRST ARGUMENT is on the command Plan builds.
+// Entrypoint is what a per-account daemon runs: set, because the workspace's
+// own image would otherwise run the agent, and dind's script rather than
+// dockerd, because the script removes a stale /var/run/docker.pid that
+// otherwise kills every RESTART with "process with PID 1 is still running".
+// What it does with its first argument is on the command Plan builds.
 const Entrypoint = "dockerd-entrypoint.sh"
 
 // SocketDir is where the agent keeps one socket directory per account, and
-// SocketMount is where that directory appears inside the account's daemon.
-//
-// Deliberately not /var/run: binding over it inside the dind would hide
-// containerd's own sockets. The daemon still listens on /var/run/docker.sock
-// as well, so anything inside expecting the usual path finds it.
+// socketMount is where that directory appears inside the account's daemon: not
+// /var/run, where it would hide containerd's own sockets.
 const (
 	SocketDir   = "/run/rd"
-	SocketMount = "/rd-sock"
-	SocketName  = "docker.sock"
+	socketMount = "/rd-sock"
+	socketName  = "docker.sock"
 )
 
 // ExecRoot is dockerd's exec-root inside a daemon container, given a tmpfs of
@@ -92,30 +65,20 @@ const (
 // pid is live only by coincidence, which is why this presented as a flake.
 const ExecRoot = "/var/run/docker"
 
-// Labels identify a container as a daemon we manage, and whose.
-//
-// The workspace label carries an id persisted in the state directory, NOT the
-// container id. A container id changes on every redeploy, so adopting by it
-// would orphan every user's daemon the first time somebody ran
-// `docker compose up -d`, leaving them running, unreferenced, and holding
-// their users' containers.
+// Labels identify a container as a daemon we manage, and whose. The workspace
+// label is the persisted workspace id, never a container id, which changes on
+// every redeploy and would orphan every account's daemon.
 const (
 	ManagedLabel   = "remote-docker.daemon"
 	AccountLabel   = "remote-docker.account"
 	WorkspaceLabel = "remote-docker.workspace"
 
-	// SpecLabel and StorageLabel record what a daemon was CREATED with: the
-	// whole spec digested, and the graph driver on its own.
-	//
-	// A daemon that already exists is STARTED, never re-run, which is what
-	// keeps an account's containers and images across a redeploy, and means
-	// its command line is fixed for life. Without a record of what it was
-	// created from, a changed setting silently applies to nobody who already
-	// has a daemon, which on any workspace that has been used is everybody.
-	// The driver is separate because it is the one change that cannot be
-	// applied by recreating the container; see Manager.reconcile.
-	SpecLabel    = "remote-docker.spec"
-	StorageLabel = "remote-docker.storage-driver"
+	// specLabel and storageLabel record what a daemon was CREATED with: the
+	// spec digested, and the graph driver on its own. An existing daemon is
+	// started, never re-run, so without them a changed setting would reach
+	// nobody who already has one. See Manager.reconcile.
+	specLabel    = "remote-docker.spec"
+	storageLabel = "remote-docker.storage-driver"
 )
 
 // Spec describes one account's daemon.
@@ -125,12 +88,9 @@ type Spec struct {
 	Entrypoint string
 	Privileged bool
 
-	// No --rm and no restart policy, and this is where somebody will look for
-	// them. `--rm` deletes the containers, images and volumes a user's daemon
-	// holds the moment it stops; a restart policy makes the parent dockerd a
-	// second supervisor with no backoff and nothing in our log (ADR 0019).
-	// Ensure starts a daemon when its account connects, and that is the whole
-	// lifecycle. plan_test.go pins both flags absent.
+	// No --rm, which would delete everything the account holds when the
+	// daemon stops, and no restart policy, which would make the parent a
+	// second supervisor (ADR 0019). plan_test.go pins both absent.
 
 	Labels []string
 	Mounts []elevate.Mount
@@ -162,29 +122,22 @@ type Options struct {
 	StorageDriver string
 }
 
-// ContainerName is what one account's daemon is called.
-//
-// Derived from the account rather than from a random id, so a daemon can be
-// found again after the agent restarts even before its labels are read.
+// ContainerName is what one account's daemon is called, derived so it can be
+// found again after an agent restart.
 func ContainerName(account string) string {
 	return "rd-dind-" + account
 }
 
-// VolumeName is where one account's /var/lib/docker lives.
-//
-// A named volume on the WORKSPACE's daemon, so it lands on a real filesystem
-// rather than on an overlay (overlay2 on overlay2 never arises) and so it
-// survives the daemon being restarted, the agent being restarted and the
-// workspace being redeployed. Never collected automatically, for the same
-// reason accounts are revoked rather than deleted: the cost of being wrong is
-// somebody's work.
+// VolumeName is where one account's /var/lib/docker lives: a named volume on
+// the workspace's daemon, on a real filesystem, outliving the daemon, the agent
+// and a redeploy. Never collected automatically.
 func VolumeName(account string) string {
 	return "rd-dind-" + account + "-lib"
 }
 
 // SocketPathFor is where the agent dials one account's daemon.
 func SocketPathFor(account string) string {
-	return SocketDir + "/" + account + "/" + SocketName
+	return SocketDir + "/" + account + "/" + socketName
 }
 
 // HostFor is that same socket as a DOCKER_HOST value.
@@ -208,20 +161,16 @@ func Plan(account string, opts Options) (Spec, error) {
 	}
 
 	// `dockerd` FIRST, and that word is the only thing keeping this daemon off
-	// TCP. dind's entrypoint supplies dockerd's own --host flags whenever there
-	// is no argument or the first starts with a dash, and one of them is always
-	// tcp://0.0.0.0:2375: an unauthenticated Docker API in the account's own
-	// network namespace, reachable by every container it runs, that nothing
-	// here has ever dialled. Naming the binary skips that block and keeps the
-	// one below it, which deletes a stale docker*.pid, injects tini and sets up
-	// iptables. (docker-library/docker `dockerd-entrypoint.sh`, read
-	// 2026-09-08; re-check with `curl -s https://raw.githubusercontent.com/docker-library/docker/master/dockerd-entrypoint.sh`.)
+	// TCP: without it dind's entrypoint adds tcp://0.0.0.0:2375, an
+	// unauthenticated Docker API reachable by every container the account runs
+	// (CLAUDE.md, "The command handed to dockerd-entrypoint.sh NAMES dockerd").
+	// (docker-library/docker `dockerd-entrypoint.sh`, read 2026-09-08; re-check
+	// with `curl -s https://raw.githubusercontent.com/docker-library/docker/master/dockerd-entrypoint.sh`.)
 	//
-	// Two listeners, the one the agent dials and the conventional path, so
-	// anything running inside the daemon's own container still works.
+	// Two listeners: the one the agent dials, and the conventional path.
 	command := []string{
 		"dockerd",
-		"-H", "unix://" + SocketMount + "/" + SocketName,
+		"-H", "unix://" + socketMount + "/" + socketName,
 		"-H", "unix:///var/run/docker.sock",
 	}
 	if opts.StorageDriver != "" {
@@ -231,9 +180,9 @@ func Plan(account string, opts Options) (Spec, error) {
 	labels := []string{
 		ManagedLabel + "=1",
 		AccountLabel + "=" + account,
-		StorageLabel + "=" + opts.StorageDriver,
+		storageLabel + "=" + opts.StorageDriver,
 		// Filled in below, once there is a spec to digest.
-		SpecLabel + "=",
+		specLabel + "=",
 	}
 	if opts.Workspace != "" {
 		labels = append(labels, WorkspaceLabel+"="+opts.Workspace)
@@ -246,19 +195,15 @@ func Plan(account string, opts Options) (Spec, error) {
 		Privileged: true,
 		Labels:     labels,
 		Mounts: append([]elevate.Mount{
-			{Type: "bind", Source: SocketDir + "/" + account, Destination: SocketMount},
+			{Type: "bind", Source: SocketDir + "/" + account, Destination: socketMount},
 			{Type: "volume", Name: VolumeName(account), Destination: "/var/lib/docker"},
 		}, opts.Mounts...),
 		// exec because runc executes from the exec-root, and 0755 rather
 		// than docker's tmpfs default of 1777.
 		Tmpfs: []string{ExecRoot + ":rw,exec,mode=755"},
-		// Empty, not unset. It no longer decides anything about the daemon,
-		// since naming `dockerd` above means the block that reads it never
-		// runs. What still reads it is dind's OTHER script,
-		// docker-entrypoint.sh, which a `docker exec` into this container goes
-		// through: with no DOCKER_HOST and no socket yet, a non-empty value
-		// sends that client to tcp://docker:2376, a host this deployment does
-		// not have.
+		// Empty, not unset: dind's docker-entrypoint.sh, which a `docker
+		// exec` goes through, sends a client with no DOCKER_HOST to
+		// tcp://docker:2376 when it is set.
 		Env:     []string{"DOCKER_TLS_CERTDIR="},
 		Command: command,
 	}
@@ -266,8 +211,8 @@ func Plan(account string, opts Options) (Spec, error) {
 	// Stamped last: the digest covers the spec, so it cannot be part of what
 	// it digests.
 	for i, l := range spec.Labels {
-		if l == SpecLabel+"=" {
-			spec.Labels[i] = SpecLabel + "=" + Fingerprint(spec)
+		if l == specLabel+"=" {
+			spec.Labels[i] = specLabel + "=" + Fingerprint(spec)
 		}
 	}
 	return spec, nil
@@ -291,14 +236,10 @@ func (s Spec) Args() []string {
 }
 
 // StorageDriverFrom picks a per-account storage driver out of the workspace's
-// own dockerd arguments, as the default under WORKSPACE_DIND_STORAGE_DRIVER.
-//
-// A per-account daemon does NOT inherit its parent's flags, and the one flag
-// where that matters is the graph driver: a deployment on Ceph- or NFS-backed
-// storage sets fuse-overlayfs because overlay2 refuses such a filesystem, and
-// the account's graph volume is on that same filesystem. Getting it wrong is
-// silent, because dockerd falls back to vfs; Manager.warnIfSlowStorage is what
-// that costs.
+// own dockerd arguments, as the default under WORKSPACE_DIND_STORAGE_DRIVER. A
+// per-account daemon inherits no flags, and a graph volume on Ceph or NFS
+// needs the parent's fuse-overlayfs, or dockerd silently falls back to vfs
+// (Manager.warnIfSlowStorage).
 func StorageDriverFrom(dockerdArgs []string) string {
 	for i, arg := range dockerdArgs {
 		if v, ok := strings.CutPrefix(arg, "--storage-driver="); ok {
@@ -311,16 +252,12 @@ func StorageDriverFrom(dockerdArgs []string) string {
 	return ""
 }
 
-// Fingerprint digests the rendered arguments, minus its own label: image,
-// entrypoint, flags, labels, mounts.
-//
-// A digest rather than a comparison of arguments means a new setting is
-// noticed without anything having to be taught what settings exist. Adding one
-// to Plan is enough.
+// Fingerprint digests the rendered arguments, minus its own label, so a setting
+// added to Plan is noticed without anything being taught it exists.
 func Fingerprint(spec Spec) string {
 	h := sha256.New()
 	for _, arg := range spec.Args() {
-		if strings.HasPrefix(arg, SpecLabel+"=") {
+		if strings.HasPrefix(arg, specLabel+"=") {
 			continue
 		}
 		_, _ = h.Write([]byte(arg))
@@ -334,19 +271,11 @@ func Fingerprint(spec Spec) string {
 //
 //	/etc/docker/daemon.json:/etc/docker/daemon.json:ro,/etc/docker/certs.d:/etc/docker/certs.d:ro
 //
-// For what the daemon can only be given as files: a daemon.json naming an
-// insecure or mirrored registry, the certificates for a registry with a
-// private CA. A workspace mounts those into its own daemon and each account's
-// needs the same, or a pull that works on the workspace fails inside every
-// account.
+// For what a daemon can only be given as files: a daemon.json, a registry's CA.
 //
-// Both paths must be absolute. A relative source is not a path to docker, it is
-// a VOLUME NAME, so `-v etc/docker:/etc/docker` silently creates an empty
-// volume called "etc/docker" and the daemon reads no configuration at all.
-//
-// A destination the daemon already uses is refused rather than ordered after
-// ours: docker rejects two mounts at one path, so the daemon would not start
-// and the message would name the path rather than the setting that produced it.
+// Both paths absolute: a relative source is a VOLUME NAME to docker, silently
+// created empty. A destination the daemon already uses is refused here, where
+// the setting can be named, rather than by docker at start.
 func ParseMounts(spec string) ([]elevate.Mount, error) {
 	var mounts []elevate.Mount
 
@@ -373,7 +302,7 @@ func ParseMounts(spec string) ([]elevate.Mount, error) {
 		if !strings.HasPrefix(source, "/") || !strings.HasPrefix(destination, "/") {
 			return nil, fmt.Errorf("daemons: %q needs absolute paths on both sides", entry)
 		}
-		if destination == SocketMount || destination == "/var/lib/docker" {
+		if destination == socketMount || destination == "/var/lib/docker" {
 			return nil, fmt.Errorf("daemons: %q mounts over %s, which every daemon needs for itself",
 				entry, destination)
 		}
@@ -388,12 +317,9 @@ func ParseMounts(spec string) ([]elevate.Mount, error) {
 	return mounts, nil
 }
 
-// MissingSources reports the mounts whose source is not on this machine.
-//
-// docker CREATES a missing bind source, so `/typo:/lib/modules` would give the
-// daemon an empty directory and surface inside somebody's container with
-// nothing naming the setting. Separate from ParseMounts, which stays pure, and
-// stat is injected for the same reason.
+// MissingSources reports the mounts whose source is not on this machine:
+// docker CREATES a missing bind source, so a typo would be an empty directory
+// with nothing naming the setting.
 func MissingSources(mounts []elevate.Mount, stat func(string) error) []elevate.Mount {
 	var out []elevate.Mount
 	for _, m := range mounts {
@@ -405,13 +331,8 @@ func MissingSources(mounts []elevate.Mount, stat func(string) error) []elevate.M
 }
 
 // DaemonPaths reports the paths a bind may name, because the workspace put them
-// in the daemon's own filesystem (ADR 0041).
-//
-// Which side that is depends on the daemon resolving the bind, and is settled
-// here so no use site has to ask: per-account, the DESTINATION, where the dind
-// mount lands; shared, the SOURCE, since nothing is mounted and the workspace's
-// own dockerd sees the path as it exists here. Identical for the usual
-// /lib/modules:/lib/modules:ro.
+// in the daemon's own filesystem (ADR 0041): per-account the DESTINATION,
+// where the dind mount lands; shared the SOURCE, since nothing is mounted.
 func DaemonPaths(mounts []elevate.Mount, perAccount bool) []string {
 	var out []string
 	for _, m := range mounts {

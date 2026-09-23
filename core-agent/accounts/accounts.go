@@ -336,7 +336,8 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	return nil
 }
 
-// nextUID allocates the lowest free uid at or above the base.
+// nextUID allocates one above the highest uid in the record, and at least the
+// base. Never the lowest free one, so no uid is handed out twice.
 func nextUID(uids map[string]int, base int) int {
 	highest := base - 1
 	for _, uid := range uids {

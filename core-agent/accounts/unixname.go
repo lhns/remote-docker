@@ -6,33 +6,18 @@ import "github.com/lhns/remote-docker/core/workspace"
 // client derives the same name from the local username (workspace.AccountName).
 const maxNameLength = workspace.MaxAccountNameLength
 
-// DefaultPrefix is what a unix account name starts with.
-//
-// The account name is ours -- it comes from the key file, it is what a client
-// logs in as, it owns the reverse-tunnel port. The unix user behind it is not:
-// on a VM (ADR 0025) it sits in the machine's own passwd file next to its
-// service accounts, and `alice.pub` quietly taking the name `alice` there is a
-// claim on somebody else's namespace.
-//
-// The same default everywhere, container included. Two defaults would be two
-// behaviours to keep in step, and the container has nothing to gain from the
-// shorter name.
+// DefaultPrefix is what a unix account name starts with, container included:
+// on a VM (ADR 0025) the unix user sits in the machine's own passwd file, where
+// `alice.pub` taking `alice` would be a claim on somebody else's namespace.
 const DefaultPrefix = "rd-"
 
-// unixName is the unix user behind an account.
-//
-// Truncated so the whole thing fits, prefix included. workspace.AccountName
-// already caps the account at maxNameLength, so without this the prefix would push it
-// past what Linux accepts. It moves the cliff where two long names collapse
-// into one from 30 characters to 30 minus the prefix; beyond that they were
-// already colliding, and the uid lookup in Ensure is what catches it either
-// way.
+// unixName is the unix user behind an account, truncated so the prefix does
+// not push it past maxNameLength. Two long names that collide are caught by
+// the uid lookup in Ensure.
 func unixName(prefix, account string) string {
 	room := maxNameLength - len(prefix)
 	if room < 1 {
-		// A prefix longer than a whole name is a configuration error, not a
-		// case to be clever about. Keep the account and let useradd complain
-		// about the length with the name in hand.
+		// A configuration error: useradd refuses the length, naming it.
 		return account
 	}
 	if len(account) > room {
@@ -42,17 +27,10 @@ func unixName(prefix, account string) string {
 }
 
 // claim says what to do about the unix user, if any, already holding the uid
-// this account is mapped to.
-//
-// The UID is the identity, not the name. It is what the uidmap binds, what the
-// reverse-tunnel port is derived from (ADR 0021), and what owns the files; the
-// unix name is a label on top of it. So an existing workspace, whose accounts
-// were created before the prefix and are called `alice`, is adopted exactly as
-// it stands -- no rename, no home directory moved, no port changed.
-//
-// A stranger at that uid is the case this exists for. Adopting one would hand
-// an enrolled key somebody else's files, and on a machine that does other work
-// there is no reason to assume uid 10001 is free.
+// this account is mapped to. The uid is the identity (CLAUDE.md, "The unix
+// account name is not the account name"): an unprefixed `alice` from an older
+// workspace is adopted as it stands, and a stranger is refused, since adopting
+// one hands an enrolled key somebody else's files.
 func claim(account, prefix, holder string) action {
 	switch holder {
 	case "":

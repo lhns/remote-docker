@@ -26,20 +26,15 @@ const releaseTimeout = 30 * time.Second
 // dropping what the client deleted, and handing back what the container wrote
 // (ADR 0044).
 //
-// The channel closing is what releases a share, which is why there is no
-// request for it: the session that asked for the mount is the only thing that
-// needs it, and when it goes so does the mount.
+// There is no release request: the channel closing releases the account's
+// unions that no container is bound to (unions.Manager.ReleaseAccount).
 //
-// Runs as root, like serveNotify and for the same reason: it mounts inside a
-// daemon's namespace and writes into a volume the account cannot reach. Every
-// request is re-validated here rather than trusted, because this is a root
-// process being told which paths to write and which to remove. See
-// cache.Request.Validate, which both sides call.
+// Runs as root, since it mounts inside a daemon's namespace, so every request
+// is re-validated here (cache.Request.Validate, which both sides call).
 //
-// One request per line, each answered before the next is read. Deliberately
-// not pipelined: every op here changes a mount or a file, the client waits for
-// each in turn anyway, and a protocol that could reorder them would have to
-// explain what two overlapping applies to one share mean.
+// One request per line, each answered before the next is read: every op
+// changes a mount or a file, and pipelining would have to say what two
+// overlapping applies to one share mean.
 func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	if s.cfg.Unions == nil {
 		_, _ = fmt.Fprintln(session.Stderr(), "workspace-cache: this workspace does not serve delegated shares")
@@ -157,7 +152,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{}, nil
 
 	case cache.OpChanges:
-		changes, err := s.cfg.Unions.Changes(ctx, name, req.Export)
+		changes, err := s.cfg.Unions.Changes(name, req.Export)
 		if err != nil {
 			return refused(err), nil
 		}
@@ -175,7 +170,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{Caches: s.cfg.Unions.MountedCaches(name, account.Client(), d)}, nil
 
 	case cache.OpPull:
-		pulled, err := s.cfg.Unions.Pull(ctx, name, req.Export, req.Paths)
+		pulled, err := s.cfg.Unions.Pull(name, req.Export, req.Paths)
 		if err != nil {
 			return refused(err), nil
 		}

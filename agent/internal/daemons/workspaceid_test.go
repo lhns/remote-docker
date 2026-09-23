@@ -48,7 +48,7 @@ func TestTwoWorkspacesGetDifferentIDs(t *testing.T) {
 // workspace that failed the same way.
 func TestAnEmptyIDFileIsReplaced(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, WorkspaceIDFile)
+	path := filepath.Join(dir, workspaceIDFile)
 	if err := os.WriteFile(path, []byte("  \n"), 0o600); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestAnEmptyIDFileIsReplaced(t *testing.T) {
 // Whitespace around a hand-edited id must not make it a different id.
 func TestTheIDIsTrimmed(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, WorkspaceIDFile), []byte("ws-abc123\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, workspaceIDFile), []byte("ws-abc123\n"), 0o600); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
 
