@@ -859,7 +859,7 @@ premise of the project, and it applies to building it too. So:
 - **A per-account daemon's answers are untrusted input.** It reports its own
   volume mountpoints and the account is root inside it. `path.Join` is not
   containment -- it CLEANS, so `/proc/42/root` joined to `/../../etc/shadow` is
-  `/proc/etc/shadow`, outside the root and looking correct. `relocate` checks
+  `/proc/etc/shadow`, outside the root and looking correct. `replay.Relocate` checks
   the result; `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in the poker stopped being
   tidiness the moment those paths left the agent's own filesystem.
 - **`rd-dind-<account>-lib` is the account, and the container in front of it is
