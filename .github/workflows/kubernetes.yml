@@ -64,9 +64,11 @@ jobs:
       # Every combination somebody can install, checked against real API
       # schemas. A template that renders is not the same as one the API server
       # will accept.
+      # pipefail: helm failing leaves kubeconform an empty stdin, which it
+      # passes as "0 resources found".
       - name: helm template, each way it can be configured
         run: |
-          set -eux
+          set -euxo pipefail
           render() {
             helm template ws charts/remote-docker-workspace --kube-version 1.29.0 "$@" \
               | kubeconform -strict -kubernetes-version 1.29.0 -summary -
@@ -121,7 +123,8 @@ jobs:
 
           # And the default still generates both, which is what every existing
           # install renders.
-          case "$(render --set ingress.host=ws.example.com)" in
+          default=$(render --set ingress.host=ws.example.com)
+          case "$default" in
             *claimName*) echo "the default mounted a claim it does not create"; exit 1 ;;
           esac
 

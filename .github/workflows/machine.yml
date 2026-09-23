@@ -156,6 +156,7 @@ jobs:
         shell: pwsh
         run: |
           .\client\rd.exe remote machine create ci --rootfs .\rootfs.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw "machine create failed" }
           .\client\rd.exe remote ls
           .\client\rd.exe remote machine status ci
 
@@ -201,9 +202,14 @@ jobs:
       - name: it survives being stopped and started
         shell: pwsh
         run: |
+          # Checked one by one: pwsh fails a step on the LAST native exit code
+          # only, so a stop that failed would otherwise pass as a survival.
           .\client\rd.exe run -d --name survivor alpine:3 sleep 600
+          if ($LASTEXITCODE -ne 0) { throw "could not start the survivor" }
           .\client\rd.exe remote machine stop ci
+          if ($LASTEXITCODE -ne 0) { throw "machine stop failed" }
           .\client\rd.exe remote machine start ci
+          if ($LASTEXITCODE -ne 0) { throw "machine start failed" }
 
           # An EOF on the local pipe names the wrong layer entirely, so these
           # separate "no session at all" from "a session whose machine went
@@ -233,6 +239,7 @@ jobs:
           # one-shot `docker run` would take its hold with it when it exits and
           # prove nothing about a machine left alone.
           .\client\rd.exe remote start
+          if ($LASTEXITCODE -ne 0) { throw "remote start failed" }
 
           # Polled for `Stopped` rather than slept for a fixed 180s: the
           # machine stops at 106s (measured 2026-09-08), so the sleep carried
@@ -318,7 +325,10 @@ jobs:
         shell: pwsh
         run: |
           .\client\rd.exe remote rm ci
-          $distros = (wsl -l -q) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "remote rm failed" }
+          # NULs stripped, as in the idle step: read raw, wsl.exe's UTF-16
+          # matches nothing and a distribution left behind would pass.
+          $distros = ((wsl -l -q | Out-String) -replace "`0", "")
           $distros
           if ($distros -match 'rd-ci') { throw "the distribution outlived the workspace" }
 
