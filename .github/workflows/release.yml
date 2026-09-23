@@ -225,7 +225,7 @@ jobs:
           VERSION: ${{ needs.meta.outputs.version }}
           CHART_VERSION: ${{ needs.meta.outputs.chart_version }}
         run: |
-          set -eux
+          set -euxo pipefail
           helm package charts/remote-docker-workspace \
             --version "$CHART_VERSION" --app-version "$VERSION" --destination .
 
