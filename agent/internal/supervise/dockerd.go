@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/lhns/remote-docker/core/logx"
@@ -51,6 +52,12 @@ const (
 
 	// restartDelay is how long to wait before restarting a daemon that died.
 	restartDelay = 2 * time.Second
+
+	// stopTimeout is how long a daemon asked to stop has before it is killed:
+	// dockerd's own --shutdown-timeout, 15s by default, and a little over.
+	// (Read 2026-09-23 as DefaultShutdownTimeout in moby daemon/config/config.go;
+	// re-check with `dockerd --help | grep shutdown-timeout`.)
+	stopTimeout = 20 * time.Second
 
 	DefaultSocket       = "/var/run/docker.sock"
 	DefaultStartTimeout = 90 * time.Second
@@ -103,6 +110,11 @@ func (d *Dockerd) runOnce(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, command, d.args()...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	// Cancelling is the agent shutting down, and the default here is SIGKILL:
+	// a killed daemon leaves its runtime state for the next start (see
+	// daemons.ExecRoot). tini forwards the SIGTERM.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = stopTimeout
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting %s: %w", command, err)
@@ -150,7 +162,7 @@ func (d *Dockerd) Stop() error {
 	}
 	// SIGTERM, not Kill: dockerd stops its containers and flushes its state,
 	// and killing it risks leaving the graph driver inconsistent.
-	if err := cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 	return nil
