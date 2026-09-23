@@ -198,6 +198,32 @@ for image in alpine:3 nginx:alpine; do
 done
 
 echo
+echo "== 6a. the workspace's own daemon binds no TCP API =="
+# per-user-dind.sh section 14 for the shared daemon, which lives in the
+# workspace container's namespace: the one every shell runs in. Both halves,
+# because either alone can pass for the wrong reason.
+listeners=$(hostdocker exec "$CONTAINER" netstat -lnt 2>&1)
+case "$listeners" in
+*:2375*|*:2376*)
+    bad "SECURITY: the shared daemon is listening on a TCP port: [$listeners]" ;;
+*Active*|*Proto*)
+    ok "the shared daemon binds no Docker API on 2375 or 2376" ;;
+*)
+    # No header means netstat did not run, so no listener was measured.
+    bad "netstat said nothing in the workspace, so no listener was measured: [$listeners]" ;;
+esac
+
+for port in 2375 2376; do
+    reach=$(dockert run --rm --network host alpine:3 \
+        sh -c "nc -w 2 127.0.0.1 $port </dev/null && echo CONNECTED || echo REFUSED" 2>&1 | tr -d '\015')
+    case "$reach" in
+    *CONNECTED*) bad "SECURITY: a container on the shared daemon reached a Docker API on $port" ;;
+    *REFUSED*)   ok "a container on the shared daemon finds nothing on $port" ;;
+    *)           bad "the $port probe said nothing, so it proves nothing: [$reach]" ;;
+    esac
+done
+
+echo
 echo "== 6b. container stdout, with no volume involved =="
 # Isolates the attach/stdout path from anything to do with mounts. If this
 # fails, no mount test below can be trusted to be telling us about mounts.
