@@ -222,9 +222,10 @@ helm lint charts/remote-docker-workspace
 helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --set ingress.host=ws.example | kubeconform -strict -
 ```
 
-`go.work` ties the eight together for editors and local commands. CI and the
-image build deliberately ignore it and build one module at a time, so a missing
-`require` fails where it is wrong rather than being covered by the workspace.
+`go.work` ties the eight together, and being committed, it is what every CI
+step resolves through too. So a missing `require` builds everywhere except the
+image build, which copies no `go.work`, and `ci.yml`'s `GOWORK=off` step, which
+exists to fail on it first. Locally: `GOWORK=off go list -C <module> -deps -test ./...`.
 `image/Dockerfile` copies the module trees it needs by name, so a new module the
 agent imports must be added there or the image build fails on it alone. CI reads
 its Go version from `core/go.mod`, and `.goreleaser.yaml` tidies in `core/`:
@@ -640,9 +641,11 @@ premise of the project, and it applies to building it too. So:
   who asked. Bounded by design: one entry per distinct path this process has
   exported, tens of bytes each, for the life of the client process. What a
   share HOLDS is a different question, and is released. `SetAttrs` rebuilds
-  every share's filesystem on every connect, so the stack it replaces is closed
-  (`closeFS`), or its descriptor cache goes on holding files open until its
-  idle timers expire.
+  every share's filesystem when the account's attributes change, so the stack
+  it replaces is closed (`closeFS`), or its descriptor cache goes on holding
+  files open until its idle timers expire. It rebuilds NOTHING on a reconnect
+  that reports the same account: go-nfs resolves every handle issued before it
+  to the stack it came from, which would then serve with its cache closed.
 
 - **A WebSocket connection carries its own liveness.**
   `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection
@@ -888,8 +891,9 @@ premise of the project, and it applies to building it too. So:
   daemon start: dockerd sleeps 1s + 15s after the "DON'T BIND ON ANY IP ADDRESS
   WITHOUT setting --tlsverify" warning so a human reads it (moby
   `cmd/dockerd/daemon.go`, `loadListeners`, read 2026-09-08).
-  `per-user-dind.sh` section 14 asserts both halves: what the daemon bound, and
-  what a container in its namespace can reach.
+  `per-user-dind.sh` section 14 and `integration.sh` section 6a assert both
+  halves, for each daemon mode: what the daemon bound, and what a container in
+  its namespace can reach.
 - **A failed start is remembered for 5 seconds, and that is not a backoff.**
   `ensure` single-flights, so a burst all waits on one leader -- and when the
   leader failed it stored nothing, so every waiter woke, became the next leader

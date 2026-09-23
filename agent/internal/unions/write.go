@@ -13,7 +13,6 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/lhns/remote-docker/core-agent/replay"
 	"github.com/lhns/remote-docker/core/cache"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -52,25 +51,38 @@ func (m *Manager) Apply(ctx context.Context, account, export, codec string, body
 	}
 	defer done()
 
-	tr := tar.NewReader(decoded)
+	return extract(root, decoded, func(name string, info os.FileInfo) {
+		l.noteApplied(name, info.Size(), info.ModTime())
+	})
+}
+
+// extract writes a tar into the share rooted at root, telling landed about
+// each regular file as it LANDED rather than as it was asked for: a filesystem
+// keeping coarser timestamps than the tar would otherwise match nothing, and
+// every filled file would read as a container write for the rest of the
+// session.
+func extract(root string, body io.Reader, landed func(name string, info os.FileInfo)) error {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("unions: opening the share: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	tr := tar.NewReader(body)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("unions: reading the batch for %s: %w", export, err)
+			return fmt.Errorf("unions: reading a batch: %w", err)
 		}
-		info, err := writeEntry(root, header, tr)
+		info, err := writeEntry(r, header, tr)
 		if err != nil {
 			return err
 		}
 		if info != nil {
-			// As it LANDED, not as it was asked for: a filesystem that keeps
-			// coarser timestamps than the tar carries would otherwise make
-			// this record match nothing, and every filled file would be
-			// reported as a container write for the rest of the session.
-			l.noteApplied("/"+strings.TrimPrefix(header.Name, "/"), info.Size(), info.ModTime())
+			landed("/"+strings.TrimPrefix(header.Name, "/"), info)
 		}
 	}
 }
@@ -82,29 +94,29 @@ func (m *Manager) Apply(ctx context.Context, account, export, codec string, body
 // is skipped rather than refused: the client does not send them, and a batch
 // that failed because of one would leave the cache half applied for a file
 // nothing can use anyway.
-func writeEntry(root string, header *tar.Header, body io.Reader) (os.FileInfo, error) {
-	target, err := within(root, header.Name)
+func writeEntry(r *os.Root, header *tar.Header, body io.Reader) (os.FileInfo, error) {
+	target, err := within(header.Name)
 	if err != nil {
 		return nil, err
 	}
 
 	switch header.Typeflag {
 	case tar.TypeDir:
-		return nil, os.MkdirAll(target, header.FileInfo().Mode().Perm())
+		return nil, r.MkdirAll(target, header.FileInfo().Mode().Perm())
 
 	case tar.TypeSymlink:
 		// Replaced rather than merged: a symlink that changed target is a
 		// different link, and there is no way to edit one in place.
-		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := r.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("unions: replacing the link %s: %w", header.Name, err)
 		}
-		return nil, os.Symlink(header.Linkname, target)
+		return nil, r.Symlink(header.Linkname, target)
 
 	case tar.TypeReg:
-		if err := os.MkdirAll(path.Dir(target), 0o755); err != nil {
+		if err := r.MkdirAll(path.Dir(target), 0o755); err != nil {
 			return nil, fmt.Errorf("unions: creating the directory for %s: %w", header.Name, err)
 		}
-		f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode().Perm())
+		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode().Perm())
 		if err != nil {
 			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}
@@ -120,9 +132,9 @@ func writeEntry(root string, header *tar.Header, body io.Reader) (os.FileInfo, e
 		// compares those, and a file stamped with the moment it was copied
 		// would look like something the container had just changed.
 		if !header.ModTime.IsZero() {
-			_ = os.Chtimes(target, time.Time{}, header.ModTime)
+			_ = r.Chtimes(target, time.Time{}, header.ModTime)
 		}
-		info, err := os.Stat(target)
+		info, err := r.Stat(target)
 		if err != nil {
 			// Written, and this pass cannot say with what timestamp. Reported
 			// as a change once and settled by the client's manifest.
@@ -173,15 +185,29 @@ func (m *Manager) Drop(ctx context.Context, account, export string, paths []stri
 		return err
 	}
 
+	return remove(root, paths, l.forgetApplied)
+}
+
+// remove deletes paths from the share rooted at root, telling gone about each.
+func remove(root string, paths []string, gone func(string)) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("unions: opening the share: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+
 	for _, p := range paths {
-		target, err := within(root, p)
+		target, err := within(p)
 		if err != nil {
 			return err
 		}
-		if err := os.RemoveAll(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("unions: dropping %s from %s: %w", p, export, err)
+		if err := r.RemoveAll(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("unions: dropping %s: %w", p, err)
 		}
-		l.forgetApplied(p)
+		gone(p)
 	}
 	return nil
 }
@@ -204,20 +230,18 @@ func (m *Manager) mergedRoot(ctx context.Context, account, export string) (*live
 	return l, root, nil
 }
 
-// within resolves a path inside the share and refuses one that leaves it.
-//
-// The client validated it too, and that is not a reason to skip this: the
-// stream tells a root process which files to write and which to remove. The
-// containment rule is replay.Under's.
-func within(root, name string) (string, error) {
-	if err := workspace.ValidSharePath("/" + strings.TrimPrefix(name, "/")); err != nil {
+// within is a share path as a name inside an os.Root, which is what keeps a
+// symlink the container left in the share from steering this root process out
+// of it: followed through /proc/<pid>/root, an absolute target resolves against
+// the AGENT's root. The client validated the path too, and that is not a
+// reason to skip this.
+func within(name string) (string, error) {
+	p := "/" + strings.TrimPrefix(name, "/")
+	if err := workspace.ValidSharePath(p); err != nil {
 		return "", fmt.Errorf("unions: %w", err)
 	}
-	target := path.Join(root, name)
-	// root is Relocate's join of a daemon root onto Merged(), so it is never
-	// "/" and never slash-terminated: Under with either refuses every path.
-	if !replay.Under(root, target, "/") {
-		return "", fmt.Errorf("unions: %q leaves the share", name)
+	if p == "/" {
+		return ".", nil
 	}
-	return target, nil
+	return p[1:], nil
 }

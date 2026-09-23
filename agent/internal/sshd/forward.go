@@ -179,7 +179,13 @@ func (p *ForwardPolicy) Holder(host string, port uint32) (string, bool) {
 	return res.account, ok
 }
 
+// key names a reservation. Every loopback name is one key, because a dialler
+// resolves "localhost" to the socket held as 127.0.0.1: keyed by spelling, bob
+// dialled alice's file server as localhost.
 func key(host string, port uint32) string {
+	if isLoopback(host) {
+		host = "loopback"
+	}
 	return net.JoinHostPort(host, strconv.Itoa(int(port)))
 }
 
