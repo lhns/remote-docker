@@ -582,6 +582,36 @@ func TestASingleFileTakesAModeToo(t *testing.T) {
 	}
 }
 
+// A union is bound by path and a file is mounted by subpath. Combined, the
+// -v form became a volume named after the union's path and the --mount form a
+// bind carrying VolumeOptions, both after the union had been prepared. Refused
+// by name before anything is created.
+func TestASingleFileRefusesAUnion(t *testing.T) {
+	for _, body := range []string{
+		`{"HostConfig":{"Binds":["/home/alice/app.conf:/etc/app.conf:ro,write=back"]}}`,
+		`{"HostConfig":{"Mounts":[{"Type":"bind","Source":"/home/alice/app.conf","Target":"/etc/app.conf","Consistency":"write=back"}]}}`,
+	} {
+		r, sharer, volumes := newRewriter()
+		r.Watching = true
+		cache := &fakeCache{}
+		r.OpenCache = servingCache(cache)
+		r.UnionReady = workspace.UnionReady
+		sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
+
+		out, err := r.ContainerCreate(t.Context(), []byte(body))
+		if err == nil {
+			t.Errorf("%s\n  was rewritten to %s", body, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "fix: mount the directory") {
+			t.Errorf("err = %v, want the remedy", err)
+		}
+		if cache.prepared != "" || len(volumes.created) != 0 {
+			t.Errorf("a refused mount still prepared %q and created %v", cache.prepared, volumes.created)
+		}
+	}
+}
+
 // A union holds actual copies, so the watcher is what keeps them honest: a
 // cached copy of a file that changed here is the one way this mode could be
 // wrong rather than merely slow.
