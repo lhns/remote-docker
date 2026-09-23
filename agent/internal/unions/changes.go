@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/lhns/remote-docker/core/cache"
 )
@@ -99,25 +98,29 @@ func (m *Manager) Pull(ctx context.Context, account, export string, paths []stri
 	if err != nil {
 		return nil, err
 	}
+	return pull(upper, paths)
+}
 
-	// Resolved one at a time rather than through TarFilesFrom, because each
-	// path comes from the client and `within` is what refuses one that leaves
-	// the share. A file that has gone since it was reported is skipped by
-	// WriteTar, which is ordinary here: the container is still running.
+// pull is the named paths under upper as a tar. A file that has gone since it
+// was reported is skipped, which is ordinary: the container is still running.
+func pull(upper string, paths []string) ([]byte, error) {
+	r, err := os.OpenRoot(upper)
+	if err != nil {
+		return nil, fmt.Errorf("unions: opening the cache layer: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+
 	files := make([]cache.TarFile, 0, len(paths))
 	for _, p := range paths {
-		target, err := within(upper, p)
+		name, err := within(p)
 		if err != nil {
 			return nil, err
 		}
-		files = append(files, cache.TarFile{
-			Name: strings.TrimPrefix(p, "/"),
-			Path: target,
-		})
+		files = append(files, cache.TarFile{Name: name, Path: name})
 	}
 
 	var buf bytes.Buffer
-	if err := cache.WriteTar(files, &buf); err != nil {
+	if err := cache.WriteTarFrom(r.Open, files, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
