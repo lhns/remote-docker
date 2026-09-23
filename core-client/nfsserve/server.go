@@ -1,11 +1,6 @@
-// Package nfsserve is the client's in-process NFSv3 server.
-//
-// It replaces `rclone serve nfs`, which the previous clients downloaded at
-// runtime. Owning the server buys two things rclone could not give us: an
-// export namespace we control, so bind sources anywhere on this machine can be
-// served through one listener and one tunnel port (ADR 0007), and synthesised
-// ownership, so files do not all appear as uid 1000 with chown failing
-// (ADR 0004).
+// Package nfsserve is the client's in-process NFSv3 server: one export
+// namespace for bind sources anywhere on this machine (ADR 0007), with
+// synthesised ownership (ADR 0004).
 package nfsserve
 
 import (
@@ -23,12 +18,8 @@ import (
 	"github.com/willscott/go-nfs/helpers"
 )
 
-// handleCacheSize bounds the file-handle cache.
-//
-// NFSv3 handles are opaque and the client may present one at any later point,
-// so an entry evicted while still in use surfaces as ESTALE. A source tree has
-// a lot of files; this is deliberately generous, matching the
-// --nfs-cache-handle-limit the shell clients passed to rclone.
+// handleCacheSize bounds the file-handle cache. Generous, because a handle
+// evicted while a client still holds it surfaces as ESTALE.
 const handleCacheSize = 1_000_000
 
 // Server exports a Registry over NFSv3.
@@ -49,9 +40,7 @@ func newServer(registry *Registry, log *slog.Logger, limit int) *Server {
 	return &Server{
 		registry: registry,
 		// The caching handler supplies the directory verifiers and every handle
-		// but a share root; implementing those correctly is not our business.
-		// rootHandler takes the root, which is the one the kernel cannot ask
-		// for twice. See ADR 0033.
+		// but a share root, which rootHandler derives (ADR 0033).
 		handler: &rootHandler{
 			Handler:  helpers.NewCachingHandler(h, limit),
 			registry: registry,
@@ -135,14 +124,10 @@ func (h *mountHandler) Change(fs billy.Filesystem) billy.Change {
 	return c
 }
 
-// FSStat reports free space. Docker and ordinary tools query it; zeroes would
-// make a build tool believe the disk is full.
+// FSStat reports a large, finite free space rather than the real figure, which
+// has no portable source. Zeroes would make a build tool believe the disk is
+// full; a disk that really is full fails the write with its own error.
 func (h *mountHandler) FSStat(_ context.Context, _ billy.Filesystem, stat *nfs.FSStat) error {
-	// The real figure belongs to whichever local volume backs the share, and
-	// obtaining it portably is more trouble than it is worth. Report a large
-	// but finite size: writes fail with the underlying error if the disk is
-	// genuinely full, which is a clearer signal than a client that refused to
-	// try.
 	const tb = uint64(1) << 40
 	stat.TotalSize = tb
 	stat.FreeSize = tb

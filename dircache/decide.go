@@ -107,25 +107,19 @@ func decide(
 		base, sent := manifest[change.Path]
 		info, here := local(change.Path)
 
-		// What the fill itself put there. The cache is written THROUGH the
-		// union (ADR 0044), so the filled copy of every file is in the layer
-		// this reads, beside whatever the consumer wrote -- and without this
-		// every round asks for the whole tree back, which is a stream large
-		// enough to be refused rather than a small mistake.
-		//
-		// Being wrong here is cheap and self-correcting: if a timestamp did
-		// not survive the round trip exactly, the file is written back with
-		// the bytes it already has and the baseline moves to what both sides
-		// then hold.
+		// What the fill itself put there, which sits in the same layer as the
+		// consumer's writes (ADR 0044); without this every round asks for the
+		// whole tree back. A timestamp that did not survive the round trip
+		// exactly reads as the consumer's change, and the file comes back with
+		// the bytes it already has.
 		if sent && !change.Deleted && change.Size == base.Size &&
 			time.Unix(0, change.ModTime).Equal(base.ModTime) {
 			continue
 		}
 
-		// A path the fill never sent is not the consumer's doing as far as
-		// this can tell -- it may be a file it created, or one that was never
-		// cached. Only the first should come back, and nothing here can tell
-		// them apart, so neither does.
+		// A path the fill never sent comes back only when it is new: one that
+		// exists here, or was deleted, may be a file the cache never held, and
+		// nothing here can tell.
 		if !sent {
 			if change.Deleted || here {
 				continue

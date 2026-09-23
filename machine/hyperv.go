@@ -30,17 +30,10 @@ import (
 // new address on every boot, which is why Backend.Address is asked every time.
 const hyperVSwitch = "Default Switch"
 
-// hyperVBuilding is the generation a machine carries between New-VM and the
-// notes psSetNotes writes once it is built.
-//
-// A half-finished create must not look finished. Writing the Spec's own
-// generation made one that died before psSetNotes match: Plan said Nothing,
-// nothing offered to rebuild it, and its notes carried no key, so
-// hyperVEnrolment assumed a match too. A machine reporting healthy that nothing
-// can log into. Writing NO generation does not fix it either, because an
-// unreadable one is deliberately read as a match (Observed.Generation). So the
-// unfinished state is a generation no Spec can produce, which Plan reads as
-// Recreate.
+// hyperVBuilding is the generation a machine carries between New-VM and
+// psSetNotes: one no Spec produces, so Plan reads a create that died half way
+// as Recreate. The Spec's own generation would read as finished, and none at
+// all as a match (Observed.Generation), both a machine nothing can log into.
 const hyperVBuilding = "building"
 
 // hyperVNotes is what a machine records about itself, in the one place Hyper-V
@@ -128,15 +121,9 @@ func parseVMState(raw string) State {
 	}
 }
 
-// observeVM turns what look read into what Plan is asked about.
-//
-// A PowerShell failure is returned rather than folded into Absent. It says
-// nothing about whether the machine is there, and reporting it as absent made
-// `machine status` print `absent` for a machine that is running and sent
-// `machine create` at a name already taken, where the error names creation
-// rather than the fault that actually happened. Absence needs no error of its
-// own: psGetVM asks with -ErrorAction SilentlyContinue and prints nothing when
-// the VM is not there.
+// observeVM turns what look read into what Plan is asked about. A PowerShell
+// failure is returned, not folded into Absent, which would send `create` at a
+// running machine; absence itself is psGetVM printing nothing.
 func observeVM(state State, notes hyperVNotes, err error) (Observed, error) {
 	if err != nil {
 		return Observed{}, err

@@ -89,9 +89,8 @@ type Spec struct {
 // Truncated to 16 hex characters. It identifies a local machine against its own
 // configuration and is not a security boundary.
 func (s Spec) Generation() string {
-	// Written out field by field rather than through a struct encoder, so that
-	// adding a field to Spec and forgetting it here is a compile error at the
-	// call below rather than a generation that silently stops changing.
+	// Every field of Spec that decides what is built must be listed here, or
+	// changing it silently stops changing the generation; nothing checks that.
 	parts := []string{
 		"name=" + s.Name,
 		"backend=" + s.Backend,
@@ -276,9 +275,7 @@ func firstIPv4(fields []string) string {
 	return ""
 }
 
-// closerFunc makes a func into an io.Closer. Not in a _windows.go file beside
-// the backend that needed it first, because locate_test.go's fake returns a
-// hold too and would then compile only on Windows.
+// closerFunc makes a func into an io.Closer.
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }

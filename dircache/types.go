@@ -1,15 +1,8 @@
 package dircache
 
-// The vocabulary this module needs from the outside, and the whole of it.
-//
-// Declared here rather than imported so the module depends on nothing at all
-// (ADR 0021). These are the two directions a cache has to hear about: what the
-// CONSUMER did to the cache, which write-back reads, and what happened HERE,
-// which invalidation reads. Both are plain data.
-//
-// A caller whose own types differ converts at the boundary. That conversion is
-// field-for-field and belongs to the caller, because only the caller knows
-// which of its events mean a path is gone.
+// The vocabulary this module needs from outside, declared rather than imported
+// so it depends on nothing (ADR 0021): what the consumer did, for write-back,
+// and what happened here, for invalidation.
 
 // Change is one thing the consumer did to its copy of a share.
 type Change struct {
@@ -18,14 +11,11 @@ type Change struct {
 
 	Size int64
 
-	// ModTime is when the consumer wrote it, in Unix nanoseconds ON THE
-	// CONSUMER'S CLOCK. Compared against this machine's own only for a file
-	// both sides changed, and only after the measured offset is applied. Two
-	// clocks that were never set together.
+	// ModTime is Unix nanoseconds ON THE CONSUMER'S CLOCK, compared with this
+	// machine's only for a file both sides changed, after the measured offset.
 	ModTime int64
 
-	// Deleted says the consumer removed it. Distinguishable from a file that
-	// was never cached, which is why write-back can act on it.
+	// Deleted says the consumer removed it.
 	Deleted bool
 }
 
@@ -42,12 +32,8 @@ const (
 )
 
 // Gone reports whether an op means the path is no longer there under that
-// name.
-//
-// A rename is a removal of the old name, which is the half this module sees:
-// the new name arrives as its own event. Getting this wrong leaves a cached
-// copy shadowing a file's absence, which is the one failure a cache must not
-// have (ADR 0044).
+// name. A rename removes the old name; the new one arrives as its own event.
+// Missing one leaves a cached copy shadowing a file's absence (ADR 0044).
 func (o Op) Gone() bool { return o&(OpRemove|OpRename) != 0 }
 
 // Event is one change seen on this machine.

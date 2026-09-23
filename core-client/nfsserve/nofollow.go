@@ -46,19 +46,12 @@ func (n *noFollowFS) Stat(name string) (os.FileInfo, error) {
 	return n.Filesystem.Stat(name)
 }
 
-// Lstat resolves through secureLeaf rather than the bound osfs, which is a
-// cost and not a behaviour: both leave the last element alone and contain the
-// directory part, but go-billy's Lstat runs filepath.EvalSymlinks TWICE for one
-// call, over the file's directory and over the share root, walking every
-// component of an absolute path each time. Measured on Windows against a share
-// four directories deep, 4.79ms against 0.42ms, where the os.Lstat under both
-// is 0.09ms; go-nfs stats a path several times per request. BenchmarkLstat
-// measures both again.
-//
-// The one difference: secureLeaf CLAMPS a name that climbs out of the share to
-// the share root where go-billy refuses it, so `../x` reports <share>/x or
-// nothing and never a file above the share. That is what REMOVE and RENAME
-// have always done here (TestNoFollowStaysInsideTheShare).
+// Lstat resolves through secureLeaf rather than the bound osfs for speed:
+// go-billy's runs filepath.EvalSymlinks twice per call, 4.79ms against 0.42ms
+// on Windows four directories deep (BenchmarkLstat), and go-nfs stats a path
+// several times per request. The one difference is that secureLeaf clamps
+// `../x` to <share>/x where go-billy refuses it, as REMOVE and RENAME do
+// (TestNoFollowStaysInsideTheShare).
 func (n *noFollowFS) Lstat(name string) (os.FileInfo, error) {
 	if n.unspellable(name) {
 		return nil, os.ErrNotExist

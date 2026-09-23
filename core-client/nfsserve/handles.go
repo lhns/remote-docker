@@ -1,22 +1,9 @@
 package nfsserve
 
-// A share's root handle, which has to outlive this process.
-//
-// NFSv3 handles are opaque and the kernel keeps presenting the ones it holds,
-// because the protocol promises they stay valid for the life of the file --
-// across server restarts. go-nfs mints a uuid per path into an in-memory cache,
-// so a restarted client cannot resolve any of them, and every container that
-// was running reads "Stale file handle" against a mount that still looks fine.
-//
-// One handle matters more than the others. MOUNT returns the handle for the
-// share root (go-nfs mount.go:42), and the kernel NEVER mounts again: once that
-// one stops resolving, every lookup starts from something dead and nothing can
-// recover. Below the root, Linux retries a path lookup once on ESTALE with
-// LOOKUP_REVAL, so given a root that answers it can ask again for everything
-// underneath and get fresh handles as it goes.
-//
-// So the root is derived from the export path and the rest stay a cache. See
-// ADR 0033, which also records why per-file handles were measured and rejected.
+// A share's root handle is derived from the export path so it outlives this
+// process: MOUNT issues it once and the kernel never mounts again, while below
+// the root Linux re-looks-up after ESTALE and go-nfs's in-memory handles are
+// enough (ADR 0033).
 
 import (
 	"crypto/sha256"
@@ -31,16 +18,10 @@ import (
 // A root handle is the export key followed by the cache's own handle; every
 // other handle is the cache's alone, byte for byte.
 //
-// Told apart by LENGTH, which is not the tidy way round. Prefixing every handle
-// with a tag byte instead -- the obvious way to carry two formats -- makes
-// every mount succeed and every read fail with "permission denied", with the
-// workspace daemon unable to open the volume's own directory. Nothing in go-nfs
-// or here explains why an ordinary handle must keep the size it was given;
-// what is established is the measurement, and it is enough to rule the tidier
-// version out.
-//
-// Recognising by length means depending on those handles being a fixed 16
-// bytes, so a test pins it rather than trusting it.
+// Told apart by LENGTH. A tag byte on every handle made every mount succeed and
+// every read fail with "permission denied", for no reason anyone has found; the
+// measurement rules it out. So the cache's handles must stay 16 bytes, which a
+// test pins.
 const (
 	exportKeySize = 8
 
@@ -67,18 +48,12 @@ var errStaleExport = errors.New("nfsserve: no such export")
 func (h *rootHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 	cached := h.Handler.ToHandle(f, path)
 
-	// Only the share's own root, never a Chroot into a subdirectory of it:
-	// that mount resolves against the subdirectory, and giving it the share's
-	// handle would serve the wrong directory to a client that asked correctly.
+	// Only the share's own root: a Chroot mount given it would serve the share
+	// root instead of the subdirectory asked for.
 	export := exportRootOf(f)
 	if len(path) != 0 || export == "" || len(cached) != cachedHandleSize {
 		return cached
 	}
-
-	// The cache's answer FIRST and the derived key behind it. While this
-	// process lives, every root operation resolves exactly as it did before any
-	// of this existed; the key answers once the cache is gone, which is the
-	// only case this feature is for.
 	return append(exportKey(export), cached...)
 }
 
@@ -96,13 +71,10 @@ func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, err
 	}
 	key, cached := handle[:exportKeySize], handle[exportKeySize:]
 
-	// The cache, exactly as before, for as long as this process holds it.
+	// The cache while this process holds it; the derived key after a restart.
 	if fs, path, err := h.Handler.FromHandle(cached); err == nil {
 		return fs, path, nil
 	}
-
-	// And the derived key when it cannot answer, which is what a client that
-	// has restarted is asking with.
 	share, ok := h.shareForKey(key)
 	if !ok {
 		return nil, nil, errStaleExport
@@ -119,11 +91,8 @@ func (h *rootHandler) InvalidateHandle(f billy.Filesystem, handle []byte) error 
 	return h.Handler.InvalidateHandle(f, handle)
 }
 
-// shareForKey finds the share whose export path matches a root handle.
-//
-// Asked of the registry every time rather than cached, so a handle can only
-// ever reach a share exported RIGHT NOW. There are a handful of shares -- one
-// per bind mount -- so this is a walk of three or four entries.
+// shareForKey finds the share whose export path matches a root handle, asking
+// the registry every time so a handle reaches only a share exported now.
 func (h *rootHandler) shareForKey(key []byte) (*Share, bool) {
 	if len(key) != exportKeySize {
 		return nil, false
@@ -149,16 +118,11 @@ type mover interface {
 	Rename(billy.Filesystem, []string, billy.Filesystem, []string) error
 }
 
-// Rename re-points a cached handle at the file's new path instead of forgetting
-// it, so a client that renames a file it holds open keeps its handle. Forwarded
-// for the same reason as the verifier pair below: embedding does not carry an
-// optional interface, and without it every rename costs the opener an ESTALE,
-// including the silly-rename the kernel does for an unlinked open file.
-//
-// The fallback is go-nfs's own: because rootHandler always implements mover,
-// go-nfs never reaches its `else invalidate` branch, so a handler that cannot
-// move a handle must be told to forget it here. Returning nil instead leaves a
-// cached handle naming the path the file no longer has.
+// Rename re-points a cached handle at the file's new path, so a client that
+// renames a file it holds open keeps its handle; embedding does not carry the
+// optional interface, and without it every rename, the kernel's silly-rename
+// included, costs the opener an ESTALE. Since rootHandler always implements
+// mover, go-nfs never falls back to invalidating, so that fallback is here.
 func (h *rootHandler) Rename(sourceFS billy.Filesystem, source []string, destFS billy.Filesystem, dest []string) error {
 	if m, ok := h.Handler.(mover); ok {
 		return m.Rename(sourceFS, source, destFS, dest)

@@ -407,12 +407,19 @@ func (f *shares) noteSent(share, root string, entries []Entry) {
 		return
 	}
 	for _, e := range entries {
-		info, err := os.Stat(localPath(root, e.Path))
-		if err != nil {
-			continue
+		if b, ok := baselineOf(root, e.Path); ok {
+			manifest["/"+e.Path] = b
 		}
-		manifest["/"+e.Path] = baseline{Size: info.Size(), ModTime: info.ModTime()}
 	}
+}
+
+// baselineOf is a file as this machine has it now.
+func baselineOf(root, p string) (baseline, bool) {
+	info, err := os.Stat(localPath(root, p))
+	if err != nil {
+		return baseline{}, false
+	}
+	return baseline{Size: info.Size(), ModTime: info.ModTime()}, true
 }
 
 // paths is what this run put in a share's cache.
@@ -458,12 +465,11 @@ func (f *shares) rebase(share, root string, actions []action) {
 		case a.kind == kindDelete:
 			delete(manifest, a.Path)
 		case a.kind == kindWrite || (a.kind == kindConflict && a.Wins):
-			info, err := os.Stat(localPath(root, a.Path))
-			if err != nil {
+			if b, ok := baselineOf(root, a.Path); ok {
+				manifest[a.Path] = b
+			} else {
 				delete(manifest, a.Path)
-				continue
 			}
-			manifest[a.Path] = baseline{Size: info.Size(), ModTime: info.ModTime()}
 		}
 	}
 }
