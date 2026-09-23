@@ -1,9 +1,11 @@
 package tunnelclient
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,5 +58,49 @@ func TestDialGivesUpOnASilentPeer(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Dial with a 200ms timeout was still waiting on the SSH handshake after 5s")
+	}
+}
+
+// The handshake's deadline and its context are the handshake's alone. A
+// deadline left on the connection fails every read after it with i/o timeout,
+// and a context still watched after Dial returns closes a working connection
+// whenever the caller's context ends.
+func TestDialLeavesTheConnectionUnboundedAfterTheHandshake(t *testing.T) {
+	ts := startTestServer(t)
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port := hostPort(t, ts.Addr.String())
+
+	const timeout = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	c, err := Dial(ctx, Config{
+		Host: host, Port: port, User: "tester",
+		Signer: signer, HostKey: ssh.FixedHostKey(ts.HostKey),
+		Timeout: timeout,
+	})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { c.Close() })
+
+	cancel()
+	time.Sleep(2 * timeout)
+
+	out, err := c.Run(t.Context(), "hello")
+	if err != nil {
+		t.Fatalf("Run after the context ended and past Config.Timeout: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "ran: hello" {
+		t.Errorf("Run() = %q, want %q", got, "ran: hello")
+	}
+	if !c.Alive() {
+		t.Error("the connection reports itself dead")
 	}
 }

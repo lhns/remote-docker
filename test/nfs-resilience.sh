@@ -463,14 +463,17 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         # retransmitting, which is minutes, and tearing the old connection down
         # waits on the goroutines riding it. "Not yet" and "never" needed
         # telling apart, and only a clock does that.
-        recovered=0
+        # Empty means never. A number cannot be the sentinel: a reconnect that
+        # works inside the same second as the unblock measures 0s, and reading
+        # that as "never" failed this section for a client that recovered at once.
+        recovered=
         for _ in $(seq 1 32); do
             if timeout 15 docker ps >/dev/null 2>&1; then
                 recovered=$(( $(date +%s) - mark ))
                 break
             fi
         done
-        if [ "$recovered" -gt 0 ]; then
+        if [ -n "$recovered" ]; then
             ok "a docker command works again ${recovered}s after the block was lifted"
         else
             bad "no docker command worked within 8 minutes of the block being lifted"
@@ -493,7 +496,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         mark=$(date +%s)
         sleep 20
         window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
-        if [ "$recovered" -eq 0 ]; then
+        if [ -z "$recovered" ]; then
             bad "E7 not measured: the transport never came back, so the mount proves nothing"
         elif echo "$window" | grep -q "OK ssh black hole marker"; then
             ok "E7: the mount survives an interrupted transport and reads again"
