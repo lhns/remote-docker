@@ -206,6 +206,30 @@ func TestAMountTheWorkspaceOwnsIsForwardedWhole(t *testing.T) {
 	}
 }
 
+// Our words are taken out of a mount that is NOT rewritten as well: the daemon
+// refuses them by name. Docker's own words and every other option stay.
+func TestOurWordsLeaveAMountThatIsKept(t *testing.T) {
+	r, _ := cachedRewriter()
+	r.DaemonPaths = []string{"/lib/modules"}
+	r.LocalExists = func(string) bool { return false }
+
+	for _, c := range []struct{ in, want, gone string }{
+		{`"Binds":["/lib/modules:/lib/modules:ro,read=cached"]`, `"/lib/modules:/lib/modules:ro"`, "read="},
+		{`"Binds":["data:/data:write=back,nocopy"]`, `"data:/data:nocopy"`, "write="},
+		{`"Mounts":[{"Type":"bind","Source":"/lib/modules","Target":"/m","Consistency":"read=cached"}]`, `"Target":"/m"`, "Consistency"},
+		{`"Mounts":[{"Type":"volume","Source":"data","Target":"/d","Consistency":"cached,write=back"}]`, `"Consistency":"cached"`, "write="},
+	} {
+		out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{`+c.in+`}}`))
+		if err != nil {
+			t.Errorf("%s: %v", c.in, err)
+			continue
+		}
+		if !strings.Contains(string(out), c.want) || strings.Contains(string(out), c.gone) {
+			t.Errorf("%s\n  became %s\n  want %s and no %q", c.in, out, c.want, c.gone)
+		}
+	}
+}
+
 // The workspace setting is what a mount that named nothing gets, a rule for a
 // directory outranks it, and each axis is filled on its own.
 func TestModePrecedence(t *testing.T) {
