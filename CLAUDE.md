@@ -889,8 +889,9 @@ premise of the project, and it applies to building it too. So:
   daemon start: dockerd sleeps 1s + 15s after the "DON'T BIND ON ANY IP ADDRESS
   WITHOUT setting --tlsverify" warning so a human reads it (moby
   `cmd/dockerd/daemon.go`, `loadListeners`, read 2026-09-08).
-  `per-user-dind.sh` section 14 asserts both halves: what the daemon bound, and
-  what a container in its namespace can reach.
+  `per-user-dind.sh` section 14 and `integration.sh` section 6a assert both
+  halves, for each daemon mode: what the daemon bound, and what a container in
+  its namespace can reach.
 - **A failed start is remembered for 5 seconds, and that is not a backoff.**
   `ensure` single-flights, so a burst all waits on one leader -- and when the
   leader failed it stored nothing, so every waiter woke, became the next leader

@@ -335,20 +335,16 @@ never runs. The alternative was `--tlsverify` on 2376, which would have left an
 authenticated port nobody presents a certificate to and put certificate
 generation on every daemon's startup path.
 
-The first word of the command is the whole control, so it is pinned in three
-places, and the coverage is asymmetric:
+The first word of the command is the whole control, so it is pinned in two
+places for each daemon:
 
 | daemon | where the word is | pinned by |
 |---|---|---|
 | per account (default, ADR 0019) | `agent/internal/daemons/plan.go` | `plan_test.go`, and `per-user-dind.sh` section 14 end to end |
-| shared (ADR 0012) | `agent/internal/supervise/dockerd.go` (`args`) | `agent/internal/supervise/args_test.go` only |
+| shared (ADR 0012) | `agent/internal/supervise/dockerd.go` (`args`) | `args_test.go`, and `integration.sh` section 6a end to end |
 
-`per-user-dind.sh` 14 asserts both halves, since either alone can pass for the
-wrong reason: what the daemon bound, and what a container in its namespace can
-reach. **No suite asserts the same of the shared daemon**; there
-`supervise.Dockerd.args` and its unit test are the whole assurance, and
-anything that put a flag in front of that word again would be caught by that
-test and by nothing else.
+Both suites assert both halves, since either alone can pass for the wrong
+reason: what the daemon bound, and what a container in its namespace can reach.
 
 What this does not change is what separates accounts. `AllowDial` gates SSH
 channels; a process opening a socket in its own namespace asks no policy at
@@ -1021,9 +1017,6 @@ Stated here rather than buried, because each is a deliberate trade.
   binary and is in `checksums.txt`. Its `docker.exe` feature is off by default
   and refused when a `docker.exe` is found, but the search reads four
   directories rather than PATH.
-- **Only a unit test says the shared daemon binds no TCP API.** The per-account
-  daemon has an end-to-end assertion (`per-user-dind.sh` 14); the shared one has
-  `supervise/args_test.go` and nothing else.
 - **Windows and macOS clients are less exercised.** The endpoint code and the
   file-watching backends are where they diverge. Windows takes a session end to
   end only in the machine workflow; macOS has never run a test of any kind.
