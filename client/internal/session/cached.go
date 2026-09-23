@@ -15,8 +15,6 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
-
-	"github.com/lhns/remote-docker/client/internal/config"
 )
 
 // cachedFile is the fill record on disk, bound to its writer exactly as the
@@ -35,6 +33,9 @@ type cachedStore struct {
 
 	mu     sync.Mutex
 	shares map[string][]string
+
+	// saving: see shareStore.saving.
+	saving sync.Mutex
 }
 
 // newCachedStore loads the record, or an empty one.
@@ -66,6 +67,9 @@ func (s *cachedStore) Filled(export string) ([]string, bool) {
 
 // Record replaces what is known about a share and writes the file.
 func (s *cachedStore) Record(export string, paths []string) {
+	s.saving.Lock()
+	defer s.saving.Unlock()
+
 	s.mu.Lock()
 	sort.Strings(paths)
 	s.shares[export] = paths
@@ -83,7 +87,7 @@ func (s *cachedStore) Record(export string, paths []string) {
 	// half-written record is one that decides to remove the wrong files from
 	// somebody's cache, and the rename needs the retry that helper carries for
 	// a Windows sharing violation. The share record already goes through it.
-	if err := config.WriteAtomic(s.path, data, 0o600); err != nil {
+	if err := writeRecord(s.path, data, 0o600); err != nil {
 		s.warn("could not keep a record of what a cache holds", err)
 	}
 }
