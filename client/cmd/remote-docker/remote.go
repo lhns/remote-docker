@@ -91,15 +91,16 @@ func newVersionCommand() *cobra.Command {
 
 func newEnrollCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "enroll",
+		Use:   "enroll [name]",
 		Short: "Print the public key to hand to whoever runs the workspace",
 		Long: `Generates this machine's keypair on first use and prints the public half.
 
 Enrolment is out of band: someone with access to the workspace saves the key
 as authorized_keys.d/<your account>.pub, and the filename becomes your unix
 account there.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolve(args)
 			if err != nil {
 				return err
 			}
@@ -132,7 +133,7 @@ func newGCCommand() *cobra.Command {
 	var orphans bool
 
 	cmd := &cobra.Command{
-		Use:   "gc",
+		Use:   "gc [name]",
 		Short: "Remove share volumes this account is no longer using",
 		Long: `Each directory bound into a container gets a volume on the workspace, and
 they outlive the containers that used them.
@@ -145,8 +146,13 @@ Volumes another of your machines created are left alone, because this one
 cannot tell whether that machine is still using them. --orphans additionally
 removes those that name no machine at all, which are the ones left by a version
 before machines were named, or by this machine before its key was replaced.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withQuerySession(func(ctx context.Context, s *session.Session) error {
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolve(args)
+			if err != nil {
+				return err
+			}
+			return withQuerySession(cfg, func(ctx context.Context, s *session.Session) error {
 				removed, err := s.Collect(ctx, session.CollectOptions{Orphans: orphans})
 				if err != nil {
 					return err

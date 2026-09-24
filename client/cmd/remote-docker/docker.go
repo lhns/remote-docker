@@ -168,7 +168,7 @@ func arrangeSession() error {
 		return nil
 	}
 
-	cfg, err := config.Resolve(config.Overrides{Workspace: aim.workspace}, "")
+	cfg, err := resolveOverrides(config.Overrides{Workspace: aim.workspace})
 	if err != nil {
 		return err
 	}

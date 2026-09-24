@@ -137,11 +137,7 @@ func logger() *slog.Logger { return logx.Logger(os.Stderr, "  ", false) }
 // nor the account's one reverse-tunnel port (ADR 0003), so it still works while
 // a real session holds both, which is precisely when somebody runs `status`
 // or `gc`. See session.Role for what each half of that prevents.
-func withQuerySession(fn func(ctx context.Context, s *session.Session) error) error {
-	cfg, err := resolve()
-	if err != nil {
-		return err
-	}
+func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session.Session) error) error {
 	if err := requireHost(cfg); err != nil {
 		return err
 	}

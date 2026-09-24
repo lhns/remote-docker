@@ -208,15 +208,11 @@ func TestResolveNamedWorkspaces(t *testing.T) {
 		}
 	})
 
-	t.Run("an unknown name lists what exists", func(t *testing.T) {
+	// The remedy names one of our commands, so the caller adds it.
+	t.Run("an unknown name is ErrUnknownWorkspace", func(t *testing.T) {
 		_, err := Resolve(Overrides{Workspace: "nope"}, path)
-		if err == nil {
-			t.Fatal("an unknown workspace was accepted")
-		}
-		for _, want := range []string{"nope", "ci", "dev"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("error %q does not mention %q", err, want)
-			}
+		if !errors.Is(err, ErrUnknownWorkspace) || err.Error() != `no workspace named "nope"` {
+			t.Errorf("an unknown workspace answered %v", err)
 		}
 	})
 }
