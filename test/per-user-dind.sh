@@ -53,12 +53,7 @@ dump_dind() {
 }
 
 echo "== 1. build =="
-if build_image && build_client; then
-    ok "image and client build"
-else
-    bad "build failed"
-    exit 1
-fi
+build_all
 
 echo
 echo "== 2. enrol two accounts =="
@@ -78,24 +73,10 @@ echo "reached the inner daemon" >"$WORK/dindconf/marker"
 # WORKSPACE_DIND_IMAGE is the workspace's OWN image, as the Helm chart sets it.
 # The fallback, stock docker:dind, lacks fuse-overlayfs, so this suite would
 # test an image no deployment should run.
-if start_workspace true \
+workspace_up true "$A $B" \
     -v "$WORK/dindconf:/etc/rd-test:ro" \
     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro" \
-    -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
-    ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
-else
-    bad "workspace container failed to start"
-    exit 1
-fi
-
-info "waiting for both accounts to be provisioned"
-if wait_provisioned "$A" "$B"; then
-    ok "both accounts provisioned"
-else
-    bad "the accounts were never provisioned"
-    dump_workspace_log 40
-    exit 1
-fi
+    -e "WORKSPACE_DIND_IMAGE=$IMAGE"
 
 # The `docker` group reaches the PARENT daemon, which holds every account's
 # dind, so in this mode nobody may be in it. The lookup must succeed first: a
@@ -109,9 +90,6 @@ for account in "$A" "$B"; do
         ok "rd-$account is not in the docker group"
     fi
 done
-
-info "waiting for the parent dockerd"
-wait_parent_dockerd
 
 # Before any account connects, since the first connection starts its daemon.
 info "loading the workspace image into the workspace's own daemon"
@@ -264,19 +242,10 @@ if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=ba
     # The fallthrough, for a file created after the union was mounted. Retried:
     # the NFS attribute cache and libfuse's entry cache are about a second each.
     echo "after the mount" >"$WORK/project-$A/late.txt"
-    fell=""
-    for i in $(seq 1 15); do
-        out=$(da exec pud-deleg cat /w/late.txt 2>&1)
-        if [ "$out" = "after the mount" ]; then
-            fell=$i
-            break
-        fi
-        sleep 1
-    done
-    if [ -n "$fell" ]; then
-        ok "a file the cache does not have falls through to the live export (${fell}s)"
+    if wait_output '^after the mount$' 15 da exec pud-deleg cat /w/late.txt; then
+        ok "a file the cache does not have falls through to the live export (${WAITED}s)"
     else
-        bad "the fallthrough never happened: $(echo "$out" | tail -3)"
+        bad "the fallthrough never happened: $(echo "$LAST_OUTPUT" | tail -3)"
     fi
 
     da rm -f pud-deleg >/dev/null 2>&1
@@ -311,28 +280,7 @@ for corner in "read=direct,write=back" "read=direct,write=ephemeral"; do
     else
         bad "$corner: the union did not serve the file"
     fi
-    # Read back inside the container, or the ephemeral case passes on a write
-    # that never happened.
-    if ! out=$(da exec "$name" sh -c 'echo "written there" >/w/out.txt && cat /w/out.txt' 2>&1) ||
-        [ "$out" != "written there" ]; then
-        bad "$corner: the container could not write into the union: [$out]"
-    fi
-    case "$corner" in
-        *back)
-            back=$(wait_for_content "$dir/out.txt" "written there" 30)
-            if [ "$back" = "written there" ]; then
-                ok "$corner: the container's write came back to alice's directory"
-            else
-                bad "$corner: the write never came back: [$back]"
-            fi ;;
-        *ephemeral)
-            back=$(wait_for_content "$dir/out.txt" "" 30)
-            if [ -z "$back" ]; then
-                ok "$corner: the container's write stayed in the workspace, 30s on"
-            else
-                bad "$corner: an ephemeral write came back: [$back]"
-            fi ;;
-    esac
+    write_comes_back da "$name" "$dir" "$corner" "${corner#*write=}"
     da rm -f "$name" >/dev/null 2>&1
 done
 
@@ -419,8 +367,8 @@ echo "== 10. the workspace restarts and a daemon comes back when its account con
 before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
 dind_before=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
 
-kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
-kill "$CLIENT_B_PID" 2>/dev/null; wait "$CLIENT_B_PID" 2>/dev/null; CLIENT_B_PID=""
+stop_pid "$CLIENT_A_PID"; CLIENT_A_PID=""
+stop_pid "$CLIENT_B_PID"; CLIENT_B_PID=""
 
 hostdocker restart "$CONTAINER" >/dev/null 2>&1
 info "waiting for the workspace's own daemon to come back"
@@ -486,7 +434,7 @@ fi
 images_before=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '\n' ' ')
 
 # Remove the daemon CONTAINER, keeping the volume, as an upgrade does.
-kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
+stop_pid "$CLIENT_A_PID"; CLIENT_A_PID=""
 hostdocker exec "$CONTAINER" docker rm -f "rd-dind-$A" >/dev/null 2>&1
 
 A_SOCK="$WORK/a3.sock"
@@ -518,8 +466,7 @@ echo "== 12. the NFS export is not reachable from a shell =="
 alice_port=$(cd "$WORK/project-$A" && REMOTE_DOCKER_STATE_DIR="$WORK/state-$A" \
     REMOTE_DOCKER_HOST=127.0.0.1 REMOTE_DOCKER_PORT="$SSH_PORT" \
     REMOTE_DOCKER_USER="$A" REMOTE_DOCKER_ENDPOINT="$A_SOCK" \
-    timeout 60 "$WORK/remote-docker" remote status 2>/dev/null |
-    awk '/^account/ {print $NF}')
+    timeout 60 "$WORK/remote-docker" remote status 2>/dev/null | tunnel_port)
 
 if [ -z "$alice_port" ]; then
     bad "could not read $A's tunnel port, so nothing was probed"

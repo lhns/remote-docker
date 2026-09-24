@@ -62,9 +62,7 @@ wait_unix_account() {
 # stop_session WAITS for the client: the endpoint is held until the process is
 # gone, and the next session would exit with "already serving".
 stop_session() {
-    [ -z "$CLIENT_PID" ] && return 0
-    kill "$CLIENT_PID" 2>/dev/null
-    wait "$CLIENT_PID" 2>/dev/null
+    stop_pid "$CLIENT_PID"
     CLIENT_PID=
 }
 

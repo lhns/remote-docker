@@ -38,17 +38,10 @@ MODES=${BENCH_MODES:-"read=direct,write=through read=cached,write=through read=c
 . "$REPO/test/lib.sh"
 
 cleanup() {
-    echo
-    echo "== cleanup =="
     # Before the client goes: the workload container is reachable only through
     # the session, which on an abort may already be gone.
     timeout 30 docker rm -f "$PIN" >/dev/null 2>&1
-    if [ -n "${CLIENT_PID:-}" ]; then
-        kill "$CLIENT_PID" 2>/dev/null
-        wait "$CLIENT_PID" 2>/dev/null
-    fi
-    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    rm -rf "$WORK"
+    cleanup_suite "${CLIENT_PID:-}"
 }
 trap cleanup EXIT
 
@@ -105,8 +98,7 @@ elapsed() {
 }
 
 echo "== build =="
-build_image && ok "image builds" || { bad "image build failed"; exit 1; }
-build_client && ok "client builds" || { bad "client build failed"; exit 1; }
+build_all
 
 export REMOTE_DOCKER_STATE_DIR="$WORK/state"
 export REMOTE_DOCKER_HOST=127.0.0.1
@@ -116,11 +108,8 @@ export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
 
 echo
 echo "== workspace =="
-mkdir -p "$WORK/keys" "$WORK/wsstate"
-enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR" || { bad "enrol failed"; exit 1; }
-start_workspace false || { bad "the workspace failed to start"; exit 1; }
-wait_provisioned "$ACCOUNT" || { bad "the account was never provisioned"; exit 1; }
-wait_parent_dockerd || exit 1
+enrol_machine "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"
+workspace_up false "$ACCOUNT" || exit 1
 if hostdocker exec "$CONTAINER" apk add --no-cache iproute2 >/dev/null 2>&1; then
     ok "workspace up, with shaping available"
 else
@@ -132,13 +121,7 @@ echo "== the session =="
 # Watching, because read=cached refuses to run without it (ADR 0042).
 REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
-if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    ok "the local Docker endpoint answers"
-else
-    bad "the endpoint never came up"
-    sed 's/^/        /' "$WORK/up.log"
-    exit 1
-fi
+endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/up.log" || exit 1
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
 echo
@@ -190,8 +173,7 @@ WORKLOADS=${BENCH_WORKLOADS:-"dense subtree sparse dense3 parallel write"}
 
 restart_client() {
     local policy=$1
-    kill "$CLIENT_PID" 2>/dev/null
-    wait "$CLIENT_PID" 2>/dev/null
+    stop_pid "$CLIENT_PID"
     REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH="$policy" \
         "$WORK/remote-docker" remote start --foreground >"$WORK/up-$policy.log" 2>&1 &
     CLIENT_PID=$!

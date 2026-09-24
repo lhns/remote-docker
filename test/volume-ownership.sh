@@ -94,12 +94,7 @@ compare() {
 }
 
 echo "== 1. build the workspace image and the client =="
-if build_image && build_client; then
-    ok "image and client build"
-else
-    bad "image or client build failed"
-    exit 1
-fi
+build_all
 
 export REMOTE_DOCKER_STATE_DIR="$WORK/state"
 export REMOTE_DOCKER_HOST=127.0.0.1
@@ -109,22 +104,9 @@ export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
 
 echo
 echo "== 2. enrol and start the workspace =="
-mkdir -p "$WORK/keys" "$WORK/wsstate"
-if ! enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
-    bad "enroll produced no public key"
-    exit 1
-fi
+enrol_machine "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"
 # The shared daemon: the daemon mode changes nothing measured here.
-if ! start_workspace false; then
-    bad "workspace container failed to start"
-    exit 1
-fi
-if ! wait_provisioned "$ACCOUNT"; then
-    bad "the account was never provisioned"
-    dump_workspace_log 30
-    exit 1
-fi
-wait_parent_dockerd
+workspace_up false "$ACCOUNT"
 
 PROJECT="$WORK/project"
 mkdir -p "$PROJECT"
@@ -133,13 +115,7 @@ echo marker >"$PROJECT/marker"
 echo
 echo "== 3. open a session =="
 CLIENT_PID=$(start_session "$REMOTE_DOCKER_STATE_DIR" "$ACCOUNT" "$REMOTE_DOCKER_ENDPOINT" "$WORK/up.log" "$PROJECT")
-if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    ok "the local Docker endpoint answers"
-else
-    bad "the Docker endpoint never came up"
-    sed 's/^/        /' "$WORK/up.log"
-    exit 1
-fi
+endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/up.log" || exit 1
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
 echo

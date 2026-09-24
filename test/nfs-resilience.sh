@@ -68,22 +68,11 @@ WATCH_SH='while true; do
     sleep 1
 done'
 
-cleanup() {
-    echo
-    echo "== cleanup =="
-    if [ -n "${CLIENT_PID:-}" ]; then
-        kill "$CLIENT_PID" 2>/dev/null
-        wait "$CLIENT_PID" 2>/dev/null
-    fi
-    hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    # The agent's host keys are owned by root.
-    rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true
-}
+cleanup() { cleanup_suite "${CLIENT_PID:-}"; }
 trap cleanup EXIT
 
 echo "== 1. build =="
-if build_image; then ok "workspace image built"; else bad "image build failed"; exit 1; fi
-if build_client; then ok "client built"; else bad "client build failed"; exit 1; fi
+build_all
 
 export REMOTE_DOCKER_STATE_DIR="$WORK/state"
 export REMOTE_DOCKER_HOST=127.0.0.1
@@ -93,20 +82,8 @@ export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
 # Short, because sections 4 and 5 are about the idle release.
 export REMOTE_DOCKER_IDLE_TIMEOUT=8s
 
-mkdir -p "$WORK/keys" "$WORK/wsstate"
-if enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
-    ok "enrolled"
-else
-    bad "enroll produced no public key"; exit 1
-fi
-
-if start_workspace false; then
-    ok "workspace started"
-else
-    bad "workspace failed to start"; exit 1
-fi
-if wait_provisioned "$ACCOUNT"; then ok "account provisioned"; else bad "never provisioned"; exit 1; fi
-if wait_parent_dockerd; then ok "the workspace daemon is up"; fi
+enrol_machine "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"
+workspace_up false "$ACCOUNT"
 
 PROJECT="$WORK/project"
 mkdir -p "$PROJECT"
@@ -118,18 +95,12 @@ echo "== 2. a session, and the port it binds =="
 CLIENT_LOG="$WORK/up.log"
 "$WORK/remote-docker" remote start --foreground >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
-if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    ok "the endpoint answers"
-else
-    bad "the endpoint never came up"
-    sed 's/^/        /' "$CLIENT_LOG"
-    exit 1
-fi
+endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$CLIENT_LOG" || exit 1
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
 # The port is allocated per machine, so it is READ rather than assumed.
 if outputs "tunnel port [0-9]+" "$WORK/remote-docker" remote status; then
-    PORT=$(echo "$LAST_OUTPUT" | sed -n 's/.*tunnel port \([0-9]*\).*/\1/p' | head -1)
+    PORT=$(tunnel_port <<<"$LAST_OUTPUT")
     ok "the session bound a reverse-tunnel port: $PORT"
 else
     bad "status did not report a tunnel port"
@@ -229,8 +200,7 @@ echo
 echo "== 6. E3: a NEW client process, and the mount it inherits =="
 # The only place ADR 0033's derived ROOT handle meets a real kernel across a
 # client restart.
-kill "$CLIENT_PID" 2>/dev/null
-wait "$CLIENT_PID" 2>/dev/null
+stop_pid "$CLIENT_PID"
 sleep 2
 CLIENT_LOG="$WORK/up2.log"
 "$WORK/remote-docker" remote start --foreground >"$CLIENT_LOG" 2>&1 &
@@ -325,8 +295,7 @@ else
     bad "could not create the container"
 fi
 
-kill "$CLIENT_PID" 2>/dev/null
-wait "$CLIENT_PID" 2>/dev/null
+stop_pid "$CLIENT_PID"
 CLIENT_PID=""
 sleep 2
 

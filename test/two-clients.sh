@@ -29,12 +29,7 @@ cleanup() { cleanup_suite "${PC_PID:-}" "${PHONE_PID:-}"; }
 trap cleanup EXIT
 
 echo "== 1. build =="
-if build_image && build_client; then
-    ok "image and client build"
-else
-    bad "build failed"
-    exit 1
-fi
+build_all
 
 echo
 echo "== 2. two machines, one account =="
@@ -61,21 +56,7 @@ echo
 echo "== 3. start the workspace =="
 # The shared daemon: a daemon per account would add a second variable to every
 # failure below.
-if start_workspace false; then
-    ok "workspace container started"
-else
-    bad "workspace container failed to start"
-    exit 1
-fi
-
-if wait_provisioned "$ACCOUNT"; then
-    ok "the account was provisioned"
-else
-    bad "the account was never provisioned"
-    dump_workspace_log 40
-    exit 1
-fi
-wait_parent_dockerd
+workspace_up false "$ACCOUNT"
 
 echo
 echo "== 4. a session on each machine, at the same time =="
@@ -305,25 +286,10 @@ if [ "$pc_ok" = true ] && [ "$phone_ok" = true ]; then
         bad "a union served the wrong machine's file"
     fi
 
-    # Read back inside the container, or the ephemeral check below passes on a
-    # write that never happened.
-    if ! out=$(dpc exec tc-pc-eph sh -c 'echo "pc wrote this" >/w/out.txt && cat /w/out.txt' 2>&1) ||
-        [ "$out" != "pc wrote this" ]; then
-        bad "the pc could not write into its ephemeral share: [$out]"
-    fi
-    if ! out=$(dphone exec tc-phone-back sh -c 'echo "phone wrote this" >/w/out.txt' 2>&1); then
-        bad "the phone could not write into its write-back share: [$out]"
-    fi
-    if phone_got=$(wait_for_content "$phone_back/out.txt" "phone wrote this" 30); then
-        ok "the phone's write came back to the phone's directory"
-    else
-        bad "the phone's write did not come back: [$phone_got]"
-    fi
-    if pc_got=$(wait_for_content "$pc_eph/out.txt" "pc wrote this" 30); then
-        bad "an ephemeral write came back to the pc: [$pc_got]"
-    else
-        ok "the pc's ephemeral write reached nobody, 30s on"
-    fi
+    # Each write names its container, so one arriving on the wrong machine
+    # does not pass for the right one.
+    write_comes_back dphone tc-phone-back "$phone_back" "the phone" back
+    write_comes_back dpc tc-pc-eph "$pc_eph" "the pc" ephemeral
 else
     info "a corner could not be mounted, so the cross-machine write assertions were skipped"
 fi
