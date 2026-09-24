@@ -281,10 +281,19 @@ var _ nfs.UnixChange = (*attrChange)(nil)
 // where the same chmod against Docker's own bind mount, served by root, has no
 // such effect. The mode reported back is synthesised anyway (see Attrs), so
 // nothing the container can observe is changed by keeping them.
+//
+// A symlink is refused, as lchmod is on Linux: resolve leaves the last element
+// unresolved and os.Chmod follows it, so a crafted client asking on a link's
+// own handle changed the mode of whatever it named, outside the share included.
 func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 	target, err := c.resolve(name)
 	if err != nil {
 		return err
+	}
+	if fi, err := os.Lstat(target); err != nil {
+		return err
+	} else if fi.Mode()&os.ModeSymlink != 0 && target != filepath.Clean(c.root) {
+		return syscall.ENOTSUP
 	}
 	return os.Chmod(target, mode|0o600)
 }

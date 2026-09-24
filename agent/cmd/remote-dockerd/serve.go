@@ -387,6 +387,10 @@ func serve(addr, wsAddr string) error {
 
 	// A second listener for the same SSH server, so a reverse proxy can front
 	// the workspace (ADR 0034). Disabled by setting --ws-addr to "".
+	//
+	// Closed by hand on every way out: server.Close misses a listener that
+	// ServeListener has not registered yet, and wg.Wait then waits forever.
+	closeWS := func() {}
 	if wsAddr != "" {
 		ws, err := wslisten.New(wsAddr, logger("wslisten"))
 		if err != nil {
@@ -394,7 +398,7 @@ func serve(addr, wsAddr string) error {
 			wg.Wait()
 			return fmt.Errorf("serving the websocket on %s: %w", wsAddr, err)
 		}
-		defer func() { _ = ws.Close() }()
+		closeWS = func() { _ = ws.Close() }
 
 		log.Info("websocket listening on " + ws.Addr() + " (any path)")
 		wg.Go(func() {
@@ -409,13 +413,18 @@ func serve(addr, wsAddr string) error {
 		log.Info("shutting down")
 	case err := <-serveErr:
 		if err != nil {
+			// The SSH port could not be bound. The server's own shutdown is
+			// armed only once it has a listener, so it is closed here.
 			stop()
+			_ = server.Close()
+			closeWS()
 			wg.Wait()
 			return err
 		}
 	}
 
 	_ = server.Close()
+	closeWS()
 	_ = daemon.Stop()
 	wg.Wait()
 	return nil

@@ -23,8 +23,8 @@ import (
 // says nothing against looking.
 
 // Changes lists what the container did to a share.
-func (m *Manager) Changes(ctx context.Context, account, export string) ([]cache.Change, error) {
-	l, upper, err := m.upperRoot(account, export)
+func (m *Manager) Changes(ctx context.Context, account, client, export string) ([]cache.Change, error) {
+	l, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, err
 	}
@@ -93,8 +93,8 @@ func (m *Manager) Changes(ctx context.Context, account, export string) ([]cache.
 }
 
 // Pull streams the named paths out of the cache layer as a tar.
-func (m *Manager) Pull(ctx context.Context, account, export string, paths []string) ([]byte, error) {
-	_, upper, err := m.upperRoot(account, export)
+func (m *Manager) Pull(ctx context.Context, account, client, export string, paths []string) ([]byte, error) {
+	_, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +127,8 @@ func pull(upper string, paths []string) ([]byte, error) {
 }
 
 // upperRoot is the cache layer of a share, as the AGENT can read it.
-func (m *Manager) upperRoot(account, export string) (*live, string, error) {
-	l, ok := m.share(account, export)
+func (m *Manager) upperRoot(account, client, export string) (*live, string, error) {
+	l, ok := m.share(account, client, export)
 	if !ok {
 		return nil, "", fmt.Errorf("unions: %s has no cache: %w", export, ErrNoShare)
 	}

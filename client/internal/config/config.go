@@ -363,11 +363,11 @@ func Resolve(o Overrides, path string) (Config, error) {
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
 
-	// The SSH port is defaulted only once the host is known, and only when the
-	// host is not a WebSocket. Defaulting it up front would make 2222
-	// indistinguishable from a port somebody asked for, and every wss://
-	// workspace would then inherit the SSH port instead of 443.
-	if cfg.Port == 0 && !isWebSocketHost(cfg.Host) {
+	// Defaulted only for a bare host. A host with a scheme says its own port or
+	// gets its scheme's default from Transport, and a 2222 put here would be
+	// indistinguishable from a `port` somebody set: wss:// would inherit it
+	// instead of 443, and ssh://host:2299 would be refused as contradicting it.
+	if _, _, scheme := splitScheme(strings.TrimSpace(cfg.Host)); cfg.Port == 0 && !scheme {
 		cfg.Port = DefaultSSHPort
 	}
 	// Zero is "not set", which Transport resolves from the scheme.
@@ -847,27 +847,25 @@ func (f *File) Set(name string, ws Workspace) error {
 	if name == "" {
 		return fmt.Errorf("config: a workspace needs a name")
 	}
-	if f.Workspaces == nil {
-		f.Workspaces = map[string]Workspace{}
-	}
-	if f.Host != "" {
+	// Only while there are no keyed entries is the flat form a workspace of
+	// its own. Beside keyed entries it is the base applyWorkspace lays under
+	// each of them, and moving it would take it away from every one.
+	if f.Host != "" && len(f.Workspaces) == 0 {
 		// The WHOLE entry moves, not the four fields that name the address.
-		// The flat form describes one workspace, so its watch mode, its
-		// consistency rules and above all its `machine` belong to that
-		// workspace; left at the top level they become a base that
-		// applyWorkspace lays under every keyed entry, and the new workspace
-		// silently inherits a machine it does not have.
-		existing := f.Workspace
+		// Its watch mode, its consistency rules and above all its `machine`
+		// belong to that workspace; left at the top level they become a base,
+		// and the new workspace silently inherits a machine it does not have.
 		flat := f.Default
 		if flat == "" {
 			flat = f.Host
 		}
 		if flat != name {
-			if _, taken := f.Workspaces[flat]; !taken {
-				f.Workspaces[flat] = existing
-			}
+			f.Workspaces = map[string]Workspace{flat: f.Workspace}
 		}
 		f.Workspace = Workspace{}
+	}
+	if f.Workspaces == nil {
+		f.Workspaces = map[string]Workspace{}
 	}
 	f.Workspaces[name] = ws
 	if f.Default == "" {

@@ -2,8 +2,12 @@ package session
 
 import (
 	"context"
+	"io"
+	"net"
 	"testing"
 	"time"
+
+	"github.com/lhns/remote-docker/client/internal/proxy"
 )
 
 // standbySession is the least Session that Standby and wake can run against:
@@ -20,6 +24,43 @@ func standbySession(t *testing.T) *Session {
 		shut: func(*liveConn) {},
 	}
 	return s
+}
+
+// silentDaemon accepts a request and never answers it: a workspace whose
+// daemon has wedged while the tunnel in front of it stays up.
+type silentDaemon struct{}
+
+func (silentDaemon) DialDocker(context.Context) (io.ReadWriteCloser, error) {
+	ours, theirs := net.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, theirs) }()
+	return ours, nil
+}
+
+// Every caller asks what depends on the connection under a context nobody
+// cancels (the sweep, Standby, the daemon's expiry), so the question carries
+// its own deadline or a silent daemon stalls them for good.
+func TestAskingWhatDependsOnUsIsBounded(t *testing.T) {
+	old := dependentsTimeout
+	dependentsTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { dependentsTimeout = old })
+
+	s := standbySession(t)
+	s.gate.conn = &liveConn{api: &proxy.APIClient{Dialer: silentDaemon{}}}
+	s.gate.held = true
+
+	done := make(chan bool, 1)
+	go func() {
+		_, safe := s.IdleFor(context.Background())
+		done <- safe
+	}()
+	select {
+	case safe := <-done:
+		if safe {
+			t.Error("a daemon that did not answer was taken to mean nothing depends on us")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("IdleFor was still waiting on a silent daemon after 3s")
+	}
 }
 
 // Standby and waking are a state, not an event: a session stands by, is woken

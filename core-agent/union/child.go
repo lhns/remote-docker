@@ -25,6 +25,7 @@ const (
 	envMode   = "RD_UNION_MODE"
 	envPID    = "RD_UNION_PID"
 	envExport = "RD_UNION_EXPORT"
+	envClient = "RD_UNION_CLIENT"
 	envPort   = "RD_UNION_PORT"
 	envCache  = "RD_UNION_CACHE"
 	envRead   = "RD_UNION_READ"
@@ -46,6 +47,7 @@ func envFor(mode string, spec Spec) []string {
 		envMode + "=" + mode,
 		envPID + "=" + strconv.Itoa(spec.PID),
 		envExport + "=" + spec.Export,
+		envClient + "=" + spec.Client,
 		envPort + "=" + strconv.Itoa(spec.Port),
 		envCache + "=" + spec.CacheDir,
 		envRead + "=" + string(spec.Read),
@@ -70,6 +72,7 @@ func FromEnv(getenv func(string) string) (Spec, string, error) {
 	spec := Spec{
 		PID:      pid,
 		Export:   getenv(envExport),
+		Client:   getenv(envClient),
 		Port:     port,
 		CacheDir: getenv(envCache),
 		Read:     workspace.Read(getenv(envRead)),
@@ -209,32 +212,39 @@ func (p *prober) finish(merged string, pr *probe, err error) {
 	close(pr.done)
 }
 
-// MountedShares names the share ids that have a union mounted, reading the
-// FILESYSTEM under root rather than any process's memory: after an agent
-// restart the mounts are still serving and nothing in this process knows about
-// them, so anything deciding what may be deleted would truthfully report
+// MountedShares names the share ids that have a union mounted for one client,
+// reading the FILESYSTEM under root rather than any process's memory: after an
+// agent restart the mounts are still serving and nothing in this process knows
+// about them, so anything deciding what may be deleted would truthfully report
 // "none" about unions that are running (ADR 0044).
 //
 // root is "/" for the shared daemon and /proc/<pid>/root for one per account,
-// exactly as Spec.Root gives it.
-func MountedShares(root string) []string {
-	entries, err := os.ReadDir(path.Join(root, Root))
+// exactly as Spec.Root gives it. A union mounted at Root/<id> by an agent from
+// before mountpoints were per machine is reported to every client, since
+// keeping a cache nobody needs is the safe mistake.
+func MountedShares(root, client string) []string {
+	out := mountedUnder(path.Join(root, Root))
+	if validClient(client) {
+		out = append(out, mountedUnder(path.Join(root, Root, client))...)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mountedUnder names the directories under dir whose merged is a mount. A dir
+// that is not there is no unions, the ordinary case on a workspace that has
+// never served one.
+func mountedUnder(dir string) []string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		// No union directory at all is no unions, which is the ordinary case
-		// on a workspace that has never served one.
 		return nil
 	}
-
 	var out []string
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if mountedAt(path.Join(root, Root, e.Name(), "merged")) {
+		if e.IsDir() && mountedAt(path.Join(dir, e.Name(), "merged")) {
 			out = append(out, e.Name())
 		}
 	}
-	sort.Strings(out)
 	return out
 }
 

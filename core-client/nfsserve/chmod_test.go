@@ -132,3 +132,43 @@ func TestChmodThroughTheShareKeepsTheFileWritable(t *testing.T) {
 		t.Errorf("after the write the file holds %q, err %v", got, err)
 	}
 }
+
+// A SETATTR mode on a symlink's own handle must not reach what it points at. A
+// kernel client resolves the link before asking, so only a crafted one sends
+// this, and os.Chmod on the resolved path followed the link out of the share.
+func TestChmodOnASymlinkDoesNotReachItsTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is privileged on this platform")
+	}
+
+	base := t.TempDir()
+	share := filepath.Join(base, "share")
+	if err := os.Mkdir(share, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "outside.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(share, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	target := mountCWD(t, share)
+
+	// Not 0777: that is what a link reports, and go-nfs skips a chmod to the
+	// mode a file already has.
+	var sattr nfsclient.Sattr3
+	sattr.Mode.SetIt = true
+	sattr.Mode.Mode = 0o640
+	reply := target.Setattr("escape", sattr)
+
+	info, err := os.Stat(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("SETATTR on a link inside the share changed %s outside it to %v (reply: %v)",
+			outside, info.Mode().Perm(), reply)
+	}
+}

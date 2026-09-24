@@ -2,6 +2,7 @@ package dircache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,6 +47,21 @@ func eventually(t *testing.T, what string, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// A batch the store refuses ends the prefetch, and status has to say so. The
+// sender returned with the share neither done nor failed, so status read
+// "filling" for the rest of the session and never named the error.
+func TestAFailedBatchStopsThePrefetchWithItsError(t *testing.T) {
+	store := &fakeStore{applyErr: errors.New("the workspace refused the batch")}
+	c, root := treeCache(t, store)
+	c.Policy = PolicyEager
+	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+
+	eventually(t, "the prefetch to report its failure", func() bool {
+		r := c.Reports()
+		return len(r) == 1 && r[0].Done && r[0].Err != nil
+	})
 }
 
 // A read the cache does not hold reaches the tree, and what the tree decides

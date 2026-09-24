@@ -10,6 +10,7 @@ package fswatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -148,6 +149,10 @@ type Watcher struct {
 	raw   chan fsnotify.Event
 	syncC chan []Share
 
+	// missed says events were lost before any share could be named: the
+	// kernel's queue overflowed, or raw was full.
+	missed chan struct{}
+
 	mu           sync.Mutex
 	sink         Sink
 	observer     Observer
@@ -182,6 +187,7 @@ func New(opts Options) (*Watcher, error) {
 		opts:         opts,
 		raw:          make(chan fsnotify.Event, 4096),
 		syncC:        make(chan []Share, 1),
+		missed:       make(chan struct{}, 1),
 		disconnected: make(map[string]int),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -321,13 +327,24 @@ func (w *Watcher) drain() {
 				// the whole point: a receiver that silently believes it has
 				// seen everything is the failure this package removes.
 				w.countDropped(1)
+				w.miss()
 			}
 		case err, ok := <-w.be.Errors():
 			if !ok {
 				return
 			}
 			w.log().Warn("file watcher", "err", err)
+			if errors.Is(err, fsnotify.ErrEventOverflow) {
+				w.miss()
+			}
 		}
+	}
+}
+
+func (w *Watcher) miss() {
+	select {
+	case w.missed <- struct{}{}:
+	default:
 	}
 }
 
@@ -365,6 +382,17 @@ func (w *Watcher) process(out chan<- notify.Frame) {
 		case e := <-w.raw:
 			w.handle(t, c, e)
 			arm()
+
+		case <-w.missed:
+			// Which share lost what is unknown, so every one is told it lost
+			// something somewhere, which is what a cache reconciles on.
+			for _, r := range t.roots {
+				c.overflow(r.export, "/", 0)
+			}
+			if !armed {
+				timer.Reset(0)
+				armed = true
+			}
 
 		case <-timer.C:
 			armed = false

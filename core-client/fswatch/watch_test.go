@@ -92,6 +92,45 @@ func startWatcher(t *testing.T, mode Mode, root string) (*Watcher, *fakeBackend,
 	return w, be, sink
 }
 
+// lostObserver records what the watcher says it missed.
+type lostObserver struct {
+	mu   sync.Mutex
+	lost []notify.Notice
+}
+
+func (o *lostObserver) Observe(notify.Event) {}
+
+func (o *lostObserver) Lost(n notify.Notice) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lost = append(o.lost, n)
+}
+
+func (o *lostObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.lost)
+}
+
+// A kernel queue overflow loses events nobody can name, deletions included, and
+// a cache answers that with a reconcile (Observer.Lost). It was logged and
+// nothing else, so a deletion lost to it stayed shadowed by a cached copy.
+func TestWatcherReportsAKernelOverflow(t *testing.T) {
+	root := mkdirs(t, t.TempDir(), "src")
+	w, be, sink := startWatcher(t, ModePartial, root)
+	obs := &lostObserver{}
+	w.SetObserver(obs)
+
+	be.errors <- fsnotify.ErrEventOverflow
+
+	waitFor(t, "the overflow to reach the observer and the agent", func() bool {
+		return obs.count() > 0 && len(sink.notices()) > 0
+	})
+	if n := sink.notices()[0]; n.Export != workspace.ExportCWD || n.Path != "/" {
+		t.Errorf("notice %+v, want the whole of %s", n, workspace.ExportCWD)
+	}
+}
+
 func TestWatcherReportsAWrite(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
 	w, be, sink := startWatcher(t, ModePartial, root)

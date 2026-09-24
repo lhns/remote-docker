@@ -197,3 +197,29 @@ func TestANilStoreRestoresNothing(t *testing.T) {
 	s.remember("/m/0123456789abcdef", "somewhere")
 	s.forget(nil)
 }
+
+func TestConcurrentRemembersKeepTheNewerSet(t *testing.T) {
+	s, project, export := store(t)
+	other := filepath.Join(filepath.Dir(project), "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	otherExport := workspace.ExportPathForID(workspace.ShareID(other))
+	held := overtakenWrite(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.remember(export, project)
+	}()
+	<-held
+	s.remember(otherExport, other)
+	<-done
+
+	next := newShareStore(s.path, nil)
+	for _, e := range []string{export, otherExport} {
+		if _, ok := next.restore(e); !ok {
+			t.Errorf("%s is missing on disk after two concurrent remembers", e)
+		}
+	}
+}

@@ -5,8 +5,64 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 )
+
+// overtakenWrite holds the first record write until a second has been written
+// or a moment has passed, and says when the first is being held. Unless saves
+// are serialised, the second lands first and the first, holding the OLDER
+// copy, lands over it.
+func overtakenWrite(t *testing.T) <-chan struct{} {
+	t.Helper()
+	real := writeRecord
+	t.Cleanup(func() { writeRecord = real })
+
+	held, second := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	writeRecord = func(path string, data []byte, mode os.FileMode) error {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		switch n {
+		case 1:
+			close(held)
+			select {
+			case <-second:
+			case <-time.After(300 * time.Millisecond):
+			}
+		case 2:
+			defer close(second)
+		}
+		return real(path, data, mode)
+	}
+	return held
+}
+
+func TestConcurrentCachedRecordsKeepTheNewerSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caches", "ws.json")
+	store := newCachedStore(path, nil)
+	held := overtakenWrite(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		store.Record("/m/aaaa", []string{"/a.go"})
+	}()
+	<-held
+	store.Record("/m/bbbb", []string{"/b.go"})
+	<-done
+
+	again := newCachedStore(path, nil)
+	for _, export := range []string{"/m/aaaa", "/m/bbbb"} {
+		if _, ok := again.Filled(export); !ok {
+			t.Errorf("%s is missing on disk after two concurrent records", export)
+		}
+	}
+}
 
 // The record survives the session that wrote it, which is the whole point:
 // the deletion it has to explain happened while nothing was running.

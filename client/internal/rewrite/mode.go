@@ -80,6 +80,54 @@ func takeMode(mount map[string]json.RawMessage) (workspace.Mode, string, error) 
 	return mode, dockerSpelling(value), nil
 }
 
+// withoutOurWords takes the read= and write= words out of an option list the
+// daemon will see as it is, keeping Docker's own, which it accepts. A misspelt
+// one of ours is refused here as it would be on a rewritten bind.
+func withoutOurWords(options string) (string, error) {
+	var ours, kept []string
+	for _, opt := range strings.Split(options, ",") {
+		if workspace.IsModeWord(opt) && !workspace.DockerWord(opt) {
+			ours = append(ours, opt)
+		} else {
+			kept = append(kept, opt)
+		}
+	}
+	if len(ours) == 0 {
+		return options, nil
+	}
+	if _, err := workspace.ParseMode(strings.Join(ours, ",")); err != nil {
+		return "", fmt.Errorf("rewrite: %w", err)
+	}
+	return strings.Join(kept, ","), nil
+}
+
+// dropOurConsistency is withoutOurWords for a `--mount` entry that is not
+// rewritten, reporting whether it changed the entry.
+func dropOurConsistency(mount map[string]json.RawMessage) (bool, error) {
+	raw, ok := mount["Consistency"]
+	if !ok || string(raw) == "null" {
+		return false, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, nil
+	}
+	rest, err := withoutOurWords(value)
+	if err != nil || rest == value {
+		return false, err
+	}
+	if rest == "" {
+		delete(mount, "Consistency")
+		return true, nil
+	}
+	encoded, err := json.Marshal(rest)
+	if err != nil {
+		return false, err
+	}
+	mount["Consistency"] = encoded
+	return true, nil
+}
+
 // The remedies named more than once, so two spellings cannot drift.
 const (
 	fixWatchOn = "\n  fix: set watch to partial or coarse for this workspace"
