@@ -7,9 +7,9 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// DefaultPollInterval is how often the keys directory is re-read regardless of
+// defaultPollInterval is how often the keys directory is re-read regardless of
 // notifications.
-const DefaultPollInterval = 60 * time.Second
+const defaultPollInterval = 60 * time.Second
 
 // Watch keeps accounts in step with the keys directory until ctx is done.
 //
@@ -23,7 +23,7 @@ const DefaultPollInterval = 60 * time.Second
 // poll.
 func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 	if poll <= 0 {
-		poll = DefaultPollInterval
+		poll = defaultPollInterval
 	}
 
 	// Synced once up front so the agent has its accounts before it accepts a

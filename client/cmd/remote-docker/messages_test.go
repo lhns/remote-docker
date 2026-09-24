@@ -66,6 +66,10 @@ func TestAnUnknownWorkspaceNameIsAnsweredOnce(t *testing.T) {
 		{"remote", "rm", "nope"},
 		{"remote", "machine", "status", "nope"},
 		{"remote", "machine", "stop", "nope"},
+		{"remote", "--workspace", "nope", "status"},
+		{"remote", "--workspace", "nope", "machine", "status"},
+		{"remote", "stop", "nope"},
+		{"remote", "inspect", "nope"},
 	} {
 		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
 			err := run(t, args...)

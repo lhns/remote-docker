@@ -8,6 +8,31 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Upgrading
+
+- **`remote stop`, `machine stop`, `machine rebuild`, `rm` of a machine
+  workspace and the agent's `daemons reset` now refuse while their target is in
+  use**, as `restart` already did and as `docker rm` does: a session something
+  depends on, or an account daemon running containers. `-f` goes ahead, and
+  `restart --force` is now also `-f`. A script that stops a busy session needs
+  the flag.
+- `remote status` exits 1 when its verdict is not ready, and `machine status`
+  when the machine is not running. The output is unchanged.
+
+### Changed
+
+- The machine commands take an optional name, falling back to `--workspace` and
+  then the default, and so do `start`, `stop`, `restart`, `status`, `gc` and
+  `enroll`.
+- `remote rm` stops the workspace's session before removing anything.
+- `machine --help` says `remote rm` removes a machine.
+- `daemons reset <account>` with no daemon says `no daemon for <account>`
+  rather than claiming to have removed one.
+- `--workspace nope` is answered like every other unknown name, with
+  `remote ls` as the fix.
+
 ## 0.7.0 — 2026-09-08
 
 ### Security: no daemon binds an unauthenticated Docker API

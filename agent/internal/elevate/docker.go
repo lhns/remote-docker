@@ -24,8 +24,8 @@ import (
 // the path that matters. Docker accepts a name wherever it accepts an id.
 const SelfEnv = "WORKSPACE_SELF"
 
-// HostSocketEnv overrides where the host's Docker socket is mounted.
-const HostSocketEnv = "WORKSPACE_HOST_SOCKET"
+// hostSocketEnv overrides where the host's Docker socket is mounted.
+const hostSocketEnv = "WORKSPACE_HOST_SOCKET"
 
 // Runner performs the elevation.
 type Runner struct {
@@ -230,7 +230,7 @@ func (r *Runner) hostSocket() string {
 	if r.HostSocket != "" {
 		return r.HostSocket
 	}
-	if s := os.Getenv(HostSocketEnv); s != "" {
+	if s := os.Getenv(hostSocketEnv); s != "" {
 		return s
 	}
 	return DefaultHostSocket

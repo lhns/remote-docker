@@ -395,9 +395,10 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         # The reconnect is PROVEN before the mount is judged: "the handles
         # died" and "it never reconnected" look identical. Timed, because a
         # black-holed socket stays writable for minutes of retransmits, and
-        # "not yet" is not "never". Against a deadline, because a docker ps
+        # "not yet" is not "never". Empty means never, since a reconnect in
+        # the same second measures 0s. Against a deadline, because a docker ps
         # that fails fast would spend all its attempts in seconds.
-        recovered=0
+        recovered=
         deadline=$(( $(date +%s) + 480 ))
         while [ "$(date +%s)" -lt "$deadline" ]; do
             if timeout 15 docker ps >/dev/null 2>&1; then
@@ -406,7 +407,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
             fi
             sleep 5
         done
-        if [ "$recovered" -gt 0 ]; then
+        if [ -n "$recovered" ]; then
             ok "a docker command works again ${recovered}s after the block was lifted"
         else
             bad "no docker command worked within 8 minutes of the block being lifted"
@@ -425,7 +426,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         mark=$(date +%s)
         sleep 20
         window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')
-        if [ "$recovered" -eq 0 ]; then
+        if [ -z "$recovered" ]; then
             bad "E7 not measured: the transport never came back, so the mount proves nothing"
         elif echo "$window" | grep -q "OK ssh black hole marker"; then
             ok "E7: the mount survives an interrupted transport and reads again"

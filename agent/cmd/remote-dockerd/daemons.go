@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -63,7 +64,7 @@ func newDaemonsListCommand() *cobra.Command {
 }
 
 func newDaemonsResetCommand() *cobra.Command {
-	var all, purge bool
+	var all, purge, force bool
 
 	cmd := &cobra.Command{
 		Use:   "reset [account]",
@@ -76,7 +77,8 @@ With --purge that volume goes too. That is the account's entire Docker state,
 and it is needed for exactly one thing: changing the storage driver, because a
 graph written by one driver cannot be read by another.
 
-Removing a daemon stops whatever it was running.`,
+Removing a daemon stops whatever it was running, so it is refused while the
+daemon runs containers; -f overrides.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if (len(args) == 0) == !all {
@@ -84,7 +86,7 @@ Removing a daemon stops whatever it was running.`,
 					"  fix: `remote-dockerd daemons ls` lists them")
 			}
 
-			m, err := managerForCommands()
+			m, err := daemonsManager()
 			if err != nil {
 				return err
 			}
@@ -95,29 +97,65 @@ Removing a daemon stops whatever it was running.`,
 					return err
 				}
 			}
-
-			out := cmd.OutOrStdout()
-			for _, account := range accounts {
-				if err := m.Reset(cmd.Context(), account, purge); err != nil {
-					return fmt.Errorf("resetting %s: %w", account, err)
-				}
-				what := "daemon"
-				if purge {
-					what = "daemon and storage"
-				}
-				_, _ = fmt.Fprintf(out, "removed %s's %s\n", account, what)
-			}
-			if len(accounts) == 0 {
-				_, _ = fmt.Fprintln(out, "no per-account daemons")
-			}
-			return nil
+			return resetDaemons(cmd, m, accounts, purge, force)
 		},
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, "every account with a daemon")
 	cmd.Flags().BoolVar(&purge, "purge", false,
 		"also delete the account's images and containers (needed only when the storage driver changes)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "reset even while the daemon runs containers")
 	return cmd
+}
+
+// daemonResetter is what reset asks of a daemons.Manager.
+type daemonResetter interface {
+	Accounts(ctx context.Context) ([]string, error)
+	Exists(ctx context.Context, account string) bool
+	Running(ctx context.Context, account string) int
+	Reset(ctx context.Context, account string, purge bool) error
+}
+
+// daemonsManager is managerForCommands, replaced in tests.
+var daemonsManager = func() (daemonResetter, error) { return managerForCommands() }
+
+// resetDaemons resets each account's daemon, refusing all of them unless
+// forced when any is running containers, before anything is removed.
+func resetDaemons(cmd *cobra.Command, m daemonResetter, accounts []string, purge, force bool) error {
+	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+	if len(accounts) == 0 {
+		_, _ = fmt.Fprintln(out, "no per-account daemons")
+		return nil
+	}
+
+	if !force {
+		for _, account := range accounts {
+			fix := fmt.Sprintf("  fix: `remote-dockerd daemons reset %s -f` to stop them anyway", account)
+			switch n := m.Running(ctx, account); {
+			case n < 0:
+				return fmt.Errorf("cannot tell whether %s's daemon is running containers\n%s", account, fix)
+			case n > 0:
+				return fmt.Errorf("%s's daemon is running %d container(s), and resetting it stops them\n%s", account, n, fix)
+			}
+		}
+	}
+
+	what := "daemon"
+	if purge {
+		what = "daemon and storage"
+	}
+	for _, account := range accounts {
+		if !m.Exists(ctx, account) {
+			_, _ = fmt.Fprintf(out, "no daemon for %s\n", account)
+			continue
+		}
+		if err := m.Reset(ctx, account, purge); err != nil {
+			return fmt.Errorf("resetting %s: %w", account, err)
+		}
+		_, _ = fmt.Fprintf(out, "removed %s's %s\n", account, what)
+	}
+	return nil
 }
 
 // managerForCommands builds a Manager for the one-shot commands.

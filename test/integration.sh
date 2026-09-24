@@ -128,15 +128,17 @@ echo "from an unrelated directory" >"$OUTSIDE/data"
 cd "$PROJECT" || exit 1
 # A timeout, so a hang reports where it stopped instead of eating the job
 # budget (it once caught Close waiting on a context a one-shot command never
-# cancels). No session runs yet, so "no session" is correct; the account row
-# exists only if the workspace answered.
-if timeout 90 "$WORK/remote-docker" remote status >"$WORK/status.log" 2>&1 &&
-    grep -q "^status " "$WORK/status.log" &&
+# cancels). No session runs yet, so "no session" and exit 1 are correct; the
+# account row exists only if the workspace answered.
+timeout 90 "$WORK/remote-docker" remote status >"$WORK/status.log" 2>&1
+status_rc=$?
+if [ "$status_rc" = 1 ] &&
+    grep -q "^status  *no session" "$WORK/status.log" &&
     grep -q "tunnel port" "$WORK/status.log"; then
-    ok "status reports a verdict and the workspace parameters"
+    ok "status reports a verdict and the workspace parameters, and exits 1 when not ready"
     sed 's/^/        /' "$WORK/status.log"
 else
-    bad "status failed"
+    bad "status failed (exit $status_rc, want 1)"
     sed 's/^/        /' "$WORK/status.log"
     hostdocker logs "$CONTAINER" 2>&1 | tail -20
     exit 1
@@ -1958,10 +1960,10 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         fi
 
         # And the verdict: the command above went through a live session.
-        if outputs "^status  *ready" "$WORK/remote-docker" remote status; then
-            ok "status says ready while a session is serving"
+        if outputs "^status  *ready" "$WORK/remote-docker" remote status && [ "$LAST_STATUS" = 0 ]; then
+            ok "status says ready while a session is serving, and exits 0"
         else
-            bad "status did not say ready: $(echo "$LAST_OUTPUT" | head -1)"
+            bad "status did not say ready (exit $LAST_STATUS): $(echo "$LAST_OUTPUT" | head -1)"
         fi
     else
         bad "unexpected output through the daemon: $out"
@@ -2080,6 +2082,13 @@ if (cd "$REPO/client" && CGO_ENABLED=0 go build -ldflags="-X main.version=sha-ot
             bad "restart proceeded while a container depended on the session"
         else
             ok "restart refuses while something depends on the session"
+        fi
+        # And stop, the same way, naming -f as the way through.
+        if outputs "fix: .*remote stop.* -f" "$WORK/remote-docker" remote stop &&
+            [ "$LAST_STATUS" != 0 ]; then
+            ok "stop refuses while something depends on the session, and names -f"
+        else
+            bad "stop did not refuse (exit $LAST_STATUS): $LAST_OUTPUT"
         fi
 
         "$WORK/remote-docker" rm -f itest-pin >/dev/null 2>&1

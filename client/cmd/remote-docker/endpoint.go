@@ -6,6 +6,7 @@ package main
 // there is one spelling and no pair to disagree.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -13,8 +14,24 @@ import (
 	"github.com/lhns/remote-docker/client/internal/proxy"
 )
 
-func resolve() (config.Config, error) {
-	return config.Resolve(overrides, "")
+// resolve is the workspace a command is about: its [name] argument, else
+// --workspace, else the default. Every `remote` command that takes an optional
+// name resolves it here.
+func resolve(args []string) (config.Config, error) {
+	o := overrides
+	if len(args) > 0 {
+		o.Workspace = args[0]
+	}
+	return resolveOverrides(o)
+}
+
+// resolveOverrides is config.Resolve with the remedy for an unknown name.
+func resolveOverrides(o config.Overrides) (config.Config, error) {
+	cfg, err := config.Resolve(o, "")
+	if errors.Is(err, config.ErrUnknownWorkspace) {
+		return cfg, listRemedy(err)
+	}
+	return cfg, err
 }
 
 // requireHost is config's RequireHost with the remedy spelled for this binary.
@@ -28,7 +45,11 @@ func requireHost(cfg config.Config) error {
 
 // noWorkspaceNamed is the one answer to a name that is not in the config.
 func noWorkspaceNamed(name string) error {
-	return fmt.Errorf("no workspace named %q\n  fix: `%s` lists them", name, ourCommand("ls"))
+	return listRemedy(config.UnknownWorkspace(name))
+}
+
+func listRemedy(err error) error {
+	return fmt.Errorf("%w\n  fix: `%s` lists them", err, ourCommand("ls"))
 }
 
 // exportLine renders the DOCKER_HOST assignment for the shell the user is
