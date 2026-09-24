@@ -19,13 +19,18 @@ import (
 //
 // Run inside the workspace container, where the parent daemon is:
 //
-//	docker exec <workspace> remote-dockerd daemons list
+//	docker exec <workspace> remote-dockerd daemons ls
 //	docker exec <workspace> remote-dockerd daemons reset alice
 //	docker exec <workspace> remote-dockerd daemons reset --all --purge
 func newDaemonsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemons",
 		Short: "Inspect and reset the per-account Docker daemons",
+		// A word that is not a subcommand is an error rather than a help
+		// screen with exit 0. cobra shows help before checking Args unless
+		// the command can run, hence the RunE.
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	cmd.AddCommand(newDaemonsListCommand(), newDaemonsResetCommand())
 	return cmd
@@ -33,8 +38,9 @@ func newDaemonsCommand() *cobra.Command {
 
 func newDaemonsListCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "ls",
-		Short: "List the accounts that have a daemon",
+		Use:     "ls",
+		Aliases: []string{"list"},
+		Short:   "List the accounts that have a daemon",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			m, err := managerForCommands()
 			if err != nil {
@@ -74,7 +80,8 @@ Removing a daemon stops whatever it was running.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if (len(args) == 0) == !all {
-				return fmt.Errorf("name an account, or pass --all")
+				return fmt.Errorf("name one account, or pass --all\n" +
+					"  fix: `remote-dockerd daemons ls` lists them")
 			}
 
 			m, err := managerForCommands()

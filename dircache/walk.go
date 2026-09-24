@@ -78,21 +78,12 @@ type Stats struct {
 // deleted by the container or simply never sent.
 func (s Stats) Complete() bool { return s.Files == s.TotalFiles }
 
-// walk finds what to cache and hands each entry over as it is found.
+// walk hands over each entry to cache as it is found, so sending can start
+// before the scan ends.
 //
-// Streaming rather than returning a list, so a caller can start sending before
-// the scan is done. What it yields is ordered by Tree.Unstored.
-//
-// The budget is deliberately NOT applied here. A walk that stopped at the
-// ceiling would let the DIRECTORY ORDER decide what a share caches: the first
-// files it happened to reach, however large, and never the small ones behind
-// them. The budget is checked where the candidates can be seen, in next and
-// finishIfWalked.
-//
-// Errors are skipped rather than returned. A directory that cannot be read is a
-// part of the tree that stays live, which is the same outcome as a budget that
-// ran out, and refusing the whole share over one unreadable path would be worse
-// than the thing it protects against.
+// The budget is NOT applied here, or directory order would decide what a share
+// caches; next and finishIfWalked apply it where the candidates can be seen.
+// An unreadable directory is skipped and stays live, like a spent budget.
 func walk(root string, excludes []string, yield func(Entry)) Stats {
 	var stats Stats
 	skip := excluded(excludes)
@@ -163,16 +154,9 @@ const batchBytes = 16 << 20
 // failure costs all of it. Two thousand keeps a batch a few seconds of work.
 const maxBatchFiles = 2000
 
-// batches splits entries into sends bounded the same way a prefetch's are.
-//
-// For the paths an invalidation carries, which arrive all at once rather than
-// through the tree: a `git checkout` across a branch, or a build that rewrote
-// a generated directory, is thousands of files in one event. Sent as one batch
-// it is one tar held whole in memory, framed as one payload, and lost entirely
-// if anything about it fails.
-//
-// An entry with no Size counts as nothing against the byte budget, so a caller
-// that has not stat'ed its paths is still bounded by maxBatchFiles.
+// batches splits entries into sends bounded like a prefetch's, for an
+// invalidation that arrives all at once (a `git checkout` is thousands of
+// files). An entry with no Size is still bounded by maxBatchFiles.
 func batches(entries []Entry) [][]Entry {
 	var (
 		out   [][]Entry

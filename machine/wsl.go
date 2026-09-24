@@ -115,27 +115,15 @@ func observeWSL(distros []wslDistribution, name, generation string) Observed {
 	return Observed{State: Absent}
 }
 
-// wslConf is the distribution's own configuration.
-//
-// `[boot] command` is what starts the agent, and it is why nothing on the
-// Windows side supervises anything: WSL runs it every time the distribution
-// starts, so a machine that was terminated, rebooted or shut down comes back
-// with the agent running.
-//
-// systemd is off: the agent is the only thing that has to run and it supervises
-// dockerd itself (ADR 0010).
+// wslConf is the distribution's own configuration. `[boot] command` starts the
+// agent every time WSL starts the distribution, so nothing on the Windows side
+// supervises anything; systemd is off because the agent supervises dockerd
+// itself (ADR 0010).
 func wslConf(spec Spec) string {
 	env := []string{
-		// The image's own environment, restored by hand: `docker export` writes
-		// a FILESYSTEM and the image config is not in the tarball, so a machine
-		// imported from one starts with WSL's environment and none of the
-		// image's. These two have no default in the agent's own code. It fails a
-		// long way from here, and the whole failure is CLAUDE.md's "a rootfs is
-		// a filesystem" invariant.
-		//
-		// DOCKER_TLS_CERTDIR is EMPTY rather than unset, which is still a
-		// different answer: dind's docker-entrypoint.sh points a client with no
-		// DOCKER_HOST and no socket at tcp://docker:2376 when it is set.
+		// The image's environment, which a rootfs does not carry (CLAUDE.md, "a
+		// rootfs is a filesystem"). DOCKER_TLS_CERTDIR is EMPTY, not unset:
+		// dind's docker-entrypoint.sh reads the difference.
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"DOCKER_TLS_CERTDIR=",
 
@@ -144,22 +132,15 @@ func wslConf(spec Spec) string {
 		"WORKSPACE_HOSTKEY_DIR=/etc/workspace/host_keys",
 		"WORKSPACE_ENABLE_DIND=true",
 
-		// One daemon, not one per account. A machine on somebody's own computer
-		// has exactly one account, so a daemon each separates nobody from
-		// anybody and ADR 0012's argument for the shared daemon applies in
-		// full. It also keeps a fresh machine's first connection from waiting
-		// on adoption, which asks dockerd before the agent serves.
+		// One daemon: a machine on somebody's own computer has one account, so
+		// ADR 0012's argument applies in full, and a first connection does not
+		// wait on adoption.
 		"WORKSPACE_PER_USER_DIND=false",
 	}
-	// Bound to every interface INSIDE the machine, not to its loopback.
-	//
-	// WSL2's default networking is NAT, and Windows reaches the machine either
-	// through its localhost relay or at the machine's own address. A service on
-	// the machine's loopback can only be reached by the first of those, and ADR
-	// 0026 measured the relay not carrying it.
-	//
-	// Not an exposure: that interface is a host-only virtual network, and the
-	// agent authenticates every connection by key wherever it came from.
+	// Every interface inside the machine, not its loopback: Windows reaches it
+	// at the machine's own address, the localhost relay having been measured
+	// not to carry it (ADR 0026). That interface is host-only, and the agent
+	// authenticates every connection by key.
 	return "[boot]\nsystemd=false\ncommand=/usr/bin/env " +
 		strings.Join(env, " ") +
 		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, agentLog)
@@ -195,19 +176,14 @@ func wslReadGenerationArgs(name string) []string {
 	return wslRunArgs(name, "cat", generationFile)
 }
 
-// wslWriteArgs writes a file inside a distribution.
-//
-// printf rather than a heredoc or tee: one process, no shell features beyond
-// quoting, and nothing that behaves differently between the shells a rootfs
-// might ship.
+// wslWriteArgs writes a file inside a distribution, with printf: one process
+// and nothing that differs between the shells a rootfs might ship.
 func wslWriteArgs(name, path, content string) []string {
 	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
 }
 
-// shellQuote wraps a string for `sh -c`: single quotes, with the only escape sh
-// understands for them. What passes through is our own config and a hex digest
-// rather than anything hostile, so what it is for is a newline in the content
-// not ending the command.
+// shellQuote wraps a string in single quotes for `sh -c`, so a newline in the
+// content does not end the command.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

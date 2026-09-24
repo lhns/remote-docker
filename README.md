@@ -973,6 +973,10 @@ docker exec <workspace> remote-dockerd daemons reset --all --purge   # and disca
 `--purge` is the account's entire Docker state, and it is needed for exactly
 that one case.
 
+The agent that is serving may keep reporting the old failure for up to five
+seconds after a reset, until its own record of that failure expires; retry
+after that.
+
 #### What persists
 
 | | shared daemon | a daemon per account |

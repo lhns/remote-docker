@@ -282,10 +282,16 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	// 3. Build the next map, seeded from the current one so an account whose
 	// Ensure failed this round is carried forward and keeps authenticating: a
 	// transient useradd failure must not present as a key that stopped working.
+	// With the file's keys, though, or a key replaced in it would keep working.
 	next := make(map[string]*Account, len(s.accounts)+len(found))
 	maps.Copy(next, s.accounts)
 	for _, name := range names {
 		if failed[name] {
+			if known, ok := s.accounts[name]; ok {
+				carried := *known
+				carried.Keys = found[name].Keys
+				next[name] = &carried
+			}
 			continue
 		}
 		if _, existed := s.accounts[name]; !existed {

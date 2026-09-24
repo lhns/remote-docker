@@ -206,6 +206,30 @@ func TestAMountTheWorkspaceOwnsIsForwardedWhole(t *testing.T) {
 	}
 }
 
+// Our words are taken out of a mount that is NOT rewritten as well: the daemon
+// refuses them by name. Docker's own words and every other option stay.
+func TestOurWordsLeaveAMountThatIsKept(t *testing.T) {
+	r, _ := cachedRewriter()
+	r.DaemonPaths = []string{"/lib/modules"}
+	r.LocalExists = func(string) bool { return false }
+
+	for _, c := range []struct{ in, want, gone string }{
+		{`"Binds":["/lib/modules:/lib/modules:ro,read=cached"]`, `"/lib/modules:/lib/modules:ro"`, "read="},
+		{`"Binds":["data:/data:write=back,nocopy"]`, `"data:/data:nocopy"`, "write="},
+		{`"Mounts":[{"Type":"bind","Source":"/lib/modules","Target":"/m","Consistency":"read=cached"}]`, `"Target":"/m"`, "Consistency"},
+		{`"Mounts":[{"Type":"volume","Source":"data","Target":"/d","Consistency":"cached,write=back"}]`, `"Consistency":"cached"`, "write="},
+	} {
+		out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{`+c.in+`}}`))
+		if err != nil {
+			t.Errorf("%s: %v", c.in, err)
+			continue
+		}
+		if !strings.Contains(string(out), c.want) || strings.Contains(string(out), c.gone) {
+			t.Errorf("%s\n  became %s\n  want %s and no %q", c.in, out, c.want, c.gone)
+		}
+	}
+}
+
 // The workspace setting is what a mount that named nothing gets, a rule for a
 // directory outranks it, and each axis is filled on its own.
 func TestModePrecedence(t *testing.T) {
@@ -579,6 +603,36 @@ func TestASingleFileTakesAModeToo(t *testing.T) {
 	}
 	if o := optionsFor(t, volumes); !strings.Contains(o, "actimeo=60") {
 		t.Errorf("volume options = %q, want the long attribute cache", o)
+	}
+}
+
+// A union is bound by path and a file is mounted by subpath. Combined, the
+// -v form became a volume named after the union's path and the --mount form a
+// bind carrying VolumeOptions, both after the union had been prepared. Refused
+// by name before anything is created.
+func TestASingleFileRefusesAUnion(t *testing.T) {
+	for _, body := range []string{
+		`{"HostConfig":{"Binds":["/home/alice/app.conf:/etc/app.conf:ro,write=back"]}}`,
+		`{"HostConfig":{"Mounts":[{"Type":"bind","Source":"/home/alice/app.conf","Target":"/etc/app.conf","Consistency":"write=back"}]}}`,
+	} {
+		r, sharer, volumes := newRewriter()
+		r.Watching = true
+		cache := &fakeCache{}
+		r.OpenCache = servingCache(cache)
+		r.UnionReady = workspace.UnionReady
+		sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
+
+		out, err := r.ContainerCreate(t.Context(), []byte(body))
+		if err == nil {
+			t.Errorf("%s\n  was rewritten to %s", body, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "fix: mount the directory") {
+			t.Errorf("err = %v, want the remedy", err)
+		}
+		if cache.prepared != "" || len(volumes.created) != 0 {
+			t.Errorf("a refused mount still prepared %q and created %v", cache.prepared, volumes.created)
+		}
 	}
 }
 

@@ -120,7 +120,7 @@ func (f *Forwards) HandleRequest(ctx gssh.Context, _ *gssh.Server, req *gossh.Re
 		if err := gossh.Unmarshal(req.Payload, &payload); err != nil {
 			return false, []byte{}
 		}
-		f.close(net.JoinHostPort(payload.BindAddr, strconv.Itoa(int(payload.BindPort))))
+		f.close(forwardKey(conn, net.JoinHostPort(payload.BindAddr, strconv.Itoa(int(payload.BindPort)))))
 		return true, nil
 
 	default:
@@ -151,30 +151,43 @@ func (f *Forwards) open(ctx gssh.Context, conn *gossh.ServerConn, payload remote
 	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
 	port, _ := strconv.Atoi(portStr)
 
+	key := forwardKey(conn, addr)
 	f.mu.Lock()
 	if f.forwards == nil {
 		f.forwards = make(map[string]net.Listener)
 	}
-	f.forwards[addr] = ln
+	f.forwards[key] = ln
 	f.mu.Unlock()
 
 	// The listener does not outlive the connection that asked for it. By
-	// identity, not by address: the reservation is released on this same
+	// identity, not by key: the reservation is released on this same
 	// ctx.Done, so a second session may already hold the address.
 	go func() {
 		<-ctx.Done()
-		f.drop(addr, ln)
+		f.drop(key, ln)
 	}()
 
-	go f.serve(conn, ln, payload.BindAddr, uint32(port), addr)
+	go func() {
+		f.serve(conn, ln, payload.BindAddr, uint32(port), key)
+		// However the forward ended, a cancel included, which would otherwise
+		// hold the port until the connection closed.
+		f.Reverse.Release(token, payload.BindAddr, payload.BindPort)
+	}()
 	return true, gossh.Marshal(&remoteForwardSuccess{BindPort: uint32(port)})
 }
 
-// close takes down the listener for addr, for cancel-tcpip-forward, which
-// names a forward by address and nothing else.
-func (f *Forwards) close(addr string) {
+// forwardKey names one connection's forward. A cancel names only an address,
+// and one Forwards serves every connection: looked up by address alone, any
+// connection could cancel another account's NFS export.
+func forwardKey(conn *gossh.ServerConn, addr string) string {
+	return string(conn.SessionID()) + " " + addr
+}
+
+// close takes down one of this connection's listeners, for
+// cancel-tcpip-forward.
+func (f *Forwards) close(key string) {
 	f.mu.Lock()
-	ln, ok := f.forwards[addr]
+	ln, ok := f.forwards[key]
 	f.mu.Unlock()
 	if ok {
 		_ = ln.Close()
@@ -182,11 +195,11 @@ func (f *Forwards) close(addr string) {
 }
 
 // drop takes down one particular listener, leaving a successor registered
-// under the same address alone.
-func (f *Forwards) drop(addr string, ln net.Listener) {
+// under the same key alone.
+func (f *Forwards) drop(key string, ln net.Listener) {
 	f.mu.Lock()
-	if f.forwards[addr] == ln {
-		delete(f.forwards, addr)
+	if f.forwards[key] == ln {
+		delete(f.forwards, key)
 	}
 	f.mu.Unlock()
 	_ = ln.Close()

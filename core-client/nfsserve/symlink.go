@@ -25,8 +25,7 @@ import "github.com/lhns/remote-docker/core/logx"
 
 // warnPrivilege says why the host refused, once per share: npm creates a bin
 // entry per package, and a hundred identical warnings is a message nobody
-// reads. The share is rebuilt on every connect, so a reconnect says it again,
-// which is the right cadence for something the user is meant to act on.
+// reads.
 func (n *noFollowFS) warnPrivilege() {
 	n.warned.Do(func() {
 		logx.Or(n.log).Warn("nfs: this machine cannot create a symlink; Windows withholds the privilege" +

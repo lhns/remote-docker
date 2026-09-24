@@ -64,7 +64,7 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 		// "keep" as it must, and the workspace would never release one at all.
 		ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 		defer cancel()
-		s.cfg.Unions.ReleaseAccount(ctx, name)
+		s.cfg.Unions.Release(ctx, name, account.Client())
 	}()
 
 	reader := bufio.NewReaderSize(session, cache.MaxFrame)
@@ -139,20 +139,20 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{Merged: merged}, nil
 
 	case cache.OpApply:
-		err := s.cfg.Unions.Apply(ctx, name, req.Export, req.Codec, io.LimitReader(body, req.Bytes))
+		err := s.cfg.Unions.Apply(ctx, name, account.Client(), req.Export, req.Codec, io.LimitReader(body, req.Bytes))
 		if err != nil {
 			return refused(err), nil
 		}
 		return cache.Reply{}, nil
 
 	case cache.OpDrop:
-		if err := s.cfg.Unions.Drop(ctx, name, req.Export, req.Paths); err != nil {
+		if err := s.cfg.Unions.Drop(ctx, name, account.Client(), req.Export, req.Paths); err != nil {
 			return refused(err), nil
 		}
 		return cache.Reply{}, nil
 
 	case cache.OpChanges:
-		changes, err := s.cfg.Unions.Changes(name, req.Export)
+		changes, err := s.cfg.Unions.Changes(name, account.Client(), req.Export)
 		if err != nil {
 			return refused(err), nil
 		}
@@ -170,7 +170,7 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		return cache.Reply{Caches: s.cfg.Unions.MountedCaches(name, account.Client(), d)}, nil
 
 	case cache.OpPull:
-		pulled, err := s.cfg.Unions.Pull(name, req.Export, req.Paths)
+		pulled, err := s.cfg.Unions.Pull(name, account.Client(), req.Export, req.Paths)
 		if err != nil {
 			return refused(err), nil
 		}

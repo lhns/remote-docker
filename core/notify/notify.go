@@ -1,20 +1,7 @@
-// Package notify is the contract for the change-notification channel.
-//
-// NFS carries no change notification, so a watcher inside a container sees
-// nothing at all when the user edits a file on their own machine. Measured,
-// not assumed (ADR 0014). Every hot-reload workflow depends on inotify and so
-// does nothing while appearing to work.
-//
-// Linux offers no way to inject a synthetic event; fanotify(7) states plainly
-// that it "does not catch remote events that occur on network filesystems".
-// The only mechanism available to anyone is to perform a real VFS operation
-// and let the kernel emit the event as a side effect. So the client watches its
-// own filesystem, where the changes actually happen, and tells the agent which
-// paths to touch.
-//
-// The channel's name, its version and its frames are all here because they are
-// one agreement: opening a name an agent does not know IS the version check
-// (ADR 0021).
+// Package notify is the contract for the change-notification channel: NFS
+// carries no change notification, so the client watches its own filesystem and
+// tells the agent which paths to touch, and the kernel emits the event a
+// container's watcher waits for (ADR 0014, ADR 0016).
 package notify
 
 import (
@@ -24,26 +11,19 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// Command carries the client's filesystem changes to be replayed inside
-// the workspace, so watchers in containers see edits made on the user's machine
-// (ADR 0016).
-//
-// An agent too old to know it runs `sh -c "workspace-notify"`, which exits 127.
-// That is the version check: the client offers, and an agent that cannot do it
-// fails in a way the client recognises rather than one it has to ask about
-// first.
+// Command carries the client's changes to be replayed in the workspace. An
+// agent too old to know it runs `sh -c "workspace-notify"` and exits 127, which
+// is the version check.
 const Command = "workspace-notify"
 
 const (
-	// Version is the wire version. The agent announces it first: an
-	// agent too old to know this command would otherwise fall through to the
-	// generic exec path, run `sh -c "workspace-notify"` and exit 127, which
-	// the client must be able to tell apart from a working channel.
+	// Version is announced by the agent first, so a working channel can be
+	// told from that exit 127.
 	Version = 1
 
-	// MaxFrame bounds one line. Both ends must agree, because a scanner
-	// with a smaller buffer than the writer's frame silently truncates the
-	// stream at the first large batch.
+	// MaxFrame bounds one line. Both ends must agree: a scanner smaller than
+	// the writer's frame silently truncates the stream at the first large
+	// batch.
 	MaxFrame = 1 << 20
 )
 
@@ -88,12 +68,9 @@ func (o Op) String() string {
 	return strings.Join(names, "|")
 }
 
-// Event is one change to one path, as the client observed it.
-//
-// It carries no content and never will. The bytes are already in the container
-// through the NFS mount; what is missing is only the kernel's notification.
-// Shipping data here would turn this into a sync, the thing ADR 0014 is
-// trying not to become.
+// Event is one change to one path, as the client observed it. It carries no
+// content and never will: the bytes are already there through NFS, and only
+// the notification is missing (ADR 0014).
 type Event struct {
 	// Export is the share the path belongs to: "/cwd" or "/m/<id>".
 	Export string `json:"e"`
@@ -105,24 +82,15 @@ type Event struct {
 	// Op is the merged operation set. Zero is invalid.
 	Op Op `json:"o"`
 
-	// Dir says the path is, or was, a directory. The agent needs it because
-	// the operation that makes a watcher notice a directory is not the one
-	// that makes it notice a file, and after a removal it cannot go and
-	// look.
+	// Dir says the path is, or was, a directory: the replay differs, and after
+	// a removal the agent cannot look.
 	Dir bool `json:"d,omitempty"`
 }
 
-// Validate rejects anything that is not a well-formed in-share path.
-//
-// Called on BOTH sides, and that is the point: this stream tells a root
-// process which path to touch inside the workspace. On the client a failure is
-// a bug in our own watcher; on the agent it is the only thing between a
-// malformed path and a privileged syscall. Neither end may assume the other
-// checked.
+// Validate rejects anything that is not a well-formed in-share path. Called on
+// both sides: on the agent it is the only thing between a malformed path and a
+// privileged syscall.
 func (e Event) Validate() error {
-	// ValidExport accepts exactly /cwd and /m/<16 hex>, which is the same set
-	// the agent can resolve to a volume. Reusing it means the two cannot
-	// drift apart.
 	if err := workspace.ValidExport(e.Export); err != nil {
 		return fmt.Errorf("workspace: notify event export: %w", err)
 	}
@@ -138,14 +106,9 @@ func (e Event) Validate() error {
 	return nil
 }
 
-// Notice tells the receiver that the client's view is incomplete under Path,
-// so it should do something coarser than replaying events, or nothing, if
-// the tool being served rescans anyway.
-//
-// Never omitted when something was lost. A receiver that silently believes it
-// has seen everything is precisely the failure this whole channel exists to
-// remove, and reintroducing it one layer down would be worse than not having
-// the channel: the user would have been told it works.
+// Notice tells the receiver that the client's view is incomplete under Path.
+// Never omitted when something was lost: a receiver that believes it saw
+// everything is the failure this channel exists to remove.
 type Notice struct {
 	Export string `json:"e"`
 

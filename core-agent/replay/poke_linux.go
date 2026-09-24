@@ -28,13 +28,15 @@ type SyscallPoker struct{}
 // process does not control and points anywhere it likes; this is a root process
 // being told which path to touch, and following one would be the escape.
 func (SyscallPoker) Poke(path string, isDir bool) error {
-	if err := pokeMtime(path); err != nil {
+	regular, err := pokeMtime(path)
+	if err != nil {
 		return err
 	}
-	if isDir {
-		// O_WRONLY on a directory is EISDIR. The utimensat above already
-		// produced IN_MODIFY|IN_ISDIR, which is what a rescanning watcher
-		// needs.
+	if isDir || !regular {
+		// A directory already got IN_MODIFY|IN_ISDIR above, which is what a
+		// rescanning watcher needs. Anything else that is not a regular file
+		// is not opened at all: a FIFO blocks the open until a reader comes,
+		// and the notify channel replays one event at a time.
 		return nil
 	}
 
@@ -50,7 +52,7 @@ func (SyscallPoker) Poke(path string, isDir bool) error {
 	// It is also completely silent over NFSv3, which is stateless and has no
 	// OPEN operation, so this primitive cannot echo back to the client as a
 	// change, which would otherwise loop forever.
-	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		// A read-only file, or one we may not open for writing, still got its
 		// IN_MODIFY above. Not worth failing the whole event for.
@@ -70,19 +72,22 @@ func (SyscallPoker) Poke(path string, isDir bool) error {
 // observable changes: no build system sees a newer file, and the SETATTR this
 // produces over NFS is an identity the client's own server can decline to
 // apply, which is what keeps the echo loop closed.
-func pokeMtime(path string) error {
+//
+// It reports whether the path is a regular file, the only kind Poke opens.
+func pokeMtime(path string) (regular bool, err error) {
 	var st unix.Stat_t
 	if err := unix.Lstat(path, &st); err != nil {
-		return err
+		return false, err
 	}
 	if st.Mode&unix.S_IFMT == unix.S_IFLNK {
 		// Never follow a symlink out of the share. The client does not watch
 		// through them either.
-		return nil
+		return false, nil
 	}
 	ts := []unix.Timespec{
 		{Sec: 0, Nsec: unix.UTIME_OMIT},
 		st.Mtim,
 	}
-	return unix.UtimesNanoAt(unix.AT_FDCWD, path, ts, unix.AT_SYMLINK_NOFOLLOW)
+	return st.Mode&unix.S_IFMT == unix.S_IFREG,
+		unix.UtimesNanoAt(unix.AT_FDCWD, path, ts, unix.AT_SYMLINK_NOFOLLOW)
 }

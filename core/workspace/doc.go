@@ -3,16 +3,8 @@
 // mount options, ownership labels, mount modes, the uid<->port mapping,
 // this machine's id, and the workspace-info handshake.
 //
-// Everything in here is imported by both binaries, and that is the point. The
-// uid->port mapping once lived in two shell scripts, and when they disagreed
-// the client tunnelled to one port while the mount read another, which
-// presented as a network fault rather than as drift. One function makes that
-// class of bug a compile error.
-//
-// The channel PROTOCOLS are not here. Each one holds its whole agreement --
-// name, version, frames, payload -- in a package of its own: core/notify,
-// core/cache, and core/tunnel for the transport itself (ADR 0021).
-//
-// Nothing here may depend on client- or server-only concerns. If a type is
-// only used on one side, it does not belong in this package.
+// Both binaries import it, so a derivation that drifted between two copies,
+// as the uid->port mapping once did, cannot recur. The channel protocols each
+// have their own package (ADR 0021), and a type only one side uses does not
+// belong here.
 package workspace

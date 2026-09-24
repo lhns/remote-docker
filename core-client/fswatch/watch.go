@@ -10,6 +10,7 @@ package fswatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -148,6 +149,10 @@ type Watcher struct {
 	raw   chan fsnotify.Event
 	syncC chan []Share
 
+	// missed says events were lost before any share could be named: the
+	// kernel's queue overflowed, or raw was full.
+	missed chan struct{}
+
 	mu           sync.Mutex
 	sink         Sink
 	observer     Observer
@@ -182,6 +187,7 @@ func New(opts Options) (*Watcher, error) {
 		opts:         opts,
 		raw:          make(chan fsnotify.Event, 4096),
 		syncC:        make(chan []Share, 1),
+		missed:       make(chan struct{}, 1),
 		disconnected: make(map[string]int),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -227,23 +233,14 @@ func (w *Watcher) Sync(shares []Share) {
 	}
 }
 
-// Observer is told about every change, before the mode decides what a watcher
-// inside a container can be shown.
-//
-// Two consumers with different needs, which is why this is not the Sink. The
-// notify channel may only report what it can replay faithfully -- a deletion
-// over NFS cannot be, so ModePartial drops it rather than misrepresent it. A
-// cache has the opposite requirement: a deletion is the one event it MUST have,
-// because a cached copy of a file that is gone would shadow its absence
-// (ADR 0044).
+// Observer is told about every change before the mode strips any: ModePartial
+// drops a deletion the Sink cannot replay, and a cache must have exactly that
+// event, or a cached copy shadows a file that is gone (ADR 0044).
 type Observer interface {
 	Observe(event notify.Event)
 
-	// Lost says the watcher could not report everything, which for a cache is
-	// a different problem from a missed notification: the events it did not
-	// see may have been deletions, and a cached copy of a deleted file
-	// shadows its absence until something removes it. The observer's answer is
-	// to reconcile rather than to log a line.
+	// Lost says events were missed, deletions possibly among them; a cache
+	// answers with a reconcile.
 	Lost(notice notify.Notice)
 }
 
@@ -321,13 +318,24 @@ func (w *Watcher) drain() {
 				// the whole point: a receiver that silently believes it has
 				// seen everything is the failure this package removes.
 				w.countDropped(1)
+				w.miss()
 			}
 		case err, ok := <-w.be.Errors():
 			if !ok {
 				return
 			}
 			w.log().Warn("file watcher", "err", err)
+			if errors.Is(err, fsnotify.ErrEventOverflow) {
+				w.miss()
+			}
 		}
+	}
+}
+
+func (w *Watcher) miss() {
+	select {
+	case w.missed <- struct{}{}:
+	default:
 	}
 }
 
@@ -365,6 +373,17 @@ func (w *Watcher) process(out chan<- notify.Frame) {
 		case e := <-w.raw:
 			w.handle(t, c, e)
 			arm()
+
+		case <-w.missed:
+			// Which share lost what is unknown, so every one is told it lost
+			// something somewhere, which is what a cache reconciles on.
+			for _, r := range t.roots {
+				c.overflow(r.export, "/", 0)
+			}
+			if !armed {
+				timer.Reset(0)
+				armed = true
+			}
 
 		case <-timer.C:
 			armed = false

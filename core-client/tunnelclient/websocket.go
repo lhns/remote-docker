@@ -1,18 +1,11 @@
 package tunnelclient
 
 // Reaching a workspace through an HTTP reverse proxy: a WebSocket returned as
-// a net.Conn, which is what Config.Dial takes.
+// the net.Conn Config.Dial takes.
 //
-// In this package rather than beside it, because dialling the tunnel over TCP
-// and dialling it through a proxy are one subject, and the seam between them
-// was a single function. Used when the workspace is behind an HTTP reverse
-// proxy, which is how one is reached without an SSH port open to it.
-//
-// TLS on this connection authenticates the proxy. It does not authenticate the
-// workspace: the SSH host key does that, inside the tunnel, and the client key
-// identifies the machine. This is why Insecure and ws:// are offered -- both
-// give up checking which proxy answered, and neither affects whether the SSH
-// session itself is authenticated and encrypted. See ADR 0034.
+// TLS here authenticates the proxy, not the workspace, which the SSH host key
+// does inside the tunnel. That is why Insecure and ws:// are offered: neither
+// affects the SSH session's own authentication (ADR 0034).
 
 import (
 	"context"

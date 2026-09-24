@@ -127,5 +127,5 @@ is willing to ask for again.
   error rather than silence.
 - **The export key must be checked against the live registry**, or a handle
   becomes a way to name a share that is no longer exported.
-- **`SetAttrs` rebuilds `share.fs` on every connect** (`registry.go:215`), so
+- **`SetAttrs` rebuilds `share.fs` when the account's attributes change**, so
   nothing may key on the filesystem pointer. The export path is the identity.

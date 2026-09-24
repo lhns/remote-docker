@@ -9,27 +9,9 @@ import (
 	nfs "github.com/willscott/go-nfs"
 )
 
-// go-nfs logs to stderr through a package-level logger of its own, at Info by
-// default. Left alone it writes straight past the client's own logging and
-// onto the user's terminal, and the first thing it says on every single mount
-// is:
-//
-//	[ERROR] No handler for 100227.0
-//
-// Program 100227 is NFS_ACL and procedure 0 is NULL, so that line is the Linux
-// NFS client asking "do you support ACLs?" and being correctly told no. It is
-// a routine probe reported as a failure, and it is alarming precisely when a
-// user is least able to judge it: the first time they run `shell`.
-//
-// The mount options carry `noacl` now, which stops the probe at source. This
-// stays as well, because the probe is only the loudest example: go-nfs's
-// default logger is a stderr firehose we do not control, and a file server
-// embedded in a CLI has no business writing to the terminal on its own.
-
-// SetLogger routes go-nfs's logging into the client's, once.
-//
-// Package-level because go-nfs's logger is package-level; there is nothing
-// per-server to attach it to.
+// SetLogger routes go-nfs's package-level logger into the client's, once.
+// Left alone it writes to the terminal, starting with `[ERROR] No handler for
+// 100227.0` on every mount: the NFS_ACL probe, correctly refused.
 func SetLogger(log *slog.Logger) {
 	loggerOnce.Do(func() { nfs.SetLogger(&nfsLogger{log: log}) })
 }

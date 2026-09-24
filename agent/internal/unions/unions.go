@@ -1,6 +1,6 @@
 // Package unions owns the union mounts behind delegated shares (ADR 0044).
 //
-// One per share per account: the client's export underneath, a cache volume on
+// One per share per machine: the client's export underneath, a cache volume on
 // top, and the merged view a container binds. This package is the glue --
 // resolving an account to its daemon, asking that daemon where a volume's data
 // lives, and supervising the process that serves the union. The mechanics of
@@ -157,12 +157,12 @@ func (l *live) isApplied(name string, size int64, modTime time.Time) bool {
 	return ok && a.size == size && a.modTime.Equal(modTime)
 }
 
-// share is the live union for one of an account's shares, if this manager has
+// share is the live union for one of a machine's shares, if this manager has
 // one.
-func (m *Manager) share(account, export string) (*live, bool) {
+func (m *Manager) share(account, client, export string) (*live, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	l, ok := m.shares[key(account, export)]
+	l, ok := m.shares[key(account, client, export)]
 	return l, ok
 }
 
@@ -176,13 +176,18 @@ func (l *live) relocate(p string) (string, error) {
 // serving. Named so the client can stop asking rather than guess from a string.
 var ErrNoShare = errors.New("no union for this share")
 
-// key names a share within an account, since two accounts may share a name for
-// the same directory and must never share a mount.
-func key(account, export string) string { return account + "\x00" + export }
+// key names a share within a machine of an account. Two accounts, or two of
+// one account's machines, may name different directories alike (/cwd is
+// everybody's) and must never share a mount.
+func key(account, client, export string) string {
+	return owner(account, client) + export
+}
 
-// ownedBy reports whether a share key belongs to an account, and exists so
-// that only key() above knows how one is put together.
-func ownedBy(k, account string) bool { return strings.HasPrefix(k, account+"\x00") }
+// ownedBy reports whether a share key belongs to a machine, and exists so that
+// only key() above knows how one is put together.
+func ownedBy(k, account, client string) bool { return strings.HasPrefix(k, owner(account, client)) }
+
+func owner(account, client string) string { return account + "\x00" + client + "\x00" }
 
 // Prepare mounts a share's union if it is not already mounted, and answers with
 // the path a container binds.
@@ -221,6 +226,7 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 	spec := union.Spec{
 		PID:      d.PID,
 		Export:   req.Export,
+		Client:   client,
 		Port:     req.Port,
 		Read:     read,
 		CacheDir: cacheDir,
@@ -229,9 +235,9 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 		return "", err
 	}
 
-	k := key(account, req.Export)
+	k := key(account, client, req.Export)
 	for {
-		existing, known := m.share(account, req.Export)
+		existing, known := m.share(account, client, req.Export)
 
 		// Outside m.mu, for the reason on the pending field: a wedged server
 		// takes aliveTimeout to say so.
@@ -336,7 +342,7 @@ func (m *Manager) start(spec union.Spec, host string) *live {
 			// Safe only because "alive" means MOUNTED rather than "the path
 			// is there". Against a stat this would wait forever on the empty
 			// directory a dead union leaves behind.
-			if m.awaitGone(ctx, spec) {
+			if m.awaitGone(ctx, spec) || m.awaitGone(ctx, legacy(spec)) {
 				continue
 			}
 
@@ -378,6 +384,15 @@ func (m *Manager) awaitGone(ctx context.Context, spec union.Spec) bool {
 	logx.Or(m.Log).Info("the adopted union went; mounting one of ours",
 		"export", spec.Export)
 	return true
+}
+
+// legacy is where an agent from before per-machine mountpoints put this share's
+// union. One still serving after an upgrade may be on this share's upper, so it
+// is waited out like any other, and a Prepare fails meanwhile rather than
+// stacking a second union on that upper.
+func legacy(spec union.Spec) union.Spec {
+	spec.Client = ""
+	return spec
 }
 
 // run is one attempt: the agent re-executed as the child that enters the
@@ -445,25 +460,25 @@ func (m *Manager) aliveErr(ctx context.Context, spec union.Spec) error {
 	return union.Alive(ctx, spec)
 }
 
-// ReleaseAccount drops the shares an account holds that nothing is using,
-// which is what a cache session ending means.
+// Release drops the shares a machine holds that nothing is using, which is
+// what its cache session ending means.
 //
 // NOT every share: the union outlives the channel that asked for it, because
 // the channel goes whenever the connection under it is released (ADR 0015)
 // while the containers bound to the union keep running (ADR 0044).
-func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
-	held := m.heldByContainers(ctx, account)
+func (m *Manager) Release(ctx context.Context, account, client string) {
+	held := m.heldByContainers(ctx, account, client)
 
 	m.mu.Lock()
 	var specs []union.Spec
 	for k, l := range m.shares {
-		if !ownedBy(k, account) {
+		if !ownedBy(k, account, client) {
 			continue
 		}
 		if held[l.spec.Merged()] {
 			// Unmounting now frees nothing: the container keeps the mount it
 			// already has, and keeps it BROKEN. Released instead the next time
-			// the account disconnects with nothing holding this share.
+			// the machine disconnects with nothing holding this share.
 			continue
 		}
 		specs = append(specs, l.spec)
@@ -479,7 +494,7 @@ func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
 	}
 }
 
-// heldByContainers is the set of this account's union mounts that a running
+// heldByContainers is the set of this machine's union mounts that a running
 // container is still bound to.
 //
 // A union is bound into a container by PATH rather than as a volume, so nothing
@@ -487,12 +502,12 @@ func (m *Manager) ReleaseAccount(ctx context.Context, account string) {
 // can say. On any doubt this answers "held": keeping a mount nobody needs costs
 // a process, while taking one that is in use breaks somebody's container
 // permanently.
-func (m *Manager) heldByContainers(ctx context.Context, account string) map[string]bool {
+func (m *Manager) heldByContainers(ctx context.Context, account, client string) map[string]bool {
 	m.mu.Lock()
 	hosts := map[string]bool{}
 	shares := map[string]bool{}
 	for k, l := range m.shares {
-		if ownedBy(k, account) {
+		if ownedBy(k, account, client) {
 			hosts[l.host] = true
 			shares[l.spec.Merged()] = true
 		}
@@ -504,7 +519,7 @@ func (m *Manager) heldByContainers(ctx context.Context, account string) map[stri
 		sources, err := m.Volumes.MountSources(ctx, host)
 		if err != nil {
 			logx.Or(m.Log).Warn("cannot tell which unions are in use; keeping them",
-				"account", account, "err", err)
+				"account", account, "client", client, "err", err)
 			return shares
 		}
 		for source := range sources {
@@ -536,14 +551,14 @@ func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 
 	m.mu.Lock()
 	for k, l := range m.shares {
-		if ownedBy(k, account) && l.cache != "" {
+		if ownedBy(k, account, client) && l.cache != "" {
 			names[l.cache] = true
 		}
 	}
 	m.mu.Unlock()
 
 	if client != "" {
-		for _, id := range union.MountedShares(netns.Root(d.PID)) {
+		for _, id := range union.MountedShares(netns.Root(d.PID), client) {
 			names[workspace.VolumeNameForCache(client, id)] = true
 		}
 	}

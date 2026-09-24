@@ -77,7 +77,7 @@ type Registry struct {
 
 	// The tracing threshold, read once. shareFS runs on every registration and
 	// again for every share on every SetAttrs, and a value that is not
-	// understood is worth saying once rather than once per share per connect.
+	// understood is worth saying once rather than once per share.
 	traceOnce sync.Once
 	trace     time.Duration
 
@@ -264,6 +264,11 @@ func (r *Registry) SetAttrs(attrs Attrs) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// A reconnect reports the same account, and go-nfs resolves every handle
+	// it issued before one to the stack it came from, which a rebuild closes.
+	if attrs == r.attrs {
+		return
+	}
 	r.attrs = attrs
 	for _, share := range r.shares {
 		// Rebuilt the same way it was registered: a single-file share must

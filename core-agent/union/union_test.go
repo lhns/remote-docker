@@ -12,21 +12,23 @@ func testSpec() Spec {
 	return Spec{
 		PID:      4242,
 		Export:   "/m/00112233445566ff",
+		Client:   "aabbccdd",
 		Port:     30001,
 		CacheDir: "/var/lib/docker/volumes/rd-aabbccdd-00112233445566ff/_data",
 		Read:     workspace.ReadCached,
 	}
 }
 
-// Every path a share uses is derived from its export, so two shares cannot
-// collide and the same share resolves to the same places on every reconnect.
+// Every path a share uses is derived from its export and its machine, so two
+// shares cannot collide, not even one id from two of an account's machines,
+// and the same share resolves to the same places on every reconnect.
 func TestSpecPaths(t *testing.T) {
 	s := testSpec()
 
-	if got, want := s.Lower(), "/run/rd-union/00112233445566ff/lower"; got != want {
+	if got, want := s.Lower(), "/run/rd-union/aabbccdd/00112233445566ff/lower"; got != want {
 		t.Errorf("Lower() = %q, want %q", got, want)
 	}
-	if got, want := s.Merged(), "/run/rd-union/00112233445566ff/merged"; got != want {
+	if got, want := s.Merged(), "/run/rd-union/aabbccdd/00112233445566ff/merged"; got != want {
 		t.Errorf("Merged() = %q, want %q", got, want)
 	}
 
@@ -43,8 +45,8 @@ func TestSpecPaths(t *testing.T) {
 
 	// The working-directory share is the commonest of all -- it is what
 	// `-v .:/app` becomes -- and it has no id to strip.
-	cwd := Spec{Export: workspace.ExportCWD}
-	if got, want := cwd.Merged(), "/run/rd-union/cwd/merged"; got != want {
+	cwd := Spec{Export: workspace.ExportCWD, Client: "aabbccdd"}
+	if got, want := cwd.Merged(), "/run/rd-union/aabbccdd/cwd/merged"; got != want {
 		t.Errorf("the cwd share landed at %q, want %q", got, want)
 	}
 }
@@ -150,6 +152,8 @@ func TestSpecValidate(t *testing.T) {
 		// nobody defined would be mounted as whatever the parser made of it.
 		{"a read mode that is not one", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: "fast"}, "read mode"},
 		{"no read mode at all", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x"}, "read mode"},
+		{"no client", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: workspace.ReadCached}, "client"},
+		{"a client that leaves the union root", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: workspace.ReadCached, Client: "../x"}, "client"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.spec.Validate()
@@ -200,6 +204,7 @@ func TestFromEnvRefusesWhatItCannotUse(t *testing.T) {
 		{"a port that is not a number", "RD_UNION_PORT", "thirty thousand"},
 		{"an export nothing serves", "RD_UNION_EXPORT", "/etc"},
 		{"a cache directory that is not a path", "RD_UNION_CACHE", "relative"},
+		{"a client that is not an id", "RD_UNION_CLIENT", "../etc"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			env := map[string]string{}
