@@ -254,7 +254,7 @@ that is ours lives under `remote`:
 
 A command about one workspace takes its name as an argument, else
 `--workspace`, else the default. `stop`, `restart`, `machine stop`,
-`machine rebuild` and `rm` of a machine refuse while the session is in use,
+`machine rebuild` and `rm` refuse while the session is in use,
 as `docker rm` refuses a running container; `-f` goes ahead.
 
 Any command that needs a session starts one, including the embedded CLI. For a

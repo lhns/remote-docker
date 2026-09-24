@@ -132,6 +132,7 @@ func TestInUseRefusesWithoutForce(t *testing.T) {
 		{[]string{"machine", "stop"}, true, "remote machine stop dev -f"},
 		{[]string{"machine", "rebuild", "dev"}, true, "remote machine rebuild dev -f"},
 		{[]string{"rm", "dev"}, true, "remote rm dev -f"},
+		{[]string{"rm", "dev"}, false, "remote rm dev -f"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			log := &events{}
@@ -153,17 +154,19 @@ func TestInUseRefusesWithoutForce(t *testing.T) {
 // -f goes ahead, and the session is stopped before the machine is touched.
 func TestForceStopsTheSessionFirst(t *testing.T) {
 	for _, tc := range []struct {
-		args []string
-		want string
-		out  string
+		args    []string
+		machine bool
+		want    string
+		out     string
 	}{
-		{[]string{"stop", "-f"}, "shutdown", "stopped: "},
-		{[]string{"machine", "stop", "--force"}, "shutdown,stop dev", `stopped "dev"`},
-		{[]string{"rm", "dev", "-f"}, "shutdown,destroy dev", `removed workspace "dev"`},
+		{[]string{"stop", "-f"}, false, "shutdown", "stopped: "},
+		{[]string{"machine", "stop", "--force"}, true, "shutdown,stop dev", `stopped "dev"`},
+		{[]string{"rm", "dev", "-f"}, true, "shutdown,destroy dev", `removed workspace "dev"`},
+		{[]string{"rm", "dev", "-f"}, false, "shutdown", `removed workspace "dev"`},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			log := &events{}
-			oneWorkspace(t, fakeSession(t, false, log), true)
+			oneWorkspace(t, fakeSession(t, false, log), tc.machine)
 			withBackend(t, &fakeBackend{log: log})
 
 			out, err := runOut(t, append([]string{"remote"}, tc.args...)...)

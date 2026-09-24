@@ -107,12 +107,11 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 		Short:   "Remove a workspace and its docker context",
 		Long: `Stops the workspace's background session, then removes the workspace from
 this machine's configuration and the docker context remote-docker created for
-it.
+it. Refused while that session is in use; -f overrides.
 
 A workspace made by "remote machine create" has its machine destroyed too,
 with the images, containers and volumes inside it. Your files are not in it.
---keep-machine leaves the machine running. Removing one is refused while its
-session is in use; -f overrides.`,
+--keep-machine leaves the machine running.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -131,10 +130,10 @@ session is in use; -f overrides.`,
 			// Destroyed before the entry goes: the entry is the only record the
 			// machine exists, so a failure must leave it to retry from.
 			machine := ws.Machine
-			if machine != nil && cfgErr == nil {
-				consequence := "removing it destroys its machine"
-				if keepMachine {
-					consequence = "removing it takes its file server away"
+			if cfgErr == nil {
+				consequence := "removing it takes its file server away"
+				if machine != nil && !keepMachine {
+					consequence = "removing it destroys its machine"
 				}
 				if err := refuseInUse(cfg, force, consequence, "rm"); err != nil {
 					return err
@@ -170,7 +169,7 @@ session is in use; -f overrides.`,
 	cmd.Flags().BoolVar(&keepContext, "keep-context", false, "leave the docker context in place")
 	cmd.Flags().BoolVar(&keepMachine, "keep-machine", false,
 		"leave the local machine running instead of destroying it")
-	forceFlag(cmd, &force, "remove a machine-backed workspace even if its session is in use")
+	forceFlag(cmd, &force, "remove even if the session is in use")
 	return cmd
 }
 

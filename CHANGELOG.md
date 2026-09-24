@@ -12,8 +12,8 @@ software.
 
 ### Upgrading
 
-- **`remote stop`, `machine stop`, `machine rebuild`, `rm` of a machine
-  workspace and the agent's `daemons reset` now refuse while their target is in
+- **`remote stop`, `rm`, `machine stop`, `machine rebuild` and the agent's
+  `daemons reset` now refuse while their target is in
   use**, as `restart` already did and as `docker rm` does: a session something
   depends on, or an account daemon running containers. `-f` goes ahead, and
   `restart --force` is now also `-f`. A script that stops a busy session needs
