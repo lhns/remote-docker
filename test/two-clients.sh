@@ -1,19 +1,11 @@
 #!/usr/bin/env bash
 # ONE account, TWO client machines, at the same time (ADR 0029).
 #
-# The claim: an account is a person and a person has more than one computer, so
-# both may hold a session at once. What they share is the daemon, and therefore
-# containers and images. What they must NOT share is files, because those live
-# on one machine each.
+# Both machines share the daemon, and so containers and images; they must NOT
+# share files. Two clients are two state directories with a key each, both in
+# `alice`'s one key file: different keys, different client ids.
 #
-# Two clients here are two state directories with a key each, both enrolled
-# against `alice` in one key file, which is the format's own multi-key support.
-# Different keys mean different client ids, which is what everything below turns
-# on.
-#
-# Separate from per-user-dind.sh, which is two ACCOUNTS. This is two machines of
-# one account, and the two suites fail in different places when the same thing
-# breaks.
+# per-user-dind.sh is two ACCOUNTS; this is two machines of one.
 #
 # Requires: docker, and a kernel with NFS client support.
 set -uo pipefail
@@ -24,7 +16,6 @@ IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-twoclients
 SSH_PORT=22224
 
-# One account, two machines.
 ACCOUNT=alice
 PC=pc
 PHONE=phone
@@ -49,17 +40,13 @@ echo
 echo "== 2. two machines, one account =="
 mkdir -p "$WORK/keys" "$WORK/wsstate"
 for machine in "$PC" "$PHONE"; do
-    # genkey rather than enrol: both keys go into ONE account's file below,
-    # which is what makes these two machines rather than two accounts.
+    # genkey rather than enrol: both keys go into ONE account's file below.
     if ! genkey "$WORK/state-$machine"; then
         bad "no key generated for $machine"
         exit 1
     fi
 done
 
-# BOTH keys in ONE file, which is what makes them one account. A key file holds
-# several keys and is parsed line by line, so this is the format doing what it
-# was built for rather than a trick.
 cat "$WORK/state-$PC/id_ed25519.pub" "$WORK/state-$PHONE/id_ed25519.pub" \
     >"$WORK/keys/$ACCOUNT.pub"
 
@@ -72,9 +59,8 @@ fi
 
 echo
 echo "== 3. start the workspace =="
-# The shared daemon, because the claim is that two machines of one account see
-# the same containers. A daemon per account would prove that too and would add
-# a second variable to every failure below.
+# The shared daemon: a daemon per account would add a second variable to every
+# failure below.
 if start_workspace false; then
     ok "workspace container started"
 else
@@ -97,8 +83,7 @@ mkdir -p "$WORK/project-$PC" "$WORK/project-$PHONE"
 echo "from the pc" >"$WORK/project-$PC/marker"
 echo "from the phone" >"$WORK/project-$PHONE/marker"
 
-# One session per machine, both as $ACCOUNT: the state directory is the only
-# thing that differs.
+# Both as $ACCOUNT: only the state directory differs.
 session() {
     local machine=$1 endpoint=$2 log=$3 dir=$4
     start_session "$WORK/state-$machine" "$ACCOUNT" "$endpoint" "$log" "$dir"
@@ -110,12 +95,9 @@ PHONE_SOCK="$WORK/phone.sock"
 PC_PID=$(session "$PC" "$PC_SOCK" "$WORK/pc.log" "$WORK/project-$PC")
 PHONE_PID=$(session "$PHONE" "$PHONE_SOCK" "$WORK/phone.log" "$WORK/project-$PHONE")
 
-# One command per machine, each against that machine's own endpoint.
 dpc() { dockerat "$PC_SOCK" "$@"; }
 dphone() { dockerat "$PHONE_SOCK" "$@"; }
 
-# The pids are passed so a client that dies at startup ends the wait at once,
-# rather than spending the full patience and reporting the symptom.
 if wait_endpoint "$PC_SOCK" "$PC_PID" && wait_endpoint "$PHONE_SOCK" "$PHONE_PID"; then
     ok "both machines have a working docker endpoint at the same time"
 else
@@ -126,9 +108,8 @@ else
     exit 1
 fi
 
-# The failure this whole change is about. The second machine used to be refused
-# with "tcpip-forward request denied by peer", because one account had one port,
-# and the refusal named nothing.
+# With one port per account, the second machine got "tcpip-forward request
+# denied by peer".
 if grep -q "denied by peer" "$WORK/pc.log" "$WORK/phone.log"; then
     bad "a machine was refused its reverse tunnel"
     grep -h "denied by peer" "$WORK/pc.log" "$WORK/phone.log" | head -3
@@ -153,20 +134,15 @@ else
     bad "both machines were given the same port"
 fi
 
-# Pulled before anything reads command output. One daemon serves both machines
-# so this happens once, but it still has to happen first: an unpulled image puts
-# "Unable to find image locally" into the output an assertion is reading, and
-# then the assertion is about docker's progress messages rather than about the
-# file. per-user-dind.sh records the same finding; this suite repeated it.
+# Pulled first, so "Unable to find image locally" stays out of the output
+# assertions read. One daemon serves both machines.
 info "pulling the test image"
 dpc pull -q alpine:3 >/dev/null 2>&1 || info "could not pre-pull alpine:3"
 
 echo
 echo "== 6. each machine mounts ITS OWN files =="
-# The one that matters. Both bind a directory of their own at the same path
-# inside the container, and the volume names used to collide on rd-cwd.
-# The last line only: anything docker says on its way to running the container
-# is not the file, and reading it as the file is how this failed the first time.
+# Both bind their own directory at the same container path. The last line
+# only: anything before it is docker talking, not the file.
 pc_saw=$(dpc run --rm -v "$WORK/project-$PC:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
 phone_saw=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
 
@@ -193,15 +169,9 @@ dpc rm -f shared-by-both >/dev/null 2>&1
 
 echo
 echo "== 7b. both machines publish, and each gets its own number =="
-# One account has one daemon, so before the port became the client's
-# (ADR 0008) the second of these was
-# refused: a published port is bound on the workspace and 18095 was taken.
-# Neither binds it there now, so both containers run.
-#
-# These two clients share a machine, which real ones do not, so each asks for a
-# number of its own. What is under test is that the workspace refuses neither,
-# and that each client opens the number ITS OWN container asked for instead of
-# contending for the other one.
+# The port is the client's (ADR 0008), so the workspace refuses neither. These
+# two clients share a runner, so each asks for a number of its own and must
+# open the one ITS OWN container asked for.
 echo "<h1>pc</h1>" >"$WORK/project-$PC/index.html"
 echo "<h1>phone</h1>" >"$WORK/project-$PHONE/index.html"
 
@@ -232,13 +202,8 @@ dphone rm -f phone-web >/dev/null 2>&1
 
 echo
 echo "== 8. neither machine collects the other's volumes =="
-# Each machine's share volume is named for the machine, so a collection on one
-# must leave the other's alone. Losing one is not tidy: the daemon recreates a
-# missing named volume as an empty local one, so the container comes up with an
-# empty directory where the project should be.
-# Named rather than counted. A count says "something survived", which is also
-# what a run that never created the second volume says, and that is exactly the
-# way this first reported a pass it had not earned.
+# A lost volume is silently recreated empty by the daemon, so the container
+# gets an empty directory where the project should be.
 volumes() { hostdocker exec "$CONTAINER" docker volume ls -q 2>/dev/null | grep '^rd-' | sort; }
 
 before=$(volumes)
@@ -249,11 +214,8 @@ else
     bad "the two machines did not create two volumes"
 fi
 
-# The NAME has to carry the machine, which is the whole mechanism: rd-<client>-
-# rather than rd-cwd. Asserted on the shape because a count cannot see it -- the
-# first run of this suite counted one volume called `rd-cwd` and every other
-# assertion still passed, because the client had never been set on the rewriter
-# and each machine was silently rebuilding the other's volume under it.
+# The NAME carries the machine, rd-<client>-, which a count cannot see: two
+# machines sharing one name silently rebuild each other's volume.
 if [ "$(echo "$before" | grep -c '^rd-[0-9a-f]\{8\}-')" -ge 2 ]; then
     ok "the volume names carry the machine that created them"
 else
@@ -295,8 +257,6 @@ else
     fi
 fi
 
-# And the phone can still mount, which is what catches a volume having been
-# collected and recreated empty.
 phone_again=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
 if [ "$phone_again" = "from the phone" ]; then
     ok "the phone still mounts its own directory after the pc collected"
@@ -306,11 +266,8 @@ fi
 
 echo
 echo "== 9. an ephemeral share on one machine, a write-back one on the other =="
-# The union's cache volume carries the machine in its name like any other
-# (section 8), so one machine's union cannot be the other's. What this
-# asserts is the write axis across machines: the phone's container writes
-# back into the phone's directory, the pc's ephemeral write reaches nobody,
-# and neither directory ends up with the other's write.
+# The write axis across machines: the phone's write comes back to the phone,
+# the pc's ephemeral write reaches nobody.
 pc_eph="$WORK/project-$PC-ephemeral"
 phone_back="$WORK/project-$PHONE-back"
 mkdir -p "$pc_eph" "$phone_back"

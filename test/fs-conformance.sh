@@ -9,14 +9,10 @@
 # test/fs-conformance/deviations-linux.txt, and every listed difference must
 # still be observed.
 #
-# That the probe is deterministic is asserted by its own `go test`, which runs
-# on every pull request before this suite does, so it is not re-asserted here.
+# That the probe is deterministic is asserted by its own `go test` in ci.yml,
+# which runs beside this suite rather than before it, so is not re-asserted.
 #
-# Requires what test/integration.sh requires: docker, and a kernel with NFS
-# client support.
-#
-# The transcripts and the report are copied OUTSIDE the work directory, which
-# is removed on exit, so the workflow can upload them after.
+# Requires: docker, and a kernel with NFS client support.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,26 +22,22 @@ CONTAINER=remote-docker-fsconf
 SSH_PORT=22226
 ACCOUNT=fsconf
 PROBE_IMAGE=fsprobe:ci
+# Outside $WORK, which is removed on exit, so the workflow can upload them.
 ARTIFACTS=/tmp/fs-conformance-artifacts
 
-# A full probe run is many round trips over the tunnel, so it gets more than
-# lib.sh's default two minutes.
 DOCKER_TIMEOUT=600
 
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
 cleanup() {
-    # The oracle ran as root on the runner's daemon, so what it left under
-    # $WORK is root's and rm -rf as the runner user cannot take it. The same
-    # image, as root, can.
+    # The oracle left root-owned files under $WORK.
     hostdocker run --rm -v "$WORK:/work" --entrypoint sh "$PROBE_IMAGE" \
         -c 'rm -rf /work/native' >/dev/null 2>&1
     cleanup_suite "${CLIENT_PID:-}"
 }
 trap cleanup EXIT
 
-# keep copies one file into the artifact directory, if it exists.
 keep() {
     [ -f "$1" ] && cp "$1" "$ARTIFACTS/"
 }
@@ -109,9 +101,7 @@ else
     exit 1
 fi
 
-# The SHARED daemon, as test/integration.sh runs it: the session's endpoint
-# then reaches the workspace's own dockerd, which is where `docker load`
-# below has to land.
+# The SHARED daemon, so `docker load` below lands in the workspace's own dockerd.
 if start_workspace false; then
     ok "workspace container started"
 else
@@ -133,9 +123,7 @@ wait_parent_dockerd
 
 echo
 echo "== 5. open a session =="
-# From inside $WORK/share, so the share the probe mounts is the session's own
-# working directory. The suite's own directory stays outside $WORK, which the
-# cleanup removes.
+# From inside $WORK/share, so the share the probe mounts is the session's cwd.
 mkdir -p "$WORK/share"
 CLIENT_PID=$(start_session "$REMOTE_DOCKER_STATE_DIR" "$ACCOUNT" \
     "$REMOTE_DOCKER_ENDPOINT" "$WORK/up.log" "$WORK/share")
@@ -150,9 +138,7 @@ fi
 
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
-# The workspace's daemon has its own image store and has never seen the
-# probe image; through the session's endpoint, so the load takes the same
-# path a user's `docker load` would.
+# Through the session's endpoint, the path a user's `docker load` takes.
 if hostdocker save "$PROBE_IMAGE" | dockert load >"$WORK/load.log" 2>&1 &&
     dockert image inspect "$PROBE_IMAGE" >/dev/null 2>&1; then
     ok "the probe image is in the workspace's daemon"
@@ -175,8 +161,7 @@ fi
 
 echo
 echo "== 7. compare =="
-# The report is printed whether or not it passes: the first run's is what
-# the deviations file is filled from, and a later failure's names the step.
+# Printed either way: it names the failing step, or feeds the deviations file.
 if bash "$REPO/test/fs-conformance/diff.sh" \
     "$WORK/transcript-native.txt" "$WORK/transcript-linux.txt" \
     "$REPO/test/fs-conformance/deviations-linux.txt" >"$WORK/report.txt" 2>&1; then

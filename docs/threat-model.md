@@ -119,7 +119,7 @@ sequenceDiagram
     participant KH as known_hosts
 
     Op->>Keys: place alice.pub
-    Note over Keys,Agent: filename becomes the unix account
+    Note over Keys,Agent: filename becomes the account (unix user rd-name)
     Agent->>Agent: reconcile: useradd alice, uid 10001
     Note over Agent: uid decides the tunnel port,<br/>port = PortBase + uid - UIDBase
 
@@ -668,7 +668,7 @@ sequenceDiagram
     participant Vol as the account's volume
     participant C as container watcher
 
-    W->>Ch: FSEvent{export:/m/ab12, path:/src/a.ts, op:write}
+    W->>Ch: notify.Event{export:/m/ab12, path:/src/a.ts, op:write}
     Ch->>Ag: validate on arrival
     Ag->>Ag: export is /cwd, or /m/ and 16 hex?
     Ag->>Ag: path whitelisted? (never path.Clean)
@@ -881,7 +881,7 @@ machines already share a daemon and can list its volumes, so this exposes
 nothing that `docker volume ls` did not.
 
 **D — an apply is as large as the client says it is.** The frame's header is
-bounded (`MaxCacheFrame`); the payload deliberately is not, because it is a tar
+bounded (`cache.MaxFrame`); the payload deliberately is not, because it is a tar
 of somebody's project. What it consumes is that account's own graph volume, and
 an enrolled account can already fill that from any container it starts. Listed
 under accepted risks for that reason rather than defended against here.
@@ -1048,7 +1048,7 @@ Stated here rather than buried, because each is a deliberate trade.
   Decision no longer reads "no timeout, no bound, no eviction". Flow 5 has the
   detail.
 - **A prepare may only name the asking machine's own cache volume.**
-  `CacheRequest.Validate` asks whether the volume is a MANAGED
+  `cache.Request.Validate` asks whether the volume is a MANAGED
   one, which every machine of an account satisfies for every other machine's
   volumes — one account's machines share a daemon (ADR 0029). So a second
   machine could have the agent mount somebody else's cache as the upper of its

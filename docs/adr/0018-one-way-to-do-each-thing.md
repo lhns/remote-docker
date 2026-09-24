@@ -93,34 +93,19 @@ mount to exist for it to land in.
 ## What stays, and this is the part to read before deleting anything
 
 **`serveExec` and `servePTY` stay.** Deleting the client's `shell` does not
-make them dead code, and the reasoning that would conclude otherwise is exactly
-the reasoning to distrust here.
-
-They are the default arm of the agent's session dispatch, so anyone with an
-enrolled key still gets a shell from a stock `ssh` — and `agent/internal/sshd/server.go`
-leans on precisely that. Its justification for allowing unrestricted local
-forwarding is that everything reachable that way "is inside the workspace,
-which the account can already reach with a shell". Remove the PTY and that
-sentence stops being true, which makes a security argument false as a side
-effect of a cleanup.
+make them dead code: they are the default arm of the agent's session dispatch
+(`agent/internal/sshd/session.go`), so anyone with an enrolled key still gets a
+shell from a stock `ssh`, which is ADR 0010's claim that one binary replaces
+sshd.
 
 `test/integration.sh` section 13b is their only coverage, and it deliberately
 uses a stock `ssh -tt` rather than anything of ours. It was narrowed rather
-than deleted for this reason: it asserted the mount, and the obvious move when
-the mount went was to delete the section. That would have left ADR 0010's
-central claim — one binary replacing sshd — with no coverage at all, and
-nothing on screen saying so.
+than deleted: it asserted the mount, and deleting the section with the mount
+would have left that claim with no coverage and nothing on screen saying so.
 
-**`workspace.Info.Mountpoint` and `.Mounted` stay in the wire contract**,
-unset. They have no consumer in the client. Removing a field from a format both
-binaries parse is a change worth making on purpose, with both sides of a
-version skew thought about, rather than as a side effect of deleting a command.
-
-**`Replayer.roots` keeps returning a slice** for what is now always one path.
-The reason it was ever plural is a real finding — separate mounts of one export
-do not share an inode the way dockerd's bind mount does, so each needs its own
-poke — and the shape is what would make a second mount cheap to add rather than
-a rewrite.
+*(Two further "stays" recorded here were later reversed and are gone:
+`workspace.Info.Mountpoint`/`.Mounted` left the contract on 2026-08-22, above,
+and `Replayer` resolves one mountpoint rather than a slice.)*
 
 ## Consequences
 

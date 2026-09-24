@@ -14,8 +14,9 @@ image:
   pullSecrets: []
 
 # Public keys of the machines allowed in, one entry per account. The KEY of
-# each entry is the unix account name, and its value is one or more SSH public
-# keys, one per line:
+# each entry is the account name a client logs in as (the unix user behind it
+# is rd-<name>, ADR 0025), and its value is one or more SSH public keys, one
+# per line:
 #
 #   authorizedKeys:
 #     alice: |

@@ -1,27 +1,15 @@
 #!/usr/bin/env bash
 # How fast is a mounted directory, and where does the time go?
 #
-# This is the measurement. ADR 0002 recorded two numbers -- artifacts off the
-# share is worth ~20x, protocol tuning ~2x -- and no way to reproduce them.
+# CI tunnels over loopback, ~0 RTT and unbounded throughput, so netem shapes
+# both; without that the numbers are a lie. It shapes the WORKSPACE container's
+# lo, where NFS runs in shared mode (per-account mode mounts inside each dind).
 #
-# TWO KNOBS, and without them the numbers are a lie. CI tunnels over loopback:
-# ~0 RTT and effectively infinite throughput, which is exactly what a remote
-# workspace does not have. netem shapes both, so a mode that only pays off at
-# distance shows it, and one that only pays off on a thin link shows that.
+# Not a gate: it reports numbers. It runs from the `bench` pull-request label or
+# workflow_dispatch (.github/workflows/bench.yml).
 #
-# Shaping goes on the WORKSPACE container's loopback, because that is where the
-# traffic is: the local volume driver mounts NFS in the DAEMON's namespace --
-# the workspace container in shared mode -- and bind-mounts the result into the
-# container, so `addr=127.0.0.1` is the workspace's own lo. Per-account mode
-# mounts inside each dind and would need the qdisc there instead, which is a
-# different measurement.
-#
-# Not a gate: this is minutes long and reports numbers rather than passing or
-# failing, so it runs on workflow_dispatch.
-#
-# Needs docker, a kernel with NFS client support, and iproute2, which is
-# installed into the RUNNING workspace rather than into the image: a measurement
-# tool is not something the product ships.
+# Needs docker, a kernel with NFS client support, and iproute2, installed into
+# the RUNNING workspace because the product does not ship it.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,19 +21,16 @@ PIN=bench-workload
 SSH_PORT=22224
 ACCOUNT=bench
 
-# Read by lib.sh's dockert: a shaped link makes every command slow.
 DOCKER_TIMEOUT=600
 
-# Sized for CI. Every operation on every file costs a round trip, so at 80ms a
-# tree ten times this size is an hour rather than a table.
+# Sized for CI: at 80ms a tree ten times this size is an hour.
 FILES=${BENCH_FILES:-300}
 
 DIRS=${BENCH_DIRS:-20}
 WRITES=${BENCH_WRITES:-100}
 
-# The shape is what netem is told, as delay:rate, where a rate of 0 means
-# unshaped; the mode is written on the mount exactly as a person would write
-# it (ADR 0042): Docker's word, or one of ours.
+# A shape is delay:rate for netem, rate 0 meaning unshaped; a mode is written
+# on the mount as a person would (ADR 0042).
 SHAPES=${BENCH_SHAPES:-"0ms:0 10ms:0 20ms:0 80ms:0 0ms:10mbit"}
 MODES=${BENCH_MODES:-"read=direct,write=through read=cached,write=through read=cached,write=back read=cached,write=ephemeral"}
 
@@ -55,9 +40,8 @@ MODES=${BENCH_MODES:-"read=direct,write=through read=cached,write=through read=c
 cleanup() {
     echo
     echo "== cleanup =="
-    # Before the client goes: the workload container is on the workspace daemon
-    # and is only reachable through the session. A short timeout because on an
-    # abort the session may already be gone.
+    # Before the client goes: the workload container is reachable only through
+    # the session, which on an abort may already be gone.
     timeout 30 docker rm -f "$PIN" >/dev/null 2>&1
     if [ -n "${CLIENT_PID:-}" ]; then
         kill "$CLIENT_PID" 2>/dev/null
@@ -68,10 +52,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# rtt is what the shaping actually produced, measured rather than assumed:
-# netem delays each egress and loopback is not a wire, so a 20ms delay is not a
-# 20ms round trip. busybox and iputils print different labels and the same
-# min/avg/max, so the average is taken from the value list.
+# rtt is measured: on loopback netem delays both directions, so a 20ms delay is
+# not a 20ms round trip. The average comes from the value list, which busybox
+# and iputils label differently.
 rtt() {
     hostdocker exec "$CONTAINER" ping -c 3 -q 127.0.0.1 2>/dev/null |
         awk -F'= ' '/min\/avg\/max/ { split($2, v, "/"); printf "%.1f", v[2] }'
@@ -86,11 +69,8 @@ shape() {
 
 unshape() { hostdocker exec "$CONTAINER" tc qdisc del dev lo root >/dev/null 2>&1; }
 
-# nfsops reads the per-operation counters for the NFS mounts inside the
-# workspace. This is what says whether a workload is metadata-bound
-# (GETATTR/LOOKUP/ACCESS) or data-bound (READ/WRITE), which is the question that
-# picks the layer to fix -- and the question compression cannot be argued
-# without.
+# nfsops reads the workspace's NFS per-operation counters: metadata-bound
+# (GETATTR/LOOKUP/ACCESS) or data-bound (READ/WRITE).
 nfsops() {
     hostdocker exec "$CONTAINER" cat /proc/self/mountstats 2>/dev/null |
         awk '
@@ -103,8 +83,6 @@ nfsops() {
         '
 }
 
-# delta subtracts two nfsops readings, so a row reports what ITS workloads cost
-# rather than what the mount has done since it was made.
 delta() {
     awk -v before="$1" -v after="$2" 'BEGIN {
         split(before, b, " "); split(after, a, " ")
@@ -115,11 +93,9 @@ delta() {
 
 # elapsed prints the seconds a command took, to hundredths.
 #
-# The workloads run through exec in a container that is already up. A container
-# per workload timed the tunnel's round trips for creating one -- seconds of it
-# at 80ms -- on top of what is being measured, and the mount is REFCOUNTED, so
-# `--rm` dropped the count to zero and unmounted: /proc/self/mountstats had
-# nothing left to report and every nfs_ops column came back empty.
+# Workloads run through exec in a container already up. `run --rm` would time
+# creating a container too, and would unmount the REFCOUNTED volume, leaving
+# mountstats (and every nfs_ops column) empty.
 elapsed() {
     local start end
     start=$(date +%s.%N)
@@ -153,9 +129,7 @@ fi
 
 echo
 echo "== the session =="
-# Watching, because `cached` rests on it: the client pokes what changed, and a
-# long attribute cache with nothing to invalidate it is refused rather than
-# served (ADR 0042).
+# Watching, because read=cached refuses to run without it (ADR 0042).
 REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
@@ -171,8 +145,7 @@ echo
 echo "== a project-shaped tree: $FILES files across $DIRS directories =="
 PROJECT="$WORK/project"
 filler=$(head -c 400 /dev/zero | tr '\0' 'x')
-# build_tree makes a project-shaped tree of a given size. Every row of the
-# table gets a fresh one, and the first, PROJECT, is the warm-up's.
+# Every row of the table gets a fresh tree; PROJECT is the warm-up's.
 build_tree() {
     local root=$1 files=$2 d f
     for d in $(seq 1 "$DIRS"); do mkdir -p "$root/pkg$d"; done
@@ -186,24 +159,19 @@ build_tree() {
 build_tree "$PROJECT" "$FILES"
 ok "tree built"
 
-# The image is pulled and the volume created before anything is timed, so the
-# first row does not carry a pull.
+# So the first row does not carry a pull.
 dockert run --rm -v "$PROJECT:/w" alpine:3 true >/dev/null 2>&1
 ok "warm"
 
 # --- the table --------------------------------------------------------------
 #
-# One row per (prefetch, shape, mode, workload), each in a FRESH container over a
-# FRESH tree, because a share id comes from its path and reusing a directory
-# reuses its cache volume: from the second row on, every cache would already be
-# full.
+# One row per (prefetch, shape, mode, workload), each in a FRESH container over
+# a FRESH tree: a share id comes from its path, so a reused directory reuses a
+# full cache. Prefetch is read at client start, so the client restarts per
+# value, all on ONE runner so the numbers compare.
 #
-# Prefetch is the client's setting, so the client is restarted per value. All
-# run in ONE job on ONE runner, which is the only way their numbers are
-# comparable (ADR 0044).
-#
-# The workloads are the ones the simulator runs (dircache/sim_test.go), so the
-# two tables lay side by side and disagreement between them is a finding:
+# The workloads are the simulator's (dircache/sim_test.go), so the two tables
+# lie side by side:
 #
 #   dense     every file once, which is the one row an eager fill wins
 #   subtree   two of twenty directories, which is what a build looks like
@@ -220,8 +188,6 @@ ok "warm"
 PREFETCH=${BENCH_PREFETCH:-"off eager tree"}
 WORKLOADS=${BENCH_WORKLOADS:-"dense subtree sparse dense3 parallel write"}
 
-# restart_client brings the session back under a prefetch setting, which is
-# read at start.
 restart_client() {
     local policy=$1
     kill "$CLIENT_PID" 2>/dev/null
@@ -234,14 +200,12 @@ restart_client() {
         sed 's/^/        /' "$WORK/up-$policy.log" | tail -20
         return 1
     fi
-    # The first container after a restart carries the reconnect; a throwaway
-    # takes it so no row does.
+    # A throwaway carries the reconnect so no row does.
     dockert run --rm -v "$PROJECT:/w" alpine:3 true >/dev/null 2>&1
     return 0
 }
 
-# workload_files prints the host paths a workload reads, one per line, over a
-# tree built by build_tree: pkg<d>/file<f>.go. `write` reads nothing.
+# workload_files prints the host paths a workload reads. `write` reads nothing.
 workload_files() {
     local w=$1 tree=$2
     case $w in
@@ -252,14 +216,11 @@ workload_files() {
     esac
 }
 
-# workload_cmd is the shell the container runs for a workload, over the files
-# workload_files names, spelled as the container sees them.
 workload_cmd() {
     local w=$1 tree=$2 list
     list=$(workload_files "$w" "$tree" | sed "s#^$tree#/w#" | tr '\n' ' ')
-    # The dense rows walk the tree in the container, as a build does, so the
-    # directory walk is in the measurement and the rows stay comparable with
-    # the recorded ones (ADR 0045).
+    # The dense rows walk the tree in the container, as a build does, and as
+    # the rows recorded in ADR 0045 did.
     case $w in
     dense) echo 'find /w -name "*.go" -exec cat {} +' ;;
     dense3) echo 'for i in 1 2 3; do find /w -name "*.go" -exec cat {} +; done' ;;
@@ -269,8 +230,7 @@ workload_cmd() {
     esac
 }
 
-# workload_bytes is how much a workload reads, from the host's copy of the
-# tree, for the amplification column.
+# workload_bytes is how much a workload reads, for the amp column.
 workload_bytes() {
     local w=$1 tree=$2 n
     n=$(workload_files "$w" "$tree" | xargs -r cat | wc -c)
@@ -280,8 +240,7 @@ workload_bytes() {
     esac
 }
 
-# fetched_bytes reads what `remote status` says the cache channel carried for
-# a share, and turns humanBytes back into a number.
+# fetched_bytes turns `remote status`'s human-readable "sent" back into bytes.
 fetched_bytes() {
     local tree=$1
     "$WORK/remote-docker" remote status 2>/dev/null |
@@ -334,8 +293,7 @@ for policy in $PREFETCH; do
                 before=$(nfsops)
                 took=$(elapsed dockert exec "$PIN" sh -c "$cmd")
                 after=$(nfsops)
-                # What the cache channel carried, once the sender has had a
-                # moment to drain what the reads triggered.
+                # Let the sender drain what the reads triggered.
                 sleep 3
                 fetched=$(fetched_bytes "$tree")
                 [ -n "$fetched" ] || fetched=0

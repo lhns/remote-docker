@@ -9,41 +9,30 @@
 #                          ->  SSH channels to this machine
 #                          ->  the client's in-process NFS server
 #
-# Neither layer is ours to configure once a container is running: docker's
-# local driver calls mount(2) with the options we chose and never speaks to the
-# volume again. So what a container SEES when a session drops is measured here
-# rather than reasoned about, and each section states what it expects before it
-# looks, so a wrong expectation is a finding rather than a red line.
+# Once a container runs, docker's local driver never speaks to the volume
+# again, so what a container SEES when a session drops is measured here. Each
+# section states its expectation (E1..E7) before it looks.
 #
 # WHAT IS KNOWN, all of it measured here:
 #
-#   The share ROOT handle is the one that must survive a client restart. MOUNT
-#   issues it once and the kernel never mounts again, so a root that stops
-#   resolving leaves every lookup starting from something dead. Below the root,
-#   Linux re-looks-up after ESTALE and needs nothing stable (ADR 0033).
+#   The share ROOT handle must survive a client restart: MOUNT issues it once.
+#   Below the root, Linux re-looks-up after ESTALE (ADR 0033).
 #
-#   Docker's local driver REFCOUNTS a mount. A volume already mounted is handed
-#   to the next container as it is, stale included, so nothing recovers while
-#   any container still holds it. That is why `compose down && up` cures a
-#   broken mount where restarting the session does not: down drops the count to
-#   zero and unmounts.
+#   Docker's local driver REFCOUNTS a mount, stale included, so nothing
+#   recovers while any container holds it; `compose down && up` drops the
+#   count to zero (section 6b).
 #
-#   The mount address exists only while a session is connected. Anything that
-#   starts a container without this client -- a restart policy, the daemon
-#   coming back -- gets "connection refused" against the port (section 8).
+#   The mount address exists only while a session is connected: a container
+#   started without this client gets "connection refused" (section 8).
 #
-#   An idle release does not fire under a live mount: the container's own
-#   traffic keeps the connection leased (section 4).
+#   An idle release does not fire under a live mount (section 4).
 #
-#   A blocked port costs a mount about 180 SECONDS, and timeo and retrans are
-#   not where that comes from: they govern RPCs after a mount, and the mount
-#   call retries on its own clock (section 7). Which is why section 7's 300s
-#   budget did not move when timeo went from 30 to 600 (deciseconds, so 3s to
-#   60s -- core/workspace.NFSVolumeOptions).
+#   A blocked port costs a mount about 180 SECONDS whatever timeo and retrans
+#   say: they govern RPCs after a mount, and the mount call retries on its own
+#   clock (section 7; core/workspace.NFSVolumeOptions).
 #
-#   A container holding a file OPEN across a client restart still gets ESTALE
-#   on that descriptor. There is no path lookup left to retry, and that is
-#   correct rather than fixable.
+#   A file held OPEN across a client restart still gets ESTALE on that
+#   descriptor, which is correct rather than fixable.
 #
 # TWO RULES FOR EDITING THIS FILE, both of which cost a day when broken:
 #
@@ -55,8 +44,7 @@
 #   The watching containers log to their own stdout, read afterwards.
 #
 # Requires: docker, and a kernel with NFS client support. Runs the shared
-# daemon (ADR 0012); the per-account mode binds its listener inside the
-# daemon's netns and deserves its own run once this one says something.
+# daemon (ADR 0012) only.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -66,17 +54,11 @@ CONTAINER=remote-docker-nfsres
 SSH_PORT=22224
 ACCOUNT=nfsres
 
-# The docker timeout is lib.sh's default, 120s.
-
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-# WATCH_SH reads its mount once a second and says what happened, with the time,
-# to its own stdout. Read afterwards with `docker logs`.
-#
-# Never `docker exec` to observe this: every docker command reaches the daemon
-# THROUGH the client, which reopens the connection and rebinds the listener. An
-# observation would repair what it was there to observe.
+# WATCH_SH reads its mount once a second and logs the result with the time, for
+# `docker logs` afterwards (the second rule in the header).
 WATCH_SH='while true; do
     if out=$(cat /w/marker 2>&1); then
         echo "$(date +%s) OK $out"
@@ -94,9 +76,7 @@ cleanup() {
         wait "$CLIENT_PID" 2>/dev/null
     fi
     hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    # The agent runs as root and its host keys are owned by root, so a plain
-    # rm leaves "Permission denied" as the last thing in the log of an
-    # otherwise clean run.
+    # The agent's host keys are owned by root.
     rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -110,8 +90,7 @@ export REMOTE_DOCKER_HOST=127.0.0.1
 export REMOTE_DOCKER_PORT=$SSH_PORT
 export REMOTE_DOCKER_USER=$ACCOUNT
 export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
-# Short, because two sections here are ABOUT the idle release and the default
-# minute would be spent waiting rather than testing.
+# Short, because sections 4 and 5 are about the idle release.
 export REMOTE_DOCKER_IDLE_TIMEOUT=8s
 
 mkdir -p "$WORK/keys" "$WORK/wsstate"
@@ -148,8 +127,7 @@ else
 fi
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
-# The port is per machine and allocated, so it is READ rather than assumed. A
-# hardcoded 30000 would pass here by luck and mislead on the day it moved.
+# The port is allocated per machine, so it is READ rather than assumed.
 if outputs "tunnel port [0-9]+" "$WORK/remote-docker" remote status; then
     PORT=$(echo "$LAST_OUTPUT" | sed -n 's/.*tunnel port \([0-9]*\).*/\1/p' | head -1)
     ok "the session bound a reverse-tunnel port: $PORT"
@@ -158,11 +136,8 @@ else
     exit 1
 fi
 
-# Whether the port is open is asked INSIDE the workspace, which is where both
-# ends of it live in shared-daemon mode.
-#
-# Read from /proc/net/tcp rather than netstat or ss, neither of which the image
-# promises. State 0A is LISTEN; the port is the hex after the colon.
+# Asked INSIDE the workspace, from /proc/net/tcp since the image promises
+# neither netstat nor ss. State 0A is LISTEN; the port is the hex after the colon.
 HEXPORT=$(printf '%04X' "$PORT")
 listening() {
     hostdocker exec "$CONTAINER" sh -c \
@@ -197,19 +172,13 @@ fi
 
 echo
 echo "== 4. E1/E2: what an idle release does to a running container =="
-# Nothing is asked of docker during this window, deliberately. The gate
-# releases the connection after REMOTE_DOCKER_IDLE_TIMEOUT of no leases, and
-# any docker command here would take a lease and prevent the thing under test.
+# No docker command in this window: each takes a lease and prevents the release.
 info "waiting out the idle timeout with no docker commands"
 mark=$(date +%s)
 sleep 25
 
-# Whether a release HAPPENED is asked before what it did, because the first run
-# of this section proved nothing: the port was still open and every read
-# succeeded, which reads like good news and is equally consistent with the
-# release never having occurred. A mounted container talks to its server about
-# once a second, and that traffic may be exactly what keeps the connection
-# leased.
+# Whether a release HAPPENED is asked first: an open port and good reads are
+# equally consistent with no release at all.
 released=no
 grep -q "released the idle connection" "$CLIENT_LOG" 2>/dev/null && released=yes
 info "did the client release its connection during the window: $released"
@@ -224,8 +193,6 @@ else
     ok "E1 was wrong, which is the better outcome"
 fi
 
-# What the container saw during the window, from ITS log, which needed no
-# docker command at the time.
 window=$(dockert logs nfsres-watch 2>&1 | awk -v t="$mark" '$1 >= t')
 errs=$(echo "$window" | grep -c "ERR")
 info "during the idle window the container logged $(echo "$window" | grep -c .) lines, $errs of them errors"
@@ -240,10 +207,8 @@ fi
 
 echo
 echo "== 5. the port after a docker command =="
-# This section used to claim a docker command "healed" the mount. It could
-# not: section 4 established that no release happens under a live mount, so
-# there was never a drop to recover from and the assertion passed on a
-# connection that had never gone anywhere. What is left is the honest half.
+# Not a "heal": section 4 shows no release under a live mount, so nothing
+# dropped.
 dockert ps >/dev/null 2>&1
 sleep 5
 if [ "$(listening)" = yes ]; then
@@ -262,14 +227,8 @@ fi
 
 echo
 echo "== 6. E3: a NEW client process, and the mount it inherits =="
-# The kernel keeps the handles it was given, including the SHARE ROOT handle
-# that MOUNT returned, and it never mounts again. So a restarted client that
-# cannot resolve that one leaves every lookup starting from something dead.
-#
-# ADR 0033 derives the root handle from the export path for exactly this, and
-# leaves everything below it a cache: given a root that answers, the kernel
-# re-looks-up the rest after ESTALE. This section is the only place that claim
-# meets a real kernel.
+# The only place ADR 0033's derived ROOT handle meets a real kernel across a
+# client restart.
 kill "$CLIENT_PID" 2>/dev/null
 wait "$CLIENT_PID" 2>/dev/null
 sleep 2
@@ -300,14 +259,8 @@ info "what the container reports now: $(echo "$window" | tail -1)"
 
 echo
 echo "== 6b. the stale mount is SHARED, and that is why down/up cures things =="
-# Docker's local driver refcounts: a volume already mounted is reused rather
-# than mounted again. So the stale mount the watcher holds is handed to every
-# later container using the same directory, and no fresh container can recover
-# while it lives.
-#
-# Which is why everything below this point gets a directory of its own, and why
-# the watcher is removed here: a section sharing a mount with an earlier one
-# measures that mount's state rather than its own subject.
+# The refcount hands the watcher's mount to every later container on the same
+# directory, so everything below gets a directory of its own.
 if out=$(timeout 60 docker run --rm -v "$PROJECT:/w" alpine:3 cat /w/marker 2>&1); then
     ok "a NEW container reading the same stale volume works"
 else
@@ -323,15 +276,12 @@ else
     bad "even with nothing holding it, the volume did not recover: $(echo "$out" | tail -1 | cut -c1-160)"
 fi
 
-# Everything below wants a mount of its own, for the reason just measured.
 BLACK="$WORK/black"; mkdir -p "$BLACK"; echo "black hole marker" >"$BLACK/marker"
 EXIST="$WORK/existing"; mkdir -p "$EXIST"; echo "existing marker" >"$EXIST/marker"
 
 echo
 echo "== 7. E4: a black hole rather than a refusal =="
-# DROP, not REJECT: a refused connection answers immediately and a dropped one
-# does not answer at all, and those are different failures with different
-# costs. This is the one that costs timeo*retrans.
+# DROP, not REJECT: a dropped connection never answers, which is the costly one.
 if blocked=$(hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP 2>&1); then
     ok "blocked the port inside the workspace"
 
@@ -340,13 +290,10 @@ if blocked=$(hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$POR
     out=$(timeout 300 docker run --rm --name nfsres-black -v "$BLACK:/w" alpine:3 cat /w/marker 2>&1)
     rc=$?
     elapsed=$(( $(date +%s) - start ))
-    # The daemon's line, not the tail: the tail is docker's "Run --help"
-    # footer, so a bare `tail -1` records advice instead of the failure.
+    # Not `tail -1`, which is docker's "Run --help" footer.
     said=$(echo "$out" | grep -m1 -iE "error|refused|timed out" | cut -c1-200)
     info "a mount into a black hole took ${elapsed}s and said: ${said:-$(echo "$out" | head -1)}"
-    # rc 124 is OUR timeout, not the mount's verdict, and the two must never be
-    # reported as the same thing: the first run said "fails rather than hanging"
-    # about a number that was within seconds of the limit it was given.
+    # rc 124 is OUR timeout, not the mount's verdict.
     if [ "$rc" -eq 124 ]; then
         bad "the mount was still hanging when the suite gave up at ${elapsed}s"
     elif [ "$rc" -ne 0 ]; then
@@ -369,9 +316,8 @@ fi
 
 echo
 echo "== 8. E5: starting a container with no session at all =="
-# The reported failure: `docker compose up` on a container that already exists.
-# Creating one goes through /containers/create, which reopens the connection;
-# starting one that exists does not create anything.
+# `docker compose up` on a container that already exists: starting it creates
+# nothing, so nothing reopens the connection.
 dockert rm -f nfsres-existing >/dev/null 2>&1
 if dockert create --name nfsres-existing -v "$EXIST:/w" alpine:3 cat /w/marker >/dev/null 2>&1; then
     ok "an existing container to start later"
@@ -384,8 +330,7 @@ wait "$CLIENT_PID" 2>/dev/null
 CLIENT_PID=""
 sleep 2
 
-# Asked of the workspace's own daemon, so no client is involved and nothing
-# reopens anything. This is the daemon doing exactly what it did for the user.
+# Asked of the workspace's own daemon, so no client reopens anything.
 out=$(hostdocker exec "$CONTAINER" docker start -a nfsres-existing 2>&1)
 rc=$?
 info "starting it with no session: rc=$rc, said: $(echo "$out" | grep -m1 -iE 'error|refused' | cut -c1-200)"
@@ -414,13 +359,8 @@ fi
 
 echo
 echo "== 10. E7: the SSH layer black-holed, with the SAME client process =="
-# The other half of what this suite is for. Section 6 restarted the client,
-# which changes two things at once: the connection AND the process holding the
-# handle cache. This changes only the connection.
-#
-# If the mount recovers here but not in section 6, then handles are what
-# matters and an address that survives is not enough on its own -- which is the
-# whole question behind moving the listener to the agent.
+# Section 6 changed the connection AND the process holding the handle cache;
+# this changes only the connection, so the two can be told apart.
 SSHBH="$WORK/sshblack"; mkdir -p "$SSHBH"; echo "ssh black hole marker" >"$SSHBH/marker"
 dockert rm -f nfsres-ssh >/dev/null 2>&1
 if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/dev/null 2>&1; then
@@ -431,8 +371,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         bad "the second watcher could not read its mount"
     fi
 
-    # The sshd port, not the tunnel port: this breaks the transport UNDER the
-    # NFS traffic rather than the NFS traffic itself.
+    # The sshd port: the transport UNDER the NFS traffic.
     if blocked=$(hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport 2222 -j DROP 2>&1); then
         mark=$(date +%s)
         # Keepalive is 15s with a 30s wait, so detection is inside 45s.
@@ -453,20 +392,12 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         hostdocker exec "$CONTAINER" iptables -D INPUT -p tcp --dport 2222 -j DROP 2>/dev/null
         mark=$(date +%s)
 
-        # A reconnect has to be PROVEN before anything is concluded from the
-        # mount: "the handles died" and "it never reconnected" produce the
-        # identical symptom, so assuming the reconnect blames the handle cache
-        # either way. The client logs a line per connect, and that is the
-        # evidence.
-        # How LONG, not whether. The first version waited 20s, found nothing
-        # working and called it "did not recover on its own" -- but a
-        # black-holed socket stays writable until the kernel stops
-        # retransmitting, which is minutes, and tearing the old connection down
-        # waits on the goroutines riding it. "Not yet" and "never" needed
-        # telling apart, and only a clock does that.
-        # Empty means never: a reconnect inside the same second as the unblock
-        # measures 0s. Against a deadline, so a docker ps that fails fast does
-        # not spend all its attempts in seconds and report eight minutes.
+        # The reconnect is PROVEN before the mount is judged: "the handles
+        # died" and "it never reconnected" look identical. Timed, because a
+        # black-holed socket stays writable for minutes of retransmits, and
+        # "not yet" is not "never". Empty means never, since a reconnect in
+        # the same second measures 0s. Against a deadline, because a docker ps
+        # that fails fast would spend all its attempts in seconds.
         recovered=
         deadline=$(( $(date +%s) + 480 ))
         while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -482,9 +413,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
             bad "no docker command worked within 8 minutes of the block being lifted"
         fi
 
-        # No `|| echo 0`: grep -c already prints 0 when it matches nothing, and
-        # the fallback appended a SECOND line, so the comparison below was
-        # given "0\n0" and errored instead of reporting.
+        # No `|| echo 0`: grep -c already prints 0, and a second line breaks -ge.
         connects=$(grep -c "connected to" "$CLIENT_LOG" 2>/dev/null)
         [ -n "$connects" ] || connects=0
         if [ "$connects" -ge 2 ]; then
@@ -493,9 +422,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
             info "the client's original connection resumed; it never had to redial"
         fi
 
-        # Only now look at the mount. The command working says the transport is
-        # back; the container reads on its own clock and had none of that time
-        # to try again.
+        # The container reads on its own clock, so it gets time of its own.
         mark=$(date +%s)
         sleep 20
         window=$(dockert logs nfsres-ssh 2>&1 | awk -v t="$mark" '$1 >= t')

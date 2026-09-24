@@ -1,10 +1,6 @@
-# Shared MECHANICS for the integration suites, and only those: nothing here
-# decides anything a suite exists to decide. The suites stay separate on
-# purpose, one per WORKSPACE_PER_USER_DIND mode, each stating its own.
-#
-# What belongs here is the line that kept being got wrong in one suite and
-# right in the other: capturing stderr on a failed assertion, breaking a wait
-# loop when the client dies. The assertions do not.
+# Shared MECHANICS for the test/*.sh suites, and only those: the assertions
+# stay in the suites, each of which states the setup it tests (daemon mode,
+# clients, workspace image).
 #
 # Sourced, not executed. The counters and `outputs` need nothing; the rest
 # needs the caller's REPO, WORK, IMAGE, CONTAINER and SSH_PORT.
@@ -23,15 +19,11 @@ info() { echo "  ....  $*"; }
 # Never `cmd | grep -q` on a live command. grep -q exits at the first match,
 # the producer's next write gets EPIPE, and Go turns EPIPE on fd 1 or 2 into a
 # fatal SIGPIPE (exit 141), so under `set -o pipefail` the assertion fails
-# BECAUSE it matched, depending only on scheduling. Measured 2026-08-13: a
-# producer still writing when grep exits gives 141 every time; Windows ignores
-# the failed write. This is a hazard removed rather than a bug fixed: it has
-# not been seen to fire here, and section 17's intermittent failures are NOT
-# explained by it. The command substitution below reads to EOF, so there is no
-# reader to close early.
+# BECAUSE it matched, depending only on scheduling. The command substitution
+# below reads to EOF, so there is no reader to close early.
 #
-# LAST_OUTPUT is empty rather than unset, because the suites run under `set -u`
-# and a failure message may name it on a path where outputs never ran.
+# LAST_OUTPUT is empty rather than unset: the suites run under `set -u` and a
+# failure message may name it on a path where outputs never ran.
 #
 # shellcheck disable=SC2034  # read by the suites that source this, not here.
 LAST_OUTPUT=""
@@ -46,15 +38,12 @@ outputs() {
     grep -qE "$re" <<<"$LAST_OUTPUT"
 }
 
-# Every docker command that crosses the proxy is wrapped in a timeout. A
-# container whose volume mount never completes would otherwise block forever,
-# burning the whole CI budget and reporting nothing about where it stopped.
+# Every docker command that crosses the proxy has a timeout: a volume mount
+# that never completes otherwise blocks until CI kills the job, saying nothing.
 # A suite sets DOCKER_TIMEOUT before sourcing this to change the budget.
 DOCKER_TIMEOUT=${DOCKER_TIMEOUT:-120}
 dockert() { timeout "$DOCKER_TIMEOUT" docker "$@"; }
 
-# dockerat runs a docker command against one endpoint, with the same timeout.
-#
 #   dockerat <socket> <args...>
 dockerat() {
     local sock=$1
@@ -62,18 +51,15 @@ dockerat() {
     timeout "$DOCKER_TIMEOUT" docker -H "unix://$sock" "$@"
 }
 
-# The workspace container lives on the RUNNER's daemon. Once DOCKER_HOST points
-# at the workspace, plain `docker` talks to the workspace's daemon instead, so
-# anything about the container -- exec, logs, inspect -- has to say which
-# daemon it means or it silently looks in the wrong place.
+# The workspace container lives on the RUNNER's daemon, and once DOCKER_HOST
+# points at the workspace a plain `docker exec` silently looks in the wrong one.
 hostdocker() { env -u DOCKER_HOST docker "$@"; }
 
-# build_image builds the workspace image from the repo root, because the image
-# builds the agent from source. The output is kept and printed on failure: with
-# -q a failed build reports the Dockerfile line and NOTHING from the compiler,
-# and the build's own words are the whole diagnosis.
+# build_image builds the workspace image, agent included, from the repo root.
+# Not -q: that reports the failing Dockerfile line and nothing from the compiler.
 build_image() {
-    if docker build -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO"             >"$WORK/image-build.log" 2>&1; then
+    if docker build -t "$IMAGE" -f "$REPO/image/Dockerfile" "$REPO" \
+        >"$WORK/image-build.log" 2>&1; then
         return 0
     fi
     echo "--- image build output ---"
@@ -81,7 +67,6 @@ build_image() {
     return 1
 }
 
-# build_client builds the client binary into $WORK.
 build_client() {
     (cd "$REPO/client" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker)
 }
@@ -95,9 +80,8 @@ build_probe() {
     (cd "$REPO/test/probes" && CGO_ENABLED=0 GOOS=linux go build -o "$dest" "./$name")
 }
 
-# cleanup_suite is the EXIT trap of a suite that runs one workspace container:
-# it ends the client pids it is given (empty ones are skipped), removes the
-# container and the work directory.
+# cleanup_suite is the EXIT trap of a suite that runs one workspace container.
+# Empty pids are skipped.
 #
 #   cleanup_suite <pid...>
 cleanup_suite() {
@@ -113,34 +97,27 @@ cleanup_suite() {
     rm -rf "$WORK"
 }
 
-# genkey generates a keypair into <statedir> and returns 0 once its public half
-# is there. Separate from enrol because a suite with several machines on ONE
-# account stages the keys itself, in one file (test/two-clients.sh).
+# genkey is separate from enrol because test/two-clients.sh stages two
+# machines' keys in ONE account's file itself.
 genkey() {
     local statedir=$1
     REMOTE_DOCKER_STATE_DIR="$statedir" "$WORK/remote-docker" remote enroll >/dev/null 2>&1
     [ -f "$statedir/id_ed25519.pub" ]
 }
 
-# enrol generates a keypair for one account and stages its public half where
-# the workspace will find it. The FILENAME becomes the ACCOUNT name, which is
-# what a client logs in as; the unix user behind it is `rd-<account>`
-# (ADR 0025).
+# enrol stages a new key for <account>. The FILENAME is the account name a
+# client logs in as; the unix user behind it is `rd-<account>` (ADR 0025).
 enrol() {
     local account=$1 statedir=$2
     genkey "$statedir" || return 1
     cp "$statedir/id_ed25519.pub" "$WORK/keys/$account.pub"
 }
 
-# ssh_account runs one command as an enrolled account, with a stock ssh rather
-# than anything of ours -- which is the point wherever it is used: the agent
-# replaces sshd (ADR 0010) and an ordinary client still has to get a session.
+# ssh_account runs one command as an enrolled account with a STOCK ssh: the
+# agent replaces sshd (ADR 0010) and an ordinary client must still get a
+# session. stderr is left alone, so a caller that wants it captured says so.
 #
 #   ssh_account <keyfile> <account> <timeout-seconds> <command> [ssh-option...]
-#
-# stdin is /dev/null so a command that reads never waits. stderr is left alone,
-# so a caller that wants it in the capture asks for it: a failure message with
-# nothing after the colon costs a CI round trip. Needs the caller's SSH_PORT.
 ssh_account() {
     local key=$1 account=$2 secs=$3 command=$4
     shift 4
@@ -150,9 +127,8 @@ ssh_account() {
         "$account@127.0.0.1" "$command" </dev/null
 }
 
-# start_workspace runs the workspace container. The dind mode is REQUIRED with
-# no default, which is what lets this be shared at all: given one, the suites
-# stop stating which mode they test and become one script with a flag.
+# start_workspace runs the workspace container. The WORKSPACE_PER_USER_DIND
+# value has no default, so every suite states the daemon mode it tests.
 start_workspace() {
     local per_user_dind=$1
     shift
@@ -172,8 +148,7 @@ start_workspace() {
         "$IMAGE" >/dev/null
 }
 
-# wait_provisioned waits for the agent to create the named accounts. Asked for
-# the UNIX user, `rd-<account>`, which is what useradd made; asking for the
+# wait_provisioned asks for the UNIX user, `rd-<account>`; asking for the
 # account name waits the full timeout on a correctly provisioned workspace.
 wait_provisioned() {
     local seconds=${WAIT_PROVISION:-90} account
@@ -189,20 +164,15 @@ wait_provisioned() {
 }
 
 # load_image_into_workspace copies an image from the RUNNER's daemon into the
-# workspace's own. They are different image stores: the suites build the
-# workspace image on the runner, and the WORKSPACE's dockerd starts each
-# per-account daemon (ADR 0019) having never heard of it, so without this it
-# tries Docker Hub and fails with `pull access denied for
-# remote-docker-workspace`, naming a registry nobody meant to use. CI-only:
-# real deployments pull the image from one.
+# workspace's own, which starts each per-account daemon (ADR 0019) from it.
+# Without it: `pull access denied for remote-docker-workspace`.
 load_image_into_workspace() {
     local image=$1
     hostdocker save "$image" | hostdocker exec -i "$CONTAINER" docker load >/dev/null 2>&1
 }
 
-# wait_parent_dockerd waits for the workspace's own daemon, and REPORTS when it
-# never arrives: falling through silently makes the next section fail for a
-# reason nothing on screen explains.
+# wait_parent_dockerd REPORTS a daemon that never arrives, or the next section
+# fails for a reason nothing on screen explains.
 wait_parent_dockerd() {
     for _ in $(seq 1 90); do
         hostdocker exec "$CONTAINER" docker info >/dev/null 2>&1 && return 0
@@ -212,30 +182,33 @@ wait_parent_dockerd() {
     return 1
 }
 
-# start_session runs a client session in the background, from inside <dir>,
-# and prints its pid. Extra VAR=value arguments are added to its environment.
-# Watching is on because a read=cached share refuses to run without it (ADR
-# 0044); harmless to a section that mounts none.
+# start_session runs a client session in the background from inside <dir> and
+# prints its pid. Watching is on because read=cached refuses to run without it.
 #
 #   start_session <statedir> <user> <endpoint> <log> <dir> [VAR=value...]
 #
-# exec, so the subshell BECOMES the client. Without it $! is the subshell's
-# pid, killing that leaves the client running, and the next session finds the
-# endpoint held by a process the suite thinks it stopped.
+# exec, so $! is the client and not a subshell whose death leaves the client
+# holding the endpoint.
 start_session() {
     local statedir=$1 user=$2 endpoint=$3 log=$4 dir=$5
     shift 5
     (
         cd "$dir" || exit 1
-        exec env             REMOTE_DOCKER_STATE_DIR="$statedir"             REMOTE_DOCKER_HOST=127.0.0.1             REMOTE_DOCKER_PORT="$SSH_PORT"             REMOTE_DOCKER_USER="$user"             REMOTE_DOCKER_ENDPOINT="$endpoint"             REMOTE_DOCKER_WATCH=partial             "$@"             "$WORK/remote-docker" remote start --foreground
+        exec env \
+            REMOTE_DOCKER_STATE_DIR="$statedir" \
+            REMOTE_DOCKER_HOST=127.0.0.1 \
+            REMOTE_DOCKER_PORT="$SSH_PORT" \
+            REMOTE_DOCKER_USER="$user" \
+            REMOTE_DOCKER_ENDPOINT="$endpoint" \
+            REMOTE_DOCKER_WATCH=partial \
+            "$@" \
+            "$WORK/remote-docker" remote start --foreground
     ) >"$log" 2>&1 &
     echo $!
 }
 
-# wait_endpoint waits for a client endpoint to answer. The optional second
-# argument is a client pid: if that process dies the wait ends at once, rather
-# than spending the whole timeout and then reporting a timeout, which names the
-# symptom and not the cause.
+# wait_endpoint waits for a client endpoint to answer, and gives up at once
+# when the optional client <pid> dies rather than reporting a timeout.
 wait_endpoint() {
     local sock=$1 pid=${2:-}
     for _ in $(seq 1 120); do
@@ -250,9 +223,8 @@ wait_endpoint() {
     return 1
 }
 
-# wait_ready polls a probe container's log for up to <secs> for the READY line
-# watchprobe prints once its watch is registered. A change made before that
-# proves nothing either way.
+# wait_ready waits for watchprobe's READY line: a change made before its watch
+# is registered proves nothing either way.
 #
 #   wait_ready <container> <secs>
 wait_ready() {
@@ -264,9 +236,6 @@ wait_ready() {
     return 1
 }
 
-# wait_url polls <url> for up to <secs> until its body matches <regex>;
-# LAST_OUTPUT holds the last answer.
-#
 #   wait_url <url> <regex> <secs>
 wait_url() {
     local url=$1 re=$2 secs=$3 _
@@ -277,7 +246,6 @@ wait_url() {
     return 1
 }
 
-# dump_workspace_log prints the tail of the workspace container's log.
 dump_workspace_log() {
     echo "== workspace log =="
     hostdocker logs "$CONTAINER" 2>&1 | tail -"${1:-60}" | sed 's/^/        /'
@@ -290,8 +258,7 @@ union_is_fuse() {
     outputs ' /w fuse' "$exec_fn" exec "$container" sh -c 'grep " /w " /proc/mounts'
 }
 
-# wait_for_content polls a local file for exact content for up to <secs>,
-# prints what it last saw (empty for no file), and returns 0 once it matched.
+# wait_for_content prints what it last saw (empty for no file).
 wait_for_content() {
     local path=$1 want=$2 secs=$3 seen="" _
     for _ in $(seq 1 "$secs"); do
@@ -302,10 +269,8 @@ wait_for_content() {
     [ "$seen" = "$want" ]
 }
 
-# wait_gone polls for up to <secs> until <path> no longer exists inside a
-# container, asked through <exec-fn>; returns 0 once it is gone. Its directory
-# must still list, so a failed exec or a dead mount is not read as a deletion.
-# LAST_OUTPUT holds the last answer.
+# wait_gone: the directory must still list, so a failed exec or a dead mount
+# is not read as a deletion. LAST_OUTPUT holds the last answer.
 wait_gone() {
     local exec_fn=$1 container=$2 path=$3 secs=$4 _
     for _ in $(seq 1 "$secs"); do
@@ -318,12 +283,10 @@ wait_gone() {
     return 1
 }
 
-# union_diagnostics prints what the workspace logged about its unions.
 union_diagnostics() {
     hostdocker logs "$CONTAINER" 2>&1 | grep -iE "union|fuse" | tail -8 | sed 's/^/        /'
 }
 
-# summary prints the totals and sets the exit status.
 summary() {
     echo
     echo "=================================="

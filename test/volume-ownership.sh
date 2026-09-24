@@ -1,27 +1,14 @@
 #!/usr/bin/env bash
 # Who owns the directory a NAMED VOLUME lands on, asked of BOTH daemons.
 #
-# Reported from a Windows client against a RHEL 7 workspace: a compose project
-# whose image runs as uid 1000 died the moment it started, with
+# A fresh named volume inherits mode and ownership from the directory in the
+# image; where the image has none, the daemon creates it root-owned 0755, and a
+# uid-1000 container gets EACCES. That is Docker's rule, but it reads like a
+# share reporting the wrong owner (ADR 0046).
 #
-#	EACCES: permission denied, mkdir '/home/opencode/.local/share/opencode/repos'
-#
-# The compose file mounts two named volumes under $HOME and the Dockerfile
-# creates neither mountpoint. A fresh named volume inherits mode and ownership
-# from the directory already in the image; where the image has none, the daemon
-# creates the mountpoint root-owned 0755 and the volume is empty, so the
-# container's own uid cannot write into it. That is Docker's rule and not ours,
-# but reading the log cannot tell it apart from a share whose reported
-# ownership was wrong (ADR 0046), and a user hitting it through us blames us.
-#
-# So each case runs twice, against the RUNNER's own daemon and through a real
-# session, and the suite fails on any DIFFERENCE. The runner's daemon is the
-# oracle: an identical answer from both is Docker's behaviour and not ours.
-#
-# It stays because it asks a second question the same way. Rewriting a named
-# volume is forbidden (the volume would be replaced by an export of a directory
-# that does not exist), and a rewrite is exactly what would make these two
-# daemons disagree.
+# So each case runs against the RUNNER's daemon, the oracle, and through a
+# session, and the suite fails on any DIFFERENCE. A named volume being
+# rewritten (which is forbidden) would also show as one.
 #
 # Requires: docker, and a kernel with NFS client support.
 set -uo pipefail
@@ -40,8 +27,8 @@ TEST_IMAGE=rd-volown-probe:test
 cleanup() { cleanup_suite "${CLIENT_PID:-}"; }
 trap cleanup EXIT
 
-# The probe image is the user's shape reduced to what matters: a uid-1000
-# account, one mountpoint that EXISTS in the image and one that does not.
+# A uid-1000 account, one mountpoint that EXISTS in the image and one that does
+# not.
 #
 #   build_probe_image <docker-fn> <log-name>
 build_probe_image() {
@@ -60,8 +47,7 @@ DOCKERFILE
     "$docker_fn" build -t "$TEST_IMAGE" "$dir" >"$WORK/probe-build-$name.log" 2>&1
 }
 
-# mkdir_under runs the probe image with one mount and reduces the outcome to a
-# single word: OK, EACCES, or the error itself.
+# mkdir_under prints OK, EACCES, or the error itself.
 #
 #   mkdir_under <docker-fn> <mount-args...> -- <target>
 mkdir_under() {
@@ -85,9 +71,8 @@ mkdir_under() {
     esac
 }
 
-# compare runs one case on both daemons and reports whether they AGREE, which
-# is the whole question. `want` is what the runner's own daemon is expected to
-# say, so a change in Docker's behaviour is caught rather than silently adopted.
+# compare reports whether both daemons AGREE. `want` pins the runner's answer,
+# so a change in Docker's behaviour is caught rather than silently adopted.
 #
 #   compare <description> <want> <mount-args...> -- <target>
 compare() {
@@ -129,8 +114,7 @@ if ! enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
     bad "enroll produced no public key"
     exit 1
 fi
-# The shared daemon, stated: what is measured here is Docker's volume rule and
-# our share ownership, and the daemon mode changes neither.
+# The shared daemon: the daemon mode changes nothing measured here.
 if ! start_workspace false; then
     bad "workspace container failed to start"
     exit 1
@@ -170,17 +154,13 @@ fi
 
 echo
 echo "== 5. a named volume onto a path the image does not create =="
-# The user's case exactly. Expected to FAIL on both, which is what makes it
-# Docker's rule rather than ours: the daemon creates the mountpoint root-owned
-# and an empty volume has nothing to inherit.
+# Expected to FAIL on both: nothing to inherit.
 compare "named volume, mountpoint absent from the image" EACCES \
     -v volown-absent:/home/app/absent -- /home/app/absent
 
 echo
 echo "== 6. a named volume onto a path the image DOES create, owned by uid 1000 =="
-# The same mount with the one line the user's Dockerfile is missing. Expected
-# to SUCCEED on both: a fresh volume copies the image directory's mode and
-# ownership, so uid 1000 keeps it.
+# Expected to SUCCEED on both: the volume copies the directory's ownership.
 compare "named volume, mountpoint present and chowned in the image" OK \
     -v volown-present:/home/app/present -- /home/app/present
 
