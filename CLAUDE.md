@@ -901,8 +901,14 @@ premise of the project, and it applies to building it too. So:
   not start was N x 180s, serialised, and `docker compose up` is hundreds of
   calls. The memo answers them from the record instead. It must stay SHORT: a
   memo cannot tell a daemon that will never start from one somebody has just
-  repaired by hand, and refusing a working daemon is the worse mistake, so
-  `Reset` clears it too. The budget itself is `WORKSPACE_DAEMON_READY_TIMEOUT`,
+  repaired by hand, and refusing a working daemon is the worse mistake.
+  `remote-dockerd daemons reset` does NOT clear it in the serving agent: it
+  runs as its own process, so it removes the container but clears only its
+  own copy of the memo and of the cached daemon. The serving agent keeps
+  answering from its memo for up to 5s and trusts its cached daemon for up to
+  2s (`aliveTTL`), then recovers by itself. Accepted rather than adding a
+  control path into a root process for five seconds. The budget itself is
+  `WORKSPACE_DAEMON_READY_TIMEOUT`,
   because what a cold daemon costs belongs to the deployment: about a second on
   a runner, and the 180s default is for a first start on fuse-overlayfs over
   Ceph.

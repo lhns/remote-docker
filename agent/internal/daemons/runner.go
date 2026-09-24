@@ -841,8 +841,8 @@ func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 
 	m.mu.Lock()
 	delete(m.byName, account)
-	// The record of the last failure goes with it: this command is exactly the
-	// repair the memo must not outlive.
+	// Only this process's copy. Run from `daemons reset`, it does not reach the
+	// serving agent, whose memo and cache expire by themselves (CLAUDE.md).
 	delete(m.failed, account)
 	m.mu.Unlock()
 
