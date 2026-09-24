@@ -77,8 +77,8 @@ experiment and outlives the mount it justified.)
   paragraph above about `rslave` is the reason. It was found by experiment, it
   costs real debugging time to rediscover, and the failure mode is an empty
   directory rather than an error.
-- `test/propagation.sh` still governs the `~/workspace` shell mount and is
-  retained, with its stated purpose narrowed to that.
+- `test/propagation.sh` governed the `~/workspace` shell mount, and went with
+  it (ADR 0018).
 - The daemon now mounts NFS once per container rather than once per session, so
   a broken tunnel surfaces as a container that fails to start with a mount
   error. That is a clearer failure than a container that starts and sees

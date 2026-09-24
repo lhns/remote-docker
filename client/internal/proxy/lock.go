@@ -10,19 +10,11 @@ import (
 	"time"
 )
 
-// Binding the endpoint is not a lock, and the two platforms differ (ADR 0017).
-//
-// On Windows a named pipe bind is exclusive: winio asks for
-// FILE_FLAG_FIRST_PIPE_INSTANCE, and the kernel releases it when the process
-// dies. On Unix a bind excludes nothing, and clearing a stale socket first --
-// which is necessary, or a process that died uncleanly makes every later run
-// fail with "address already in use" -- silently unlinks a RUNNING process's
-// socket: the first keeps accepting on an inode nobody can reach and still
-// looks healthy.
-//
-// So: an explicit lock, held for as long as the endpoint is served, and taking
-// it is what earns the right to clear a socket. The pid inside it is what lets
-// `start` and `stop` say WHICH process owns a workspace.
+// Binding the endpoint is not a lock (ADR 0017). On Unix a bind excludes
+// nothing, and clearing a stale socket unlinks a RUNNING process's socket,
+// which keeps accepting on an inode nobody can reach. So the lock is held for
+// as long as the endpoint is served, and only its holder clears a socket. On
+// Windows the pipe bind excludes and the file only records the pid.
 
 // Lock is a held claim on one workspace's endpoint. Release when done.
 type Lock struct {
@@ -30,12 +22,8 @@ type Lock struct {
 	file *os.File
 }
 
-// LockPath is where the claim for an endpoint is recorded.
-//
-// Beside the endpoint rather than in the state directory, so the two cannot
-// disagree about which workspace they describe: an explicitly configured
-// endpoint is shared by every workspace pointed at it, and that is exactly the
-// case a lock has to notice.
+// LockPath is keyed on the endpoint, not the workspace: two workspaces
+// configured with one endpoint must contend for one lock.
 func LockPath(endpoint string) string {
 	if endpoint == "" {
 		endpoint = DefaultEndpoint()
@@ -61,10 +49,8 @@ func sanitizeLockName(endpoint string) string {
 	return b.String()
 }
 
-// Owner reads the pid recorded in a lock, or 0 if there is none.
-//
-// Advisory: the pid is for reporting, never for deciding whether the lock is
-// held. Deciding is the lock's own job, because a pid can be reused.
+// Owner reads the pid recorded in a lock, or 0. For reporting only: a pid can
+// be reused, so it never decides whether the lock is held.
 func Owner(endpoint string) int {
 	data, err := os.ReadFile(LockPath(endpoint))
 	if err != nil {
@@ -77,8 +63,7 @@ func Owner(endpoint string) int {
 	return pid
 }
 
-// writePid records who holds the lock. Best effort: failing to write it costs
-// a nicer error message later, never correctness.
+// writePid records who holds the lock. Best effort.
 func (l *Lock) writePid() {
 	if l == nil || l.file == nil {
 		return
@@ -100,42 +85,26 @@ func (e *ErrLocked) Error() string {
 	return fmt.Sprintf("another remote-docker is already serving %s", e.Endpoint)
 }
 
-// lockedListener releases the endpoint's claim when the listener closes, so
-// the lock's lifetime is exactly the endpoint's and no caller has to remember.
+// lockedListener releases the endpoint's lock when the listener closes.
 type lockedListener struct {
 	net.Listener
 	lock *Lock
 }
 
-// closeRetry is how long to wait for a Close before signalling again, and how
-// many times. Generous, because every attempt after the first is a symptom.
 const (
 	closeRetry    = 250 * time.Millisecond
 	closeAttempts = 8
 )
 
-// Close releases the endpoint's claim, and keeps asking if the listener will
-// not close.
-//
-// go-winio's pipe listener signals its accept goroutine over an unbuffered
-// channel and then waits to be told it finished (microsoft/go-winio#85, PR
-// #369 unmerged as of 2026-08-11; re-check at
-// github.com/microsoft/go-winio/issues/85). A client connecting at that moment
-// can have the signal consumed by the connect path and reported as
-// ERROR_PIPE_CONNECTED or ERROR_NO_DATA, neither of which it recognises as a
-// close: the signal is spent, Close blocks forever and Accept never returns,
-// so the session hangs behind it. It presented as one CI run in many timing
-// out after ten minutes on Windows. The listener is then back in a select that
-// receives the next signal, so asking again lands.
-//
-// Not conditioned on GOOS: a listener that closes promptly is closed on the
-// first attempt and never reaches the timer, which is every listener on every
-// other platform.
+// Close retries because go-winio's pipe listener can lose its close signal to
+// a client connecting at that moment (ERROR_PIPE_CONNECTED / ERROR_NO_DATA),
+// leaving Close and Accept blocked forever; a second signal lands.
+// microsoft/go-winio#85, PR #369 unmerged as of 2026-08-11; re-check there.
+// Harmless elsewhere: a prompt close never reaches the timer.
 func (l *lockedListener) Close() error {
 	defer l.lock.Release()
 
-	// Buffered, so an attempt that finishes after we stop waiting does not
-	// leak the goroutine holding it.
+	// Buffered, so a late attempt does not leak its goroutine.
 	done := make(chan error, closeAttempts)
 	closeOnce := func() { done <- l.Listener.Close() }
 	go closeOnce()
@@ -148,10 +117,7 @@ func (l *lockedListener) Close() error {
 			return err
 		case <-timer.C:
 			if attempt >= closeAttempts {
-				// Give the caller its thread back. The endpoint stays bound
-				// until the process exits, which for the background session is
-				// immediately, and the lock is released by the defer either
-				// way.
+				// Give up; the endpoint stays bound until the process exits.
 				return fmt.Errorf("proxy: the listener on %s did not close", l.Addr())
 			}
 			go closeOnce()

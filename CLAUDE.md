@@ -106,6 +106,7 @@ client/go.mod            the client module: THE GLUE. docker/cli, buildx
     ports/               published ports -> local forwards. Stays glue whole:
                          its manager is keyed on container ids throughout, and
                          the generic forward is already tunnelclient's
+    endpointtest/        an endpoint a test may bind, in the platform's spelling
     session/             wires the above into one live connection, dials the
                          tunnel, and holds the enrolment hint -- the one part
                          of authentication that is this project's policy
@@ -137,7 +138,9 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
     daemons/             a dockerd per account, and the one resolver both
                          modes answer through (ADR 0019)
     dockercli/           the one way this side runs the docker binary, and
-                         the volume lookup notify asks for
+                         the volume lookup core-agent/replay asks for
+    unions/              the union mounts behind delegated shares (ADR 0044):
+                         the Docker glue around core-agent/union
 
 image/                   the workspace container (Dockerfile only)
 installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
@@ -368,8 +371,9 @@ premise of the project, and it applies to building it too. So:
   namespace that created it (a container gets EOPNOTSUPP, and so does the host
   under `unshare --mount`); and a file written into the cache LAYER rather than
   through the union stays invisible to a container that already missed on it, so
-  the obvious way to fill it is a silent bug. `test/union-probe.sh` asserts both
-  and runs on every pull request. Prefetch runs only when `read=cached` AND a
+  the obvious way to fill it is a silent bug. `test/union-probe.sh` measures both
+  on every pull request and RECORDS them rather than asserting them, so a kernel
+  that changed either answer would turn nothing red. Prefetch runs only when `read=cached` AND a
   union exists: in a `direct` corner the upper holds only what the container
   wrote, because a file in the upper is served with no revalidation and the
   user asked for live reads. An `ephemeral` share is never asked for its
@@ -572,9 +576,11 @@ premise of the project, and it applies to building it too. So:
 - **A fill cannot carry a deletion, so the client records what it sent** (ADR
   0044). A fill overwrites and adds; a file deleted here while nothing was
   running leaves no event for anyone to replay, so it stays in the cache and
-  stays visible to every container. The record of what the last fill sent is
-  what makes it removable, and only paths from that record are ever dropped --
-  a path in the cache no fill put there is a container's own file. A watcher
+  stays visible to every container. The record of what every batch sent
+  (fill, prefetch or invalidation, saved BEFORE it is applied) is what makes
+  it removable, and only paths from that record are ever dropped -- a path in
+  the cache no batch put there is a container's own file. Write-back refuses
+  a recorded path this run did not send and this machine no longer has. A watcher
   overflow is the same problem inside a session, which is why `Observer` has
   `Lost` and answers it with a reconcile rather than a log line.
 - **A cache volume is never in use as far as the daemon is concerned, and the
@@ -861,7 +867,7 @@ premise of the project, and it applies to building it too. So:
 - **A per-account daemon's answers are untrusted input.** It reports its own
   volume mountpoints and the account is root inside it. `path.Join` is not
   containment -- it CLEANS, so `/proc/42/root` joined to `/../../etc/shadow` is
-  `/proc/etc/shadow`, outside the root and looking correct. `relocate` checks
+  `/proc/etc/shadow`, outside the root and looking correct. `replay.Relocate` checks
   the result; `O_NOFOLLOW` and `AT_SYMLINK_NOFOLLOW` in the poker stopped being
   tidiness the moment those paths left the agent's own filesystem.
 - **`rd-dind-<account>-lib` is the account, and the container in front of it is
@@ -1048,7 +1054,7 @@ the user's machine and the only one of these that fails silently.
 `.github/workflows/kubernetes.yml` installs the chart on a kind cluster behind
 ingress-nginx on every pull request and takes a session through it: a file
 written on the runner, read inside a container in the cluster through a bind
-mount. It also runs `helm lint` and five renders through `kubeconform`, which is
+mount. It also runs `helm lint` and seven renders through `kubeconform`, which is
 eight seconds and always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 

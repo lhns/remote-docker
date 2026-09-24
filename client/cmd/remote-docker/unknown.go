@@ -1,14 +1,8 @@
 package main
 
-// What happens when a word is not one of our commands.
-//
-// cobra's answer for a command that only groups subcommands is to print the
-// help and exit 0, which is wrong twice over: a typo is indistinguishable from
-// a deliberate `--help`, and a script sees success.
-//
-// A parent that runs on its own is worse than silent. `remote creat dev` fell
-// back to the parent, which lists the workspaces, so it printed a list and
-// exited 0 having created nothing.
+// An unknown subcommand is an error. cobra would print help and exit 0, and a
+// parent that runs on its own (`remote` lists workspaces) turned `remote creat
+// dev` into a listing that exited 0 having created nothing.
 
 import (
 	"fmt"
@@ -16,24 +10,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// onlySubcommands is the Args rule for a command whose arguments are the names
-// of its own subcommands and nothing else.
-//
-// Paired with a RunE on any command that is not otherwise runnable: cobra
-// returns help for an unrunnable command BEFORE it validates arguments, so a
-// rule alone would never be reached.
+// onlySubcommands is the Args rule for a command that takes only subcommand
+// names. An unrunnable command also needs a RunE (helpWhenBare): cobra returns
+// help for it before validating arguments, so this rule would never run.
 func onlySubcommands(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		return nil
 	}
-	// The nearest real command, when there is one. A corrupted or fat-fingered
-	// word is the common case here, and naming the intended command is a
-	// better answer than a list of thirty.
-	//
-	// The distance has to be set. cobra defaults it to 0, and SuggestionsFor
-	// uses that value as given rather than falling back to 2 the way
-	// findSuggestions does, so unset it matches on a common prefix and nothing
-	// else: `creat` found `create` and `statuss` found nothing at all.
+	// cobra defaults the distance to 0 and SuggestionsFor does not fall back to
+	// 2, so unset it matches prefixes only: `statuss` found nothing.
 	if cmd.SuggestionsMinimumDistance <= 0 {
 		cmd.SuggestionsMinimumDistance = 2
 	}

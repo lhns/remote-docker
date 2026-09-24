@@ -2,15 +2,10 @@
 #
 # The agent on a machine, not in a container (ADR 0025).
 #
-# The claim is narrow: the same binary, with WORKSPACE_ENABLE_DIND=false
-# because this machine already has a dockerd, serves the same workspace. There
-# is no VM mode and no second code path; both daemon modes read the switch they
-# always read, and this runs each. The runner IS the machine, which is what
-# makes it testable at all.
+# The same binary, with WORKSPACE_ENABLE_DIND=false because the runner already
+# has a dockerd, in both daemon modes. There is no VM mode.
 #
-# What this does NOT prove: any distro but Ubuntu, any docker but the runner's,
-# and systemd. What is under test is the agent as a guest, not systemd's
-# ability to run a binary.
+# NOT proven: any distro but Ubuntu, any docker but the runner's, and systemd.
 set -uo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -27,8 +22,7 @@ cleanup() {
     [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" 2>/dev/null
     [ -n "$AGENT_PID" ] && sudo kill "$AGENT_PID" 2>/dev/null
     wait 2>/dev/null
-    # The per-account daemon outlives the agent deliberately -- it holds
-    # somebody's containers (ADR 0019) -- so this suite takes its own away.
+    # The per-account daemon outlives the agent deliberately (ADR 0019).
     hostdocker rm -f "rd-dind-$ACCOUNT" >/dev/null 2>&1
     hostdocker volume rm -f "rd-dind-$ACCOUNT-lib" >/dev/null 2>&1
     sudo userdel -r "rd-$ACCOUNT" >/dev/null 2>&1
@@ -36,12 +30,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# start_agent runs the agent as root, in the background, with its output where
-# this suite can print it.
 start_agent() {
     local per_user_dind=$1
-    # SC2024: the redirect is the CALLING user's on purpose. The log has to be
-    # readable by this suite, which does not run as root.
+    # SC2024: the redirect is the CALLING user's, so this suite can read the log.
     # shellcheck disable=SC2024
     sudo -b env \
         WORKSPACE_ENABLE_DIND=false \
@@ -59,8 +50,7 @@ start_agent() {
     return 1
 }
 
-# wait_unix_account waits for the unix user behind an account, which is
-# `rd-<account>` and not the account name.
+# wait_unix_account waits for `rd-<account>`, not the account name.
 wait_unix_account() {
     for _ in $(seq 1 60); do
         id "rd-$1" >/dev/null 2>&1 && return 0
@@ -69,12 +59,8 @@ wait_unix_account() {
     return 1
 }
 
-# stop_session ends the client and WAITS for it.
-#
-# Waiting is the point. The endpoint is held until the process is gone, so a
-# second session started a tenth of a second later finds it bound and exits
-# with "already serving" -- which is the same race `stop && start` is
-# documented for, arriving here as "no endpoint in shared mode".
+# stop_session WAITS for the client: the endpoint is held until the process is
+# gone, and the next session would exit with "already serving".
 stop_session() {
     [ -z "$CLIENT_PID" ] && return 0
     kill "$CLIENT_PID" 2>/dev/null
@@ -82,10 +68,8 @@ stop_session() {
     CLIENT_PID=
 }
 
-# stop_agent ends the agent and waits for its port.
-#
-# Not a child of this shell -- sudo -b detached it -- so `wait` cannot see it
-# and the process table is what there is to ask.
+# stop_agent polls the process table: sudo -b detached the agent, so `wait`
+# cannot see it.
 stop_agent() {
     [ -z "$AGENT_PID" ] && return 0
     sudo kill "$AGENT_PID" 2>/dev/null
@@ -101,37 +85,22 @@ dump_agent_log() {
     tail -"${2:-40}" "$WORK/agent-$1.log" 2>/dev/null | sed 's/^/        /'
 }
 
-# session starts a client in the background against the configured endpoint.
-#
-# The workspace comes from the environment rather than from flags, as it does
-# in the other suites, so every client command sees it and not only the one
-# that opens the session. REMOTE_DOCKER_ENDPOINT is a PATH and not a URL: the
-# client puts the unix:// on itself, and passing one produced a DOCKER_HOST of
-# `unix://unix:///...` and a socket nothing was ever going to find.
-# exec, so the subshell BECOMES the client rather than waiting for it. Without
-# it `$!` is the subshell's pid, killing that leaves the client running, and the
-# next session finds the endpoint held by a process this suite thinks it stopped:
-# "another remote-docker is already serving ... (pid N)". lib.sh's start_session
-# does the same for the other suites.
+# session starts a client in the background, configured from the environment
+# so every client command sees it. REMOTE_DOCKER_ENDPOINT is a PATH, not a URL:
+# the client adds unix:// itself. exec and watching as in lib.sh's
+# start_session.
 session() {
     local log=$1
-    # Watching on for the same reason lib.sh's start_session has it: a
-    # delegated share refuses to run without it (ADR 0044).
-    (cd "$WORK/project" && exec env REMOTE_DOCKER_WATCH=partial         "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
+    (cd "$WORK/project" && exec env REMOTE_DOCKER_WATCH=partial \
+        "$WORK/remote-docker" remote start --foreground >"$log" 2>&1) &
     CLIENT_PID=$!
 }
 
-# rd runs one client command with a timeout, so a command that hangs reports
-# where it stopped rather than spending the job's budget. Also the exec-fn
-# lib.sh's union_is_fuse is given.
+# rd runs one client command with a timeout; also union_is_fuse's exec-fn.
 rd() { timeout 60 "$WORK/remote-docker" "$@"; }
 
-# unions_running counts the fuse-overlayfs servers on this machine.
-#
-# All of them, because this suite holds one union at a time and the process
-# line names the SHARE rather than the directory it came from -- lowerdir,
-# upperdir and the merged path are all under /run/rd-union/<client>/<id>, and the id is
-# a digest nothing here has to hand.
+# unions_running counts ALL fuse-overlayfs servers: this suite holds one union
+# at a time, and each names only /run/rd-union/<client>/<id>, a digest.
 unions_running() {
     sudo pgrep -c fuse-overlayfs 2>/dev/null || true
 }
@@ -151,9 +120,8 @@ else
     bad "no useradd, so the agent cannot provision accounts"
 fi
 
-# Only shared mode needs this, because only shared mode mounts NFS on the
-# machine itself. Reported either way, so a failure in section 5 arrives with
-# its cause already on screen rather than as a volume that will not mount.
+# Only shared mode mounts NFS (and a union) on the machine itself; reported
+# here so a skip in section 5 or 5b has its cause on screen.
 if command -v mount.nfs >/dev/null; then
     ok "an NFS client, so shared-daemon mode can mount"
     HAVE_NFS=true
@@ -162,9 +130,6 @@ else
     HAVE_NFS=false
 fi
 
-# And what a union needs, which in shared mode is on this machine rather than
-# inside a per-account dind. Reported the same way and for the same reason: a
-# section 5b that skips says so here first.
 if command -v fuse-overlayfs >/dev/null; then
     ok "fuse-overlayfs, so a delegated share can be a union here"
     HAVE_FUSE_OVERLAY=true
@@ -227,8 +192,7 @@ else
     exit 1
 fi
 
-# The account name is ours; the unix name is not. The client logs in as
-# `vmtest` and the machine knows `rd-vmtest` (ADR 0025).
+# The client logs in as `vmtest`; the machine knows `rd-vmtest` (ADR 0025).
 if id "$ACCOUNT" >/dev/null 2>&1; then
     bad "the account took the bare name in this machine's passwd file"
 else
@@ -249,7 +213,6 @@ else
     exit 1
 fi
 
-# The whole point of the project, against an agent with no container around it.
 if out=$(cd "$WORK/project" && timeout 300 \
         "$WORK/remote-docker" run --rm -v "$WORK/project:/w" alpine:3 cat /w/marker 2>&1) &&
     echo "$out" | grep -q "served from the machine"; then
@@ -271,9 +234,7 @@ hostdocker rm -f "rd-dind-$ACCOUNT" >/dev/null 2>&1
 
 echo
 echo "== 5. one shared daemon, which is this machine's own =="
-# The mode where the machine itself mounts NFS, so also the one that needs a
-# client. Skipped rather than failed when there is none: the absence is a
-# property of the runner and section 1 has already said so.
+# Skipped, not failed, without an NFS client: that is the runner's property.
 if [ "$HAVE_NFS" != true ]; then
     info "skipped: no NFS client on this machine"
 else
@@ -307,23 +268,18 @@ else
     else
         echo
         echo "== 5b. a union, and an agent restart underneath it =="
-        # The deployment where an orphaned union can happen at all. With the
-        # agent in a container it is pid 1, so restarting it takes its dockerd
-        # and every dind with it and nothing is left to adopt; here the union
-        # server outlives the agent that started it (ADR 0025, ADR 0044).
+        # The only deployment where a union outlives the agent: in a container
+        # the agent is pid 1 and takes every dind with it (ADR 0025, ADR 0044).
+        # Shared mode, because section 3's per-account dind runs stock
+        # docker:dind (daemons.DefaultImage), which lacks fuse-overlayfs.
         #
-        # In SHARED mode, where the union mounts in the agent's own namespace
-        # and so needs fuse-overlayfs on THIS machine rather than inside a
-        # per-account dind. Stock docker:dind has not got it, which is why
-        # section 4 cannot ask this at all (agent/internal/daemons/plan.go:38).
-        #
-        # A directory of its own, because one directory is one share and one
-        # CONSISTENCY (ADR 0042): asking for a delegated mount of the one
-        # section 5 already mounted plainly is refused, correctly.
+        # A directory of its own: one directory is one share and one mode
+        # (ADR 0042), and section 5 mounted the project plainly.
         UNIONDIR="$WORK/uniondir"
         mkdir -p "$UNIONDIR"
         echo "served from the machine" >"$UNIONDIR/marker"
-        if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg         -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
+        if timeout 300 "$WORK/remote-docker" run -d --name vm-deleg \
+            -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/deleg.log" 2>&1; then
             ok "a container starts against a delegated union"
 
             if union_is_fuse rd vm-deleg; then
@@ -333,9 +289,7 @@ else
                 dump_agent_log false
             fi
 
-            # BEFORE the restart, so a failure afterwards says which half is
-            # broken. Without it, "the held share stopped working" cannot be
-            # told from a union that never served the file at all.
+            # BEFORE the restart, so a failure afterwards says which half broke.
             if out=$(rd exec vm-deleg cat /w/marker 2>&1) &&
                 echo "$out" | grep -q "served from the machine"; then
                 ok "it reads this machine's file through the union"
@@ -353,11 +307,10 @@ else
                 dump_agent_log false
             fi
 
-            # A NEW container, because that is what asks the agent to prepare the share
-            # again. Without adoption the supervisor mounts a second fuse-overlayfs on
-            # the same path, over the same upper and work directories -- which
-            # overlayfs does not allow and which nothing else here would notice.
-            if timeout 300 "$WORK/remote-docker" run --rm             -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
+            # A NEW container asks the agent to prepare the share again; without
+            # adoption a second fuse-overlayfs stacks on the same upper.
+            if timeout 300 "$WORK/remote-docker" run --rm \
+                -v "$UNIONDIR:/w:read=cached,write=back" alpine:3 cat /w/marker >"$WORK/deleg2.log" 2>&1; then
                 ok "a second container prepares the same share after the restart"
             else
                 bad "the share could not be prepared again: $(tail -2 "$WORK/deleg2.log" | tr -s '[:space:]' ' ')"
@@ -372,7 +325,6 @@ else
                 sudo pgrep -af fuse-overlayfs 2>/dev/null | sed 's/^/        /'
             fi
 
-            # And the container that held it throughout still reads through its mount.
             if out=$(rd exec vm-deleg cat /w/marker 2>&1) &&
                 echo "$out" | grep -q "served from the machine"; then
                 ok "the container held its share across the agent restart"

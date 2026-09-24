@@ -17,12 +17,9 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// modeOf parses this workspace's mount mode settings.
-//
-// Here rather than in config, for the same reason the watch mode is: config is
-// the lowest layer, and a value nobody can serve should be refused by name
-// before anything connects. An axis left unset falls through to Docker's
-// default in the rewriter.
+// modeOf parses this workspace's mount mode settings, so a bad value is
+// refused before anything connects. Parsed here because config is the lowest
+// layer; the same holds for the watch mode.
 func modeOf(cfg config.Config) (workspace.Mode, map[string]workspace.Mode, error) {
 	def, err := workspace.ParseMode(cfg.Consistency)
 	if err != nil {
@@ -43,20 +40,12 @@ func modeOf(cfg config.Config) (workspace.Mode, map[string]workspace.Mode, error
 	return def, paths, nil
 }
 
-// runSession holds a session open until something ends it.
-//
-// This is the whole of what a background session does; `start` spawns
-// `start --foreground`, which lands here. Keeping one implementation rather
-// than a foreground command and a daemon body means there is nothing to keep
-// in step, and watching a session by running it in a terminal shows exactly
-// what the background one does.
+// runSession holds a session open until something ends it. It is also what a
+// background session runs.
 func runSession(cmd *cobra.Command, cfg config.Config) error {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	// Parsed here rather than in config, which is the lowest layer and depends
-	// on nothing above it. A bad value is reported now, before anything
-	// connects, rather than being silently treated as off.
 	watch, err := fswatch.ParseMode(cfg.Watch)
 	if err != nil {
 		return err
@@ -70,9 +59,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 		Config:      cfg,
 		Endpoint:    endpointOf(cfg),
 		IdleTimeout: cfg.IdleTimeout,
-		// The only session that hosts: it binds the endpoint, takes the
-		// account's one export port, and narrates. Every other command either
-		// talks to whoever is serving, or only asks the workspace a question.
+		// The only role that binds the endpoint and the export port.
 		Role:         session.Host,
 		Version:      version,
 		PosixSource:  msysFrom(os.Getenv).posixSource,
@@ -98,16 +85,10 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 			"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
 	}
 
-	// Letting go of the workspace is not the same as ending: standby drops the
-	// connection and the watches and keeps serving the endpoint, so the Docker
-	// clients pointed at it never notice. Shutdown is the tier above and is off
-	// unless asked for, because it takes the endpoint with it.
+	// Standby drops the connection and watches but keeps the endpoint;
+	// shutdown, below, also takes the endpoint.
 	go standbyWhenIdle(ctx, s, daemonStandby(cfg.DaemonStandby))
 
-	// Three ways out: the terminal, `remote-docker stop`, and having nothing
-	// left to do. A background session has no terminal to press Ctrl-C in, so
-	// without the other two there would be no way to end one short of finding
-	// its pid.
 	idle := daemonIdle(cfg.DaemonIdle)
 	select {
 	case <-ctx.Done():
@@ -119,23 +100,11 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	return nil
 }
 
-// logger prints session progress to stderr, so stdout stays usable for
-// anything a command genuinely outputs.
-//
-// Two spaces and the message, which is what these lines have always looked
-// like: they sit under a command's own output and are read by a person, not
-// parsed. logx.Handler is what keeps that true through log/slog, whose own
-// TextHandler would render them as time=... level=INFO msg="...".
+// logger prints session progress to stderr as "  message", for a person.
 func logger() *slog.Logger { return logx.Logger(os.Stderr, "  ", false) }
 
-// withQuerySession opens a session that only asks the workspace questions, and
-// hands it to fn.
-//
-// `session.Query` is the load-bearing part, and the reason this is shared
-// rather than written twice. A query session takes neither the local endpoint
-// nor the account's one reverse-tunnel port (ADR 0003), so it still works while
-// a real session holds both, which is precisely when somebody runs `status`
-// or `gc`. See session.Role for what each half of that prevents.
+// withQuerySession opens a session.Query session, which takes neither the
+// endpoint nor the reverse-tunnel port, so it works beside a running session.
 func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session.Session) error) error {
 	if err := requireHost(cfg); err != nil {
 		return err

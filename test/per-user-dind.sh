@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # A daemon per account (ADR 0019), end to end, with TWO accounts.
 #
-# Separate from integration.sh, which must keep passing UNCHANGED in shared
-# mode: two scripts prove both modes, where one script with a flag would prove
-# whichever branch it happened to take.
+# Separate from integration.sh, which tests shared mode: one script with a flag
+# would prove whichever branch it happened to take.
 #
 # The claim is narrow: accounts stop seeing each other's containers. It is NOT
-# isolation. Each per-account daemon runs privileged, so a determined account
-# can still break out and reach another's; what changes is that nobody does so
-# by accident.
+# isolation; each per-account daemon runs privileged.
 #
 # Requires: docker, and a kernel with NFS client support.
 set -uo pipefail
@@ -19,7 +16,6 @@ IMAGE=remote-docker-workspace:test
 CONTAINER=remote-docker-peruser
 SSH_PORT=22223
 
-# Two accounts, which is the whole point of this file.
 A=alice
 B=bob
 
@@ -44,11 +40,9 @@ wait_dind() {
     return 1
 }
 
-# dump_dind says why an account's daemon is not usable. The exit code and
-# OOMKilled separate "it would not start" from "something killed it", which is
-# a bug here against a runner out of memory; the daemon's own log carries the
-# reason for the first. Asked of the PARENT daemon, because a daemon that is
-# down cannot answer for itself.
+# dump_dind says why an account's daemon is not usable, asked of the PARENT
+# daemon because a daemon that is down cannot answer. The exit code and
+# OOMKilled separate "would not start" from "something killed it".
 dump_dind() {
     local who=$1
     hostdocker exec "$CONTAINER" docker inspect "rd-dind-$who" --format \
@@ -76,27 +70,18 @@ ok "two keypairs staged as $A.pub and $B.pub"
 
 echo
 echo "== 3. start the workspace with a daemon per account =="
-# true, written here rather than defaulted in the library: this suite exists to
-# test that mode, and says so in its own file.
-#
-# The extra mount stands in for a workspace with a private registry, which
-# mounts /etc/docker/daemon.json into its own daemon and needs the same file in
-# each account's. A marker, since a real daemon.json would have to name a
-# registry this suite does not have.
+# WORKSPACE_DIND_MOUNTS stands in for a private registry's daemon.json, which
+# each account's daemon needs too; a marker file, since there is no registry.
 mkdir -p "$WORK/dindconf"
 echo "reached the inner daemon" >"$WORK/dindconf/marker"
 
-# WORKSPACE_DIND_IMAGE is the workspace's OWN image, which is what a real
-# deployment runs (the Helm chart sets exactly this, and elevate passes
-# WORKSPACE_IMAGE where it can). Without it the fallback is stock docker:dind,
-# which carries none of the tooling this workspace decided it needs --
-# fuse-overlayfs above all -- so this suite would exercise an image no
-# deployment should be using and miss anything that depends on it.
-#
-# It has to be LOADED into the workspace's daemon as well, below: the image was
-# built on the runner, and the daemon that starts each account's dind is the
-# workspace's own.
-if start_workspace true     -v "$WORK/dindconf:/etc/rd-test:ro"     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro"     -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
+# WORKSPACE_DIND_IMAGE is the workspace's OWN image, as the Helm chart sets it.
+# The fallback, stock docker:dind, lacks fuse-overlayfs, so this suite would
+# test an image no deployment should run.
+if start_workspace true \
+    -v "$WORK/dindconf:/etc/rd-test:ro" \
+    -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro" \
+    -e "WORKSPACE_DIND_IMAGE=$IMAGE"; then
     ok "workspace container started with WORKSPACE_PER_USER_DIND=true"
 else
     bad "workspace container failed to start"
@@ -112,13 +97,9 @@ else
     exit 1
 fi
 
-# The shared `docker` group grants a socket reaching the PARENT daemon, which
-# holds every account's dind, so in this mode nobody may be in it.
-#
-# Asked of the UNIX user, `rd-<account>` and not the account name (ADR 0025).
-# Spelled `$account` this looked like it passed: `id` failed for a user that
-# does not exist, and "not in the docker group" is what a missing user and a
-# correct one produce alike. So the lookup must succeed first.
+# The `docker` group reaches the PARENT daemon, which holds every account's
+# dind, so in this mode nobody may be in it. The lookup must succeed first: a
+# missing user is "not in the docker group" too.
 for account in "$A" "$B"; do
     if ! groups=$(hostdocker exec "$CONTAINER" id -nG "rd-$account" 2>&1); then
         bad "no unix user rd-$account: $groups"
@@ -132,9 +113,7 @@ done
 info "waiting for the parent dockerd"
 wait_parent_dockerd
 
-# Before any account connects, because the first connection is what starts that
-# account's daemon (ADR 0019) and it would otherwise try to pull this image
-# from a registry.
+# Before any account connects, since the first connection starts its daemon.
 info "loading the workspace image into the workspace's own daemon"
 if load_image_into_workspace "$IMAGE"; then
     ok "each account's daemon can start from the workspace image"
@@ -148,30 +127,21 @@ mkdir -p "$WORK/project-$A" "$WORK/project-$B"
 echo "alice's file" >"$WORK/project-$A/marker"
 echo "bob's file"   >"$WORK/project-$B/marker"
 
-# One session per account, on lib.sh's start_session with a short idle timeout.
 session() {
     local account=$1 endpoint=$2 log=$3 dir=$4
     start_session "$WORK/state-$account" "$account" "$endpoint" "$log" "$dir" \
         REMOTE_DOCKER_IDLE_TIMEOUT=8s
 }
 
-# Each account's CURRENT endpoint, tracked rather than written out at each use.
-#
-# Sessions get restarted below, onto new sockets, and a helper pinned to the
-# first one keeps answering -- with nothing, silently, because a dead socket
-# reads as an empty result rather than an error. That produced a baseline of []
-# and an assertion that failed while the thing it tested was working.
+# Each account's CURRENT endpoint. Sessions restart onto new sockets below, and
+# a helper pinned to a dead one silently reads as an empty result.
 A_SOCK="$WORK/a.sock"
 B_SOCK="$WORK/b.sock"
 
 CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a.log" "$WORK/project-$A")
 CLIENT_B_PID=$(session "$B" "$B_SOCK" "$WORK/b.log" "$WORK/project-$B")
 
-# A cold dind has to be pulled and booted, which is the slowest thing here.
-#
-# The client pids are passed so a client that dies at startup ends the wait
-# immediately. Without that this suite spent its full patience and then
-# reported a timeout, naming the symptom instead of the cause.
+# A cold dind has to boot, which is the slowest thing here.
 if wait_endpoint "$A_SOCK" "$CLIENT_A_PID" && wait_endpoint "$B_SOCK" "$CLIENT_B_PID"; then
     ok "both accounts have a working docker endpoint"
 else
@@ -185,10 +155,8 @@ fi
 da() { dockerat "$A_SOCK" "$@"; }
 db() { dockerat "$B_SOCK" "$@"; }
 
-# Pulled per account, because a daemon per account means a layer cache per
-# account -- which is the cost this design accepts, and it shows up here first:
-# an unpulled image put "Unable to find image locally" into the output an
-# assertion was reading.
+# Pulled per account (a layer cache each), so "Unable to find image locally"
+# stays out of the output assertions read.
 info "pulling test images into each account's daemon"
 for image in alpine:3 nginx:alpine; do
     da pull -q "$image" >/dev/null 2>&1 || info "could not pre-pull $image for $A"
@@ -207,9 +175,7 @@ else
     bad "both accounts reached the same daemon ($ida)"
 fi
 
-# WORKSPACE_DIND_MOUNTS, asserted in the daemon rather than in the plan: what
-# an operator needs is the file readable by the dockerd doing the pulling, and
-# only a running container can say whether it is.
+# WORKSPACE_DIND_MOUNTS, asserted in the running daemon rather than the plan.
 for who in "$A" "$B"; do
     if outputs '^reached the inner daemon$' \
         hostdocker exec "$CONTAINER" docker exec "rd-dind-$who" cat /etc/rd-test/marker; then
@@ -221,7 +187,6 @@ done
 
 echo
 echo "== 6. one account cannot see the other's containers =="
-# THE assertion. Everything else in this file supports it.
 if da run -d --name alice-secret alpine:3 sleep 300 >/dev/null 2>&1; then
     ok "alice started a container"
 else
@@ -234,8 +199,6 @@ else
     ok "bob cannot see alice's container"
 fi
 
-# And cannot reach it by name either, which is the operation somebody would
-# actually try.
 if db stop alice-secret >/dev/null 2>&1; then
     bad "bob stopped alice's container"
 else
@@ -250,13 +213,8 @@ fi
 
 echo
 echo "== 7. a bind mount resolves, which proves the in-netns NFS listener =="
-# The reverse tunnel is bound INSIDE each account's dind. If that were wrong,
-# the volume would fail to mount and this reads the file rather than guessing.
-#
-# stderr is captured, not discarded. It was briefly sent to /dev/null to keep
-# image-pull noise out of $out -- which also emptied the failure message, so a
-# broken mount reported "failed:" and nothing else. The images are pre-pulled
-# above instead, which removes the noise at its source.
+# The reverse tunnel is bound INSIDE each account's dind; bound anywhere else,
+# the volume fails to mount. stderr is kept for the failure message.
 if out=$(da run --rm -v "$WORK/project-$A:/w" alpine:3 cat /w/marker 2>&1); then
     if [ "$out" = "alice's file" ]; then
         ok "alice's bind mount resolves through her own daemon"
@@ -279,14 +237,10 @@ fi
 
 echo
 echo "== 7b. a read=cached,write=back share, which is a union mounted inside the dind =="
-# The ONLY place the mount-namespace entry is exercised. In shared mode the
-# agent and the daemon are one filesystem and nothing has to be entered; here
-# the union lives inside this account's dind, and the agent has to get in there
-# to mount it (ADR 0044).
-#
-# It also proves the two accounts stay separate at this layer: each union is
-# mounted in its own daemon's namespace, so alice's cache cannot be bob's.
-if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=back"     alpine:3 sleep 120 2>&1); then
+# The ONLY place the agent entering a dind's namespaces to mount a union is
+# exercised: in shared mode nothing has to be entered (ADR 0044).
+if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=back" \
+    alpine:3 sleep 120 2>&1); then
     ok "a container starts against a union inside alice's own daemon"
 
     # a bare directory passes every other check here (ADR 0044)
@@ -307,14 +261,8 @@ if out=$(da run -d --name pud-deleg -v "$WORK/project-$A:/w:read=cached,write=ba
         bad "reading through the union failed: $(echo "$out" | tail -3)"
     fi
 
-    # The fallthrough, which is what makes an incomplete cache correct: this
-    # file did not exist when the union was mounted.
-    #
-    # Retried rather than read once. Two caches sit between the two sides -- the
-    # NFS attribute cache under the union, and libfuse's own entry cache -- and
-    # both are about a second, so reading immediately measures the caches rather
-    # than the mechanism. How long it took is reported, because that IS the
-    # answer to "when does a new file appear".
+    # The fallthrough, for a file created after the union was mounted. Retried:
+    # the NFS attribute cache and libfuse's entry cache are about a second each.
     echo "after the mount" >"$WORK/project-$A/late.txt"
     fell=""
     for i in $(seq 1 15); do
@@ -390,12 +338,8 @@ done
 
 echo
 echo "== 8. two accounts publish, and the limit is this machine =="
-# Where the collision lives now that the port is the client's (ADR 0008). The
-# workspace no longer binds the
-# number anybody asked for, so neither daemon can refuse the other. What can
-# refuse is the CLIENT, because the requested number is opened here, and both
-# accounts in this suite are driven from one runner: two people on two machines
-# would both get 18090.
+# The port is the client's (ADR 0008), so only the CLIENT can refuse, and both
+# accounts here share one runner: on two machines both would get 18090.
 if da run -d --name alice-web -p 18090:80 nginx:alpine >/dev/null 2>&1; then
     ok "$A published 18090"
 else
@@ -403,9 +347,7 @@ else
     da logs alice-web 2>&1 | tail -5
 fi
 
-# The forward has to be OPEN before the refusal can be about anything: the
-# ports manager reconciles on container events, so asking a second too early
-# probes a port nobody is listening on yet and the create succeeds.
+# The forward opens on a container event; asked too early, the create succeeds.
 info "waiting for $A's forward to open on 18090"
 for _ in $(seq 1 60); do
     if timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/18090" 2>/dev/null; then
@@ -426,8 +368,6 @@ else
     esac
 fi
 
-# And nothing on the workspace was in the way: a different local number works
-# at once, on that account's own daemon.
 if db run -d --name bob-web -p 18091:80 nginx:alpine >/dev/null 2>&1; then
     ok "$B published 18091 beside $A, on its own daemon"
 else
@@ -437,11 +377,8 @@ fi
 
 echo
 echo "== 9. a shell points at its own daemon, AND CAN USE IT =="
-# Asserting the variable was set is what let a real bug ship: /run/rd was
-# created 0750 root:root, so every account's DOCKER_HOST named a socket behind
-# a directory it could not enter. The variable was perfect and `docker ps` in a
-# shell said "permission denied while trying to connect to the Docker daemon
-# socket". So the shell is made to actually USE it.
+# A correct DOCKER_HOST behind a directory the account cannot enter (/run/rd
+# at 0750 root:root) shipped once, so the shell has to USE it.
 shell_out=$(ssh_account "$WORK/state-$A/id_ed25519" "$A" 90 \
     'echo "HOST=$DOCKER_HOST"; docker ps --format "{{.Names}}" 2>&1 | head -5' \
     2>/dev/null | tr -d '\015')
@@ -455,24 +392,16 @@ case "$shell_out" in
         bad "a shell got no DOCKER_HOST; it would find the parent daemon" ;;
 esac
 
-# alice-secret is running on her daemon by now, so her own shell must see it.
-# Any permission problem reaching the socket shows up here instead.
 if echo "$shell_out" | grep -q "permission denied"; then
     bad "the account cannot reach its own docker socket: $(echo "$shell_out" | tail -1)"
 elif echo "$shell_out" | grep -qx alice-secret; then
     ok "and a shell can actually use it"
 else
-    bad "a shell could not list its own containers: $(echo "$shell_out" | tail -2 | tr '
-' ' ')"
+    bad "a shell could not list its own containers: $(echo "$shell_out" | tail -2 | tr '\n' ' ')"
 fi
 
-# The storage driver, which is the difference between `docker run` taking a
-# second and taking two minutes.
-#
-# vfs has no copy-on-write and copies the whole image on every create. dockerd
-# picks it silently when the graph filesystem refuses overlay2 -- which is what
-# a Ceph- or NFS-backed data directory does -- so nothing fails and everything
-# is slow. A real workspace hit exactly this.
+# dockerd silently falls back to vfs, which copies the whole image on every
+# create, when the graph filesystem refuses overlay2 (Ceph, NFS).
 driver=$(da info --format '{{.Driver}}' 2>/dev/null)
 if [ -z "$driver" ]; then
     bad "could not read the storage driver from $A's daemon"
@@ -484,17 +413,10 @@ fi
 
 echo
 echo "== 10. the workspace restarts and a daemon comes back when its account connects =="
-# The case that would otherwise lose everybody's work: the agent comes back,
-# finds every daemon's name taken, and `docker run --name` conflicts rather
-# than replacing.
-#
-# What survives is deliberately stated as CONTAINERS EXISTING, not running.
-# A restarted dockerd starts only containers with a restart policy, and neither
-# the account's containers nor the daemon itself has one: the agent is the only
-# supervisor (ADR 0019), so the daemon starts when its account next connects and
-# brings its graph with it.
-before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
-' ' ')
+# The agent comes back to every daemon's name taken, and must adopt rather than
+# conflict. What survives is CONTAINERS EXISTING, not running: nothing has a
+# restart policy (ADR 0019).
+before=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
 dind_before=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
 
 kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
@@ -509,22 +431,16 @@ for _ in $(seq 1 120); do
     sleep 1
 done
 
-# Asserted rather than assumed, because it is what ADR 0019 trades away: no
-# restart policy, no session yet, so nothing has started it.
 if outputs '^(exited|created)$' hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.State.Status}}'; then
     ok "$A's daemon stayed down until $A connects"
 else
     bad "something restarted $A's daemon: [$LAST_OUTPUT]"
 fi
 
-# Asserted as "exactly one", not by grepping a log line.
-#
-# A duplicate is the failure adoption exists to prevent, and the log message
-# is an implementation detail that was also a race: the agent runs Adopt the
-# moment it starts, while the parent dockerd is still bringing the daemons
-# back up, so it legitimately finds nothing running to adopt and Ensure does
-# the work on demand instead. The outcome is what the design promises.
-count=$(hostdocker exec "$CONTAINER" docker ps --all     --filter "name=^/rd-dind-$A$" --format '{{.Names}}' 2>/dev/null | grep -c .)
+# "Exactly one", not an adoption log line: Adopt runs while the parent dockerd
+# is still starting, may find nothing, and Ensure does the work later instead.
+count=$(hostdocker exec "$CONTAINER" docker ps --all \
+    --filter "name=^/rd-dind-$A$" --format '{{.Names}}' 2>/dev/null | grep -c .)
 if [ "$count" = "1" ]; then
     ok "exactly one daemon for $A after the restart, not a second one beside it"
 else
@@ -536,26 +452,19 @@ A_SOCK="$WORK/a2.sock"
 CLIENT_A_PID=$(session "$A" "$A_SOCK" "$WORK/a2.log" "$WORK/project-$A")
 if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
     bad "alice's endpoint never came back after the restart"
-    # The client's own log, which is where the reason is. Without it this
-    # failure reads as "slow" and costs a CI round trip to learn otherwise.
     sed 's/^/    A: /' "$WORK/a2.log" | tail -20
-    # And the daemon the endpoint is waiting for. This is the first Ensure
-    # after the workspace container restarted, so it is where a daemon that
-    # will not come back shows first.
     dump_dind "$A"
     dump_workspace_log 40
 fi
 
-after=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '
-' ' ')
+after=$(da ps --all --format '{{.Names}}' 2>/dev/null | sort | tr '\n' ' ')
 if [ -n "$before" ] && [ "$before" = "$after" ]; then
     ok "alice's containers survived the restart"
 else
     bad "alice's containers changed across the restart: [$before] -> [$after]"
 fi
 
-# Reused, not replaced. A new id would mean the old daemon was abandoned with
-# everything in it, which is what adoption exists to prevent.
+# A new id would mean the old daemon was abandoned with everything in it.
 dind_after=$(hostdocker exec "$CONTAINER" docker inspect "rd-dind-$A" --format '{{.Id}}' 2>/dev/null)
 if [ -n "$dind_before" ] && [ "$dind_before" = "$dind_after" ]; then
     ok "the same daemon container was reused, not replaced"
@@ -565,10 +474,8 @@ fi
 
 echo
 echo "== 11. the account's storage outlives its daemon container =="
-# The persistence promise, stated exactly: the graph volume is named and
-# labelled so the container in front of it is disposable. An upgrade removes
-# and recreates that container; if the storage were anonymous, every account's
-# work would go with it.
+# The graph volume is named and labelled so the container in front of it is
+# disposable: an upgrade removes and recreates that container.
 if outputs '^1$' hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$A-lib" \
         --format '{{index .Labels "remote-docker.daemon"}}'; then
     ok "the graph volume is labelled, so an operator can see what must not be pruned"
@@ -576,11 +483,9 @@ else
     bad "the graph volume carries no label; a prune would take it with nothing naming it"
 fi
 
-images_before=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
-' ' ')
+images_before=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '\n' ' ')
 
-# Remove the daemon CONTAINER, keeping the volume -- which is what an upgrade
-# does, and what adoption does after a redeploy.
+# Remove the daemon CONTAINER, keeping the volume, as an upgrade does.
 kill "$CLIENT_A_PID" 2>/dev/null; wait "$CLIENT_A_PID" 2>/dev/null; CLIENT_A_PID=""
 hostdocker exec "$CONTAINER" docker rm -f "rd-dind-$A" >/dev/null 2>&1
 
@@ -591,8 +496,7 @@ if ! wait_endpoint "$A_SOCK" "$CLIENT_A_PID"; then
     dump_dind "$A"
 fi
 
-images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '
-' ' ')
+images_after=$(da images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort | tr '\n' ' ')
 if [ -n "$images_before" ] && [ "$images_before" = "$images_after" ]; then
     ok "alice's images survived her daemon container being destroyed"
 else
@@ -607,14 +511,10 @@ fi
 
 echo
 echo "== 12. the NFS export is not reachable from a shell =="
-# The reverse forward binds 127.0.0.1 inside the account's own dind namespace
-# (agent/internal/sshd/forward_tcpip.go). A shell runs in the workspace
-# container's namespace, so it cannot reach the export, not even its own
-# account's. Opening a socket asks no forwarding policy, so the namespace is
-# the only thing deciding here.
-#
-# With one daemon for everybody (ADR 0012) the export binds in the namespace
-# the shells run in and this does not hold; test/integration.sh measures it.
+# The reverse forward binds inside the account's own dind namespace
+# (agent/internal/sshd/forward_tcpip.go) and a shell runs in the workspace's,
+# so the namespace is the only thing deciding here: a socket asks no policy.
+# With a shared daemon (ADR 0012) this does not hold.
 alice_port=$(cd "$WORK/project-$A" && REMOTE_DOCKER_STATE_DIR="$WORK/state-$A" \
     REMOTE_DOCKER_HOST=127.0.0.1 REMOTE_DOCKER_PORT="$SSH_PORT" \
     REMOTE_DOCKER_USER="$A" REMOTE_DOCKER_ENDPOINT="$A_SOCK" \
@@ -624,61 +524,42 @@ alice_port=$(cd "$WORK/project-$A" && REMOTE_DOCKER_STATE_DIR="$WORK/state-$A" \
 if [ -z "$alice_port" ]; then
     bad "could not read $A's tunnel port, so nothing was probed"
 else
-    # One probe, run in both namespaces, so the two answers are comparable. nc
-    # is busybox's, present in the workspace image and in alpine.
+    # One probe for both namespaces; busybox nc is in both images.
     probe="nc -w 2 127.0.0.1 $alice_port </dev/null && echo CONNECTED || echo REFUSED"
 
-    # A container holding a bind mount keeps the export in use, so the forward
-    # stays bound while the probes run. Without it an idle release unbinds the
-    # port and every probe below is refused for the wrong reason, which is a
-    # test that cannot fail.
+    # Holds the export in use, or an idle release unbinds the port and every
+    # probe is refused for the wrong reason.
     da run -d --name alice-hold -v "$WORK/project-$A:/w" alpine:3 sleep 300 >/dev/null 2>&1
 
-    # The positive control, and the claim the threat model's flow 3 makes about
-    # host networking: a container that joins the daemon's namespace lands
-    # where the export is bound, and reaches every share, not only its own
-    # mounts.
+    # The positive control: a host-network container in the daemon's namespace
+    # reaches the export (docs/threat-model.md, flow 3).
     inside=$(da run --rm --network host alpine:3 sh -c "$probe" 2>/dev/null | tr -d '\015')
     case "$inside" in
     *CONNECTED*) ok "the export answers inside $A's daemon namespace, so the port is live" ;;
     *) bad "the export did not answer inside $A's own namespace: [$inside]. The probes below prove nothing" ;;
     esac
 
-    # A shell WAITS for its account's daemon: agent/internal/sshd/session.go
-    # calls Ensure before it opens one, and Ensure spends up to
-    # daemons.DefaultReadyTimeout (180s) on a daemon that is not up. $B has not
-    # reconnected since section 10 restarted the workspace, so without this the
-    # probe pays for a cold dind boot rather than measuring what it is here to
-    # measure.
+    # A shell waits for its account's daemon (Ensure in
+    # agent/internal/sshd/session.go, up to daemons.DefaultReadyTimeout), and
+    # $B's is down since section 10 restarted the workspace.
     info "starting $B's daemon, so the shell probe does not pay for its boot"
     started_at=$(date +%s)
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
     if ! wait_dind "$B" 90; then
-        # Said HERE, while it is still about the daemon. Left to the probe, a
-        # daemon that will not stay up is reported as "the probe said nothing",
-        # which names the symptom and nothing that can be acted on.
         bad "$B's daemon did not answer in 180s, so the probe below proves nothing"
         dump_dind "$B"
     else
-        # Printed rather than only waited on: this is the one place a healthy
-        # daemon's whole boot is timed, and any claim about daemon startup has
-        # to come from it. 17.0s +/- 0.2 while dockerd slept at the
-        # unencrypted-listener warning, 1s once no daemon bound TCP
-        # (2026-09-08); wait_dind polls every 2s, which is the resolution.
+        # The one place a healthy daemon's boot is timed: 17.0s while dockerd
+        # slept at the unencrypted-listener warning, 1s since (2026-09-08), at
+        # wait_dind's 2s resolution.
         info "$B's daemon answered in $(( $(date +%s) - started_at ))s"
     fi
 
     for who in "$A" "$B"; do
-        # The exit status is kept: an empty answer is two failures the output
-        # cannot tell apart, `timeout` exiting 124 because the shell never
-        # opened, and 0 from a probe that ran and said nothing. ssh's own
-        # stderr goes to a file rather than into $reach, so a diagnostic line
-        # cannot be read as an answer below.
-        #
-        # 200s, longer than daemons.DefaultReadyTimeout on purpose: Ensure
-        # waits 180s for a daemon that is not up and only THEN writes the
-        # message naming the reason. At 120s four CI failures reported an empty
-        # answer and none carried a cause.
+        # The status tells 124 (the shell never opened) from a probe that said
+        # nothing. ssh's stderr goes to a file so it cannot read as an answer.
+        # 200s outlasts daemons.DefaultReadyTimeout, after which Ensure names
+        # its reason; shorter, the failure carries no cause.
         reach=$(ssh_account "$WORK/state-$who/id_ed25519" "$who" 200 "$probe" \
             2>"$WORK/probe-$who.err" | tr -d '\015')
         status=$?
@@ -702,19 +583,16 @@ fi
 
 echo
 echo "== 13. a daemon that was killed rather than stopped starts again =="
-# Arranged rather than waited for: in the wild this arrives about once in
-# eighty runs (agent/internal/daemons.ExecRoot has the failure and the
-# measurement). A stale containerd.pid only stops dockerd while the pid it
-# names is alive, so planting pid 1, the daemon container's own init, makes it
-# deterministic.
+# A stale containerd.pid stops dockerd only while the pid it names is alive,
+# so planting pid 1 makes a one-in-eighty failure deterministic
+# (daemons.ExecRoot in agent/internal/daemons/plan.go).
 EXECROOT=/var/run/docker
 PIDFILE=$EXECROOT/containerd/containerd.pid
 if ! planted=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
         sh -c "echo 1 >$PIDFILE && cat $PIDFILE" 2>&1); then
     bad "could not plant a stale containerd pid in $B's daemon: [$planted]"
 else
-    # kill, not stop: this is what the workspace container restarting does to
-    # every per-account daemon, since they die with the dockerd holding them.
+    # kill, not stop: what a workspace restart does to every per-account daemon.
     hostdocker exec "$CONTAINER" docker kill "rd-dind-$B" >/dev/null 2>&1
     hostdocker exec "$CONTAINER" docker start "rd-dind-$B" >/dev/null 2>&1
 
@@ -725,9 +603,8 @@ else
         dump_dind "$B"
     fi
 
-    # The mechanism, asserted separately from the outcome: a daemon that
-    # happened to start would otherwise hide a missing tmpfs until the next
-    # coincidence.
+    # The mechanism too: a daemon that happened to start would hide a missing
+    # tmpfs.
     if outputs '^tmpfs$' hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" \
             stat -f -c %T "$EXECROOT"; then
         ok "the exec-root is a tmpfs, so nothing in it survives a restart"
@@ -738,14 +615,9 @@ fi
 
 echo
 echo "== 14. an account's daemon binds no TCP API =="
-# dind's entrypoint supplies dockerd's --host flags whenever the first argument
-# is absent or starts with a dash, and one of them is always
-# tcp://0.0.0.0:2375: an unauthenticated Docker API, bound in the account's own
-# network namespace, where every container that account runs can reach it.
-# Naming `dockerd` first skips that block (agent/internal/daemons.Entrypoint).
-#
-# Two assertions, because either alone can pass for the wrong reason: what the
-# daemon BOUND, and what a container can REACH.
+# dind's entrypoint adds tcp://0.0.0.0:2375 unless the command names `dockerd`
+# first (the command daemons.Plan builds). Asserted as what the daemon BOUND and
+# what a container can REACH, since either alone can pass for the wrong reason.
 listeners=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$A" netstat -lnt 2>&1)
 case "$listeners" in
 *:2375*|*:2376*)
@@ -753,13 +625,11 @@ case "$listeners" in
 *Active*|*Proto*)
     ok "$A's daemon binds no Docker API on 2375 or 2376" ;;
 *)
-    # No header means netstat itself did not run, so the absence above is
-    # evidence of nothing.
+    # No header: netstat did not run, so the absence is evidence of nothing.
     bad "netstat said nothing inside $A's daemon, so no listener was measured: [$listeners]" ;;
 esac
 
-# --network host is the daemon's own namespace, which is where a published port
-# and the NFS export both live, so this is the reach a container really has.
+# --network host is the daemon's own namespace.
 probe2375="nc -w 2 127.0.0.1 2375 </dev/null && echo CONNECTED || echo REFUSED"
 reach=$(da run --rm --network host alpine:3 sh -c "$probe2375" 2>/dev/null | tr -d '\015')
 case "$reach" in
@@ -770,11 +640,8 @@ esac
 
 echo
 if [ "$FAIL" -ne 0 ]; then
-    # 200 rather than the default 60. A per-account daemon that will not stay
-    # up makes the workspace's own dockerd log one identical "container is not
-    # running" line every 2 seconds, so 60 lines is under two minutes of that
-    # and nothing else: on 2026-09-08 the whole dump was 51 copies of one line,
-    # and the daemon's first failure was already off the top.
+    # 200, not 60: a daemon that will not stay up logs "container is not
+    # running" every 2s, which pushes its first failure off a shorter tail.
     dump_workspace_log 200
 fi
 

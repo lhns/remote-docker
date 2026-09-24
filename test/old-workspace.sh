@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
-# THIS client against a PUBLISHED OLDER WORKSPACE, which is the only way the
-# compatibility claim can be checked at all: every other suite builds both ends
-# from this tree, so each always knows every command the other speaks. The
-# failure this exists for is a client asking for a channel the workspace has
-# never heard of, which HUNG a 0.6.0 client against a 0.5.1 workspace with
-# nothing on screen.
+# THIS client against a PUBLISHED OLDER WORKSPACE: every other suite builds both
+# ends from this tree. A client asking for a channel the workspace has never
+# heard of HUNG a 0.6.0 client against a 0.5.1 workspace with nothing on screen.
 #
-# PULLED rather than built from the v0.5.1 tag, so what is under test is what is
-# deployed. ghcr's tag listing does not name 0.5.1 at all and the tag is
-# pullable regardless (checked 2026-09-08; re-check with `docker pull
-# ghcr.io/lhns/remote-docker-workspace:0.5.1`). WORKSPACE_IMAGE overrides it for
-# whatever the oldest supported workspace becomes.
+# PULLED, so what is under test is what is deployed. ghcr's tag listing omits
+# 0.5.1 but it pulls (checked 2026-09-08; re-check with `docker pull
+# ghcr.io/lhns/remote-docker-workspace:0.5.1`). WORKSPACE_IMAGE overrides it.
 #
 # Requires: docker, a kernel with NFS client support, and network access to
 # ghcr.io.
@@ -56,8 +51,7 @@ if ! enrol "$ACCOUNT" "$WORK/state"; then
     exit 1
 fi
 
-# The shared daemon: the oldest deployment shape, and one fewer variable in
-# every failure below.
+# The shared daemon: the oldest deployment shape.
 if ! start_workspace false; then
     bad "workspace container failed to start"
     exit 1
@@ -72,8 +66,8 @@ wait_parent_dockerd
 SOCK="$WORK/client.sock"
 CLIENT_PID=$(start_session "$WORK/state" "$ACCOUNT" "$SOCK" "$WORK/client.log" "$WORK/project")
 
-# The bug: the client used to reach this point and stop. With a deadline the
-# endpoint comes up whether or not the cache channel is served.
+# Where the client used to hang: the endpoint must come up whether or not the
+# cache channel is served.
 if wait_endpoint "$SOCK" "$CLIENT_PID"; then
     ok "the endpoint came up against a workspace that does not serve the cache channel"
 else
@@ -96,8 +90,7 @@ else
     bad "the container read: $saw"
 fi
 
-# A workspace serving every mount it was given is doing nothing wrong, and must
-# not be told about a capability nobody asked for.
+# Nobody asked for the cache, so nothing may be said about it.
 if grep -qiE "cache channel|does not serve" "$WORK/client.log"; then
     bad "the client said something about the cache channel anyway"
     grep -iE "cache channel|does not serve" "$WORK/client.log" | head -3 | sed 's/^/    /'
@@ -107,9 +100,8 @@ fi
 
 echo
 echo "== 4. a mount that needs the cache is refused, naming itself =="
-# Refused rather than quietly served as write=through, because a silent
-# downgrade moves where somebody's writes live. Bounded by the docker timeout,
-# so a client that hangs here fails the suite rather than the whole job.
+# Refused rather than quietly served as write=through: a silent downgrade moves
+# where somebody's writes live.
 start=$(date +%s)
 outputs 'asks for write=back' d run --rm -v "$WORK/project:/w:read=cached,write=back" alpine:3 true
 refused=$?
@@ -121,10 +113,8 @@ if [ "$refused" -eq 0 ]; then
 else
     bad "the mount was not refused by name"
 fi
-# Either remedy: which one depends on the agent and both are correct. Measured
-# 2026-09-08 against the published 0.5.1 image, this is the SILENT case: that
-# agent never answers, so the refusal is the deadline rather than anything the
-# workspace said.
+# Either remedy is correct. 0.5.1 never answers (measured 2026-09-08), so there
+# the refusal is the deadline.
 if grep -qE 'fix: use write=through|fix: update the workspace' <<<"$LAST_OUTPUT"; then
     ok "the refusal carries a remedy"
 else

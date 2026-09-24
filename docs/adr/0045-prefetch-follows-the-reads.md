@@ -13,34 +13,23 @@
 ## What forced it
 
 ADR 0044's fill ignored the reads: smallest first over the whole tree, at full
-speed, up to a budget. Three things were wrong with it, and all three are the same
-mistake of not looking at what the container reads:
+speed, up to a budget.
 
 - **A subtree read paid for the tree.** A build touching two of twenty
-  directories waited behind the other eighteen, since the walk order is size
-  and not need.
-- **The fill competed with the reads.** `Cache.fill` was `stream -> sendBatch`
-  back to back on the SSH connection the live NFS traffic shares, so a miss
-  queued behind a 16 MiB batch: about 13s on a 10 Mbit link.
-- **The budget was the only bound**, 2 GiB by default, which is not a thing
-  to move without asking.
+  directories waited behind the other eighteen.
+- **The fill competed with the reads.** Batches went back to back on the SSH
+  connection the live NFS traffic shares, so a miss queued behind a 16 MiB
+  batch: about 13s on a 10 Mbit link.
+- **The budget was the only bound**, 2 GiB by default.
+- **The lower was mounted `consistent`, `actimeo=1`**, so every file the fill
+  had not reached lost the attribute cache `cached` had bought. Fixed here: the
+  lower carries the share's read mode (ADR 0044).
 
-And one thing was wrong with the union itself: `core-agent/union/union.go`
-mounted the lower `consistent`, `actimeo=1`, so every file the fill had not
-reached lost the attribute cache `cached` had already bought (ADR 0042). Fixed
-in this change; the lower now carries the share's read mode.
-
-**Two problems, one already solved.** Coherent caching of data that HAS been
-read is `cached`: the page cache holds the bytes, `actimeo=60` holds the
-attributes, and the watcher's replayed SETATTR refreshes the one inode that
-changed. Re-reads are free and correct. What remains is the FIRST read of
-each small file, two serial round trips the client drives and no server can
-merge: 300 files at 160ms is 98s after `cached` has done everything it can.
-That is a batching problem, and the only answer is to ship files before they
-are asked for, over a channel that carries many in one request.
-
-So the union is not a cache. **It is the landing zone for a batch**, the one
-local place a prefetched file can live that merges with the live view.
+Re-reads are already `cached`'s, free and correct. What remains is the FIRST
+read of each small file, two serial round trips no server can merge: 300 files
+at 160ms is 98s after `cached` has done everything it can. That is a batching
+problem, so the union is **the landing zone for a batch**, not a cache (ADR
+0044, "The union is a landing zone").
 
 ## The decision
 
@@ -80,11 +69,9 @@ cache for re-reads. It costs what it costs today and is never sent twice.
 
 ### The walk
 
-The walk stays, over small files only, smallest first, bounded by the
-budget, and it **yields**: nothing is walked until 2s have passed since the
-last miss, walk batches are 1 MiB so a demand batch never waits long behind
-one, and demand batches go first. The server sees every miss, so it knows
-when the consumer is reading.
+Over small files only, smallest first, bounded by the budget, and it
+**yields**: nothing is walked within 2s of the last miss (`quietFor`), walk
+batches are 1 MiB (`walkBatch`), and demand batches go first.
 
 ### Where the numbers come from
 
@@ -106,21 +93,19 @@ when the consumer is reading.
 | `direct` | `ephemeral` | yes | no | |
 | `cached` | `ephemeral` | yes | if `prefetch` is on | |
 
-Prefetch is on exactly when `read=cached` AND a union exists. In a `direct`
-corner the upper holds only what the container wrote: files in the upper are
-served from local disk with no revalidation, so prefetching into it would hand
-somebody who asked for live reads a cache. `read=cached,write=through` has no
-upper to land in; step 0.5 below is what could change that.
+Prefetch runs exactly when `read=cached` AND a union exists. In a `direct`
+corner the upper holds only what the container wrote: a file in
+the upper is served with no revalidation, so prefetching would hand somebody
+who asked for live reads a cache. `read=cached,write=through` has no upper to
+land in; step 0.5 below could change that.
 
 ### The switch
 
 - `prefetch` (`REMOTE_DOCKER_PREFETCH`): `off` (default), `eager`, `tree`.
-  One sender in `dircache/prefetch.go`; `eager` differs from `tree` in two
-  tests (`Touch` ignored, no quiet wait, 16 MiB batches). `eager` is kept
-  because a dense workload is its case once the apply is fixed, and the two
-  are compared in one bench job.
-- `remote status` reports bytes sent per share, counted when a batch is
-  sent.
+  One sender in `dircache/prefetch.go`; `eager` differs from `tree` in three
+  ways: `Touch` ignored, no quiet wait, 16 MiB batches (`batchBytes`). Kept
+  because a dense workload is its case once the apply is fixed.
+- `remote status` reports bytes sent per share.
 
 ## What it measured
 
@@ -152,9 +137,10 @@ Four findings from the simulator that changed the design:
 
 **Measured**, `test/bench.sh` on GitHub runners, 2026-09-04, run 33868598926
 on PR 110: one job per shape, every row a fresh container over a fresh
-300-file tree, the workload started the moment the container was up. Seconds
-for the workload; `union` is `read=cached,write=back`, filled under each
-policy. Re-check with the `bench` label on a pull request.
+300-file tree, the workload started the moment the container was up. Seconds;
+`union` is `read=cached,write=back`. The run predates the `prefetch` switch;
+its `blind` is today's `eager`. Re-check with the `bench` label on a pull
+request.
 
 | RTT | workload | `read=direct` | `read=cached` | union, tree | union, eager |
 |---|---|---|---|---|---|
@@ -177,70 +163,62 @@ policy. Re-check with the `bench` label on a pull request.
 | 10 Mbit | dense | 0.87 | 0.74 | 0.86 | 0.70 |
 | | sparse | 0.09 | 0.09 | 0.28 | 0.21 |
 
-The run predates the `prefetch` switch; its `blind` is today's `eager`.
-
 **Every pass criterion failed at latency, and the reason is not the tree.**
 
-- A union reads a cold tree in the time `read=direct` takes, and reads six
-  sparse files in ten to forty times what a plain mount takes. `read=cached`
-  beats every union row at every latency on every workload but dense x3,
-  where the union's second and third passes are local.
-- The cause is where a batch LANDS. The agent applies a tar through the
-  merged mount, one file at a time, with `O_TRUNC` on a name that exists in
-  the lower, and fuse-overlayfs answers that with a copy-up: a lookup, an
-  open and a read of the lower over NFS before the write reaches the upper.
-  Landing one file is several round trips, serial, on the same link and the
-  same one-request-at-a-time server the container is reading through. The
-  fill cannot get ahead of the reader, and while it runs it slows the reader
-  down; a sparse read of six files is queued behind three hundred copy-ups.
-  With no network in it the same apply is 0.36ms a file (`union-probe.sh`).
+- A cold union reads a tree in the time `read=direct` takes, and six sparse
+  files in ten to forty times a plain mount. `read=cached` beats every union
+  row at every latency on every workload but dense x3, where the union's
+  second and third passes are local.
+- The cause is where a batch LANDS. The agent applies the tar through the
+  merged mount one file at a time, with `O_TRUNC` on a name the lower has, and
+  fuse-overlayfs answers with a copy-up: lookup, open and read of the lower
+  over NFS before the write reaches the upper. Landing a file is several
+  serial round trips on the link and the one-request-at-a-time server the
+  container reads through, so the fill cannot get ahead of the reader and
+  slows it; a sparse read of six files queues behind three hundred copy-ups.
 - `tree` against `eager`: the same, or worse on subtree and sparse, because
   the first demand batch at a 256 KiB leaf is the whole 125 KB tree, applied
-  at the cost above, and the reader competes with it. Nothing about the
-  tree's choices can be read from this table until landing a batch is
-  cheaper than reading a file.
+  at that cost. The tree's choices cannot be read from this table until
+  landing a batch is cheaper than reading a file.
 - At 160ms `fetched` reads 0 for rows whose apply had not returned when the
-  workload ended, and after seventeen rows no further container started
-  in that job; the agent's log was not in the job's output, so the cause is
-  unrecorded. `bench.yml` dumps it always now.
-- Unshaped and on 10 Mbit every mode is within a few hundred milliseconds
-  of every other, as before.
+  workload ended, and after seventeen rows no further container started in
+  that job. The agent's log was not in the output, so the cause is
+  unrecorded, and nothing dumps it yet (checked 2026-09-23: `grep -n logs
+  test/bench.sh .github/workflows/bench.yml` prints nothing).
+- Unshaped and on 10 Mbit every mode is within a few hundred milliseconds of
+  every other.
 
-The claim that survives is ADR 0044's: once the upper HOLDS the tree, a
-read of it is local (dense x3 at 160ms: 229s for three passes against 499s
-for `read=direct`, so the second and third passes together cost about 20s).
-What does not survive is that the upper can be filled faster than the
-container reads, by this mechanism, over a link with latency.
+What survives is ADR 0044's claim: once the upper HOLDS the tree, a read of it
+is local (dense x3 at 160ms: 229s for three passes against 499s for
+`read=direct`, so passes two and three cost about 20s together). What does
+not is that this mechanism fills the upper faster than the container reads,
+over a link with latency.
 
 **What follows, decided by this table and not yet built:**
 
-- The apply has to pipeline. Round trips are paid per file because the tar
-  is walked serially; a pool of writers puts many in flight, and a serial
-  server still answers pipelined requests in turn with the latency paid
-  once per batch. Writing each file under a temporary name and renaming it
-  over the lower's avoids the copy-up's data read as well. Both are in
-  `agent/internal/unions/write.go`, and `union-probe.sh` over a shaped NFS
-  lower is where they are measured before the bench runs again.
-- Step 0.5, warming the page cache instead of writing an upper, pipelines
-  for the same reason and touches no upper at all.
-- Prefetch is off by default until then; `eager` stays selectable so the
-  next table compares both in one job.
+- The apply has to pipeline: a pool of writers puts many files in flight, and
+  a serial server answers them in turn with the latency paid once per batch.
+  Writing under a temporary name and renaming over the lower's also avoids
+  the copy-up's data read. Both belong in `agent/internal/unions/write.go`,
+  measured by `union-probe.sh` over a shaped NFS lower before the bench runs
+  again.
+- Prefetch is off by default until then; `eager` stays selectable so the next
+  table compares both in one job.
 - The union's write path has the same shape: a create looks the new name up
   in the lower, so 100 new small files cost 13s at 40ms under every mode.
   Namespace operations reach the lower; only data stays local.
 
 **Not yet measured, and do not quote otherwise:**
 
-- **Step 0.5: where a prefetched file should land.** Tar into the upper is
-  what this builds on. The alternative is the agent warming the page cache by
-  reading the paths through the NFS mount in parallel: nothing written, works
-  with every write mode, and then prefetch would run in all six corners. It
-  rests on the container's mount sharing a superblock with the agent's
-  (`sharecache`, the kernel default for one export and one option set), which
-  is an assumption until a container's READ count reads zero after a warm.
-  The probe is written down here so the next plan runs it; if warming is at
-  least as fast, the union becomes write capture only and the applied
-  manifest, `OpDrop` and the fill's Apply path go.
+- **Step 0.5: where a prefetched file should land.** The alternative to tar
+  into the upper is the agent warming the page cache by reading the paths
+  through the NFS mount in parallel: nothing written, pipelined for free, works
+  with every write mode, so prefetch would run in all six corners. It rests on
+  the container's mount sharing a superblock with the agent's (`sharecache`,
+  the kernel default for one export and one option set), an assumption until
+  a container's READ count reads zero after a warm. If warming is at least as
+  fast, the union becomes write capture only and the applied manifest,
+  `OpDrop` and the fill's Apply path go.
 
 ## Rejected, with the reason each was retired
 
@@ -275,17 +253,15 @@ depth one is US 6,529,998 and US 11,474,948.
 
 ## Consequences
 
-- **A `read=cached` union revalidates every 60s now, not every second.**
-  The lower carries the read mode.
-- **Prefetch is bounded by the link, not by a number in a config file.** The
-  budget still caps the walk; it no longer decides how much a read pulls.
-- **Landing a batch costs 0.36ms a file with no network in it**: 3,000
-  files through the union in 1.07s (`test/union-probe.sh`, 2026-09-04). The
-  2.6ms a file the old settle column suggested was the link, not the union.
+- **A `read=cached` union revalidates every 60s, not every second.**
+- **Prefetch is bounded by the link, not by a config number.** The budget
+  still caps the walk; it no longer decides how much a read pulls.
+- **Landing a batch costs 0.36ms a file with no network in it**: 3,000 files
+  through the union in 1.07s (`test/union-probe.sh`, 2026-09-04). The 2.6ms a
+  file the old settle column suggested was the link, not the union.
 - **A fresh share fills at once.** Nothing has been read, so the walk has
   nothing to yield to; the first miss stops it for 2s.
-- **The simulator is a model and the bench is the gate, and the bench
-  contradicted the model.** The model charges a batch `RTT + transfer`; the
-  real apply charges several round trips per file. The model is corrected
-  when the apply is, not before, so that the next table can be read against
+- **The bench contradicted the simulator.** The model charges a batch
+  `RTT + transfer`; the real apply charges several round trips per file. The
+  model is corrected when the apply is, so the next table can be read against
   it.

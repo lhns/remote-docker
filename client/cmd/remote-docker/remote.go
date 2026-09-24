@@ -1,15 +1,7 @@
 package main
 
-// Everything that is ours, under one command.
-//
-// The root of this binary is the Docker CLI, so that `docker run` is what a
-// person types and nothing has to be installed to make that true. That leaves
-// exactly one place for the commands that are about the remote itself, and
-// this is it.
-//
-// A remote IS the workspace, so there is no `workspace` level under this: `ls`
-// lists them, `create` adds one. The verbs are docker's own, which is the same
-// borrowing `workspace` did when it had them, for the same reason.
+// Everything that is ours, under `remote` (ADR 0024). A remote is a workspace,
+// so `ls`, `create` and the rest sit directly under it.
 
 import (
 	"context"
@@ -38,17 +30,8 @@ workspace the current docker context names.`,
 		RunE: helpWhenBare,
 	}
 
-	// The workspace options live here rather than on the root, and that is
-	// load bearing rather than tidy. The root is the Docker CLI, whose own
-	// root flags include --host and --user; a persistent flag of ours with
-	// those names would be merged into every docker subcommand, where pflag
-	// silently skips the duplicate and the meaning depends on which command
-	// you happened to reach. A clashing SHORTHAND is worse still and panics
-	// the subtree outright.
-	//
-	// Which workspace a DOCKER command talks to is a different question with a
-	// different answer: the docker context, which is docker's own mechanism
-	// and which `remote use` selects.
+	// Never on the root, which has docker's own --host and --user (ADR 0024).
+	// A docker command's workspace is chosen by the docker context instead.
 	cmd.PersistentFlags().StringVar(&overrides.Workspace, "workspace", "", "which configured workspace to use")
 	cmd.PersistentFlags().StringVar(&overrides.Host, "host", "", "workspace address")
 	cmd.PersistentFlags().IntVar(&overrides.Port, "port", 0, "workspace SSH port")
@@ -105,12 +88,8 @@ account there.`,
 				return err
 			}
 
-			// config.KeyComment(), not a bare "remote-docker": the comment is
-			// the only thing distinguishing one .pub from another in the
-			// workspace's authorized_keys.d, so an anonymous key cannot be
-			// audited or attributed to a machine. LoadOrCreateKey only sets a
-			// comment when it GENERATES, and enroll is what usually generates,
-			// so this is the spelling that ends up on almost every key.
+			// The comment is what attributes a key to a machine in
+			// authorized_keys.d.
 			key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 			if err != nil {
 				return err
@@ -121,8 +100,7 @@ account there.`,
 			_, _ = fmt.Fprintf(out, "It must be saved as: authorized_keys.d/%s.pub\n", cfg.User)
 			_, _ = fmt.Fprintln(out, "(the filename becomes your account name there)")
 			_, _ = fmt.Fprintln(out)
-			// With the comment, for the reason above: a key loaded from disk
-			// rather than generated carries none until one is asked for.
+			// Again: a key loaded from disk carries no comment of its own.
 			_, _ = fmt.Fprintln(out, key.AuthorizedKey(config.KeyComment()))
 			return nil
 		},

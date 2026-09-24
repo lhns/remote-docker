@@ -47,9 +47,7 @@ func (s *notifySink) Send(_ context.Context, frame notify.Frame) error {
 		return err
 	}
 	if len(encoded)+1 > notify.MaxFrame {
-		// The far side's scanner would truncate at its buffer limit and then
-		// desynchronise on the remainder, which is a far worse failure than
-		// admitting one oversized frame was not sent.
+		// The agent's scanner would truncate it and desynchronise.
 		return fmt.Errorf("change frame of %d bytes exceeds the %d byte limit",
 			len(encoded)+1, notify.MaxFrame)
 	}
@@ -64,11 +62,8 @@ func (s *notifySink) Send(_ context.Context, frame notify.Frame) error {
 
 func (s *notifySink) Close() error { return s.stream.Close() }
 
-// startNotify attaches the watcher to a freshly established connection.
-//
-// A workspace that cannot do this is not an error worth failing a session
-// over: everything else about the connection works, and the user is told once
-// rather than on every reconnect.
+// startNotify attaches the watcher to a new connection. A workspace without
+// the channel is warned about once, not failed.
 func (s *Session) startNotify(live *liveConn) {
 	if s.watch == nil {
 		return
@@ -85,8 +80,6 @@ func (s *Session) startNotify(live *liveConn) {
 	s.syncWatch()
 }
 
-// sharesOf adapts the NFS registry's view of what is exported to the
-// watcher's.
 func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 	all := registry.Shares()
 	out := make([]fswatch.Share, 0, len(all))
@@ -100,13 +93,8 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 	return out
 }
 
-// reconcileShares keeps the watcher's idea of what to watch in step with the
-// registry.
-//
-// Registration already notifies directly, so this is the same belt-and-braces
-// the port manager uses: a periodic pass costs nothing and covers the paths
-// that do not go through the notifying one, such as a share a MOUNT restored
-// from the record.
+// reconcileShares periodically resyncs the watcher, covering shares registered
+// without notifying it, such as a share restored from the record.
 func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -115,8 +103,7 @@ func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Nothing to reconcile while dormant, and re-syncing the real set
-			// would put back the watches Standby just dropped.
+			// Syncing while dormant would restore the watches Standby dropped.
 			if s.isDormant() {
 				continue
 			}

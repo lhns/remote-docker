@@ -16,19 +16,10 @@ import (
 	"github.com/lhns/remote-docker/client/internal/proxy"
 )
 
-// A session in the background.
-//
-// `start` spawns `start --foreground`, so the thing running in the background
-// is exactly the thing a person would have run in a terminal, with its output
-// going to a log. There is no second implementation of the session to keep in
-// step with the first, and `start --help` describes both.
+// A background session is `remote start --foreground`, spawned detached with
+// its output in a log.
 
 // How long to wait for an endpoint to start or stop answering.
-//
-// startTimeout is the generous one: the first thing a spawned daemon does is
-// bind the endpoint, but on a cold start it may also be loading a key and
-// reading known_hosts off a slow disk. stopTimeout can be shorter because the
-// session has already acknowledged the request before we begin waiting.
 const (
 	startTimeout = 20 * time.Second
 	stopTimeout  = 15 * time.Second
@@ -99,13 +90,7 @@ REMOTE_DOCKER_TRACE here rather than on the docker command you run.`,
 }
 
 // waitForExit blocks until the process is gone, and reports whether it got
-// there before the deadline.
-//
-// A pid of 0 means nobody told us which process to watch: an older session
-// that does not report one, or a status request that failed. Treated as done
-// rather than as a failure: the endpoint has already gone quiet, which is what
-// this command could check before, and refusing to return would turn a missing
-// nicety into a broken `stop`.
+// there before the deadline. An unknown pid (0) counts as gone.
 func waitForExit(pid int, timeout time.Duration) bool {
 	if pid <= 0 {
 		return true
@@ -198,20 +183,12 @@ func sessionOf(cfg config.Config) string {
 	return fmt.Sprintf("the session for %q", cfg.Name)
 }
 
-// stopSession asks the session serving an endpoint to stop, and returns once
-// its process has gone.
-//
-// The PROCESS, not the endpoint. The endpoint going quiet is the START of the
-// teardown: Session.Close shuts the listener first, so no request can arrive
-// mid-teardown, and only then drops the SSH connection, the reverse tunnel and
-// the NFS export. An account has exactly ONE reverse-tunnel port (ADR 0003) and
-// a host session fails hard when it cannot take it, so returning at the
-// listener lets the next session start against a port the workspace has not
-// released, which kills its NFS server and takes the session down with it.
+// stopSession asks the session to stop and returns once its PROCESS has gone.
+// The listener closes first in teardown, so returning when the endpoint goes
+// quiet lets the next session start before the workspace has released its
+// reverse-tunnel port, and that session then fails.
 func stopSession(endpoint string) error {
-	// Asked for first, because after the shutdown there is nothing left to
-	// ask. Advisory: a pid we cannot read only costs the second wait below,
-	// never correctness.
+	// Asked before the shutdown, while something can answer.
 	var st proxy.Status
 	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
 		st.PID = proxy.Owner(endpoint)
@@ -221,8 +198,7 @@ func stopSession(endpoint string) error {
 		return fmt.Errorf("stopping the session: %w", err)
 	}
 
-	// Confirmed rather than assumed: the daemon acknowledges before it acts,
-	// so a successful reply only means it agreed to stop.
+	// The reply comes before the daemon acts.
 	if !waitForEndpoint(endpoint, false, stopTimeout) {
 		return fmt.Errorf("the session acknowledged the stop but is still serving %s",
 			proxy.DockerHost(endpoint))
@@ -233,11 +209,8 @@ func stopSession(endpoint string) error {
 	return nil
 }
 
-// lingeringError is a session that acknowledged the stop, stopped serving,
-// and whose process is still there. Its own type so restartDaemon can tell it
-// from a refusal: the endpoint is free, so a start can go ahead, and the
-// lingering process is a warning and not a reason to leave the old build
-// serving.
+// lingeringError is a session that stopped serving but whose process is still
+// there. restartDaemon starts anyway, since the endpoint is free.
 type lingeringError struct {
 	endpoint string
 	pid      int
@@ -254,22 +227,14 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return fmt.Errorf("creating the log directory: %w", err)
 	}
-	// Appended, not truncated: the log of the run that failed is exactly what
-	// somebody needs when the next one will not start either.
+	// Appended, so the previous failed run's log survives.
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", logPath, err)
 	}
 	defer func() { _ = logFile.Close() }()
 
-	// The workspace is passed explicitly rather than inherited from the
-	// environment, so the daemon serves the workspace that was asked for even
-	// if it is started from a shell whose variables say otherwise.
-	// Itself, in the foreground: one command serves a workspace, and the
-	// background case is that same command with something else holding it.
-	//
-	// Under `remote`, because that is where our commands are: the root is the
-	// Docker CLI, so a bare "start" reaches nothing.
+	// The workspace is passed explicitly, not inherited from the environment.
 	args := []string{"remote", "start", "--foreground"}
 	if cfg.Name != "" {
 		args = append(args, "--workspace", cfg.Name)
@@ -286,23 +251,14 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting the background session: %w", err)
 	}
-	// Released deliberately: this process is about to exit and must not be the
-	// daemon's parent for any longer than it takes to launch it.
 	_ = cmd.Process.Release()
 
 	if waitForEndpoint(endpoint, true, startTimeout) {
 		return nil
 	}
 
-	// Killed, not left behind. Returning the error on its own leaves a child
-	// that is merely SLOW rather than dead: it binds the endpoint a moment
-	// later and serves a session the user was told had failed to start, with
-	// no pid on screen and nothing owning it. Worse, the next `start` then
-	// reports "already running" and points at the session its predecessor
-	// disowned.
-	//
-	// By pid, because cmd.Process was released above: this process must not
-	// be the daemon's parent, so it cannot wait on it either.
+	// Killed, or a slow child binds later and serves a session reported as
+	// failed, which the next `start` then calls "already running".
 	stopped := "and was stopped"
 	if err := killPID(cmd.Process.Pid); err != nil {
 		stopped = fmt.Sprintf("and could not be stopped (pid %d: %v)", cmd.Process.Pid, err)
@@ -323,8 +279,7 @@ func control(endpoint, method, path string, out any) error {
 		Transport: &http.Transport{DialContext: proxy.DialEndpoint(endpoint)},
 		Timeout:   10 * time.Second,
 	}
-	// The host is ignored (the transport dials the endpoint) but a URL
-	// needs one.
+	// The host is ignored: the transport dials the endpoint.
 	req, err := http.NewRequest(method, "http://remote-docker"+proxy.ControlPrefix+path, nil)
 	if err != nil {
 		return err
@@ -351,19 +306,10 @@ func control(endpoint, method, path string, out any) error {
 	return json.Unmarshal(body, out)
 }
 
-// ensureDaemon makes a usable session available, restarting one built from a
-// different commit when that costs nothing.
-//
-// A running daemon serves the endpoint, so without the restart a freshly
-// updated client talks to the OLD build and appears not to have changed, which
-// presents as commands the new build added answering Docker's own "page not
-// found" -- forwarded by a daemon that predates them.
-//
-// The error is what stopped a session existing, and returning it is the whole
-// point. The command below cannot say anything better: it reaches an endpoint
-// nobody is serving and reports a missing daemon, which is true and explains
-// nothing. Something already serving is NOT an error, however old or foreign
-// it is, because the command about to run will work.
+// ensureDaemon makes a session available, restarting one built from a
+// different commit when it is idle. Otherwise an updated client talks to the
+// old build, and new endpoints answer "page not found". Something already
+// serving is never an error, however old or foreign.
 func ensureDaemon(cfg config.Config, endpoint string) error {
 	if !proxy.Reachable(endpoint) {
 		if err := requireHost(cfg); err != nil {
@@ -374,10 +320,7 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 
 	var st proxy.Status
 	if err := control(endpoint, http.MethodGet, "status", &st); err != nil {
-		// Something is serving the endpoint but will not answer for itself:
-		// a daemon too old to have a control channel, or not ours at all.
-		// Left alone either way, because taking over something we cannot identify
-		// is worse than the mismatch.
+		// Too old for a control channel, or not ours: left alone.
 		return nil
 	}
 
@@ -388,18 +331,14 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 		return nil
 	}
 
-	// Versions differ. Whether that is worth doing anything about depends on
-	// what would be lost, and asking THAT costs a round trip to the workspace,
-	// which is why it is asked here and not on every command.
+	// Asked only on a mismatch: it costs a round trip to the workspace.
 	var idle proxy.Idle
 	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil || !idle.Safe {
 		warnVersionMismatch(st)
 		return nil
 	}
 
-	// A restart that fails is a WARNING, not this function's error: the
-	// session that is already serving still works, and the only cost is
-	// running a different build than this one.
+	// A failed restart is a warning: the serving session still works.
 	if err := restartDaemon(cfg, endpoint); err != nil {
 		warnVersionMismatch(st)
 	}
@@ -410,12 +349,8 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 // than this binary.
 func versionDiffers(st proxy.Status) bool { return st.Version != version }
 
-// differentBuild names both builds without claiming an order.
-//
-// "different", never "outdated": a sha build names a commit and says nothing
-// about when, so sha-a7634c0 and sha-95e42ac cannot be sequenced and neither
-// can be compared with a release version. Saying which is newer would be
-// inventing information.
+// differentBuild names both builds without claiming an order: sha builds
+// cannot be sequenced, so never "outdated".
 func differentBuild(st proxy.Status) string {
 	return fmt.Sprintf("a different build (session %s, this binary %s)",
 		orUnknown(st.Version), orUnknown(version))
@@ -436,12 +371,8 @@ func orUnknown(v string) string {
 	return v
 }
 
-// restartDaemon stops a running session and starts one from this binary.
-//
-// A process still exiting after its endpoint went quiet is warned about and
-// not waited for: the endpoint is free and the start binds it, while aborting
-// would leave the old build serving nothing and the new one never started. Any
-// other failure to stop leaves the running session alone.
+// restartDaemon stops a running session and starts one from this binary. A
+// lingering process only warns; any other stop failure aborts.
 func restartDaemon(cfg config.Config, endpoint string) error {
 	if err := stopSession(endpoint); err != nil {
 		var lingering *lingeringError
@@ -498,12 +429,8 @@ container holding a directory from it loses its filesystem. -f overrides.`,
 	return cmd
 }
 
-// reportLocalSession describes the background session, if there is one.
-//
-// The version is the reason this exists. A running session serves the
-// endpoint, so an updated client talks to the OLD build and behaves like it --
-// and until this line existed there was no way to see that from the outside,
-// which is exactly how it went unnoticed during development.
+// reportLocalSession describes the background session, if there is one,
+// including its version, the only outside sign of a stale build.
 func reportLocalSession(out io.Writer, cfg config.Config) {
 	f := gather(cfg)
 	row(out, "session", f.sessionLine())
@@ -515,23 +442,12 @@ func reportLocalSession(out io.Writer, cfg config.Config) {
 		row(out, "session version", orUnknown(f.local.Version))
 		return
 	}
-	// The marker is what a reader scanning the rows catches; versionsLine
-	// carries the same one so the two views of a session agree.
+	// versionsLine carries the same marker.
 	rowf(out, "session version", "%s (DIFFERENT)", differentBuild(f.local))
 }
 
-// warnTraceGoesNowhere says so when this process is tracing and the process
-// that would print the traces is not.
-//
-// REMOTE_DOCKER_TRACE is read once, at start, by whichever process forwards
-// the requests, and that is the background session, not this command. So
-// `REMOTE_DOCKER_TRACE=1 remote-docker docker ps` against a running session
-// prints nothing and explains nothing, which reads as "tracing does not work"
-// rather than "you set it on the wrong process".
-//
-// Only when the session is genuinely not tracing: somebody who started the
-// session with the variable set is already getting what they asked for and
-// must not be told otherwise.
+// warnTraceGoesNowhere warns when REMOTE_DOCKER_TRACE is set here but not on
+// the background session, which is the process that forwards and would trace.
 func warnTraceGoesNowhere(w io.Writer, st proxy.Status) {
 	if !proxy.Tracing() || st.Tracing {
 		return
@@ -539,8 +455,7 @@ func warnTraceGoesNowhere(w io.Writer, st proxy.Status) {
 	writeTraceWarning(w, st)
 }
 
-// writeTraceWarning is the message, separated from the decision to print it so
-// a test can read it without owning the environment this process started with.
+// writeTraceWarning is split out so a test need not set the environment.
 func writeTraceWarning(w io.Writer, st proxy.Status) {
 	_, _ = fmt.Fprintf(w,
 		"\nwarning: %s is set here, but the session forwarding the requests (pid %d) was started without it.\n"+
@@ -548,21 +463,9 @@ func writeTraceWarning(w io.Writer, st proxy.Status) {
 		proxy.TraceEnv, st.PID, proxy.TraceEnv, ourCommand("restart"))
 }
 
-// warnSlowStorage says so when the workspace's daemon is on vfs.
-//
-// vfs has no copy-on-write: it copies the entire image on every container
-// create. Nothing fails: `docker ps` stays instant, `docker run` takes
-// minutes, so it presents as a hang, and it stays that way until somebody
-// changes the workspace's configuration. A real workspace lost a day to it.
-//
-// Printed here, on the path every `remote-docker docker ...` already takes,
-// because that is where somebody is standing when they notice the slowness.
-// The agent logs it too, and `status` shows it, but both require already
-// suspecting storage, and reaching the daemon's own host to look is exactly
-// what an account may not do.
-//
-// To stderr, and only when it is true: a correctly configured workspace prints
-// nothing, and nothing here ever touches stdout, which belongs to the command.
+// warnSlowStorage warns, on every docker command, when the workspace daemon is
+// on vfs: it copies the whole image per container, so `docker run` takes
+// minutes and presents as a hang. Stderr only.
 func warnSlowStorage(w io.Writer, st proxy.Status) {
 	if st.Storage != "vfs" {
 		return
@@ -570,8 +473,7 @@ func warnSlowStorage(w io.Writer, st proxy.Status) {
 	_, _ = fmt.Fprintf(w, "\nwarning: %s.\n  fix: %s\n", slowStorage, fixSlowStorage)
 }
 
-// slowStorage is the one verdict on a daemon using vfs, and fixSlowStorage
-// its remedy. `status` prints the verdict; the warning adds the fix.
+// `status` prints slowStorage; the warning adds the fix.
 const (
 	slowStorage    = "the workspace daemon is on vfs, so containers start slowly"
 	fixSlowStorage = "set WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs, then rebuild the daemon"

@@ -17,19 +17,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Two questions, and no suite starts until both have passed.
-  #
-  # Does this change need the suites? PATHS decide, and the `integration` label
-  # is the manual override for a change that touches none of them. It was the
-  # label ALONE, and that label did not exist, so the gate never opened: every
-  # pull request this repository had skipped the suites silently and reported
-  # green. Fails OPEN, because a wasted runner is cheaper than that.
-  #
-  # Can a privileged container on this runner mount NFS? The runner's kernel is
-  # shared with every container on it, so no apt-get inside the image can
-  # supply NFS client support: without it the suites need a different home.
-  # Folded in here rather than a job of its own for 26s of work (why a runner
-  # slot is worth that: ci.yml, the lint job).
+  # Two questions before any suite starts. Does this change need them? Paths
+  # decide, the `integration` label overrides, and it fails OPEN. Can a
+  # privileged container here mount NFS? The kernel is the runner's, so no
+  # package in the image can supply it.
   gate:
     name: do the suites apply, and can this runner mount nfs
     runs-on: ubuntu-latest
@@ -115,12 +106,8 @@ jobs:
         if: steps.decide.outputs.run == 'true'
         run: echo "NFS client works inside a privileged container on this runner."
 
-  # Can a cache be a union mount? Every question the cache mode (ADR 0044) asks
-  # of the KERNEL rather than of our code, with no binary of ours but the watch
-  # probe. A job of its own rather than another tail on gate: at about three
-  # minutes it is the one capability probe the suites should not wait behind,
-  # and it settles nothing they depend on. It runs on every pull request
-  # because its answers are about the runner's kernel, and that moves.
+  # What the cache mode (ADR 0044) asks of the KERNEL. Its own job so the
+  # suites do not wait three minutes behind it.
   union-capability:
     name: can a cache be a union mount
     runs-on: ubuntu-latest
@@ -138,17 +125,8 @@ jobs:
       - name: probe
         run: bash test/union-probe.sh
 
-  # The suites, one job each, all on the same runner recipe. The names are what
-  # the checks are known by and stay as they were; each suite's own header says
-  # what it proves. What is not in those headers:
-  #
-  #   vm              the only suite needing an NFS client and fuse-overlayfs
-  #                   on the RUNNER, since it has no container to carry them.
-  #   old-workspace   the only suite that does not build both ends; it needs
-  #                   network access to ghcr.io.
-  #   volume-ownership  the only suite whose oracle is plain Docker, which
-  #                   is what separates Docker's rule about a fresh
-  #                   volume's mountpoint from a rewrite of a named one.
+  # One job per suite. The names are what the checks are known by. vm is the
+  # only suite needing an NFS client and fuse-overlayfs on the runner itself.
   suite:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -161,34 +139,27 @@ jobs:
         include:
           - suite: integration
             name: end to end
-            container: remote-docker-itest
             timeout: 30
           - suite: vm
             name: the agent on a machine
             timeout: 30
           - suite: per-user-dind
             name: a daemon per account
-            container: remote-docker-peruser
             timeout: 40
           - suite: two-clients
             name: two machines, one account
-            container: remote-docker-twoclients
             timeout: 40
           - suite: nfs-resilience
             name: what a mount does when the session drops
-            container: remote-docker-nfsres
             timeout: 40
           - suite: fs-conformance
             name: does a share behave like a bind mount
-            container: remote-docker-fsconf
             timeout: 30
           - suite: old-workspace
             name: this client against a published older workspace
-            container: remote-docker-oldworkspace
             timeout: 30
           - suite: volume-ownership
             name: who owns a named volume's mountpoint
-            container: remote-docker-volown
             timeout: 20
     steps:
       - uses: actions/checkout@v7
@@ -205,8 +176,7 @@ jobs:
       - name: run the suite
         run: bash test/${{ matrix.suite }}.sh
 
-      # The path fs-conformance.sh copies to. It sits outside the suite's work
-      # directory, which the suite removes on exit.
+      # Outside the suite's work directory, which it removes on exit.
       - name: keep the transcripts and the report
         if: always() && matrix.suite == 'fs-conformance'
         uses: actions/upload-artifact@v7
@@ -214,8 +184,3 @@ jobs:
           name: fs-conformance-linux
           path: /tmp/fs-conformance-artifacts
           if-no-files-found: warn
-
-      # vm.sh runs the agent on the runner and has no container to ask.
-      - name: workspace logs on failure
-        if: failure() && matrix.container
-        run: docker logs ${{ matrix.container }} 2>&1 | tail -100 || true

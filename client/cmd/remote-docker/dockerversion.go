@@ -10,15 +10,9 @@ import (
 	dockerversion "github.com/docker/cli/cli/version"
 )
 
-// embeddedCLIVersion is the docker/cli version compiled into this binary.
-//
-// Read from the build info rather than written down. docker/cli sets its own
-// version through ldflags at ITS release, which we do not perform, so
-// without this the embedded CLI reports "unknown-version", and `docker
-// version` on a machine with no other docker is the only place to find out
-// what is actually running.
-//
-// A constant would drift: the version lives in go.mod and dependabot moves it.
+// embeddedCLIVersion is the docker/cli version compiled into this binary, from
+// the build info: docker/cli sets it by ldflags at its own release, so it would
+// otherwise say "unknown-version".
 func embeddedCLIVersion() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -28,20 +22,14 @@ func embeddedCLIVersion() string {
 		if dep.Path != "github.com/docker/cli" {
 			continue
 		}
-		// "v29.7.2+incompatible" is how a pre-modules major version arrives.
-		// Neither part means anything to somebody reading a version number.
+		// "v29.7.2+incompatible" -> "29.7.2".
 		v := strings.TrimPrefix(dep.Version, "v")
 		return strings.TrimSuffix(v, "+incompatible")
 	}
 	return ""
 }
 
-// nameTheEmbeddedCLI tells docker/cli what it is, so its own `version` command
-// stops saying "unknown-version" and says who is carrying it.
-//
-// PlatformName is the line docker prints as "Client: Docker Engine -
-// Community". Ours is not that, and saying so tells somebody reading `docker
-// version` which program they are holding.
+// nameTheEmbeddedCLI sets the version and platform name `docker version` prints.
 func nameTheEmbeddedCLI() {
 	if v := embeddedCLIVersion(); v != "" {
 		dockerversion.Version = v
@@ -49,12 +37,8 @@ func nameTheEmbeddedCLI() {
 	dockerversion.PlatformName = "remote-docker " + version
 }
 
-// dockerVersionLine is what `docker --version` prints.
-//
-// The shape is docker's ("Docker version X, build Y") because that is what
-// scripts and tools parse, and a different shape here would break them for no
-// gain. The build field says remote-docker rather than a commit we do not
-// have, which is the honest thing to put in it and also the useful one.
+// dockerVersionLine is what `docker --version` prints, in docker's shape
+// because scripts parse it.
 func dockerVersionLine() string {
 	v := embeddedCLIVersion()
 	if v == "" {

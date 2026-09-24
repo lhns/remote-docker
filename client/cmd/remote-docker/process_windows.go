@@ -16,17 +16,9 @@ func killPID(pid int) error {
 	return p.Kill()
 }
 
-// processAlive reports whether pid is still RUNNING.
-//
-// Opening the process is not the question: one that has exited can still be
-// opened while any handle to it remains, so answering that way makes `stop`
-// wait its whole timeout and then report a running session that has been gone
-// for seconds.
-//
-// GetExitCodeProcess is the question. STILL_ACTIVE (259) means running;
-// anything else is an exit status. The ambiguity Windows is famous for here --
-// a process that genuinely exits WITH 259 reads as alive, costs nothing in
-// this use: the session exits 0 or is killed, and the caller has a timeout.
+// processAlive reports whether pid is still RUNNING. An exited process can
+// still be opened while any handle remains, so the exit code is what decides.
+// A process that exits with 259 reads as alive; the caller has a timeout.
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false

@@ -11,11 +11,8 @@ import (
 
 func lockDir() string { return filepath.Dir(defaultSocketPath()) }
 
-// acquireLock takes an exclusive, non-blocking flock.
-//
-// flock rather than a pid file with a liveness check, because the kernel
-// releases it when the holder dies, including when it is killed, which a
-// pid file cannot survive correctly. A stale lock is therefore impossible.
+// acquireLock takes an exclusive, non-blocking flock, which the kernel
+// releases when the holder dies, so it cannot go stale.
 func acquireLock(endpoint string) (*Lock, error) {
 	path := LockPath(endpoint)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

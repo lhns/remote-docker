@@ -21,20 +21,14 @@ import (
 	"github.com/lhns/remote-docker/dircache"
 )
 
-// The client's end of the cache channel (ADR 0044), which is this project's
-// dircache.Store: the wire format, the tar and its codec are all in here, and
-// none of them is visible to the policy that drives it.
-//
-// One connection per session, shared by every delegated share, and serialised:
-// each request is answered before the next is written, as the agent reads them
-// (agent/internal/sshd/cache.go, which has why).
+// The client's end of the cache channel (ADR 0044), and this project's
+// dircache.Store. One per session, shared by every share, and serialised.
 
 // cacheChannel is the session's link to the workspace's union mounts.
 type cacheChannel struct {
 	stream io.ReadWriteCloser
 
-	// codec is the payload encoding this workspace said it can read, settled
-	// once in the greeting and fixed for the life of the channel.
+	// codec is the payload encoding the workspace announced in its greeting.
 	codec string
 
 	// turn is held for a whole exchange (see do). A channel rather than a
@@ -61,9 +55,8 @@ func openCache(ctx context.Context, client *tunnelclient.Client) (*cacheChannel,
 	}
 
 	c := newCacheChannel(stream, r)
-	// Chosen from what the AGENT said it can read, never from what this client
-	// can produce: a workspace older than compression announces no codecs at
-	// all, and sending it one would be refused rather than negotiated.
+	// Chosen from what the AGENT announced, never from what this client can
+	// produce: an older workspace announces none and refuses one.
 	if reply.Hello.Accepts(cache.CodecZstd) {
 		c.codec = cache.CodecZstd
 	}
@@ -78,9 +71,8 @@ func (e *notServedError) Error() string {
 	return fmt.Sprintf("the workspace did not answer %q", e.command)
 }
 
-// silentError is a channel the workspace accepted and then said nothing on
-// before the deadline. Apart from notServedError because silence names no
-// cause: what is reported is what was observed and nothing more.
+// silentError is a channel the workspace accepted and then said nothing on.
+// Silence names no cause, so it reports only what was observed.
 type silentError struct {
 	command string
 	after   time.Duration
@@ -90,28 +82,14 @@ func (e *silentError) Error() string {
 	return fmt.Sprintf("the workspace accepted %q and then said nothing for %s", e.command, e.after)
 }
 
-// handshakeTimeout bounds every greeting this client waits for. The agent
-// writes one as it begins serving the command, waiting on no daemon, no mount
-// and no disk, so this is a single round trip. The same number as
-// refusalReasonTimeout, for the same reason.
-//
-// Without it the client hangs outright and prints nothing (measured against
-// v0.5.1 asked for workspace-cache): an agent with no case for the command runs
-// it as a shell command, whose exit os/exec never reports because it is copying
-// a stdin this client will not close while it blocks on the greeting. The agent
-// side is fixed, but only for agents built since, and every command added later
-// has the same shape against every workspace already deployed.
+// handshakeTimeout bounds every greeting, which is one round trip. Without it
+// an agent that does not know the command (v0.5.1) runs it as a shell command
+// that never exits, and the client hangs printing nothing.
 const handshakeTimeout = 10 * time.Second
 
-// cacheRefusal turns a cache channel that could not be opened into the tail of
-// the sentence refusing a mount that needs one, with its remedy under it.
-//
-// Two cases rather than one message, because only one is a statement about the
-// workspace: "does not serve it" is rewrite.unionAvailable's own sentence, so a
-// missing channel and a missing union arrive alike, while a workspace that
-// answered nothing is reported as answering nothing. The agent's version rides
-// along as CONTEXT and is never the test: what gates is a mount needing a
-// capability, never a version compared against a table.
+// cacheRefusal turns a failed cache channel into the tail of the sentence
+// refusing a mount, with its remedy. The agent version is context, never the
+// test.
 func cacheRefusal(err error, agent string) error {
 	var notServed *notServedError
 	if errors.As(err, &notServed) {
@@ -119,9 +97,7 @@ func cacheRefusal(err error, agent string) error {
 	}
 	var silent *silentError
 	if errors.As(err, &silent) {
-		// "Try again" is the obvious remedy and is wrong for the case that
-		// produced this: measured against a real v0.5.1 workspace, which never
-		// answers at all.
+		// Not "try again": a v0.5.1 workspace never answers.
 		return fmt.Errorf("%w\n  fix: use write=%s, which is served by the mount itself",
 			silent, workspace.WriteThrough)
 	}
@@ -137,14 +113,9 @@ func runningVersion(agent string) string {
 	return "; it runs remote-dockerd " + agent
 }
 
-// greet opens a channel and completes its version handshake.
-//
-// The agent dispatches session commands on exact strings and runs anything
-// else, so an agent too old for a command runs `sh -c "<command>"` and exits
-// 127 with nothing to say, indistinguishable from a working channel that has
-// nothing to say. Reading a greeting first is the only thing that tells them
-// apart. hello reads the version out of a decoded greeting, and false means
-// the line was not one.
+// greet opens a channel and completes its version handshake. An agent too old
+// for the command runs it as a shell command and says nothing, so the greeting
+// is what tells them apart. hello returns false for a line that is not one.
 func greet[T any](ctx context.Context, client *tunnelclient.Client, command string, frame, want int, hello func(T) (int, bool)) (io.ReadWriteCloser, *bufio.Reader, T, error) {
 	var greeting T
 	stream, err := client.OpenStream(command)
@@ -157,20 +128,15 @@ func greet[T any](ctx context.Context, client *tunnelclient.Client, command stri
 	if err != nil {
 		_ = stream.Close()
 		if errors.Is(err, context.Canceled) {
-			// This client stopped waiting, which is the session closing. Its
-			// error travels unchanged rather than becoming a claim that the
-			// workspace was silent for a wait nobody performed.
+			// The session closing, not a silent workspace.
 			return nil, nil, greeting, err
 		}
 		if errors.Is(err, context.DeadlineExceeded) && waited > 0 {
 			return nil, nil, greeting, &silentError{command: command, after: waited}
 		}
 		if errors.Is(err, io.EOF) {
-			// A CLEAN end with nothing on it: the command ran and produced no
-			// greeting, which is an agent with no case for it once its shell
-			// has exited. A broken link ends in a reset or a closed pipe
-			// instead, and stays the error it was rather than becoming a claim
-			// about the workspace's age.
+			// A CLEAN end: an agent with no case for the command. A broken
+			// link ends otherwise and keeps its own error.
 			return nil, nil, greeting, &notServedError{command: command}
 		}
 		return nil, nil, greeting, fmt.Errorf("no greeting from the workspace: %w", err)
@@ -191,21 +157,14 @@ func greet[T any](ctx context.Context, client *tunnelclient.Client, command stri
 	return stream, r, greeting, nil
 }
 
-// readGreeting reads the one line a greeting is, bounded. Closing the stream is
-// the only lever, for the reason cacheChannel.do gives: the close fails the
-// blocked read, so the goroutine ends on the slow path as well as the fast one.
-//
-// It returns the budget it read under, which is handshakeTimeout or the
-// caller's own deadline where that is shorter. Reporting the constant instead
-// names a wait nobody performed, which is what a refusal must never do.
+// readGreeting reads the greeting line, bounded; on timeout it closes the
+// stream to fail the blocked read. It returns the budget actually given, which
+// may be the caller's shorter deadline.
 func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (string, time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 
-	// Derived rather than measured, so the message names the budget the read was
-	// given rather than however long the scheduler took to report it. To the
-	// second, because this is a diagnosis: a budget under half a second rounds
-	// to zero, and silentError is not raised for a wait of 0s.
+	// Rounded to the second: under half a second is 0, which is not "silent".
 	deadline, _ := ctx.Deadline()
 	budget := time.Until(deadline).Round(time.Second)
 
@@ -228,18 +187,10 @@ func readGreeting(ctx context.Context, stream io.Closer, r *bufio.Reader) (strin
 	}
 }
 
-// do sends one request, with its payload if it has one, and returns the answer.
-//
-// The lock spans the whole exchange rather than the write alone: the replies
-// are not tagged, so a second request written before the first was answered
-// would make every reply after it belong to the wrong caller.
-//
-// The context bounds it, and the only honest way to end a timed-out exchange is
-// to CLOSE the channel. It is an SSH stream with no deadline to set, and a reply
-// abandoned half read leaves the next caller reading a JSON line out of the
-// middle of a tar. A wedged workspace therefore costs this channel, which the
-// session opens again on the next connection, rather than costing every request
-// after it.
+// do sends one request, with its payload, and returns the answer. Replies are
+// untagged, so the lock spans the whole exchange. A timed-out exchange CLOSES
+// the channel: there is no deadline to set, and a half-read reply would leave
+// the next caller reading from the middle of a tar.
 func (c *cacheChannel) do(ctx context.Context, req cache.Request, body io.Reader) (cache.Reply, error) {
 	if err := req.Validate(); err != nil {
 		return cache.Reply{}, err
@@ -287,8 +238,7 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 		return cache.Reply{}, fmt.Errorf("cache: sending %s: %w", req.Op, err)
 	}
 	if body != nil && req.Bytes > 0 {
-		// Exactly the number of bytes the header promised. A short body would
-		// leave the agent reading the next request out of the middle of a tar.
+		// Exactly the bytes promised, or the stream desynchronises.
 		if _, err := io.CopyN(c.stream, body, req.Bytes); err != nil {
 			return cache.Reply{}, fmt.Errorf("cache: sending the batch for %s: %w", req.Export, err)
 		}
@@ -302,9 +252,7 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 	if err := json.Unmarshal([]byte(line), &reply); err != nil {
 		return cache.Reply{}, fmt.Errorf("cache: reading the answer for %s: %w", req.Op, err)
 	}
-	// Whatever the outcome, a promised payload is read: it follows on the same
-	// stream, and leaving it there would put the next reply in the middle of a
-	// tar.
+	// A promised payload is read whatever the outcome, for the same reason.
 	if reply.Bytes > 0 {
 		reply.Payload = make([]byte, reply.Bytes)
 		if _, err := io.ReadFull(c.r, reply.Payload); err != nil {
@@ -317,11 +265,8 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 	return reply, nil
 }
 
-// Changes asks what the container did to a share.
-//
-// The wire type and dircache's are converted here rather than shared, because
-// dircache depends on nothing at all and this is the boundary that costs
-// (ADR 0021). Field for field, and a compile error if either side gains one.
+// Changes asks what the container did to a share, converting the wire type to
+// dircache's field for field (ADR 0021).
 func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.Change, error) {
 	reply, err := c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export}, nil)
 	if reply.Unknown {
@@ -342,10 +287,7 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.C
 	return changes, nil
 }
 
-// Pull fetches the named paths, calling into once per file.
-//
-// Chunked for the same reason Drop is, and unpacked here because the tar is
-// this channel's own encoding: it built the one going the other way.
+// Pull fetches the named paths in chunks, calling into once per file.
 func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, into func(dircache.File) error) error {
 	for _, batch := range chunkPaths(paths) {
 		reply, err := c.do(ctx, cache.Request{
@@ -363,11 +305,7 @@ func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, 
 	return nil
 }
 
-// untar hands each regular file in an archive over.
-//
-// Only regular files: a written-back directory is made by the writer as it
-// needs one, and nothing else in a cache layer can be carried to another
-// machine safely.
+// untar hands over each regular file; nothing else is safe to carry back.
 func untar(body io.Reader, into func(dircache.File) error) error {
 	tr := tar.NewReader(body)
 	for {
@@ -420,11 +358,6 @@ func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port 
 }
 
 // Apply puts one batch of files, read from root, into a share's cache.
-//
-// Entries rather than bytes, so the codec stays in here: the frame's length has
-// to describe what is ACTUALLY sent, which means whatever builds the tar has to
-// know how it was encoded. Handing the caller that fact made it the caller's
-// problem in two files.
 func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []dircache.Entry) error {
 	body, err := tarOf(root, entries, c.codec)
 	if err != nil {
@@ -439,12 +372,8 @@ func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries [
 	return err
 }
 
-// Drop removes paths from a share's cache, which is what a deletion here
-// becomes.
-//
-// However many: the paths ride in the JSON header line, which the protocol
-// caps, so a `git checkout` across a large branch is several requests. That is
-// a fact about the wire and no caller has to know it.
+// Drop removes paths from a share's cache, in as many requests as the frame
+// cap needs.
 func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) error {
 	for _, batch := range chunkPaths(paths) {
 		if _, err := c.do(ctx, cache.Request{
@@ -461,26 +390,20 @@ func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) 
 // Close ends the channel, which releases every union this session prepared.
 func (c *cacheChannel) Close() error { return c.stream.Close() }
 
-// liveCache is this session's cache channel, or nil when there is no live
-// connection or the workspace does not serve one.
-//
-// Asked per batch rather than captured once: a fill outlives the request that
-// started it, and the connection under it can be released and reopened while it
-// runs (ADR 0015).
+// liveCache is this session's cache channel, or nil. Asked per batch: a fill
+// outlives the connection it started on (ADR 0015).
 func (s *Session) liveCache() *cacheChannel {
 	live, ok := s.gate.currentLive()
 	if !ok || live == nil {
 		return nil
 	}
-	// Only reached for a share that already has a union, so this is the
-	// memoised answer. A mount's refusal is where the reason is said.
+	// Memoised; a mount's refusal is where the reason is said.
 	c, _ := s.ensureCacheChan(s.ctx, live)
 	return c
 }
 
-// liveStore is what dircache is given, and the nil check is why it is not
-// liveCache itself: a typed nil pointer in an interface is not a nil interface,
-// so handing one over would make every call a panic instead of a no-op.
+// liveStore is liveCache as a dircache.Store, never a typed nil in an
+// interface.
 func (s *Session) liveStore() (dircache.Store, bool) {
 	live := s.liveCache()
 	if live == nil {
@@ -489,24 +412,16 @@ func (s *Session) liveStore() (dircache.Store, bool) {
 	return live, true
 }
 
-// shareCache is what the rewriter is handed: the channel for the request the
-// container is waiting on, and the session for the fill it is not.
-//
-// Two objects because the two have different lifetimes. Prepare must finish
-// before the container is created; the fill outlives the request entirely and
-// belongs to the session, which is what survives a connection being released
-// and reopened underneath it (ADR 0015).
+// shareCache is what the rewriter is handed: the channel for Prepare, which
+// the container waits on, and the session for the fill, which outlives the
+// connection (ADR 0015).
 type shareCache struct {
 	*cacheChannel
 	session *Session
 }
 
-// Attach hands the share to the engine in the engine's own terms, and does
-// nothing on a session that caches nothing (the engine is nil there).
-//
-// The translation from the mode is here and nowhere else: dircache depends on
-// nothing and cannot name workspace.Mode, so what it is told is what the mode
-// MEANS for it -- fill ahead, or not; carry writes back, or not.
+// Attach hands the share to the engine, if any, translating the mode into
+// dircache's terms, which cannot name workspace.Mode.
 func (c shareCache) Attach(export, localPath string, mode workspace.Mode) {
 	if c.session.cache != nil {
 		c.session.cache.Attach(export, localPath, dircache.ShareOptions{
@@ -516,21 +431,12 @@ func (c shareCache) Attach(export, localPath string, mode workspace.Mode) {
 	}
 }
 
-// pathsPerFrame bounds how many paths one request names.
-//
-// The paths of a pull or a drop ride in the JSON header line, which the
-// protocol caps at cache.MaxFrame -- so a `git checkout` across a
-// large branch, or a build that wrote ten thousand files, is not a big request
-// but a REFUSED one, and the refusal is the whole operation rather than a part
-// of it. Half the frame, because the op, the export and JSON's own escaping
-// share the line.
+// pathsPerFrame bounds the paths one request names: they ride in the header
+// line, capped at cache.MaxFrame, and an oversized one is refused whole. Half,
+// leaving room for the rest of the line and JSON escaping.
 const pathsPerFrame = cache.MaxFrame / 2
 
-// tarOf builds the batch.
-//
-// In memory because the channel frames a payload by length: the workspace has
-// to be told how many bytes follow before they are sent. dircache bounds a
-// batch before it gets here.
+// tarOf builds the batch in memory, since a payload is framed by its length.
 func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) {
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -539,18 +445,14 @@ func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) 
 
 	var buf bytes.Buffer
 	if codec != cache.CodecZstd {
-		// Written before the buffer is read: `return buf.Bytes(), WriteTar(...)`
-		// evaluates the bytes first and hands back an empty slice.
+		// Not `return buf.Bytes(), WriteTar(...)`: that returns an empty slice.
 		if err := cache.WriteTar(cache.TarFilesFrom(root, names), &buf); err != nil {
 			return nil, err
 		}
 		return buf.Bytes(), nil
 	}
 
-	// The compressor wraps the tar writer, so the tar is written once and the
-	// bytes that leave are the encoded ones, which is what the frame's length
-	// has to describe. Default level: a source tree compresses hard enough that
-	// the link, not the CPU, is what the fill waits on.
+	// The frame length describes the encoded bytes.
 	zw, err := zstd.NewWriter(&buf)
 	if err != nil {
 		return nil, err
@@ -559,8 +461,7 @@ func tarOf(root string, entries []dircache.Entry, codec string) ([]byte, error) 
 		_ = zw.Close()
 		return nil, err
 	}
-	// Closed before the buffer is measured, or the payload's length is right
-	// and its contents end early.
+	// Closed before the buffer is read, or the payload ends early.
 	if err := zw.Close(); err != nil {
 		return nil, err
 	}
@@ -575,8 +476,7 @@ func chunkPaths(paths []string) [][]string {
 		size  int
 	)
 	for _, p := range paths {
-		// Quotes, a comma, and headroom for the escaping of a name this does
-		// not inspect.
+		// Quotes, a comma, and headroom for escaping.
 		cost := len(p) + 8
 		if len(batch) > 0 && size+cost > pathsPerFrame {
 			out = append(out, batch)

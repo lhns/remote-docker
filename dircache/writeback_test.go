@@ -119,7 +119,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 	}
 
 	c := cacheWith(t, store)
-	c.shares.set("/m/1111111111111111", root, &shareState{Report: Report{Done: true}, Cached: true})
+	c.shares.set("/m/1111111111111111", root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
 	c.shares.noteSent("/m/1111111111111111", root, []Entry{{Path: "main.go", Size: 7}})
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111")
@@ -149,7 +149,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 func TestWriteBackShareStopsWhenTheShareIsGone(t *testing.T) {
 	store := &fakeStore{changesErr: ErrShareGone}
 	c := cacheWith(t, store)
-	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{Report: Report{Done: true}, Cached: true})
+	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{Report: Report{Done: true}, Cached: true}, nil)
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
@@ -166,7 +166,7 @@ func TestWriteBackShareWaitsForTheFill(t *testing.T) {
 		changes: []Change{{Path: "/main.go", Size: 1, ModTime: 1}},
 	}
 	c := cacheWith(t, store)
-	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{})
+	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{}, nil)
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
@@ -188,12 +188,16 @@ func TestDropDeletedAsksOnlyForWhatIsGone(t *testing.T) {
 
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.dropDeleted("/m/1111111111111111", root, []string{"/kept.go", "/gone.go"})
+	c.shares.set("/m/1111111111111111", root, &shareState{}, []string{"/kept.go", "/gone.go"})
+	c.reconcileDeletions("/m/1111111111111111", root)
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if len(store.dropped) != 1 || store.dropped[0] != "/gone.go" {
 		t.Errorf("dropped %v, want only /gone.go", store.dropped)
+	}
+	if got := c.shares.recordedPaths("/m/1111111111111111"); len(got) != 1 || got[0] != "/kept.go" {
+		t.Errorf("recorded %v after the drop, want only /kept.go", got)
 	}
 }
 
@@ -208,7 +212,8 @@ func TestDropDeletedSaysNothingWhenNothingIsGone(t *testing.T) {
 
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.dropDeleted("/m/1111111111111111", root, []string{"/a.go"})
+	c.shares.set("/m/1111111111111111", root, &shareState{}, []string{"/a.go"})
+	c.reconcileDeletions("/m/1111111111111111", root)
 
 	store.mu.Lock()
 	defer store.mu.Unlock()

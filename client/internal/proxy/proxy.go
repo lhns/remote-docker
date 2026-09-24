@@ -1,9 +1,5 @@
 // Package proxy exposes a local Docker API endpoint that forwards to the
-// workspace daemon over SSH, rewriting bind mounts on the way.
-//
-// This is what lets the real `docker` CLI, Compose, Testcontainers and IDE
-// integrations work unmodified: they speak the Engine API, so the translation
-// belongs at the API rather than in a command wrapper (ADR 0005).
+// workspace daemon over SSH, rewriting bind mounts on the way (ADR 0005).
 package proxy
 
 import (
@@ -25,9 +21,6 @@ import (
 )
 
 // Dialer opens a fresh connection to the workspace's Docker socket.
-//
-// In production this is an SSH session running `docker system dial-stdio`;
-// in tests it is a plain net.Dial at a local server.
 type Dialer interface {
 	DialDocker(ctx context.Context) (io.ReadWriteCloser, error)
 }
@@ -43,21 +36,13 @@ type Proxy struct {
 	Rewriter Rewriter
 	Log      *slog.Logger
 
-	// Control answers this session's own endpoints, under ControlPrefix. Nil
-	// for a session that is not the daemon, which then reports them as absent
-	// rather than pretending.
+	// Control answers ControlPrefix. Nil unless this session is the daemon.
 	Control Control
 
 	wg sync.WaitGroup
 
-	// live tracks accepted connections so shutdown can close them.
-	//
-	// A Docker client keeps its connection alive between requests, so a
-	// handler that has finished one sits blocked reading the next. Harmless
-	// while the client is another process, which exits and closes the socket.
-	// Not when the embedded CLI is the client: it runs in this process, so
-	// nothing closes it, and Serve waits minutes for a peer that is waiting to
-	// be told to go away.
+	// live lets shutdown close idle keep-alive connections, which nothing
+	// else closes when the client is the embedded CLI in this process.
 	mu       sync.Mutex
 	live     map[net.Conn]struct{}
 	shutdown bool
@@ -65,10 +50,8 @@ type Proxy struct {
 
 // Serve accepts connections until l is closed.
 func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
-	// Closing live connections on cancellation is what makes shutdown prompt.
-	// An idle keep-alive connection has nothing to say and will not notice
-	// the context; the handler blocked on it only unblocks when the socket
-	// underneath it goes.
+	// A handler blocked on an idle connection ignores ctx; closing it is the
+	// only way to unblock it.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -115,12 +98,8 @@ func (p *Proxy) track(conn net.Conn) bool {
 	return true
 }
 
-// clientGone reports an error that only means the other end hung up.
-//
-// A Docker client abandons requests it no longer needs. It stops caring
-// about /containers/<id>/wait the moment the attach stream says the container
-// is gone, so a write failing partway through is routine, and reporting it
-// puts "The pipe has been ended." after a container that ran perfectly.
+// clientGone reports an error that only means the other end hung up. Routine:
+// a client abandons /wait once attach says the container is gone.
 func clientGone(err error) bool {
 	return errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, io.ErrClosedPipe) ||
@@ -129,8 +108,8 @@ func clientGone(err error) bool {
 		peerGone(err)
 }
 
-// closing reports whether shutdown has begun, so a failure caused by our own
-// teardown is not reported as one caused by anything else.
+// closing reports whether shutdown has begun, so our own teardown is not
+// logged as a fault.
 func (p *Proxy) closing() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -143,11 +122,8 @@ func (p *Proxy) untrack(conn net.Conn) {
 	delete(p.live, conn)
 }
 
-// closeLive drops every accepted connection, including hijacked ones.
-//
-// Deliberately brutal: by the time this runs the session is going away, and a
-// container's attached stream is about to lose the tunnel underneath it
-// regardless. Ending it here is the same outcome, minutes sooner.
+// closeLive drops every accepted connection, hijacked ones included: the
+// session is going and would take them anyway.
 func (p *Proxy) closeLive() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -159,21 +135,14 @@ func (p *Proxy) closeLive() {
 }
 
 // handleConn services one client connection, which may carry several requests.
-//
-// Each request gets its own connection to the workspace daemon. Keep-alive
-// multiplexing across a shared upstream is where proxies of this shape go
-// wrong: a hijacked or streaming response leaves the connection in a state
-// the next request cannot use. An extra SSH channel is cheap by comparison.
+// Each request gets its own upstream: a hijacked or streamed response leaves a
+// shared one unusable.
 func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 	reader := bufio.NewReader(client)
 
 	for {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
-			// Once shutdown has begun every connection is closed underneath
-			// its handler on purpose, so the resulting read failure describes
-			// the shutdown rather than a fault, and reporting it makes a clean
-			// exit look like a crash.
 			if err != io.EOF && !clientGone(err) && !p.closing() {
 				p.log().Warn("reading request", "err", err)
 			}
@@ -183,8 +152,6 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 		keepGoing, err := p.forward(ctx, client, reader, req)
 		if err != nil {
 			if p.closing() || clientGone(err) {
-				// The client is going away with us; there is nobody left to
-				// read an error and nothing left to do about it.
 				return
 			}
 			p.log().Warn("proxying a request", "method", req.Method, "path", req.URL.Path, "err", err)
@@ -200,18 +167,12 @@ func (p *Proxy) handleConn(ctx context.Context, client net.Conn) {
 // forward sends one request upstream and relays the response. It reports
 // whether the connection can carry another request.
 func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufio.Reader, req *http.Request) (bool, error) {
-	// Answered here, never forwarded: the workspace has never heard of these
-	// and would return a bewildering 404 from a daemon the user did not think
-	// they were talking to.
 	if isControl(req) {
 		p.serveControl(client, req)
 		return false, nil
 	}
 
-	// Two halves, because they fail and are fixed differently: opening the
-	// stream (an SSH channel and an exec) is ours, everything after it is the
-	// daemon's. Without the split, "docker run takes five seconds" cannot be
-	// attributed to either.
+	// Traced in parts: the dial is ours, everything after is the daemon's.
 	started := time.Now()
 	upstream, err := p.Dialer.DialDocker(ctx)
 	if err != nil {
@@ -223,8 +184,7 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 	var sent, headed, written time.Time
 	if traceEnabled {
 		defer func() {
-			// A hijack never reaches the write, so its zero time would render
-			// as a nonsense duration. Reported as the stream it is instead.
+			// A hijack never sets written.
 			body := "stream"
 			if !written.IsZero() {
 				body = written.Sub(headed).Round(time.Millisecond).String()
@@ -245,9 +205,6 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 		}
 	}
 
-	// The daemon is reached over a stream we own end to end, so there is no
-	// proxy in front of it and no reason to keep the request's original
-	// framing headers.
 	req.Close = false
 	if err := req.Write(upstream); err != nil {
 		return false, fmt.Errorf("sending request: %w", err)
@@ -262,13 +219,11 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 	headed = time.Now()
 	defer resp.Body.Close()
 
-	// A hijack (`docker exec`, `attach`, and buildx's /session, which carries
-	// gRPC) means everything after the response head is raw bytes in both
-	// directions. Nothing may parse or buffer it after this point.
+	// After a hijack (exec, attach, buildx's /session) everything is raw bytes
+	// both ways.
 	if isHijack(resp) {
-		// Only the head. resp.Write would copy the body too, and for a
-		// content-type hijack the body IS the stream: it would be consumed
-		// here, in one direction, and the splice below would never run.
+		// Only the head: for a content-type hijack the body IS the stream, and
+		// resp.Write would consume it one way.
 		if err := writeHead(client, resp); err != nil {
 			return false, fmt.Errorf("writing hijack response: %w", err)
 		}
@@ -276,9 +231,7 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 		return false, nil
 	}
 
-	// Streaming responses (/events, /build, logs with follow) are copied
-	// as they arrive. resp.Write does not buffer the body, so a chunk read
-	// from the daemon becomes a write to the client.
+	// resp.Write does not buffer, so /events, /build and logs -f stream.
 	err = resp.Write(client)
 	written = time.Now()
 	if err != nil {
@@ -302,18 +255,14 @@ func (p *Proxy) rewriteBody(ctx context.Context, req *http.Request) error {
 
 	req.Body = io.NopCloser(strings.NewReader(string(rewritten)))
 	req.ContentLength = int64(len(rewritten))
-	// The original may have arrived chunked; the rewritten body has a known
-	// length, and leaving a stale Transfer-Encoding would misframe it.
+	// A stale chunked Transfer-Encoding would misframe the new body.
 	req.TransferEncoding = nil
 	req.Header.Del("Content-Length")
 	return nil
 }
 
-// writeHead writes a response's status line and headers, and nothing else.
-//
-// resp.Status rather than deriving the text from the code: the daemon's
-// reason phrases are not always the standard ones. Attach answers
-// "101 UPGRADED", and a client matching on it would be misled.
+// writeHead writes a response's status line and headers only, keeping the
+// daemon's own reason phrase ("101 UPGRADED").
 func writeHead(w io.Writer, resp *http.Response) error {
 	status := resp.Status
 	if status == "" {
@@ -331,36 +280,23 @@ func writeHead(w io.Writer, resp *http.Response) error {
 	return err
 }
 
-// Docker's content types for a hijacked stream. The daemon answers an attach
-// with one of these and then treats the connection as raw bytes.
+// Docker's content types for a hijacked stream.
 const (
 	rawStreamType         = "application/vnd.docker.raw-stream"
 	multiplexedStreamType = "application/vnd.docker.multiplexed-stream"
 )
 
-// isHijack reports whether the daemon has taken the connection over.
-//
-// 101 is the obvious case and not the only one: attach negotiates by content
-// type when the client does not ask for an upgrade, answering 200 with a
-// docker stream content type and then writing raw frames.
-//
-// Treating that as an ordinary response fails as a success: `docker run` exits
-// 0 having printed nothing, because the container's output was framed as an
-// HTTP body nobody was reading.
+// isHijack reports whether the daemon has taken the connection over: 101, or
+// 200 with a docker stream content type. Missing one, `docker run` exits 0
+// having printed nothing.
 func isHijack(resp *http.Response) bool {
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		return true
 	}
 	switch contentType(resp) {
 	case rawStreamType, multiplexedStreamType:
-		// The content type alone is not enough. `docker logs` uses the same
-		// one for an ordinary chunked response, and splicing that raw hands
-		// the chunk-size lines to the client's demultiplexer, which reports
-		// "Unrecognized input header: 49" (the ASCII '1' of a hex length).
-		//
-		// A hijack is where the daemon frames nothing itself: no content
-		// length and no transfer encoding, just bytes until the connection
-		// ends.
+		// Only when unframed: `docker logs` sends the same type chunked, and
+		// splicing that gives "Unrecognized input header: 49".
 		return resp.ContentLength < 0 && len(resp.TransferEncoding) == 0
 	default:
 		return false
@@ -391,8 +327,7 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		// Buffered bytes first, or the first frame of the upgraded protocol
-		// is silently dropped.
+		// Buffered bytes first, or the first upgraded frame is lost.
 		if n := clientReader.Buffered(); n > 0 {
 			if buffered, err := clientReader.Peek(n); err == nil {
 				_, _ = upstream.Write(buffered)
@@ -401,11 +336,8 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 		}
 		_, _ = io.Copy(upstream, clientReader)
 
-		// Half-close, never a full close. `docker run` without -i closes its
-		// stdin the moment the attach is established; closing the whole
-		// upstream in response would tear down the session carrying the
-		// container's output, and the command would exit 0 having printed
-		// nothing. Only signal end-of-input.
+		// Half-close only: `docker run` without -i closes stdin at once, and a
+		// full close would drop the container's output.
 		tunnel.CloseWrite(upstream)
 	})
 
@@ -418,9 +350,7 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 		}
 		_, _ = io.Copy(client, upstreamReader)
 
-		// The other fallback, and deliberately: upstream has finished, so
-		// there is nothing further to deliver here, and a client that cannot
-		// half-close must still be told the exchange is over.
+		// Upstream is done, so a client that cannot half-close is closed.
 		tunnel.CloseWriteOrClose(client)
 	})
 
@@ -442,24 +372,12 @@ func (p *Proxy) log() *slog.Logger {
 	return logx.Or(p.Log)
 }
 
-// TraceEnv turns on per-request timing.
-//
-// One line per Docker API request, split into the part that is ours (opening
-// an SSH channel and asking the agent to exec) and the part that is the
-// daemon's. A `docker run` is several requests, and knowing which of them is
-// slow is the difference between fixing and guessing.
-//
-// An environment variable rather than a flag, because the process doing the
-// forwarding is the background session and nobody passes it flags.
+// TraceEnv turns on one timing line per Docker API request. An environment
+// variable because the background session, which forwards, takes no flags.
 const TraceEnv = "REMOTE_DOCKER_TRACE"
 
 var traceEnabled = os.Getenv(TraceEnv) != ""
 
-// Tracing reports whether this process is tracing.
-//
-// Exported because the answer belongs to a process rather than to a command:
-// the requests are forwarded by the background session, so the variable only
-// does anything in the process that session runs in. A command that sets it
-// and expects output gets neither the output nor an explanation, which is the
-// failure this exists to let the caller name.
+// Tracing reports whether this process is tracing. Setting TraceEnv on a
+// command does nothing unless the session was started with it.
 func Tracing() bool { return traceEnabled }

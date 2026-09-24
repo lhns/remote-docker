@@ -17,11 +17,9 @@ docker compose up -d                                  # ports land on YOUR local
 
 ## Quick start
 
-Take the archive for your platform from
-[the latest release](https://github.com/lhns/remote-docker/releases/latest) and
-unpack the single binary out of it. There is nothing else in it.
-
-You also need a workspace to connect to. If nobody has set one up yet, see
+Unpack the single binary from your platform's archive in
+[the latest release](https://github.com/lhns/remote-docker/releases/latest).
+You also need a workspace; if nobody has set one up, see
 [Running a workspace](#running-a-workspace).
 
 ```bash
@@ -40,10 +38,9 @@ remote-docker run --rm -v .:/w alpine ls /w
 
 `start` prints the endpoint and returns. No terminal has to stay open.
 
-**On Android, in Termux**, take the `android_arm64` archive, or `android_amd64`
-on an emulator or a Chromebook. It is a normal Termux program from there: run it
-from a directory you can execute, and everything above works the same. Do not
-use the `linux_arm64` archive, which will not load on a phone at all
+**On Android, in Termux**, take the `android_arm64` archive (`android_amd64` on
+an emulator or a Chromebook) and run it from a directory you can execute. The
+`linux_arm64` archive will not load on a phone
 ([ADR 0023](docs/adr/0023-running-where-the-loader-is-not-us.md)).
 
 **If you already have a docker CLI**, point it at the workspace:
@@ -59,24 +56,21 @@ mv remote-docker docker                  # docker.exe on Windows
 docker run --rm -v .:/w alpine ls /w
 ```
 
-That is the whole installation. The Docker CLI is this program's root command,
-so the file's name is the only thing that decides how you spell it, and there
-is nothing to put on PATH, keep in step, or uninstall. A standalone docker CLI
-does exist if you want one (`winget install Docker.DockerCLI` on Windows, or
-the static zip from download.docker.com), but it is a second thing to install
-and update.
-
-`docker compose` and `docker build` (BuildKit, through buildx) are included, so
-the whole toolchain is one file.
+That is the whole installation: the Docker CLI is this program's root command
+([ADR 0024](docs/adr/0024-the-docker-cli-is-the-root.md)), so the file's name
+decides how you spell it. `docker compose` and `docker build` (BuildKit,
+through buildx) are included. A standalone docker CLI also exists
+(`winget install Docker.DockerCLI`, or the static zip from download.docker.com)
+if you prefer one. *(Checked 2026-09-23 with
+`winget show --id Docker.DockerCLI --exact`.)*
 
 ## Windows: an installer
 
 Every release also carries an MSI per architecture, beside the zip:
 `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It installs
 `remote-docker.exe` into `C:\Program Files\remote-docker` and **appends** that
-directory to the system PATH, so a shell opened afterwards has it. Per machine,
-so it needs administrator rights. About 19 MB to download on amd64 and 18 on
-arm64, holding the same binary the zip does.
+directory to the system PATH. Per machine, so it needs administrator rights.
+About 19 MB on amd64 and 18 on arm64, the same binary the zip holds.
 
 ```powershell
 # with a UI, and a feature tree
@@ -92,17 +86,13 @@ msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName
 msiexec /x remote-docker_0.6.0_windows_amd64.msi /qn
 ```
 
-**The `docker.exe` option is off by default.** Selected, it puts a second copy
-of the same binary in the install directory under the name `docker.exe`, so
-`docker run ...` on this machine is this program. There is no code behind it:
-the Docker CLI is this program's root command
-([ADR 0024](docs/adr/0024-the-docker-cli-is-the-root.md)), so the file's name is
-the whole of it. The MSI carries the binary once and makes the copy at install,
-removing it again at uninstall, so selecting the option costs nothing to
-download.
+**The `docker.exe` option is off by default.** Selected, it installs a second
+copy of the same binary as `docker.exe`, so `docker run ...` on this machine is
+this program. The copy is made at install and removed at uninstall, so it costs
+nothing to download.
 
-What it does **not** do is take the name from anybody else. If a `docker.exe`
-is already installed, the install stops and says where it found one:
+It does **not** take the name from anybody else. If a `docker.exe` is already
+installed, the install stops and says where:
 
 ```
 A docker.exe is already installed at C:\Program Files\Docker\docker.exe, and
@@ -114,45 +104,42 @@ the "docker" name would shadow it.
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName ALLOWDOCKERSHADOW=1
 ```
 
-The check reads the directories a `docker.exe` actually comes from — the two
-system directories and Docker Desktop's two — rather than the whole PATH, which
-Windows Installer cannot enumerate. A `docker.exe` somewhere else on PATH will
-not be noticed, and yours will win, because the install directory is appended.
+The check reads four directories (the two system directories and Docker
+Desktop's two), not PATH, which Windows Installer cannot enumerate
+([ADR 0048](docs/adr/0048-a-windows-installer.md)). A `docker.exe` elsewhere on
+PATH is not noticed, and it keeps winning, because the install directory is
+appended.
 
-**The MSI is unsigned.** There is no code-signing certificate for this project,
-so SmartScreen will warn about an unrecognised publisher and the elevation
-prompt will name none. It is also **not** in the release's `checksums.txt`,
-which is written before the installers are built, so there is nothing on the
-release page to check it against. If either matters to you, take the zip
-instead: it is the same binary, and it is in `checksums.txt`.
+**The MSI is unsigned** (the project has no code-signing certificate), so
+SmartScreen warns about an unrecognised publisher. It is also **not** in the
+release's `checksums.txt`, which is written before the installers are built. If
+either matters, take the zip: the same binary, and in `checksums.txt`.
 
 ## A workspace on this machine (Windows)
 
-When there is no Linux host to point at, this builds one locally and registers
-it as an ordinary workspace. It needs WSL, which Windows installs itself
-(`wsl --install`, then reboot).
+With no Linux host to point at, this builds one locally and registers it as an
+ordinary workspace ([ADR 0026](docs/adr/0026-a-machine-is-a-workspace-we-provision.md)).
+It needs WSL (`wsl --install`, then reboot).
 
 ```powershell
 remote-docker remote machine create dev
 remote-docker run --rm -v .:/w alpine ls /w
 ```
 
-`create` pulls the workspace image — the same one the container deployment runs,
-built and tested on every push — and flattens it into the machine's filesystem.
-It is kept, by digest, so a second machine or a `rebuild` costs nothing.
-`--rootfs <file>` builds from a file you supply instead, for an air-gapped
-machine or an image of your own.
+`create` pulls the workspace image, the same one the container deployment runs,
+and flattens it into the machine's filesystem. The image is kept by digest, so
+a second machine or a `rebuild` downloads nothing. `--rootfs <file>` builds
+from a file you supply instead, for an air-gapped machine or an image of your
+own.
 
-What comes out is a workspace like any other: `remote ls` lists it, the docker
-context is created for it, bind mounts and published ports work exactly as they
-do against a host in another country. `remote machine start` and `stop` are its
-lifecycle, and `remote rm dev` removes the workspace **and** the machine.
+The result is a workspace like any other: `remote ls` lists it, it gets a docker
+context, bind mounts and published ports work. `remote machine start`, `stop`
+and `status` are its lifecycle, and `remote rm dev` removes the workspace
+**and** the machine.
 
-Nothing is installed into it and no package manager ever runs. Changing
-versions replaces the filesystem rather than upgrading it, which is why
-`remote machine rebuild` is the repair path: it is this same command run again.
-It discards the images and containers inside the machine, never your files —
-those live here and are served to it.
+Changing versions replaces the filesystem rather than upgrading it, so
+`remote machine rebuild` is the repair path. It discards the images and
+containers inside the machine, never your files, which live here.
 
 A Hyper-V backend exists (`--backend hyperv`, from a Flatcar disk image) and
 **has never been run by anybody**; see `docs/testing-machines.md` if you have
@@ -160,36 +147,28 @@ Hyper-V and are willing to be the first.
 
 ## What works
 
-- **Bind mounts from anywhere on your machine.** Another drive, above the
-  working directory, unrelated to it. Not only a synced project folder.
-  **Single files work too**, as `-v ./nginx.conf:/etc/nginx/nginx.conf`, and
-  only that file is shared, not the directory holding it
+- **Bind mounts from anywhere on your machine**: another drive, above the
+  working directory, unrelated to it. **Single files work too**
+  (`-v ./nginx.conf:/etc/nginx/nginx.conf`), sharing only that file
   ([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)).
 - **Published ports reach your localhost.** `-p 8080:80` means
-  `localhost:8080` here, opened automatically as containers start. The number
-  is yours alone: the workspace publishes on a port of its own choosing, so two
-  people sharing a workspace can both ask for 8080, and `-p 8080:80 -p 9090:80`
-  gives you both. On the workspace itself, `docker ps` shows the port it picked
-  rather than the one you typed
+  `localhost:8080` here, opened as containers start. The workspace publishes
+  on a port of its own choosing, so two people sharing a workspace can both
+  ask for 8080, and `-p 8080:80 -p 9090:80` gives you both; `docker ps` on the
+  workspace itself shows the port it picked
   ([ADR 0008](docs/adr/0008-published-ports-reach-the-client.md)).
-  **UDP works too**, through the same connection
-  ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)). One thing to
-  know before relying on it: datagrams travel inside the SSH stream, so a
-  delayed one delays those behind it. Fine for DNS, syslog and metrics; not the
-  same service as a real UDP path if you are measuring latency.
+  **UDP works too** ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)), but
+  datagrams travel inside the SSH stream, so a delayed one delays those behind
+  it. Fine for DNS, syslog and metrics; not for measuring latency.
 - **The real tooling, unmodified.** `docker`, `docker compose`,
   Testcontainers, IDE plugins, anything that speaks the Docker API. The
-  translation happens at the API, not in a command wrapper. The Docker CLI,
-  buildx and Compose are all inside this binary, so a machine with nothing
-  installed still gets `docker compose up`.
+  translation happens at the API, not in a command wrapper.
 - **Named volumes stay named volumes.** Only host paths are rewritten.
-- **File watchers can see your edits**, once `REMOTE_DOCKER_WATCH` is on. See
-  [File watching](#file-watching); it is off by default and worth
-  understanding before you rely on it.
+- **File watchers can see your edits**, once `REMOTE_DOCKER_WATCH` is on (off
+  by default; see [File watching](#file-watching)).
 
-Every one of those is asserted end to end on each push, against a real
-Docker-in-Docker daemon and a real kernel NFS mount. See
-[`test/integration.sh`](test/integration.sh).
+Each of those is asserted end to end in CI against a real Docker-in-Docker
+daemon and a real kernel NFS mount: [`test/integration.sh`](test/integration.sh).
 
 ## How it works
 
@@ -212,32 +191,27 @@ docker / compose / IDE
 
 Your machine is the **file server**; the workspace is the client. The proxy
 rewrites each bind mount into an NFS-backed Docker volume, which the remote
-daemon mounts for itself when the container starts. Nothing has to propagate
-into a running container, and a bind source anywhere on your disk works.
+daemon mounts for itself when the container starts
+([ADR 0006](docs/adr/0006-per-bind-nfs-volumes.md)).
 
 The endpoint is a **named pipe** on Windows (`\\.\pipe\docker_remote`) and a
-unix socket elsewhere, owner-only in both cases. Never a TCP port: anything
+unix socket elsewhere, owner-only in both cases, never a TCP port: anything
 that can reach it can start containers that read and write your filesystem.
 Nothing here needs administrator rights.
 
-The reasoning behind each decision is in [`docs/adr/`](docs/adr/), and what
-this trusts, what it does not, and where the checks are is in
-[`docs/threat-model.md`](docs/threat-model.md).
+Decisions are in [`docs/adr/`](docs/adr/); what this trusts and where the checks
+are is in [`docs/threat-model.md`](docs/threat-model.md).
 
 ## One account from two machines
 
-An account is the identity and a machine is a client, so a laptop and a desktop
-enrolled with a key each share a workspace: the same daemon, the same images,
-the same containers. Files are not shared, because they are on one machine or
-the other, and neither are published ports: each machine opens the number its
-own containers asked for, and sees the other machine's containers at whatever
-the workspace published them on.
+A laptop and a desktop enrolled in one account with a key each share the
+daemon, images and containers. Files are not shared, and neither are published
+ports: each machine opens the number its own containers asked for, and sees the
+other machine's containers at whatever port the workspace published them on.
 
-**One thing does collide, and it is worth knowing before it bites: compose
-projects.** Compose names a project after the directory it runs in, so the same
-compose file on both machines is one project on the daemon they share, with one
-set of container names and one network. What happens next depends on where the
-project lives:
+**Compose projects collide.** Compose names a project after the directory it
+runs in, so the same compose file on both machines is one project on the shared
+daemon, with one set of container names and one network:
 
 - if the paths differ, each machine sees the other's containers as out of date
   and recreates them, so an `up` on one stops the service the other is running;
@@ -252,18 +226,14 @@ export COMPOSE_PROJECT_NAME=demo-laptop     # demo-desktop on the other
 docker compose up -d
 ```
 
-This is a limitation rather than a design.
-[ADR 0029](docs/adr/0029-one-account-many-machines.md) records it, along with
-the two fixes considered and why neither is built yet.
+This is a limitation, not a design
+([ADR 0029](docs/adr/0029-one-account-many-machines.md)).
 
 ## Commands
 
-**This binary is the Docker CLI.** `remote-docker run`, `remote-docker ps`,
-`remote-docker compose up` are the real commands with their real flags, talking
-to the workspace. Rename the file to `docker` and they are spelled the way they
-are everywhere else, with no install step and nothing on PATH to manage.
-
-Everything that is ours lives under `remote`:
+**This binary is the Docker CLI.** `remote-docker run`, `ps`, `compose up` are
+the real commands with their real flags, talking to the workspace. Everything
+that is ours lives under `remote`:
 
 | | |
 |---|---|
@@ -280,6 +250,7 @@ Everything that is ours lives under `remote`:
 | `remote-docker remote ls` | list them |
 | `remote-docker remote use <name>` | make it the default here, and docker's current context |
 | `remote-docker remote inspect [name]` | settings, endpoint, context, whether a session is up |
+| `remote-docker remote machine …` | `create`, `rebuild`, `start`, `stop`, `status` a [local workspace](#a-workspace-on-this-machine-windows) |
 
 A command about one workspace takes its name as an argument, else
 `--workspace`, else the default. `stop`, `restart`, `machine stop`,
@@ -289,17 +260,14 @@ as `docker rm` refuses a running container; `-f` goes ahead.
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
-`remote use` sets two things: the default in `~/.remote-docker.json`, which
-only this binary reads, and `currentContext` in `~/.docker/config.json`, which
-is what compose, buildx, Testcontainers and IDE plugins resolve. The second is
-machine-wide, so it redirects those tools too. `--no-context` sets only ours,
-matching `create --no-context`, and an exported `DOCKER_HOST` overrides both.
+`remote use` sets the default in `~/.remote-docker.json` **and**
+`currentContext` in `~/.docker/config.json`, which compose, buildx,
+Testcontainers and IDE plugins resolve, so it redirects those tools too.
+`--no-context` sets only ours (as on `create`), and an exported `DOCKER_HOST`
+overrides both. A missing context is created.
 
-The context is created if it is missing, so this works on a machine that has
-never had a docker CLI: the binary is one, and writes the context itself.
-
-There is no `context` command. A docker context is written when a workspace is
-created and removed when it is
+There is no `context` command: a docker context is written when a workspace is
+created and removed with it
 ([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)). Re-run
 `remote create` to rewrite one that has drifted.
 
@@ -321,7 +289,7 @@ default.**
 | `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
 | `REMOTE_DOCKER_WATCH` | `watch` | `remote create --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
-| `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `__pycache__`, `.gradle`, `.terraform` |
+| `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.gradle`, `.terraform` |
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
 | `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
@@ -332,16 +300,14 @@ default.**
 | `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
 | `REMOTE_DOCKER_NFS_FDCACHE` | | | `2s` that a file stays open after the request that used it; `0` closes it on every request |
 | `REMOTE_DOCKER_NFS_NCONNECT` | | | off; `2`–`16` connections per share. **Needs Linux 5.3 on the workspace** and breaks every mount without it. See [More connections behind a share](#more-connections-behind-a-share) |
-| `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` |
+| `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` on Linux, `~/Library/Application Support/remote-docker` on macOS |
 
 Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 
-`REMOTE_DOCKER_TRACE` belongs to the **session**, which is the process that
-forwards the requests, so set it there:
-`REMOTE_DOCKER_TRACE=1 remote-docker remote start`. On a docker command it does
-nothing, and says so. `REMOTE_DOCKER_NFS_TRACE`,
-`REMOTE_DOCKER_NFS_FDCACHE` and `REMOTE_DOCKER_NFS_NCONNECT` belong to the
-session too, which is what serves the share.
+`REMOTE_DOCKER_TRACE` and the `REMOTE_DOCKER_NFS_*` variables belong to the
+**session**, so set them where it starts:
+`REMOTE_DOCKER_TRACE=1 remote-docker remote start`. On a docker command
+`REMOTE_DOCKER_TRACE` does nothing, and says so.
 
 ### Several workspaces
 
@@ -374,13 +340,11 @@ docker --context dev ps
 ## File watching
 
 A container watching a directory on the share receives **no inotify events**
-when you change a file, because NFS carries no change-notification protocol.
-Hot reload silently does nothing: vite, webpack, nodemon, `air` and
-`dotnet watch` sit there while the file is plainly present.
-
-Turning watching on makes remote-docker watch this machine and replay each
-change inside the workspace as a real syscall, so the kernel there emits a
-genuine inotify event:
+when you change a file, because NFS carries no change notification, so hot
+reload (vite, webpack, nodemon, `air`, `dotnet watch`) silently does nothing.
+Watching replays each change here inside the workspace as a real syscall, so
+the kernel there emits a genuine inotify event
+([ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md)):
 
 ```bash
 export REMOTE_DOCKER_WATCH=partial    # writes and creations
@@ -393,24 +357,21 @@ export REMOTE_DOCKER_WATCH=coarse     # also deletions, approximately
 | `partial` | writes and creations fire real events. Deletions are not reported at all |
 | `coarse` | as `partial`, plus a directory-level event for deletions and renames |
 
-It is off by default because watching costs one inotify watch per directory,
-and on macOS one file descriptor per file. Only the directories you share are
-watched, never your whole disk, and there is a budget. What that costs, why
-deletions are the honest gap, and what to do when the budget runs out are in
-[Caveats](#file-watching-in-detail).
+It is off by default because it costs one watch per shared directory (on macOS
+one file descriptor per file), within a budget. Costs, deletions and the budget
+are in [File watching in detail](#file-watching-in-detail).
 
 ## Faster access to a shared directory
 
-Reading a project through the share costs a round trip per file, and the mount
-revalidates any attribute older than a second. Over a link with real latency
-that is the whole cost, and it is latency rather than bandwidth: a thin link
-costs almost nothing and a distant one costs 400x. The measurements, per link
-shape and per mode, are the table in
-[ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md); `test/bench.sh`
-produces them, from the `bench` label on a pull request.
+Reading through the share costs a round trip per file, and the mount
+revalidates any attribute older than a second. The cost is latency, not
+bandwidth: a 10 Mbit link costs almost nothing and 160ms RTT costs 400x
+([ADR 0042](docs/adr/0042-mount-consistency-modes.md)). Per-mode measurements
+are the table in [ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md),
+produced by `test/bench.sh` (the `bench` label on a pull request).
 
-Docker's own mount consistency is how you say a directory may be cached, and
-every client already parses it:
+Docker's own mount consistency says a directory may be cached, and every client
+already parses it:
 
 ```bash
 docker run -v ./project:/app:ro,cached
@@ -424,12 +385,10 @@ docker run --mount type=bind,source=./project,target=/app,consistency=cached
 | `cached` | trusts attributes for a minute | `back` | in a union on the workspace, carried back within seconds |
 | | | `ephemeral` | in a union on the workspace, never carried back |
 
-The read axis is the mount itself and needs nothing in the workspace, so
-`read=cached` works wherever a share works. The write axis is what pulls in a
-union, which needs `fuse-overlayfs` where the account's daemon runs:
-`write=back`, `write=ephemeral`, and Docker's `delegated`, which means
-`read=cached,write=back`. A workspace that cannot make one says so before
-anything is created, and names the word you wrote.
+`read=cached` is the mount itself and works wherever a share works. Any
+`write=` other than `through` (including Docker's `delegated`) makes a union,
+which needs `fuse-overlayfs` in the image the account's daemon runs; a workspace
+that cannot make one says so before anything is created.
 
 ```bash
 docker run -v ./project:/app:read=cached img                       # the one to reach for
@@ -438,14 +397,12 @@ docker run -v ./target:/app/target:write=ephemeral img             # a build dir
 docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,write=back"' img
 ```
 
-A mount names one axis or both; what it does not name comes from the
-per-directory rule, then the workspace setting, then the default. A `-v` has
-three fields and the third is a list, so `ro,read=cached` and never
-`:read=cached:ro`. `--mount` is itself split on commas by the CLI, so both
-axes go in one csv-quoted field, the way Docker documents `volume-opt`.
-Compose passes `consistency:` through as a string; whether it accepts these
-has not been verified. Docker's own values for the field are accepted and
-mean what Docker says they mean: `consistent` and `default` are
+An axis a mount does not name comes from the per-directory rule
+(`consistencyPaths`), then the workspace setting, then the default. The third
+field of `-v` is a list: `ro,read=cached`, never `:read=cached:ro`. `--mount` is
+split on commas by the CLI, so both axes go in one csv-quoted field. Whether
+Compose accepts these words in `consistency:` is **unverified**. Docker's own
+values keep their meaning: `consistent` and `default` are
 `read=direct,write=through`, `cached` is `read=cached,write=through`,
 `delegated` is `read=cached,write=back`.
 
@@ -453,87 +410,68 @@ mean what Docker says they mean: `consistent` and `default` are
 {"consistency": "read=cached", "consistencyPaths": {"/home/me/app/target": "write=ephemeral"}}
 ```
 
-**`read=cached` is the one to reach for on a slow link.** It halves the time
-in ADR 0045's table and needs only the watcher.
+**`read=cached` is the one to reach for on a slow link.** It roughly halves the
+time in ADR 0045's table.
 
-**`write=back` and `write=ephemeral` are write capture.** The share becomes
-a union on the workspace: the live mount underneath, a local layer on top
-that the container writes into. `back` carries those writes here within
-seconds and reports a conflict by path when a file changed in both places;
-`ephemeral` never carries them anywhere, which keeps a build directory off
-this machine. Both are proven correct end to end. Neither is faster today: a
-cold union reads no faster than a plain mount, and a name the union has not
-seen is looked up on the live mount, so a burst of small files costs the
-plain mount's round trips ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md)).
-Large writes are local.
+**`write=back` and `write=ephemeral` are write capture**
+([ADR 0044](docs/adr/0044-a-delegated-share-is-a-cache.md)). The share becomes a
+union on the workspace: the live mount underneath, a local layer on top that
+the container writes into. `back` carries those writes here within seconds and
+reports a conflict by path when a file changed in both places; `ephemeral`
+never carries them anywhere, which keeps a build directory off this machine.
+Both are proven end to end in CI; conflict handling only by unit tests.
+**Neither is faster today**: a cold union reads no faster than a plain mount,
+and scattered reads are slower. Large writes are local.
 
 **Prefetch is off by default.** `prefetch: eager` or `prefetch: tree`
-(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union, and
-[ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off.
+(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union
+([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off).
 
 **`read=cached` and every union need [file watching](#file-watching) on**, and
-refuse to run without it.
+refuse to run without it. An edit to an existing file arrives at once; a file
+you create or delete can take up to a minute to appear in a listing unless
+watching is `coarse`. A union caches only what the watcher covers; anything
+under an excluded directory is read over the mount.
 
-`cached` keeps a long attribute cache, which is safe only because an edit here
-is replayed into the workspace and refreshes exactly the file that changed. So
-an edit to an existing file arrives at once, and a file you CREATE or DELETE can
-take up to a minute to appear in a listing unless watching is `coarse`, which
-pokes the directory too.
-
-A union holds copies, so it only caches what the watcher covers; anything
-under an excluded directory is read over the mount instead
-([ADR 0044](docs/adr/0044-a-delegated-share-is-a-cache.md)).
-
-How much of a share prefetch copies is capped by `cacheFiles` and
-`cacheBytes` (20,000 files and 2 GiB by default). That is a ceiling on the
-COPY, never on the mode: what does not fit is read over the live mount, so a repository bigger than
-the ceiling is cached in part and works. Raise them for a large project whose
-reads are worth the copy, lower them on a metered link, and watch which you are
-getting with `remote status`:
+Prefetch copies at most `cacheFiles` and `cacheBytes` (20,000 files and 2 GiB
+by default). What does not fit is read over the live mount, so a larger
+repository is cached in part and still works. Raise them for a large project,
+lower them on a metered link, and see which you are getting with
+`remote status`:
 
 ```
 cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, 181.0MB sent, cached in part; the rest is read live
 ```
 
-A union also needs **`fuse-overlayfs` in the image the account's daemon
-runs**, because that is what it is mounted with. The workspace's own image
-carries it, which is what a per-account daemon should be running anyway (see
-[the storage driver](#the-storage-driver-worth-getting-right-once)).
-
+The workspace's own image carries `fuse-overlayfs`; stock `docker:dind` does
+not (see `WORKSPACE_DIND_IMAGE` in [Workspace settings](#workspace-settings)).
 Switching a directory's mode costs a volume rebuild rather than a migration.
 
 ### More connections behind a share
 
-**`REMOTE_DOCKER_NFS_NCONNECT` requires Linux 5.3 or newer on the WORKSPACE,
-and nothing checks that before mounting.** Not your own machine's kernel: the
-workspace is what mounts a share. On anything older the NFS client refuses the
-*whole* option string over the one word it does not know, so **every bind mount
-fails**, with `invalid argument` against an option list whose every word is
-individually valid, and the volumes it made cannot be repaired without removing
-them. That is why it is off unless you set it, and unsetting it is the fix.
+**`REMOTE_DOCKER_NFS_NCONNECT` requires Linux 5.3 or newer on the WORKSPACE
+(not your machine), and nothing checks that before mounting.** On an older
+kernel **every bind mount fails** with `invalid argument`, and the volumes it
+made cannot be repaired without removing them (see
+[the kernel floor](#running-a-workspace)). Unsetting it is the fix.
 
 ```bash
 REMOTE_DOCKER_NFS_NCONNECT=4 remote-docker remote start
 ```
 
-`2` to `16`; `0` and `1` are off, which is what a mount does anyway. It belongs
-to the session, like the other `REMOTE_DOCKER_NFS_*` variables, and it takes
-effect on volumes created after it: a share whose volume already exists keeps
-the options it was built with until that volume is removed.
+`2` to `16`; `0` and `1` are off. Set it on the session. It applies to volumes
+created afterwards; an existing share volume keeps its options until removed.
 
-It is one setting for every share, not one per share. Linux keeps a single RPC
-transport per server address and every share of yours mounts from
-`127.0.0.1:<tunnel port>`, so all of them share one transport and this
-multiplies the connections behind all of them at once. What that buys is a
-higher ceiling on requests in flight: the file server bounds those per
-connection, so more connections is a bigger bound.
+It is one setting for every share: Linux keeps one RPC transport per server
+address, and every share mounts from `127.0.0.1:<tunnel port>`, so this
+multiplies the connections behind all of them. The first share mounted sets
+the transport's options and later ones are silently ignored, so a change shows
+only once none of your shares is mounted. What it buys is a higher ceiling on
+requests in flight, which the file server bounds per connection.
 
-**Whether it makes anything faster here is unmeasured.** Nothing in CI or in
-`test/bench.sh` has run with it on. If you turn it on and it helps, or does
-not, say so in an issue; that is what would turn it into a default.
-
-What is in this release, and what is still unproven:
-[`CHANGELOG.md`](CHANGELOG.md).
+**Whether it makes anything faster is unmeasured**: nothing in CI or
+`test/bench.sh` has run with it on. If you try it, say in an issue whether it
+helped.
 
 ## Running a workspace
 
@@ -541,38 +479,26 @@ The workspace runs one binary, `remote-dockerd`. It supervises dockerd,
 provisions an account per enrolled key, and serves SSH itself. There is no
 sshd, no sudo and no shell scripts in the image.
 
-**The workspace kernel must be 3.10 or newer**, which is RHEL 7 and is the
-oldest thing this targets on purpose. It is a hard floor rather than a
-preference: a share is an NFS mount the workspace makes, the NFS client refuses
-the *whole* option string over one word it does not know, and a Docker volume's
-driver options cannot be changed after it is created, so an option too new
-fails every mount on that workspace and leaves volumes that can never mount
-again. What each option needs, and where that was read in the kernel source, is
-the table in `core/workspace/kernel_test.go`; a test fails on anything above the
-floor. Your own machine's kernel does not come into it, and neither does macOS
-or Windows: the client mounts nothing.
-
-The one option above the floor a share can be given is `nconnect`, and only
-because you asked for it by name with `REMOTE_DOCKER_NFS_NCONNECT`, which needs
-5.3 and is off by default. See
-[More connections behind a share](#more-connections-behind-a-share).
+**The workspace kernel must be 3.10 or newer** (RHEL 7). It is a hard floor:
+the NFS client refuses the *whole* option string over one word it does not
+know, and a Docker volume's driver options cannot change after creation, so an
+option too new fails every mount on that workspace, permanently. Each option's
+kernel requirement is tabulated in `core/workspace/kernel_test.go`, and a test
+fails on anything above the floor. Your own machine's kernel does not matter:
+the client mounts nothing. The one exception is
+[`nconnect`](#more-connections-behind-a-share), opt-in only.
 
 Two things about an old workspace kernel that are *not* the floor:
 
-- **`write=back` and `write=ephemeral` need `fuse-overlayfs`** in the image the
-  account's daemon runs, and that is asked of the workspace rather than guessed
-  from a version: the agent runs the binary itself, as root, so nothing here
-  reads a kernel version. Upstream's man page says fuse-overlayfs "works with
-  Linux 4.18 or newer" flatly, while upstream's README scopes 4.18 to running
-  **from a user namespace**, which is what rootless podman does and what a
-  per-account dind does not. Neither document states a floor for a root mount,
-  so treat 4.18 as the number to expect and the workspace's answer as the one
-  that decides. RHEL 7 shipping the package
-  (`fuse-overlayfs-0.7.2-6.el7_8` in Extras, [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222))
-  is **not** evidence that the floor is imaginary: Red Hat backported the
-  kernel side into their 3.10 branch for rootless podman and
-  [said so](https://www.redhat.com/en/blog/rhel-78-and-final-update-container-tools).
-  A RHEL kernel version string says very little about what the kernel can do.
+- **`write=back` and `write=ephemeral` need `fuse-overlayfs`**, which the agent
+  runs itself, as root, so the workspace's answer decides and no kernel version
+  is read. Upstream's man page says it "works with Linux 4.18 or newer"; its
+  README scopes 4.18 to running **from a user namespace**, which a per-account
+  dind does not. Neither states a floor for a root mount, so expect 4.18. RHEL 7
+  shipping the package (`fuse-overlayfs-0.7.2-6.el7_8` in Extras,
+  [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222)) is **not**
+  evidence against that: Red Hat backported the kernel side into its 3.10
+  branch and [said so](https://www.redhat.com/en/blog/rhel-78-and-final-update-container-tools).
   *(Checked 2026-09-08 against
   [the README](https://github.com/containers/fuse-overlayfs/blob/main/README.md)
   and [the man page](https://github.com/containers/fuse-overlayfs/blob/main/fuse-overlayfs.1.md);
@@ -589,58 +515,56 @@ Two things about an old workspace kernel that are *not* the floor:
 
 ### Behind a reverse proxy
 
-An open SSH port is often the thing that makes a workspace hard to reach. The
-agent also serves SSH over a WebSocket, so any HTTP reverse proxy can front it:
+The agent also serves SSH over a WebSocket, so any HTTP reverse proxy can front
+it ([ADR 0034](docs/adr/0034-ssh-inside-a-websocket.md)):
 
 ```
 --ws-addr :2280      the WebSocket listener; empty disables it
 ```
 
-Both listeners run by default. Point the proxy at `:2280`, make sure it passes
+The agent runs both listeners by default, but `deploy/` only publishes 2222
+(uncomment the `2280` port in the compose or stack file) and the systemd unit
+passes `--ws-addr ""`. Point the proxy at `:2280`, make sure it passes
 WebSocket upgrades, and give the client the URL:
 
 ```
 remote-docker remote create dev --host wss://dev.example.com --user alice
 ```
 
-The tunnel is on the root, and the agent accepts an upgrade on **any path**, so
-it does not matter whether the proxy strips its prefix. Put it under a path if
-the proxy routes on one:
+The agent accepts an upgrade on **any path**, so it does not matter whether the
+proxy strips its prefix:
 
 ```
 remote-docker remote create dev --host wss://example.com/rd --user alice
 ```
 
-Opening the endpoint in a browser gets a short reply rather than a hang.
+**The agent never terminates TLS**; the proxy does. Plaintext between proxy and
+agent still carries the full SSH handshake, so the host key and your key
+authenticate both ends.
 
-**The agent never terminates TLS.** It has no certificate options at all, so
-there is nothing to renew and nothing to expire; the proxy does that. Serving
-plaintext between the proxy and the agent is not the weakness it looks like,
-because the same SSH handshake runs inside it: the host key still proves this is
-the workspace and your key still proves which machine is calling.
-
-For a proxy with a self-signed certificate, either point the client at your CA
-with `--ca-file`, or use `--insecure` for that workspace. `--insecure` gives up
-knowing which front door answered and nothing more — SSH inside still
-authenticates both ends, which is why the flag exists here at all.
+For a proxy with a self-signed certificate, pass `--ca-file` or, for that
+workspace, `--insecure`, which gives up knowing which proxy answered and
+nothing more.
 
 ### On Kubernetes
 
 ```bash
-helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace   --namespace remote-docker --create-namespace   --set ingress.host=ws.example.com   --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
+helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace \
+  --namespace remote-docker --create-namespace \
+  --set ingress.host=ws.example.com \
+  --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
 
 kubectl label namespace remote-docker pod-security.kubernetes.io/enforce=privileged
 ```
 
-One privileged pod with its image store and its host keys on volumes, reached
-through an ordinary Ingress — no load balancer and no node port, because the
-tunnel is an HTTP upgrade. Then `remote create dev --host wss://ws.example.com`
-and a laptop with no Docker installed is working against it.
+One privileged pod with its image store and host keys on volumes, reached
+through an ordinary Ingress (the tunnel is an HTTP upgrade). Then
+`remote create dev --host wss://ws.example.com`.
 
-`charts/remote-docker-workspace/README.md` has the values and the two things
-worth knowing first: which storage driver your volumes need, and why both
-volumes are ReadWriteOnce. The chart is installed on a real cluster by CI on
-every change (ADR 0035).
+[`charts/remote-docker-workspace/README.md`](charts/remote-docker-workspace/README.md)
+has the values, which storage driver your volumes need, and why both volumes are
+ReadWriteOnce. CI installs the chart on a kind cluster behind ingress-nginx on
+every pull request ([ADR 0035](docs/adr/0035-the-workspace-on-kubernetes.md)).
 
 ### The image
 
@@ -654,8 +578,8 @@ ghcr.io/lhns/remote-docker-workspace:sha-<short> # every commit to main
 
 `latest` follows the most recent `v*` tag and exists from `v0.1.0` onwards.
 *(Checked 2026-08-12 with `docker manifest inspect
-ghcr.io/lhns/remote-docker-workspace:latest`.)* Pin `sha-<short>` to track main
-between releases, or build it yourself, with the repository root as the context:
+ghcr.io/lhns/remote-docker-workspace:latest`.)* To build it yourself, use the
+repository root as the context:
 
 ```bash
 docker build -f image/Dockerfile -t remote-docker-workspace:latest .
@@ -666,7 +590,7 @@ docker build -f image/Dockerfile -t remote-docker-workspace:latest .
 ```bash
 cd deploy
 mkdir -p authorized_keys.d state
-cp /path/to/alice.pub authorized_keys.d/alice.pub   # filename == unix account
+cp /path/to/alice.pub authorized_keys.d/alice.pub   # filename = account (unix user rd-alice)
 docker compose up -d --build
 ```
 
@@ -675,16 +599,15 @@ gives every client a changed-host-key warning and reassigns every account's
 uid, which changes its tunnel port and orphans the ownership of everything it
 has written.
 
-The container is privileged, because dind runs its own daemon, sets up its own
-bridge and iptables rules, and mounts NFS in its own namespace.
+The container is privileged: dind runs its own daemon, bridge and iptables, and
+mounts NFS.
 
 ### On a VM, with no container
 
-The same binary, as a systemd service, when the workspace is a machine rather
-than an image ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Nothing
-about the agent changes: it obeys the same switches, and the one that differs
-is `WORKSPACE_ENABLE_DIND=false`, because the machine already has a dockerd and
-a second would fight it for the socket.
+The same binary as a systemd service
+([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). The one setting that
+differs is `WORKSPACE_ENABLE_DIND=false`, because the machine already has a
+dockerd. The unit file itself is not exercised by any test.
 
 ```bash
 tar xf remote-dockerd_<version>_linux_amd64.tar.gz
@@ -705,48 +628,47 @@ What the machine has to provide, which depends on the daemon mode:
 | `useradd` / `usermod` (shadow) | yes | yes |
 | NFS client (`nfs-common`) | no | **yes** |
 
-The last row is the one that catches people. With a daemon per account the NFS
-mount happens inside `docker:dind`, which ships an NFS client; with one shared
-daemon this machine mounts, and a missing client shows up as a container that
-will not start, naming the volume rather than the package.
+The last row catches people: with one shared daemon this machine mounts NFS
+itself, and a missing client shows up as a container that will not start,
+naming the volume rather than the package.
 
-`/etc/workspace` must persist for the same reason `state/` does above: it holds
-the host keys and the uid map.
+A per-account daemon runs the image in `WORKSPACE_DIND_IMAGE`, and the unit
+sets none, so it falls back to stock `docker:dind`, which cannot serve
+`write=back` or `write=ephemeral`. Set it to the workspace image in
+`/etc/remote-docker/env` if you want those.
 
-Two things are worth knowing before running this on a machine that does other
-work. Enrolled keys become **real users on that machine**, not disposable
-container ones. And a per-account daemon is separation, not isolation
-([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)) — each runs privileged, so
-an account that breaks out of one reaches the VM itself rather than a workspace
-container somebody can recreate.
+`/etc/workspace` must persist, like `state/` above.
+
+On a machine that does other work: enrolled keys become **real users on that
+machine** (`rd-<account>`), and a per-account daemon runs privileged, so an
+account that breaks out of one reaches the VM itself
+([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)).
 
 ### Docker Swarm
 
 Swarm cannot run privileged tasks, so the service starts **unprivileged** and
 relaunches itself through the node's Docker socket
-([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)). No
-launcher image is involved.
-
-Two things must be true first, and neither fails in an obvious way:
+([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)).
 
 ```bash
-# 1. Label the node. Without this the service is accepted and never schedules.
-docker node update --label-add workspace=true <node>
-
-# 2. Create the state directories ON THAT NODE. They are bind mounts, so a
-#    missing path becomes an empty root-owned directory instead of an error.
+# Create the state directories ON THE NODE first. They are bind mounts, so a
+# missing path becomes an empty root-owned directory instead of an error.
 export WORKSPACE_DATA=/var/lib/remote-docker
 ssh <node> "mkdir -p $WORKSPACE_DATA/{state,authorized_keys.d}"
 
 docker stack deploy -c deploy/swarm.yml workspace
 ```
 
-Port 2222 is published with `mode: host`, so it lands on the node actually
-running the task. That node's 2222 is what clients connect to.
+Those binds are one node's filesystem, so on a multi-node swarm pin the service
+to that node with a placement constraint: a task rescheduled elsewhere gets new
+host keys and new uids, which moves every account's tunnel port. Port 2222 is
+published through the routing mesh; the privileged child joins the task's
+network namespace, so `mode: host` is not needed.
 
-The host Docker socket mount in `swarm.yml` is **the whole trust boundary**.
-Whoever can deploy this stack can already start privileged containers on the
-node. The socket is deliberately not passed to the privileged child.
+The host Docker socket mount in `swarm.yml` is **the whole trust boundary**:
+whoever can deploy this stack can already start privileged containers on the
+node. The socket is not passed to the privileged child. Swarm itself is
+untested; only the elevation mechanism is.
 
 ### Workspace settings
 
@@ -759,42 +681,38 @@ node. The socket is deliberately not passed to the privileged child.
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
 | `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
-| `WORKSPACE_DIND_IMAGE` | the workspace's own image | image a per-account daemon runs |
+| `WORKSPACE_DIND_IMAGE` | `WORKSPACE_IMAGE`, else `docker:28-dind` | image a per-account daemon runs. Stock dind has no `fuse-overlayfs`, so no unions and no fuse-overlayfs storage driver |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
 | `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon, and the paths a bind may name; see below |
 | `WORKSPACE_DAEMON_READY_TIMEOUT` | `180` | seconds a cold per-account daemon has to answer; see below |
 | `WORKSPACE_SHELL` | `/bin/bash` | shell an SSH session lands in |
 | `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
-| `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; uid decides the rest |
-| `WORKSPACE_IMAGE` | | the service's own image, for Swarm elevation |
+| `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; an account's first port is `PORT_BASE + (uid - UID_BASE)` |
+| `WORKSPACE_ACCOUNT_PREFIX` | `rd-` | prefix of the unix user behind an account (`rd-alice`) |
+| `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
+| `WORKSPACE_HOST_SOCKET` | `/var/run/host-docker.sock` | the node's Docker socket, for Swarm elevation |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
 
 ### How long a cold daemon has to start
 
-An account's daemon is started when that account connects, and everything that
-account does waits for it, a shell included: the agent asks for the daemon
-before it opens one, so an account whose daemon will not start gets no prompt
-until the wait is over.
+An account's daemon is started when that account connects, and everything the
+account does waits for it, a shell included, so an account whose daemon will
+not start gets no prompt until the wait is over.
 
-The wait is 180 seconds by default. A healthy daemon answers in about a second
-on a GitHub runner, so the rest of that budget is for a workspace slower than
-that one: a first start on fuse-overlayfs over Ceph or NFS is the case it was
-chosen for. `WORKSPACE_DAEMON_READY_TIMEOUT` is that budget in seconds.
-
-Lowering it makes a broken daemon say so sooner and risks giving up on a slow
-one, which costs the account a session that fails for a reason they cannot act
-on. An unusable value is logged once at startup and the default is used.
+`WORKSPACE_DAEMON_READY_TIMEOUT` is that wait, 180 seconds by default. A healthy
+daemon answers in about a second on a GitHub runner; the budget is for a first
+start on fuse-overlayfs over Ceph or NFS. Lowering it makes a broken daemon say
+so sooner and risks giving up on a slow one. An unusable value is logged at
+startup and the default is used.
 
 ### A private or insecure registry
 
-A workspace pulls images with its own daemon, and with a daemon per account
-(the default) each account's daemon does its own pulling. Configuration you
-give the workspace's daemon does not reach them, so a registry that works on
-the workspace fails inside every account with `http: server gave HTTP response
-to HTTPS client` or an unknown certificate authority.
-
-Give them the same files:
+With a daemon per account (the default) each account's daemon does its own
+pulling, and configuration given to the workspace's daemon does not reach it: a
+registry that works on the workspace fails inside every account with
+`http: server gave HTTP response to HTTPS client` or an unknown certificate
+authority. Give them the same files:
 
 ```yaml
 services:
@@ -808,33 +726,24 @@ services:
         /etc/docker/certs.d:/etc/docker/certs.d:ro
 ```
 
-The first two lines are the workspace's own daemon, which you already needed.
-`WORKSPACE_DIND_MOUNTS` passes the same paths on to each account's daemon, as
-`source:destination` or `source:destination:ro`, comma-separated. Both paths
-must be absolute: docker reads a relative source as a volume NAME, so it would
-quietly mount an empty volume and the daemon would read no configuration at all.
+The volumes are for the workspace's own daemon. `WORKSPACE_DIND_MOUNTS` passes
+the same paths on to each account's daemon, as `source:destination` or
+`source:destination:ro`, comma-separated. Both must be absolute: docker reads a
+relative source as a volume NAME and would mount an empty volume. A source
+missing on the workspace is refused at startup rather than created empty.
 
 **It also declares which paths a bind may name.** A client leaves
-`-v /lib/modules:/lib/modules:ro` alone rather than trying to export it from the
-user's machine, which is what makes tools that build their own flags work
-([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)). Which side of the mount
-that is depends on the daemon doing the resolving: with a daemon per account it
-is the DESTINATION, since that is where the mount lands; with a shared daemon
-nothing is mounted at all and it is the SOURCE, as the path exists in the
-workspace container. Identical for the usual `/lib/modules:/lib/modules:ro`, and
-a remap in shared mode is warned about at startup because it cannot be honoured.
+`-v /lib/modules:/lib/modules:ro` alone rather than exporting it from the
+user's machine, which is what makes tools like `kind` work
+([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)). With a daemon per
+account the DESTINATION is what counts; with a shared daemon it is the SOURCE,
+and a remap is warned about at startup because it cannot be honoured.
 
-A source that is not on the workspace is refused at startup rather than mounted:
-docker creates a missing bind source, so a typo would otherwise give the daemon
-an empty directory and surface inside somebody's container much later.
-
-Two things to know before you use it. A `daemon.json` that sets `storage-driver`
-or `hosts` collides with the flags the agent passes, and dockerd refuses to
-start saying so; keep those out of the file and use
-`WORKSPACE_DIND_STORAGE_DRIVER` instead. And changing this setting applies to a
-daemon that already exists only when that account has nothing running, because
-applying it means recreating the container (its images and containers are on a
-volume and are kept).
+A `daemon.json` that sets `storage-driver` or `hosts` collides with the flags
+the agent passes and dockerd refuses to start; use
+`WORKSPACE_DIND_STORAGE_DRIVER` instead. A change to this setting reaches an
+existing daemon only once that account has nothing running (see
+[Changing settings later](#changing-settings-later)).
 
 Operator commands, on the workspace:
 
@@ -842,88 +751,70 @@ Operator commands, on the workspace:
 |---|---|
 | `remote-dockerd serve` | the agent; the image's default |
 | `remote-dockerd elevate` | the Swarm entry point |
-| `remote-dockerd healthcheck` | is this workspace serving? Both deployments use it |
+| `remote-dockerd healthcheck` | is this workspace serving? `deploy/` and the chart use it |
 | `remote-dockerd daemons ls` | which accounts have a daemon |
 | `remote-dockerd daemons reset <account> [--purge] [-f]` | rebuild one; `--purge` discards its images; `-f` while it runs containers |
 
 ### The storage driver, worth getting right once
 
-If `WORKSPACE_DATA` is on Ceph- or NFS-backed storage, worth doing if the
-workspace should survive moving nodes, you must set
-`WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs`. overlay2 refuses
-such a filesystem outright, and vfs, the only other fallback, copies every
-layer.
+If `WORKSPACE_DATA` (or `/var/lib/docker`) is on Ceph- or NFS-backed storage,
+you must set `WORKSPACE_DOCKERD_ARGS=--storage-driver=fuse-overlayfs`: overlay2
+refuses such a filesystem, and vfs copies every layer. Per-account daemons
+inherit it unless `WORKSPACE_DIND_STORAGE_DRIVER` says otherwise.
 
-Per-account daemons inherit that setting, so this is the one place to set it.
+**If anything it needs is missing, dockerd falls back to vfs rather than
+failing.** vfs copies the whole image on every `docker create`: nothing errors,
+`docker ps` stays instant, and `docker run` takes minutes. The agent logs it and
+`remote-docker remote status` shows it.
 
-**If it is set and anything it needs is missing, dockerd falls back to vfs
-rather than failing.** vfs has no copy-on-write, so it copies the whole image
-on every `docker create`. Nothing errors, `docker ps` stays instant, and
-`docker run` takes minutes. The agent logs it and `remote-docker remote status` shows
-it, because the cost of this one is entirely in how quiet it is.
+It needs `CONFIG_FUSE_FS` (`modprobe fuse` is enough), `/dev/fuse` in the
+container, and the `fuse-overlayfs` binary **in the image the daemon runs**,
+which stock `docker:dind` lacks and the workspace image has (so check
+`WORKSPACE_DIND_IMAGE`).
 
-This needs `CONFIG_FUSE_FS` (`modprobe fuse` is enough), `/dev/fuse` in the
-container, and the `fuse-overlayfs` binary **in the image the daemon runs**.
-Stock `docker:dind` does not ship it; this workspace image does, which is why
-per-account daemons default to the workspace's own image.
-
-It also needs a kernel **reporting 4.18 or newer**, and that is dockerd's rule
-rather than fuse-overlayfs's: moby checks the version and nothing else
-(`CheckKernelVersion(4, 18, 0)` in
+It also needs a kernel **reporting 4.18 or newer**: moby checks the version and
+nothing else (`CheckKernelVersion(4, 18, 0)` in
 `daemon/graphdriver/fuse-overlayfs/fuseoverlayfs.go`), so a backported kernel
-that can run fuse-overlayfs perfectly well is still refused, and refused as the
-silent fall-through to vfs described above. RHEL 7 is exactly that case
-([moby#42970](https://github.com/moby/moby/issues/42970)). This is a different
-gate from the one a `write=back` share passes through, where the agent runs the
-binary directly and dockerd is not asked. *(Checked 2026-09-08 against moby
-master; re-read that file.)*
+such as RHEL 7's is refused, silently, as the fall-through to vfs above
+([moby#42970](https://github.com/moby/moby/issues/42970)). A `write=back` share
+does not pass this gate, since the agent runs the binary itself. *(Checked
+2026-09-08 against moby master; re-read that file.)*
 
-It is not the default because where overlay2 works it is the kernel doing the
-work and is markedly faster. fuse-overlayfs is a userspace filesystem, so
-every layer read crosses into a userspace process.
+It is not the default because overlay2, where it works, is in the kernel and
+markedly faster.
 
 ### Restarting a workspace container
 
-A container's `/run` is part of its writable layer, so runtime state written
-there outlives the container being killed, which on a real machine it never
-does. dind's entrypoint deletes `docker*.pid` on startup and containerd's file
-is `containerd.pid`, which it misses. A workspace that ended **uncleanly** and
-is started again on the **same writable layer** therefore comes back with a
-stale `/var/run/docker/containerd/containerd.pid` naming a pid from its
-previous life, and if that number happens to be alive again dockerd either
-refuses to record its containerd's pid and exits, or believes containerd is
-already up, starts nothing, and times out. Either way the workspace runs,
-accepts SSH and answers nothing.
+A container's `/run` is part of its writable layer, and dind's entrypoint
+deletes `docker*.pid` but not `containerd.pid`. A workspace that ended
+**uncleanly** and restarts on the **same writable layer** comes back with a
+stale `/var/run/docker/containerd/containerd.pid`; if that pid is alive again,
+dockerd either exits or waits for a containerd it never started. Either way the
+workspace accepts SSH and answers nothing.
 
-The agent mounts a tmpfs on that directory before it starts dockerd, so
-nothing in it survives a restart. Nothing to configure, and it applies to
-compose, Swarm, Helm, a VM and any hand-rolled deployment alike.
+The agent mounts a tmpfs on that directory before it starts dockerd, in every
+deployment. Nothing to configure. Whether you were ever exposed:
 
-Worth knowing whether you were ever exposed to it:
+- **A clean stop is safe**: a clean shutdown removes the file. Measured on a
+  runner: 0 failures in 50 clean stops, 11 in 114 unclean restarts.
+- **The exposed case is an unclean end plus a restart on the same layer**:
+  `docker restart`, `docker compose restart`, a host reboot under
+  `restart: unless-stopped`, an OOM kill, or a SIGKILL after the grace period.
+- **Kubernetes was never exposed**: kubelet gives every restart a fresh layer.
+- **A VM workspace was never exposed**
+  ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)): `/run` is already a
+  tmpfs there, and the operator starts dockerd, so the agent mounts nothing.
 
-- **A clean stop is safe.** The agent stops dockerd with SIGTERM and a clean
-  shutdown removes the file: measured 0 failures in 50 clean stops, against 8%
-  for `docker kill`.
-- **An unclean end plus a restart on the same layer is the case**: `docker
-  restart` or `docker compose restart`, a host reboot under `restart:
-  unless-stopped`, an OOM kill, or a SIGKILL after the stop grace period.
-- **Kubernetes was never exposed**, because kubelet creates a container with a
-  fresh layer for every restart.
-- **A VM workspace was never exposed** ([ADR
-  0025](docs/adr/0025-a-vm-workspace.md)), because `/run` on a real machine is
-  already a tmpfs. There the operator starts dockerd, so the agent mounts
-  nothing.
-
-If the agent cannot mount it -- it is not privileged, or a daemon is already
-serving from that directory -- it says so and starts the daemon anyway. The
-workspace then behaves as it did before this existed.
+If the agent cannot mount it (not privileged, or a daemon is already serving
+from that directory) it says so and starts the daemon anyway.
 
 ### Enrolment
 
-Out of band: someone with access drops a `<name>.pub` into the keys directory,
-and the filename becomes that user's unix account. Removing a key revokes
-access but keeps the account and its home directory, because a key file is
-removed far more often than a person leaves for good.
+Out of band: someone with access drops a `<account>.pub` into the keys
+directory, one key per line. The filename is the account name a client logs in
+as; the unix user behind it is `rd-<account>`
+([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Emptying or removing the
+file revokes access but keeps the account and its home directory.
 
 The keys directory is re-read on change and polled every 60 seconds, because
 inotify never fires for a change made on another host when that directory is
@@ -931,20 +822,17 @@ on shared storage.
 
 ### A daemon per account
 
-Each enrolled account gets its own Docker daemon behind the same single SSH
-port ([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)), which is the
-default. Accounts stop seeing each other's containers, images and volumes, two
-accounts can publish the same port at once, and a shell lands on its own
-daemon.
+By default each enrolled account gets its own Docker daemon behind the same SSH
+port ([ADR 0019](docs/adr/0019-a-dockerd-per-account.md)). Accounts stop seeing
+each other's containers, images and volumes, two accounts can publish the same
+port at once, and a shell lands on its own daemon.
 
 **It is separation, not isolation.** Each per-account daemon runs privileged,
-which is root on whatever hosts it, so a determined account can still break
-out and reach another's. What this buys is that nobody sees anyone else's work
-*by accident*, which is the failure that actually happens. A workspace is
-still a shared machine. Genuine isolation is one workspace container per
-account.
+so a determined account can still break out and reach another's; what this
+buys is that nobody sees anyone else's work *by accident*. Genuine isolation is
+one workspace container per account.
 
-It costs real resources:
+It costs:
 
 - **the layer cache is duplicated.** Five accounts on `node:22` is five
   copies. A registry mirror recovers bandwidth but not disk.
@@ -955,19 +843,13 @@ It costs real resources:
 
 #### Changing settings later
 
-A per-account daemon is created once and started thereafter, which is what
-keeps an account's containers and images across a redeploy, so its image,
-flags and mounts are fixed at creation.
+A per-account daemon's image, flags and mounts are fixed when its container is
+created. The agent applies a changed configuration by itself: a daemon whose
+recorded configuration no longer matches is recreated once that account has
+nothing running, keeping its graph volume.
 
-The agent applies a changed configuration by itself: each daemon is stamped
-with a digest of what it was built from, and one that no longer matches is
-recreated. The container is disposable and the graph volume beside it is kept.
-It waits until that account has nothing running, because recreating a daemon
-stops its containers.
-
-**The storage driver is the exception**, because a graph written by one driver
-cannot be read by another. There is no recreation that keeps the data, so the
-agent says so and leaves it. Deciding is a command:
+**The storage driver is the exception**: a graph written by one driver cannot
+be read by another, so the agent says so and leaves it. Deciding is a command:
 
 ```bash
 docker exec <workspace> remote-dockerd daemons ls
@@ -975,8 +857,7 @@ docker exec <workspace> remote-dockerd daemons reset alice           # rebuild i
 docker exec <workspace> remote-dockerd daemons reset --all --purge   # and discard images
 ```
 
-`--purge` is the account's entire Docker state, and it is needed for exactly
-that one case.
+`--purge` is the account's entire Docker state.
 
 The agent that is serving may keep reporting the old failure for up to five
 seconds after a reset, until its own record of that failure expires; retry
@@ -991,42 +872,35 @@ after that.
 | `rd-*` share volumes | the workspace's daemon | that account's daemon |
 | the account's docker socket | n/a | `/run/rd/<account>/`, recreated on every start |
 
-Both deployments in `deploy/` already persist `/var/lib/docker` and
-`/etc/workspace`. Neither mode persists anything the other does not; a daemon
-per account nests the same data one level deeper.
+Both deployments in `deploy/` persist `/var/lib/docker` and `/etc/workspace`; a
+daemon per account nests the same data one level deeper. So:
 
-Three consequences of that nesting:
-
-- **`rd-dind-<account>-lib` is the most valuable object in the deployment.**
-  It is everything that account has. It is a *named* volume on purpose: the
-  daemon container in front of it can be removed and recreated, and the
-  account's images and containers come back with it.
+- **`rd-dind-<account>-lib` is everything that account has.** The daemon
+  container in front of it can be removed and recreated; the volume cannot.
 - **`docker system prune -a --volumes` on the workspace's own daemon is
-  destructive.** It removes stopped containers first and then unused volumes,
-  so an idle account's daemon and then its storage go together.
+  destructive**: an idle account's daemon container goes, then its storage.
   `docker volume ls --filter label=remote-docker.daemon` lists what must not
   be pruned.
-- **`/etc/workspace/workspace-id` matters more than it looks.** It is how the
-  agent recognises its own daemons after a redeploy. Lose it and the running
-  daemons are orphaned: still running, still holding their users' work, no
-  longer adopted.
+- **`/etc/workspace/workspace-id` is how the agent recognises its own daemons
+  after a redeploy.** Lose it and they keep running, holding their users' work,
+  no longer adopted.
 
-`rd-*` share volumes are the exception and can be destroyed freely. They hold
-no data, only a pointer to a directory on a client's machine, and
-`remote-docker remote gc` removes the unused ones as a matter of routine.
+`rd-*` share volumes hold no data, only a pointer to a directory on a client's
+machine, and `remote-docker remote gc` removes unused ones. The exception is a
+`rd-*-cache` volume behind a `write=back` or `write=ephemeral` share, which
+holds a container's writes not yet carried back; leave those to `remote gc`,
+which asks the workspace whether they are mounted.
 
 #### Upgrading an existing workspace is a breaking change
 
 Images and volumes an account built under the shared daemon are invisible from
-its own, and there is no cheap migration. **Set
-`WORKSPACE_PER_USER_DIND=false` before upgrading** if that matters. The old
-data is still in the shared `/var/lib/docker` either way, so the decision is
-reversible.
+its own, with no cheap migration. **Set `WORKSPACE_PER_USER_DIND=false` before
+upgrading** if that matters. The old data stays in the shared `/var/lib/docker`,
+so the decision is reversible.
 
-With it off, all enrolled users share one daemon and can see each other's
+With it off, all enrolled users share one daemon and see each other's
 containers ([ADR 0012](docs/adr/0012-shared-dockerd-across-users.md)). That
-stays supported rather than deprecated: a single-account workspace has nothing
-to separate.
+stays supported: a single-account workspace has nothing to separate.
 
 ## Caveats
 
@@ -1034,18 +908,15 @@ to separate.
 
 Every file in a share is reported as owned by the workspace account (uid
 10000 and up) with mode 0666, every directory 0777, so an image that runs as
-its own user can read and write the share without matching any number. A
-`chown` inside the container is accepted and does nothing, and a read-only
-bind (`ro`) is still read-only. ADR 0046 has the reasoning.
+its own user can read and write the share. A `chown` inside the container is
+accepted and does nothing, and a read-only bind (`ro`) is still read-only
+([ADR 0046](docs/adr/0046-a-share-reports-wide-mode-bits.md)).
 
-**A named volume is not a share, and gets none of that.** A fresh named volume
-takes its mode and ownership from the directory already in the image; where the
-image has no such directory, the daemon creates the mountpoint root-owned 0755
-and the volume is empty, so a container running as anyone but root gets EACCES
-on its first write. This is Docker's own rule and happens identically without
-us: `test/volume-ownership.sh` runs the same case against a plain daemon and
-through a session and asserts they agree. The tell is that the path is a volume
-rather than a bind. The fix is in the Dockerfile, before `USER`:
+**A named volume is not a share, and gets none of that.** Where the image has no
+directory at the mount path, the daemon creates it root-owned 0755, so a
+non-root container gets EACCES on its first write. That is Docker's own rule,
+identical without us (`test/volume-ownership.sh` asserts so). The fix is in the
+Dockerfile, before `USER`:
 
 ```dockerfile
 RUN mkdir -p /home/app/.local/share/app && chown -R app:app /home/app/.local
@@ -1062,25 +933,21 @@ RUN mkdir -p /home/app/.local/share/app && chown -R app:app /home/app/.local
 
 ### Windows shells
 
-**PowerShell and cmd need nothing.** Paths are Windows paths and arrive as
-typed.
+**PowerShell and cmd need nothing.**
 
-**Git Bash rewrites arguments before this program sees them**, which is MSYS
-doing what it exists to do: a native Windows program cannot read `/c/Users/you`,
-so the runtime maps POSIX paths to Windows form while building the command line.
-It cannot know that `-v` has two halves meaning different things, so it converts
-both and turns the `:` into a `;`:
+**Git Bash rewrites POSIX-looking arguments into Windows paths before this
+program sees them.** It converts both halves of `-v` and turns the `:` into a
+`;`:
 
 ```
 you type      -v /c/Users/you/x:/app
 docker gets   C:\Users\you\x;C:\Program Files\Git\app
 ```
 
-The container side is restored automatically now
-([ADR 0040](docs/adr/0040-git-bash-mangles-argv.md)), and the source keeps the
-Windows spelling Git Bash correctly gave it, so `-v` works from Git Bash without
-setting anything. Git Bash maps `/bin` and `/usr/bin` onto one directory, so
-where the reversal cannot be exact it says what it read.
+The container side is restored automatically
+([ADR 0040](docs/adr/0040-git-bash-mangles-argv.md)), so `-v` works from Git
+Bash as typed. Where the reversal cannot be exact (Git Bash maps `/bin` and
+`/usr/bin` onto one directory) it says what it read.
 
 Only `-v` is repaired. These are mangled too and are not:
 
@@ -1089,16 +956,13 @@ Only `-v` is repaired. These are mangled too and are not:
 | `-w /src` | `C:/Program Files/Git/src` |
 | `-e PATH=/usr/bin:/bin` | `…\usr\bin;…\usr\bin` |
 
-A path the workspace owns works from Git Bash too. Both halves of `-v` are
-converted, so `-v /lib/modules:/lib/modules:ro` arrives with a source under the
-Git installation; the client offers that reading back and takes it when the
-workspace declared the path and this machine does not have it. `//lib/modules`
-survives conversion untouched and works as well, if you would rather be explicit.
+A path the workspace owns (`-v /lib/modules:/lib/modules:ro`) works from Git
+Bash too: the client undoes the conversion when the workspace declared the path
+and this machine does not have it. `//lib/modules` also works.
 
-For those, and for anything else that surprises you, escape at the source or use
-`--mount`, which Git Bash has never mangled. Escaping is
-`MSYS_NO_PATHCONV=1 docker …`, whose value is ignored and which disables
-conversion entirely, or a leading double slash (`//app`):
+For everything else, use `--mount`, which Git Bash does not mangle, or escape:
+`MSYS_NO_PATHCONV=1 docker …` disables conversion entirely, and a leading
+double slash (`//app`) protects one argument:
 
 ```bash
 docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
@@ -1107,9 +971,9 @@ docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
 ### What differs from a bind mount
 
 `test/probes/fsprobe` runs one fixed sequence of filesystem operations inside
-a container against a plain bind mount on the runner and against a share from a
-Linux and from a Windows client, and CI fails on any difference not listed with
-a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
+a container against a plain bind mount and against a share from a Linux and a
+Windows client; CI fails on any difference not listed in
+`test/fs-conformance/deviations-*.txt`. The differences:
 
 | behaviour | on a share | why |
 |---|---|---|
@@ -1125,111 +989,83 @@ a reason in `test/fs-conformance/deviations-*.txt`. What is listed today:
 | Windows host: a symlink | `size=0`, where a Linux host reports the target path's length | a symlink is an NTFS reparse point |
 | Windows host: creating a symlink | refused, unless Developer Mode is on or the client runs elevated; the client says so once per share, and nothing stands in for it | Windows needs `SeCreateSymbolicLinkPrivilege`, and NFSv3 cannot answer "I made something else" (`core-client/nfsserve/symlink.go`) |
 
-Everything else the probe does behaves as on a bind mount, which is most of it:
-`flock` and `fcntl` byte-range locks across processes, `mmap` MAP_SHARED reads
-and writes, two processes appending with `O_APPEND` without a torn line, eight
-processes creating in one directory, sparse files, rename in every form
-including over an existing file and while the file is open, hard links, and a
+Everything else the probe does behaves as on a bind mount: `flock` and `fcntl`
+byte-range locks across processes, `mmap` MAP_SHARED, concurrent `O_APPEND`
+without a torn line, eight processes creating in one directory, sparse files,
+rename in every form, hard links, NFC and NFD names kept byte for byte, and a
 git repository through `init`, 200 commits, `status`, `checkout`, `gc` and
-`fsck`. A name written NFC and one written NFD are each created, listed and
-unlinked under the bytes they were written with, so neither client normalises
-them. Two things this does not answer: a file over 4 GiB, which no step writes,
-and creating a symlink from an ordinary Windows account, since the only runner
-that exercises it is elevated.
+`fsck`. Not answered: a file over 4 GiB, which no step writes, and creating a
+symlink from an ordinary Windows account, since the runner is elevated.
 
 ### What cannot be bind mounted
 
 A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.
-Directories and files both work; these do not, and say so rather than failing
-later:
+These do not work, and say so up front:
 
-- **Sockets**, `/var/run/docker.sock` above all, and **devices and FIFOs**.
-  `connect()` needs the kernel object, and a file share carries the name and
-  nothing behind it. Not a single-file limitation: a socket inside a directory
-  you share is equally unreachable, and always has been. (`--device` is
-  unaffected — it names a device on the workspace.)
+- **Sockets** (`/var/run/docker.sock` above all), **devices and FIFOs**, alone
+  or inside a shared directory: a file share carries the name, not the kernel
+  object. (`--device` is unaffected; it names a device on the workspace.)
 - **Windows named pipes** (`npipe` mounts) pass through untouched, so the
   workspace looks for a pipe path that means nothing there.
 
-**A bind source is a path on YOUR machine**, always, which is the point of the
-whole thing. A path that exists only on the workspace fails here, and the error
-is about your filesystem. The exception is deliberate and belongs to whoever runs
-the workspace: paths listed in `WORKSPACE_DIND_MOUNTS` are resolved by the
-workspace's own daemon
-([ADR 0041](docs/adr/0041-the-workspaces-own-paths.md)), which is what lets a
-tool that builds its own flags work at all: `kind` mounts `/lib/modules`.
-A path your machine also has still wins, so nothing changes for the mounts you
-already use.
+**A bind source is a path on YOUR machine.** A path that exists only on the
+workspace fails, except those the operator lists in `WORKSPACE_DIND_MOUNTS`
+([A private or insecure registry](#a-private-or-insecure-registry)), and a path
+your machine also has still wins.
 
-Two things work but are not what `docker inspect` will show: every bind is a
-volume, and a single file is a volume with a subpath
-([ADR 0039](docs/adr/0039-a-single-file-is-a-one-file-export.md)). Mount
-propagation (`:rshared` and friends) is dropped with it, since the mount happens
-inside the workspace daemon's own namespace.
+`docker inspect` shows every bind as a volume, and a single file as a volume
+with a subpath. Mount propagation (`:rshared` and friends) is dropped, since the
+mount happens inside the workspace daemon's own namespace.
 
 ### A session must be running
 
-Not in a terminal you are watching, but running: it is the endpoint and the
-file server, so stopping it takes running containers' mounts with it. Any
-command that needs one starts it, and does not close it afterwards: a one-shot
-`docker run` leaves the session up for whatever comes next.
+The session is the endpoint and the file server, so stopping it takes running
+containers' mounts with it. Any command that needs one starts it and leaves it
+running.
 
-**It reclaims in two stages, and only one of them is on by default.**
+**It reclaims in two stages, and only one is on by default.** After
+`daemonStandby` (30 minutes) idle, the session **stands by**: it drops the
+workspace connection and its file watches but keeps the endpoint, so the next
+request from compose, buildx, Testcontainers or your IDE wakes it.
 
-After `daemonStandby` (30 minutes) with nothing to do, the session **stands
-by**: it drops the workspace connection and releases its file watches, which is
-what a reclaim is actually for. The endpoint stays bound, so compose, buildx,
-Testcontainers and your IDE keep working — the next request through it wakes the
-session and rebuilds what it let go of.
-
-`daemonIdle` is the tier above and **ends the process**. It is off unless you
-ask for it, because ending takes the endpoint with it: those tools connect to a
-path, know nothing of sessions, and only a `remote-docker` command can rebuild
-one. Set it if you want a session gone rather than idle — reasonable on a
-laptop — and know that when it fires, every other client pointed at the endpoint
-stops working until something starts a session again.
+`daemonIdle` **ends the process**, and is off unless you set it, because the
+endpoint goes with it: tools pointed at the endpoint then fail until a
+`remote-docker` command starts a session again.
 
 ### File watching in detail
 
-**Deletions are the honest gap.** `unlink` of a name that is already gone
-fails before the kernel generates anything, so a deletion cannot be replayed
-faithfully. `coarse` approximates it with a directory-level event; `partial`
-says nothing rather than something wrong. A watcher that rescans notices; one
-that trusts the event *kind* is told something untrue.
-[ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md) stays open on
-exactly this, and
-[ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md) records
-how the rest works.
+**Deletions are the gap.** `unlink` of a name that is already gone fails
+before the kernel generates anything, so a deletion cannot be replayed
+faithfully. `coarse` approximates it with a directory-level event (unit tested
+only); `partial` says nothing rather than something wrong. A watcher that
+rescans notices; one that trusts the event *kind* is misled
+([ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md)).
 
-**Watching is not free.** inotify is not recursive: `inotify_add_watch` covers
-one directory and reports only its direct entries, so a tree costs one watch
-per directory. macOS is worse, because kqueue needs an open file descriptor
-per *file*.
+**Watching costs one watch per directory** (inotify is not recursive), and on
+macOS one open file descriptor per *file*.
 
 | platform | budget | what binds |
 |---|---|---|
-| Linux | 4096 directories | `fs.inotify.max_user_watches` (8192 by kernel default; many distros raise it) |
+| Linux | 4096 directories | `fs.inotify.max_user_watches` (`sysctl fs.inotify.max_user_watches` shows yours) |
 | Windows | 1024 directories | one `ReadDirectoryChangesW` buffer per watch |
 | macOS | 512 directories | `RLIMIT_NOFILE`, because kqueue costs an fd per file |
 
 Build outputs like `dist/` and `target/` are **not** excluded by default,
-because serving `dist/` and reloading when it changes is exactly the workflow
-this is for. So a Rust or Java tree will spend its budget inside `target/` and
-say so. Tune with `REMOTE_DOCKER_WATCH_BUDGET` and
-`REMOTE_DOCKER_WATCH_EXCLUDE` (comma- or `PATH`-separated). When the budget
-runs out, the directory it stopped at is named rather than silently dropped.
+because serving `dist/` and reloading when it changes is the point; a Rust or
+Java tree will spend its budget inside `target/` and say so. Tune with
+`REMOTE_DOCKER_WATCH_BUDGET` and `REMOTE_DOCKER_WATCH_EXCLUDE` (comma- or
+`PATH`-separated). When the budget runs out, the directory it stopped at is
+named. Nothing has run a watcher over a very large tree (10,000 directories).
 
-Watching starts delivering once the session has connected, which happens on
-the first Docker command. Edits made before that are counted and reported, not
-silently lost.
+Watching starts once the session has connected, on the first Docker command;
+edits before that are counted and reported.
 
 The per-tool polling flags (`CHOKIDAR_USEPOLLING=1`, `WATCHPACK_POLLING=true`,
 `--poll`) still work and are never set for you.
 
 ### Why a container takes a few seconds to start
 
-Measured against a workspace whose `/var/lib/docker` is on CephFS, which is
-the case this is worth knowing for.
+Measured against a workspace whose `/var/lib/docker` is on CephFS:
 
 | | |
 |---|---|
@@ -1238,35 +1074,39 @@ the case this is worth knowing for.
 | `docker create` | **~250ms**, the same measured on the workspace itself. Container creation is many small synchronous metadata writes. |
 | `docker start` | **~800ms**, likewise the same locally. |
 
-So a `docker run` is roughly 400ms of us, a second of the daemon, then the
-container's own runtime. **The remote part is not the expensive part**; the
-storage is. The same daemon on local disk does create and start in tens of
-milliseconds. If that matters more than surviving a node move, put
-`/var/lib/docker` on local disk.
+**The storage is the expensive part, not the remote part**: the same daemon on
+local disk creates and starts in tens of milliseconds. If that matters more
+than surviving a node move, put `/var/lib/docker` on local disk.
 
 ### What is not tested
 
-The integration suites run the Linux client against a real workspace on every
-push. **macOS has never been executed at all**, in CI or anywhere else.
-**A Windows client is exercised end to end on every pull request**
-(`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
-non-root mkdir and the conformance probe), on one runner image; nobody
-working on this has WSL on their own machine. Swarm itself needs a real
-cluster and CI cannot cover it.
-**Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
-option newer than the supported floor passes CI and fails on the workspace, on
-every bind mount at once. `nconnect=8` did exactly that on a RHEL 7 workspace.
-What guards it is a table, not a test run. `REMOTE_DOCKER_NFS_NCONNECT` is that
-same option offered as an opt-in, and **nothing measures whether it helps**: no
-suite and no benchmark has ever run with it on.
-**The Windows MSI is installed and uninstalled on a runner** when the installer
-changes, which is more than the zips get — nobody has ever unpacked one of
-those on a machine that did not build it. But no MSI from a real release has
-been installed by anybody, and none of them is signed.
-**Android is built and inspected, and CI runs nothing on it**: it checks that
-the binary is loadable on a phone and links the system libc, which is what makes
-DNS work there. A session and a container were confirmed by hand from Termux on
-2026-08-14, on one arm64 device. `android_amd64` has never been executed.
+The integration suites run the Linux client against a real workspace in CI.
+Beyond that:
+
+- **macOS has never been executed at all**, in CI or anywhere else.
+- **Windows**: one client is exercised end to end on every pull request
+  (`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
+  non-root mkdir and the conformance probe), on one runner image and one WSL
+  kernel. The rest of the Windows client is unit tested only, and **Hyper-V has
+  never run**.
+- **Swarm itself** needs a real cluster; only the elevation mechanism is tested.
+  The systemd unit is not exercised either.
+- **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
+  option newer than the [3.10 floor](#running-a-workspace) would pass CI and fail
+  every mount on an older workspace. A table guards it, not a test run.
+- **Write-back conflicts** are unit tested only, and whether Compose accepts
+  our `consistency:` words is unverified.
+- **The Windows MSI** is installed and uninstalled on a runner when the
+  installer changes. No MSI from a real release has been installed by anybody,
+  none is signed, and no release zip has been unpacked on a machine that did not
+  build it.
+- **Android is built and inspected, and CI runs nothing on it**: it checks that
+  the binary is loadable on a phone and links the system libc, which is what
+  makes DNS work there. A session and a container were confirmed by hand from
+  Termux on 2026-08-14, on one arm64 device. `android_amd64` has never been
+  executed.
+
+What each release changed, and what is still unproven: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Prior art
 
@@ -1282,26 +1122,22 @@ implemented". VS Code and Codespaces document it as unsupported.
 [docker/compose#8484](https://github.com/docker/compose/issues/8484) was
 closed by a stale bot;
 [podman#13358](https://github.com/containers/podman/issues/13358) was closed
-"won't fix, far from trivial".
+"won't fix, far from trivial". *(Both still closed on 2026-09-23:
+`gh issue view 8484 -R docker/compose`, `gh issue view 13358 -R containers/podman`.)*
 
-Sync is not obviously the wrong answer. It makes changes land as ordinary
-local writes, so file watchers work, which is very likely the whole reason it
-won.
-
-remote-docker answers it differently, and not originally: Docker Desktop ships
-the same idea as "Event Injection", forwarding host events into its VM so a
-replay thread reproduces them. Linux offers no way to inject a synthetic
-inotify event, `fanotify(7)` says so outright, so performing a real operation
-is the only mechanism available to anyone. The difference here is that we own
-the NFS server as well as the agent, which is what keeps the replay from
-echoing back as a change of its own
+Sync makes changes land as ordinary local writes, so file watchers work, which
+is likely why it won. The replay here is the same idea as Docker Desktop's
+"Event Injection": Linux cannot inject a synthetic inotify event, so a real
+operation is the only mechanism. Owning the NFS server as well as the agent is
+what keeps the replay from echoing back as a change of its own
 ([ADR 0016](docs/adr/0016-replaying-change-events-as-real-syscalls.md)).
 
 ## Project layout
 
-Seven Go modules in one repository
-([ADR 0021](docs/adr/0021-the-module-layout.md)). Four of them know nothing
-about Docker; the two binaries are the glue that does.
+Eight Go modules in one repository
+([ADR 0021](docs/adr/0021-the-module-layout.md)). The two binaries are the
+glue that knows Docker; `core`, `dircache`, `core-client` and `core-agent` do
+not.
 
 ```
 core/                  what both ends must agree on
@@ -1339,7 +1175,9 @@ agent/                 the agent binary (five direct third-party requires)
 
 image/  deploy/        the workspace container and its deployments
 charts/                the Helm chart
-test/                  the integration suites, and their probes
+test/                  the integration suites
+  probes/              their instruments, a module of their own
+installer/windows/     the MSI
 docs/adr/              why everything is the way it is
 ```
 

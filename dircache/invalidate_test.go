@@ -41,7 +41,7 @@ func TestExcludedPath(t *testing.T) {
 func TestInvalidatorBatchesByPath(t *testing.T) {
 	const share = "/m/00112233445566ff"
 	c := &Cache{}
-	c.shares.set(share, "/home/alice/project", &shareState{})
+	c.shares.set(share, "/home/alice/project", &shareState{}, nil)
 	defer c.Stop()
 
 	observe := func(p string, op Op) {
@@ -86,7 +86,7 @@ func TestInvalidatorBatchesByPath(t *testing.T) {
 // not delegated, and this runs on the watcher's own path.
 func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 	c := &Cache{}
-	c.shares.set("/m/00112233445566ff", "/home/alice/project", &shareState{})
+	c.shares.set("/m/00112233445566ff", "/home/alice/project", &shareState{}, nil)
 	defer c.Stop()
 
 	c.Observe(Event{Share: "/m/1111111111111111", Path: "/other.go", Op: OpWrite})
@@ -103,7 +103,7 @@ func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 func TestInvalidatorIgnoresDirectories(t *testing.T) {
 	const share = "/m/1111111111111111"
 	c := &Cache{}
-	c.shares.set(share, "/home/alice/project", &shareState{})
+	c.shares.set(share, "/home/alice/project", &shareState{}, nil)
 	defer c.Stop()
 
 	c.Observe(Event{Share: share, Path: "/pkg", Op: OpCreate, Dir: true})
@@ -120,7 +120,7 @@ func TestInvalidatorIgnoresDirectories(t *testing.T) {
 func TestInvalidatorIgnoresExcludedPaths(t *testing.T) {
 	const share = "/m/1111111111111111"
 	c := &Cache{Exclude: []string{".git"}}
-	c.shares.set(share, "/home/alice/project", &shareState{})
+	c.shares.set(share, "/home/alice/project", &shareState{}, nil)
 	defer c.Stop()
 
 	c.Observe(Event{Share: share, Path: "/.git/index", Op: OpWrite})

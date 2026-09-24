@@ -1,13 +1,14 @@
 # The cache
 
 What makes a shared directory fast, and what is known about it. A shared
-directory is an NFS mount over an SSH tunnel, and NFS is a round-trip
-protocol, so a project of thousands of small files costs one file's round
-trips times the count; latency and not bandwidth decides it. The decisions
-are in [ADR 0042](adr/0042-mount-consistency-modes.md) (the two axes),
+directory is NFS over an SSH tunnel, and NFS is a round-trip protocol, so
+thousands of small files cost one file's round trips times the count: latency,
+not bandwidth, decides it. The decisions are
+[ADR 0042](adr/0042-mount-consistency-modes.md) (the two axes),
 [ADR 0044](adr/0044-a-delegated-share-is-a-cache.md) (the union) and
-[ADR 0045](adr/0045-prefetch-follows-the-reads.md) (the prefetch policy and
-every table); the user-facing table and examples are in the README.
+[ADR 0045](adr/0045-prefetch-follows-the-reads.md) (the prefetch policy, every
+table, and the prior art, checked 2026-09-04); the user-facing table and
+examples are in the README.
 
 ## The two settings
 
@@ -24,13 +25,12 @@ ADR 0042 has the parsing rules.
 
 ## The union
 
-A share with `write != through` is a union on the workspace: the live export
-is the lower layer, a local cache is the upper, and the container binds the
-merged view. A read the upper holds is local disk; one it does not falls
-through and is correct, so an incomplete upper is never wrong, only slower.
-The lower carries the share's read mode, the agent is the union's only writer
-and writes through the merged mount, and `ephemeral` is never asked for its
-changes. ADR 0044 is where each of those is reasoned about and measured.
+A share with `write != through` is a union: the live export is the lower, a
+local cache the upper, and the container binds the merged view. A read the
+upper holds is local disk; one it does not falls through and is correct, so an
+incomplete upper is only slower, never wrong. The lower carries the share's
+read mode, the agent is the only writer and writes through the merged mount,
+and `ephemeral` is never asked for its changes (ADR 0044).
 
 ## Prefetch
 
@@ -59,11 +59,6 @@ ADR 0045.
 | page-cache warming as an alternative landing zone | not run; ADR 0045 step 0.5 |
 | a container's mount sharing a superblock with the agent's | assumed |
 
-## Prior art
-
-What was read before designing this, and what it says about lazy filling, is
-[ADR 0045](adr/0045-prefetch-follows-the-reads.md) (checked 2026-09-04).
-
 ## Where the code lives
 
 | what | where |
@@ -80,7 +75,5 @@ What was read before designing this, and what it says about lazy filling, is
 | the lower's read mode | `core-agent/union/union.go` |
 | wiring, RTT, the policy switch | `client/internal/session` |
 
-`dircache` depends on nothing, in-repo or out, which is the membership test
-for what belongs in it: fill a local copy of a tree in a bounded order,
-invalidate what changes here, carry the consumer's writes back, naming no
-transport and no storage.
+`dircache` depends on nothing, in-repo or out; what belongs in it names no
+transport and no storage (ADR 0044, "Where the policy lives").

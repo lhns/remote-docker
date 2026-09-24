@@ -1,12 +1,8 @@
 name: kubernetes
 
-# The chart, installed on a real cluster and reached the way a person would
-# reach it: through an ingress, with the client binary. Separate from
-# integration.yml because it needs a cluster.
-#
-# The pod runs dockerd inside a kind node, which is itself a container, so this
-# is docker inside docker inside docker. That it works at all was measured
-# before the chart was written (2026-08-14) rather than assumed.
+# The chart on a kind cluster, reached through an ingress with the client
+# binary. dockerd in a pod in a kind node is docker in docker in docker, which
+# was measured to work (2026-08-14) before the chart was written.
 
 on:
   push:
@@ -25,10 +21,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Not gated by which paths changed. It runs beside the integration suites,
-  # whose longest job is ten minutes against this one's four, so it costs
-  # nothing anyone waits for -- and a gate would mean an agent change reaching
-  # main without ever having run on a cluster.
+  # Not path-gated: it finishes inside the integration suites' ten minutes, and
+  # a gate would let an agent change reach main without running on a cluster.
   end-to-end:
     name: a session through the ingress
     runs-on: ubuntu-latest
@@ -39,15 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The chart's own checks, folded in from a job of their own that did 9s
-      # of work (why a runner slot is worth that: ci.yml, the lint job). They
-      # run FIRST, so a chart that cannot render fails in twenty seconds rather
-      # than after an image build and a cluster; it costs this job about 18s,
-      # and that is the trade to undo first if runner slots stop being scarce.
-      #
-      # helm is pinned for the whole job, installing the chart included: the
-      # runner image's own helm was one more thing that could move underneath
-      # a failure.
+      # The chart's own checks run FIRST, so a chart that cannot render fails
+      # in twenty seconds. Folded in from a job of their own (runner slots are
+      # scarce: ci.yml, lint). helm is pinned for the whole job.
       - uses: azure/setup-helm@v5
         with:
           version: v3.16.3
@@ -61,9 +49,7 @@ jobs:
             | tar xz kubeconform
           sudo mv kubeconform /usr/local/bin/
 
-      # Every combination somebody can install, checked against real API
-      # schemas. A template that renders is not the same as one the API server
-      # will accept.
+      # Every combination somebody can install, against real API schemas.
       # pipefail: helm failing leaves kubeconform an empty stdin, which it
       # passes as "0 resources found".
       - name: helm template, each way it can be configured
@@ -85,10 +71,9 @@ jobs:
           render --set ingress.host=ws.example.com \
                  --set persistence.graph.existingClaim=graph-x
 
-      # A volume is EITHER mounted from a claim you supplied or generated from
-      # a template, and rendering valid YAML proves neither. Both directions
-      # are checked because both fail silently: a claim named nowhere is a pod
-      # with no storage, and a claim named twice is a duplicate volume name.
+      # A volume is EITHER a supplied claim or a template. Both directions fail
+      # silently: a claim named nowhere is a pod with no storage, one named
+      # twice a duplicate volume.
       - name: existingClaim replaces its template, and only its own
         run: |
           set -eu
@@ -108,8 +93,7 @@ jobs:
             esac
           done
 
-          # The mixed case is what a careless guard breaks: supplying one claim
-          # must not take the other template away.
+          # Supplying one claim must not take the other template away.
           mixed=$(render --set ingress.host=ws.example.com \
                          --set persistence.graph.existingClaim=graph-x)
           case "$mixed" in
@@ -121,16 +105,14 @@ jobs:
             *) echo "the generated state template disappeared"; exit 1 ;;
           esac
 
-          # And the default still generates both, which is what every existing
-          # install renders.
+          # Assigned first: a failed render inside `case "$(...)"` is ignored.
           default=$(render --set ingress.host=ws.example.com)
           case "$default" in
             *claimName*) echo "the default mounted a claim it does not create"; exit 1 ;;
           esac
 
-      # A volumeClaimTemplate is immutable, so one label that moves with the
-      # chart makes every later upgrade forbidden. Neither helm lint nor
-      # kubeconform sees it: the API server refuses it at update time.
+      # A volumeClaimTemplate is immutable, so a label that moves with the chart
+      # forbids every later upgrade, and only the API server says so.
       - name: a volume claim template does not move with the chart version
         run: |
           set -eu
@@ -157,12 +139,8 @@ jobs:
             exit 1
           fi
 
-      # The failure this is worth pinning: an ingress with no host matches every
-      # request that reaches the controller, so the chart refuses to render one.
-      #
-      # Captured and then matched, never `helm ... | grep -q`: grep exits at
-      # the first match, the producer's next write gets EPIPE, and a Go program
-      # turns that into a fatal SIGPIPE (why: test/lib.sh).
+      # An ingress with no host matches every request, so the chart refuses
+      # one. Captured, never `| grep -q` (why: test/lib.sh).
       - name: an ingress with no host is refused
         run: |
           if out=$(helm template ws charts/remote-docker-workspace --kube-version 1.29.0 2>&1); then
@@ -185,9 +163,7 @@ jobs:
       - name: build the client
         run: (cd client && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/remote-docker" ./cmd/remote-docker)
 
-      # Port 80 of the kind node is published to the runner, so the ingress
-      # controller is reachable at 127.0.0.1 and the client can be pointed at
-      # it with a Host header via /etc/hosts.
+      # The node's port 80 is published to the runner (test/kind.yaml).
       - name: create a cluster with an ingress-ready node
         uses: helm/kind-action@v1
         with:
@@ -206,18 +182,10 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
 
-      # Every Ingress creation is validated against the ADMISSION webhook, and
-      # neither the controller pod being ready nor its endpoint being listed
-      # means that webhook answers: on 2026-09-08 (issue #151) the pod reported
-      # `condition met`, the endpoint was listed as 10.244.0.7:8443, and
-      # `helm install` was refused `connection refused` against that same
-      # address 0.3s later.
-      #
-      # So ask the webhook itself, over the exact path `helm install` takes: a
-      # server-side dry-run CREATE makes the API server call
-      # validate.nginx.ingress.kubernetes.io and report what came back. Safe to
-      # repeat because the webhook declares `sideEffects: None` (checked
-      # 2026-09-08 in the deploy.yaml pinned above) and this creates nothing.
+      # A ready controller does not mean its admission webhook answers (#151:
+      # refused 0.3s after `condition met`). A server-side dry-run CREATE asks
+      # it over the path `helm install` takes; the webhook declares
+      # `sideEffects: None` (2026-09-08, the deploy.yaml pinned above).
       - name: the admission webhook answers
         run: |
           set -eu
@@ -292,12 +260,8 @@ jobs:
           kubectl get pods -n rd -o wide
           kubectl exec -n rd "$POD" -- remote-dockerd healthcheck
 
-      # `kind load` puts an image in the NODE's containerd. The workspace runs
-      # its own dockerd with its own graph on a PVC, which knows nothing about
-      # that, so a per-account daemon started from this image would be pulled
-      # from a registry that has never heard of it. A real deployment pulls
-      # ghcr.io/lhns/remote-docker-workspace and never meets this; here the
-      # image is handed over directly.
+      # `kind load` fills the NODE's containerd, not the workspace's own
+      # dockerd, which would pull a per-account daemon's image from a registry.
       - name: give the workspace's own daemon the image
         run: |
           docker save remote-docker-workspace:kind | kubectl exec -i -n rd "$POD" -- docker load
@@ -310,9 +274,7 @@ jobs:
           export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state"
           export REMOTE_DOCKER_ENDPOINT="$RUNNER_TEMP/docker.sock"
 
-          # ws rather than wss: the ingress controller in kind serves plain
-          # HTTP on 80, and TLS is the cluster's business rather than this
-          # test's. The transport under it is the same either way.
+          # ws: kind's ingress serves plain HTTP; the transport is the same.
           "$RUNNER_TEMP/remote-docker" remote create k8s \
             --host ws://ws.rd.test --user ci --no-context
 
@@ -325,9 +287,7 @@ jobs:
           echo "$out"
           grep -q "tunnel port" <<<"$out"
 
-      # The single command that proves the whole chain: the tunnel, the NFS
-      # export, the bind rewriting and the daemon in the pod. The file is
-      # written on the runner and read inside a container in the cluster.
+      # The whole chain in one command: written on the runner, read in the pod.
       - name: a bind mount from the runner into a container in the cluster
         run: |
           set -eux
@@ -347,9 +307,8 @@ jobs:
       - name: helm upgrade keeps it running
         run: |
           set -eux
-          # A new version and appVersion, which is the upgrade that fails when
-          # something version-bearing has reached an immutable field. The image
-          # is image.tag from install, kept by --reuse-values.
+          # A new version and appVersion: the upgrade that fails when something
+          # version-bearing reached an immutable field.
           rm -rf "$RUNNER_TEMP/chart-next"
           cp -r charts/remote-docker-workspace "$RUNNER_TEMP/chart-next"
           sed -i 's/^version: .*/version: 9.9.9/; s/^appVersion: .*/appVersion: "9.9.9"/' \
@@ -363,8 +322,6 @@ jobs:
       - name: what went wrong
         if: failure()
         run: |
-          # The client's own log first: a failure here is as likely to be on
-          # this side of the tunnel as in the cluster.
           echo "== client =="
           cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -60 || echo "(none)"
 
@@ -372,9 +329,7 @@ jobs:
           kubectl describe pod -n rd "$POD" | tail -30 || true
           kubectl logs -n rd "$POD" --tail=100 || true
 
-          # A per-account daemon is a container of its own, so the reason it
-          # will not start is in its log and nowhere else. This is what found
-          # the storage-driver and the image-pull failures.
+          # A per-account daemon's reason for not starting is only in its log.
           echo "== per-account daemons =="
           kubectl exec -n rd "$POD" -- docker ps -a 2>&1 | tail -5 || true
           for c in $(kubectl exec -n rd "$POD" -- docker ps -aq --filter name=rd-dind 2>/dev/null); do

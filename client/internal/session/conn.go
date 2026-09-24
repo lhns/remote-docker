@@ -1,10 +1,3 @@
-// Bringing a connection up, and everything that lives only while it is up.
-//
-// The ORDER in here is load-bearing and is the reason it is one file: the NFS
-// export has to be reachable before any container can mount a volume backed by
-// it, and the things only a hosting session starts (ports, notify, the volume
-// collector) must not be started by one that merely asks a question.
-
 package session
 
 import (
@@ -12,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"strconv"
 	"sync"
@@ -29,20 +21,15 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// connect brings up everything that needs the workspace. The order matters:
-// the NFS export has to be reachable before any container can mount a volume
-// backed by it.
+// connect brings up everything that needs the workspace. The NFS export must be
+// reachable before any container can mount a volume backed by it.
 func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {
 		return nil, err
 	}
 
-	// This machine's name for itself, and the workspace derives the same one
-	// from the key it authenticates rather than from anything sent to it. See
-	// workspace.ClientID: the account is the identity, the client is the
-	// machine, and only the second can tell one of somebody's computers from
-	// another when both use one account.
+	// The workspace derives the same id from the key it authenticated (ADR 0029).
 	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
 
 	known, err := keys.NewKnownHosts(config.KnownHostsPath())
@@ -50,35 +37,22 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
-	// Whether this workspace is reached over SSH directly or through a reverse
-	// proxy (ADR 0034). Worked out here because tunnelclient is handed its
-	// connection rather than choosing one (ADR 0021).
 	transport, err := s.opts.Config.Transport()
 	if err != nil {
 		return nil, err
 	}
 
-	// THE one place a machine is located and held.
-	//
-	// A workspace on another host is simply there; a machine on this one has to
-	// be running before it can answer, and its address is given to it at boot,
-	// so a stored one is stale the moment it restarts. Here rather than in the
-	// commands because every path to a session comes through this function: a
-	// check at `machine create` would be right for the first connection and
-	// wrong for every one after a reboot.
+	// The one place a local machine is held and located (ADR 0026), on every
+	// connect: its address changes at boot.
 	host := transport.Host
 	var hold io.Closer
 	if m := s.opts.Config.Machine; m != nil {
-		// Held first, for as long as this connection lives. A machine with
-		// nobody in it shuts down, and an open TCP connection is not somebody:
-		// WSL counts its own sessions, so without this the machine can go away
-		// underneath a working session.
+		// Held first: a WSL machine with no session in it shuts down under a
+		// working connection.
 		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
 			return nil, err
 		}
-		// ONE release rule, because live.machine is the hold's only closer and
-		// every failure before that hand-over used to leave a wsl.exe session
-		// running under a context nothing cancels. Disarmed where live takes it.
+		// Released on any failure until live takes it over.
 		defer func() {
 			if hold != nil {
 				_ = hold.Close()
@@ -105,17 +79,13 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Dial:    dial,
 	})
 	if err != nil {
-		// The transport reports that it was refused; only this side knows how
-		// somebody is enrolled, so the remedy is attached here.
 		if hint := enrolmentHint(err, s.opts.Config.User, key.Signer); hint != "" {
 			return nil, fmt.Errorf("%w%s", err, hint)
 		}
 		return nil, err
 	}
 
-	// Timed, because it is one request and one reply over the tunnel and
-	// therefore the round trip the prefetch policy decides against. The
-	// bandwidth half of that it measures itself, from its own batches.
+	// Timed: one request and one reply is the round trip prefetch decides on.
 	started := time.Now()
 	info, err := readInfo(ctx, client)
 	if err != nil {
@@ -124,22 +94,14 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	}
 	s.rtt.Store(int64(time.Since(started)))
 
-	// Now the account is known, report its uid rather than the default, so
-	// files are owned by whoever will read them.
 	s.registry.SetAttrs(attrsFor(info))
 
 	live := &liveConn{ssh: client, info: info, machine: hold}
-	// live owns the hold from here.
 	hold = nil
 	if info.Now != 0 {
-		// Measured here, once, rather than per comparison: the round trip that
-		// fetched this is the only thing between the two readings, and it is
-		// far smaller than the differences this exists to catch.
 		live.clockSkew = time.Duration(info.Now - time.Now().UnixNano())
 	}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
-	// One guard for this connection, shared by the two things that disagree
-	// about a volume's lifetime. See rewrite.Guard.
 	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
 	live.rewriter = &rewrite.Rewriter{
 		Shares:   shareRegistrar{registry: s.registry, shares: s.shares, changed: s.syncWatch},
@@ -152,11 +114,8 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 		Mode:      s.opts.Mode,
 		ModePaths: s.opts.ModePaths,
-		// Asked of the session rather than of the setting: only a hosting
-		// session has a watcher.
-		Watching: s.watch != nil,
+		Watching:  s.watch != nil,
 
-		// Opened when a mount asks for it and not before: see ensureCacheChan.
 		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },
 		UnionReady: info.Union,
 
@@ -167,8 +126,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	}
 	if s.opts.Role.hosting() {
 		if err := s.startNFS(live); err != nil {
-			// live's own teardown, not just the ssh client's: it is what
-			// releases the machine by this point.
+			// live.close, not just the ssh client's: it releases the machine.
 			live.close()
 			return nil, err
 		}
@@ -177,21 +135,13 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	liveCtx, cancel := context.WithCancel(s.ctx)
 	live.cancel = cancel
 
-	// Both of these belong to a session that is HOSTING something: forwarding
-	// ports exists to make this session's containers reachable, and collecting
-	// volumes is housekeeping for a long-running `up`.
-	//
-	// A Query session (`status`, `gc`) only asks the workspace a question and
-	// then closes, so starting these there begins background round trips and
-	// then tears the connection out from under them: the command prints its
-	// answer followed by errors about work nobody asked for.
+	// A query session closes right after its answer, so background work
+	// started there only prints errors about work nobody asked for.
 	if s.opts.Role.hosting() {
 		s.startPorts(liveCtx, live)
 		s.startNotify(live)
 
-		// Carrying container writes back, for delegated shares (ADR 0044).
-		// Per connection, because it needs one; it does nothing at all until a
-		// share has a cache and that cache is complete.
+		// Idle until a share has a complete cache (ADR 0044).
 		live.wg.Go(func() { s.cache.WriteBack(liveCtx) })
 
 		live.wg.Go(func() {
@@ -199,25 +149,16 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 				s.logQuiet(liveCtx, "collecting unused share volumes", "err", err)
 				return
 			}
-			// Here rather than in Session.Collect, which is the `gc` command
-			// and runs on a QUERY session: a query session keeps no record, so
-			// pruning there could only ever be a no-op.
+			// Here and not in `gc`, whose query session keeps no record.
 			s.pruneShareRecord(liveCtx, live)
 		})
-	}
 
-	// Progress belongs to a session that serves. A query command's output is
-	// the command's own, and chatter interleaved with it is noise.
-	if s.opts.Role.hosting() {
 		s.log().Info("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	}
 	return live, nil
 }
 
-// dialerFor returns the function that opens the connection, or nil to dial TCP.
-//
-// Only the transport differs: the SSH handshake, the host-key check and the
-// client key are the same for both.
+// dialerFor returns the WebSocket dialer (ADR 0034), or nil to dial TCP.
 func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (net.Conn, error), error) {
 	if !t.WebSocket() {
 		return nil, nil
@@ -230,16 +171,9 @@ func dialerFor(t config.Transport, cfg config.Config) (func(context.Context) (ne
 	})
 }
 
-// ensureCacheChan opens the workspace's cache channel on first use, and
-// remembers the error so a refusal can tell a workspace that does not serve the
-// command from one that said nothing.
-//
-// Lazily, and load-bearing rather than an optimisation: the channel exists for
-// one write mode, so a session whose mounts are all write=through never asks
-// and is never told. That is the common case against an older workspace and it
-// must stay SILENT, which it cannot be if the answer is fetched at connect.
-// Once, so a failure costs one handshake rather than one per container; the
-// next connection asks again (ADR 0015).
+// ensureCacheChan opens the cache channel once per connection, keeping the
+// error. Lazily, not at connect: a session with only write=through mounts must
+// never ask, so it stays silent against an older workspace.
 func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChannel, error) {
 	l.cacheOnce.Do(func() {
 		l.cacheChan, l.cacheErr = openCache(ctx, l.ssh)
@@ -247,8 +181,6 @@ func (s *Session) ensureCacheChan(ctx context.Context, l *liveConn) (*cacheChann
 	return l.cacheChan, l.cacheErr
 }
 
-// shareCacheFor is what the rewriter opens the channel through, and the error
-// is the tail of the refusal a mount needing one gets.
 func (s *Session) shareCacheFor(ctx context.Context, l *liveConn) (rewrite.Cache, error) {
 	c, err := s.ensureCacheChan(ctx, l)
 	if err != nil {
@@ -257,13 +189,8 @@ func (s *Session) shareCacheFor(ctx context.Context, l *liveConn) (rewrite.Cache
 	return shareCache{cacheChannel: c, session: s}, nil
 }
 
-// skew is the workspace's clock minus this machine's, as measured when the
-// connection was made.
-//
-// Used for one comparison only: which side wrote last when both changed the
-// same file. Zero when the workspace reports no clock, which is an agent
-// predating workspace.Info.Now -- the two clocks are assumed to agree, as they
-// were before that field existed.
+// skew is the workspace's clock minus this machine's; zero from an agent that
+// reports no clock.
 func (s *Session) skew() time.Duration {
 	live, ok := s.gate.currentLive()
 	if !ok || live == nil || live.info.Now == 0 {
@@ -272,39 +199,18 @@ func (s *Session) skew() time.Duration {
 	return live.clockSkew
 }
 
-// shareReconcileInterval matches the port manager's: the same reasoning
-// applies, that a direct notification can be missed and a cheap periodic pass
-// covers it.
 const shareReconcileInterval = 30 * time.Second
 
-// syncWatch tells the watcher what to watch, which is whatever the registry
-// exports now. The one way that is said, so a share registered, restored or
-// woken all reach the watcher the same way.
+// syncWatch points the watcher at whatever the registry exports now.
 func (s *Session) syncWatch() {
 	if s.watch != nil {
 		s.watch.Sync(sharesOf(s.registry))
 	}
 }
 
-// portsLogger is the logger the port manager gets: the real one when progress
-// is wanted, and nil otherwise, because "forwarding ..." arriving in the
-// middle of a container's output is exactly the pollution this avoids.
-func (s *Session) portsLogger() *slog.Logger {
-	if s.opts.Role.hosting() {
-		return s.opts.Log
-	}
-	return nil
-}
-
-// logQuiet reports an error unless the context that owns the work has already
-// been cancelled.
-//
-// Everything here talks over one SSH connection, so tearing that connection
-// down makes every goroutine still using it fail at once, with EOF, or
-// "unexpected packet in response to channel open", or a half-read stream.
-// Those are descriptions of shutdown, not of anything wrong, and printing them
-// after the user pressed Ctrl-C or after a one-shot command finished is how a
-// clean exit came to look like a crash.
+// logQuiet reports an error unless its work was cancelled: tearing down the
+// connection fails every goroutine on it, and printing that made a clean exit
+// look like a crash.
 func (s *Session) logQuiet(ctx context.Context, msg string, args ...any) {
 	if ctx.Err() != nil || s.ctx.Err() != nil {
 		return
@@ -312,20 +218,11 @@ func (s *Session) logQuiet(ctx context.Context, msg string, args ...any) {
 	s.log().Warn(msg, args...)
 }
 
-// refusalReasonTimeout bounds the one question asked after a refusal. Short:
-// the command has already failed and this only decides what to call it.
 const refusalReasonTimeout = 10 * time.Second
 
-// refusalReason is why the workspace refused the reverse forward, asked of the
-// workspace rather than guessed at.
-//
-// ssh's tcpip-forward failure carries no reason (RFC 4254 request failure has
-// no payload), so naming a likely cause sends somebody hunting the wrong one:
-// the account's daemon failing to start looks identical, and the forward is
-// bound inside that daemon's namespace.
-//
-// Asked again rather than read from live.info, which was only true when the
-// session began: a daemon still booting then may have failed since.
+// refusalReason asks the workspace why the reverse forward was refused, since
+// the refusal carries no reason (RFC 4254). Asked afresh: the daemon may have
+// failed since live.info was read.
 func (s *Session) refusalReason(live *liveConn) string {
 	ctx, cancel := context.WithTimeout(s.ctx, refusalReasonTimeout)
 	defer cancel()
@@ -348,10 +245,7 @@ func (s *Session) startNFS(live *liveConn) error {
 	}
 	live.nfsTunnel = l
 
-	// The SESSION's server, not one built here. Serve returns when this
-	// connection's listener closes and the same server takes the next one, so
-	// the handle cache spans reconnects and a container that was already
-	// running keeps reading. See Session.nfs.
+	// The session's server, so its handles survive the reconnect (Session.nfs).
 	live.wg.Go(func() {
 		if err := s.nfs.Serve(l); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.logQuiet(s.ctx, "the nfs server stopped", "err", err)
@@ -364,7 +258,7 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 	live.ports = &ports.Manager{
 		Docker:    dockerPorts{live.api},
 		Forwarder: sshForwarder{live.ssh},
-		Log:       s.portsLogger(),
+		Log:       s.opts.Log,
 		Owned: func(c ports.Container) bool {
 			return c.Labels[workspace.OwnerLabel] == live.info.User
 		},
@@ -376,9 +270,8 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 	live.wg.Go(func() { s.watchPorts(ctx, live) })
 }
 
-// watchPorts reconciles on container events and on a timer. The timer is not
-// redundant: the event stream can drop, and a container whose ports are
-// silently unreachable is worse than a cheap periodic pass.
+// watchPorts reconciles on container events and on a timer, since the event
+// stream can drop.
 func (s *Session) watchPorts(ctx context.Context, live *liveConn) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -430,13 +323,8 @@ func (s *Session) watchPorts(ctx context.Context, live *liveConn) {
 	}
 }
 
-// nconnect is how many connections a share's mount asks the workspace's NFS
-// client for, from REMOTE_DOCKER_NFS_NCONNECT.
-//
-// Read once, and a value that cannot be honoured is reported once and then
-// ignored: connect runs again on every reconnect, and a warning each time about
-// a variable nothing is going to act on is noise in the one log a person
-// watches.
+// nconnect reads REMOTE_DOCKER_NFS_NCONNECT once, so a bad value is warned
+// about once rather than on every reconnect.
 func (s *Session) nconnect() int {
 	nconnectOnce.Do(func() {
 		n, err := rewrite.NConnect()
@@ -454,17 +342,9 @@ var (
 	nconnectValue int
 )
 
-// localPortFree reports whether this machine can open a port for a container
-// about to be created.
-//
-// Two answers, because both kinds of clash are real: a forward this session
-// already holds, and anything else on the machine listening there. The second
-// is a bind that is opened and closed at once, which is the only way to ask
-// about a program this process knows nothing about.
-//
-// A race with whatever binds it next is unavoidable and Docker has the same
-// one. When the forward fails later, the ports manager reports it and carries
-// on with the container other ports.
+// localPortFree reports whether this machine can open port for a container
+// about to be created: not a forward this session holds, and not bound by
+// anything else.
 func localPortFree(live *liveConn, port int) error {
 	if live.ports != nil && live.ports.Forwarding(port) {
 		return fmt.Errorf("this session already forwards it")
@@ -477,17 +357,9 @@ func localPortFree(live *liveConn, port int) error {
 	return l.Close()
 }
 
-// localPortsFor is every port to open here for one published port, or nothing
-// to use the published port itself.
-//
-// Only on the machine that asked. Every client forwards the whole account's
-// containers (ADR 0029), so another machine's are forwarded where the daemon
-// published them, and two machines can both ask for 8080 without contending for
-// one listener (ADR 0008).
-//
-// More than one when a container port was published more than once
-// (`-p 8080:80 -p 9090:80`): the workspace publishes it once and both numbers
-// are opened in front of that, because both front the same container port.
+// localPortsFor is the ports to open here for one published port, or nil to
+// use the published one. Only on the machine that asked (ADR 0008, ADR 0029);
+// several when one container port was published more than once.
 func localPortsFor(c ports.Container, p ports.Published, clientID string) []int {
 	if c.Labels[workspace.ClientLabel] != clientID {
 		return nil

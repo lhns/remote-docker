@@ -12,21 +12,9 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// The workspaces in ~/.remote-docker.json.
-//
-// Docker contexts are written as a side effect rather than by a separate
-// command. There is no case where you want a workspace configured and not
-// reachable as `docker --context <name>`, so making that a second thing to
-// remember was a split in the tool that was never a split in the task.
-//
-// The verbs are docker's (create, ls, use, rm, inspect) because a workspace IS
-// the thing a docker context points at, and borrowing the vocabulary costs
-// nothing and saves explaining. They are reached as `remote create` and so on,
-// because a remote IS a workspace (ADR 0024), but the noun stays ours in the
-// code: the config file's key is `workspaces`, the wire protocol is
-// `workspace-info`, the server's variables are WORKSPACE_*, and a CLI that
-// disagreed with all of them would trade one confusion for another. The old
-// verbs remain as aliases.
+// The workspaces in ~/.remote-docker.json, each with a docker context written
+// as a side effect. Reached as `remote create` etc. (ADR 0024); the code keeps
+// the noun "workspace", as the config, wire protocol and agent do.
 func newWorkspaceCreateCommand() *cobra.Command {
 	var host, user, endpoint, watch, consistency, caFile string
 	var port int
@@ -42,9 +30,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 			if host == "" {
 				return fmt.Errorf("--host is required\n  fix: `%s`", ourCommand("create "+name+" --host <host>"))
 			}
-			// Only for a bare host. A host carrying a scheme says its own port,
-			// or takes the default its scheme implies, and writing 2222 beside
-			// a wss:// URL would be the contradiction Transport refuses.
+			// Only for a bare host: Transport refuses a port beside a URL.
 			if port == 0 && !strings.Contains(host, "://") {
 				port = config.DefaultSSHPort
 			}
@@ -55,8 +41,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 			}
 			_, existed := file.Workspaces[name]
 
-			// Parsed before it is written, so a word nothing understands is
-			// refused here rather than on the first container.
+			// Refused here rather than on the first container.
 			if _, err := workspace.ParseMode(consistency); err != nil {
 				return err
 			}
@@ -90,9 +75,6 @@ func newWorkspaceCreateCommand() *cobra.Command {
 				reportContext(out, cfg)
 			}
 
-			// The key is per machine, not per workspace, so it is the same one
-			// every workspace has to accept, and a freshly added workspace
-			// is exactly when someone has not yet handed it over.
 			_, _ = fmt.Fprintf(out,
 				"\nIf this machine is not enrolled there yet, hand this to whoever runs it:\n\n    %s\n",
 				enrolledKey())
@@ -144,19 +126,11 @@ session is in use; -f overrides.`,
 				return noWorkspaceNamed(name)
 			}
 
-			// Resolved BEFORE removal, because the context name is derived
-			// from the workspace and there is nothing to derive it from
-			// afterwards.
+			// Before removal: the context name derives from the entry.
 			cfg, cfgErr := resolve(args)
 
-			// And the machine, for the same reason and a heavier one: the
-			// config entry is the only record that a Linux system was ever
-			// built for this workspace. Delete it first and the machine is
-			// still running on somebody's laptop with nothing naming it.
-			//
-			// Destroyed BEFORE the entry goes, so a failure leaves a workspace
-			// that still knows about its machine and can be told to try again.
-			// The other order leaves an orphan and no way to ask for it back.
+			// Destroyed before the entry goes: the entry is the only record the
+			// machine exists, so a failure must leave it to retry from.
 			machine := ws.Machine
 			if machine != nil && cfgErr == nil {
 				consequence := "removing it destroys its machine"
@@ -167,8 +141,8 @@ session is in use; -f overrides.`,
 					return err
 				}
 			}
-			// Before anything is destroyed, as `machine stop` and `rebuild`
-			// do: a session left serving answers for a workspace that is gone.
+			// As `machine stop` does: a session left serving answers for a
+			// workspace that is gone.
 			stopSessionFor(cmd, name)
 			if machine != nil && !keepMachine {
 				if err := destroyMachine(cmd, machine); err != nil {
@@ -201,13 +175,8 @@ session is in use; -f overrides.`,
 	return cmd
 }
 
-// destroyMachine takes away the Linux system this program built for a
-// workspace.
-//
-// A backend that is not compiled into this build is reported rather than
-// ignored. Removing the config entry anyway would leave a machine running with
-// nothing on the system naming it, which is worse than refusing: the user can
-// at least be told what to remove by hand.
+// destroyMachine destroys a workspace's machine. An unknown backend is an
+// error, so `rm` refuses rather than orphaning a running machine.
 func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
 	backend, err := findBackend(m.Backend)
 	if err != nil {
@@ -252,10 +221,8 @@ Creates the context first if it is missing.`,
 				return nil
 			}
 
-			// And docker's, which is what everything that is not this binary
-			// resolves. The context is ensured first: a workspace created on a
-			// machine with no docker CLI, or with --no-context, has none yet,
-			// and selecting one that does not exist only produces an error.
+			// Docker's current context, which every other tool reads. Ensured
+			// first, since a workspace made with --no-context has none.
 			cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
 			if err != nil {
 				return nil
@@ -266,9 +233,6 @@ Creates the context first if it is missing.`,
 		},
 	}
 
-	// Same spelling and same meaning as `create --no-context`: leave docker's
-	// context alone. Someone who created a workspace without one has said what
-	// they want, and `use` must not quietly overrule it.
 	cmd.Flags().BoolVar(&noContext, "no-context", false, "do not select the docker context")
 	return cmd
 }
@@ -311,9 +275,7 @@ func newWorkspaceListCommand() *cobra.Command {
 				}
 				where := where(cfg)
 				if m := file.Workspaces[name].Machine; m != nil {
-					// Which backend, because `rm` will destroy it and the
-					// person reading this table is usually deciding whether
-					// that is what they want.
+					// Shown because `rm` destroys it.
 					where += " (" + m.Backend + ")"
 				}
 				_, _ = fmt.Fprintf(out, "%s%-13s %-30s %s\n",
@@ -330,8 +292,6 @@ func newWorkspaceListCommand() *cobra.Command {
 func where(cfg config.Config) string {
 	transport, err := cfg.Transport()
 	if err != nil {
-		// Whatever is wrong with it, the raw setting is what the user typed and
-		// what they will recognise; Transport's own error says the rest.
 		return fmt.Sprintf("%s@%s", cfg.User, cfg.Host)
 	}
 	return fmt.Sprintf("%s@%s", cfg.User, transport)
@@ -339,11 +299,6 @@ func where(cfg config.Config) string {
 
 // reportContext creates the docker context for a workspace, reporting rather
 // than failing. A workspace is still usable without one.
-//
-// Having no docker CLI on PATH is ordinary here and no longer stops it: this
-// binary is one, and dockerCmd falls back to it. Giving up left the premise
-// machine with no context, so every tool that resolves one found the platform
-// default instead.
 func reportContext(out io.Writer, cfg config.Config) {
 	installed, err := installContext(cfg)
 	if err != nil {
@@ -353,15 +308,8 @@ func reportContext(out io.Writer, cfg config.Config) {
 	_, _ = fmt.Fprintf(out, "docker context %q -> %s\n", installed.name, installed.endpoint)
 }
 
-// useContext makes a workspace's context the one docker resolves by default.
-//
-// Setting only OUR default is not enough. That is what `remote-docker
-// docker ...` reads, but everything else on the machine reads docker's current
-// context, so compose and the rest would keep talking to whatever was selected
-// before -- usually a Docker Desktop pipe that is not there.
-//
-// Reported rather than fatal, for the same reason as reportContext: the
-// workspace default has already been saved and is the part that was asked for.
+// useContext selects a workspace's context as docker's current one, reporting
+// rather than failing.
 func useContext(out io.Writer, name string) {
 	if outBytes, err := dockerCmd("context", "use", name).CombinedOutput(); err != nil {
 		_, _ = fmt.Fprintf(out, "docker context %q was not selected: %v: %s\n",
@@ -374,21 +322,14 @@ func useContext(out io.Writer, name string) {
 func removeContextFor(out io.Writer, cfg config.Config) {
 	name := cfg.ContextName()
 	if !contextIsOurs(name) {
-		// Said out loud rather than passed over in silence. A context that is
-		// not ours is the expected case for a name the user created
-		// themselves, but it is also what a marker that failed to be written
-		// looks like, and the difference matters, because in the second case
-		// a context we made is left behind with nothing reporting it.
+		// Said out loud: it may also be ours with a marker that failed to write.
 		_, _ = fmt.Fprintf(out, "docker context %q was left in place: "+
 			"it is not marked as one remote-docker created\n", name)
 		return
 	}
-	// Select default first: removing the active context would leave the CLI
-	// pointing at one that no longer exists.
+	// Deselect first, or the CLI is left pointing at a missing context.
 	_ = dockerCmd("context", "use", "default").Run()
 
-	// CombinedOutput, not Run: an exit status alone says a removal failed
-	// without saying why, and docker's own message is the whole diagnosis.
 	if out2, err := dockerCmd("context", "rm", "-f", name).CombinedOutput(); err != nil {
 		_, _ = fmt.Fprintf(out, "docker context %q was left in place: %v: %s\n",
 			name, err, strings.TrimSpace(string(out2)))
@@ -408,12 +349,6 @@ func enrolledKey() string {
 }
 
 // newWorkspaceInspectCommand shows everything about one workspace in one place.
-//
-// It exists because the pieces were scattered: the config file holds the host
-// and account, the endpoint is derived from the name, the docker context is
-// named after it too, and a session may or may not be running against it.
-// Answering "what is this workspace, actually" meant knowing all four
-// derivations. Now it does not.
 func newWorkspaceInspectCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "inspect [name]",
@@ -431,10 +366,6 @@ func newWorkspaceInspectCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 			row(out, "name", cfg.Name)
 
-			// The transport rather than the raw host: a setting that decides
-			// how a workspace is reached should not have to be worked out from
-			// a string, and one that weakens something should not be
-			// discoverable only by reading the JSON.
 			transport, err := cfg.Transport()
 			if err != nil {
 				rowf(out, "workspace", "%s@%s (%v)", cfg.User, cfg.Host, err)

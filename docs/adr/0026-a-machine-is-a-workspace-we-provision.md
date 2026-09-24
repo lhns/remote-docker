@@ -5,173 +5,130 @@
 
 ## Context
 
-The project can talk to a Docker daemon on any Linux system, and ADR 0025 made
-the agent run on one that is a machine rather than a container. On Windows
-there is no such system, and making one is the entire reason Docker Desktop
-exists.
-
-The client already carries everything needed to *use* a workspace. What it
-cannot do is *make* one.
+ADR 0025 runs the agent on a Linux machine rather than a container. Windows has
+no such machine, and making one is the reason Docker Desktop exists. The client
+can already *use* a workspace; it cannot *make* one.
 
 ## Decision
 
 **A machine is a workspace this program provisioned, and nothing else about it
-is special.** `remote ls` lists it, `remote use` selects it, `remote status`
-reports on it, and a session reaches it over SSH and serves files back over NFS
-exactly as it does for a host on another continent. There is **no second data
-path**: the session, the export, the port forwarding and the bind rewriting are
-untouched.
-
-What is added is a lifecycle, held in one new config block:
+is special.** `remote ls`, `use` and `status` treat it like any workspace, and
+a session reaches it over SSH and serves files over NFS as it would a host on
+another continent. There is **no second data path**. What is added is a
+lifecycle, in one config block:
 
 ```json
 "machine": { "backend": "wsl", "name": "rd-dev", "image": "...", "generation": "..." }
 ```
 
-Its presence changes two things, and this record originally claimed one.
+Its presence changes two things:
 
-`remote rm` has a machine to destroy as well as an entry to delete. And a
-session **locates** the machine before it dials it, which a workspace on another
-host never needs: that host is simply there, at an address that was written down
-once. A machine is not. It is started on demand and given its address at boot,
-so `host` in the entry is a placeholder and the real answer is asked for at
-every connection, in `session.connect` and nowhere else.
+- **`remote rm`** has a machine to destroy as well as an entry to delete.
+- **A session locates the machine** before dialling it, in `session.connect`
+  and nowhere else. A machine is started on demand and given its address at
+  boot, so `host` in the entry is a placeholder and the address is asked at
+  every connection.
 
-Measured on 2026-08-11, in the `a machine on wsl` job, which is why the
-placeholder is not simply `127.0.0.1`: with the machine running and its agent
-listening, Windows could not reach `127.0.0.1:2222` at all and reached the
-machine's own `172.24.110.158:2222` immediately. WSL2 forwards localhost through
-a relay that did not carry it there, and re-checking that is one CI run.
+Both were measured on 2026-08-11 in `machine.yml`'s `a machine on wsl` job
+(re-check: one run of that workflow):
 
-The same job established the other half: a machine nobody is using goes away.
-WSL shuts an idle distribution down, and a TCP connection from Windows is not
-use it counts -- the first version of `create` spent three minutes dialling a
-machine that had stopped two and a half minutes after its own agent reported it
-was listening. So locating a machine starts it, and starting a running machine
-is what keeps it running.
+- With the machine running and its agent listening, Windows could not reach
+  `127.0.0.1:2222` and reached the machine's own `172.24.110.158:2222` at once:
+  WSL2's localhost relay did not carry it. Hence not simply `127.0.0.1`.
+- WSL shuts an idle distribution down, and a TCP connection from Windows does
+  not count as use: a machine stopped two and a half minutes after its agent
+  reported listening. So locating a machine starts it, and a hold keeps it
+  running (a `wsl.exe` session held open; `machine.Hold`).
 
 ## The Hyper-V backend was merged unverified, on purpose
 
-The plan for this feature said the backends merge when somebody has run
-`docs/testing-machines.md` against them and said what happened, not on green CI
-alone. WSL cleared that bar. Hyper-V cannot: no CI offers it and nobody
-involved has it, so the bar would hold the code in a branch indefinitely,
-rotting against a moving codebase, for a verification that has no scheduled
-date.
+The plan was that a backend merges once somebody has run
+`docs/testing-machines.md` against it and reported. WSL cleared that. Hyper-V
+cannot: no CI offers it and nobody involved has it, so the bar would hold the
+code in a branch indefinitely. It merged unrun because it costs nothing until
+somebody types `--backend hyperv`: no other path reaches it, and the WSL
+backend imports none of it.
 
-So it merged unrun, deliberately, on the argument that it costs nothing until
-somebody types `--backend hyperv`: no other path reaches it, and the WSL backend
-does not import a line of it.
+The price is honesty, in four places that must stay in step:
 
-What that costs is honesty, and the price is paid in four places that must stay
-in step, because a claim nobody re-checks is one that expires silently:
+- a warning the program prints on every `machine create` with that backend;
+- `--backend`'s help;
+- CLAUDE.md's NOT-tested list, where it is the strongest entry;
+- the README, which says it has never been run by anybody.
 
-- the program says it, on every `machine create` with that backend, in a warning
-  it prints itself;
-- `--backend`'s help says it, since that is where somebody choosing looks;
-- CLAUDE.md's NOT-tested list calls it the strongest entry there;
-- the README says the backend has never been run by anybody.
-
-The first of those goes away when somebody has run the runbook and reported
-what happened. Until then it is not a supported option, it is a written-down
-attempt, and anything that says otherwise -- release notes, a summary, an
-answer to a user -- is wrong.
+The first goes away when somebody has run the runbook and reported. Until
+then it is a written-down attempt, and anything saying otherwise is wrong.
 
 ## Both backends are located the same way, and Hyper-V uses no hvsock
 
-The design for Hyper-V originally called for Hyper-V sockets, on the argument
-that they avoid discovering a NAT address that changes on every boot -- the
-fragile thing tools in this space get wrong first.
+Hyper-V sockets would avoid discovering a NAT address that changes every boot.
+But WSL showed discovery is one measured platform call per connection with no
+agent change, while hvsock needs a pluggable listener in the agent, AF_HYPERV
+on the Linux side, a service GUID per machine on the host and a new
+dependency, all in code no CI can run. So a Hyper-V machine is on the Default
+Switch (NAT with DHCP Hyper-V maintains) and `Address` asks
+`Get-VMNetworkAdapter`. If that fails on a real machine, hvsock is the
+fallback and this record is where to start.
 
-That argument was answered by building WSL. Discovering the address is one
-platform call per connection, it is measured, and it costs no agent change at
-all. hvsock would have meant a pluggable listener in the agent, an AF_HYPERV
-listener on the Linux side, a service GUID registered per machine on the host,
-and a new dependency -- all of it in code no CI can execute and nobody involved
-can run. The same reasoning that makes the decisions pure functions says to pick
-the transport that adds nothing untestable.
+Two platform differences from WSL:
 
-So a Hyper-V machine is on the Default Switch, which is NAT with DHCP that
-Hyper-V maintains itself, and `Address` asks `Get-VMNetworkAdapter`. If that
-turns out not to work on a real machine, hvsock is still there, and this record
-is where to start.
-
-Two things do differ from WSL, and both are the platform rather than a choice:
-
-- **A Hyper-V machine has no idle timeout**, so its `Hold` is nothing. A WSL
-  distribution shuts down when nobody is in it, which is the harder case and the
-  one the interface is shaped by.
-- **A key can only be enrolled at creation.** The guest is Linux, so PowerShell
-  Direct does not apply, and the only door is the SSH the key is for. The key
-  goes into the Ignition document, its fingerprint into the VM's Notes, and
-  `Enrol` on an existing machine reports a mismatch rather than writing
-  anything. It is deliberately not part of the generation: a rotated key would
-  then trigger a rebuild on its own, and a rebuild discards every image.
+- **No idle timeout**, so a Hyper-V `Hold` is nothing. WSL's shutdown is the
+  harder case and shapes the interface.
+- **A key can only be enrolled at creation.** The guest is Linux, so
+  PowerShell Direct does not apply and the only door is the SSH the key is for.
+  The key goes into the Ignition document and its fingerprint into the VM's
+  Notes; `Enrol` on an existing machine reports a mismatch rather than writing
+  anything. It is not part of the generation, or a rotated key would trigger a
+  rebuild, which discards every image.
 
 ## The image is the artifact, and there is no second one
 
-A machine is built by pulling the workspace image and flattening it, in the
-client, with no docker involved: a container image IS a rootfs, and
-`mutate.Extract` is what `docker export` does. So nothing is published for
-machines specifically.
+A machine is built by pulling the workspace image and flattening it in the
+client, with no docker: a container image IS a rootfs, and `mutate.Extract`
+(`machine/rootfs.go`) is what `docker export` does. Nothing is published for
+machines.
 
-The alternative, briefly taken and then removed, was to publish a rootfs tarball
-with each release. It worked and it was wrong in a way worth recording: it made
-a second name for one thing. The image reference in a machine's configuration
-said one version, an arch-named tarball on a release page said another, and
-nothing made them agree -- a release whose upload step failed would have served
-a machine built from the previous version, silently.
-
-Pulling the image instead means the version in the config IS what the machine is
-made of, the registry resolves the architecture rather than a filename spelling
-it, and the digest verifies the download for free. `--rootfs` remains for the
-cases a registry cannot serve: air-gapped, an image of your own, a version
-pinned by hand.
-
-The client already depended on go-containerregistry through docker/cli, so this
-cost no new dependency. If client-side flattening ever proves a problem, the
-fallback is to push a flattened tar as an OCI artifact -- which keeps the
-registry's addressing and verification, and reintroduces a publish step.
+- **Rejected: a rootfs tarball per release** (built, then removed). It is a
+  second name for one thing: the config's image reference said one version,
+  an arch-named tarball another, and a release whose upload failed would
+  silently have served the previous version.
+- Pulling means the config's version IS the machine, the registry resolves the
+  architecture, and the digest verifies the download. `--rootfs` stays for
+  air-gapped use, an image of your own, or a version pinned by hand.
+- No new dependency: go-containerregistry came with docker/cli. If client-side
+  flattening ever fails, the fallback is a flattened tar pushed as an OCI
+  artifact, which reintroduces a publish step.
 
 **Nothing is installed at provisioning time.** No package manager runs, on any
-path, ever. The unit of change is a published artifact named in that block, and
-moving between versions replaces the artifact rather than mutating what is
-there. This is the property the whole design is arranged around: there is no
-half-finished install to be in, because there is no install.
+path. Moving between versions replaces the artifact rather than mutating what
+is there, so there is no half-finished install to be in.
 
-It follows that **rebuild is not a repair mode**. It is the ordinary path run
-again, which is the only kind of self-healing that can be trusted. It discards
-what was inside the machine, and says so: the thing most likely to be corrupt
-is exactly what a "preserve" option would preserve. The user's files are never
-at risk — they live on the host and are served *to* the machine.
+So **rebuild is not a repair mode**: it is the ordinary path run again, the
+only self-healing that can be trusted. It discards what was inside the machine
+and says so, since the thing most likely corrupt is what a "preserve" option
+would preserve. The user's files live on the host and are never at risk.
 
-**A generation marker** identifies the settings a machine was built from, so
-"out of date" is a fact rather than a guess. Same trick `daemons.reconcile`
-uses for per-account daemons. A backend that cannot read one is treated as a
-match, never as a mismatch: recreating somebody's machine because a label could
-not be read would destroy their work to satisfy our bookkeeping.
+**A generation marker** records the settings a machine was built from, so "out
+of date" is a fact (the trick `daemons.reconcile` uses with its spec label). A
+backend that cannot read one counts it as a match: recreating a machine because
+a label could not be read destroys work for bookkeeping.
 
 ## Consequences
 
 - **`remote rm` refuses rather than orphaning.** If the machine cannot be
-  destroyed — wrong platform, backend unavailable — the config entry stays,
-  because it is the only record that a Linux system was built. Deleting it
-  anyway leaves a machine running with nothing naming it.
-- **The decisions are pure and the platform calls are an interface**
-  (the `machine` module, ADR 0021), the shape `elevate` and `daemons` already
-  use.
-  It matters more here: **nobody working on this project has WSL or Hyper-V**,
-  so anything that is not a pure function is code that ships without having
-  run. The interface exists to make that surface as small as it can be.
-- **A GitHub Windows runner can run WSL2**, which halves that problem for one
-  backend. Measured rather than assumed: `HypervisorPresent: True`, an imported
-  rootfs reporting `6.18.33.2-microsoft-standard-WSL2`, and `wsl -l -v` showing
-  `VERSION 2`. *(Checked 2026-08-11, run 31496228112. Re-check by restoring the
-  spike workflow from that commit.)* Hyper-V is not available on those runners
-  and will have no automated coverage at all.
-- **This is where "nothing needs to be installed" stops being true.** WSL needs
-  a one-time install, and Hyper-V lifecycle needs administrator rights. The
-  premise held for every earlier decision; it does not hold for this one, and
-  saying so is better than quietly elevating.
-- **Two backends that share nothing** but the interface. That is the cost of
-  covering both the machine that has WSL and the one that cannot.
+  destroyed (wrong platform, backend unavailable) the config entry stays: it is
+  the only record a Linux system was built.
+- **The decisions are pure functions and the platform calls an interface**
+  (the `machine` module, ADR 0021), as in `elevate` and `daemons`. Here it
+  matters more: **nobody working on this has WSL or Hyper-V**, so everything
+  that is not a pure function ships without having run.
+- **A GitHub Windows runner can run WSL2**: `HypervisorPresent: True`, an
+  imported rootfs reporting `6.18.33.2-microsoft-standard-WSL2`, `wsl -l -v`
+  showing `VERSION 2`. *(Checked 2026-08-11, run 31496228112. Re-check by
+  restoring the spike workflow from that commit.)* Hyper-V is not available
+  there and has no automated coverage.
+- **"Nothing needs to be installed" stops being true here.** WSL needs a
+  one-time install and Hyper-V needs administrator rights; the program reports
+  that rather than quietly elevating.
+- **Two backends that share nothing** but the interface: the cost of covering
+  both the machine that has WSL and the one that cannot.
