@@ -270,11 +270,7 @@ func (c *Cache) finishIfWalked(p *prefetch) {
 		p.state.Stats.Files, p.state.Stats.Bytes = files, stored
 	}
 	c.shares.mu.Unlock()
-	// Recorded once, when the prefetch finishes; the sender calls this on
-	// every tick afterwards, and the record is a file rewritten per call.
-	if c.shares.finish(p.state, left == 0, nil) && c.Record != nil {
-		c.Record.Record(p.share, c.shares.paths(p.share))
-	}
+	c.shares.finish(p.state, left == 0, nil)
 }
 
 // link is what the policy decides against: the round trip from the caller,

@@ -12,8 +12,8 @@ import (
 // failure asks about it every five seconds for the rest of its life.
 func TestSharesForget(t *testing.T) {
 	var f shares
-	f.set("/m/aaaa", "/home/me/a", &shareState{})
-	f.set("/m/bbbb", "/home/me/b", &shareState{})
+	f.set("/m/aaaa", "/home/me/a", &shareState{}, nil)
+	f.set("/m/bbbb", "/home/me/b", &shareState{}, nil)
 
 	f.forget("/m/aaaa")
 

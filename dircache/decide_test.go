@@ -69,7 +69,7 @@ func TestDecide(t *testing.T) {
 		{Path: "/created.go", Size: 5, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := decide(manifest, changes, local, 0, true)
+	actions := decide(manifest, nil, changes, local, 0, true)
 
 	for path, want := range map[string]kind{
 		"/theirs.go":            kindWrite,
@@ -108,7 +108,7 @@ func TestDecideDeletedHereChangedThere(t *testing.T) {
 	missing := func(string) (fs.FileInfo, bool) { return nil, false }
 	changes := []Change{{Path: "/gone.go", Size: 20, ModTime: laterHere.UnixNano()}}
 
-	actions := decide(manifest, changes, missing, 0, true)
+	actions := decide(manifest, nil, changes, missing, 0, true)
 
 	if len(actions) != 1 || actions[0].kind != kindConflict || !actions[0].Wins {
 		t.Errorf("decided %+v, want one conflict the container's version wins", actions)
@@ -122,7 +122,7 @@ func TestDecideDeletedHereChangedThere(t *testing.T) {
 func TestDecideRefusesAnIncompleteCache(t *testing.T) {
 	changes := []Change{{Path: "/anything.go", Size: 1, ModTime: sentAt.UnixNano()}}
 
-	if got := decide(nil, changes, localFrom(nil), 0, false); len(got) != 0 {
+	if got := decide(nil, nil, changes, localFrom(nil), 0, false); len(got) != 0 {
 		t.Errorf("decided %v on an incomplete cache, want nothing", got)
 	}
 }
@@ -140,12 +140,12 @@ func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
 		{Path: "/both.go", Size: 20, ModTime: laterHere.Add(skew).UnixNano()},
 	}
 
-	uncorrected := decide(manifest, changes, local, 0, true)
+	uncorrected := decide(manifest, nil, changes, local, 0, true)
 	if len(uncorrected) != 1 || !uncorrected[0].Wins {
 		t.Fatalf("without the offset the container should look newer: %+v", uncorrected)
 	}
 
-	corrected := decide(manifest, changes, local, skew, true)
+	corrected := decide(manifest, nil, changes, local, skew, true)
 	if len(corrected) != 1 || corrected[0].Wins {
 		t.Errorf("with the offset applied this machine wrote last: %+v", corrected)
 	}
@@ -163,7 +163,7 @@ func TestDecideLeavesUnsentPathsAlone(t *testing.T) {
 		{Path: "/gone.go", Deleted: true},
 	}
 
-	if got := decide(map[string]baseline{}, changes, local, 0, true); len(got) != 0 {
+	if got := decide(map[string]baseline{}, nil, changes, local, 0, true); len(got) != 0 {
 		t.Errorf("decided %v, want nothing for paths the fill never sent", got)
 	}
 }
@@ -212,7 +212,7 @@ func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
 		{Path: "/written.go", Size: 20, ModTime: laterHere.UnixNano()},
 	}
 
-	actions := decide(manifest, changes, local, 0, true)
+	actions := decide(manifest, nil, changes, local, 0, true)
 
 	if _, ok := kindOf(actions, "/filled.go"); ok {
 		t.Error("the fill's own copy was decided to be a container write")
@@ -232,7 +232,7 @@ func TestDecideCarriesBackASameSizedRewrite(t *testing.T) {
 		{Path: "/same-size.go", Size: 10, ModTime: laterHere.UnixNano()},
 	}
 
-	if got, ok := kindOf(decide(manifest, changes, local, 0, true), "/same-size.go"); !ok || got != kindWrite {
+	if got, ok := kindOf(decide(manifest, nil, changes, local, 0, true), "/same-size.go"); !ok || got != kindWrite {
 		t.Errorf("/same-size.go = %v %v, want a write", got, ok)
 	}
 }
