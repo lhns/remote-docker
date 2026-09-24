@@ -64,6 +64,11 @@ type Spec struct {
 	// is what the client asked for.
 	Export string
 
+	// Client is the machine the share is on (ADR 0029), and names the
+	// mountpoints with Export: an account's machines share a daemon, and two of
+	// them sharing a share id is ordinary, since /cwd is everybody's.
+	Client string
+
 	// Port is the client's reverse-tunnel port for the NFS export, inside the
 	// daemon's network namespace.
 	Port int
@@ -88,10 +93,10 @@ func (s Spec) id() string {
 }
 
 // Lower is where the client's export is mounted.
-func (s Spec) Lower() string { return path.Join(Root, s.id(), "lower") }
+func (s Spec) Lower() string { return path.Join(Root, s.Client, s.id(), "lower") }
 
 // Merged is the union itself, and what a container binds.
-func (s Spec) Merged() string { return path.Join(Root, s.id(), "merged") }
+func (s Spec) Merged() string { return path.Join(Root, s.Client, s.id(), "merged") }
 
 // Upper is the cache layer, inside the cache volume.
 func (s Spec) Upper() string { return path.Join(s.CacheDir, "upper") }
@@ -188,5 +193,22 @@ func (s Spec) Validate() error {
 	default:
 		return fmt.Errorf("union: %s has read mode %q, which is not one", s.Export, s.Read)
 	}
+	if !validClient(s.Client) {
+		return fmt.Errorf("union: %s names client %q, which is not one", s.Export, s.Client)
+	}
 	return nil
+}
+
+// validClient reports whether a client id can name a directory: the lowercase
+// hex workspace.ClientID produces, and nothing that could leave Root.
+func validClient(c string) bool {
+	if c == "" {
+		return false
+	}
+	for _, r := range c {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }

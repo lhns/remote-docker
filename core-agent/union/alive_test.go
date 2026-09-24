@@ -8,7 +8,7 @@ import (
 )
 
 func wedgedSpec() Spec {
-	return Spec{Export: "/m/0011223344556677", Port: 30001, CacheDir: "/var/lib/docker/volumes/v/_data"}
+	return Spec{Export: "/m/0011223344556677", Client: "aabbccdd", Port: 30001, CacheDir: "/var/lib/docker/volumes/v/_data"}
 }
 
 // wedged is a prober whose Lstat never returns until the returned channel is

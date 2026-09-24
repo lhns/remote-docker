@@ -130,7 +130,7 @@ rd() { timeout 60 "$WORK/remote-docker" "$@"; }
 #
 # All of them, because this suite holds one union at a time and the process
 # line names the SHARE rather than the directory it came from -- lowerdir,
-# upperdir and the merged path are all under /run/rd-union/<id>, and the id is
+# upperdir and the merged path are all under /run/rd-union/<client>/<id>, and the id is
 # a digest nothing here has to hand.
 unions_running() {
     sudo pgrep -c fuse-overlayfs 2>/dev/null || true
