@@ -119,10 +119,10 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 	}
 
 	c := cacheWith(t, store)
-	c.shares.set("/cwd", root, &shareState{Report: Report{Done: true}, Cached: true})
-	c.shares.noteSent("/cwd", root, []Entry{{Path: "main.go", Size: 7}})
+	c.shares.set("/m/1111111111111111", root, &shareState{Report: Report{Done: true}, Cached: true})
+	c.shares.noteSent("/m/1111111111111111", root, []Entry{{Path: "main.go", Size: 7}})
 
-	c.writeBackShare(t.Context(), "/cwd")
+	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
 	got, err := os.ReadFile(local)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 
 	// And the manifest moved with it, or the next round decides the same
 	// change again and every round after that reports a conflict with itself.
-	base, ok := c.shares.baselines("/cwd")["/main.go"]
+	base, ok := c.shares.baselines("/m/1111111111111111")["/main.go"]
 	if !ok {
 		t.Fatal("the written-back file left the manifest")
 	}
@@ -149,11 +149,11 @@ func TestWriteBackShareAppliesAChange(t *testing.T) {
 func TestWriteBackShareStopsWhenTheShareIsGone(t *testing.T) {
 	store := &fakeStore{changesErr: ErrShareGone}
 	c := cacheWith(t, store)
-	c.shares.set("/cwd", t.TempDir(), &shareState{Report: Report{Done: true}, Cached: true})
+	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{Report: Report{Done: true}, Cached: true})
 
-	c.writeBackShare(t.Context(), "/cwd")
+	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
-	if _, ok := c.shares.get("/cwd"); ok {
+	if _, ok := c.shares.get("/m/1111111111111111"); ok {
 		t.Error("a released share is still polled")
 	}
 }
@@ -166,9 +166,9 @@ func TestWriteBackShareWaitsForTheFill(t *testing.T) {
 		changes: []Change{{Path: "/main.go", Size: 1, ModTime: 1}},
 	}
 	c := cacheWith(t, store)
-	c.shares.set("/cwd", t.TempDir(), &shareState{})
+	c.shares.set("/m/1111111111111111", t.TempDir(), &shareState{})
 
-	c.writeBackShare(t.Context(), "/cwd")
+	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -188,7 +188,7 @@ func TestDropDeletedAsksOnlyForWhatIsGone(t *testing.T) {
 
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.dropDeleted("/cwd", root, []string{"/kept.go", "/gone.go"})
+	c.dropDeleted("/m/1111111111111111", root, []string{"/kept.go", "/gone.go"})
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -208,7 +208,7 @@ func TestDropDeletedSaysNothingWhenNothingIsGone(t *testing.T) {
 
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.dropDeleted("/cwd", root, []string{"/a.go"})
+	c.dropDeleted("/m/1111111111111111", root, []string{"/a.go"})
 
 	store.mu.Lock()
 	defer store.mu.Unlock()

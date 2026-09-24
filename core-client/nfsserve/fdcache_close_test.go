@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/go-git/go-billy/v5"
-
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // fdCacheIn reports the descriptor cache inside a share's filesystem, and nil
@@ -51,9 +49,9 @@ func TestSetAttrsClosesTheOutgoingDescriptorCache(t *testing.T) {
 	}
 
 	r := registryFor(t, dir)
-	share, _, ok := r.Lookup(workspace.ExportCWD)
+	share, _, ok := r.Lookup(exportOf(dir))
 	if !ok {
-		t.Fatal("the working directory share is not registered")
+		t.Fatal("the share is not registered")
 	}
 	cache := fdCacheIn(share.fs)
 	if cache == nil {
@@ -99,11 +97,12 @@ var accountAttrs = Attrs{UID: 1000, GID: 1000, FileMode: 0o644, DirMode: 0o755}
 func TestSetAttrsWithTheSameAttrsKeepsTheStack(t *testing.T) {
 	t.Setenv("REMOTE_DOCKER_NFS_FDCACHE", "1h")
 
-	r := registryFor(t, t.TempDir())
+	dir := t.TempDir()
+	r := registryFor(t, dir)
 	r.SetAttrs(accountAttrs)
-	share, _, ok := r.Lookup(workspace.ExportCWD)
+	share, _, ok := r.Lookup(exportOf(dir))
 	if !ok {
-		t.Fatal("the working directory share is not registered")
+		t.Fatal("the share is not registered")
 	}
 	issued := share.fs
 
@@ -190,9 +189,9 @@ func TestSetAttrsRebuildsWithLayersAbsent(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := registryFor(t, dir)
-			share, _, ok := r.Lookup(workspace.ExportCWD)
+			share, _, ok := r.Lookup(exportOf(dir))
 			if !ok {
-				t.Fatal("the working directory share is not registered")
+				t.Fatal("the share is not registered")
 			}
 
 			r.SetAttrs(accountAttrs)

@@ -164,7 +164,7 @@ dpc pull -q alpine:3 >/dev/null 2>&1 || info "could not pre-pull alpine:3"
 echo
 echo "== 6. each machine mounts ITS OWN files =="
 # The one that matters. Both bind a directory of their own at the same path
-# inside the container, and the volume names used to collide on rd-cwd.
+# inside the container, and the volume names used to collide.
 # The last line only: anything docker says on its way to running the container
 # is not the file, and reading it as the file is how this failed the first time.
 pc_saw=$(dpc run --rm -v "$WORK/project-$PC:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
@@ -250,8 +250,8 @@ else
 fi
 
 # The NAME has to carry the machine, which is the whole mechanism: rd-<client>-
-# rather than rd-cwd. Asserted on the shape because a count cannot see it -- the
-# first run of this suite counted one volume called `rd-cwd` and every other
+# rather than rd-<id>. Asserted on the shape because a count cannot see it -- the
+# first run of this suite counted one volume per path and every other
 # assertion still passed, because the client had never been set on the rewriter
 # and each machine was silently rebuilding the other's volume under it.
 if [ "$(echo "$before" | grep -c '^rd-[0-9a-f]\{8\}-')" -ge 2 ]; then
@@ -259,9 +259,8 @@ if [ "$(echo "$before" | grep -c '^rd-[0-9a-f]\{8\}-')" -ge 2 ]; then
 else
     bad "a volume does not name the machine that created it"
 fi
-# The phone's prefix, read off a volume only the phone mounts. gc keeps the
-# volume for the directory it runs in, so a count of survivors proves nothing:
-# the pc's own always survives.
+# The phone's prefix, read off a volume only the phone mounts, so the check
+# below is about the phone's volumes and nothing else.
 dphone create --name tc-phone-probe -v "$WORK/project-$PHONE:/w" alpine:3 true >/dev/null 2>&1
 phone_prefix=$(dphone inspect -f '{{range .Mounts}}{{.Name}}{{end}}' tc-phone-probe 2>&1 | grep -o '^rd-[0-9a-f]\{8\}-')
 dphone rm -f tc-phone-probe >/dev/null 2>&1

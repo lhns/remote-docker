@@ -10,20 +10,14 @@ import (
 )
 
 // The client serves a single NFS export whose root is synthetic: each local
-// directory the client shares appears as one entry beneath it.
-//
-//	/cwd            -> the directory remote-docker was invoked from
-//	/m/<id>         -> any other local directory named by a bind mount
+// directory the client shares appears beneath it as /m/<id>, the id derived
+// from its path. The working directory is no exception.
 //
 // One export means one server, one reverse-tunnel port and one round of NFS
 // handle state, while still supporting bind sources anywhere on the client:
 // another drive, above the working directory, or unrelated to it.
 const (
-	// ExportCWD is where the invoking working directory is always registered,
-	// so the interactive shell has somewhere meaningful to land.
-	ExportCWD = "/cwd"
-
-	// ExportMountPrefix precedes every dynamically registered directory.
+	// ExportMountPrefix precedes every exported directory.
 	ExportMountPrefix = "/m/"
 
 	// VolumeNamePrefix precedes every Docker volume we create, so garbage
@@ -107,8 +101,9 @@ func ExportPathForID(id string) string {
 
 // VolumeNameForID is the Docker volume backing a share with this id on the
 // given client machine. The client is in the NAME because an account's machines
-// share a daemon: without it both derive `rd-cwd`, the second create silently
-// returns the first's volume, and a container reads somebody else's project.
+// share a daemon: without it two machines with one path derive one name, the
+// second create silently returns the first's volume, and a container reads
+// somebody else's project.
 // An empty client is the shape volumes had before, which nothing creates now.
 func VolumeNameForID(client, id string) string {
 	if client == "" {
@@ -136,18 +131,8 @@ func IsManagedVolume(name string) bool {
 	return strings.HasPrefix(name, VolumeNamePrefix)
 }
 
-// CWDShareID names the working-directory share wherever an id is needed, here
-// and in core-agent/union's mountpoints. A drift between two copies made the
-// agent report a cache volume that did not exist, and the collector then
-// emptied one under a running container.
-const CWDShareID = "cwd"
-
-// VolumeNameForExport is the volume backing any export path, /cwd included:
-// `-v .:/app` registers as the existing /cwd share.
+// VolumeNameForExport is the volume backing an export path.
 func VolumeNameForExport(client, exportPath string) (string, error) {
-	if exportPath == ExportCWD {
-		return VolumeNameForID(client, CWDShareID), nil
-	}
 	id, err := parseID(exportPath)
 	if err != nil {
 		return "", err
@@ -181,7 +166,7 @@ func ParseVolumeName(name string) (client, share string, ok bool) {
 
 	client, share, found := strings.Cut(rest, "-")
 	if !found {
-		// rd-<id> or rd-cwd, from before this.
+		// rd-<id>, from before this.
 		return "", rest, validShare(rest)
 	}
 	if !validClient(client) {
@@ -199,9 +184,6 @@ func IsCacheVolume(name string) bool {
 // validShare reports whether a volume name suffix names a share this program
 // could have created. Asked of parseID, so the rule for an id exists once.
 func validShare(share string) bool {
-	if share == CWDShareID {
-		return true
-	}
 	_, err := parseID(VolumeNamePrefix + share)
 	return err == nil
 }
@@ -216,11 +198,8 @@ func validClient(s string) bool {
 }
 
 // ValidExport reports whether a path is one this program exports, which is
-// exactly /cwd and /m/<id>.
+// exactly /m/<id>.
 func ValidExport(exportPath string) error {
-	if exportPath == ExportCWD {
-		return nil
-	}
 	_, err := parseID(exportPath)
 	return err
 }

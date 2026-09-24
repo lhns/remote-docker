@@ -21,7 +21,6 @@ import (
 	"os"
 	"os/user"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -148,12 +147,6 @@ func (s *shareStore) usable(rec shareRecord) bool {
 	if rec.Export == "" || rec.Path == "" {
 		return false
 	}
-	// /cwd is registered by the session itself, from the directory the command
-	// actually ran in. Remembering it would mean exporting a working directory
-	// somebody has since left.
-	if !strings.HasPrefix(rec.Export, workspace.ExportMountPrefix) {
-		return false
-	}
 	if rec.Export != workspace.ExportPathForID(workspace.ShareID(rec.Path)) {
 		return false
 	}
@@ -166,7 +159,7 @@ func (s *shareStore) usable(rec shareRecord) bool {
 
 // remember records a share, so a container started later can still be served.
 func (s *shareStore) remember(exportPath, localPath string) {
-	if s == nil || !strings.HasPrefix(exportPath, workspace.ExportMountPrefix) {
+	if s == nil {
 		return
 	}
 

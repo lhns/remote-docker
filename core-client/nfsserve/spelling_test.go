@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/go-git/go-billy/v5"
-
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // One file, every spelling go-nfs might reach it by, one fileid.
@@ -30,14 +28,14 @@ func TestFileIDIsOneWhateverTheSpelling(t *testing.T) {
 	}
 
 	r := registryFor(t, dir)
-	share, _, ok := r.Lookup(workspace.ExportCWD)
+	share, _, ok := r.Lookup(exportOf(dir))
 	if !ok {
-		t.Fatal("the working directory share is not registered")
+		t.Fatal("the share is not registered")
 	}
 
 	// What the wire says, so the table is anchored to what a client sees and
 	// not only to the filesystem being consistent with itself.
-	target := mustMount(t, serve(t, r), "/cwd")
+	target := mustMount(t, serve(t, r), exportOf(dir))
 	wire, err := target.Getattr("a/b/c.txt")
 	if err != nil {
 		t.Fatalf("Getattr over the wire: %v", err)
@@ -62,7 +60,7 @@ func TestFileIDIsOneWhateverTheSpelling(t *testing.T) {
 		// A bind written on Windows arrives with forward slashes, and the
 		// registry keeps the spelling it was given (Share.LocalPath).
 		slashed := registryFor(t, filepath.ToSlash(dir))
-		s2, _, ok := slashed.Lookup(workspace.ExportCWD)
+		s2, _, ok := slashed.Lookup(exportOf(dir))
 		if !ok {
 			t.Fatal("the forward-slash share is not registered")
 		}
@@ -131,7 +129,7 @@ func splitAnySeparator(name string) (dir, base string) {
 // "" and "." both name the share itself, and go-nfs asks with both: the
 // mount handle's path is empty, and a lookup of "." is answered from it.
 func TestFileIDOfTheRootIsOneSpelling(t *testing.T) {
-	share := cwdShare(t, t.TempDir())
+	share := dirShare(t, t.TempDir())
 	empty, err := share.fs.Stat("")
 	if err != nil {
 		t.Fatalf(`Stat(""): %v`, err)

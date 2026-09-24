@@ -24,7 +24,6 @@ func TestQueryDoesNotBindTheEndpoint(t *testing.T) {
 
 	s, err := Open(context.Background(), Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
-		WorkDir:  t.TempDir(),
 		Endpoint: endpoint,
 		Role:     Query,
 	})
@@ -50,7 +49,6 @@ func TestHostBindsTheEndpoint(t *testing.T) {
 
 	s, err := Open(context.Background(), Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
-		WorkDir:  t.TempDir(),
 		Endpoint: endpoint,
 		Role:     Host,
 	})
@@ -73,7 +71,6 @@ func TestASecondHostIsRefused(t *testing.T) {
 	endpoint := endpointtest.Endpoint(t)
 	opts := Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
-		WorkDir:  t.TempDir(),
 		Endpoint: endpoint,
 		Role:     Host,
 	}
@@ -112,7 +109,6 @@ func TestRoleIsOneBit(t *testing.T) {
 func TestTheCacheExcludesWhatTheWatcherExcludes(t *testing.T) {
 	s, err := Open(context.Background(), Options{
 		Config:   config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
-		WorkDir:  t.TempDir(),
 		Endpoint: endpointtest.Endpoint(t),
 		Role:     Host,
 	})

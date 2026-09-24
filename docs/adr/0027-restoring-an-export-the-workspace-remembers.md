@@ -58,8 +58,6 @@ file on disk is not evidence:
   people sync and a partial match is the case most likely to be a different
   directory with the same spelling;
 - the path must still be a directory;
-- `/cwd` is never restored, since the session registers it from the directory
-  the command actually ran in;
 - an entry nothing has wanted for thirty days is dropped, as is one whose volume
   the workspace no longer has.
 

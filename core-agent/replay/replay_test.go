@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/core/notify"
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type fakePoker struct {
@@ -71,7 +70,11 @@ func (v *fakeVolumes) Mountpoint(_ context.Context, volume string) (string, erro
 	return "", errors.New("no such volume")
 }
 
-const cwdVolume = "rd-cwd"
+// share is the export most tests replay into, and shareVolume its volume.
+const (
+	share       = "/m/1111111111111111"
+	shareVolume = "rd-1111111111111111"
+)
 
 func newReplayer(mounts map[string]string) (*Replayer, *fakePoker, *fakeVolumes) {
 	poker := newFakePoker()
@@ -106,7 +109,7 @@ func feed(t *testing.T, r *Replayer, frames ...notify.Frame) string {
 // `sh -c "workspace-notify"` and exits 127, so without a hello the client
 // cannot distinguish a working channel from a missing one.
 func TestServeGreetsFirst(t *testing.T) {
-	r, _, _ := newReplayer(map[string]string{cwdVolume: "/mnt"})
+	r, _, _ := newReplayer(map[string]string{shareVolume: "/mnt"})
 	out := feed(t, r)
 
 	line, _, _ := strings.Cut(out, "\n")
@@ -123,11 +126,11 @@ func TestServeGreetsFirst(t *testing.T) {
 }
 
 func TestReplaysAWrite(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 
 	feed(t, r, notify.Frame{Events: []notify.Event{
-		{Export: workspace.ExportCWD, Path: "/src/a.go", Op: notify.OpWrite},
+		{Export: share, Path: "/src/a.go", Op: notify.OpWrite},
 	}})
 
 	want := filepath.Join(root, "src", "a.go")
@@ -139,11 +142,11 @@ func TestReplaysAWrite(t *testing.T) {
 // A creation pokes the file, so a watcher keyed on the file notices, and the
 // parent, so one keyed on the directory rescans and finds it.
 func TestCreatePokesTheFileAndItsParent(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 
 	feed(t, r, notify.Frame{Events: []notify.Event{
-		{Export: workspace.ExportCWD, Path: "/src/new.go", Op: notify.OpCreate},
+		{Export: share, Path: "/src/new.go", Op: notify.OpCreate},
 	}})
 
 	got := poker.sorted()
@@ -161,11 +164,11 @@ func TestCreatePokesTheFileAndItsParent(t *testing.T) {
 // parent can be said, and the vanished path must NOT be poked: doing so with
 // O_CREAT semantics anywhere would recreate it.
 func TestRemovePokesOnlyTheParent(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 
 	feed(t, r, notify.Frame{Events: []notify.Event{
-		{Export: workspace.ExportCWD, Path: "/src/gone.go", Op: notify.OpRemove},
+		{Export: share, Path: "/src/gone.go", Op: notify.OpRemove},
 	}})
 
 	got := poker.sorted()
@@ -182,13 +185,13 @@ func TestRemovePokesOnlyTheParent(t *testing.T) {
 // A save touching many files in one directory must not become many identical
 // directory pokes.
 func TestParentDirectoryIsPokedOncePerFrame(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 
 	var events []notify.Event
 	for _, n := range []string{"a.go", "b.go", "c.go", "d.go"} {
 		events = append(events, notify.Event{
-			Export: workspace.ExportCWD, Path: "/src/" + n, Op: notify.OpCreate,
+			Export: share, Path: "/src/" + n, Op: notify.OpCreate,
 		})
 	}
 	feed(t, r, notify.Frame{Events: events})
@@ -201,20 +204,20 @@ func TestParentDirectoryIsPokedOncePerFrame(t *testing.T) {
 // The security-critical test. This stream tells a root process which path to
 // touch, so the agent validates independently of the client.
 func TestRefusesMalformedEvents(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
+	root := filepath.FromSlash("/mnt/share")
 
 	bad := []notify.Event{
-		{Export: workspace.ExportCWD, Path: "/../../etc/shadow", Op: notify.OpWrite},
-		{Export: workspace.ExportCWD, Path: "/a/../../../etc/passwd", Op: notify.OpWrite},
-		{Export: workspace.ExportCWD, Path: "relative", Op: notify.OpWrite},
-		{Export: workspace.ExportCWD, Path: `/a\b`, Op: notify.OpWrite},
+		{Export: share, Path: "/../../etc/shadow", Op: notify.OpWrite},
+		{Export: share, Path: "/a/../../../etc/passwd", Op: notify.OpWrite},
+		{Export: share, Path: "relative", Op: notify.OpWrite},
+		{Export: share, Path: `/a\b`, Op: notify.OpWrite},
 		{Export: "/etc", Path: "/a", Op: notify.OpWrite},
-		{Export: workspace.ExportCWD, Path: "/a", Op: 0},
-		{Export: workspace.ExportCWD, Path: "/a", Op: 1 << 7},
+		{Export: share, Path: "/a", Op: 0},
+		{Export: share, Path: "/a", Op: 1 << 7},
 	}
 
 	for _, e := range bad {
-		r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+		r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 		feed(t, r, notify.Frame{Events: []notify.Event{e}})
 		if got := poker.sorted(); len(got) != 0 {
 			t.Errorf("event %+v was refused by neither end; it poked %v", e, got)
@@ -225,7 +228,7 @@ func TestRefusesMalformedEvents(t *testing.T) {
 // resolve is the last line of defence and must hold even if validation is
 // somehow bypassed.
 func TestResolveRefusesEscapes(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
+	root := filepath.FromSlash("/mnt/share")
 	for _, share := range []string{"/../etc", "/../../etc/shadow", "/a/../../.."} {
 		if got, ok := resolve(root, share); ok && !strings.HasPrefix(got, root) {
 			t.Errorf("resolve(%q, %q) = %q, which escapes the root", root, share, got)
@@ -249,7 +252,7 @@ func TestUnknownVolumeIsCachedAndSilent(t *testing.T) {
 	var events []notify.Event
 	for range 20 {
 		events = append(events, notify.Event{
-			Export: workspace.ExportCWD, Path: "/a.go", Op: notify.OpWrite,
+			Export: share, Path: "/a.go", Op: notify.OpWrite,
 		})
 	}
 	feed(t, r, notify.Frame{Events: events})
@@ -263,12 +266,12 @@ func TestUnknownVolumeIsCachedAndSilent(t *testing.T) {
 }
 
 func TestMountpointIsCached(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, _, vols := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, _, vols := newReplayer(map[string]string{shareVolume: root})
 
 	for range 10 {
 		feed(t, r, notify.Frame{Events: []notify.Event{
-			{Export: workspace.ExportCWD, Path: "/a.go", Op: notify.OpWrite},
+			{Export: share, Path: "/a.go", Op: notify.OpWrite},
 		}})
 	}
 	if vols.calls != 1 {
@@ -279,11 +282,11 @@ func TestMountpointIsCached(t *testing.T) {
 // A notice means the client's own picture is incomplete. Replaying events we
 // never received is not on offer, so the directory it names is poked instead.
 func TestNoticePokesTheNamedDirectory(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 
 	feed(t, r, notify.Frame{Notice: &notify.Notice{
-		Export: workspace.ExportCWD, Path: "/src/deep", Dropped: 900, Reason: "overflow",
+		Export: share, Path: "/src/deep", Dropped: 900, Reason: "overflow",
 	}})
 
 	got := poker.sorted()
@@ -299,11 +302,11 @@ func TestNoticePokesTheNamedDirectory(t *testing.T) {
 // A malformed line is a client bug, not a reason to tear down a working
 // session: the next frame is very likely fine.
 func TestMalformedFrameDoesNotEndTheStream(t *testing.T) {
-	root := filepath.FromSlash("/mnt/cwd")
-	r, poker, _ := newReplayer(map[string]string{cwdVolume: root})
+	root := filepath.FromSlash("/mnt/share")
+	r, poker, _ := newReplayer(map[string]string{shareVolume: root})
 
 	good, _ := json.Marshal(notify.Frame{Events: []notify.Event{
-		{Export: workspace.ExportCWD, Path: "/after.go", Op: notify.OpWrite},
+		{Export: share, Path: "/after.go", Op: notify.OpWrite},
 	}})
 	in := "{not json\n\n" + string(good) + "\n"
 
@@ -324,22 +327,22 @@ func TestMalformedFrameDoesNotEndTheStream(t *testing.T) {
 // against its own mountpoint.
 func TestEventsSpanningExports(t *testing.T) {
 	const otherExport = "/m/0123456789abcdef"
-	cwdRoot := filepath.FromSlash("/mnt/cwd")
+	shareRoot := filepath.FromSlash("/mnt/share")
 	otherRoot := filepath.FromSlash("/mnt/other")
 	r, poker, _ := newReplayer(map[string]string{
-		cwdVolume:             cwdRoot,
+		shareVolume:           shareRoot,
 		"rd-0123456789abcdef": otherRoot,
 	})
 
 	feed(t, r, notify.Frame{Events: []notify.Event{
-		{Export: workspace.ExportCWD, Path: "/a/one.go", Op: notify.OpCreate},
+		{Export: share, Path: "/a/one.go", Op: notify.OpCreate},
 		{Export: otherExport, Path: "/b/two.go", Op: notify.OpCreate},
 	}})
 
 	got := poker.sorted()
 	want := []string{
-		filepath.Join(cwdRoot, "a"),
-		filepath.Join(cwdRoot, "a", "one.go"),
+		filepath.Join(shareRoot, "a"),
+		filepath.Join(shareRoot, "a", "one.go"),
 		filepath.Join(otherRoot, "b"),
 		filepath.Join(otherRoot, "b", "two.go"),
 	}

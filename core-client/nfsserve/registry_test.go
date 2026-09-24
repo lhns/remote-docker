@@ -9,19 +9,6 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-func TestRegisterCWD(t *testing.T) {
-	dir := t.TempDir()
-	r := NewRegistry(DefaultAttrs)
-
-	share, err := r.RegisterCWD(dir)
-	if err != nil {
-		t.Fatalf("RegisterCWD: %v", err)
-	}
-	if share.ExportPath != workspace.ExportCWD {
-		t.Errorf("ExportPath = %q, want %q", share.ExportPath, workspace.ExportCWD)
-	}
-}
-
 // Registering the same directory twice must not create a second share: the
 // share id is derived from the path precisely so a reconnecting client reuses
 // its handles and its remote volumes rather than orphaning a set per session.
@@ -122,28 +109,29 @@ func TestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.RegisterCWD(dir)
+	share, err := r.Register(dir)
 	if err != nil {
-		t.Fatalf("RegisterCWD: %v", err)
+		t.Fatalf("Register: %v", err)
 	}
+	export := share.ExportPath
 
 	tests := []struct {
 		name     string
 		query    string
 		wantRest string
 	}{
-		{"exact", "/cwd", "/"},
-		{"trailing slash", "/cwd/", "/"},
-		{"subdirectory", "/cwd/src", "/src"},
-		{"nested subdirectory", "/cwd/src/inner", "/src/inner"},
-		{"redundant separators", "/cwd//src", "/src"},
-		{"dot segment", "/cwd/./src", "/src"},
-		{"missing leading slash", "cwd/src", "/src"},
-		// Cleaning resolves this to "/cwd", which is a legitimate spelling of
+		{"exact", export, "/"},
+		{"trailing slash", export + "/", "/"},
+		{"subdirectory", export + "/src", "/src"},
+		{"nested subdirectory", export + "/src/inner", "/src/inner"},
+		{"redundant separators", export + "//src", "/src"},
+		{"dot segment", export + "/./src", "/src"},
+		{"missing leading slash", strings.TrimPrefix(export, "/") + "/src", "/src"},
+		// Cleaning resolves this to the export, which is a legitimate spelling of
 		// a registered share, not an escape. The boundary that matters is
 		// that nothing *unregistered* becomes reachable, which is asserted in
 		// TestLookupRefusesUnregisteredPaths.
-		{"parent of root", "/../cwd", "/"},
+		{"parent of root", "/.." + export, "/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -167,18 +155,19 @@ func TestLookup(t *testing.T) {
 func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
-		t.Fatalf("RegisterCWD: %v", err)
+	if _, err := r.Register(dir); err != nil {
+		t.Fatalf("Register: %v", err)
 	}
+	export := exportOf(dir)
 
 	for _, query := range []string{
 		"/",
 		"/m",
 		"/m/0011223344556677",
 		"/etc",
-		"/cwd/../etc",
-		"/cwd/../../etc/passwd",
-		"/cwdx",
+		export + "/../etc",
+		export + "/../../etc/passwd",
+		export + "x",
 		"",
 	} {
 		if share, _, ok := r.Lookup(query); ok {
@@ -192,7 +181,7 @@ func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.RegisterCWD(dir)
+	share, err := r.Register(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,15 +192,15 @@ func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
 
 func TestNormalizeExport(t *testing.T) {
 	tests := map[string]string{
-		"/cwd":        "/cwd",
-		"/cwd/":       "/cwd",
-		"cwd":         "/cwd",
-		"//cwd":       "/cwd",
-		"/cwd/./x":    "/cwd/x",
-		"/cwd/y/../x": "/cwd/x",
-		"/cwd/../..":  "/",
+		"/m/a":        "/m/a",
+		"/m/a/":       "/m/a",
+		"m/a":         "/m/a",
+		"//m/a":       "/m/a",
+		"/m/a/./x":    "/m/a/x",
+		"/m/a/y/../x": "/m/a/x",
+		"/m/a/../..":  "/",
 		"":            "/",
-		"   /cwd   ":  "/cwd",
+		"   /m/a   ":  "/m/a",
 	}
 	for in, want := range tests {
 		if got := normalizeExport(in); got != want {

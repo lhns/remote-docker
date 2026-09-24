@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/lhns/remote-docker/core/notify"
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 func TestSplitLocal(t *testing.T) {
@@ -112,7 +111,7 @@ func TestRelativeToProducesValidWirePaths(t *testing.T) {
 		if !ok {
 			t.Fatalf("relativeTo(%q, %q, %q) refused a path under the root", c.goos, c.root, c.local)
 		}
-		event := notify.Event{Export: workspace.ExportCWD, Path: got, Op: notify.OpWrite}
+		event := notify.Event{Export: "/m/1111111111111111", Path: got, Op: notify.OpWrite}
 		if err := event.Validate(); err != nil {
 			t.Errorf("relativeTo(%q, %q, %q) = %q, which the agent would reject: %v",
 				c.goos, c.root, c.local, got, err)

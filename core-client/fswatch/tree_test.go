@@ -97,7 +97,7 @@ func TestSyncWalksTheWholeShare(t *testing.T) {
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 
 	added := be.addedSet()
 	for _, want := range []string{root,
@@ -119,7 +119,7 @@ func TestExcludedDirectoriesAreNotWatched(t *testing.T) {
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, DefaultExcludes)
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 
 	added := be.addedSet()
 	if added[filepath.Join(root, "node_modules")] || added[filepath.Join(root, ".git")] {
@@ -157,7 +157,7 @@ func TestBudgetKeepsShallowDirectoriesFirst(t *testing.T) {
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 4, nil) // root + three children
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 
 	added := be.addedSet()
 	if len(added) != 4 {
@@ -220,7 +220,7 @@ func TestRenamePrunesTheSubtreeAndRemoveDoesNot(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "keep", "gone", "gone/inner", "gone/inner/deepest")
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 
 	gone := filepath.Join(root, "gone")
 	inner := filepath.Join(gone, "inner")
@@ -257,7 +257,7 @@ func TestAddTreeEmitsWhatItFindsForALateWatch(t *testing.T) {
 	root := t.TempDir()
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 
 	// The whole subtree exists before we are told about the top of it.
 	created := mkdirs(t, root, "late", "late/inner")
@@ -286,7 +286,7 @@ func TestAddTreeToleratesAVanishedDirectory(t *testing.T) {
 	root := t.TempDir()
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 
 	tr.addTree(tr.roots[0], filepath.Join(root, "never-existed"), nil)
 	// No panic, and nothing bogus recorded as watched.
@@ -301,12 +301,12 @@ func TestSyncRemovesAShareThatWentAway(t *testing.T) {
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: a}, {ExportPath: "/m/0123456789abcdef", LocalPath: b}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: a}, {ExportPath: "/m/0123456789abcdef", LocalPath: b}})
 	if !tr.watching(b) {
 		t.Fatal("setup: second share not watched")
 	}
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: a}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: a}})
 	if tr.watching(b) {
 		t.Error("a removed share is still watched")
 	}
@@ -324,7 +324,7 @@ func TestSyncIsIdempotent(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
-	shares := []Share{{ExportPath: "/cwd", LocalPath: root}}
+	shares := []Share{{ExportPath: "/m/1111111111111111", LocalPath: root}}
 
 	tr.sync(shares)
 	first := len(be.addedSet())
@@ -347,7 +347,7 @@ func TestRootForFindsTheOwningShare(t *testing.T) {
 	b := t.TempDir()
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: a}, {ExportPath: "/m/0123456789abcdef", LocalPath: b}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: a}, {ExportPath: "/m/0123456789abcdef", LocalPath: b}})
 
 	root, rel, ok := tr.rootFor(filepath.Join(b, "x", "y.go"))
 	if !ok || root.export != "/m/0123456789abcdef" || rel != "/x/y.go" {
@@ -427,7 +427,7 @@ func TestRemoveTreeReleasesEveryDescendant(t *testing.T) {
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 	added := be.addedSet()
 	if len(added) != 4 {
 		t.Fatalf("setup: watched %d directories, want 4: %v", len(added), added)
@@ -456,7 +456,7 @@ func TestRemoveTreeAsksTheBackendWithTheAddedSpelling(t *testing.T) {
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
 
-	tr.sync([]Share{{ExportPath: "/cwd", LocalPath: root}})
+	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 	tr.removeTree(root)
 
 	for _, p := range be.removedList() {

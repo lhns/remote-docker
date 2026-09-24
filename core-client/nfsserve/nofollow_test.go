@@ -23,7 +23,7 @@ func linkedShare(t *testing.T) (string, *nfsclient.Target) {
 	if err := os.Symlink("b", filepath.Join(dir, "a")); err != nil {
 		t.Fatal(err)
 	}
-	return dir, mountCWD(t, dir)
+	return dir, mountDir(t, dir)
 }
 
 // Removing a symlink through the share removes the LINK. go-billy's BoundOS
@@ -84,8 +84,8 @@ func TestRemoveAndRenameOfAPlainFileThroughTheShare(t *testing.T) {
 	}
 	r := registryFor(t, dir)
 	addr := serve(t, r)
-	root := mustMount(t, addr, "/cwd")
-	sub := mustMount(t, addr, "/cwd/sub")
+	root := mustMount(t, addr, exportOf(dir))
+	sub := mustMount(t, addr, exportOf(dir)+"/sub")
 
 	if err := root.Rename("one", "sub/moved"); err != nil {
 		t.Fatalf("rename across directories: %v", err)

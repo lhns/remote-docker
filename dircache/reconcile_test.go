@@ -31,9 +31,9 @@ func TestAttachReconcilesDeletionsWithPrefetchOff(t *testing.T) {
 	store := &fakeStore{}
 	c := cacheWith(t, store)
 	c.Policy = PolicyOff
-	c.Record = &fakeRecord{filled: map[string][]string{"/cwd": {"kept.go", "gone.go"}}}
+	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"kept.go", "gone.go"}}}
 
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 
 	eventually(t, "the deleted file to be dropped", func() bool {
 		store.mu.Lock()

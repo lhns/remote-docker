@@ -24,9 +24,9 @@ func TestAttachWithoutPrefetchWritesBack(t *testing.T) {
 		},
 	}
 	c := cacheWith(t, store)
-	c.Attach("/cwd", root, ShareOptions{Prefetch: false})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: false})
 
-	c.writeBackShare(t.Context(), "/cwd")
+	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
 	got, err := os.ReadFile(filepath.Join(root, "out.txt"))
 	if err != nil {
@@ -53,9 +53,9 @@ func TestAttachWithNothingToPrefetch(t *testing.T) {
 			store := &fakeStore{}
 			c, root := treeCache(t, store)
 			c.Policy = tc.policy
-			c.Attach("/cwd", root, tc.opts)
+			c.Attach("/m/1111111111111111", root, tc.opts)
 
-			c.Touch("/cwd", "/pkga/faa.go", 2000)
+			c.Touch("/m/1111111111111111", "/pkga/faa.go", 2000)
 			time.Sleep(50 * time.Millisecond)
 			if n := store.appliedCount(); n != 0 {
 				t.Errorf("%d files were sent", n)
@@ -74,7 +74,7 @@ func TestAttachWithNothingToPrefetch(t *testing.T) {
 func TestTreeFillReportsComplete(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 
 	eventually(t, "the fill to finish", func() bool {
 		r := c.Reports()
@@ -106,10 +106,10 @@ func TestAttachRunsOncePerShare(t *testing.T) {
 	store := &fakeStore{}
 	c := cacheWith(t, store)
 
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 	eventually(t, "the prefetch to finish", func() bool { r := c.Reports(); return len(r) == 1 && r[0].Done })
 
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 	eventually(t, "one report", func() bool { return len(c.Reports()) == 1 })
 
 	store.mu.Lock()
@@ -131,7 +131,7 @@ func TestAttachWithNoStore(t *testing.T) {
 	c := &Cache{Store: func() (Store, bool) { return nil, false }, Ctx: t.Context(), Policy: PolicyTree}
 	t.Cleanup(c.Stop)
 
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 	eventually(t, "the prefetch to finish", func() bool { r := c.Reports(); return len(r) == 1 && r[0].Done })
 
 	if err := c.Reports()[0].Err; err != nil {

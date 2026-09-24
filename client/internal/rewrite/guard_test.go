@@ -14,10 +14,7 @@ import (
 // when the container starts. `remote-docker start && docker run -v $PWD:/w`
 // failed in CI with the project directory mounted empty.
 func TestCollectSparesAVolumeThisSessionIsExporting(t *testing.T) {
-	name, err := workspace.VolumeNameForExport("", workspace.ExportCWD)
-	if err != nil {
-		t.Fatalf("naming the cwd volume: %v", err)
-	}
+	name := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))
 
 	store := &fakeVolumeStore{volumes: []Volume{managed(name, "alice")}}
 	c := newCollector(store, "alice")
@@ -56,10 +53,7 @@ func (b *blockingVolumes) EnsureVolume(context.Context, string, map[string]strin
 // held section, so without the lock a collector that read the registry a
 // moment earlier would still delete it.
 func TestARewriteInProgressBlocksCollection(t *testing.T) {
-	name, err := workspace.VolumeNameForExport("", workspace.ExportCWD)
-	if err != nil {
-		t.Fatalf("naming the cwd volume: %v", err)
-	}
+	name := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))
 
 	exported := make(chan struct{})
 	guard := &Guard{Exported: func(v string) bool {
@@ -91,7 +85,7 @@ func TestARewriteInProgressBlocksCollection(t *testing.T) {
 		}
 	}}
 
-	r := &Rewriter{Shares: &fakeSharer{cwd: "/home/alice/project"}, Volumes: volumes, NFSPort: 30000, Guard: guard}
+	r := &Rewriter{Shares: &fakeSharer{}, Volumes: volumes, NFSPort: 30000, Guard: guard}
 	body := []byte(`{"HostConfig":{"Binds":["/home/alice/project:/w"]}}`)
 	if _, err := r.ContainerCreate(t.Context(), body); err != nil {
 		t.Fatalf("ContainerCreate: %v", err)

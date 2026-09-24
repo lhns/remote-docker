@@ -11,7 +11,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/lhns/remote-docker/core/notify"
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type fakeSink struct {
@@ -87,7 +86,7 @@ func startWatcher(t *testing.T, mode Mode, root string) (*Watcher, *fakeBackend,
 
 	sink := &fakeSink{}
 	w.SetSink(sink)
-	w.Sync([]Share{{ExportPath: workspace.ExportCWD, LocalPath: root}})
+	w.Sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 	waitFor(t, "the initial walk", func() bool { return w.Stats().Watched > 0 })
 	return w, be, sink
 }
@@ -126,8 +125,8 @@ func TestWatcherReportsAKernelOverflow(t *testing.T) {
 	waitFor(t, "the overflow to reach the observer and the agent", func() bool {
 		return obs.count() > 0 && len(sink.notices()) > 0
 	})
-	if n := sink.notices()[0]; n.Export != workspace.ExportCWD || n.Path != "/" {
-		t.Errorf("notice %+v, want the whole of %s", n, workspace.ExportCWD)
+	if n := sink.notices()[0]; n.Export != "/m/1111111111111111" || n.Path != "/" {
+		t.Errorf("notice %+v, want the whole of %s", n, "/m/1111111111111111")
 	}
 }
 
@@ -139,8 +138,8 @@ func TestWatcherReportsAWrite(t *testing.T) {
 
 	waitFor(t, "the write to arrive", func() bool { return len(sink.events()) > 0 })
 	got := sink.events()[0]
-	if got.Export != workspace.ExportCWD || got.Path != "/src/a.go" || got.Op != notify.OpWrite {
-		t.Errorf("reported %+v, want /src/a.go write on /cwd", got)
+	if got.Export != "/m/1111111111111111" || got.Path != "/src/a.go" || got.Op != notify.OpWrite {
+		t.Errorf("reported %+v, want /src/a.go write on the share", got)
 	}
 	if w.Stats().Sent == 0 {
 		t.Error("Stats did not count the sent event")
@@ -199,7 +198,7 @@ func TestOffModeWatchesNothing(t *testing.T) {
 
 	sink := &fakeSink{}
 	w.SetSink(sink)
-	w.Sync([]Share{{ExportPath: workspace.ExportCWD, LocalPath: root}})
+	w.Sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
 	time.Sleep(50 * time.Millisecond)
 
 	if s := w.Stats(); s.Watched != 0 || s.Sent != 0 {

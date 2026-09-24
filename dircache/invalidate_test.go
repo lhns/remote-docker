@@ -89,7 +89,7 @@ func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 	c.shares.set("/m/00112233445566ff", "/home/alice/project", &shareState{})
 	defer c.Stop()
 
-	c.Observe(Event{Share: "/cwd", Path: "/other.go", Op: OpWrite})
+	c.Observe(Event{Share: "/m/1111111111111111", Path: "/other.go", Op: OpWrite})
 
 	c.inval.mu.Lock()
 	defer c.inval.mu.Unlock()
@@ -101,7 +101,7 @@ func TestInvalidatorIgnoresWhatItDoesNotCache(t *testing.T) {
 // A directory is not cached in its own right: its files are, and each arrives
 // as its own event.
 func TestInvalidatorIgnoresDirectories(t *testing.T) {
-	const share = "/cwd"
+	const share = "/m/1111111111111111"
 	c := &Cache{}
 	c.shares.set(share, "/home/alice/project", &shareState{})
 	defer c.Stop()
@@ -118,7 +118,7 @@ func TestInvalidatorIgnoresDirectories(t *testing.T) {
 // A path the change source does not cover is never cached, so there is nothing to
 // invalidate and no reason to spend a round trip saying so.
 func TestInvalidatorIgnoresExcludedPaths(t *testing.T) {
-	const share = "/cwd"
+	const share = "/m/1111111111111111"
 	c := &Cache{Exclude: []string{".git"}}
 	c.shares.set(share, "/home/alice/project", &shareState{})
 	defer c.Stop()

@@ -22,7 +22,7 @@ func TestChmodThroughTheShareReachesTheFile(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	f, err := target.OpenFile("prog", 0o644)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestChmodThroughTheShareReachesTheFile(t *testing.T) {
 // replay -- 3063 events for one edit. See attrChange.Chtimes.
 func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 	dir := t.TempDir()
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	f, err := target.OpenFile("stamped", 0o644)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestChtimesThroughTheShareIsAcceptedAndNotApplied(t *testing.T) {
 // ability to write with it. See attrChange.Chmod.
 func TestChmodThroughTheShareKeepsTheFileWritable(t *testing.T) {
 	dir := t.TempDir()
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	f, err := target.OpenFile("locked", 0o644)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestChmodOnASymlinkDoesNotReachItsTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	target := mountCWD(t, share)
+	target := mountDir(t, share)
 
 	// Not 0777: that is what a link reports, and go-nfs skips a chmod to the
 	// mode a file already has.

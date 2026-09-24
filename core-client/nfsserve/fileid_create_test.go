@@ -16,7 +16,7 @@ import (
 func TestCreateReplyFileIDMatchesGetattr(t *testing.T) {
 	dir := t.TempDir()
 	r := registryFor(t, dir)
-	target, client, root := mustMountAt(t, serve(t, r), "/cwd")
+	target, client, root := mustMountAt(t, serve(t, r), exportOf(dir))
 	t.Cleanup(func() { client.Close() })
 
 	type how struct {

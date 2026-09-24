@@ -104,20 +104,15 @@ func TestLeasedStreamCloseWriteWithoutSupport(t *testing.T) {
 // ours.
 func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs())}
-	if _, err := s.registry.RegisterCWD(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	other := t.TempDir()
-	if _, err := s.registry.Register(other); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{t.TempDir(), t.TempDir()} {
+		if _, err := s.registry.Register(dir); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	ours := s.ourVolumes()
 	if len(ours) != 2 {
 		t.Fatalf("named %d volumes, want one per share: %v", len(ours), ours)
-	}
-	if !ours[workspace.VolumeNamePrefix+"cwd"] {
-		t.Errorf("the working directory's volume is missing: %v", ours)
 	}
 
 	// Another account's managed volume carries the same prefix and must not

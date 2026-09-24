@@ -105,8 +105,8 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 //
 // Registration already notifies directly, so this is the same belt-and-braces
 // the port manager uses: a periodic pass costs nothing and covers the paths
-// that do not go through the notifying one, such as the working directory,
-// registered inside Open before any of this exists.
+// that do not go through the notifying one, such as a share a MOUNT restored
+// from the record.
 func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()

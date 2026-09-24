@@ -186,9 +186,7 @@ func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
 		if !ok || (client != "" && client != s.clientID) {
 			continue
 		}
-		if share != "cwd" {
-			keep[workspace.ExportPathForID(share)] = true
-		}
+		keep[workspace.ExportPathForID(share)] = true
 	}
 	s.shares.forget(keep)
 }

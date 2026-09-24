@@ -673,7 +673,9 @@ premise of the project, and it applies to building it too. So:
   answered "no such file or directory" against a directory that is right there
   (ADR 0027). The record fixes that, and it is checked again every time it is
   read: the id is RECOMPUTED from the path, the file is bound to this host and
-  account and refused wholesale if either differs, and `/cwd` is never restored.
+  account and refused wholesale if either differs. The working directory is a
+  share like any other: an export it named would mean a different directory in
+  the next process, while the volume naming it would not.
   Restore only from a MOUNT that missed; `Lookup` and `Shares` must never
   resurrect, or "in use" depends on who asked. And never feed the record to
   `rewrite.Guard`: a stopped container already pins its volume, so the collector

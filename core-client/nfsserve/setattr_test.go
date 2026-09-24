@@ -25,7 +25,7 @@ import (
 // knowing precisely.
 func TestServeTruncatesAFile(t *testing.T) {
 	dir := t.TempDir()
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	f, err := target.OpenFile("p2", 0o644)
 	if err != nil {

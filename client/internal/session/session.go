@@ -37,9 +37,6 @@ import (
 type Options struct {
 	Config config.Config
 
-	// WorkDir is the directory exported at /cwd.
-	WorkDir string
-
 	// Endpoint overrides where the Docker API is served locally.
 	Endpoint string
 
@@ -101,7 +98,7 @@ const (
 	Query Role = iota
 
 	// Host serves the workspace to this machine: it binds the endpoint,
-	// exports the working directory, forwards published ports, and reports
+	// exports what binds name, forwards published ports, and reports
 	// what it is doing. This is what `start` runs, in the foreground or
 	// behind one.
 	//
@@ -293,11 +290,6 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
 
-	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
-		cancel()
-		return nil, err
-	}
-
 	if opts.Watch != fswatch.ModeOff && opts.Role.hosting() {
 		watcher, err := fswatch.New(fswatch.Options{
 			Mode:    opts.Watch,
@@ -349,9 +341,9 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 
 		if err := s.listen(opts.Endpoint); err != nil {
 			cancel()
-			// The watcher is already walking the working directory by now, and
-			// it holds handles the context does not: cancelling alone leaves
-			// it running in a process that is about to report a failure.
+			// The watcher is already running by now, and it holds handles
+			// the context does not: cancelling alone leaves it running in a
+			// process that is about to report a failure.
 			if s.watch != nil {
 				_ = s.watch.Close()
 			}

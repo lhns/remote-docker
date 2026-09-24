@@ -127,12 +127,12 @@ func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
 	return target
 }
 
-// registryFor is a registry with dir as the working-directory share, which is
-// what nearly every test here starts from.
+// registryFor is a registry sharing dir, which is what nearly every test here
+// starts from.
 func registryFor(t testing.TB, dir string) *Registry {
 	t.Helper()
 	r := NewRegistry(DefaultAttrs)
-	if _, err := r.RegisterCWD(dir); err != nil {
+	if _, err := r.Register(dir); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -156,13 +156,18 @@ func unsetEnv(t *testing.T, key string) {
 	}
 }
 
-// cwdShare registers dir as the working-directory share and returns it, for a
-// test that asks the share's filesystem directly rather than over the wire.
-func cwdShare(t testing.TB, dir string) *Share {
+// exportOf is the export a registry serves dir at.
+func exportOf(dir string) string {
+	return workspace.ExportPathForID(workspace.ShareID(dir))
+}
+
+// dirShare registers dir and returns its share, for a test that asks the
+// share's filesystem directly rather than over the wire.
+func dirShare(t testing.TB, dir string) *Share {
 	t.Helper()
-	share, _, ok := registryFor(t, dir).Lookup(workspace.ExportCWD)
+	share, _, ok := registryFor(t, dir).Lookup(exportOf(dir))
 	if !ok {
-		t.Fatal("the working directory share is not registered")
+		t.Fatal("the share is not registered")
 	}
 	return share
 }
@@ -172,11 +177,11 @@ func fileidOf(fi os.FileInfo) uint64 {
 	return fi.Sys().(*nfsfile.FileInfo).Fileid
 }
 
-// mountCWD serves dir as /cwd and mounts it, for a test that needs nothing
-// from the registry afterwards.
-func mountCWD(t *testing.T, dir string) *nfsclient.Target {
+// mountDir serves dir and mounts it, for a test that needs nothing from the
+// registry afterwards.
+func mountDir(t *testing.T, dir string) *nfsclient.Target {
 	t.Helper()
-	return mustMount(t, serve(t, registryFor(t, dir)), workspace.ExportCWD)
+	return mustMount(t, serve(t, registryFor(t, dir)), exportOf(dir))
 }
 
 // rawStatus is a procedure's NFS status word, which the client library

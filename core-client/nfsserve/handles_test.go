@@ -39,7 +39,7 @@ func TestRootHandleResolvesInAServerThatNeverIssuedIt(t *testing.T) {
 	}
 	r := registryFor(t, dir)
 
-	handle := rootHandleOf(t, New(r, nil), "/cwd")
+	handle := rootHandleOf(t, New(r, nil), exportOf(dir))
 
 	// The client restarts: a second server, over a registry rebuilt the way a
 	// reconnect rebuilds it.
@@ -64,8 +64,8 @@ func TestTheDerivedPartOfARootHandleIsTheSameInEveryServer(t *testing.T) {
 	dir := t.TempDir()
 	r := registryFor(t, dir)
 
-	first := rootHandleOf(t, New(r, nil), "/cwd")
-	second := rootHandleOf(t, New(registryFor(t, dir), nil), "/cwd")
+	first := rootHandleOf(t, New(r, nil), exportOf(dir))
+	second := rootHandleOf(t, New(registryFor(t, dir), nil), exportOf(dir))
 
 	if string(first[:exportKeySize]) != string(second[:exportKeySize]) {
 		t.Errorf("derived keys differ: %x vs %x", first[:exportKeySize], second[:exportKeySize])
@@ -79,7 +79,7 @@ func TestTheDerivedPartOfARootHandleIsTheSameInEveryServer(t *testing.T) {
 // (ADR 0027). A share that is no longer exported must not come back.
 func TestRootHandleForAnUnexportedShareIsStale(t *testing.T) {
 	dir := t.TempDir()
-	handle := rootHandleOf(t, New(registryFor(t, dir), nil), "/cwd")
+	handle := rootHandleOf(t, New(registryFor(t, dir), nil), exportOf(dir))
 
 	empty := New(NewRegistry(DefaultAttrs), nil)
 	if _, _, err := empty.handler.FromHandle(handle); err == nil {
@@ -98,7 +98,7 @@ func TestRootHandlesDifferPerShare(t *testing.T) {
 	}
 	s := New(r, nil)
 
-	if string(rootHandleOf(t, s, "/cwd")) == string(rootHandleOf(t, s, other.ExportPath)) {
+	if string(rootHandleOf(t, s, exportOf(first))) == string(rootHandleOf(t, s, other.ExportPath)) {
 		t.Error("two shares were given the same root handle")
 	}
 }
@@ -114,7 +114,7 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 	r := registryFor(t, dir)
 	s := New(r, nil)
 
-	share, _, ok := r.Lookup("/cwd")
+	share, _, ok := r.Lookup(exportOf(dir))
 	if !ok {
 		t.Fatal("no share")
 	}
@@ -123,7 +123,7 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := rootHandleOf(t, s, "/cwd")
+	root := rootHandleOf(t, s, exportOf(dir))
 	subHandle := s.handler.ToHandle(sub, []string{})
 	if string(subHandle) == string(root) {
 		t.Error("a subdirectory mount was given the share's root handle")
@@ -136,7 +136,7 @@ func TestASubdirectoryMountDoesNotTakeTheShareRootHandle(t *testing.T) {
 func TestALiveServerResolvesItsOwnRootThroughTheCache(t *testing.T) {
 	dir := t.TempDir()
 	s := New(registryFor(t, dir), nil)
-	handle := rootHandleOf(t, s, "/cwd")
+	handle := rootHandleOf(t, s, exportOf(dir))
 
 	fs, path, err := s.handler.FromHandle(handle)
 	if err != nil {
@@ -173,11 +173,11 @@ func TestHandleSizes(t *testing.T) {
 	r := registryFor(t, dir)
 	s := New(r, nil)
 
-	if got := len(rootHandleOf(t, s, "/cwd")); got != rootHandleSize {
+	if got := len(rootHandleOf(t, s, exportOf(dir))); got != rootHandleSize {
 		t.Errorf("root handle is %d bytes, want %d", got, rootHandleSize)
 	}
 
-	share, _, _ := r.Lookup("/cwd")
+	share, _, _ := r.Lookup(exportOf(dir))
 	if got := len(s.handler.ToHandle(share.fs, []string{"marker"})); got != cachedHandleSize {
 		t.Errorf("an ordinary handle is %d bytes, want the %d go-nfs mints", got, cachedHandleSize)
 	}
@@ -204,8 +204,9 @@ func (f *forgetfulHandler) InvalidateHandle(_ billy.Filesystem, h []byte) error 
 // go-nfs never reaches its own fallback, and returning nil left the cache
 // naming a path the file no longer has.
 func TestRenameInvalidatesWhenTheHandlerCannotMoveAHandle(t *testing.T) {
-	r := registryFor(t, t.TempDir())
-	share, _, ok := r.Lookup("/cwd")
+	dir := t.TempDir()
+	r := registryFor(t, dir)
+	share, _, ok := r.Lookup(exportOf(dir))
 	if !ok {
 		t.Fatal("no share")
 	}

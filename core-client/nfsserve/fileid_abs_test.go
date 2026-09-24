@@ -19,7 +19,7 @@ func TestFileIDIsTheSameForAnAbsoluteSpelling(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "fresh"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	share := cwdShare(t, dir)
+	share := dirShare(t, dir)
 
 	rel, err := share.fs.Lstat("fresh")
 	if err != nil {

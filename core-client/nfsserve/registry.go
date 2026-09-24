@@ -20,7 +20,7 @@ import (
 
 // Share is one local directory exposed to the workspace, or one file.
 type Share struct {
-	// ExportPath is how the workspace addresses it: "/cwd" or "/m/<id>".
+	// ExportPath is how the workspace addresses it: "/m/<id>".
 	ExportPath string
 
 	// LocalPath is the directory or file on this machine, in its original
@@ -100,19 +100,10 @@ func NewRegistry(attrs Attrs) *Registry {
 	}
 }
 
-// RegisterCWD exports localPath at /cwd, where the interactive shell lands.
-func (r *Registry) RegisterCWD(localPath string) (*Share, error) {
-	return r.register(workspace.ExportCWD, localPath)
-}
-
 // Register exports localPath at /m/<id>, deriving the id from the path so it
 // is the same on every run. A directory already registered is returned as it
 // stands rather than duplicated.
 func (r *Registry) Register(localPath string) (*Share, error) {
-	return r.register("", localPath)
-}
-
-func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("nfsserve: cannot export %s: %w", localPath, err)
@@ -133,12 +124,10 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if existing, ok := r.byPath[key]; ok && (exportPath == "" || existing.ExportPath == exportPath) {
+	if existing, ok := r.byPath[key]; ok {
 		return existing, nil
 	}
-	if exportPath == "" {
-		exportPath = workspace.ExportPathForID(workspace.ShareID(localPath))
-	}
+	exportPath := workspace.ExportPathForID(workspace.ShareID(localPath))
 
 	// WithBoundOS keeps every operation inside baseDir. It is the boundary
 	// that stops a crafted path escaping a share, and it is why each share
@@ -159,15 +148,6 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		LocalPath:  localPath,
 		File:       file,
 		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
-	}
-	// Reached only by registering a DIFFERENT directory at an export path
-	// already taken, since a path already held returned its share above. The
-	// displaced share is unreachable, so it gives up what it holds and takes
-	// its byPath entry with it rather than leaving one pointing at a
-	// filesystem nothing serves.
-	if old, ok := r.shares[exportPath]; ok {
-		delete(r.byPath, workspace.CanonicalKey(old.LocalPath))
-		closeFS(old.fs)
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -217,8 +197,8 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	share, err := r.register(clean, local)
-	if err != nil {
+	share, err := r.Register(local)
+	if err != nil || share.ExportPath != clean {
 		return nil, "", false
 	}
 	return share, "/", true
@@ -259,7 +239,7 @@ func normalizeExport(p string) string {
 
 // SetAttrs changes the attributes reported for shares registered from now on,
 // and for existing ones: the workspace account's uid is only known once
-// connected, while the working directory is registered before that.
+// connected, and a reconnect may report another.
 func (r *Registry) SetAttrs(attrs Attrs) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -280,9 +280,9 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 // shared between an account's machines and the files behind a share are on one
 // of them.
 //
-// Without this both machines derive `rd-cwd` for their own working directory,
-// the second create silently returns the first's volume, and a container comes
-// up reading somebody else's project.
+// Without this two machines with one path derive one name, the second create
+// silently returns the first's volume, and a container comes up reading
+// somebody else's project.
 func TestVolumeNamesCarryTheClient(t *testing.T) {
 	id := ShareID("/home/alice/project")
 
@@ -296,19 +296,6 @@ func TestVolumeNamesCarryTheClient(t *testing.T) {
 			t.Errorf("%q is not recognised as ours", name)
 		}
 	}
-
-	// And the working directory, which is the one that actually collided.
-	phoneCWD, err := VolumeNameForExport("aabbccdd", ExportCWD)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pcCWD, err := VolumeNameForExport("11223344", ExportCWD)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if phoneCWD == pcCWD {
-		t.Errorf("both machines named the working directory volume %q", phoneCWD)
-	}
 }
 
 func TestParseVolumeName(t *testing.T) {
@@ -321,12 +308,15 @@ func TestParseVolumeName(t *testing.T) {
 		wantAccepted bool
 	}{
 		{VolumeNameForID("aabbccdd", id), "aabbccdd", id, true},
-		{VolumeNameForID("aabbccdd", "cwd"), "aabbccdd", "cwd", true},
 
 		// From before clients were named. Still ours, still collectable, and
 		// reported with no client rather than refused.
 		{VolumeNameForID("", id), "", id, true},
-		{"rd-cwd", "", "cwd", true},
+
+		// The working directory's volume from before it was a share like any
+		// other. Nothing serves its export, so nothing may attribute it.
+		{"rd-aabbccdd-cwd", "", "", false},
+		{"rd-cwd", "", "", false},
 
 		// A volume somebody else named. The prefix alone is not enough: a user
 		// is entitled to call a volume rd-backups.
@@ -366,7 +356,7 @@ func TestClientID(t *testing.T) {
 		t.Errorf("client id %q is %d characters, want %d", a, len(a), clientIDLen)
 	}
 	// It goes in a volume name, so it has to survive being read back out.
-	if _, _, ok := ParseVolumeName(VolumeNameForID(a, "cwd")); !ok {
+	if _, _, ok := ParseVolumeName(VolumeNameForID(a, ShareID("/x"))); !ok {
 		t.Errorf("a volume named for client %q does not parse", a)
 	}
 }
@@ -400,15 +390,6 @@ func TestCacheVolumesBelongToTheirShare(t *testing.T) {
 	}
 	if gotShare != id {
 		t.Errorf("share = %q, want %q, the same share the volume backs", gotShare, id)
-	}
-
-	// The working directory is the commonest share of all and has no hex id.
-	cwd, err := VolumeNameForExport(client, ExportCWD)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, ok := ParseVolumeName(CacheVolumeName(cwd)); !ok {
-		t.Errorf("the cwd share's cache is not recognised: %q", CacheVolumeName(cwd))
 	}
 }
 
