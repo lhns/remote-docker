@@ -206,7 +206,8 @@ jobs:
           # only, so a stop that failed would otherwise pass as a survival.
           .\client\rd.exe run -d --name survivor alpine:3 sleep 600
           if ($LASTEXITCODE -ne 0) { throw "could not start the survivor" }
-          .\client\rd.exe remote machine stop ci
+          # -f, because the survivor is using the session.
+          .\client\rd.exe remote machine stop ci -f
           if ($LASTEXITCODE -ne 0) { throw "machine stop failed" }
           .\client\rd.exe remote machine start ci
           if ($LASTEXITCODE -ne 0) { throw "machine start failed" }

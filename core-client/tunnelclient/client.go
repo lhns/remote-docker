@@ -128,11 +128,20 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 
+	// ClientConfig.Timeout bounds ssh.Dial's connect and nothing here, so a peer
+	// that accepts and never speaks held the handshake forever.
+	_ = conn.SetDeadline(time.Now().Add(cfg.Timeout))
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr(), clientCfg)
+	if !stop() && err == nil {
+		_ = sshConn.Close()
+		err = ctx.Err()
+	}
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("tunnel: connecting to %s@%s: %w", cfg.User, cfg.Addr(), err)
 	}
+	_ = conn.SetDeadline(time.Time{})
 
 	c := &Client{
 		ssh:  ssh.NewClient(sshConn, chans, reqs),

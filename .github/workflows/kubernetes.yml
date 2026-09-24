@@ -319,7 +319,11 @@ jobs:
           # Selected by the environment: --workspace is a flag on `remote`,
           # and the root of this binary is the Docker CLI (ADR 0024).
           export REMOTE_DOCKER_WORKSPACE=k8s
-          "$RUNNER_TEMP/remote-docker" remote status
+          # No session yet, so the verdict is not ready and status exits 1.
+          # The account row is what says the workspace answered.
+          out=$("$RUNNER_TEMP/remote-docker" remote status || true)
+          echo "$out"
+          grep -q "tunnel port" <<<"$out"
 
       # The single command that proves the whole chain: the tunnel, the NFS
       # export, the bind rewriting and the daemon in the pod. The file is

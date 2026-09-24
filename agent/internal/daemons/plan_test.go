@@ -112,7 +112,7 @@ func TestTheDaemonListensWhereTheAgentDials(t *testing.T) {
 	spec := plan(t, "alice", Options{})
 	command := strings.Join(spec.Command, " ")
 
-	if !strings.Contains(command, "unix://"+SocketMount+"/"+SocketName) {
+	if !strings.Contains(command, "unix://"+socketMount+"/"+socketName) {
 		t.Errorf("the daemon does not listen where the agent dials: %s", command)
 	}
 	if !strings.Contains(command, "unix:///var/run/docker.sock") {
@@ -123,7 +123,7 @@ func TestTheDaemonListensWhereTheAgentDials(t *testing.T) {
 	// or the socket the daemon creates is invisible to the agent.
 	var bound bool
 	for _, m := range spec.Mounts {
-		if m.Destination == SocketMount && m.Source == SocketDir+"/alice" {
+		if m.Destination == socketMount && m.Source == SocketDir+"/alice" {
 			bound = true
 		}
 	}
@@ -259,7 +259,7 @@ func TestTheStorageDriverIsInheritedFromTheParent(t *testing.T) {
 // moved on since.
 func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 	spec := plan(t, "alice", Options{StorageDriver: "fuse-overlayfs"})
-	if !slices.Contains(spec.Labels, StorageLabel+"=fuse-overlayfs") {
+	if !slices.Contains(spec.Labels, storageLabel+"=fuse-overlayfs") {
 		t.Errorf("the storage driver was not labelled: %v", spec.Labels)
 	}
 
@@ -268,7 +268,7 @@ func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 	// to say nothing, so the empty value has to be written rather than
 	// omitted, or drift from unset to set could never be detected.
 	plain := plan(t, "alice", Options{})
-	if !slices.Contains(plain.Labels, StorageLabel+"=") {
+	if !slices.Contains(plain.Labels, storageLabel+"=") {
 		t.Errorf("an unset driver was not recorded: %v", plain.Labels)
 	}
 }
@@ -276,7 +276,7 @@ func TestTheStorageDriverIsRecordedOnTheDaemon(t *testing.T) {
 // The entrypoint is set, because the image is the workspace's own and its
 // entrypoint is the agent, so left alone the daemon container would run
 // `remote-dockerd` handed dockerd's flags.
-func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
+func TestTheDaemonRunsDindsEntrypointScript(t *testing.T) {
 	spec := plan(t, "alice", Options{})
 
 	// dind's own entrypoint script, NOT dockerd. The script removes a stale
@@ -288,14 +288,6 @@ func TestTheDaemonRunsDockerdDirectly(t *testing.T) {
 	args := strings.Join(spec.Args(), " ")
 	if !strings.Contains(args, "--entrypoint dockerd-entrypoint.sh") {
 		t.Errorf("the entrypoint never reached the args: %s", args)
-	}
-
-	// The command NAMES dockerd, and the script consumes that word rather than
-	// handing it on: `set -- docker-init -- "$@"` makes it the program tini
-	// runs, not a positional argument. Which listeners that buys is
-	// TestTheCommandNamesDockerdSoNoTCPListenerIsAdded.
-	if len(spec.Command) == 0 || spec.Command[0] != "dockerd" {
-		t.Errorf("Command should name dockerd, got %v", spec.Command)
 	}
 }
 
@@ -340,7 +332,7 @@ func TestTheFingerprintChangesWithTheSpec(t *testing.T) {
 	}
 
 	// And it is stamped ON the daemon, or there is nothing to compare against.
-	if !slices.Contains(base.Labels, SpecLabel+"="+Fingerprint(base)) {
+	if !slices.Contains(base.Labels, specLabel+"="+Fingerprint(base)) {
 		t.Errorf("the fingerprint was not recorded: %v", base.Labels)
 	}
 }

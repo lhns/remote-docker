@@ -15,56 +15,34 @@ type Target struct {
 	Socket string
 
 	// Host is the same daemon as a DOCKER_HOST value, for the shells the agent
-	// hands out and for the times it shells out to the docker binary.
-	//
-	// EMPTY means "whatever docker would use by default", which is what the
-	// shared daemon wants: /var/run/docker.sock is already right, and setting
-	// DOCKER_HOST to it in a login shell would only be noise.
+	// hands out and the docker binary it runs. EMPTY for the shared daemon: the
+	// default socket is already right.
 	Host string
 
 	// NetNSPath is the network namespace to bind reverse tunnels in and dial
-	// published ports from.
-	//
-	// EMPTY means the agent's own, which is where the shared daemon lives. See
-	// netns.Do: the empty path is what lets both modes share one code path.
+	// published ports from. EMPTY is the agent's own; see netns.Do.
 	NetNSPath string
 
-	// Root is this daemon's filesystem as seen from the agent, which is where
-	// a volume mountpoint it reports actually lives. "/" for a daemon sharing
-	// our filesystem; /proc/<pid>/root for one in a container of its own.
-	//
-	// Untrusted input downstream: the daemon reports its own mountpoints and
-	// the account is root inside it. See replay.Relocate.
+	// Root is this daemon's filesystem as seen from the agent, where a volume
+	// mountpoint it reports lives: "/" or /proc/<pid>/root. What it reports is
+	// untrusted, since the account is root inside it; see replay.Relocate.
 	Root string
 
-	// PID is the daemon's process, which is what a mount namespace is entered
-	// through (ADR 0044). ZERO means the agent's own namespace, the same way
-	// an empty NetNSPath does, so both daemon modes stay one code path.
-	//
-	// Distinct from Root, which names the same process and is a path to READ
-	// through. A union is mounted INSIDE that namespace, and /proc/<pid>/root
-	// cannot express that: a mount made there would land in the agent's own
-	// namespace at a path that happens to point into the daemon's.
+	// PID is the process whose mount namespace a union is mounted INSIDE (ADR
+	// 0044), which Root, a path to read through, cannot express. ZERO is the
+	// agent's own.
 	PID int
 }
 
-// Targets resolves an account to its daemon, and is the ONE way that is done.
+// Targets resolves an account to its daemon, and is the ONE way that is done:
+// daemons.Shared (ADR 0012) or a *Manager (ADR 0019), chosen once where the
+// mode is read. Never an `if manager == nil` at a use site; see CLAUDE.md, "An
+// account is resolved to its daemon exactly once".
 //
-// The implementation is chosen once, where the mode is read: daemons.Shared for
-// ADR 0012's single daemon, a *Manager for ADR 0019's one per account. Never
-// reintroduce an `if manager == nil` at a use site. That is the shape a routing
-// mistake hides in, because sending a session to the wrong daemon does not
-// fail: it succeeds, against somebody else's containers, with nothing logged.
-//
-// Two lookups, and the difference between them is load-bearing rather than
-// stylistic:
-//
-//   - Ensure waits, starting the daemon if it is not up. Right for anything
-//     the user is waiting on: a docker command, a shell, a forward.
-//   - Lookup never waits. Right for the answers folded into workspace-info,
-//     which is the client's FIRST round trip: a cold daemon must not turn
-//     every new connection into a boot-length hang for a version string the
-//     client only displays.
+//   - Ensure waits, starting the daemon: anything the user is waiting on.
+//   - Lookup never waits: the answers folded into workspace-info, the client's
+//     FIRST round trip, which a cold daemon must not turn into a boot-length
+//     hang for a version string.
 type Targets interface {
 	Ensure(ctx context.Context, account string) (Target, error)
 	Lookup(ctx context.Context, account string) (Target, bool)
@@ -123,9 +101,7 @@ func Shared(socket string) Targets {
 	return shared{socket: socket}
 }
 
-// The same target for everybody, which is what this mode means. The account is
-// accepted and ignored rather than absent from the signature, so the two modes
-// are the same call.
+// The same target for everybody, which is what this mode means.
 func (s shared) Ensure(_ context.Context, _ string) (Target, error) {
 	return s.target(), nil
 }
@@ -140,10 +116,7 @@ func (shared) Warm(string) {}
 
 func (shared) Mode() string { return workspace.ModeShared }
 
-// Host and NetNSPath are deliberately empty rather than filled in with the
-// equivalent values: empty says no redirection is needed, and it is what a call
-// site branches on where it still must (a login shell gets no DOCKER_HOST
-// rather than a redundant one).
+// Host and NetNSPath empty, meaning no redirection; see Target.
 func (s shared) target() Target {
 	return Target{Socket: s.socket, Root: "/"}
 }

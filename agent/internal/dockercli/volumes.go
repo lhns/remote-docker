@@ -8,48 +8,25 @@ import (
 	"github.com/lhns/remote-docker/core-agent/replay"
 )
 
-// Volumes resolves a managed volume to its mountpoint through the docker CLI,
-// which the workspace image already carries. The agent has no Go Docker client,
-// and adding one to ask a single question would be a large dependency for one
-// `--format` string. The same trade elevate makes.
-//
-// It lives here rather than beside the replayer because it is the only part of
-// replaying that knows Docker exists. What the replayer needs is a name to a
-// directory, which replay.Volumes states and this answers.
+// Volumes answers replay.Volumes: a managed volume's mountpoint, as the agent
+// can reach it. The only part of replaying that knows Docker exists.
 type Volumes struct {
-	// Host is the daemon to ask, as a -H value. Empty means the agent's own,
-	// which is the shared-daemon mode of ADR 0012.
-	//
-	// With a daemon per account (ADR 0019) the volume being replayed into
-	// belongs to that account's daemon and does not exist on any other, so
-	// asking the wrong one does not return a wrong path. It returns no such
-	// volume, which is at least loud.
-	//
-	// A func, and lazy, for the same reason Root is: resolving it eagerly would
-	// mean starting the account's daemon when the notify session OPENS rather
-	// than when it first replays something, turning the client's connect into a
-	// wait for a cold dind. Nil means the agent's own.
+	// Host is the daemon to ask, as a -H value; empty or nil is the agent's
+	// own (ADR 0012). Lazy, so the account's daemon starts when something is
+	// first replayed rather than when the notify session opens.
 	Host func() (string, error)
 
-	// Root maps that daemon's filesystem into ours.
-	//
-	// A per-account daemon reports a mountpoint in ITS OWN filesystem, which
-	// the agent cannot open by that path. /proc/<pid>/root is how the agent
-	// reaches it, and this promotes that route from the fallback ADR 0016
-	// measured to load-bearing.
-	//
-	// A func rather than a string because the pid changes every time the
-	// daemon restarts, and mountpoints are re-resolved often enough for a
-	// captured one to go stale. Nil means the mountpoint is already ours.
+	// Root maps that daemon's filesystem into ours: a per-account daemon
+	// reports a mountpoint in its own, reached through /proc/<pid>/root. A
+	// func because the pid changes on every restart. Nil means ours already.
 	Root func() (string, error)
 }
 
 func (v Volumes) Mountpoint(ctx context.Context, volume string) (string, error) {
 	host, err := call(v.Host)
 	if err != nil {
-		// Same rule as a root that cannot be resolved: refuse rather than fall
-		// back. An empty host is the AGENT's daemon, which exists and holds a
-		// different set of volumes.
+		// Refused rather than falling back to "", which is the AGENT's daemon
+		// and holds a different set of volumes.
 		return "", fmt.Errorf("dockercli: locating the daemon holding volume %s: %w", volume, err)
 	}
 
@@ -83,13 +60,8 @@ func call(fn func() (string, error)) (string, error) {
 }
 
 // RawVolumes answers where a volume's data lives INSIDE the daemon's own
-// filesystem, without relocating it into the agent's.
-//
-// The distinction matters for exactly one caller. A union is mounted in the
-// daemon's mount namespace (ADR 0044), so the layer paths it is given have to
-// mean something THERE; a path relocated through /proc/<pid>/root names nothing
-// inside that namespace. Everything else wants Volumes, which relocates,
-// because everything else reads the files from out here.
+// filesystem, unrelocated, for a union: it is mounted in the daemon's mount
+// namespace (ADR 0044), where a /proc/<pid>/root path names nothing.
 type RawVolumes struct{}
 
 // RawMountpoint asks the daemon at host where a volume's data is.
@@ -98,12 +70,7 @@ func (RawVolumes) RawMountpoint(ctx context.Context, host, volume string) (strin
 }
 
 // MountSources is every host path a running container has bound, on the daemon
-// at host.
-//
-// Asked about unions rather than volumes: a share's union is bound into a
-// container by PATH, so no volume filter can find it, and releasing one that a
-// container still holds breaks that container for good -- a mount that has gone
-// wrong stays wrong until the last container lets go of it.
+// at host: a union is bound by PATH, so no volume filter finds one.
 func (RawVolumes) MountSources(ctx context.Context, host string) (map[string]bool, error) {
 	cli := CLI{Host: host}
 
@@ -115,10 +82,9 @@ func (RawVolumes) MountSources(ctx context.Context, host string) (map[string]boo
 		return map[string]bool{}, nil
 	}
 
-	// A separator inside the template rather than a newline, because whether
-	// docker turns a literal \n in --format into one is a claim about the CLI
-	// that nothing here checks. A mount source is an absolute path, so a
-	// vertical bar cannot appear inside one.
+	// A separator in the template rather than a \n, whose handling by --format
+	// nothing here checks. A path holding a '|' is split, which matters to
+	// nobody: the only sources looked up are union mountpoints, which hold none.
 	args := append([]string{"inspect", "--format", "{{range .Mounts}}{{.Source}}|{{end}}"},
 		strings.Fields(ids)...)
 	out, err := cli.Line(ctx, args...)

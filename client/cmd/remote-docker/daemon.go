@@ -42,7 +42,7 @@ func newStartCommand() *cobra.Command {
 	var foreground bool
 
 	cmd := &cobra.Command{
-		Use:   "start",
+		Use:   "start [name]",
 		Short: "Start the background session for this workspace",
 		Long: `Starts a session in the background and returns, so no terminal has to stay
 open. If one is already running, this says so and does nothing.
@@ -55,8 +55,9 @@ is what the background one runs, so it is also how to watch one work.
 
 The session forwards every request, so set REMOTE_DOCKER_WATCH and
 REMOTE_DOCKER_TRACE here rather than on the docker command you run.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolve(args)
 			if err != nil {
 				return err
 			}
@@ -105,15 +106,18 @@ func waitForExit(pid int, timeout time.Duration) bool {
 }
 
 func newStopCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stop",
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "stop [name]",
 		Short: "Stop the background session for this workspace",
 		Long: `Stops the running session. If none is running, this says so and does nothing.
 
-Stopping drops the file server, and a container holding a directory from it
-loses its filesystem.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
+Refused while anything depends on it: stopping drops the file server, and a
+container holding a directory from it loses its filesystem. -f overrides.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolve(args)
 			if err != nil {
 				return err
 			}
@@ -124,6 +128,9 @@ loses its filesystem.`,
 				_, _ = fmt.Fprintf(out, "not running: %s\n", proxy.DockerHost(endpoint))
 				return nil
 			}
+			if err := refuseInUse(cfg, force, "stopping it takes its file server away", "stop"); err != nil {
+				return err
+			}
 			if err := stopSession(endpoint); err != nil {
 				return err
 			}
@@ -131,6 +138,49 @@ loses its filesystem.`,
 			return nil
 		},
 	}
+	forceFlag(cmd, &force, "stop even if something depends on the session")
+	return cmd
+}
+
+// forceFlag is -f/--force, as docker spells it.
+func forceFlag(cmd *cobra.Command, force *bool, usage string) {
+	cmd.Flags().BoolVarP(force, "force", "f", false, usage)
+}
+
+// refuseInUse refuses to take a workspace's session away while anything
+// depends on it, unless forced: docker's rule for removing something in use.
+//
+// "In use" is the session's own answer, the one its idle release acts on. A
+// session that will not answer cannot be judged, and that is not a reason to
+// break something either. Nothing serving is nothing in use. consequence ends
+// the sentence "the session for X is in use, and ..."; command is ours without
+// the name, and the remedy is it again with -f.
+func refuseInUse(cfg config.Config, force bool, consequence, command string) error {
+	endpoint := endpointOf(cfg)
+	if force || !proxy.Reachable(endpoint) {
+		return nil
+	}
+	if cfg.Name != "" {
+		command += " " + cfg.Name
+	}
+	fix := fmt.Sprintf("  fix: `%s` to go ahead anyway", ourCommand(command+" -f"))
+
+	var idle proxy.Idle
+	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil {
+		return fmt.Errorf("cannot tell whether %s is in use: %s\n%s", sessionOf(cfg), firstLine(err.Error()), fix)
+	}
+	if !idle.Safe {
+		return fmt.Errorf("%s is in use, and %s\n%s", sessionOf(cfg), consequence, fix)
+	}
+	return nil
+}
+
+// sessionOf names a workspace's session in a message.
+func sessionOf(cfg config.Config) string {
+	if cfg.Name == "" {
+		return "the session"
+	}
+	return fmt.Sprintf("the session for %q", cfg.Name)
 }
 
 // stopSession asks the session to stop and returns once its PROCESS has gone.
@@ -312,7 +362,7 @@ func warnVersionMismatch(st proxy.Status) {
 	fmt.Fprintf(os.Stderr,
 		"\nwarning: the running session (pid %d) is %s, and is in use, so it was left alone.\n"+
 			"  fix: `%s` once nothing needs it, or `%s` now\n",
-		st.PID, differentBuild(st), ourCommand("restart"), ourCommand("restart --force"))
+		st.PID, differentBuild(st), ourCommand("restart"), ourCommand("restart -f"))
 }
 
 func orUnknown(v string) string {
@@ -339,14 +389,15 @@ func newRestartCommand() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "restart",
+		Use:   "restart [name]",
 		Short: "Restart the background session for this workspace",
 		Long: `Stops the running session and starts one from this binary.
 
-Refused while anything depends on it. Restarting drops the file server, and a
-container holding a directory from it loses its filesystem. --force overrides.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
+Refused while anything depends on it: restarting drops the file server, and a
+container holding a directory from it loses its filesystem. -f overrides.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolve(args)
 			if err != nil {
 				return err
 			}
@@ -364,17 +415,8 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 				return nil
 			}
 
-			if !force {
-				var idle proxy.Idle
-				if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil {
-					return fmt.Errorf("cannot tell whether the running session is in use: %w\n"+
-						"  fix: `%s` to restart anyway", err, ourCommand("restart --force"))
-				}
-				if !idle.Safe {
-					return fmt.Errorf("the running session is in use, and restarting takes its "+
-						"file server away from whatever is using it\n"+
-						"  fix: `%s` to restart anyway", ourCommand("restart --force"))
-				}
+			if err := refuseInUse(cfg, force, "restarting it takes its file server away", "restart"); err != nil {
+				return err
 			}
 
 			if err := restartDaemon(cfg, endpoint); err != nil {
@@ -384,7 +426,7 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "restart even if something depends on the session")
+	forceFlag(cmd, &force, "restart even if something depends on the session")
 	return cmd
 }
 

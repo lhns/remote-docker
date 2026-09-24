@@ -121,9 +121,37 @@ func TestAMissingDaemonIsIdle(t *testing.T) {
 	}
 }
 
+// What `daemons reset` asks before removing anything.
+func TestRunningAndExists(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		f       fakeDocker
+		running int
+		exists  bool
+	}{
+		{"missing", fakeDocker{unreachable: true}, 0, false},
+		{"stopped", fakeDocker{state: "exited", unreachable: true}, 0, true},
+		{"empty", fakeDocker{state: "running"}, 0, true},
+		{"busy", fakeDocker{state: "running", running: "abc\ndef"}, 2, true},
+		{"silent", fakeDocker{state: "running", unreachable: true}, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manager(tc.f)
+			if got := m.Running(context.Background(), "alice"); got != tc.running {
+				t.Errorf("Running = %d, want %d", got, tc.running)
+			}
+			if got := m.Exists(context.Background(), "alice"); got != tc.exists {
+				t.Errorf("Exists = %v, want %v", got, tc.exists)
+			}
+		})
+	}
+}
+
 // In shared mode nothing routes to a per-account daemon, so one left running by
 // a previous per-account run is stopped. Never removed: the container is
 // somebody's daemon and the volume behind it is their images and containers.
+// bob's restarting daemon is the case this exists for: it crash-loops forever
+// in a mode that never sends it a session, and nothing else would stop it.
 func TestStopStraysStopsRunningDaemonsAndRemovesNothing(t *testing.T) {
 	var ran []string
 	rows := strings.Join([]string{
@@ -149,16 +177,6 @@ func TestStopStraysStopsRunningDaemonsAndRemovesNothing(t *testing.T) {
 		if strings.HasPrefix(cmd, "rm") {
 			t.Errorf("a daemon was removed rather than stopped: %q", cmd)
 		}
-	}
-}
-
-// A crash-looping daemon is the case this exists for: it restarts forever in a
-// mode that never sends it a session, and nothing else would stop it.
-func TestStopStraysStopsACrashLoopingDaemon(t *testing.T) {
-	m := manager(fakeDocker{listing: `{"Labels":"remote-docker.account=alice","State":"restarting"}`})
-
-	if n, err := m.StopStrays(context.Background()); err != nil || n != 1 {
-		t.Fatalf("StopStrays = %d, %v; want 1, nil", n, err)
 	}
 }
 

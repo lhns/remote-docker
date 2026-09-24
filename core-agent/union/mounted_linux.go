@@ -4,21 +4,13 @@ package union
 
 import "golang.org/x/sys/unix"
 
-// mountedAt reports whether anything is mounted at path, by asking whether the
-// path and its parent are on the same device.
+// mountedAt reports whether anything is mounted at path: whether it is on a
+// different device from its parent. That answers from outside the owning
+// namespace too, through /proc/<pid>/root (test/union-probe.sh section 12).
 //
-// Cheaper and more direct than parsing mountinfo, and it answers from OUTSIDE
-// the namespace that owns the mount as well as inside it: measured through
-// /proc/<pid>/root on 2026-09-01, an unmounted directory shares its parent's
-// device and a mounted one does not (test/union-probe.sh section 12).
-//
-// Not a stat, and the distinction is load-bearing. A union's directories are
-// created before it is mounted and outlive it, so "the path exists" is true of
-// a share that never mounted and of one whose server has died. Both then read
-// as serving: the workspace declares the share ready, a container binds an
-// ordinary empty directory, and the agent writes the cache into it. That is how
-// a lower which could not mount at all went unnoticed while its child
-// crash-looped every two seconds.
+// Never "the path exists": a union's directories outlive it, so a stat calls a
+// union that never mounted serving, and the container binds an empty directory
+// (CLAUDE.md, "A union that never mounted looks exactly like one that did").
 func mountedAt(path string) bool {
 	var here, up unix.Stat_t
 	if err := unix.Lstat(path, &here); err != nil {

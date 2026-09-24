@@ -106,11 +106,7 @@ func logger() *slog.Logger { return logx.Logger(os.Stderr, "  ", false) }
 
 // withQuerySession opens a session.Query session, which takes neither the
 // endpoint nor the reverse-tunnel port, so it works beside a running session.
-func withQuerySession(fn func(ctx context.Context, s *session.Session) error) error {
-	cfg, err := resolve()
-	if err != nil {
-		return err
-	}
+func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session.Session) error) error {
 	if err := requireHost(cfg); err != nil {
 		return err
 	}

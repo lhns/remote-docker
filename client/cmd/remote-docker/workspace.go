@@ -10,7 +10,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core/workspace"
-	"github.com/lhns/remote-docker/machine"
 )
 
 // The workspaces in ~/.remote-docker.json, each with a docker context written
@@ -101,18 +100,20 @@ func newWorkspaceCreateCommand() *cobra.Command {
 }
 
 func newWorkspaceRemoveCommand() *cobra.Command {
-	var keepContext, keepMachine bool
+	var keepContext, keepMachine, force bool
 
 	cmd := &cobra.Command{
 		Use:     "rm <name>",
 		Aliases: []string{"remove"},
 		Short:   "Remove a workspace and its docker context",
-		Long: `Removes the workspace from this machine's configuration, and the docker
-context remote-docker created for it.
+		Long: `Stops the workspace's background session, then removes the workspace from
+this machine's configuration and the docker context remote-docker created for
+it.
 
 A workspace made by "remote machine create" has its machine destroyed too,
 with the images, containers and volumes inside it. Your files are not in it.
---keep-machine leaves the machine running.`,
+--keep-machine leaves the machine running. Removing one is refused while its
+session is in use; -f overrides.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -120,22 +121,36 @@ with the images, containers and volumes inside it. Your files are not in it.
 			if err != nil {
 				return err
 			}
+			ws, ok := file.Workspaces[name]
+			if !ok {
+				return noWorkspaceNamed(name)
+			}
 
 			// Before removal: the context name derives from the entry.
-			cfg, cfgErr := config.Resolve(config.Overrides{Workspace: name}, "")
+			cfg, cfgErr := resolve(args)
 
 			// Destroyed before the entry goes: the entry is the only record the
 			// machine exists, so a failure must leave it to retry from.
-			machine := file.Workspaces[name].Machine
+			machine := ws.Machine
+			if machine != nil && cfgErr == nil {
+				consequence := "removing it destroys its machine"
+				if keepMachine {
+					consequence = "removing it takes its file server away"
+				}
+				if err := refuseInUse(cfg, force, consequence, "rm"); err != nil {
+					return err
+				}
+			}
+			// As `machine stop` does: a session left serving answers for a
+			// workspace that is gone.
+			stopSessionFor(cmd, name)
 			if machine != nil && !keepMachine {
 				if err := destroyMachine(cmd, machine); err != nil {
 					return err
 				}
 			}
 
-			if !file.Remove(name) {
-				return noWorkspaceNamed(name)
-			}
+			file.Remove(name)
 			if err := config.Save(file, ""); err != nil {
 				return err
 			}
@@ -156,13 +171,14 @@ with the images, containers and volumes inside it. Your files are not in it.
 	cmd.Flags().BoolVar(&keepContext, "keep-context", false, "leave the docker context in place")
 	cmd.Flags().BoolVar(&keepMachine, "keep-machine", false,
 		"leave the local machine running instead of destroying it")
+	forceFlag(cmd, &force, "remove a machine-backed workspace even if its session is in use")
 	return cmd
 }
 
 // destroyMachine destroys a workspace's machine. An unknown backend is an
 // error, so `rm` refuses rather than orphaning a running machine.
 func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
-	backend, err := machine.Find(m.Backend)
+	backend, err := findBackend(m.Backend)
 	if err != nil {
 		return fmt.Errorf("cannot destroy the %s machine %q: %w", m.Backend, m.Name, err)
 	}
@@ -339,13 +355,7 @@ func newWorkspaceInspectCommand() *cobra.Command {
 		Short: "Show a workspace's settings, endpoint and docker context",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// The positional name, else --workspace, as every other command
-			// resolves one.
-			o := overrides
-			if len(args) == 1 {
-				o.Workspace = args[0]
-			}
-			cfg, err := config.Resolve(o, "")
+			cfg, err := resolve(args)
 			if err != nil {
 				return err
 			}

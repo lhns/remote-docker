@@ -13,15 +13,15 @@ import (
 	"strings"
 )
 
-// ElevatedEnv marks a container as already elevated.
+// elevatedEnv marks a container as already elevated.
 //
 // Without it a misconfiguration, the child somehow starting with the elevate
 // command again, would fork containers until the node fell over. The guard
 // costs one environment variable.
-const ElevatedEnv = "WORKSPACE_ELEVATED"
+const elevatedEnv = "WORKSPACE_ELEVATED"
 
-// NameSuffix is appended to our own container name to name the child.
-const NameSuffix = ".elevated"
+// nameSuffix is appended to our own container name to name the child.
+const nameSuffix = ".elevated"
 
 // ImageEnv names the workspace's own image, passed to the child.
 //
@@ -47,9 +47,8 @@ type Mount struct {
 	ReadOnly    bool
 }
 
-// Arg renders the mount as a -v value. Exported because agent/internal/daemons
-// mounts into its own containers too.
-func (m Mount) Arg() string {
+// arg renders the mount as a -v value.
+func (m Mount) arg() string {
 	source := m.Source
 	if m.Type == "volume" && m.Name != "" {
 		source = m.Name
@@ -134,7 +133,7 @@ func (s RunSpec) Args() []string {
 		args = append(args, "-e", e)
 	}
 	for _, m := range s.Mounts {
-		args = append(args, "-v", m.Arg())
+		args = append(args, "-v", m.arg())
 	}
 	for _, t := range s.Tmpfs {
 		args = append(args, "--tmpfs", t)
@@ -169,7 +168,7 @@ func Plan(self ContainerInfo, opts Options) (RunSpec, error) {
 	if isElevated(self.Env) {
 		return RunSpec{}, fmt.Errorf(
 			"elevate: this container is already elevated (%s is set); "+
-				"elevating again would fork containers indefinitely", ElevatedEnv)
+				"elevating again would fork containers indefinitely", elevatedEnv)
 	}
 
 	hostSocket := opts.HostSocket
@@ -241,12 +240,12 @@ func childEnv(env []string, image string) []string {
 		out = append(out, ImageEnv+"="+image)
 	}
 	for _, e := range env {
-		if strings.HasPrefix(e, ElevatedEnv+"=") {
+		if strings.HasPrefix(e, elevatedEnv+"=") {
 			continue
 		}
 		out = append(out, e)
 	}
-	return append(out, ElevatedEnv+"=1")
+	return append(out, elevatedEnv+"=1")
 }
 
 // childName derives the child's name from ours. Docker reports container names
@@ -256,12 +255,12 @@ func childName(name string) string {
 	if name == "" {
 		return ""
 	}
-	return name + NameSuffix
+	return name + nameSuffix
 }
 
 func isElevated(env []string) bool {
 	for _, e := range env {
-		if name, value, ok := strings.Cut(e, "="); ok && name == ElevatedEnv && value != "" {
+		if name, value, ok := strings.Cut(e, "="); ok && name == elevatedEnv && value != "" {
 			return true
 		}
 	}

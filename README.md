@@ -271,15 +271,20 @@ Everything that is ours lives under `remote`:
 | `remote-docker remote start` | start a background session and return |
 | `remote-docker remote start --foreground` | run it in this terminal instead |
 | `remote-docker remote stop` | stop it |
-| `remote-docker remote restart` | stop and start, refusing while something depends on it |
-| `remote-docker remote status` | is it working, and what is it talking to |
+| `remote-docker remote restart` | stop and start |
+| `remote-docker remote status` | is it working, and what is it talking to; exits 1 when not ready |
 | `remote-docker remote gc` | remove share volumes nothing is using |
 | `remote-docker remote version` | |
 | `remote-docker remote create <name> --host …` | add a workspace and its docker context |
-| `remote-docker remote rm <name>` | remove both again |
+| `remote-docker remote rm <name>` | stop its session and remove both again |
 | `remote-docker remote ls` | list them |
 | `remote-docker remote use <name>` | make it the default here, and docker's current context |
 | `remote-docker remote inspect [name]` | settings, endpoint, context, whether a session is up |
+
+A command about one workspace takes its name as an argument, else
+`--workspace`, else the default. `stop`, `restart`, `machine stop`,
+`machine rebuild` and `rm` of a machine refuse while the session is in use,
+as `docker rm` refuses a running container; `-f` goes ahead.
 
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
@@ -839,7 +844,7 @@ Operator commands, on the workspace:
 | `remote-dockerd elevate` | the Swarm entry point |
 | `remote-dockerd healthcheck` | is this workspace serving? Both deployments use it |
 | `remote-dockerd daemons ls` | which accounts have a daemon |
-| `remote-dockerd daemons reset <account> [--purge]` | rebuild one; `--purge` discards its images |
+| `remote-dockerd daemons reset <account> [--purge] [-f]` | rebuild one; `--purge` discards its images; `-f` while it runs containers |
 
 ### The storage driver, worth getting right once
 
@@ -966,7 +971,7 @@ agent says so and leaves it. Deciding is a command:
 
 ```bash
 docker exec <workspace> remote-dockerd daemons ls
-docker exec <workspace> remote-dockerd daemons reset alice           # rebuild it
+docker exec <workspace> remote-dockerd daemons reset alice           # rebuild it; -f if it runs containers
 docker exec <workspace> remote-dockerd daemons reset --all --purge   # and discard images
 ```
 

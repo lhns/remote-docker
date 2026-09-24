@@ -31,7 +31,12 @@ Nothing is installed. The machine is the workspace image's filesystem, and
 changing versions replaces it rather than upgrading it, so there is no
 half-finished state to be in. "rebuild" is the ordinary path run again, and it
 discards what is inside the machine: images and containers, never your files,
-which live here and are served to it.`,
+which live here and are served to it.
+
+"remote rm <name>" removes a machine along with its workspace.
+
+Every command but create takes a workspace name, else --workspace, else the
+default.`,
 		Args: onlySubcommands,
 		RunE: helpWhenBare,
 	}
@@ -152,9 +157,10 @@ is not a thing a create command should decide.`,
 
 func newMachineRebuildCommand() *cobra.Command {
 	var opts machineOptions
+	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "rebuild <name>",
+		Use:   "rebuild [name]",
 		Short: "Destroy and recreate the machine",
 		Long: `Destroys the machine and builds it again from the same settings.
 
@@ -163,15 +169,47 @@ special mode: the machine is defined entirely by its configuration, so there is
 nothing to repair in place.
 
 Images, containers and volumes INSIDE the machine are lost. Your files are not:
-they are on this machine and are served to it.`,
-		Args: cobra.ExactArgs(1),
+they are on this machine and are served to it. Refused while the workspace's
+session is in use; -f overrides.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0], recordedWorkspace(args[0])), true)
+			name, err := machineName(args)
+			if err != nil {
+				return err
+			}
+			// A name nothing is configured under has no session to ask.
+			if cfg, err := resolve([]string{name}); err == nil {
+				if err := refuseInUse(cfg, force, "rebuilding destroys its machine", "machine rebuild"); err != nil {
+					return err
+				}
+			}
+			return createMachine(cmd, name, opts.spec(name, recordedWorkspace(name)), true)
 		},
 	}
 	opts.install(cmd)
+	forceFlag(cmd, &force, "rebuild even if the workspace's session is in use")
 	return cmd
 }
+
+// machineName is the workspace a machine command is about: its [name], else
+// --workspace, else the default. A name given is taken as it stands, so
+// `rebuild` can still reach a machine whose workspace entry is gone.
+func machineName(args []string) (string, error) {
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	cfg, err := resolve(nil)
+	if err != nil {
+		return "", err
+	}
+	if cfg.Name == "" {
+		return "", fmt.Errorf("%w\n  fix: `%s`", config.ErrNoWorkspace, ourCommand("machine create <name>"))
+	}
+	return cfg.Name, nil
+}
+
+// findBackend is machine.Find, replaced in tests.
+var findBackend = machine.Find
 
 // stopSessionFor stops the workspace's background session, if one is serving.
 // Best effort, but every failure is reported: a surviving session makes the
@@ -181,11 +219,14 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
 	}
 
-	endpoint, err := sessionEndpointFor(name)
+	cfg, err := resolve([]string{name})
 	if err != nil {
 		warn("cannot tell which endpoint %q uses, so a session may still be serving it: %v", name, err)
 		return
 	}
+	endpoint := endpointOf(cfg)
+	// Reachable is a plain dial, so a session that has bound its endpoint
+	// answers it; `machine start` relies on that to close the race with `stop`.
 	if !proxy.Reachable(endpoint) {
 		return
 	}
@@ -194,19 +235,6 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 		return
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
-}
-
-// sessionEndpointFor is where the session for a NAMED workspace serves. The
-// name goes in the overrides (Resolve's second argument is a file path), and the
-// other overrides such as --endpoint are kept.
-func sessionEndpointFor(name string) (string, error) {
-	o := overrides
-	o.Workspace = name
-	cfg, err := config.Resolve(o, "")
-	if err != nil {
-		return "", err
-	}
-	return endpointOf(cfg), nil
 }
 
 // unproven names the backends never executed, which warn rather than refuse.
@@ -218,7 +246,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
 
-	backend, err := machine.Find(spec.Backend)
+	backend, err := findBackend(spec.Backend)
 	if err != nil {
 		return err
 	}
@@ -363,19 +391,19 @@ func enrolledPublicKey() (string, error) {
 
 func newMachineStartCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "start <name>",
+		Use:   "start [name]",
 		Short: "Start the machine",
 		Long: `Starts the machine and returns once its agent is listening.
 
 A background session serving this workspace is stopped first, because it holds
 a connection to the machine's previous address.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, _ machine.Backend, ws config.Workspace) error {
+			return withMachine(cmd, args, func(ctx context.Context, _ machine.Backend, name string, ws config.Workspace) error {
 				// Any session here predates the boot and holds the old
 				// address. Also catches one `stop` missed while it was still
 				// binding its endpoint.
-				stopSessionFor(cmd, args[0])
+				stopSessionFor(cmd, name)
 
 				// Held while waiting: an empty WSL machine shuts down again.
 				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
@@ -388,7 +416,7 @@ a connection to the machine's previous address.`,
 				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
 					return err
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", ws.Machine.Name)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", name)
 				return nil
 			})
 		},
@@ -396,36 +424,46 @@ a connection to the machine's previous address.`,
 }
 
 func newMachineStopCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stop <name>",
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "stop [name]",
 		Short: "Stop the machine",
 		Long: `Stops the background session serving this workspace, then the machine.
 
-Its containers stop with it. Images, containers and volumes are kept.`,
-		Args: cobra.ExactArgs(1),
+Its containers stop with it. Images, containers and volumes are kept. Refused
+while the session is in use; -f overrides.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
-				m := ws.Machine
+			return withMachine(cmd, args, func(ctx context.Context, b machine.Backend, name string, ws config.Workspace) error {
+				if cfg, err := resolve([]string{name}); err == nil {
+					if err := refuseInUse(cfg, force, "stopping the machine stops its containers", "machine stop"); err != nil {
+						return err
+					}
+				}
 				// The session first: it holds the machine open.
-				stopSessionFor(cmd, args[0])
+				stopSessionFor(cmd, name)
 
-				if err := b.Stop(ctx, m.Name); err != nil {
+				if err := b.Stop(ctx, ws.Machine.Name); err != nil {
 					return err
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "stopped %q\n", m.Name)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "stopped %q\n", name)
 				return nil
 			})
 		},
 	}
+	forceFlag(cmd, &force, "stop even if the workspace's session is in use")
+	return cmd
 }
 
 func newMachineStatusCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status <name>",
+		Use:   "status [name]",
 		Short: "Show whether the machine exists, runs, and matches its settings",
-		Args:  cobra.ExactArgs(1),
+		Long:  `Exits 1 when the machine is not running.`,
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
+			return withMachine(cmd, args, func(ctx context.Context, b machine.Backend, _ string, ws config.Workspace) error {
 				m := ws.Machine
 				observed, err := b.Inspect(ctx, m.Name)
 				if err != nil {
@@ -435,6 +473,9 @@ func newMachineStatusCommand() *cobra.Command {
 				row(out, "machine", fmt.Sprintf("%s (%s)", m.Name, m.Backend))
 				row(out, "state", observed.State.String())
 				reportGeneration(out, m, observed)
+				if observed.State != machine.Running {
+					return errNotReady
+				}
 				return nil
 			})
 		},
@@ -454,8 +495,13 @@ func reportGeneration(out io.Writer, m *config.Machine, observed machine.Observe
 	}
 }
 
-// withMachine looks up a workspace's machine and hands it to fn.
-func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machine.Backend, config.Workspace) error) error {
+// withMachine looks up the machine behind the workspace args name (see
+// machineName), and hands it to fn with that name.
+func withMachine(cmd *cobra.Command, args []string, fn func(context.Context, machine.Backend, string, config.Workspace) error) error {
+	name, err := machineName(args)
+	if err != nil {
+		return err
+	}
 	file, err := config.Load("")
 	if err != nil {
 		return err
@@ -469,9 +515,9 @@ func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machi
 			"  fix: these commands manage machines created with `%s`",
 			name, ourCommand("machine create <name>"))
 	}
-	backend, err := machine.Find(ws.Machine.Backend)
+	backend, err := findBackend(ws.Machine.Backend)
 	if err != nil {
 		return err
 	}
-	return fn(cmd.Context(), backend, ws)
+	return fn(cmd.Context(), backend, name, ws)
 }
