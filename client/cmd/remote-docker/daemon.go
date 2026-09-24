@@ -52,7 +52,7 @@ func newStartCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start a session for this workspace",
+		Short: "Start the background session for this workspace",
 		Long: `Starts a session in the background and returns, so no terminal has to stay
 open. If one is already running, this says so and does nothing.
 
@@ -69,7 +69,7 @@ REMOTE_DOCKER_TRACE here rather than on the docker command you run.`,
 			if err != nil {
 				return err
 			}
-			if err := cfg.RequireHost(); err != nil {
+			if err := requireHost(cfg); err != nil {
 				return err
 			}
 			endpoint := endpointOf(cfg)
@@ -123,6 +123,10 @@ func newStopCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the background session for this workspace",
+		Long: `Stops the running session. If none is running, this says so and does nothing.
+
+Stopping drops the file server, and a container holding a directory from it
+loses its filesystem.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolve()
 			if err != nil {
@@ -132,13 +136,13 @@ func newStopCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 
 			if !proxy.Reachable(endpoint) {
-				_, _ = fmt.Fprintln(out, "not running")
+				_, _ = fmt.Fprintf(out, "not running: %s\n", proxy.DockerHost(endpoint))
 				return nil
 			}
 			if err := stopSession(endpoint); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(out, "stopped")
+			_, _ = fmt.Fprintf(out, "stopped: %s\n", proxy.DockerHost(endpoint))
 			return nil
 		},
 	}
@@ -313,7 +317,7 @@ func control(endpoint, method, path string, out any) error {
 // it is, because the command about to run will work.
 func ensureDaemon(cfg config.Config, endpoint string) error {
 	if !proxy.Reachable(endpoint) {
-		if err := cfg.RequireHost(); err != nil {
+		if err := requireHost(cfg); err != nil {
 			return err
 		}
 		return startDaemon(cfg, endpoint)
@@ -372,8 +376,8 @@ func differentBuild(st proxy.Status) string {
 func warnVersionMismatch(st proxy.Status) {
 	fmt.Fprintf(os.Stderr,
 		"\nwarning: the running session (pid %d) is %s, and is in use, so it was left alone.\n"+
-			"  fix: `%s` once nothing needs it, or `restart --force` now\n",
-		st.PID, differentBuild(st), ourCommand("restart"))
+			"  fix: `%s` once nothing needs it, or `%s` now\n",
+		st.PID, differentBuild(st), ourCommand("restart"), ourCommand("restart --force"))
 }
 
 func orUnknown(v string) string {
@@ -415,7 +419,7 @@ container holding a directory from it loses its filesystem. --force overrides.`,
 			if err != nil {
 				return err
 			}
-			if err := cfg.RequireHost(); err != nil {
+			if err := requireHost(cfg); err != nil {
 				return err
 			}
 			endpoint := endpointOf(cfg)

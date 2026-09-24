@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,15 +132,8 @@ func TestRequireHost(t *testing.T) {
 		t.Errorf("a configured host was rejected: %v", err)
 	}
 
-	err := (Config{User: "alice"}).RequireHost()
-	if err == nil {
-		t.Fatal("a missing host was accepted")
-	}
-	// The message has to say how to fix it, not just that it is wrong.
-	for _, want := range []string{EnvHost, "--host", "alice"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
-		}
+	if err := (Config{User: "alice"}).RequireHost(); !errors.Is(err, ErrNoWorkspace) {
+		t.Fatalf("a missing host answered %v, want ErrNoWorkspace", err)
 	}
 }
 

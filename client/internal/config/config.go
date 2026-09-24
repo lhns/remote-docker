@@ -638,14 +638,14 @@ func (c Config) ContextName() string {
 	return sanitizeUser(c.Name)
 }
 
-// RequireHost reports a usable error when no workspace is configured.
+// ErrNoWorkspace is RequireHost's answer. Its remedy names one of our
+// commands, which only the caller can spell, so the caller adds it.
+var ErrNoWorkspace = errors.New("no workspace configured")
+
+// RequireHost reports ErrNoWorkspace when no workspace is configured.
 func (c Config) RequireHost() error {
 	if c.Host == "" {
-		return fmt.Errorf(
-			"no workspace configured.\n"+
-				"Set %s, pass --host, or write %s:\n"+
-				"    {\"host\": \"workspace.example\", \"port\": %d, \"user\": %q}",
-			EnvHost, DefaultPath(), DefaultSSHPort, c.User)
+		return ErrNoWorkspace
 	}
 	return nil
 }
