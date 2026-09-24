@@ -94,7 +94,7 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 }
 
 // reconcileShares periodically resyncs the watcher, covering shares registered
-// without notifying it, such as the working directory.
+// without notifying it, such as a share restored from the record.
 func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()

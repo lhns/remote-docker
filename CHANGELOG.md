@@ -20,6 +20,10 @@ software.
   the flag.
 - `remote status` exits 1 when its verdict is not ready, and `machine status`
   when the machine is not running. The output is unchanged.
+- The working directory is a share like any other, with a volume named from its
+  path, and nothing serves `rd-<client>-cwd` volumes any more. A container
+  created from one mounts nothing until it is recreated once, as for any stale
+  volume, and `remote gc` then removes the old volume.
 
 ### Changed
 

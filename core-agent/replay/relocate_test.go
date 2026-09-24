@@ -10,12 +10,12 @@ import (
 // cannot open by that path. The root is how it reaches it, and this is the
 // whole of what changes for the replayer (ADR 0019).
 func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
-	got, err := Relocate("/var/lib/docker/volumes/rd-cwd/_data",
+	got, err := Relocate("/var/lib/docker/volumes/rd-1111111111111111/_data",
 		func() (string, error) { return "/proc/42/root", nil })
 	if err != nil {
 		t.Fatalf("relocate: %v", err)
 	}
-	if want := "/proc/42/root/var/lib/docker/volumes/rd-cwd/_data"; got != want {
+	if want := "/proc/42/root/var/lib/docker/volumes/rd-1111111111111111/_data"; got != want {
 		t.Errorf("relocate = %q, want %q", got, want)
 	}
 }
@@ -30,7 +30,7 @@ func TestRelocateMapsAMountpointIntoTheDaemonsRoot(t *testing.T) {
 // asserted the value "/" without ever passing it through the code that reads
 // it, which is a test agreeing with a bug rather than catching it.
 func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
-	const mp = "/var/lib/docker/volumes/rd-cwd/_data"
+	const mp = "/var/lib/docker/volumes/rd-1111111111111111/_data"
 
 	for _, root := range []func() (string, error){
 		nil,
@@ -50,7 +50,7 @@ func TestRelocateLeavesOurOwnPathsAlone(t *testing.T) {
 func TestRelocateFailsRatherThanFallingBack(t *testing.T) {
 	boom := errors.New("no such daemon")
 
-	got, err := Relocate("/var/lib/docker/volumes/rd-cwd/_data",
+	got, err := Relocate("/var/lib/docker/volumes/rd-1111111111111111/_data",
 		func() (string, error) { return "", boom })
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want it to carry the cause", err)

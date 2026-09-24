@@ -23,7 +23,7 @@ func TestPerRPCCostDoesNotGrowWithTheHandleCache(t *testing.T) {
 		measure = "bytes allocated per FromHandle"
 	)
 
-	share := cwdShare(t, t.TempDir())
+	share := dirShare(t, t.TempDir())
 	srv := New(NewRegistry(DefaultAttrs), nil)
 
 	// A handle deep enough to have ancestors, which is what the refresh walks.
@@ -65,7 +65,7 @@ func TestPerRPCCostDoesNotGrowWithTheHandleCache(t *testing.T) {
 func TestAnAncestorIsNotEvictedWhileAChildIsInUse(t *testing.T) {
 	const limit = 64
 
-	share := cwdShare(t, t.TempDir())
+	share := dirShare(t, t.TempDir())
 	srv := newServer(NewRegistry(DefaultAttrs), nil, limit)
 
 	deep := []string{"a", "b", "c", "file"}
@@ -100,7 +100,7 @@ func TestAnAncestorIsNotEvictedWhileAChildIsInUse(t *testing.T) {
 func BenchmarkFromHandle(b *testing.B) {
 	for _, cached := range []int{100, 1_000, 10_000, 50_000} {
 		b.Run(fmt.Sprint(cached), func(b *testing.B) {
-			share := cwdShare(b, b.TempDir())
+			share := dirShare(b, b.TempDir())
 			srv := New(NewRegistry(DefaultAttrs), nil)
 			fh := srv.handler.ToHandle(share.fs, []string{"a", "b", "c", "file"})
 			fillTo(b, srv, share, cached)

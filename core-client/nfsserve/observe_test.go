@@ -46,10 +46,10 @@ func TestReadsAreReportedByShareAndPath(t *testing.T) {
 	log := &readLog{}
 	r := NewRegistry(DefaultAttrs)
 	r.OnRead = log.observe
-	if _, err := r.RegisterCWD(dir); err != nil {
+	if _, err := r.Register(dir); err != nil {
 		t.Fatal(err)
 	}
-	share, _, ok := r.Lookup("/cwd")
+	share, _, ok := r.Lookup(exportOf(dir))
 	if !ok {
 		t.Fatal("share not registered")
 	}
@@ -63,7 +63,7 @@ func TestReadsAreReportedByShareAndPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if got := log.get("/cwd", "/pkg/f.go"); got != int64(len(body)) {
+	if got := log.get(exportOf(dir), "/pkg/f.go"); got != int64(len(body)) {
 		t.Errorf("read of pkg/f.go reported %d bytes, want %d", got, len(body))
 	}
 
@@ -82,7 +82,7 @@ func TestReadsAreReportedByShareAndPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if got := log.get("/cwd", "/pkg/f.go"); got != int64(len(body))+4 {
+	if got := log.get(exportOf(dir), "/pkg/f.go"); got != int64(len(body))+4 {
 		t.Errorf("after a 4-byte ReadAt from a chroot, total is %d, want %d", got, len(body)+4)
 	}
 }
@@ -94,7 +94,7 @@ func TestNoObserverIsNoCost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	share := cwdShare(t, dir)
+	share := dirShare(t, dir)
 	f, err := share.fs.Open("a")
 	if err != nil {
 		t.Fatal(err)

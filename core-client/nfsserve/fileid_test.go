@@ -19,7 +19,7 @@ import (
 // handle it could not resolve.
 func TestFileIDIsStableHoweverTheFileIsReached(t *testing.T) {
 	dir := t.TempDir()
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	f, err := target.OpenFile("p2", 0o644)
 	if err != nil {
@@ -84,7 +84,7 @@ func TestFileIDSurvivesADifferentSpellingOfThePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share := cwdShare(t, dir)
+	share := dirShare(t, dir)
 
 	// Asserted on every platform, deliberately. Unix has the inode and Windows
 	// has NTFS's File Reference Number, so there is no platform this project

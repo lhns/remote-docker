@@ -42,9 +42,9 @@ func TestAttachReconcilesDeletionsWithPrefetchOff(t *testing.T) {
 	store := &fakeStore{}
 	c := cacheWith(t, store)
 	c.Policy = PolicyOff
-	c.Record = &fakeRecord{filled: map[string][]string{"/cwd": {"kept.go", "gone.go"}}}
+	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"kept.go", "gone.go"}}}
 
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 
 	eventually(t, "the deleted file to be dropped", func() bool {
 		store.mu.Lock()
@@ -64,7 +64,7 @@ func deletedWhileAway(t *testing.T, record Record, root, file string) {
 	c := cacheWith(t, store)
 	c.Policy = PolicyOff
 	c.Record = record
-	c.Attach("/cwd", root, ShareOptions{})
+	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
 	eventually(t, "/"+file+" to be dropped from the cache", func() bool {
 		store.mu.Lock()
@@ -82,12 +82,12 @@ func TestAnInvalidationBatchIsRecorded(t *testing.T) {
 	c := cacheWith(t, store)
 	c.Policy = PolicyOff
 	c.Record = record
-	c.Attach("/cwd", root, ShareOptions{})
+	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
 	if err := os.WriteFile(filepath.Join(root, "new.go"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	c.Observe(Event{Share: "/cwd", Path: "/new.go", Op: OpCreate})
+	c.Observe(Event{Share: "/m/1111111111111111", Path: "/new.go", Op: OpCreate})
 	eventually(t, "the new file to reach the cache", func() bool { return store.appliedCount() == 1 })
 
 	deletedWhileAway(t, record, root, "new.go")
@@ -101,7 +101,7 @@ func TestAnInterruptedPrefetchIsRecorded(t *testing.T) {
 	c, root := treeCache(t, store)
 	c.Policy = PolicyEager
 	c.Record = record
-	c.Attach("/cwd", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
 	eventually(t, "the prefetch to fail", func() bool {
 		r := c.Reports()
 		return len(r) == 1 && r[0].Done && r[0].Err != nil
@@ -127,10 +127,10 @@ func TestWriteBackRefusesARecordedFileDeletedHere(t *testing.T) {
 	}
 	c := cacheWith(t, store)
 	c.Policy = PolicyOff
-	c.Record = &fakeRecord{filled: map[string][]string{"/cwd": {"/stale.go"}}}
-	c.Attach("/cwd", root, ShareOptions{})
+	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"/stale.go"}}}
+	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
-	c.writeBackShare(t.Context(), "/cwd")
+	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
 	if _, err := os.Stat(filepath.Join(root, "stale.go")); err == nil {
 		t.Error("a file deleted here was brought back from the cache")

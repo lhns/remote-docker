@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/user"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -121,10 +120,6 @@ func (s *shareStore) usable(rec shareRecord) bool {
 	if rec.Export == "" || rec.Path == "" {
 		return false
 	}
-	// /cwd is never restored: the session registers it from where it runs.
-	if !strings.HasPrefix(rec.Export, workspace.ExportMountPrefix) {
-		return false
-	}
 	if rec.Export != workspace.ExportPathForID(workspace.ShareID(rec.Path)) {
 		return false
 	}
@@ -137,7 +132,7 @@ func (s *shareStore) usable(rec shareRecord) bool {
 
 // remember records a share, so a container started later can still be served.
 func (s *shareStore) remember(exportPath, localPath string) {
-	if s == nil || !strings.HasPrefix(exportPath, workspace.ExportMountPrefix) {
+	if s == nil {
 		return
 	}
 
@@ -175,6 +170,18 @@ func (s *shareStore) restore(exportPath string) (string, bool) {
 	}
 	s.remember(exportPath, rec.Path)
 	return rec.Path, true
+}
+
+// exports names every recorded export, for matching a root handle to one.
+func (s *shareStore) exports() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.records))
+	for export := range s.records {
+		out = append(out, export)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // forget drops records for exports the workspace no longer has a volume for.

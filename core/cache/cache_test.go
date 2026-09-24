@@ -102,20 +102,6 @@ func TestCacheRequestValidate(t *testing.T) {
 	}
 }
 
-// The cwd share is a share like any other, and the commonest one of all: it is
-// what `-v .:/app` becomes.
-func TestCacheRequestAcceptsTheWorkingDirectoryShare(t *testing.T) {
-	req := Request{
-		Op:     OpPrepare,
-		Export: workspace.ExportCWD,
-		Port:   30001,
-		Cache:  workspace.VolumeNameForID("aabbccdd", "cwd"),
-	}
-	if err := req.Validate(); err != nil {
-		t.Errorf("Validate() = %v", err)
-	}
-}
-
 // Compression is a negotiation rather than a new format, which is what the
 // codec field has been there for since version 1. The case that matters is an
 // agent OLDER than it: its greeting names no codecs, and a client must then

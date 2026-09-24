@@ -177,8 +177,8 @@ func (l *live) relocate(p string) (string, error) {
 var ErrNoShare = errors.New("no union for this share")
 
 // key names a share within a machine of an account. Two accounts, or two of
-// one account's machines, may name different directories alike (/cwd is
-// everybody's) and must never share a mount.
+// one account's machines, may name different directories alike (one path on
+// two machines) and must never share a mount.
 func key(account, client, export string) string {
 	return owner(account, client) + export
 }

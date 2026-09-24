@@ -72,7 +72,7 @@ func (o Op) String() string {
 // content and never will: the bytes are already there through NFS, and only
 // the notification is missing (ADR 0014).
 type Event struct {
-	// Export is the share the path belongs to: "/cwd" or "/m/<id>".
+	// Export is the share the path belongs to: "/m/<id>".
 	Export string `json:"e"`
 
 	// Path is within the share, always leading-slash and always "/"-separated

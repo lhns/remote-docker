@@ -27,9 +27,13 @@ Serve **one export with a synthetic root**. Its entries are registered on
 demand:
 
 ```
-/cwd            -> the directory remote-docker was invoked from
-/m/<share id>   -> any other local directory named by a bind mount
+/m/<share id>   -> a local directory named by a bind mount
 ```
+
+The working directory is no exception. It had an export of its own, `/cwd`,
+until 2026-09-24: a volume outlives the process, and `/cwd` meant whichever
+directory the NEXT client started in, so a container created from one project
+mounted another after a restart.
 
 `<share id>` is 16 hex characters of the SHA-256 of the directory's canonical
 path. Canonicalisation folds case and separators on Windows and cleans the path

@@ -16,8 +16,7 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// The machine asking, and two shares of its own. Both exports are share ids
-// rather than /cwd, so CacheVolumeForExport can name a volume for them.
+// The machine asking, and two shares of its own.
 const (
 	thisClient = "aabbccdd"
 	coldExport = "/m/00112233445566ff"
@@ -185,7 +184,7 @@ func TestApplyGivesUpOnAWedgedUnion(t *testing.T) {
 	}
 }
 
-// Two machines of one account share a daemon (ADR 0029) and, for /cwd or two
+// Two machines of one account share a daemon (ADR 0029) and, for two
 // identical paths, a share id. The files behind each are on its own machine,
 // so each needs its own union: handed the first one's, the second machine's
 // container reads the first machine's files and its fill writes into them.

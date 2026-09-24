@@ -57,7 +57,6 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 
 	s, err := session.Open(ctx, session.Options{
 		Config:      cfg,
-		WorkDir:     mustWorkDir(),
 		Endpoint:    endpointOf(cfg),
 		IdleTimeout: cfg.IdleTimeout,
 		// The only role that binds the endpoint and the export port.
@@ -116,7 +115,6 @@ func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session
 
 	s, err := session.Open(ctx, session.Options{
 		Config:   cfg,
-		WorkDir:  mustWorkDir(),
 		Endpoint: endpointOf(cfg),
 		Role:     session.Query,
 		Log:      logger(),
@@ -127,14 +125,6 @@ func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session
 	defer func() { _ = s.Close() }()
 
 	return fn(ctx, s)
-}
-
-func mustWorkDir() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return dir
 }
 
 // signalContext cancels on Ctrl-C so a session is torn down rather than

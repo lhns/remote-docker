@@ -55,9 +55,6 @@ func TestAnUnknownExportRestoresNothing(t *testing.T) {
 	if _, ok := s.restore("/m/0123456789abcdef"); ok {
 		t.Error("an export nobody recorded was restored")
 	}
-	if _, ok := s.restore(workspace.ExportCWD); ok {
-		t.Error("the working directory was restored from a record")
-	}
 }
 
 // The record is checked again on the way out, not trusted because it is on

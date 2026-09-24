@@ -20,7 +20,7 @@ import (
 
 // Share is one local directory exposed to the workspace, or one file.
 type Share struct {
-	// ExportPath is how the workspace addresses it: "/cwd" or "/m/<id>".
+	// ExportPath is how the workspace addresses it: "/m/<id>".
 	ExportPath string
 
 	// LocalPath is the directory or file on this machine, in its original
@@ -63,6 +63,10 @@ type Registry struct {
 	// before it is believed.
 	Restore func(exportPath string) (localPath string, ok bool)
 
+	// Recorded names the exports Restore can answer for. A root handle carries
+	// only a digest of its export, and this is how one is matched to a record.
+	Recorded func() []string
+
 	// OnRead is told every read the workspace makes through a share, in
 	// bytes, as it happens. On a share with a cache that is exactly the
 	// stream of misses, which is what a prefetch policy runs on (ADR 0045).
@@ -100,19 +104,10 @@ func NewRegistry(attrs Attrs) *Registry {
 	}
 }
 
-// RegisterCWD exports localPath at /cwd, where the interactive shell lands.
-func (r *Registry) RegisterCWD(localPath string) (*Share, error) {
-	return r.register(workspace.ExportCWD, localPath)
-}
-
 // Register exports localPath at /m/<id>, deriving the id from the path so it
 // is the same on every run. A directory already registered is returned as it
 // stands rather than duplicated.
 func (r *Registry) Register(localPath string) (*Share, error) {
-	return r.register("", localPath)
-}
-
-func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("nfsserve: cannot export %s: %w", localPath, err)
@@ -133,12 +128,10 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if existing, ok := r.byPath[key]; ok && (exportPath == "" || existing.ExportPath == exportPath) {
+	if existing, ok := r.byPath[key]; ok {
 		return existing, nil
 	}
-	if exportPath == "" {
-		exportPath = workspace.ExportPathForID(workspace.ShareID(localPath))
-	}
+	exportPath := workspace.ExportPathForID(workspace.ShareID(localPath))
 
 	// WithBoundOS keeps every operation inside baseDir. It is the boundary
 	// that stops a crafted path escaping a share, and it is why each share
@@ -159,15 +152,6 @@ func (r *Registry) register(exportPath, localPath string) (*Share, error) {
 		LocalPath:  localPath,
 		File:       file,
 		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
-	}
-	// Reached only by registering a DIFFERENT directory at an export path
-	// already taken, since a path already held returned its share above. The
-	// displaced share is unreachable, so it gives up what it holds and takes
-	// its byPath entry with it rather than leaving one pointing at a
-	// filesystem nothing serves.
-	if old, ok := r.shares[exportPath]; ok {
-		delete(r.byPath, workspace.CanonicalKey(old.LocalPath))
-		closeFS(old.fs)
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -195,10 +179,11 @@ func (r *Registry) Lookup(exportPath string) (*Share, string, bool) {
 
 // LookupOrRestore is Lookup, with one chance to bring a share back.
 //
-// Separate from Lookup on purpose: only a MOUNT may resurrect a share. Shares,
-// which the volume collector and the file watcher both read, has to keep
-// answering with what is exported right now, and a lookup that quietly
-// registered things would make "in use" depend on who asked.
+// Separate from Lookup on purpose: only a MOUNT, or a root handle through
+// restoreMatching, may resurrect a share. Shares, which the volume collector
+// and the file watcher both read, has to keep answering with what is exported
+// right now, and a lookup that quietly registered things would make "in use"
+// depend on who asked.
 func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	if share, rest, ok := r.Lookup(exportPath); ok {
 		return share, rest, true
@@ -217,11 +202,27 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	share, err := r.register(clean, local)
-	if err != nil {
+	share, err := r.Register(local)
+	if err != nil || share.ExportPath != clean {
 		return nil, "", false
 	}
 	return share, "/", true
+}
+
+// restoreMatching restores the recorded export match accepts. A kernel
+// presents a root handle only for an export it has mounted, so this brings
+// back only what a container is using (ADR 0027).
+func (r *Registry) restoreMatching(match func(export string) bool) (*Share, bool) {
+	if r.Recorded == nil {
+		return nil, false
+	}
+	for _, export := range r.Recorded() {
+		if match(export) {
+			share, rest, ok := r.LookupOrRestore(export)
+			return share, ok && rest == "/"
+		}
+	}
+	return nil, false
 }
 
 // Shares returns every registered share, ordered by export path.
@@ -259,7 +260,7 @@ func normalizeExport(p string) string {
 
 // SetAttrs changes the attributes reported for shares registered from now on,
 // and for existing ones: the workspace account's uid is only known once
-// connected, while the working directory is registered before that.
+// connected, and a reconnect may report another.
 func (r *Registry) SetAttrs(attrs Attrs) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

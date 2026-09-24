@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core/notify"
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // base is an arbitrary fixed instant. The coalescer takes the time from its
@@ -14,7 +13,7 @@ import (
 var base = time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 
 func ev(p string, op notify.Op) notify.Event {
-	return notify.Event{Export: workspace.ExportCWD, Path: p, Op: op}
+	return notify.Event{Export: "/m/1111111111111111", Path: p, Op: op}
 }
 
 // One editor save produces three to five raw events for the same file. They
@@ -181,7 +180,7 @@ func TestCapDoesNotRejectAnAlreadyPendingPath(t *testing.T) {
 // that has already been accounted for and the agent would go coarse forever.
 func TestNoticesAreClearedAfterFlush(t *testing.T) {
 	c := newCoalescer(10*time.Millisecond, time.Second, 0)
-	c.overflow(workspace.ExportCWD, "/x", 5)
+	c.overflow("/m/1111111111111111", "/x", 5)
 
 	if _, notices := c.flush(base); len(notices) != 1 {
 		t.Fatalf("first flush gave %d notices, want 1", len(notices))
@@ -257,7 +256,7 @@ func TestFlushedEventsAreValid(t *testing.T) {
 // the other, or the agent goes coarse over a tree that is perfectly fine.
 func TestNoticesArePerExport(t *testing.T) {
 	c := newCoalescer(time.Millisecond, time.Second, 0)
-	c.overflow("/cwd", "/a", 3)
+	c.overflow("/m/1111111111111111", "/a", 3)
 	c.overflow("/m/0123456789abcdef", "/b", 7)
 
 	_, notices := c.flush(base.Add(time.Second))
@@ -268,7 +267,7 @@ func TestNoticesArePerExport(t *testing.T) {
 	for _, n := range notices {
 		byExport[n.Export] = n
 	}
-	if byExport["/cwd"].Dropped != 3 || byExport["/m/0123456789abcdef"].Dropped != 7 {
+	if byExport["/m/1111111111111111"].Dropped != 3 || byExport["/m/0123456789abcdef"].Dropped != 7 {
 		t.Errorf("losses were mixed between exports: %+v", notices)
 	}
 }

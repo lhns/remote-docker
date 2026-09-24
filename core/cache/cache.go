@@ -94,7 +94,7 @@ type Change struct {
 type Request struct {
 	Op Op `json:"op"`
 
-	// Export is "/cwd" or "/m/<id>", as the NFS export and volumes name it.
+	// Export is "/m/<id>", as the NFS export and volumes name it.
 	Export string `json:"e"`
 
 	// Port is the client's reverse-tunnel port, for OpPrepare. The agent

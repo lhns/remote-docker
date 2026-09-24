@@ -54,22 +54,22 @@ func TestFSEventValidateRejects(t *testing.T) {
 
 func TestFSEventValidateAccepts(t *testing.T) {
 	tests := []Event{
-		{"/cwd", "/", OpWrite, true},
-		{"/cwd", "/main.go", OpWrite, false},
+		{"/m/1111111111111111", "/", OpWrite, true},
+		{"/m/1111111111111111", "/main.go", OpWrite, false},
 		{"/m/0123456789abcdef", "/src/app/index.ts", OpCreate | OpWrite, false},
 		{"/m/ffffffffffffffff", "/a b/c-d.e_f", OpAttrib, false},
 		// A filename may legitimately contain dots, or start with one; only a
 		// whole component of "." or ".." is a traversal.
-		{"/cwd", "/.env", OpWrite, false},
-		{"/cwd", "/..leading", OpWrite, false},
-		{"/cwd", "/trailing..", OpWrite, false},
-		{"/cwd", "/a...b", OpWrite, false},
+		{"/m/1111111111111111", "/.env", OpWrite, false},
+		{"/m/1111111111111111", "/..leading", OpWrite, false},
+		{"/m/1111111111111111", "/trailing..", OpWrite, false},
+		{"/m/1111111111111111", "/a...b", OpWrite, false},
 		// Non-ASCII survives: macOS hands back NFD-decomposed names, and those
 		// are the bytes our own NFS server will serve for that file.
-		{"/cwd", "/café/résumé.txt", OpWrite, false},
-		{"/cwd", "/日本語.txt", OpWrite, false},
-		{"/cwd", "/deleted", OpRemove, false},
-		{"/cwd", "/moved", OpRename, true},
+		{"/m/1111111111111111", "/café/résumé.txt", OpWrite, false},
+		{"/m/1111111111111111", "/日本語.txt", OpWrite, false},
+		{"/m/1111111111111111", "/deleted", OpRemove, false},
+		{"/m/1111111111111111", "/moved", OpRename, true},
 	}
 
 	for _, e := range tests {
@@ -84,7 +84,7 @@ func TestFSEventValidateAccepts(t *testing.T) {
 func TestNotifyFrameWireFormat(t *testing.T) {
 	frame := Frame{
 		Events: []Event{
-			{Export: "/cwd", Path: "/main.go", Op: OpWrite},
+			{Export: "/m/1111111111111111", Path: "/main.go", Op: OpWrite},
 			{Export: "/m/0123456789abcdef", Path: "/src", Op: OpCreate, Dir: true},
 		},
 	}
@@ -94,7 +94,7 @@ func TestNotifyFrameWireFormat(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	const want = `{"v":[{"e":"/cwd","p":"/main.go","o":2},{"e":"/m/0123456789abcdef","p":"/src","o":1,"d":true}]}`
+	const want = `{"v":[{"e":"/m/1111111111111111","p":"/main.go","o":2},{"e":"/m/0123456789abcdef","p":"/src","o":1,"d":true}]}`
 	if string(encoded) != want {
 		t.Errorf("frame encoded as\n  %s\nwant\n  %s", encoded, want)
 	}
@@ -115,8 +115,8 @@ func TestNotifyFrameWireFormat(t *testing.T) {
 // that emitted a newline inside a frame would desynchronise both ends.
 func TestNotifyFrameIsSingleLine(t *testing.T) {
 	frame := Frame{
-		Events: []Event{{Export: "/cwd", Path: "/a\nb", Op: OpWrite}},
-		Notice: &Notice{Export: "/cwd", Path: "/", Reason: "overflow", Dropped: 12},
+		Events: []Event{{Export: "/m/1111111111111111", Path: "/a\nb", Op: OpWrite}},
+		Notice: &Notice{Export: "/m/1111111111111111", Path: "/", Reason: "overflow", Dropped: 12},
 	}
 	encoded, err := json.Marshal(frame)
 	if err != nil {

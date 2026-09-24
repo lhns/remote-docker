@@ -270,11 +270,11 @@ sequenceDiagram
     D->>D: pull, authenticating AS YOU
     CLI->>EP: POST /containers/create
     EP->>Proxy: (reaching this socket is the authorisation)
-    Proxy->>NFS: register /cwd for this directory
-    Proxy->>D: create volume rd-cwd<br/>type=nfs addr=127.0.0.1 port=30001
+    Proxy->>NFS: register /m/<id> for this directory
+    Proxy->>D: create volume rd-<client>-<id><br/>type=nfs addr=127.0.0.1 port=30001
     Proxy->>D: create container, bind rewritten to the volume
     D->>Agent: (reverse tunnel already bound at connect)
-    D->>NFS: MOUNT /cwd over 127.0.0.1:30001
+    D->>NFS: MOUNT /m/<id> over 127.0.0.1:30001
     NFS-->>D: AUTH_NULL accepted
     C->>NFS: read/write /app
     NFS->>NFS: serve from the real directory
@@ -422,7 +422,7 @@ replaced. It tells the workspace which files are hard links of each other, which
 the share's contents already implied.
 
 **T — a path outside the shares (10, 11).** The export namespace is virtual:
-only `/cwd` and `/m/<16 hex>` resolve, and lookups that climb out of a share
+only `/m/<16 hex>` resolves, and lookups that climb out of a share
 return nothing. *Covered by* `nfsserve/registry_test.go`.
 
 **T — the workspace naming an export this session never registered (10).** A
@@ -432,8 +432,9 @@ it is a capability list, not a lookup table: the workspace names an id and the
 client chooses among directories it wrote down itself, never a path the far side
 supplied. `client/internal/session/shares.go` recomputes the id from the path
 before believing an entry, refuses the whole file when another machine or
-account wrote it, never restores `/cwd`, drops records unused for 30 days, and
-restores only from a MOUNT that missed rather than from a lookup. *Covered by*
+account wrote it, drops records unused for 30 days, and
+restores only from a MOUNT or a share root handle that missed rather than
+from a lookup. *Covered by*
 `shares_test.go` and `role_test.go`.
 
 **T — a volume that is not ours (4).** Volumes are only ever created, never
@@ -670,7 +671,7 @@ sequenceDiagram
 
     W->>Ch: notify.Event{export:/m/ab12, path:/src/a.ts, op:write}
     Ch->>Ag: validate on arrival
-    Ag->>Ag: export is /cwd, or /m/ and 16 hex?
+    Ag->>Ag: export is /m/ and 16 hex?
     Ag->>Ag: path whitelisted? (never path.Clean)
     Ag->>Ag: resolve volume, relocate under the daemon's root
     Ag->>Ag: containment re-checked after the join

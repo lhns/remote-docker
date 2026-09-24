@@ -156,7 +156,7 @@ func TestTracedShareServesTheSameFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	f, err := target.Open("hello.txt")
 	if err != nil {
@@ -233,11 +233,11 @@ func TestTraceTimesTheServersReadPath(t *testing.T) {
 // coarse enough to time a real Stat at zero.
 func TestTraceReportsASlowCall(t *testing.T) {
 	var buf bytes.Buffer
-	fs := withTrace(shareFSOver(t.TempDir(), ""), "/cwd", slog.New(slog.NewTextHandler(&buf, nil)), time.Second).(*traceFS)
+	fs := withTrace(shareFSOver(t.TempDir(), ""), "/m/0123456789abcdef", slog.New(slog.NewTextHandler(&buf, nil)), time.Second).(*traceFS)
 	fs.observe("Stat", "hello.txt", time.Now().Add(-2*time.Second))
 
 	line := buf.String()
-	for _, want := range []string{"op=Stat", "path=hello.txt", "share=/cwd", "calls=1", "took=2", "mean=2"} {
+	for _, want := range []string{"op=Stat", "path=hello.txt", "share=/m/0123456789abcdef", "calls=1", "took=2", "mean=2"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the report does not carry %q: %s", want, line)
 		}

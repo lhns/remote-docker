@@ -33,9 +33,6 @@ import (
 type Options struct {
 	Config config.Config
 
-	// WorkDir is the directory exported at /cwd.
-	WorkDir string
-
 	// Endpoint overrides where the Docker API is served locally.
 	Endpoint string
 
@@ -202,6 +199,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
+		s.registry.Recorded = s.shares.exports
 		policy, err := dircache.ParsePolicy(opts.Config.Prefetch)
 		if err != nil {
 			return nil, fmt.Errorf("prefetch: %w", err)
@@ -219,11 +217,6 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		}
 		s.registry.OnRead = s.cache.Touch
 		s.nfs = nfsserve.New(s.registry, opts.Log)
-	}
-
-	if _, err := s.registry.RegisterCWD(opts.WorkDir); err != nil {
-		cancel()
-		return nil, err
 	}
 
 	if opts.Watch != fswatch.ModeOff && opts.Role.hosting() {

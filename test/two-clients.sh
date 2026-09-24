@@ -221,9 +221,8 @@ if [ "$(echo "$before" | grep -c '^rd-[0-9a-f]\{8\}-')" -ge 2 ]; then
 else
     bad "a volume does not name the machine that created it"
 fi
-# The phone's prefix, read off a volume only the phone mounts. gc keeps the
-# volume for the directory it runs in, so a count of survivors proves nothing:
-# the pc's own always survives.
+# The phone's prefix, read off a volume only the phone mounts, so the check
+# below is about the phone's volumes and nothing else.
 dphone create --name tc-phone-probe -v "$WORK/project-$PHONE:/w" alpine:3 true >/dev/null 2>&1
 phone_prefix=$(dphone inspect -f '{{range .Mounts}}{{.Name}}{{end}}' tc-phone-probe 2>&1 | grep -o '^rd-[0-9a-f]\{8\}-')
 dphone rm -f tc-phone-probe >/dev/null 2>&1

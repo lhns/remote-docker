@@ -60,13 +60,13 @@ type Spec struct {
 	// the agent and the daemon are the same filesystem.
 	PID int
 
-	// Export is the share, "/cwd" or "/m/<id>". It names the mountpoints and
+	// Export is the share, "/m/<id>". It names the mountpoints and
 	// is what the client asked for.
 	Export string
 
 	// Client is the machine the share is on (ADR 0029), and names the
 	// mountpoints with Export: an account's machines share a daemon, and two of
-	// them sharing a share id is ordinary, since /cwd is everybody's.
+	// them sharing a share id is ordinary, since two machines can have one path.
 	Client string
 
 	// Port is the client's reverse-tunnel port for the NFS export, inside the
@@ -86,9 +86,6 @@ type Spec struct {
 
 // id is the share's identifier, used to name its mountpoints.
 func (s Spec) id() string {
-	if s.Export == workspace.ExportCWD {
-		return workspace.CWDShareID
-	}
 	return strings.TrimPrefix(s.Export, workspace.ExportMountPrefix)
 }
 

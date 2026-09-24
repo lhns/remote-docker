@@ -190,9 +190,10 @@ with no event to explain it.
 ### One union per share per machine
 
 - An account's machines share a daemon (ADR 0029), and two of them naming one
-  share id is ordinary: `/cwd` is everybody's. Keyed by account and export
-  alone, the second machine's Prepare found the first one's union alive and was
-  handed its merged path, so its container read the other machine's files.
+  share id is ordinary: one path on two machines is one id. Keyed by account
+  and export alone, the second machine's Prepare found the first one's union
+  alive and was handed its merged path, so its container read the other
+  machine's files.
 - So the manager keys a union by account, **client** and export, the
   mountpoints are `/run/rd-union/<client>/<id>/{lower,merged}`, and a cache
   session ending releases only its own machine's unions.

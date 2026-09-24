@@ -44,7 +44,7 @@ func TestWindowsHostRefusesANameItCouldNotDelete(t *testing.T) {
 		t.Skip("the name rule applies to a Windows host only")
 	}
 	dir := t.TempDir()
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	if _, err := target.Create("star*", 0o644); err == nil {
 		t.Error("CREATE of star* succeeded; the host could never remove it")

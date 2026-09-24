@@ -16,7 +16,6 @@ import (
 	"archive/tar"
 	"github.com/klauspost/compress/zstd"
 	"github.com/lhns/remote-docker/core/cache"
-	"github.com/lhns/remote-docker/core/workspace"
 	"github.com/lhns/remote-docker/dircache"
 	"os"
 	"path/filepath"
@@ -39,7 +38,7 @@ func TestChunkPathsFitsAFrame(t *testing.T) {
 	var seen int
 	for _, b := range batches {
 		encoded, err := json.Marshal(cache.Request{
-			Op: cache.OpPull, Export: workspace.ExportCWD, Paths: b,
+			Op: cache.OpPull, Export: "/m/1111111111111111", Paths: b,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -104,7 +103,7 @@ func TestCacheChannelHonoursItsContext(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := c.Changes(ctx, workspace.ExportCWD)
+	_, err := c.Changes(ctx, "/m/1111111111111111")
 	if err == nil {
 		t.Fatal("a request against a workspace that never answers returned no error")
 	}
@@ -144,7 +143,7 @@ func TestCacheChannelDeadlineCoversTheWaitForItsTurn(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.Changes(ctx, workspace.ExportCWD)
+		_, err := c.Changes(ctx, "/m/1111111111111111")
 		done <- err
 	}()
 

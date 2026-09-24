@@ -42,13 +42,6 @@ func TestSpecPaths(t *testing.T) {
 	if s.Upper() == s.Work() {
 		t.Error("the upper and the work directory are the same path")
 	}
-
-	// The working-directory share is the commonest of all -- it is what
-	// `-v .:/app` becomes -- and it has no id to strip.
-	cwd := Spec{Export: workspace.ExportCWD, Client: "aabbccdd"}
-	if got, want := cwd.Merged(), "/run/rd-union/aabbccdd/cwd/merged"; got != want {
-		t.Errorf("the cwd share landed at %q, want %q", got, want)
-	}
 }
 
 // The lower is the same mount a share's volume would have been given, asked of
@@ -145,15 +138,15 @@ func TestSpecValidate(t *testing.T) {
 		want string
 	}{
 		{"an export this program does not serve", Spec{Export: "/etc", Port: 1, CacheDir: "/x", Read: workspace.ReadCached}, "export"},
-		{"no port to reach the client on", Spec{Export: workspace.ExportCWD, CacheDir: "/x", Read: workspace.ReadCached}, "port"},
-		{"a cache that is not a path", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "relative", Read: workspace.ReadCached}, "cache directory"},
-		{"a cache that is the root", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/", Read: workspace.ReadCached}, "cache directory"},
+		{"no port to reach the client on", Spec{Export: "/m/1111111111111111", CacheDir: "/x", Read: workspace.ReadCached}, "port"},
+		{"a cache that is not a path", Spec{Export: "/m/1111111111111111", Port: 1, CacheDir: "relative", Read: workspace.ReadCached}, "cache directory"},
+		{"a cache that is the root", Spec{Export: "/m/1111111111111111", Port: 1, CacheDir: "/", Read: workspace.ReadCached}, "cache directory"},
 		// The read mode becomes the lower's attribute cache, and a value
 		// nobody defined would be mounted as whatever the parser made of it.
-		{"a read mode that is not one", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: "fast"}, "read mode"},
-		{"no read mode at all", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x"}, "read mode"},
-		{"no client", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: workspace.ReadCached}, "client"},
-		{"a client that leaves the union root", Spec{Export: workspace.ExportCWD, Port: 1, CacheDir: "/x", Read: workspace.ReadCached, Client: "../x"}, "client"},
+		{"a read mode that is not one", Spec{Export: "/m/1111111111111111", Port: 1, CacheDir: "/x", Read: "fast"}, "read mode"},
+		{"no read mode at all", Spec{Export: "/m/1111111111111111", Port: 1, CacheDir: "/x"}, "read mode"},
+		{"no client", Spec{Export: "/m/1111111111111111", Port: 1, CacheDir: "/x", Read: workspace.ReadCached}, "client"},
+		{"a client that leaves the union root", Spec{Export: "/m/1111111111111111", Port: 1, CacheDir: "/x", Read: workspace.ReadCached, Client: "../x"}, "client"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.spec.Validate()

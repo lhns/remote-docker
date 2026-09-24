@@ -244,7 +244,6 @@ func startDaemon(cfg config.Config, endpoint string) error {
 	if err != nil {
 		return err
 	}
-	cmd.Dir = mustWorkDir()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	detach(cmd)

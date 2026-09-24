@@ -36,7 +36,7 @@ func TestASymlinkCannotEscapeAShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	target := mountCWD(t, share)
+	target := mountDir(t, share)
 
 	// A refusal at the open or the write is containment (billy resolves the
 	// link inside the root, where the target does not exist) and is logged.

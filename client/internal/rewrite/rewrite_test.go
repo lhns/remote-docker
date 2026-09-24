@@ -14,7 +14,6 @@ import (
 // fakeSharer records what was exported and hands back deterministic paths.
 type fakeSharer struct {
 	shared []string
-	cwd    string            // a local path to report as the /cwd share
 	files  map[string]string // local path -> base name, for single-file shares
 	err    error
 }
@@ -24,11 +23,7 @@ func (f *fakeSharer) Share(localPath string) (string, string, error) {
 		return "", "", f.err
 	}
 	f.shared = append(f.shared, localPath)
-	file := f.files[localPath]
-	if localPath == f.cwd {
-		return workspace.ExportCWD, file, nil
-	}
-	return workspace.ExportPathForID(workspace.ShareID(localPath)), file, nil
+	return workspace.ExportPathForID(workspace.ShareID(localPath)), f.files[localPath], nil
 }
 
 type fakeVolumes struct {
@@ -100,31 +95,10 @@ func TestRewriteBinds(t *testing.T) {
 	}
 }
 
-// Binding the working directory is the commonest case there is, and it
-// resolves to the /cwd share rather than a /m/<id> one.
-func TestRewriteBindOfTheWorkingDirectory(t *testing.T) {
-	r, sharer, volumes := newRewriter()
-	sharer.cwd = "/home/alice/project"
-
-	body := []byte(`{"HostConfig":{"Binds":["/home/alice/project:/app"]}}`)
-	out, err := r.ContainerCreate(t.Context(), body)
-	if err != nil {
-		t.Fatalf("ContainerCreate: %v", err)
-	}
-
-	binds := decodeHostConfig(t, out)["Binds"].([]any)
-	if got, want := binds[0].(string), "rd-cwd:/app"; got != want {
-		t.Errorf("bind = %q, want %q", got, want)
-	}
-	if _, ok := volumes.created["rd-cwd"]; !ok {
-		t.Errorf("volume rd-cwd was not created (created %v)", volumes.created)
-	}
-}
-
-// The case the single-mount design could not express.
-func TestRewriteBindOutsideTheWorkingDirectory(t *testing.T) {
-	r, sharer, _ := newRewriter()
-	sharer.cwd = "/home/alice/project"
+// The case the single-mount design could not express: two unrelated
+// directories, each its own share.
+func TestRewriteBindsOfUnrelatedDirectories(t *testing.T) {
+	r, _, _ := newRewriter()
 
 	body := []byte(`{"HostConfig":{"Binds":["/home/alice/project:/app","/mnt/data:/data"]}}`)
 	out, err := r.ContainerCreate(t.Context(), body)
@@ -136,8 +110,8 @@ func TestRewriteBindOutsideTheWorkingDirectory(t *testing.T) {
 	if len(binds) != 2 {
 		t.Fatalf("got %d binds, want 2", len(binds))
 	}
-	if first := binds[0].(string); !strings.HasPrefix(first, "rd-cwd:") {
-		t.Errorf("first bind = %q, want the cwd volume", first)
+	if first, want := binds[0].(string), workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))+":/app"; first != want {
+		t.Errorf("first bind = %q, want %q", first, want)
 	}
 	second := binds[1].(string)
 	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/mnt/data"))

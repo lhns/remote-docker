@@ -25,7 +25,7 @@ func TestLinkCountIsReported(t *testing.T) {
 		t.Skipf("no hard links here: %v", err)
 	}
 
-	target := mountCWD(t, dir)
+	target := mountDir(t, dir)
 
 	parent, err := target.Getattr("parent")
 	if err != nil {
