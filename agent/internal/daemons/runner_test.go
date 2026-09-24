@@ -121,6 +121,32 @@ func TestAMissingDaemonIsIdle(t *testing.T) {
 	}
 }
 
+// What `daemons reset` asks before removing anything.
+func TestRunningAndExists(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		f       fakeDocker
+		running int
+		exists  bool
+	}{
+		{"missing", fakeDocker{unreachable: true}, 0, false},
+		{"stopped", fakeDocker{state: "exited", unreachable: true}, 0, true},
+		{"empty", fakeDocker{state: "running"}, 0, true},
+		{"busy", fakeDocker{state: "running", running: "abc\ndef"}, 2, true},
+		{"silent", fakeDocker{state: "running", unreachable: true}, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manager(tc.f)
+			if got := m.Running(context.Background(), "alice"); got != tc.running {
+				t.Errorf("Running = %d, want %d", got, tc.running)
+			}
+			if got := m.Exists(context.Background(), "alice"); got != tc.exists {
+				t.Errorf("Exists = %v, want %v", got, tc.exists)
+			}
+		})
+	}
+}
+
 // In shared mode nothing routes to a per-account daemon, so one left running by
 // a previous per-account run is stopped. Never removed: the container is
 // somebody's daemon and the volume behind it is their images and containers.

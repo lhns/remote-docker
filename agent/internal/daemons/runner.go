@@ -816,6 +816,20 @@ func (m *Manager) runningInside(ctx context.Context, account string) int {
 	return len(strings.Split(strings.TrimSpace(out), "\n"))
 }
 
+// Exists reports whether an account has a daemon container, running or not.
+func (m *Manager) Exists(ctx context.Context, account string) bool {
+	return m.state(ctx, ContainerName(account)) != ""
+}
+
+// Running counts the containers an account's daemon is running: 0 for a
+// daemon that is not running, and -1 for a running one that cannot say.
+func (m *Manager) Running(ctx context.Context, account string) int {
+	if m.state(ctx, ContainerName(account)) != "running" {
+		return 0
+	}
+	return m.runningInside(ctx, account)
+}
+
 // Reset removes an account's daemon so the next connection builds a fresh one.
 //
 // The container always goes; the graph volume only when asked. The container
@@ -824,9 +838,9 @@ func (m *Manager) runningInside(ctx context.Context, account string) int {
 // account has, and is needed for one case: a change of storage driver, because
 // a graph written by one driver cannot be read by another.
 //
-// An account is not asked to be offline first. Removing a daemon stops what it
-// was running, which is why this is a command somebody runs rather than
-// something the agent decides.
+// Removing a daemon stops what it was running, which is why this is a command
+// somebody runs rather than something the agent decides, and why that command
+// asks Running first.
 func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 	if _, err := Plan(account, m.Options); err != nil {
 		return err

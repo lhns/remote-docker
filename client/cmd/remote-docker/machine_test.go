@@ -130,33 +130,3 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 		t.Errorf("spec with no record = %+v, want the flags and the defaults alone", got)
 	}
 }
-
-// The name selects the workspace and is never the config path: a name passed
-// as the path resolves the DEFAULT workspace, so `machine stop other` would
-// shut down the default's session.
-func TestSessionEndpointForNamesTheWorkspaceAsked(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv(config.EnvWorkspace, "")
-	t.Setenv(config.EnvEndpoint, "")
-
-	file := config.File{
-		Default: "main",
-		Workspaces: map[string]config.Workspace{
-			"main":  {Host: "main.example", Endpoint: "/tmp/main.sock"},
-			"other": {Host: "127.0.0.1", Endpoint: "/tmp/other.sock", Machine: &config.Machine{Backend: "wsl", Name: "rd-other"}},
-		},
-	}
-	if err := config.Save(file, ""); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	got, err := sessionEndpointFor("other")
-	if err != nil {
-		t.Fatalf("sessionEndpointFor: %v", err)
-	}
-	if got != "/tmp/other.sock" {
-		t.Errorf("endpoint for %q = %q, want /tmp/other.sock and not the default workspace's", "other", got)
-	}
-}

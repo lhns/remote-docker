@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/docker/cli/cli"
 	dockerconfig "github.com/docker/cli/cli/config"
 	"github.com/spf13/cobra"
 
@@ -64,7 +65,7 @@ func gather(cfg config.Config) facts {
 
 // askWorkspace fills in the half that needs the network.
 func (f *facts) askWorkspace() {
-	f.infoErr = withQuerySession(func(ctx context.Context, s *session.Session) error {
+	f.infoErr = withQuerySession(f.cfg, func(ctx context.Context, s *session.Session) error {
 		info, err := s.Info(ctx)
 		if err != nil {
 			return err
@@ -96,6 +97,9 @@ func (f facts) verdict() string {
 	}
 	return "ready"
 }
+
+// ready is whether the verdict is, which is what status exits on.
+func (f facts) ready() bool { return strings.HasPrefix(f.verdict(), "ready") }
 
 // reportStatus prints the verdict and the detail behind it.
 func reportStatus(out io.Writer, f facts) {
@@ -254,7 +258,7 @@ func firstLine(s string) string {
 
 func newStatusCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
+		Use:   "status [name]",
 		Short: "Show whether the session works and what it is talking to",
 		Long: `Prints a verdict first: ready, or the first thing that is wrong.
 
@@ -263,9 +267,11 @@ how other tools reach it, what is on the other end, and which builds are in
 play.
 
 Reports what it can even when the workspace cannot be reached, which is when
-somebody is most likely to be running it.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := resolve()
+somebody is most likely to be running it. Exits 1 when the verdict is not
+ready.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolve(args)
 			if err != nil {
 				return err
 			}
@@ -278,10 +284,17 @@ somebody is most likely to be running it.`,
 			f := gather(cfg)
 			f.askWorkspace()
 			reportStatus(cmd.OutOrStdout(), f)
+			if !f.ready() {
+				return errNotReady
+			}
 			return nil
 		},
 	}
 }
+
+// errNotReady exits 1 and prints nothing: the verdict above already said why.
+// An empty cli.StatusError is how main is told to stay quiet (see exitCode).
+var errNotReady = cli.StatusError{StatusCode: 1}
 
 // row prints one aligned "key    value" line.
 //

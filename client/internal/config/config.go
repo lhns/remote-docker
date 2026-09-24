@@ -275,7 +275,7 @@ func (f File) Names() []string {
 func (f File) selected(want string) (string, Workspace, error) {
 	if len(f.Workspaces) == 0 {
 		if want != "" {
-			return "", Workspace{}, fmt.Errorf("config: no workspaces are configured, so %q cannot be selected", want)
+			return "", Workspace{}, UnknownWorkspace(want)
 		}
 		return "", Workspace{}, nil
 	}
@@ -295,9 +295,7 @@ func (f File) selected(want string) (string, Workspace, error) {
 
 	ws, ok := f.Workspaces[want]
 	if !ok {
-		return "", Workspace{}, fmt.Errorf(
-			"config: no workspace named %q; configured: %s",
-			want, strings.Join(f.Names(), ", "))
+		return "", Workspace{}, UnknownWorkspace(want)
 	}
 	return want, ws, nil
 }
@@ -641,6 +639,15 @@ func (c Config) ContextName() string {
 // ErrNoWorkspace is RequireHost's answer. Its remedy names one of our
 // commands, which only the caller can spell, so the caller adds it.
 var ErrNoWorkspace = errors.New("no workspace configured")
+
+// ErrUnknownWorkspace is the answer to a name that is not configured, with the
+// remedy left to the caller for the same reason.
+var ErrUnknownWorkspace = errors.New("no workspace named")
+
+// UnknownWorkspace is ErrUnknownWorkspace for one name.
+func UnknownWorkspace(name string) error {
+	return fmt.Errorf("%w %q", ErrUnknownWorkspace, name)
+}
 
 // RequireHost reports ErrNoWorkspace when no workspace is configured.
 func (c Config) RequireHost() error {
