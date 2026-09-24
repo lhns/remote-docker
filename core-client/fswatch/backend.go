@@ -7,13 +7,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// backend is fsnotify's surface, narrowed to what the tree bookkeeping uses.
-//
-// The same reason connGate is generic: the policy is the part that gets this
-// wrong, and it should be testable without the thing it drives. Watch
-// bookkeeping (when to add, when to prune, what to do when the budget runs
-// out) is exercised against a fake with no kernel watches at all, on a
-// machine that has no inotify.
+// backend is fsnotify's surface, narrowed to what the tree bookkeeping uses,
+// so the bookkeeping is tested against a fake with no kernel watches.
 type backend interface {
 	Add(path string) error
 	Remove(path string) error
@@ -34,10 +29,8 @@ func newFsnotifyBackend() (backend, error) {
 
 func (b *fsnotifyBackend) Add(path string) error { return b.w.Add(path) }
 
-// Remove tolerates a watch that is already gone. The kernel drops a watch when
-// its directory is deleted and tells us so with an event, so by the time we
-// act on that event the descriptor may already have been reclaimed, which is
-// the ordinary case, not an error.
+// Remove tolerates a watch that is already gone: the kernel drops one when its
+// directory is deleted, before the event reaches us.
 func (b *fsnotifyBackend) Remove(path string) error {
 	err := b.w.Remove(path)
 	if errors.Is(err, fsnotify.ErrNonExistentWatch) {
@@ -75,23 +68,10 @@ func DefaultBudget() int {
 }
 
 // DefaultExcludes are directory names not watched unless the user says
-// otherwise.
-//
-// Deliberately short. An excluded directory is one nothing reloads on; a
-// merely large one is left to the budget, which reports what it dropped and
-// can be raised.
-//
-// Note what is NOT here: dist, build, target, out, vendor. Those are build
-// outputs, and a container serving dist/ reloading when dist/ changes is
-// exactly the workflow this exists for. Excluding one would reintroduce ADR
-// 0014's silent nothing-happens in a narrower and more confusing place. A Rust
-// or Maven tree will spend its budget inside target/, and the budget will say
-// so by name, which the user can act on.
-//
-// Honouring .gitignore was considered and rejected: it needs a real ignore
-// engine with nested files and negations, it means nothing outside a git
-// checkout, and dist/ is both commonly ignored and commonly the thing being
-// served.
+// otherwise. Deliberately short: a large directory is left to the budget,
+// which names what it dropped. Build outputs (dist, target, vendor) are NOT
+// here, because a container serving dist/ reloading on a change is the point,
+// and neither is .gitignore, which commonly ignores exactly that.
 var DefaultExcludes = []string{
 	".git",
 	"node_modules",

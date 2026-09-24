@@ -47,12 +47,8 @@ func (b wslBackend) Available(ctx context.Context) error {
 func (b wslBackend) Inspect(ctx context.Context, name string) (Observed, error) {
 	distro := machineName(name)
 
-	// The exit status is deliberately not consulted. WSL exits NON-ZERO when
-	// there are no distributions at all, which is the answer rather than a
-	// failure to look: treating it as one made the first `machine create` on a
-	// fresh WSL refuse with "cannot tell what is there". A real failure to
-	// reach WSL was already caught by Available, which asked the service
-	// directly.
+	// The exit status is not consulted: WSL exits non-zero when there are no
+	// distributions at all, and Available has already checked the service.
 	raw, _ := b.wsl(ctx, "--list", "--verbose")
 
 	observed := observeWSL(parseWSLList(raw), distro, "")

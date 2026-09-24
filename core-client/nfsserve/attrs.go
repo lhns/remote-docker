@@ -309,13 +309,9 @@ func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 func (c *attrChange) Chown(string, int, int) error  { return nil }
 func (c *attrChange) Lchown(string, int, int) error { return nil }
 
-// Chtimes is accepted and NOT applied, deliberately.
-//
-// The agent replays changes by touching files through this export (ADR 0016).
-// Apply them and this machine's watcher sees the touch, reports it, and the
-// agent replays it again: one edit became 3063 events in integration.sh
-// section 11 when this was real. Breaking the loop needs the watcher to know
-// which changes this server caused, and it has no such mechanism.
+// Chtimes is accepted and NOT applied. The agent replays changes by touching
+// files through this export (ADR 0016), so applying them feeds this machine's
+// watcher its own replay: one edit became 3063 events.
 func (c *attrChange) Chtimes(string, time.Time, time.Time) error { return nil }
 
 // Link makes a second name for a file, which is LINK: `ln`, `cp -l` and git's

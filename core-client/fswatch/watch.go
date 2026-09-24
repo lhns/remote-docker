@@ -233,23 +233,14 @@ func (w *Watcher) Sync(shares []Share) {
 	}
 }
 
-// Observer is told about every change, before the mode decides what a watcher
-// inside a container can be shown.
-//
-// Two consumers with different needs, which is why this is not the Sink. The
-// notify channel may only report what it can replay faithfully -- a deletion
-// over NFS cannot be, so ModePartial drops it rather than misrepresent it. A
-// cache has the opposite requirement: a deletion is the one event it MUST have,
-// because a cached copy of a file that is gone would shadow its absence
-// (ADR 0044).
+// Observer is told about every change before the mode strips any: ModePartial
+// drops a deletion the Sink cannot replay, and a cache must have exactly that
+// event, or a cached copy shadows a file that is gone (ADR 0044).
 type Observer interface {
 	Observe(event notify.Event)
 
-	// Lost says the watcher could not report everything, which for a cache is
-	// a different problem from a missed notification: the events it did not
-	// see may have been deletions, and a cached copy of a deleted file
-	// shadows its absence until something removes it. The observer's answer is
-	// to reconcile rather than to log a line.
+	// Lost says events were missed, deletions possibly among them; a cache
+	// answers with a reconcile.
 	Lost(notice notify.Notice)
 }
 

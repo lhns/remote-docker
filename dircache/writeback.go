@@ -10,18 +10,9 @@ import (
 	"time"
 )
 
-// Carrying a consumer's writes back to this machine (ADR 0044).
-//
-// What to do is decided in decide.go, a pure function with the rules and their
-// tests; what happens here is the fetching and the writing.
-//
-// Two things it will not do, both because the cost of being wrong is somebody's
-// source tree:
-//
-//   - nothing at all while the cache is incomplete. A file the fill never sent
-//     looks exactly like one the consumer created.
-//   - nothing silently. Every conflict is reported by path, whichever way it
-//     resolved.
+// Carrying a consumer's writes back to this machine (ADR 0044). decide.go
+// decides; this fetches and writes. Nothing is written back while the cache is
+// incomplete, and every conflict decide finds is logged by path.
 
 // writeBackEvery is how often a share's changes are collected.
 //

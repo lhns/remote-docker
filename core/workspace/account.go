@@ -10,23 +10,15 @@ import (
 // used, so existing deployments derive the same names.
 const MaxAccountNameLength = 30
 
-// AccountName derives an account name from a key file's base name.
+// AccountName derives an account name from a key file's base name, on the
+// workspace from its file in authorized_keys.d and on the client from the
+// local username. Copies that drift present as an account that does not exist
+// where it plainly does.
 //
-// Both ends derive it, so it is one function here rather than two copies that
-// look alike. The workspace names an account from its file in
-// authorized_keys.d; the client makes the same derivation from the local
-// username to guess who to log in as when nothing says. Copies that drift
-// present as an account that does not exist on a workspace where it plainly
-// does.
-//
-// The rules are the shell implementation's `sanitize`, because a deployment
-// upgrading to the agent must derive the same account for the same file --
-// deriving a different one would strand the old account's home directory and
-// hand the user a new uid, and with the uid a new reverse-tunnel port.
-//
-// A name that cannot be derived is an error rather than a substitute, because
-// the two callers answer that differently: the workspace refuses the file, and
-// the client falls back to a name the user can correct.
+// The rules are the shell implementation's `sanitize`: a different name for
+// the same file strands the old home directory and changes the uid, and with
+// it the reverse-tunnel port. An underivable name is an error, which the
+// workspace refuses and the client replaces.
 func AccountName(base string) (string, error) {
 	var b strings.Builder
 	for _, r := range strings.ToLower(base) {

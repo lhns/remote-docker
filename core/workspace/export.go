@@ -105,19 +105,11 @@ func ExportPathForID(id string) string {
 	return ExportMountPrefix + id
 }
 
-// VolumeNameForID is the Docker volume name backing a share with this id, on
-// the given client machine.
-//
-// The client is part of the NAME and not merely a label, because the daemon is
-// shared between an account's machines while the files behind a share are on
-// one of them. Without it both machines derive `rd-cwd` for their own working
-// directory, the second create silently returns the first's volume, and a
-// container comes up reading somebody else's project. That is the same failure
-// ADR 0019 records across accounts, one level down.
-//
-// An empty client yields the old shape, which is what a volume created before
-// this looks like. Those still parse and are still collectable; nothing creates
-// one.
+// VolumeNameForID is the Docker volume backing a share with this id on the
+// given client machine. The client is in the NAME because an account's machines
+// share a daemon: without it both derive `rd-cwd`, the second create silently
+// returns the first's volume, and a container reads somebody else's project.
+// An empty client is the shape volumes had before, which nothing creates now.
 func VolumeNameForID(client, id string) string {
 	if client == "" {
 		return VolumeNamePrefix + id
@@ -125,12 +117,8 @@ func VolumeNameForID(client, id string) string {
 	return VolumeNamePrefix + client + "-" + id
 }
 
-// cacheSuffix marks the volume holding a delegated share's cache layer, as
-// distinct from the volume backing the share itself (ADR 0044).
-//
-// A suffix rather than a second prefix, so IsManagedVolume, the collector and
-// ADR 0029's per-client naming all keep working on it unchanged: it is one more
-// managed volume, and the only thing that differs is which layer it holds.
+// cacheSuffix marks the volume holding a share's cache layer (ADR 0044). A
+// suffix, so it is still a managed, per-client volume to everything else.
 const cacheSuffix = "-cache"
 
 // VolumeNameForCache is the volume holding a share's cache layer.
@@ -148,20 +136,14 @@ func IsManagedVolume(name string) bool {
 	return strings.HasPrefix(name, VolumeNamePrefix)
 }
 
-// CWDShareID names the working-directory share wherever an id is needed: the
-// volume backing it here, and the union's mountpoints in core-agent/union.
-// Exported because that second caller had its own copy of the literal, and a
-// drift between them makes the agent report a cache volume that does not exist
-// -- after which the collector believes no cache is in use and empties one
-// under a running container.
+// CWDShareID names the working-directory share wherever an id is needed, here
+// and in core-agent/union's mountpoints. A drift between two copies made the
+// agent report a cache volume that did not exist, and the collector then
+// emptied one under a running container.
 const CWDShareID = "cwd"
 
-// VolumeNameForExport is the volume backing any export path.
-//
-// It handles /cwd as well as /m/<id>, which matters more than it looks:
-// registering the working directory as a bind source returns the existing
-// /cwd share rather than minting a second one for the same directory, so the
-// commonest bind of all, `-v .:/app`, arrives here as "/cwd".
+// VolumeNameForExport is the volume backing any export path, /cwd included:
+// `-v .:/app` registers as the existing /cwd share.
 func VolumeNameForExport(client, exportPath string) (string, error) {
 	if exportPath == ExportCWD {
 		return VolumeNameForID(client, CWDShareID), nil
@@ -173,11 +155,9 @@ func VolumeNameForExport(client, exportPath string) (string, error) {
 	return VolumeNameForID(client, id), nil
 }
 
-// CacheVolumeForExport is the cache volume a given machine's share must use.
-//
-// Derived rather than accepted, so the agent can check what a client asked it
-// to mount instead of trusting the name it was handed: the digest is the key
-// that authenticated, so a machine can only ever name its own (ADR 0029).
+// CacheVolumeForExport is the cache volume a given machine's share must use,
+// derived so the agent can check the name a client handed it: the client is
+// the digest of the key that authenticated (ADR 0029).
 func CacheVolumeForExport(client, exportPath string) (string, error) {
 	name, err := VolumeNameForExport(client, exportPath)
 	if err != nil {
@@ -187,20 +167,16 @@ func CacheVolumeForExport(client, exportPath string) (string, error) {
 }
 
 // ParseVolumeName splits a managed volume name into the client that created it
-// and the share it backs.
-//
-// A volume from before clients were named has no client, which is reported as
-// the empty string rather than an error: it is still ours, still collectable,
-// and still tells its share apart from the next one.
+// and the share it backs. A volume from before clients were named reports an
+// empty client, and is still ours.
 func ParseVolumeName(name string) (client, share string, ok bool) {
 	if !IsManagedVolume(name) {
 		return "", "", false
 	}
 	rest := strings.TrimPrefix(name, VolumeNamePrefix)
 
-	// A cache volume is the same share wearing a role, and the collector must
-	// see it as that share's -- otherwise it is a volume nothing claims and
-	// everything leaves alone, which is how disk disappears quietly.
+	// A cache volume is its share's, or nothing claims it and its disk is
+	// never collected.
 	rest = strings.TrimSuffix(rest, cacheSuffix)
 
 	client, share, found := strings.Cut(rest, "-")
@@ -221,12 +197,7 @@ func IsCacheVolume(name string) bool {
 }
 
 // validShare reports whether a volume name suffix names a share this program
-// could have created.
-//
-// Asked of parseID rather than re-derived. What a share id looks like is a rule
-// that has to exist once: the uid to port formula lived in two places, the
-// copies drifted, and CLAUDE.md keeps that as a retired invariant precisely so
-// it is not done again.
+// could have created. Asked of parseID, so the rule for an id exists once.
 func validShare(share string) bool {
 	if share == CWDShareID {
 		return true
@@ -236,9 +207,6 @@ func validShare(share string) bool {
 }
 
 // validClient reports whether a string could be a client id.
-//
-// hex.DecodeString accepts uppercase, which nothing here emits. Matching one
-// costs nothing, and is not worth a second rule about hex to prevent.
 func validClient(s string) bool {
 	if len(s) != clientIDLen {
 		return false
@@ -335,18 +303,12 @@ func NFSVolumeOptions(port int, exportPath string, read Read, nconnect int) map[
 //	curl -s https://raw.githubusercontent.com/torvalds/linux/v6.6/fs/nfs/fs_context.c | grep -n NFS_MAX_CONNECTIONS
 const NConnectMax = 16
 
-// nconnectOption is `nconnect=n` when a mount asks for more than one
-// connection, and NOTHING otherwise, which is what keeps the default option
-// list parseable by a kernel that has never heard of the word (5.3 is where it
-// arrived).
-//
-// 1 is not emitted because an unset or a 1 nconnect opens no second transport
-// anyway (v6.6 net/sunrpc/clnt.c, rpc_create: `args->nconnect <= 1` returns the
-// single client). 0 and anything above NConnectMax are not emitted because the
-// parser refuses them and takes the rest of the option string with them; the
-// caller validates and reports, and a value arriving here out of range is
-// dropped rather than turned into a mount that cannot work. (Checked
-// 2026-09-08, with the curl above and the same against net/sunrpc/clnt.c.)
+// nconnectOption is `nconnect=n` for 2..NConnectMax and NOTHING otherwise, so
+// the default list stays parseable by a kernel older than 5.3. A 1 opens no
+// second transport anyway (v6.6 net/sunrpc/clnt.c, rpc_create), and an out of
+// range value would make the parser refuse the whole string; the caller
+// validates and reports. (Checked 2026-09-08, with the curl above and the same
+// against net/sunrpc/clnt.c.)
 func nconnectOption(n int) []string {
 	if n < 2 || n > NConnectMax {
 		return nil
