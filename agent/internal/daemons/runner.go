@@ -648,7 +648,7 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 //     the data. Discarding it or staying is the operator's choice, and
 //     `remote-dockerd daemons reset` is how they make it.
 func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
-	was, err := m.inspect(ctx, spec.Name, "{{index .Config.Labels \""+SpecLabel+"\"}}")
+	was, err := m.inspect(ctx, spec.Name, "{{index .Config.Labels \""+specLabel+"\"}}")
 	if err != nil {
 		// No such container: nothing to reconcile, it is about to be created.
 		return
@@ -681,7 +681,7 @@ func (m *Manager) reconcile(ctx context.Context, account string, spec Spec) {
 // storageChanged reports whether the graph driver is what differs, which is
 // the one difference that cannot be applied by recreating the container.
 func (m *Manager) storageChanged(ctx context.Context, name string) bool {
-	was, err := m.inspect(ctx, name, "{{index .Config.Labels \""+StorageLabel+"\"}}")
+	was, err := m.inspect(ctx, name, "{{index .Config.Labels \""+storageLabel+"\"}}")
 	if err != nil || was == "<no value>" {
 		return false
 	}

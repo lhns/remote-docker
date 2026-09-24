@@ -2,7 +2,6 @@ package unions
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -23,7 +22,7 @@ import (
 // says nothing against looking.
 
 // Changes lists what the container did to a share.
-func (m *Manager) Changes(ctx context.Context, account, client, export string) ([]cache.Change, error) {
+func (m *Manager) Changes(account, client, export string) ([]cache.Change, error) {
 	l, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, err
@@ -93,7 +92,7 @@ func (m *Manager) Changes(ctx context.Context, account, client, export string) (
 }
 
 // Pull streams the named paths out of the cache layer as a tar.
-func (m *Manager) Pull(ctx context.Context, account, client, export string, paths []string) ([]byte, error) {
+func (m *Manager) Pull(account, client, export string, paths []string) ([]byte, error) {
 	_, upper, err := m.upperRoot(account, client, export)
 	if err != nil {
 		return nil, err

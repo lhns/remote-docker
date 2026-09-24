@@ -46,7 +46,7 @@ func TestParseMountsRefusesARelativeSource(t *testing.T) {
 // start and the message would name a path rather than the setting behind it.
 func TestParseMountsRefusesTheDaemonsOwnPaths(t *testing.T) {
 	for _, spec := range []string{
-		"/somewhere:" + SocketMount,
+		"/somewhere:" + socketMount,
 		"/somewhere:/var/lib/docker",
 	} {
 		_, err := ParseMounts(spec)

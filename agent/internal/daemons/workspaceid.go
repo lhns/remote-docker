@@ -11,9 +11,9 @@ import (
 	"github.com/lhns/remote-docker/core-agent/accounts"
 )
 
-// WorkspaceIDFile is where the workspace's identity is kept, beside the uidmap
+// workspaceIDFile is where the workspace's identity is kept, beside the uidmap
 // and for the same reason: it must survive the container it describes.
-const WorkspaceIDFile = "workspace-id"
+const workspaceIDFile = "workspace-id"
 
 // KnownWorkspaceID reads the id without creating one, and reports whether there
 // was one to read.
@@ -23,7 +23,7 @@ const WorkspaceIDFile = "workspace-id"
 // daemons, and writing one so that it can find nothing is state created for
 // nothing.
 func KnownWorkspaceID(stateDir string) (string, bool) {
-	data, err := os.ReadFile(filepath.Join(stateDir, WorkspaceIDFile))
+	data, err := os.ReadFile(filepath.Join(stateDir, workspaceIDFile))
 	if err != nil {
 		return "", false
 	}
@@ -45,7 +45,7 @@ func KnownWorkspaceID(stateDir string) (string, bool) {
 // The state directory is a volume that outlives the container, which is what
 // makes the id stable across exactly the events that change a container id.
 func WorkspaceID(stateDir string) (string, error) {
-	path := filepath.Join(stateDir, WorkspaceIDFile)
+	path := filepath.Join(stateDir, workspaceIDFile)
 
 	data, err := os.ReadFile(path)
 	if err == nil {

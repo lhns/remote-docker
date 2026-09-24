@@ -104,7 +104,7 @@ func TestPlanKeepsEveryOtherMount(t *testing.T) {
 // would fork containers until the node fell over.
 func TestPlanRefusesToElevateTwice(t *testing.T) {
 	info := self()
-	info.Env = append(info.Env, ElevatedEnv+"=1")
+	info.Env = append(info.Env, elevatedEnv+"=1")
 
 	if _, err := Plan(info, Options{}); err == nil {
 		t.Fatal("an already-elevated container was elevated again")
@@ -116,7 +116,7 @@ func TestPlanMarksTheChildAsElevated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !slices.Contains(spec.Env, ElevatedEnv+"=1") {
+	if !slices.Contains(spec.Env, elevatedEnv+"=1") {
 		t.Errorf("child env %v does not carry the elevation marker", spec.Env)
 	}
 	// The rest of the environment is what configures the workspace.
@@ -131,8 +131,8 @@ func TestPlanNamesTheChild(t *testing.T) {
 		t.Fatalf("Plan: %v", err)
 	}
 	// Docker reports names with a leading slash; the child's must not have one.
-	if spec.Name != "workspace.1.xyz"+NameSuffix {
-		t.Errorf("Name = %q, want %q", spec.Name, "workspace.1.xyz"+NameSuffix)
+	if spec.Name != "workspace.1.xyz"+nameSuffix {
+		t.Errorf("Name = %q, want %q", spec.Name, "workspace.1.xyz"+nameSuffix)
 	}
 	if !spec.Privileged {
 		t.Error("the child is not privileged, which is the entire point")
