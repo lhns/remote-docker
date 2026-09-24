@@ -29,7 +29,7 @@ func newWorkspaceCreateCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if host == "" {
-				return fmt.Errorf("--host is required: there is nothing to connect to without it")
+				return fmt.Errorf("--host is required\n  fix: `%s`", ourCommand("create "+name+" --host <host>"))
 			}
 			// Only for a bare host: Transport refuses a port beside a URL.
 			if port == 0 && !strings.Contains(host, "://") {
@@ -107,7 +107,13 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 		Use:     "rm <name>",
 		Aliases: []string{"remove"},
 		Short:   "Remove a workspace and its docker context",
-		Args:    cobra.ExactArgs(1),
+		Long: `Removes the workspace from this machine's configuration, and the docker
+context remote-docker created for it.
+
+A workspace made by "remote machine create" has its machine destroyed too,
+with the images, containers and volumes inside it. Your files are not in it.
+--keep-machine leaves the machine running.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			file, err := config.Load("")
@@ -128,7 +134,7 @@ func newWorkspaceRemoveCommand() *cobra.Command {
 			}
 
 			if !file.Remove(name) {
-				return fmt.Errorf("no workspace named %q; `%s` shows what there is", name, ourCommand("ls"))
+				return noWorkspaceNamed(name)
 			}
 			if err := config.Save(file, ""); err != nil {
 				return err
@@ -186,7 +192,7 @@ Creates the context first if it is missing.`,
 				return err
 			}
 			if _, ok := file.Workspaces[name]; !ok {
-				return fmt.Errorf("no workspace named %q", name)
+				return noWorkspaceNamed(name)
 			}
 			file.Default = name
 			if err := config.Save(file, ""); err != nil {
@@ -333,17 +339,18 @@ func newWorkspaceInspectCommand() *cobra.Command {
 		Short: "Show a workspace's settings, endpoint and docker context",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := ""
+			// The positional name, else --workspace, as every other command
+			// resolves one.
+			o := overrides
 			if len(args) == 1 {
-				name = args[0]
+				o.Workspace = args[0]
 			}
-			cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+			cfg, err := config.Resolve(o, "")
 			if err != nil {
 				return err
 			}
-			if cfg.Host == "" {
-				return fmt.Errorf("no workspace is configured; add one with `%s`",
-					ourCommand("create <name> --host <host>"))
+			if err := requireHost(cfg); err != nil {
+				return err
 			}
 
 			out := cmd.OutOrStdout()

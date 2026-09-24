@@ -302,12 +302,18 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.
 			kept = append(kept, spec)
 			continue
 		}
-		if !IsLocalPath(parsed.Source) {
-			// Never rewrite a named volume: it is the user's data.
-			kept = append(kept, spec)
-			continue
-		}
-		if r.ownedByDaemon(parsed.Source) {
+		// Never rewrite a named volume (it is the user's data) or a path the
+		// workspace owns. Either keeps every option but ours.
+		if !IsLocalPath(parsed.Source) || r.ownedByDaemon(parsed.Source) {
+			options, err := withoutOurWords(parsed.Options)
+			if err != nil {
+				return nil, err
+			}
+			if options != parsed.Options {
+				parsed.Options = options
+				spec = parsed.String()
+				*changed = true
+			}
 			kept = append(kept, spec)
 			continue
 		}
@@ -433,19 +439,22 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace
 
 	touched := len(moved) > 0
 	for _, mount := range mounts {
-		var mountType string
+		var mountType, source string
 		if err := json.Unmarshal(mount["Type"], &mountType); err != nil {
 			continue
 		}
-		if mountType != "bind" {
-			continue
+		// volume, tmpfs, npipe and cluster name no path on this machine.
+		if mountType == "bind" {
+			if err := json.Unmarshal(mount["Source"], &source); err != nil {
+				continue
+			}
 		}
-
-		var source string
-		if err := json.Unmarshal(mount["Source"], &source); err != nil {
-			continue
-		}
-		if !IsLocalPath(source) || r.ownedByDaemon(source) {
+		if mountType != "bind" || !IsLocalPath(source) || r.ownedByDaemon(source) {
+			dropped, err := dropOurConsistency(mount)
+			if err != nil {
+				return err
+			}
+			touched = touched || dropped
 			continue
 		}
 
@@ -529,6 +538,13 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspa
 	exportPath, file, err := r.Shares.Share(localPath)
 	if err != nil {
 		return "", "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
+	}
+	if file != "" && mode.Union() {
+		// A union is bound by path and a file is mounted by subpath, and the
+		// two do not combine: the result is a volume named after a path, or
+		// a bind carrying VolumeOptions, and the daemon refuses both.
+		return "", "", fmt.Errorf("rewrite: mounting the single file %s with write=%s is not supported%s",
+			localPath, mode.Write, fixMountTheDirectory)
 	}
 	if file != "" && !supportsSubpath(r.DockerVersion) {
 		return "", "", fmt.Errorf(

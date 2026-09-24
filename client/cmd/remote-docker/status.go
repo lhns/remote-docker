@@ -220,7 +220,7 @@ func firstLine(s string) string {
 func newStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Is this working, and what is it talking to?",
+		Short: "Show whether the session works and what it is talking to",
 		Long: `Prints a verdict first: ready, or the first thing that is wrong.
 
 Then the detail behind it, grouped by question: whether a session is up and
@@ -234,7 +234,7 @@ somebody is most likely to be running it.`,
 			if err != nil {
 				return err
 			}
-			if err := cfg.RequireHost(); err != nil {
+			if err := requireHost(cfg); err != nil {
 				return err
 			}
 

@@ -180,3 +180,33 @@ func TestFailedProvisioningKeepsAKnownAccount(t *testing.T) {
 		t.Error("alice's key stopped authenticating because a later useradd failed")
 	}
 }
+
+// What is carried forward is the account, not its old keys: a key replaced in
+// the file is withdrawn even while provisioning fails, which is when somebody
+// rotating a leaked key most needs it to be.
+func TestFailedProvisioningStillTakesTheFilesKeys(t *testing.T) {
+	s := newStore(t)
+	prov := &failingProvisioner{}
+	s.Provisioner = prov
+	old := s.writeKey(t, "alice.pub")
+	if err := s.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := s.writeKey(t, "alice.pub")
+	prov.fail = true
+	if err := s.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	alice, ok := s.Lookup("alice")
+	if !ok {
+		t.Fatal("alice was dropped because a later useradd failed")
+	}
+	if alice.Authorized(old) {
+		t.Error("a key removed from alice.pub still authenticates because a later useradd failed")
+	}
+	if !alice.Authorized(fresh) {
+		t.Error("the key now in alice.pub does not authenticate because a later useradd failed")
+	}
+}

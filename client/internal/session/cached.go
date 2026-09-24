@@ -10,8 +10,6 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
-
-	"github.com/lhns/remote-docker/client/internal/config"
 )
 
 // cachedFile is the fill record on disk, bound to its writer (boundRecord).
@@ -29,6 +27,9 @@ type cachedStore struct {
 
 	mu     sync.Mutex
 	shares map[string][]string
+
+	// saving: see shareStore.saving.
+	saving sync.Mutex
 }
 
 // newCachedStore loads the record. Unreadable is empty, which only means
@@ -56,6 +57,9 @@ func (s *cachedStore) Filled(export string) ([]string, bool) {
 
 // Record replaces what is known about a share and writes the file.
 func (s *cachedStore) Record(export string, paths []string) {
+	s.saving.Lock()
+	defer s.saving.Unlock()
+
 	s.mu.Lock()
 	sort.Strings(paths)
 	s.shares[export] = paths
@@ -70,7 +74,7 @@ func (s *cachedStore) Record(export string, paths []string) {
 		return
 	}
 	// Atomic: a half-written record would remove the wrong files.
-	if err := config.WriteAtomic(s.path, data, 0o600); err != nil {
+	if err := writeRecord(s.path, data, 0o600); err != nil {
 		s.warn("could not keep a record of what a cache holds", err)
 	}
 }

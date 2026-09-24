@@ -10,9 +10,10 @@ import (
 type fakeStore struct {
 	mu sync.Mutex
 
-	applied []Entry
-	dropped []string
-	pulled  []string
+	applied  []Entry
+	applyErr error
+	dropped  []string
+	pulled   []string
 
 	changes    []Change
 	changesErr error
@@ -25,6 +26,9 @@ type fakeStore struct {
 func (f *fakeStore) Apply(_ context.Context, _, _ string, entries []Entry) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.applyErr != nil {
+		return f.applyErr
+	}
 	f.applied = append(f.applied, entries...)
 	return nil
 }

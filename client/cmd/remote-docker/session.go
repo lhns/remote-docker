@@ -111,7 +111,7 @@ func withQuerySession(fn func(ctx context.Context, s *session.Session) error) er
 	if err != nil {
 		return err
 	}
-	if err := cfg.RequireHost(); err != nil {
+	if err := requireHost(cfg); err != nil {
 		return err
 	}
 

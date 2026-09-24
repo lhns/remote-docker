@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -32,8 +31,14 @@ type cacheChannel struct {
 	// codec is the payload encoding the workspace announced in its greeting.
 	codec string
 
-	mu sync.Mutex
-	r  *bufio.Reader
+	// turn is held for a whole exchange (see do). A channel rather than a
+	// mutex so that waiting for it honours the caller's context.
+	turn chan struct{}
+	r    *bufio.Reader
+}
+
+func newCacheChannel(stream io.ReadWriteCloser, r *bufio.Reader) *cacheChannel {
+	return &cacheChannel{stream: stream, r: r, turn: make(chan struct{}, 1)}
 }
 
 // openCache establishes the channel and completes the version handshake.
@@ -49,7 +54,7 @@ func openCache(ctx context.Context, client *tunnelclient.Client) (*cacheChannel,
 		return nil, err
 	}
 
-	c := &cacheChannel{stream: stream, r: r}
+	c := newCacheChannel(stream, r)
 	// Chosen from what the AGENT announced, never from what this client can
 	// produce: an older workspace announces none and refuses one.
 	if reply.Hello.Accepts(cache.CodecZstd) {
@@ -191,8 +196,13 @@ func (c *cacheChannel) do(ctx context.Context, req cache.Request, body io.Reader
 		return cache.Reply{}, err
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	select {
+	case c.turn <- struct{}{}:
+	case <-ctx.Done():
+		return cache.Reply{}, fmt.Errorf("cache: %s for %s waited for the channel: %w",
+			req.Op, req.Export, ctx.Err())
+	}
+	defer func() { <-c.turn }()
 
 	type answer struct {
 		reply cache.Reply

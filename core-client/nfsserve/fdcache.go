@@ -221,7 +221,7 @@ func (c *fdCacheFS) evictEntry(e *cachedFD) {
 }
 
 // Close gives up every descriptor this cache holds, and is what a share's
-// filesystem being replaced means (Registry.SetAttrs, on every connect).
+// filesystem being replaced means (Registry.SetAttrs).
 // Without it each rebuild orphans a cache that keeps files open until its idle
 // timers expire, which is the state the cache exists to avoid on Windows.
 //

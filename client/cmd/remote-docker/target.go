@@ -173,6 +173,9 @@ func scanRootArgs(args []string) rootArgs {
 
 		spelling, value, joined := strings.Cut(arg, "=")
 		name, carriesValue := rootFlags[spelling]
+		if !carriesValue && !strings.HasPrefix(arg, "--") {
+			name, value, joined, carriesValue = shorthandCluster(arg)
+		}
 		if !carriesValue {
 			// A boolean flag, or one we have never heard of. Either way it
 			// takes nothing with it.
@@ -189,6 +192,19 @@ func scanRootArgs(args []string) rootArgs {
 		}
 	}
 	return out
+}
+
+// shorthandCluster reads `-Dcci` as pflag does: each letter is a flag until
+// one that takes a value, which takes the rest of the word (after an optional
+// `=`) or, when nothing is left, the next argument.
+func shorthandCluster(arg string) (name, value string, joined, carriesValue bool) {
+	for i := 1; i < len(arg); i++ {
+		if name, ok := rootFlags["-"+arg[i:i+1]]; ok {
+			value = strings.TrimPrefix(arg[i+1:], "=")
+			return name, value, i+1 < len(arg), true
+		}
+	}
+	return "", "", false, false
 }
 
 // endpointIsOurs reports whether a DOCKER_HOST value is an endpoint this

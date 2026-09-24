@@ -7,7 +7,10 @@ package dockercli
 // "mountport=", so anything searching for a substring finds whichever comes
 // first in the text.
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // The real shape, as workspace.NFSVolumeOptions writes it.
 const realOptions = "addr=127.0.0.1,port=30001,mountport=30001,nfsvers=3,nolock," +
@@ -73,5 +76,18 @@ func TestFirstPortWithNothingUsable(t *testing.T) {
 	}
 	if got := firstPort([]string{"", "o=bind"}); got != 0 {
 		t.Errorf("firstPort with no nfs options = %d, want 0", got)
+	}
+}
+
+// A daemon that cannot be asked is the one reason For answers with an error,
+// because any port chosen then is a guess (ADR 0032). With one daemon for
+// everybody (ADR 0012) resolving the host never fails, so the failure arrives
+// at the query itself, and answering 0 there let the caller guess.
+func TestForRefusesWhenTheDaemonDoesNotAnswer(t *testing.T) {
+	c := ClientPorts{Host: func(string) (string, error) { return "unix:///nonexistent/docker.sock", nil }}
+
+	port, err := c.For(context.Background(), "alice", "aabbccdd")
+	if err == nil {
+		t.Errorf("For answered %d for a daemon nothing could reach", port)
 	}
 }

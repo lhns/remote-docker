@@ -124,9 +124,9 @@ func (t *traceFS) timed(name string, f billy.File, err error) (billy.File, error
 	return &traceFile{File: f, fs: t, name: name}, nil
 }
 
-// Every method go-nfs's handlers call is here. One that is missing is worse
-// than no tracer at all: a blocking call reports nothing and the reader
-// concludes the filesystem is not where the time goes.
+// A method go-nfs calls that is not timed here reports nothing when it blocks,
+// and the reader concludes the filesystem is not where the time goes. Chroot
+// and Readlink are not timed.
 
 func (t *traceFS) Stat(name string) (os.FileInfo, error) {
 	defer t.observe("Stat", name, time.Now())

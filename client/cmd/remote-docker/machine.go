@@ -227,7 +227,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 
 	if unproven[spec.Backend] {
-		_, _ = fmt.Fprintf(out, "warning: the %s backend has never been run by anybody\n"+
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has never been run by anybody\n"+
 			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
 			spec.Backend)
 	}
@@ -365,7 +365,11 @@ func newMachineStartCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "start <name>",
 		Short: "Start the machine",
-		Args:  cobra.ExactArgs(1),
+		Long: `Starts the machine and returns once its agent is listening.
+
+A background session serving this workspace is stopped first, because it holds
+a connection to the machine's previous address.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args[0], func(ctx context.Context, _ machine.Backend, ws config.Workspace) error {
 				// Any session here predates the boot and holds the old
@@ -395,7 +399,10 @@ func newMachineStopCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop <name>",
 		Short: "Stop the machine",
-		Args:  cobra.ExactArgs(1),
+		Long: `Stops the background session serving this workspace, then the machine.
+
+Its containers stop with it. Images, containers and volumes are kept.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
 				m := ws.Machine
@@ -415,7 +422,7 @@ func newMachineStopCommand() *cobra.Command {
 func newMachineStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <name>",
-		Short: "Is the machine there, running, and built from the current settings?",
+		Short: "Show whether the machine exists, runs, and matches its settings",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args[0], func(ctx context.Context, b machine.Backend, ws config.Workspace) error {
@@ -455,7 +462,7 @@ func withMachine(cmd *cobra.Command, name string, fn func(context.Context, machi
 	}
 	ws, ok := file.Workspaces[name]
 	if !ok {
-		return fmt.Errorf("no workspace named %q; `%s` shows what there is", name, ourCommand("ls"))
+		return noWorkspaceNamed(name)
 	}
 	if ws.Machine == nil {
 		return fmt.Errorf("workspace %q is not backed by a machine this program built\n"+

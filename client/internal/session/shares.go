@@ -90,6 +90,10 @@ type shareStore struct {
 
 	mu      sync.Mutex
 	records map[string]shareRecord // keyed by export path
+
+	// saving spans taking the copy AND writing it, so two saves cannot land
+	// in the opposite order and leave the older set on disk.
+	saving sync.Mutex
 }
 
 // newShareStore loads the record, dropping what no longer holds. Unreadable
@@ -196,6 +200,9 @@ func (s *shareStore) forget(keep map[string]bool) {
 
 // save writes the record, and never fails a command over it.
 func (s *shareStore) save() {
+	s.saving.Lock()
+	defer s.saving.Unlock()
+
 	s.mu.Lock()
 	file := shareFile{boundRecord: bindRecord(shareFileVersion), Shares: make([]shareRecord, 0, len(s.records))}
 	for _, rec := range s.records {
@@ -218,8 +225,12 @@ func writeShares(path string, file shareFile) error {
 	if err != nil {
 		return err
 	}
-	return config.WriteAtomic(path, append(data, '\n'), 0o600)
+	return writeRecord(path, append(data, '\n'), 0o600)
 }
+
+// writeRecord is how both records reach the disk; a test replaces it to
+// order two saves.
+var writeRecord = config.WriteAtomic
 
 // thisMachine names the host and local account a record belongs to.
 func thisMachine() (string, string) {

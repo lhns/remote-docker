@@ -17,6 +17,10 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
+// dependentsTimeout bounds asking the workspace what still depends on us. A
+// variable so a test need not wait for it.
+var dependentsTimeout = 10 * time.Second
+
 // sweepIdle releases the connection when nothing needs it.
 func (s *Session) sweepIdle() {
 	interval := max(s.opts.IdleTimeout/2, time.Second)
@@ -39,6 +43,11 @@ func (s *Session) sweepIdle() {
 // against ours, never the `rd-` prefix, which on a shared daemon (ADR 0012)
 // matches other accounts' and would pin the connection forever.
 func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, error) {
+	// Bounded here: every caller's context is never cancelled, so a daemon
+	// that stops answering would stall the idle sweep, Standby and expiry.
+	ctx, cancel := context.WithTimeout(ctx, dependentsTimeout)
+	defer cancel()
+
 	containers, err := live.api.ListContainers(ctx)
 	if err != nil {
 		return false, err
@@ -177,11 +186,16 @@ func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
 	return mounted, nil
 }
 
-// exportsVolume reports whether a volume backs a share this session exports.
-// The daemon calls it in use only once a container names it, and it must
-// survive collection before that.
+// exportsVolume reports whether a volume backs a share this session exports,
+// or is the cache over one. The daemon calls it in use only once a container
+// names it, and it must survive collection before that.
 func (s *Session) exportsVolume(volume string) bool {
-	return s.ourVolumes()[volume]
+	for name := range s.ourVolumes() {
+		if volume == name || volume == workspace.CacheVolumeName(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Status answers the control endpoint, satisfying proxy.Control. It never
@@ -210,10 +224,7 @@ func (s *Session) Status() any {
 // Idle reports whether this session could be ended without breaking anything,
 // satisfying proxy.Control.
 func (s *Session) Idle() any {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-
-	_, safe := s.IdleFor(ctx)
+	_, safe := s.IdleFor(s.ctx)
 	return proxy.Idle{Safe: safe}
 }
 

@@ -307,3 +307,33 @@ func TestCloseTearsDownEverything(t *testing.T) {
 		t.Errorf("Active() = %v after Close, want empty", got)
 	}
 }
+
+// 53/tcp and 53/udp share a number and are two publications, so both are
+// forwarded on it, and a udp forward does not hold the number for tcp.
+func TestTCPAndUDPOnOneLocalPortAreBothForwarded(t *testing.T) {
+	docker := &fakeDocker{containers: []Container{
+		{ID: "a", Name: "dns", Ports: []Published{
+			{PublicPort: 5353, PrivatePort: 53, Type: "tcp"},
+			{PublicPort: 5353, PrivatePort: 53, Type: "udp"},
+		}},
+	}}
+	fwd := newForwarder()
+	m := &Manager{Docker: docker, Forwarder: fwd}
+
+	for range 2 {
+		if err := m.Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+	}
+	if len(fwd.opened) != 2 {
+		t.Fatalf("opened %v, want 5353 once per protocol", fwd.opened)
+	}
+
+	docker.containers[0].Ports = docker.containers[0].Ports[1:]
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if m.Forwarding(5353) {
+		t.Error("a udp forward on 5353 reports 5353 as taken for tcp")
+	}
+}

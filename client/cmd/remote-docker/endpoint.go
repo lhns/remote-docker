@@ -15,6 +15,20 @@ func resolve() (config.Config, error) {
 	return config.Resolve(overrides, "")
 }
 
+// requireHost is config's RequireHost with the remedy spelled for this binary.
+func requireHost(cfg config.Config) error {
+	if err := cfg.RequireHost(); err != nil {
+		return fmt.Errorf("%w\n  fix: `%s`, or set %s",
+			err, ourCommand("create <name> --host <host>"), config.EnvHost)
+	}
+	return nil
+}
+
+// noWorkspaceNamed is the one answer to a name that is not in the config.
+func noWorkspaceNamed(name string) error {
+	return fmt.Errorf("no workspace named %q\n  fix: `%s` lists them", name, ourCommand("ls"))
+}
+
 // exportLine renders the DOCKER_HOST assignment for the shell the user is
 // most likely holding.
 func exportLine(endpoint string) string {

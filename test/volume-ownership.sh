@@ -78,7 +78,9 @@ mkdir_under() {
         sh -c "mkdir -p $target/repos 2>&1 && echo MKDIR-OK" 2>&1)
     case "$out" in
     *MKDIR-OK*) echo OK ;;
-    *[Pp]ermission\ denied*) echo EACCES ;;
+    # mkdir's own words: docker's "permission denied while trying to connect"
+    # would otherwise read as the container being refused.
+    *"mkdir: can't create directory"*[Pp]ermission\ denied*) echo EACCES ;;
     *) echo "OTHER: $(echo "$out" | tr '\n' ' ')" ;;
     esac
 }

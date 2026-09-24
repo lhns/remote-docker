@@ -537,19 +537,22 @@ func (t *Tree) fetch(n *node) []Entry {
 			continue
 		}
 		for i := range at.entries {
-			st := &at.state[i]
-			if st.stored {
-				continue
+			if !at.state[i].stored {
+				out = append(out, at.markStored(i))
 			}
-			size := at.entries[i].Size
-			st.stored = true
-			at.addRead(-min(st.read, size))
-			st.read = 0
-			at.addFetched(size, 1)
-			out = append(out, at.entries[i])
 		}
 	}
 	return out
+}
+
+// markStored marks entry i stored, moving what was read of it to fetched.
+func (n *node) markStored(i int) Entry {
+	e, st := n.entries[i], &n.state[i]
+	st.stored = true
+	n.addRead(-min(st.read, e.Size))
+	st.read = 0
+	n.addFetched(e.Size, 1)
+	return e
 }
 
 func (n *node) addRead(delta int64) {
@@ -624,12 +627,7 @@ func (t *Tree) Unstored(maxBytes int64, maxFiles int) []Entry {
 		if len(out) >= maxFiles || (len(out) > 0 && size+e.Size > maxBytes) {
 			break
 		}
-		st := &cd.leaf.state[cd.idx]
-		st.stored = true
-		cd.leaf.addRead(-min(st.read, e.Size))
-		st.read = 0
-		cd.leaf.addFetched(e.Size, 1)
-		out = append(out, e)
+		out = append(out, cd.leaf.markStored(cd.idx))
 		size += e.Size
 	}
 	return out

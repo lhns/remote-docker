@@ -13,6 +13,7 @@ package dockercli
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -52,10 +53,11 @@ func (c ClientPorts) For(ctx context.Context, account, client string) (int, erro
 	names, err := cli.Line(ctx, "volume", "ls", "--quiet",
 		"--filter", "label="+workspace.ManagedLabel+"="+workspace.ManagedShare,
 		"--filter", "label="+workspace.ClientLabel+"="+client)
-	if err != nil || strings.TrimSpace(names) == "" {
-		// A daemon that listed nothing is a machine with no volumes, and one
-		// that errored here is answering, since Host resolved. Neither is
-		// worth refusing a session over.
+	if err != nil {
+		// Host resolving says nothing: the shared daemon's always does.
+		return 0, fmt.Errorf("dockercli: listing %s's volumes: %w", account, err)
+	}
+	if strings.TrimSpace(names) == "" {
 		return 0, nil
 	}
 

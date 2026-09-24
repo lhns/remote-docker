@@ -60,6 +60,24 @@ func TestAllowDialRefusesAnotherAccountsTunnel(t *testing.T) {
 	}
 }
 
+// Go's dialer resolves "localhost" to 127.0.0.1, so a reservation held under
+// one loopback name must protect the port under the others too.
+func TestAllowDialRefusesAnotherAccountsTunnelUnderAnyLoopbackName(t *testing.T) {
+	p := newPolicy()
+	if _, ok := p.Bind(alice, "127.0.0.1", 30000); !ok {
+		t.Fatal("alice could not take her own port, so this proves nothing")
+	}
+
+	for _, host := range []string{"localhost", "::1"} {
+		if ok, _ := p.AllowDial(bob, host, 30000); ok {
+			t.Errorf("bob reached alice's file server as %s:30000", host)
+		}
+	}
+	if _, ok := p.Bind(alice, "localhost", 30000); ok {
+		t.Error("a second session took alice's held port under another name")
+	}
+}
+
 // A port nobody holds is not protected, because there is nothing of ours on
 // it. Refusing the whole reverse-tunnel range would refuse published container
 // ports too: PortForUID counts up from 30000, and docker publishes from 32768.
