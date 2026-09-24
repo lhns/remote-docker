@@ -54,12 +54,13 @@ type File struct {
 // ErrShareGone is a Store saying it holds no cache for a share.
 var ErrShareGone = errors.New("dircache: the store has no cache for this share")
 
-// Record is what an earlier prefetch put in a cache, surviving this process.
+// Record is every path this machine put in a cache, surviving this process.
 //
 // The only thing that can tell a file deleted while nothing was running from a
-// file the consumer created: a prefetch only ever writes, so it has no way to
-// notice what is GONE. Optional; without one, nothing is ever removed from a
-// cache and a share is stale in that one way.
+// file the consumer created: a fill only ever writes, so it has no way to
+// notice what is GONE. Saved for every batch, whatever sent it: one that lands
+// unrecorded is a deletion nothing can reconcile. Optional; without one,
+// nothing is ever removed from a cache.
 type Record interface {
 	Filled(share string) ([]string, bool)
 	Record(share string, paths []string)
@@ -75,7 +76,7 @@ type Cache struct {
 	// while it runs (ADR 0015).
 	Store func() (Store, bool)
 
-	// Record persists what each prefetch sent. Nil records nothing.
+	// Record persists what every batch sent. Nil records nothing.
 	Record Record
 
 	// Exclude are directory names never cached. It MUST be the list the change
@@ -114,6 +115,9 @@ type Cache struct {
 	// bw is the bandwidth measured on this cache's own batches, in bytes per
 	// second, and zero until a batch large enough has gone.
 	bw atomic.Int64
+
+	// recording keeps saves of the record in the order they were made.
+	recording sync.Mutex
 }
 
 // ShareOptions is what the caller decided about a share, in this module's
@@ -143,7 +147,11 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 		return
 	}
 	state := &shareState{opts: opts}
-	c.shares.set(share, root, state)
+	var filled []string
+	if c.Record != nil {
+		filled, _ = c.Record.Filled(share)
+	}
+	c.shares.set(share, root, state, filled)
 	// Whatever the policy: a cache filled by an earlier session still holds a
 	// file deleted here while nothing ran, and only the record of that fill
 	// can take it out.
@@ -166,24 +174,10 @@ func (c *Cache) Reports() []Report { return c.shares.reports() }
 // timer, so it can fire after everything it needs has gone.
 func (c *Cache) Stop() { c.inval.stop() }
 
-// reconcileDeletions takes out of the cache what this machine no longer has,
-// from what a previous run recorded.
+// reconcileDeletions takes out of the cache the recorded paths this machine no
+// longer has. Only recorded ones: a path no batch sent is the consumer's own.
 func (c *Cache) reconcileDeletions(share, root string) {
-	if c.Record == nil {
-		return
-	}
-	filled, ok := c.Record.Filled(share)
-	if !ok {
-		return
-	}
-	c.dropDeleted(share, root, filled)
-}
-
-// dropDeleted removes from a share's cache those of the named paths this
-// machine no longer has. Callers pass only recorded paths: one no prefetch
-// sent is the consumer's own file.
-func (c *Cache) dropDeleted(share, root string, filled []string) {
-	gone := deletedSince(root, filled)
+	gone := deletedSince(root, c.shares.recordedPaths(share))
 	if len(gone) == 0 {
 		return
 	}
@@ -201,6 +195,7 @@ func (c *Cache) dropDeleted(share, root string, filled []string) {
 			"share", share, "err", err)
 		return
 	}
+	c.unrecord(share, gone)
 	c.log().Info("took deleted files out of a share's cache", "share", share, "files", len(gone))
 }
 
@@ -225,6 +220,8 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	state.Bytes += bytes
 	c.shares.mu.Unlock()
 
+	c.record(share, entries)
+
 	ctx, cancel := context.WithTimeout(c.Ctx, batchTimeout)
 	defer cancel()
 	started := time.Now()
@@ -238,6 +235,29 @@ func (c *Cache) sendBatch(share, root string, entries []Entry, state *shareState
 	c.shares.mu.Unlock()
 	c.shares.noteSent(share, root, entries)
 	return nil
+}
+
+// record saves a batch's paths BEFORE it is applied: a batch cut off midway may
+// have landed in part, and a path recorded that never landed costs one Drop of
+// nothing.
+func (c *Cache) record(share string, entries []Entry) {
+	paths := make([]string, len(entries))
+	for i, e := range entries {
+		paths[i] = e.Path
+	}
+	c.editRecord(share, paths, true)
+}
+
+// unrecord forgets paths the cache no longer holds, so a consumer that later
+// creates one is not mistaken for the fill.
+func (c *Cache) unrecord(share string, paths []string) { c.editRecord(share, paths, false) }
+
+func (c *Cache) editRecord(share string, paths []string, add bool) {
+	c.recording.Lock()
+	defer c.recording.Unlock()
+	if all, changed := c.shares.editRecord(share, paths, add); changed && c.Record != nil {
+		c.Record.Record(share, all)
+	}
 }
 
 // batchTimeout bounds one send: up to batchBytes over whatever link the store
@@ -339,6 +359,10 @@ type shares struct {
 	// decide almost every case without comparing two machines' clocks (ADR
 	// 0044).
 	manifests map[string]map[string]baseline
+
+	// recorded is what Record holds for each share: every path any batch sent,
+	// this run or an earlier one, less what has been dropped since.
+	recorded map[string]map[string]bool
 }
 
 // ephemeral reports whether a share never carries writes back.
@@ -349,18 +373,76 @@ func (f *shares) ephemeral(share string) bool {
 	return ok && s.opts.Ephemeral
 }
 
-func (f *shares) set(share, root string, s *shareState) {
+func (f *shares) set(share, root string, s *shareState, filled []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state == nil {
 		f.state = map[string]*shareState{}
 		f.roots = map[string]string{}
 		f.manifests = map[string]map[string]baseline{}
+		f.recorded = map[string]map[string]bool{}
 	}
 	s.Local = root
 	f.state[share] = s
 	f.roots[share] = root
 	f.manifests[share] = map[string]baseline{}
+	f.recorded[share] = map[string]bool{}
+	for _, p := range filled {
+		f.recorded[share][slashed(p)] = true
+	}
+}
+
+// editRecord adds paths to a share's record, or removes them, and returns the
+// whole record and whether it changed.
+func (f *shares) editRecord(share string, paths []string, add bool) ([]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	recorded, ok := f.recorded[share]
+	if !ok {
+		return nil, false
+	}
+	changed := false
+	for _, p := range paths {
+		p = slashed(p)
+		if recorded[p] != add {
+			changed = true
+			if add {
+				recorded[p] = true
+			} else {
+				delete(recorded, p)
+			}
+		}
+	}
+	return keys(recorded), changed
+}
+
+// recordedPaths is a share's record.
+func (f *shares) recordedPaths(share string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return keys(f.recorded[share])
+}
+
+// recordedSet is a COPY of a share's record, for a write-back round to decide
+// against while batches go on adding to it.
+func (f *shares) recordedSet(share string) map[string]bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]bool, len(f.recorded[share]))
+	for p := range f.recorded[share] {
+		out[p] = true
+	}
+	return out
+}
+
+func slashed(p string) string { return "/" + strings.TrimPrefix(p, "/") }
+
+func keys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // finish marks a share's prefetch over, with whether the cache holds
@@ -389,6 +471,7 @@ func (f *shares) forget(share string) {
 	delete(f.state, share)
 	delete(f.roots, share)
 	delete(f.manifests, share)
+	delete(f.recorded, share)
 	delete(f.prefetch, share)
 }
 
@@ -420,18 +503,6 @@ func baselineOf(root, p string) (baseline, bool) {
 		return baseline{}, false
 	}
 	return baseline{Size: info.Size(), ModTime: info.ModTime()}, true
-}
-
-// paths is what this run put in a share's cache.
-func (f *shares) paths(share string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	out := make([]string, 0, len(f.manifests[share]))
-	for p := range f.manifests[share] {
-		out = append(out, p)
-	}
-	return out
 }
 
 // baselines is a COPY of a share's manifest: the prefetch may still be adding

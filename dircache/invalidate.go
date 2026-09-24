@@ -53,10 +53,7 @@ func (c *Cache) Lost(notice Notice) {
 		if !ok {
 			continue
 		}
-		// This run's own manifest, not the persisted record: it is what the
-		// cache holds right now, where the record is what the last completed
-		// fill left. A share still filling has the more accurate of the two.
-		go c.dropDeleted(share, root, c.shares.paths(share))
+		go c.reconcileDeletions(share, root)
 	}
 }
 
@@ -165,9 +162,12 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 	if len(dropped) > 0 {
 		if err := store.Drop(ctx, share, dropped); err != nil {
 			c.quiet(ctx, "dropping from a cache", "share", share, "err", err)
+		} else {
+			c.unrecord(share, dropped)
 		}
 	}
 	for _, batch := range batches(changed) {
+		c.record(share, batch)
 		if err := store.Apply(ctx, share, root, batch); err != nil {
 			c.quiet(ctx, "updating a cache", "share", share, "err", err)
 			continue

@@ -98,7 +98,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 		return
 	}
 
-	actions := decide(c.shares.baselines(share), changes, localAtRoot(root), c.skew(), state.Cached)
+	actions := decide(c.shares.baselines(share), c.shares.recordedSet(share), changes, localAtRoot(root), c.skew(), state.Cached)
 	if len(actions) == 0 {
 		return
 	}
@@ -128,6 +128,10 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	// both sides agree on, so the next round starts from it rather than seeing
 	// the same change again.
 	c.shares.rebase(share, root, actions)
+	// What came back is in the cache and now here too, so a later deletion
+	// here must be able to take it out.
+	c.editRecord(share, writes(actions), true)
+	c.unrecord(share, deletes(actions))
 }
 
 func (c *Cache) skew() time.Duration {

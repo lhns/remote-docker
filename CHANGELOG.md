@@ -32,6 +32,7 @@ software.
   rather than claiming to have removed one.
 - `--workspace nope` is answered like every other unknown name, with
   `remote ls` as the fix.
+- A file deleted here while nothing ran is taken out of a union's cache and no longer written back, even when invalidation or an interrupted prefetch put it there.
 
 ## 0.7.0 — 2026-09-08
 

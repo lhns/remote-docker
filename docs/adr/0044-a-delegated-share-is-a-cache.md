@@ -170,10 +170,18 @@ A cache volume outlives its session, and a fill only overwrites and adds. A
 file deleted here while nothing ran stays in the cache and in every container,
 with no event to explain it.
 
-- The client records what each fill sent (`client/internal/session/cached.go`),
+- The client records what every batch sent (`client/internal/session/cached.go`),
   per workspace, bound to machine and account. The next fill stats those paths
-  and drops the ones gone here. Only paths a fill put there are considered: a
-  path no fill sent is a container's own file and is never removed.
+  and drops the ones gone here. Only paths a batch put there are considered: a
+  path no batch sent is a container's own file and is never removed.
+- Every batch is recorded whatever sent it (prefetch, invalidation), BEFORE it
+  is applied, since an interrupted batch may have landed in part. A batch that
+  landed unrecorded was a deletion nothing could reconcile (2026-09-24).
+- A path leaves the record when it leaves the cache, so a container that later
+  creates it is not mistaken for the fill.
+- Write-back refuses a path in the record that this run did not send and this
+  machine no longer has: it is a cached copy of a file deleted here. A path in
+  no record is the container's new file and still comes back.
 - A watcher overflow is the same problem inside a session, so
   `fswatch.Observer.Lost` answers it with the same reconcile.
 - Not covered, deliberately: a container already running when the client

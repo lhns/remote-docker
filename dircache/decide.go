@@ -91,8 +91,13 @@ type localAt func(path string) (fs.FileInfo, bool)
 // not, nothing is written back at all: a file the fill never sent looks exactly
 // like a file the consumer created, and the cost of that mistake is content
 // appearing in somebody's source tree that they never wrote.
+//
+// recorded is every path any batch put in the cache, in any session: one this
+// run did not send and this machine no longer has was deleted here, and a
+// cached copy of it is not the consumer's to bring back.
 func decide(
 	manifest map[string]baseline,
+	recorded map[string]bool,
 	changes []Change,
 	local localAt,
 	skew time.Duration,
@@ -121,7 +126,7 @@ func decide(
 		// exists here, or was deleted, may be a file the cache never held, and
 		// nothing here can tell.
 		if !sent {
-			if change.Deleted || here {
+			if change.Deleted || here || recorded[change.Path] {
 				continue
 			}
 			actions = append(actions, action{Path: change.Path, kind: kindWrite})
