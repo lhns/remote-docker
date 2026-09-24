@@ -50,9 +50,11 @@ jobs:
           sudo mv kubeconform /usr/local/bin/
 
       # Every combination somebody can install, against real API schemas.
+      # pipefail: helm failing leaves kubeconform an empty stdin, which it
+      # passes as "0 resources found".
       - name: helm template, each way it can be configured
         run: |
-          set -eux
+          set -euxo pipefail
           render() {
             helm template ws charts/remote-docker-workspace --kube-version 1.29.0 "$@" \
               | kubeconform -strict -kubernetes-version 1.29.0 -summary -
@@ -103,7 +105,9 @@ jobs:
             *) echo "the generated state template disappeared"; exit 1 ;;
           esac
 
-          case "$(render --set ingress.host=ws.example.com)" in
+          # Assigned first: a failed render inside `case "$(...)"` is ignored.
+          default=$(render --set ingress.host=ws.example.com)
+          case "$default" in
             *claimName*) echo "the default mounted a claim it does not create"; exit 1 ;;
           esac
 

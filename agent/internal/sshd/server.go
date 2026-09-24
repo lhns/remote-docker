@@ -225,9 +225,12 @@ func (s *Server) Serve(ctx context.Context) error {
 		return fmt.Errorf("sshd: listening on %s: %w", s.cfg.Addr, err)
 	}
 
+	// The listener too: a Close that lands before ssh.Serve registers it
+	// closes nothing, and Serve then blocks in Accept for good.
 	go func() {
 		<-ctx.Done()
 		_ = s.Close()
+		_ = listener.Close()
 	}()
 
 	s.log().Info("listening on " + s.cfg.Addr)

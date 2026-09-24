@@ -187,7 +187,11 @@ for probe in "18095 pc" "18096 phone"; do
     fi
 done
 
-if outputs ':18095$' dpc port pc-web 80/tcp; then
+# And the workspace bound neither number, which is what stops the two from
+# colliding there in the first place.
+if ! outputs ':[0-9]+$' dpc port pc-web 80/tcp; then
+    bad "pc-web published nothing: [$LAST_OUTPUT]"
+elif outputs ':18095$' dpc port pc-web 80/tcp; then
     bad "the workspace bound 18095 itself"
 else
     ok "the workspace published on ports of its own choosing"
@@ -217,27 +221,40 @@ if [ "$(echo "$before" | grep -c '^rd-[0-9a-f]\{8\}-')" -ge 2 ]; then
 else
     bad "a volume does not name the machine that created it"
 fi
-(
+# The phone's prefix, read off a volume only the phone mounts. gc keeps the
+# volume for the directory it runs in, so a count of survivors proves nothing:
+# the pc's own always survives.
+dphone create --name tc-phone-probe -v "$WORK/project-$PHONE:/w" alpine:3 true >/dev/null 2>&1
+phone_prefix=$(dphone inspect -f '{{range .Mounts}}{{.Name}}{{end}}' tc-phone-probe 2>&1 | grep -o '^rd-[0-9a-f]\{8\}-')
+dphone rm -f tc-phone-probe >/dev/null 2>&1
+
+gc_out=$(
     cd "$WORK/project-$PC" || exit 1
     REMOTE_DOCKER_STATE_DIR="$WORK/state-$PC" \
     REMOTE_DOCKER_HOST=127.0.0.1 \
     REMOTE_DOCKER_PORT=$SSH_PORT \
     REMOTE_DOCKER_USER="$ACCOUNT" \
-        "$WORK/remote-docker" remote gc
-) >/dev/null 2>&1
+        "$WORK/remote-docker" remote gc 2>&1
+)
+gc_status=$?
 after=$(volumes)
 
-# The pc's own volumes may go; the phone still mounting below is the check
-# that the right one went.
-for volume in $(echo "$before" | grep .); do
-    if ! echo "$after" | grep -qx "$volume"; then
-        info "the pc's collection removed $volume"
-    fi
-done
-if [ "$(echo "$after" | grep -c .)" -ge 1 ]; then
-    ok "a volume survived the other machine's collection"
+if [ -z "$phone_prefix" ]; then
+    bad "could not tell which volumes are the phone's"
+elif [ "$gc_status" -ne 0 ]; then
+    bad "the pc's gc failed ($gc_status): $gc_out"
 else
-    bad "a collection on one machine took every volume"
+    lost=""
+    for volume in $(grep "^$phone_prefix" <<<"$before"); do
+        grep -qx "$volume" <<<"$after" || lost="$lost $volume"
+    done
+    if [ -z "$(grep "^$phone_prefix" <<<"$before")" ]; then
+        bad "the phone had no volume before the collection: [$before]"
+    elif [ -z "$lost" ]; then
+        ok "the pc's collection left every one of the phone's volumes"
+    else
+        bad "the pc's collection removed the phone's volumes:$lost"
+    fi
 fi
 
 phone_again=$(dphone run --rm -v "$WORK/project-$PHONE:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
@@ -288,17 +305,24 @@ if [ "$pc_ok" = true ] && [ "$phone_ok" = true ]; then
         bad "a union served the wrong machine's file"
     fi
 
-    dpc exec tc-pc-eph sh -c 'echo "pc wrote this" >/w/out.txt' >/dev/null 2>&1
-    dphone exec tc-phone-back sh -c 'echo "phone wrote this" >/w/out.txt' >/dev/null 2>&1
+    # Read back inside the container, or the ephemeral check below passes on a
+    # write that never happened.
+    if ! out=$(dpc exec tc-pc-eph sh -c 'echo "pc wrote this" >/w/out.txt && cat /w/out.txt' 2>&1) ||
+        [ "$out" != "pc wrote this" ]; then
+        bad "the pc could not write into its ephemeral share: [$out]"
+    fi
+    if ! out=$(dphone exec tc-phone-back sh -c 'echo "phone wrote this" >/w/out.txt' 2>&1); then
+        bad "the phone could not write into its write-back share: [$out]"
+    fi
     if phone_got=$(wait_for_content "$phone_back/out.txt" "phone wrote this" 30); then
         ok "the phone's write came back to the phone's directory"
     else
         bad "the phone's write did not come back: [$phone_got]"
     fi
-    if [ ! -e "$pc_eph/out.txt" ]; then
-        ok "the pc's ephemeral write reached nobody, 30s on"
+    if pc_got=$(wait_for_content "$pc_eph/out.txt" "pc wrote this" 30); then
+        bad "an ephemeral write came back to the pc: [$pc_got]"
     else
-        bad "an ephemeral write came back to the pc: [$(cat "$pc_eph/out.txt")]"
+        ok "the pc's ephemeral write reached nobody, 30s on"
     fi
 else
     info "a corner could not be mounted, so the cross-machine write assertions were skipped"

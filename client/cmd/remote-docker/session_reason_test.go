@@ -45,13 +45,20 @@ func TestEnsureDaemonSaysWhenNoWorkspaceIsConfigured(t *testing.T) {
 
 	// The same message `remote status` gives, because the situation is the same
 	// one and two spellings of it would drift.
-	want := config.Config{}.RequireHost().Error()
+	want := requireHost(config.Config{}).Error()
 	if err.Error() != want {
 		t.Errorf("said %q,\nwant %q", err, want)
 	}
-	// The remedy, which is the part that makes it actionable.
-	if !strings.Contains(err.Error(), config.EnvHost) {
-		t.Errorf("the error does not name the setting that fixes it: %v", err)
+	// The remedy, which is the part that makes it actionable: one line of
+	// diagnosis and one fix line naming both ways to configure a workspace.
+	lines := strings.Split(err.Error(), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], "  fix: ") {
+		t.Fatalf("want a diagnosis and one fix line, got %q", err)
+	}
+	for _, remedy := range []string{"remote create", config.EnvHost} {
+		if !strings.Contains(lines[1], remedy) {
+			t.Errorf("the fix line does not name %s: %q", remedy, lines[1])
+		}
 	}
 }
 

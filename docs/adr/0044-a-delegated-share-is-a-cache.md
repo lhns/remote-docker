@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-09-04
+- Date: 2026-09-01, last amended 2026-09-23
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
@@ -179,6 +179,20 @@ with no event to explain it.
 - Not covered, deliberately: a container already running when the client
   restarts keeps what its cache holds until that share is filled again.
 
+### One union per share per machine
+
+- An account's machines share a daemon (ADR 0029), and two of them naming one
+  share id is ordinary: `/cwd` is everybody's. Keyed by account and export
+  alone, the second machine's Prepare found the first one's union alive and was
+  handed its merged path, so its container read the other machine's files.
+- So the manager keys a union by account, **client** and export, the
+  mountpoints are `/run/rd-union/<client>/<id>/{lower,merged}`, and a cache
+  session ending releases only its own machine's unions.
+- A union an older agent mounted at `/run/rd-union/<id>` is still reported to
+  the collector and waited out before this share mounts again, so an upgrade on
+  a VM (ADR 0025) fails a Prepare loudly until the old union goes rather than
+  stacking a second one on its upper.
+
 ### The collector cannot see a cache volume in use
 
 A union is bound by path, so the daemon reports the volume holding its layer
@@ -191,8 +205,8 @@ live mount: the container keeps running and the files it wrote are gone.
 - The agent answers from the filesystem, not its own record: after an agent
   restart the unions are still serving and the manager knows nothing, so a
   truthful "none mounted" would delete the cache under a running container.
-  The ids come from the mounts under `/run/rd-union` and the client digest from
-  the authenticated key, so a machine hears only of its own caches.
+  The ids come from the mounts under `/run/rd-union/<client>` and the client
+  digest from the authenticated key, so a machine hears only of its own caches.
 
 ### A union outlives the channel that asked for it
 

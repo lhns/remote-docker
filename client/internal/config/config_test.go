@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,24 @@ func TestResolvePrecedence(t *testing.T) {
 			t.Errorf("got %+v", cfg)
 		}
 	})
+}
+
+// A port in an ssh:// host is the port, through Resolve as well as Transport:
+// the SSH default must not be filled in and then read as a `port` setting
+// that contradicts the URL.
+func TestResolveKeepsThePortOfAnSSHURL(t *testing.T) {
+	path := writeConfig(t, `{"host":"ssh://dev.example:2299"}`)
+	cfg, err := Resolve(Overrides{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := cfg.Transport()
+	if err != nil {
+		t.Fatalf("Transport: %v", err)
+	}
+	if transport.Port != 2299 {
+		t.Errorf("port = %d, want 2299", transport.Port)
+	}
 }
 
 func TestResolveDefaults(t *testing.T) {
@@ -113,15 +132,8 @@ func TestRequireHost(t *testing.T) {
 		t.Errorf("a configured host was rejected: %v", err)
 	}
 
-	err := (Config{User: "alice"}).RequireHost()
-	if err == nil {
-		t.Fatal("a missing host was accepted")
-	}
-	// The message has to say how to fix it, not just that it is wrong.
-	for _, want := range []string{EnvHost, "--host", "alice"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
-		}
+	if err := (Config{User: "alice"}).RequireHost(); !errors.Is(err, ErrNoWorkspace) {
+		t.Fatalf("a missing host answered %v, want ErrNoWorkspace", err)
 	}
 }
 

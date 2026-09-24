@@ -260,13 +260,14 @@ func (p *Ports) Owns(account string, uid, port int) bool {
 	return err == nil && port == base
 }
 
-// load reads the record once.
+// load reads the record once it has been read successfully. A failed read is
+// tried again next time rather than remembered as an empty record, which the
+// next save would write back over everybody's assignments.
 func (p *Ports) load() error {
 	if p.loaded {
 		return nil
 	}
 	p.assigned = map[assignment]int{}
-	p.loaded = true
 
 	err := ReadRecord(p.path(), func(line string) {
 		// account:client:port
@@ -283,6 +284,7 @@ func (p *Ports) load() error {
 	if err != nil {
 		return fmt.Errorf("accounts: reading clientports: %w", err)
 	}
+	p.loaded = true
 	return nil
 }
 

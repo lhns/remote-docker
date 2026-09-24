@@ -282,7 +282,7 @@ EXIST="$WORK/existing"; mkdir -p "$EXIST"; echo "existing marker" >"$EXIST/marke
 echo
 echo "== 7. E4: a black hole rather than a refusal =="
 # DROP, not REJECT: a dropped connection never answers, which is the costly one.
-if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP 2>/dev/null; then
+if blocked=$(hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP 2>&1); then
     ok "blocked the port inside the workspace"
 
     dockert rm -f nfsres-black >/dev/null 2>&1
@@ -310,7 +310,8 @@ if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport "$PORT" -j DROP
         bad "mounting did not recover after the block was lifted: $(echo "$out" | grep -m1 -iE 'error|refused' | cut -c1-160)"
     fi
 else
-    info "iptables is not available in the workspace image; E4 not measured"
+    # docker:dind ships iptables, so this is a failure rather than a skip.
+    bad "could not block the port, so E4 was not measured: [$blocked]"
 fi
 
 echo
@@ -371,7 +372,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
     fi
 
     # The sshd port: the transport UNDER the NFS traffic.
-    if hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport 2222 -j DROP 2>/dev/null; then
+    if blocked=$(hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport 2222 -j DROP 2>&1); then
         mark=$(date +%s)
         # Keepalive is 15s with a 30s wait, so detection is inside 45s.
         info "black-holing the ssh port for 70s"
@@ -394,13 +395,16 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         # The reconnect is PROVEN before the mount is judged: "the handles
         # died" and "it never reconnected" look identical. Timed, because a
         # black-holed socket stays writable for minutes of retransmits, and
-        # "not yet" is not "never".
+        # "not yet" is not "never". Against a deadline, because a docker ps
+        # that fails fast would spend all its attempts in seconds.
         recovered=0
-        for _ in $(seq 1 32); do
+        deadline=$(( $(date +%s) + 480 ))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
             if timeout 15 docker ps >/dev/null 2>&1; then
                 recovered=$(( $(date +%s) - mark ))
                 break
             fi
+            sleep 5
         done
         if [ "$recovered" -gt 0 ]; then
             ok "a docker command works again ${recovered}s after the block was lifted"
@@ -431,7 +435,7 @@ if dockert run -d --name nfsres-ssh -v "$SSHBH:/w" alpine:3 sh -c "$WATCH_SH" >/
         fi
         info "last line from the watcher: $(echo "$window" | tail -1)"
     else
-        info "iptables unavailable; E7 not measured"
+        bad "could not block the ssh port, so E7 was not measured: [$blocked]"
     fi
     dockert rm -f nfsres-ssh >/dev/null 2>&1
 else

@@ -100,7 +100,7 @@ session() {
 rd() { timeout 60 "$WORK/remote-docker" "$@"; }
 
 # unions_running counts ALL fuse-overlayfs servers: this suite holds one union
-# at a time, and each names only /run/rd-union/<share id>, a digest.
+# at a time, and each names only /run/rd-union/<client>/<id>, a digest.
 unions_running() {
     sudo pgrep -c fuse-overlayfs 2>/dev/null || true
 }

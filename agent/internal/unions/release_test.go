@@ -31,7 +31,7 @@ const (
 )
 
 func specFor(export string) union.Spec {
-	return union.Spec{Export: export, Port: 30001, CacheDir: "/var/lib/docker/volumes/v/_data"}
+	return union.Spec{Export: export, Client: thisClient, Port: 30001, CacheDir: "/var/lib/docker/volumes/v/_data"}
 }
 
 // held builds a manager holding two of an account's unions, without starting
@@ -43,7 +43,7 @@ func held(t *testing.T, vols Volumes) *Manager {
 	for _, export := range []string{firstExport, secondExport} {
 		done := make(chan struct{})
 		close(done)
-		m.shares[key("alice", export)] = &live{
+		m.shares[key("alice", thisClient, export)] = &live{
 			spec: specFor(export), cancel: func() {}, done: done,
 		}
 	}
@@ -57,12 +57,12 @@ func held(t *testing.T, vols Volumes) *Manager {
 // mount could no longer be repaired.
 func TestReleaseAccountKeepsAUnionAContainerHolds(t *testing.T) {
 	m := held(t, fakeVolumes{sources: map[string]bool{specFor(firstExport).Merged(): true}})
-	m.ReleaseAccount(context.Background(), "alice")
+	m.Release(context.Background(), "alice", thisClient)
 
-	if _, ok := m.shares[key("alice", firstExport)]; !ok {
+	if _, ok := m.shares[key("alice", thisClient, firstExport)]; !ok {
 		t.Error("released the union a container is bound to")
 	}
-	if _, ok := m.shares[key("alice", secondExport)]; ok {
+	if _, ok := m.shares[key("alice", thisClient, secondExport)]; ok {
 		t.Error("kept the union nothing is bound to")
 	}
 }
@@ -71,10 +71,26 @@ func TestReleaseAccountKeepsAUnionAContainerHolds(t *testing.T) {
 // process for every share it ever served.
 func TestReleaseAccountDropsAUnionNobodyHolds(t *testing.T) {
 	m := held(t, fakeVolumes{sources: map[string]bool{}})
-	m.ReleaseAccount(context.Background(), "alice")
+	m.Release(context.Background(), "alice", thisClient)
 
 	if len(m.shares) != 0 {
 		t.Errorf("kept %d unions with no container on them", len(m.shares))
+	}
+}
+
+// One machine's session ending is not another's: the second machine may have
+// prepared a union its container has not bound yet.
+func TestReleaseLeavesAnotherMachinesUnions(t *testing.T) {
+	m := held(t, fakeVolumes{sources: map[string]bool{}})
+	done := make(chan struct{})
+	close(done)
+	other := key("alice", "11223344", firstExport)
+	m.shares[other] = &live{spec: specFor(firstExport), cancel: func() {}, done: done}
+
+	m.Release(context.Background(), "alice", thisClient)
+
+	if _, ok := m.shares[other]; !ok || len(m.shares) != 1 {
+		t.Errorf("one machine's release left %d unions, want only the other machine's", len(m.shares))
 	}
 }
 
@@ -85,18 +101,18 @@ func TestReleaseAccountDropsAUnionNobodyHolds(t *testing.T) {
 // and costs somebody the contents of a cache their container is still reading.
 func TestMountedCachesIncludesWhatThisProcessDidNotStart(t *testing.T) {
 	m := held(t, fakeVolumes{})
-	m.shares[key("alice", firstExport)].cache = "rd-aabbccdd-aaaa-cache"
+	m.shares[key("alice", thisClient, firstExport)].cache = "rd-aabbccdd-aaaa-cache"
 
-	got := m.MountedCaches("alice", "", Daemon{})
+	got := m.MountedCaches("alice", thisClient, Daemon{})
 	if len(got) != 1 || got[0] != "rd-aabbccdd-aaaa-cache" {
 		t.Errorf("MountedCaches = %v, want this process's own record", got)
 	}
 
-	// With no client digest nothing can be named for a mount found on disk,
-	// because a cache volume's name is per machine (ADR 0029) -- so the record
-	// is all there is, and the scan is skipped rather than guessed at.
-	if len(m.MountedCaches("bob", "", Daemon{})) != 0 {
+	if len(m.MountedCaches("bob", thisClient, Daemon{})) != 0 {
 		t.Error("another account's shares were reported")
+	}
+	if len(m.MountedCaches("alice", "11223344", Daemon{})) != 0 {
+		t.Error("another machine's shares were reported")
 	}
 }
 
@@ -104,7 +120,7 @@ func TestMountedCachesIncludesWhatThisProcessDidNotStart(t *testing.T) {
 // container permanently; keeping one nobody needs costs a process.
 func TestReleaseAccountKeepsEverythingWhenTheDaemonCannotAnswer(t *testing.T) {
 	m := held(t, fakeVolumes{err: errors.New("the daemon is not up")})
-	m.ReleaseAccount(context.Background(), "alice")
+	m.Release(context.Background(), "alice", thisClient)
 
 	if len(m.shares) != 2 {
 		t.Errorf("kept %d of 2 unions when the daemon could not be asked", len(m.shares))

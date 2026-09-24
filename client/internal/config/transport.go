@@ -116,13 +116,6 @@ func (c Config) Transport() (Transport, error) {
 		"config: host %q names %q, which is not a way to reach a workspace (ssh, ws or wss)", c.Host, scheme)
 }
 
-// isWebSocketHost reports whether a host names a WebSocket endpoint, which is
-// what decides whether the SSH port default applies to it.
-func isWebSocketHost(host string) bool {
-	scheme, _, ok := splitScheme(strings.TrimSpace(host))
-	return ok && (scheme == TransportWS || scheme == TransportWSS)
-}
-
 // splitScheme separates "scheme://rest". Reported rather than guessed: a host
 // with a colon in it is a port, not a scheme.
 func splitScheme(host string) (scheme, rest string, ok bool) {

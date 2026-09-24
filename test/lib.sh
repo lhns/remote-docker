@@ -255,7 +255,7 @@ dump_workspace_log() {
 # caller reports, and LAST_OUTPUT holds what /proc/mounts said.
 union_is_fuse() {
     local exec_fn=$1 container=$2
-    outputs 'fuse' "$exec_fn" exec "$container" sh -c 'grep " /w " /proc/mounts'
+    outputs ' /w fuse' "$exec_fn" exec "$container" sh -c 'grep " /w " /proc/mounts'
 }
 
 # wait_for_content prints what it last saw (empty for no file).
@@ -269,10 +269,15 @@ wait_for_content() {
     [ "$seen" = "$want" ]
 }
 
+# wait_gone: the directory must still list, so a failed exec or a dead mount
+# is not read as a deletion. LAST_OUTPUT holds the last answer.
 wait_gone() {
     local exec_fn=$1 container=$2 path=$3 secs=$4 _
     for _ in $(seq 1 "$secs"); do
-        "$exec_fn" exec "$container" test -e "$path" >/dev/null 2>&1 || return 0
+        # shellcheck disable=SC2016  # expanded by the container's sh
+        outputs '^GONE$' "$exec_fn" exec "$container" sh -c \
+            'if [ -e "$1" ]; then echo PRESENT; else ls "$(dirname "$1")" >/dev/null && echo GONE; fi' \
+            _ "$path" && return 0
         sleep 1
     done
     return 1

@@ -200,10 +200,10 @@ func (c *Cache) send(p *prefetch) {
 				break
 			}
 			if err := c.sendBatch(p.share, p.root, batch, p.state); err != nil {
-				// Said once. The share is served live meanwhile; the tree
-				// still says these are stored, and the next connection
-				// rebuilds it (the record of what was sent is per prefetch).
+				// Said once, and kept for status. The share is served live
+				// meanwhile, and the next connection starts a new prefetch.
 				c.quiet(c.Ctx, "a share's prefetch could not be sent", "share", p.share, "demand", demand, "err", err)
+				c.shares.finish(p.state, false, err)
 				return
 			}
 			// The link as now measured, so the next decision uses it. The

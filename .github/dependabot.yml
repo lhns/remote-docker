@@ -48,10 +48,12 @@ updates:
     # download-artifact stayed on v4.
     open-pull-requests-limit: 10
 
-  # The composite action pins setup-go itself, and the root entry does not
-  # look inside .github/actions.
+  # The composite actions pin setup-go and setup-dotnet themselves, and the
+  # root entry does not look inside .github/actions.
   - package-ecosystem: github-actions
-    directory: /.github/actions/setup-go
+    directories:
+      - /.github/actions/setup-go
+      - /.github/actions/setup-wix
     schedule:
       interval: weekly
 

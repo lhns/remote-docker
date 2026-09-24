@@ -167,7 +167,9 @@ echo
 echo "== 5. the daemons really are different =="
 ida=$(da info --format '{{.ID}}' 2>/dev/null)
 idb=$(db info --format '{{.ID}}' 2>/dev/null)
-if [ -n "$ida" ] && [ "$ida" != "$idb" ]; then
+if [ -z "$ida" ] || [ -z "$idb" ]; then
+    bad "a daemon did not answer: alice [$ida], bob [$idb]"
+elif [ "$ida" != "$idb" ]; then
     ok "each account is talking to a different daemon"
 else
     bad "both accounts reached the same daemon ($ida)"
@@ -309,7 +311,12 @@ for corner in "read=direct,write=back" "read=direct,write=ephemeral"; do
     else
         bad "$corner: the union did not serve the file"
     fi
-    da exec "$name" sh -c 'echo "written there" >/w/out.txt' >/dev/null 2>&1
+    # Read back inside the container, or the ephemeral case passes on a write
+    # that never happened.
+    if ! out=$(da exec "$name" sh -c 'echo "written there" >/w/out.txt && cat /w/out.txt' 2>&1) ||
+        [ "$out" != "written there" ]; then
+        bad "$corner: the container could not write into the union: [$out]"
+    fi
     case "$corner" in
         *back)
             back=$(wait_for_content "$dir/out.txt" "written there" 30)

@@ -10,21 +10,12 @@ import (
 	"time"
 )
 
-// Keeping a cache honest when the tree under it changes (ADR 0044).
-//
-// A cached copy of a file that has changed here is the one way this mode can be
-// WRONG rather than merely slow, and it is worse than a stale attribute: the
-// `cached` consistency goes stale for at most actimeo, while an uninvalidated
-// cache entry is stale until something removes it. So the change source is
-// load-bearing for correctness, and this is what it drives.
+// Keeping a cache honest when the tree under it changes (ADR 0044): a cached
+// copy of a file changed here is stale until something removes it, which makes
+// this the one way the mode can be wrong rather than slow.
 //
 //	changed here -> send the bytes again, overwriting the cached copy
-//	deleted here -> remove it, which leaves a whiteout that is correct,
-//	                because the tree underneath has lost the file too
-//
-// Changes arrive BEFORE the watch mode strips anything. A deletion cannot be
-// replayed faithfully over NFS, which is what ModePartial is about; it can be
-// applied to a cache exactly.
+//	deleted here -> remove it; the whiteout is right, the tree lost it too
 
 // invalidateDelay batches the events of one editor save, one `git checkout` or
 // one build step into a single exchange.

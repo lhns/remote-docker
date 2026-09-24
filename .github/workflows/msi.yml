@@ -80,10 +80,16 @@ jobs:
       - name: a snapshot version is refused rather than truncated
         shell: pwsh
         run: |
-          ./installer/windows/build.ps1 -Version 0.0.0-dev.9370b24 -Arch x64 `
-            -Binary windows/amd64/remote-docker.exe -Out dist/msi/should-not-exist.msi
+          $out = (./installer/windows/build.ps1 -Version 0.0.0-dev.9370b24 -Arch x64 `
+            -Binary windows/amd64/remote-docker.exe -Out dist/msi/should-not-exist.msi *>&1 | Out-String)
+          $out
           if ($LASTEXITCODE -eq 0) {
             Write-Host 'build.ps1 accepted a snapshot version; it must refuse one'
+            exit 1
+          }
+          # Refused for THIS reason, not for any failure at all.
+          if ($out -notmatch 'not an MSI version') {
+            Write-Host 'build.ps1 failed, but not by refusing the version'
             exit 1
           }
           Write-Host 'refused, as it must be'

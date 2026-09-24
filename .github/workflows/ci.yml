@@ -36,6 +36,18 @@ jobs:
             exit 1
           fi
 
+      # go.work is committed, so every other step here resolves through the
+      # workspace and a go.mod missing a require still builds. The image build
+      # copies no go.work and fails on it (dependabot #159, #161, #170, #180).
+      - name: each module resolves on its own go.mod
+        env:
+          GOWORK: "off"
+        run: |
+          set -eux
+          for mod in core agent core-agent core-client client dircache machine test/probes; do
+            go list -C "$mod" -deps -test ./... >/dev/null
+          done
+
       # `./...` stops at a module boundary (ADR 0021), so the loop is the only
       # thing covering the repository; at the root it would test almost nothing.
       - name: go vet

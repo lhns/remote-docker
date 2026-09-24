@@ -1,8 +1,8 @@
 // Local development across the eight modules.
 //
-// Not what CI or the image build use -- each of those builds one module, with
-// the `replace` directives in its go.mod doing the resolving -- so a mistake
-// here cannot hide a mistake there.
+// Every CI step resolves through this file except one: ci.yml lists each module
+// with GOWORK=off, as the image build does, so a go.mod missing a require fails
+// there rather than only in the image.
 go 1.26.3
 
 use (

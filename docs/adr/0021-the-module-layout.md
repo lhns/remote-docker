@@ -99,8 +99,9 @@ Structural rules:
   restrict a handler every module imports to `core/...` alone.
 - **Relative `replace`, and the agent never requires the client module** — that
   would pull the graph straight back in.
-- **`go.work` is for editors only.** CI and the image build take one module at a
-  time, so a missing `require` fails where it is wrong.
+- **`go.work` is committed, so CI resolves through it.** A missing `require`
+  fails only where it is absent: the image build, and `ci.yml`'s step that lists
+  each module with `GOWORK=off`, which is there to fail first.
 - **Names are places, not roles.** `client`/`server` invert per mechanism: for
   the Docker API the user's machine is the client, for NFS it is the SERVER.
   `core-agent` rather than `workspace`, because `core/workspace` already means

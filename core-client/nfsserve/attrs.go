@@ -71,7 +71,7 @@ type attrFS struct {
 	// export is which share this filesystem serves, so a handle can name it
 	// (ADR 0033). Carried here because go-nfs hands the handler a filesystem
 	// and nothing else, and because the POINTER cannot be the identity:
-	// SetAttrs rebuilds every share's filesystem on each connect.
+	// SetAttrs rebuilds every share's filesystem when the account changes.
 	export string
 
 	// prefix is where this filesystem sits inside the share: "" for the root,
@@ -281,10 +281,19 @@ var _ nfs.UnixChange = (*attrChange)(nil)
 // where the same chmod against Docker's own bind mount, served by root, has no
 // such effect. The mode reported back is synthesised anyway (see Attrs), so
 // nothing the container can observe is changed by keeping them.
+//
+// A symlink is refused, as lchmod is on Linux: resolve leaves the last element
+// unresolved and os.Chmod follows it, so a crafted client asking on a link's
+// own handle changed the mode of whatever it named, outside the share included.
 func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 	target, err := c.resolve(name)
 	if err != nil {
 		return err
+	}
+	if fi, err := os.Lstat(target); err != nil {
+		return err
+	} else if fi.Mode()&os.ModeSymlink != 0 && target != filepath.Clean(c.root) {
+		return syscall.ENOTSUP
 	}
 	return os.Chmod(target, mode|0o600)
 }
@@ -300,13 +309,9 @@ func (c *attrChange) Chmod(name string, mode os.FileMode) error {
 func (c *attrChange) Chown(string, int, int) error  { return nil }
 func (c *attrChange) Lchown(string, int, int) error { return nil }
 
-// Chtimes is accepted and NOT applied, deliberately.
-//
-// The agent replays changes by touching files through this export (ADR 0016).
-// Apply them and this machine's watcher sees the touch, reports it, and the
-// agent replays it again: one edit became 3063 events in integration.sh
-// section 11 when this was real. Breaking the loop needs the watcher to know
-// which changes this server caused, and it has no such mechanism.
+// Chtimes is accepted and NOT applied. The agent replays changes by touching
+// files through this export (ADR 0016), so applying them feeds this machine's
+// watcher its own replay: one edit became 3063 events.
 func (c *attrChange) Chtimes(string, time.Time, time.Time) error { return nil }
 
 // Link makes a second name for a file, which is LINK: `ln`, `cp -l` and git's

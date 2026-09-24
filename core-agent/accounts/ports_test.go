@@ -91,6 +91,36 @@ func TestAPortIsRememberedAcrossRestarts(t *testing.T) {
 	}
 }
 
+// A record that could not be read once is read again, not taken as empty: an
+// empty record hands a known machine the derived port and then overwrites the
+// file with that one entry, and every other machine's volumes name a port
+// nothing will listen on again (ADR 0032).
+func TestAFailedReadOfTheRecordIsNotAnEmptyRecord(t *testing.T) {
+	p := newPorts(t)
+	record := filepath.Join(p.Dir, "clientports")
+
+	// Unreadable for the moment: a directory opens and then fails to read.
+	if err := os.Mkdir(record, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.For("alice", 10001, "aabbccdd"); err == nil {
+		t.Fatal("an unreadable record was not reported")
+	}
+
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(record, []byte("alice:aabbccdd:65000\nbob:11223344:64000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.For("alice", 10001, "aabbccdd"); err != nil || got != 65000 {
+		t.Errorf("once readable, the record gave %d (err %v), want the recorded 65000", got, err)
+	}
+	if data, _ := os.ReadFile(record); !strings.Contains(string(data), "bob:11223344:64000") {
+		t.Errorf("another machine's assignment was lost from the record: %q", data)
+	}
+}
+
 // An allocation must not take a port an account that EXISTS derives. It would
 // work until that account connected and then take a working tunnel away.
 func TestAllocationSkipsAPortSomebodyDerives(t *testing.T) {
