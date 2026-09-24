@@ -87,6 +87,25 @@ func TestRootHandleForAnUnexportedShareIsStale(t *testing.T) {
 	}
 }
 
+// A restarted client has registered nothing, and a container still holds the
+// root handle of a share the record kept. The kernel never mounts again, so
+// the handle is the only chance to bring the share back.
+func TestRootHandleRestoresARecordedExport(t *testing.T) {
+	dir := t.TempDir()
+	handle := rootHandleOf(t, New(registryFor(t, dir), nil), exportOf(dir))
+
+	r := NewRegistry(DefaultAttrs)
+	r.Recorded = func() []string { return []string{exportOf(dir)} }
+	r.Restore = func(export string) (string, bool) { return dir, export == exportOf(dir) }
+
+	if _, _, err := New(r, nil).handler.FromHandle(handle); err != nil {
+		t.Fatalf("a recorded export's root handle did not resolve: %v", err)
+	}
+	if _, _, ok := r.Lookup(exportOf(dir)); !ok {
+		t.Error("the handle resolved without registering the share")
+	}
+}
+
 // Two shares must not share a handle, or a mount of one serves the other.
 func TestRootHandlesDifferPerShare(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()

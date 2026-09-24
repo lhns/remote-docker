@@ -63,6 +63,10 @@ type Registry struct {
 	// before it is believed.
 	Restore func(exportPath string) (localPath string, ok bool)
 
+	// Recorded names the exports Restore can answer for. A root handle carries
+	// only a digest of its export, and this is how one is matched to a record.
+	Recorded func() []string
+
 	// OnRead is told every read the workspace makes through a share, in
 	// bytes, as it happens. On a share with a cache that is exactly the
 	// stream of misses, which is what a prefetch policy runs on (ADR 0045).
@@ -175,10 +179,11 @@ func (r *Registry) Lookup(exportPath string) (*Share, string, bool) {
 
 // LookupOrRestore is Lookup, with one chance to bring a share back.
 //
-// Separate from Lookup on purpose: only a MOUNT may resurrect a share. Shares,
-// which the volume collector and the file watcher both read, has to keep
-// answering with what is exported right now, and a lookup that quietly
-// registered things would make "in use" depend on who asked.
+// Separate from Lookup on purpose: only a MOUNT, or a root handle through
+// restoreMatching, may resurrect a share. Shares, which the volume collector
+// and the file watcher both read, has to keep answering with what is exported
+// right now, and a lookup that quietly registered things would make "in use"
+// depend on who asked.
 func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	if share, rest, ok := r.Lookup(exportPath); ok {
 		return share, rest, true
@@ -202,6 +207,22 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 		return nil, "", false
 	}
 	return share, "/", true
+}
+
+// restoreMatching restores the recorded export match accepts. A kernel
+// presents a root handle only for an export it has mounted, so this brings
+// back only what a container is using (ADR 0027).
+func (r *Registry) restoreMatching(match func(export string) bool) (*Share, bool) {
+	if r.Recorded == nil {
+		return nil, false
+	}
+	for _, export := range r.Recorded() {
+		if match(export) {
+			share, rest, ok := r.LookupOrRestore(export)
+			return share, ok && rest == "/"
+		}
+	}
+	return nil, false
 }
 
 // Shares returns every registered share, ordered by export path.

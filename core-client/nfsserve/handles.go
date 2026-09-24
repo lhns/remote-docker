@@ -40,9 +40,9 @@ type rootHandler struct {
 	log      *slog.Logger
 }
 
-// errStaleExport is what a handle naming a share that is no longer exported
-// gets. Never a lookup, never a guess: a handle may name a capability the
-// workspace still holds, and may not resurrect one (ADR 0027).
+// errStaleExport is what a handle naming a share that is neither exported nor
+// recorded gets. Never a guess: a handle names a capability, and resolves only
+// to one this machine wrote down (ADR 0027).
 var errStaleExport = errors.New("nfsserve: no such export")
 
 func (h *rootHandler) ToHandle(f billy.Filesystem, path []string) []byte {
@@ -76,6 +76,11 @@ func (h *rootHandler) FromHandle(handle []byte) (billy.Filesystem, []string, err
 		return fs, path, nil
 	}
 	share, ok := h.shareForKey(key)
+	if !ok {
+		share, ok = h.registry.restoreMatching(func(export string) bool {
+			return string(exportKey(export)) == string(key)
+		})
+	}
 	if !ok {
 		return nil, nil, errStaleExport
 	}

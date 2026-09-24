@@ -433,7 +433,8 @@ client chooses among directories it wrote down itself, never a path the far side
 supplied. `client/internal/session/shares.go` recomputes the id from the path
 before believing an entry, refuses the whole file when another machine or
 account wrote it, drops records unused for 30 days, and
-restores only from a MOUNT that missed rather than from a lookup. *Covered by*
+restores only from a MOUNT or a share root handle that missed rather than
+from a lookup. *Covered by*
 `shares_test.go` and `role_test.go`.
 
 **T — a volume that is not ours (4).** Volumes are only ever created, never

@@ -203,6 +203,18 @@ func (s *shareStore) restore(exportPath string) (string, bool) {
 	return rec.Path, true
 }
 
+// exports names every recorded export, for matching a root handle to one.
+func (s *shareStore) exports() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.records))
+	for export := range s.records {
+		out = append(out, export)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // forget drops records for exports the workspace no longer has a volume for.
 func (s *shareStore) forget(keep map[string]bool) {
 	if s == nil {

@@ -676,8 +676,9 @@ premise of the project, and it applies to building it too. So:
   account and refused wholesale if either differs. The working directory is a
   share like any other: an export it named would mean a different directory in
   the next process, while the volume naming it would not.
-  Restore only from a MOUNT that missed; `Lookup` and `Shares` must never
-  resurrect, or "in use" depends on who asked. And never feed the record to
+  Restore only from a MOUNT or a root handle that missed, since a kernel
+  presents either only for an export it mounts; `Lookup` and `Shares` must
+  never resurrect, or "in use" depends on who asked. And never feed the record to
   `rewrite.Guard`: a stopped container already pins its volume, so the collector
   was never the hazard, and doing so would keep every recorded volume alive
   until the record expired.

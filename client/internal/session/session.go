@@ -269,6 +269,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
 		s.registry.Restore = s.shares.restore
+		s.registry.Recorded = s.shares.exports
 		policy, err := dircache.ParsePolicy(opts.Config.Prefetch)
 		if err != nil {
 			return nil, fmt.Errorf("prefetch: %w", err)

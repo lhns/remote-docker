@@ -1,7 +1,9 @@
 # 0027 — Restoring an export the workspace remembers
 
 - Status: Accepted; amends [ADR 0007](0007-virtual-nfs-export-namespace.md)
-- Date: 2026-08-11
+- Date: 2026-08-11; amended 2026-09-25
+- Current answer: restore lazily, from a MOUNT or a share ROOT HANDLE that
+  misses, through the checks below. Never eagerly, never from a lookup.
 
 ## Context
 
@@ -37,7 +39,15 @@ workspace does.
 ## Decision
 
 Record `export path -> local directory` per workspace, and restore a share
-**lazily, on a MOUNT that misses**, never eagerly at session start.
+**lazily, on a MOUNT or a root handle that misses**, never eagerly at session
+start.
+
+- A root handle carries a digest of its export (ADR 0033), matched against the
+  recorded exports. A kernel keeps the handle MOUNT gave it and never mounts
+  again, so after a client restart a running container presents the handle and
+  nothing else: without this it gets `Stale file handle`.
+- Both are asked only by a kernel that has mounted that export, so neither
+  restores anything a container is not using.
 
 Eager restore was rejected on one ground. ADR 0007's guarantee is that the
 workspace's view of this machine is exactly the set of paths the user asked for.
