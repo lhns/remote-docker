@@ -9,26 +9,12 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// The mode a mount asks for is read out of the two places Docker puts it, and
-// taken OUT of what is forwarded. Once the bind is a volume the words describe
-// nothing the daemon can act on, and leaving them there asks a daemon that has
-// never heard of them to accept an option it did not send us.
-//
-// Consumed UNCONDITIONALLY, rewrite or not. Docker's own words are inert on a
-// daemon; ours are not, and a bind this program leaves alone would carry them
-// to a daemon that rejects `read=cached` by name (ADR 0042).
+// A mount's mode words are read from `-v` options or `--mount` Consistency and
+// always consumed: the daemon rejects ours by name (ADR 0042).
 
-// splitMode separates every mode word from the rest of a `-v` option list, and
-// returns the options without them.
-//
-// The third field of a `-v` is a comma-separated LIST, which is why
-// `-v /a:/b:ro,read=cached` is the spelling and `/a:/b:read=cached:ro` is not a bind at
-// all. Every other option is carried through untouched, `ro` above all: the
-// export behind the volume is read-write, so that flag is the only thing
-// between a container and the user's files.
-//
-// Returns the mode, the Docker word it was spelled as where it was one of
-// those (writeAsked quotes that back), and the remaining options.
+// splitMode takes the mode words out of a `-v` option list, leaving every other
+// option, `ro` above all, untouched. It returns the mode, the Docker word used
+// if any (for writeAsked), and the remaining options.
 func splitMode(options string) (workspace.Mode, string, string, error) {
 	if options == "" {
 		return workspace.ModeUnset, "", "", nil
@@ -51,8 +37,7 @@ func splitMode(options string) (workspace.Mode, string, string, error) {
 	return mode, dockerSpelling(asked), strings.Join(kept, ","), nil
 }
 
-// dockerSpelling is the Docker word to quote back, and "" where the person
-// wrote our own words, which are already in the mode.
+// dockerSpelling is the Docker word to quote back, or "" for our own words.
 func dockerSpelling(asked string) string {
 	if workspace.DockerWord(asked) {
 		return strings.TrimSpace(asked)
@@ -60,9 +45,8 @@ func dockerSpelling(asked string) string {
 	return ""
 }
 
-// takeMode reads and removes a `--mount` entry's Consistency field: Docker's
-// field, our values. The CLI splits `--mount` on commas, so both axes reach
-// it as one csv-quoted field: `"consistency=read=cached,write=back"`.
+// takeMode reads and removes a `--mount` entry's Consistency field. Both axes
+// arrive csv-quoted: `"consistency=read=cached,write=back"`.
 func takeMode(mount map[string]json.RawMessage) (workspace.Mode, string, error) {
 	raw, ok := mount["Consistency"]
 	if !ok || string(raw) == "null" {
@@ -81,8 +65,8 @@ func takeMode(mount map[string]json.RawMessage) (workspace.Mode, string, error) 
 }
 
 // withoutOurWords takes the read= and write= words out of an option list the
-// daemon will see as it is, keeping Docker's own, which it accepts. A misspelt
-// one of ours is refused here as it would be on a rewritten bind.
+// daemon will see as it is, keeping Docker's own. A misspelt one of ours is
+// refused here as it would be on a rewritten bind.
 func withoutOurWords(options string) (string, error) {
 	var ours, kept []string
 	for _, opt := range strings.Split(options, ",") {
@@ -128,23 +112,16 @@ func dropOurConsistency(mount map[string]json.RawMessage) (bool, error) {
 	return true, nil
 }
 
-// The remedies named more than once, so two spellings cannot drift.
+// Remedies named more than once.
 const (
 	fixWatchOn = "\n  fix: set watch to partial or coarse for this workspace"
 
-	// FixUpdateWorkspace is the remedy for a workspace that cannot serve a
-	// union at all, shared with the session that opens the cache channel.
+	// FixUpdateWorkspace is for a workspace that cannot serve a union at all.
 	FixUpdateWorkspace = "\n  fix: update the workspace, or use write=through"
 )
 
-// modeFor is what a share gets when the mount named nothing on an axis: the
-// rule for the deepest configured path containing it, and the workspace
-// default otherwise.
-//
-// Deepest rather than first, because rules nest: a workspace set to `cached`
-// with one tree pinned back to `consistent` is the case these exist for, and
-// which rule wins cannot depend on map order (CLAUDE.md: never range a map to
-// decide something durable).
+// modeFor is the mode for axes a mount left unset: the DEEPEST configured path
+// containing it, so nested rules never depend on map order, else the default.
 func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 	key := workspace.CanonicalKey(localPath)
 
@@ -161,33 +138,20 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 	return best.Or(r.Mode)
 }
 
-// resolveMode settles what one mount of one directory gets, and refuses what
-// this client cannot serve.
-//
-// The volume is per SHARE, so two mounts of one directory asking for different
-// things can only get one of them. Refused rather than silently resolved: the
-// second EnsureVolume would recreate the volume the first just made, and both
-// containers would quietly run under the second answer.
-//
-// spelled is the Docker word the mount used, if it used one; writeAsked is
-// what the refusals put it through.
+// resolveMode settles one mount's mode and refuses what cannot be served. Two
+// mounts of one directory disagreeing are refused: the volume is per share,
+// and the second EnsureVolume would silently recreate the first's.
 func (r *Rewriter) resolveMode(ctx context.Context, modes map[string]workspace.Mode, source string, asked workspace.Mode, spelled string) (workspace.Mode, error) {
-	// An axis nobody named is Docker's default for it.
 	got := asked.Or(r.modeFor(source)).Or(workspace.DefaultMode)
 
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
-		// The first request that needs a cache is where the workspace is asked
-		// whether it serves one; a session that never gets here never asks.
 		if _, err := r.openCache(ctx); err != nil {
 			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for %s, and %w",
 				source, wants, err)
 		}
 		if !r.Watching {
-			// A stronger requirement than read=cached's, and for a stronger
-			// reason: that mode goes stale for at most actimeo, while a cached
-			// COPY of a file that changed here is stale until something
-			// removes it, and the watcher is what removes it (ADR 0044).
+			// Without the watcher a cached copy stays stale forever (ADR 0044).
 			return workspace.ModeUnset, fmt.Errorf(
 				"rewrite: %s asks for %s, whose cache is kept honest by the watcher, and watching is off"+fixWatchOn,
 				source, wants)
@@ -216,8 +180,7 @@ func (r *Rewriter) resolveMode(ctx context.Context, modes map[string]workspace.M
 	return got, nil
 }
 
-// openCache reaches the session's cache channel, and answers for a session
-// that has none at all: a query session, or a test that wired no cache.
+// openCache reaches the session's cache channel, refusing if there is none.
 func (r *Rewriter) openCache(ctx context.Context) (Cache, error) {
 	if r.OpenCache == nil {
 		return nil, fmt.Errorf("this session cannot reach the workspace's cache\n"+
@@ -226,11 +189,8 @@ func (r *Rewriter) openCache(ctx context.Context) (Cache, error) {
 	return r.OpenCache(ctx)
 }
 
-// writeAsked names the write mode a refusal is about, and where a Docker word
-// asked for it, that word too: somebody who wrote `delegated` is told
-// `write=back, which delegated means`. `delegated` is read=cached,write=back,
-// so it is the one way to ask for a union without typing `back`, and a message
-// naming only write=back would name a word nobody wrote.
+// writeAsked names the write mode a refusal is about, plus the Docker word that
+// asked for it: `write=back, which delegated means`.
 func writeAsked(write workspace.Write, spelled string) string {
 	if spelled == "" {
 		return "write=" + string(write)
@@ -238,9 +198,8 @@ func writeAsked(write workspace.Write, spelled string) string {
 	return fmt.Sprintf("write=%s, which %s means", write, spelled)
 }
 
-// unionAvailable turns the workspace's answer into a remedy. An empty answer is
-// an agent predating workspace.Info.Union, and reads as "cannot": no workspace
-// served a union before that field existed.
+// unionAvailable turns the workspace's answer into a remedy. Empty is an agent
+// predating the field, which cannot serve one.
 func unionAvailable(reported string) error {
 	switch reported {
 	case workspace.UnionReady:

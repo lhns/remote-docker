@@ -13,16 +13,9 @@ import (
 // does not know about survives the round trip.
 type binding map[string]json.RawMessage
 
-// rewritePorts hands the published port back to the daemon and records what
-// the user asked for.
-//
-// A published port is bound on the WORKSPACE, so on a daemon shared between
-// accounts (ADR 0012) two people running -p 8080:80 collide and the second is
-// refused. Nothing needs that number to be 8080 there: the client opens the
-// local listener, so the daemon can publish wherever it likes as long as the
-// label says which local port belongs in front of it (ADR 0008).
-//
-// Returns what to record, keyed by container port.
+// rewritePorts lets the daemon pick each published port and returns, keyed by
+// container port, the numbers the user asked for, which the client opens
+// locally (ADR 0008).
 func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *bool) (workspace.RequestedPorts, error) {
 	raw, ok := hostConfig["PortBindings"]
 	if !ok || string(raw) == "null" {
@@ -31,8 +24,7 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 
 	var bindings map[string][]binding
 	if err := json.Unmarshal(raw, &bindings); err != nil {
-		// Not ours to repair: the daemon reports a malformed body better than
-		// a guess here would.
+		// The daemon reports a malformed body better.
 		return nil, nil
 	}
 
@@ -43,9 +35,7 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 			continue
 		}
 
-		// TCP only, because the question is asked by opening a TCP listener.
-		// Refusing a UDP publication on the strength of a TCP listener holding
-		// the number would be refusing it for something unrelated.
+		// TCP only: the check opens a TCP listener.
 		if workspace.IsTCP(workspace.ProtoOf(containerPort)) && r.LocalPortFree != nil {
 			for _, port := range fixed {
 				if err := r.LocalPortFree(port); err != nil {
@@ -54,19 +44,9 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 			}
 		}
 
-		// ONE binding, whatever was asked for, with an empty HostPort: that is
-		// how the API says "any free port", and the daemon picks, so nobody can
-		// be holding it.
-		//
-		// One rather than one per number, because two bindings asking for any
-		// port are identical and the daemon allocates a single port for them
-		// and then fails to bind it twice:
-		//
-		//	failed to bind host port 0.0.0.0:32778/tcp: address already in use
-		//
-		// Publishing once costs nothing here: every number the user asked for
-		// fronts the same container port, so the client opens all of them in
-		// front of the one publication.
+		// ONE binding with an empty HostPort ("any"), however many numbers were
+		// asked for: two identical "any" bindings get one port that the daemon
+		// then fails to bind twice ("address already in use").
 		keep["HostPort"] = json.RawMessage(`""`)
 		bindings[containerPort] = []binding{keep}
 
@@ -87,12 +67,8 @@ func (r *Rewriter) rewritePorts(hostConfig map[string]json.RawMessage, changed *
 	return requested, nil
 }
 
-// fixedPorts is every port asked for by name under one container port, and the
-// binding to keep for them.
-//
-// The kept one is the first that named a port, so its HostIp survives: that is
-// the interface of the workspace the user chose to publish on, and it is not
-// ours to change.
+// fixedPorts is every port asked for by number under one container port, and
+// the first such binding, kept so its HostIp survives.
 func fixedPorts(list []binding) ([]int, binding) {
 	var ports []int
 	var keep binding
@@ -110,16 +86,8 @@ func fixedPorts(list []binding) ([]int, binding) {
 	return ports, keep
 }
 
-// remappable reports the port one binding asks for, and whether it may be
-// moved.
-//
-// The only binding left where it is asks for an empty HostPort, which is the
-// user asking for any port already.
-//
-// UDP is moved like TCP, and for the same reason: two accounts publishing
-// 53/udp collide on a shared workspace daemon. The client opens the number it
-// asked for in front of whatever the daemon picked, on either protocol
-// (ADR 0038).
+// remappable reports the port one binding names, false if it names none. UDP
+// is moved like TCP (ADR 0038).
 func remappable(b binding) (int, bool) {
 	var hostPort string
 	if err := json.Unmarshal(b["HostPort"], &hostPort); err != nil {

@@ -1,13 +1,7 @@
 package main
 
-// `remote machine`: the Linux system a workspace runs on, when this machine
-// has none.
-//
-// What these commands produce is an ordinary workspace (ADR 0026). `remote ls`
-// lists it, `remote use` selects it, `docker run` reaches it through the same
-// session, the same NFS export and the same rewriting as a host in another
-// country. The only command that knows the difference is `rm`, which has a
-// machine to destroy as well as an entry to delete.
+// `remote machine`: provisions a local Linux system as an ordinary workspace
+// (ADR 0026).
 
 import (
 	"context"
@@ -57,7 +51,7 @@ default.`,
 }
 
 // machineOptions are the settings a machine is built from, shared by create
-// and rebuild so the two cannot drift into building different things.
+// and rebuild.
 type machineOptions struct {
 	backend  string
 	rootfs   string
@@ -73,39 +67,20 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
 	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
 
-	// No --port or --user here. `remote` already carries both persistently and
-	// they mean exactly this, so declaring them again would put two flags of
-	// the same name on one command line -- where pflag silently skips the
-	// duplicate and which one wins depends on where it was declared. That is
-	// the hazard ADR 0024 moved our flags off the root to avoid, and it would
-	// be a poor thing to reintroduce two levels down.
+	// No --port or --user: `remote` has both persistently, and pflag silently
+	// skips a duplicate (ADR 0024).
 }
 
 // spec turns the flags and a name into what the backend is asked to build.
-//
-// The port and the account come from `remote`'s own flags, which is where they
-// already live, falling back to the same defaults the resolver uses so that a
-// machine and a hand-written workspace agree about what "unset" means.
-//
-// A setting left unset falls back to what the machine was RECORDED as built
-// from, when there is a record. Spec.Generation hashes every one of them, so
-// without the fallback a rebuild of a machine created with `--cpus 4` or
-// `--port 2222` builds one with the defaults, whose generation never matches
-// the record: `status` reports it out of date forever, and `rebuild` destroys
-// a machine on 2222 to build one on 22. The rootfs is taken from the record
-// only for the same image and only while the file is still there: the record
-// holds the path the published image was fetched to, a client on a new version
-// must fetch the new one rather than build the old image under the new name,
-// and a cache that has been pruned leaves a path naming nothing, where
-// EnsureRootfs fetching again is the repair rather than a failure to open it.
+// Unset settings fall back to the recorded ones, since Spec.Generation hashes
+// them all: otherwise rebuilding a `--port 2222` machine builds one on 22 that
+// `status` calls out of date forever. The recorded rootfs is reused only for
+// the same image and while the file still exists.
 func (o *machineOptions) spec(name string, recorded *config.Workspace) machine.Spec {
 	spec := machine.Spec{
 		Name:    name,
 		Backend: o.backend,
-		// The image is what a machine IS (ADR 0026), and it is named here so it
-		// is recorded in the machine's configuration and therefore part of its
-		// generation: a client on a new version builds a new machine rather
-		// than adopting one made from an older image.
+		// Part of the generation, so a new client version rebuilds (ADR 0026).
 		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
 		Port:     overrides.Port,
@@ -171,9 +146,7 @@ nothing. Run against one built from different settings, it reports the mismatch
 rather than acting on it, because recreating discards what is inside and that
 is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
-		// Built from the flags alone. Create is where the settings are SAID,
-		// and one that read the record would keep whatever an earlier create
-		// chose, so the mismatch it exists to report never shows.
+		// Flags alone, not the record, or a mismatch could never show.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return createMachine(cmd, args[0], opts.spec(args[0], nil), false)
 		},
@@ -238,15 +211,9 @@ func machineName(args []string) (string, error) {
 // findBackend is machine.Find, replaced in tests.
 var findBackend = machine.Find
 
-// stopSessionFor shuts down the background session for a workspace, if one is
-// serving.
-//
-// Best effort by design: this runs before stopping a machine, and a session
-// that cannot be stopped is not a reason to leave the machine running. But
-// every failure is reported, because a session that survived stop and start
-// is otherwise invisible: the next docker command finds the endpoint
-// reachable, uses it, and gets EOF from a session serving over a dead
-// connection.
+// stopSessionFor stops the workspace's background session, if one is serving.
+// Best effort, but every failure is reported: a surviving session makes the
+// next docker command fail with a bare EOF over a dead connection.
 func stopSessionFor(cmd *cobra.Command, name string) {
 	warn := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
@@ -258,11 +225,8 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 		return
 	}
 	endpoint := endpointOf(cfg)
-	// Nothing serving is the ordinary case and not worth a line. Reachable is
-	// a plain dial, so a session that has bound its endpoint answers it before
-	// it answers for itself; the window before the bind is the same whether
-	// the check is a dial or a request, so asking first loses nothing, which is
-	// what `machine start`'s comment on the race relies on.
+	// Reachable is a plain dial, so a session that has bound its endpoint
+	// answers it; `machine start` relies on that to close the race with `stop`.
 	if !proxy.Reachable(endpoint) {
 		return
 	}
@@ -273,16 +237,11 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
 }
 
-// unproven names the backends that have never been executed.
-//
-// Not a capability check: hyperv COMPILES, is unit tested as far as a string
-// can be, and may well work. What it has never done is run, and that is a
-// different claim from "unavailable" -- which is why it is a warning and not a
-// refusal. See CLAUDE.md's NOT-tested list, which this must agree with.
+// unproven names the backends never executed, which warn rather than refuse.
+// Must agree with CLAUDE.md's NOT-tested list.
 var unproven = map[string]bool{"hyperv": true}
 
-// createMachine is the whole of create and rebuild, which differ only in
-// whether they are allowed to destroy what is there.
+// createMachine is create and rebuild; only rebuild may destroy.
 func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild bool) error {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
@@ -295,20 +254,13 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return err
 	}
 
-	// Said out loud, every time, by the program itself. A backend nobody has
-	// ever run is not the same kind of thing as one CI proves on every change,
-	// and a flag list that spells them the same way is the one place somebody
-	// choosing between them actually looks. It stays until somebody has run
-	// docs/testing-machines.md and said what happened.
 	if unproven[spec.Backend] {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has never been run by anybody\n"+
 			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
 			spec.Backend)
 	}
 
-	// Read before anything is built. One backend needs it at creation and the
-	// other writes it afterwards, and failing on a missing key after building a
-	// machine would leave one nobody can reach.
+	// Before building, so a missing key cannot leave an unreachable machine.
 	key, err := enrolledPublicKey()
 	if err != nil {
 		return err
@@ -323,8 +275,6 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	switch action := machine.Plan(spec, observed); {
 	case rebuild && observed.State != machine.Absent:
 		_, _ = fmt.Fprintf(out, "destroying %q; images and containers inside it are lost\n", name)
-		// The same reason stopping does it: a session serving a machine that is
-		// about to be destroyed goes on answering for something gone.
 		stopSessionFor(cmd, name)
 		if err := backend.Destroy(ctx, name); err != nil {
 			return fmt.Errorf("destroying %s: %w", name, err)
@@ -332,9 +282,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		fallthrough
 
 	case action == machine.Create:
-		// Fetched only when one is actually being built. A create that finds a
-		// machine already matching should not download several hundred
-		// megabytes in order to say there was nothing to do.
+		// Fetched only when building: it is several hundred megabytes.
 		if spec.Rootfs == "" {
 			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
 				return err
@@ -353,9 +301,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		}
 
 	case action == machine.Recreate:
-		// Reported, not acted on. Recreating discards everything inside, and a
-		// create command deciding that on somebody's behalf is the surprise
-		// this whole design exists to avoid.
+		// Reported, not acted on: recreating discards everything inside.
 		return fmt.Errorf("%q was built from different settings\n"+
 			"  fix: `%s` to destroy and rebuild it, which discards its images and containers",
 			name, ourCommand("machine rebuild "+name))
@@ -364,33 +310,21 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		_, _ = fmt.Fprintf(out, "%q already matches; nothing to do\n", name)
 	}
 
-	// Waited for, because "created" has to mean "usable". The agent has to
-	// start, generate a host key and open its listener, and returning before
-	// that hands the user a workspace whose first command fails with a refused
-	// connection.
-	//
-	// Held open for the whole wait. Without this the machine shuts down about
-	// thirty seconds in, restarts on the next poke, and its dockerd never gets
-	// far enough to be ready -- so the agent never listens and the wait times
-	// out against a machine that keeps starting from scratch.
+	// Waited for until the agent listens, so "created" means usable. Held open
+	// meanwhile: an empty WSL machine shuts down after ~30s and never gets there.
 	hold, err := machine.Hold(ctx, spec.Backend, name)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = hold.Close() }()
 
-	// Located, not assumed. The machine answers at its own address on a virtual
-	// network, and not on this computer's loopback: with WSL that would depend
-	// on its localhost relay, which was measured refusing the connection while
-	// the machine was running and its agent listening (2026-08-11, the `a
-	// machine on wsl` job).
+	// At its own address, not loopback: WSL's localhost relay was measured
+	// refusing connections to a listening agent (machine.yml, 2026-08-11).
 	if _, err := machine.Locate(ctx, spec.Backend, name, spec.Port); err != nil {
 		return err
 	}
 
-	// Enrolled every time, including when nothing else happened: it is how a
-	// rotated key reaches an existing machine without a rebuild. On a backend
-	// where that is impossible it reports rather than writes.
+	// Every time, so a rotated key reaches an existing machine.
 	if err := backend.Enrol(ctx, name, spec.Account, key); err != nil {
 		return fmt.Errorf("enrolling this machine's key: %w", err)
 	}
@@ -398,12 +332,10 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	return saveMachineWorkspace(cmd, name, spec)
 }
 
-// machinePlaceholderHost stands in for an address nobody should read. See
-// saveMachineWorkspace.
+// machinePlaceholderHost stands in for an address nobody should read.
 const machinePlaceholderHost = "127.0.0.1"
 
-// saveMachineWorkspace writes the workspace entry, which is what makes the
-// machine an ordinary workspace everywhere else.
+// saveMachineWorkspace writes the workspace entry.
 func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) error {
 	file, err := config.Load("")
 	if err != nil {
@@ -411,10 +343,8 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	}
 
 	ws := file.Workspaces[name]
-	// A placeholder, and only that. A machine's address is asked for at every
-	// connection (session.connect), because it is given out at boot and a
-	// stored one is wrong the moment the machine restarts. It is written at all
-	// so the entry is a complete workspace to everything that reads one.
+	// The real address changes at boot and is located at every connection
+	// (session.connect).
 	ws.Host = machinePlaceholderHost
 	ws.Port = spec.Port
 	ws.User = spec.Account
@@ -470,33 +400,19 @@ a connection to the machine's previous address.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args, func(ctx context.Context, _ machine.Backend, name string, ws config.Workspace) error {
-				// Any session serving this workspace predates the machine
-				// being started, so it holds a connection to a machine that
-				// was stopped -- and to an ADDRESS the machine no longer has,
-				// since it is given a new one at every boot. Left alone, the
-				// next docker command finds that endpoint reachable, uses it,
-				// and gets EOF from a session serving over a dead connection:
-				// an error naming a local pipe and nothing else.
-				//
-				// Together with the shutdown in `stop` this closes the race
-				// from both ends. `stop` can miss a session that was still
-				// starting and had not bound its endpoint yet; by the time
-				// `start` runs, it has.
+				// Any session here predates the boot and holds the old
+				// address. Also catches one `stop` missed while it was still
+				// binding its endpoint.
 				stopSessionFor(cmd, name)
 
-				// Held while waiting, because a WSL machine nobody is in shuts
-				// down again -- a start that allowed that would be a command
-				// which reliably undid itself.
+				// Held while waiting: an empty WSL machine shuts down again.
 				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = hold.Close() }()
 
-				// Located rather than only started: "started" has to mean
-				// "usable", and the agent is still generating a host key and
-				// opening its listener after the machine is up, so whatever
-				// runs next would race it and lose.
+				// Located, so "started" means the agent is listening.
 				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
 					return err
 				}
@@ -525,11 +441,7 @@ while the session is in use; -f overrides.`,
 						return err
 					}
 				}
-				// The session goes first. It is holding this machine open and
-				// serving a Docker API backed by it, so stopping the machine
-				// underneath leaves a session answering for something that is
-				// gone -- which presents as the NEXT command failing with EOF
-				// on a local pipe, naming nothing that suggests a machine.
+				// The session first: it holds the machine open.
 				stopSessionFor(cmd, name)
 
 				if err := b.Stop(ctx, ws.Machine.Name); err != nil {
@@ -570,8 +482,7 @@ func newMachineStatusCommand() *cobra.Command {
 	}
 }
 
-// reportGeneration says whether the machine matches the settings it would be
-// built from now, which is the question `status` is really asked.
+// reportGeneration says whether the machine matches its recorded settings.
 func reportGeneration(out io.Writer, m *config.Machine, observed machine.Observed) {
 	switch observed.Generation {
 	case "":

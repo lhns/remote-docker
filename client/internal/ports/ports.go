@@ -1,10 +1,5 @@
-// Package ports makes published container ports reachable on the client.
-//
-// `docker run -p 8080:80` publishes on the daemon's network, which for
-// Docker-in-Docker is the workspace container's own namespace, so nothing on
-// this machine can reach it. Watching the daemon's event stream and opening a
-// local forward per published port closes that gap without the user having to
-// know the ports in advance (ADR 0008).
+// Package ports opens a local forward for each published container port,
+// which otherwise lives only in the workspace's namespace (ADR 0008).
 package ports
 
 import (
@@ -23,10 +18,8 @@ import (
 // Forwarder opens a local listener carrying connections to an address inside
 // the workspace.
 type Forwarder interface {
-	// Forward carries what arrives at localAddr to remoteAddr inside the
-	// workspace. The network is "tcp" or "udp": what differs between them is
-	// entirely the forwarder's business, so this package has one path rather
-	// than two (ADR 0038).
+	// Forward carries localAddr to remoteAddr inside the workspace. network is
+	// "tcp" or "udp"; never add a UDP branch in this package (ADR 0038).
 	Forward(network, localAddr, remoteAddr string) (Forward, error)
 }
 
@@ -46,8 +39,7 @@ type Container struct {
 
 // Published is one published port.
 type Published struct {
-	// PublicPort is the port on the workspace container's network, what the
-	// user asked for on the left of the colon.
+	// PublicPort is the port on the workspace container's network.
 	PublicPort int
 
 	// PrivatePort is the port inside the container.
@@ -61,11 +53,8 @@ type Docker interface {
 	ListContainers(ctx context.Context) ([]Container, error)
 }
 
-// bindAddr is the local interface a forward binds.
-//
-// Loopback, and not configurable: a published port becoming reachable from the
-// network because a container started on somebody else's machine would be a
-// surprise, and a nasty one.
+// bindAddr is loopback and not configurable: a container started elsewhere
+// must not open this machine to the network.
 const bindAddr = "127.0.0.1"
 
 // Manager keeps local forwards in step with the containers that are running.
@@ -74,30 +63,20 @@ type Manager struct {
 	Forwarder Forwarder
 	Log       *slog.Logger
 
-	// Owned reports whether a container is one this client created. With a
-	// shared daemon (ADR 0012) the event stream carries other users'
-	// containers, and forwarding those would open listeners on this machine
-	// because somebody else ran docker compose up.
+	// Owned reports whether this client created a container; on a shared
+	// daemon (ADR 0012) others' containers must not open listeners here.
 	Owned func(Container) bool
 
-	// LocalPorts are the ports to open on this machine for a published one.
-	//
-	// They differ from the published port because the workspace daemon chooses
-	// what to publish, so nobody collides on a shared daemon, and the client
-	// puts the numbers the user actually typed in front of it (ADR 0008).
-	// SEVERAL when one container port was published more than once, since the
-	// workspace publishes it once and every number fronts the same thing.
-	//
-	// Nil, or an empty answer, means the published port itself.
+	// LocalPorts are the client's numbers for a published port (ADR 0008),
+	// several when one container port was published twice. Nil or empty means
+	// the published port itself.
 	LocalPorts func(Container, Published) []int
 
 	mu     sync.Mutex
 	active map[string]*containerForwards
 
-	// closed stops Reconcile repopulating active. Reconcile lists containers
-	// OUTSIDE the lock, so one in flight when Close runs would reopen real
-	// listeners (and for udp a goroutine each) that nothing ever closes:
-	// session.liveConn.close calls Close exactly once.
+	// closed stops a Reconcile already listing (outside the lock) from
+	// reopening listeners after Close.
 	closed bool
 }
 
@@ -113,14 +92,8 @@ type listener struct {
 	port    int
 }
 
-// Reconcile brings the set of forwards in line with what is running now.
-//
-// This is the whole of the logic, and it is deliberately a full reconciliation
-// rather than an incremental apply of each event. The event stream can drop --
-// a reconnect, a daemon restart, a tunnel blip, and an incremental design
-// leaks forwards for containers that stopped during the gap while never
-// forwarding those that started. Recomputing from the current state cannot
-// drift.
+// Reconcile brings the forwards in line with what is running now. A full
+// recompute rather than per-event, because the event stream can drop.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	containers, err := m.Docker.ListContainers(ctx)
 	if err != nil {
@@ -147,8 +120,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.active = map[string]*containerForwards{}
 	}
 
-	// Close forwards for containers that are gone, and for ports a surviving
-	// container no longer publishes.
+	// Close forwards for gone containers and ports no longer published.
 	for id, existing := range m.active {
 		container, still := wanted[id]
 		if !still {
@@ -171,11 +143,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 
-	// Open forwards for anything newly published, in a stable order.
-	//
-	// Sorted rather than ranged, because two containers can want one local
-	// port: ranging the map lets Go's randomisation decide which gets it, so
-	// successive reconciles hand it back and forth.
+	// Open new forwards in sorted order, so two containers wanting one local
+	// port do not trade it between reconciles.
 	ids := make([]string, 0, len(wanted))
 	for id := range wanted {
 		ids = append(ids, id)
@@ -204,18 +173,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-// openLocked starts one forward. Failures are reported and skipped rather than
-// aborting the reconciliation: one unavailable port must not stop every other
-// container's ports from being forwarded.
+// openLocked starts one forward; a failure is logged and skipped.
 func (m *Manager) openLocked(entry *containerForwards, container Container, p Published, localPort int) {
 	local := net.JoinHostPort(bindAddr, fmt.Sprint(localPort))
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(p.PublicPort))
 
 	fwd, err := m.Forwarder.Forward(network(p), local, remote)
 	if err != nil {
-		// Deliberately not retried on another port. A listener at an address
-		// nobody asked for looks like success and breaks the next thing that
-		// expects the real one, so the conflict is reported and left alone.
+		// Never retried on another port: that would look like success.
 		m.log().Warn("could not forward", "addr", local, "container", container.Name, "err", err)
 		return
 	}
@@ -258,11 +223,7 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// Active lists the ports currently forwarded.
-//
-// Nothing in the client calls it: the manager is driven by the daemon's
-// container list and reports to the log. It is how the tests tell "forwarded"
-// from "recorded".
+// Active lists the ports currently forwarded. Used by tests.
 func (m *Manager) Active() []int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -277,14 +238,9 @@ func (m *Manager) Active() []int {
 	return out
 }
 
-// published returns the ports a container publishes to the host, one entry
-// per protocol and port.
-//
-// A port with no PublicPort is exposed but not published: it has no host side
-// to forward. The daemon reports one entry per address family, so a port
-// published on both IPv4 and IPv6 arrives twice and is forwarded once. The
-// protocol stays in the key, because 53/tcp and 53/udp are different ports
-// that happen to share a number (ADR 0038).
+// published returns a container's published ports, once per protocol and
+// port: the daemon reports one entry per address family, and 53/tcp and
+// 53/udp are different ports (ADR 0038).
 func published(c Container) []Published {
 	var out []Published
 	seen := map[string]bool{}
@@ -308,8 +264,7 @@ func published(c Container) []Published {
 	return out
 }
 
-// network is what a published port is carried over. An empty type is tcp, which
-// is what the daemon and the CLI both mean by it.
+// network is what a published port is carried over; an empty type is tcp.
 func network(p Published) string {
 	if workspace.IsTCP(p.Type) {
 		return "tcp"
@@ -317,20 +272,13 @@ func network(p Published) string {
 	return "udp"
 }
 
-// log is the manager's logger, or silence (logx.Or). Nil is not an oversight
-// here: it is how a command that must not narrate asks for quiet, which is why
-// portsLogger hands one over deliberately.
+// log is the manager's logger, or silence (logx.Or).
 func (m *Manager) log() *slog.Logger {
 	return logx.Or(m.Log)
 }
 
-// Forwarding reports whether this manager already holds a local TCP listener
-// on a port.
-//
-// Asked before a container is created: the workspace daemon chooses the
-// published port now, so the number the user typed is claimed on this machine
-// instead, and a second container asking for it has to be refused somewhere.
-// This is the only place that knows what is already open.
+// Forwarding reports whether a local TCP listener already holds a port. Asked
+// before a container is created, since only this machine knows what is open.
 func (m *Manager) Forwarding(local int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

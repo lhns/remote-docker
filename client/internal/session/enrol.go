@@ -1,9 +1,5 @@
 package session
 
-// What an authentication failure has to say, which is this project's business
-// and not the transport's: core-client/tunnelclient takes a signer and a host
-// key callback and decides nothing about either (ADR 0021).
-
 import (
 	"fmt"
 	"strings"
@@ -11,16 +7,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// enrolmentHint is what to add to an authentication failure, and nothing at
-// all for any other kind.
-//
-// The workspace enrols a key by filename, out of band, so "unable to
-// authenticate" is nearly always a key that has not been put there yet or a
-// file that has just been written and not yet read. Neither the account nor the
-// file nor the key is in the error, and all three are needed to fix it.
-//
-// Matched on x/crypto's wording, which is not a promise it makes. A reworded
-// upstream costs the hint and leaves the error, which is the right way round.
+// enrolmentHint names the account, key file and key an authentication failure
+// needs to be fixed, and is empty for any other error. The transport decides
+// none of this (ADR 0021). Matched on x/crypto's wording: a reword upstream
+// loses only the hint.
 func enrolmentHint(err error, user string, signer ssh.Signer) string {
 	if err == nil || signer == nil || !strings.Contains(err.Error(), "unable to authenticate") {
 		return ""
