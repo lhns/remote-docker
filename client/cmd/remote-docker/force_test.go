@@ -50,11 +50,13 @@ func fakeSession(t *testing.T, safe bool, log *events) string {
 	if err != nil {
 		t.Skipf("cannot bind a test endpoint here: %v", err)
 	}
-	var once sync.Once
-	stop := func() { once.Do(func() { _ = l.Close() }) }
+	mux := http.NewServeMux()
+	// The server closes the listener, and only once: Serve closes it on return
+	// too, and two closes of the endpoint's listener race.
+	srv := &http.Server{Handler: mux}
+	stop := func() { _ = srv.Close() }
 	t.Cleanup(stop)
 
-	mux := http.NewServeMux()
 	mux.HandleFunc(proxy.ControlPrefix+"idle", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(proxy.Idle{Safe: safe})
 	})
@@ -66,7 +68,7 @@ func fakeSession(t *testing.T, safe bool, log *events) string {
 		w.WriteHeader(http.StatusOK)
 		go stop()
 	})
-	go func() { _ = http.Serve(l, mux) }()
+	go func() { _ = srv.Serve(l) }()
 	return endpoint
 }
 
