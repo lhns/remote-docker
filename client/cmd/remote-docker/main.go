@@ -48,8 +48,7 @@ func exitCode(err error) int {
 		return 0
 	}
 	// A zero StatusCode on an error would turn the failure into a success.
-	var status cli.StatusError
-	if errors.As(err, &status) && status.StatusCode != 0 {
+	if status, ok := errors.AsType[cli.StatusError](err); ok && status.StatusCode != 0 {
 		return status.StatusCode
 	}
 	return 1

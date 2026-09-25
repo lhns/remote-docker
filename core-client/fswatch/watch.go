@@ -280,9 +280,6 @@ func (w *Watcher) SetSink(s Sink) {
 	w.stats.Connected = s != nil
 }
 
-// ClearSink is SetSink(nil).
-func (w *Watcher) ClearSink() { w.SetSink(nil) }
-
 func (w *Watcher) Stats() Stats {
 	w.mu.Lock()
 	defer w.mu.Unlock()

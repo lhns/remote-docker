@@ -370,8 +370,7 @@ func orUnknown(v string) string { return cmp.Or(v, "unknown") }
 // lingering process only warns; any other stop failure aborts.
 func restartDaemon(cfg config.Config, endpoint string) error {
 	if err := stopSession(endpoint); err != nil {
-		var lingering *lingeringError
-		if !errors.As(err, &lingering) {
+		if _, ok := errors.AsType[*lingeringError](err); !ok {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)

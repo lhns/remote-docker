@@ -91,12 +91,10 @@ const handshakeTimeout = 10 * time.Second
 // refusing a mount, with its remedy. The agent version is context, never the
 // test.
 func cacheRefusal(err error, agent string) error {
-	var notServed *notServedError
-	if errors.As(err, &notServed) {
+	if _, ok := errors.AsType[*notServedError](err); ok {
 		return fmt.Errorf("this workspace does not serve it%s%s", runningVersion(agent), rewrite.FixUpdateWorkspace)
 	}
-	var silent *silentError
-	if errors.As(err, &silent) {
+	if silent, ok := errors.AsType[*silentError](err); ok {
 		// Not "try again": a v0.5.1 workspace never answers.
 		return fmt.Errorf("%w\n  fix: use write=%s, which is served by the mount itself",
 			silent, workspace.WriteThrough)
