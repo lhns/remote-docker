@@ -10,33 +10,127 @@ software.
 
 ## Unreleased
 
-### Upgrading
+### Security fixes
+
+- On a shared daemon, one account could reach another account's file server by
+  dialling its tunnel port as `localhost` or `::1` rather than `127.0.0.1`.
+  Every loopback name is one reservation now.
+- Any connection could cancel another account's reverse forward, the tunnel
+  carrying its files, and the victim could not bind that port again until it
+  reconnected. A cancel reaches only the connection's own forwards now.
+- A symlink a container left in its union could steer the agent, which runs as
+  root, out of the share: a fill could write files on the workspace itself, and
+  a drop or a pull could delete or read them. Every cache path is resolved
+  inside the share now.
+- A crafted NFS client could chmod whatever a symlink in a share names,
+  including a file outside it. A mode change on a symlink is refused, as Linux
+  refuses one.
+- Two machines of one account binding the same path were handed one union, so
+  one machine's container read the other machine's files and its fill wrote
+  into them. Unions are per machine now.
+- Replacing a leaked key in an account's key file did nothing while
+  provisioning that account kept failing: the old key still authenticated and
+  the new one did not.
+
+### A file deleted here stays deleted
+
+A file deleted on this machine could come back from a union's cache. What a
+fill sent was recorded only when a prefetch finished, so a file sent by
+invalidation, by a share without prefetch or by a prefetch that was cut off
+stayed in the cache, and write-back could carry it back. Every batch is
+recorded now, and a file deleted while nothing ran is taken out of the cache on
+the next fill.
+
+A file deleted here while a container changed it crashed the client. The
+container's version is kept now.
+
+### The working directory is an ordinary share
+
+The working directory was exported as `/cwd`, which meant whichever directory
+the client started in, so after a client restart from another directory a
+container created from the first project mounted the second. It is a share like
+any other now, named from its path.
+
+A client restart also no longer strands a running container's mount of any
+directory: the share is restored from the handle the container's kernel already
+holds, where it used to answer `Stale file handle`.
+
+### Workspace commands
 
 - **`remote stop`, `rm`, `machine stop`, `machine rebuild` and the agent's
-  `daemons reset` now refuse while their target is in
-  use**, as `restart` already did and as `docker rm` does: a session something
-  depends on, or an account daemon running containers. `-f` goes ahead, and
-  `restart --force` is now also `-f`. A script that stops a busy session needs
-  the flag.
-- `remote status` exits 1 when its verdict is not ready, and `machine status`
-  when the machine is not running. The output is unchanged.
-- The working directory is a share like any other, with a volume named from its
-  path, and nothing serves `rd-<client>-cwd` volumes any more. A container
-  created from one mounts nothing until it is recreated once, as for any stale
-  volume, and `remote gc` then removes the old volume.
-
-### Changed
-
+  `daemons reset` refuse while their target is in use**, as `restart` already
+  did and as `docker rm` does. `-f` goes ahead.
 - The machine commands take an optional name, falling back to `--workspace` and
   then the default, and so do `start`, `stop`, `restart`, `status`, `gc` and
   `enroll`.
 - `remote rm` stops the workspace's session before removing anything.
-- `machine --help` says `remote rm` removes a machine.
+- An unknown workspace name, `--workspace nope` included, and a missing
+  workspace are answered in one line with a `fix:` line, by every command.
+- `stop` prints `stopped:` or `not running:`, as `start` and `restart` do.
 - `daemons reset <account>` with no daemon says `no daemon for <account>`
-  rather than claiming to have removed one.
-- `--workspace nope` is answered like every other unknown name, with
-  `remote ls` as the fix.
-- A file deleted here while nothing ran is taken out of a union's cache and no longer written back, even when invalidation or an interrupted prefetch put it there.
+  rather than claiming to have removed one, and `daemons <typo>` exits 1.
+
+### Leaks, hangs and smaller fixes
+
+- A workspace that accepted the connection and never spoke SSH, such as a
+  wedged agent or a proxy forwarding nothing, left connecting waiting forever.
+  The handshake gives up after 30 seconds.
+- One cache request the workspace never answered held the cache channel, and
+  every request queued behind it ignored its own deadline.
+- A daemon that stopped answering while the connection stayed up stalled idle
+  release for good. The question gives up after ten seconds now.
+- An agent whose SSH port was taken hung instead of exiting, so its container
+  was never restarted.
+- The workspace's dockerd is asked to stop when the agent shuts down, and killed
+  only after 20 seconds. It used to be killed outright.
+- A change to a FIFO in a share wedged every replayed change after it for the
+  rest of the session.
+- Ctrl-C on a docker command waiting for a cold daemon made every caller for
+  the next five seconds fail with `context canceled`.
+- An ordinary WebSocket disconnect was logged as a peer that stopped answering.
+- `-p 53:53/tcp -p 53:53/udp` forwarded tcp and silently skipped udp.
+- `read=` and `write=` on a named volume, or on a mount of the workspace's own,
+  reached the daemon, which refused them. They are taken out of every mount.
+- A union mode on a single-file mount built a mount the daemon refuses. It is
+  refused up front, with the fix to mount the directory instead.
+- Joined and clustered shorthands such as `docker -cci ps` and
+  `-Htcp://host:2375` were misread, starting a session for the wrong workspace
+  or for a command aimed elsewhere. They are read as docker reads them.
+- `host: ssh://dev.example:2299` was always refused as contradicting a `port`
+  nobody wrote.
+- Adding a workspace beside keyed ones wiped the shared settings at the top of
+  the config, such as `host`, from every entry.
+- One failed read of the workspace's port record could overwrite it, so every
+  other machine's volumes named a port nothing listens on again. A machine
+  whose volumes the daemon could not list also had its port guessed; that is
+  refused now.
+- The collector could remove a `write=back` share's cache volume while a
+  container using it was being created.
+- A failed prefetch batch left `remote status` reading "filling" for the rest
+  of the session. It reads stopped, with the error.
+- A kernel watch queue overflow was only logged, so a deletion lost to it stayed
+  in a cache. It triggers a reconcile now.
+- Two saves of the share record at once, as `docker compose up` makes, could
+  leave the older one on disk, and the next client then answered `no such file
+  or directory` for a mount it should have restored.
+- After the first idle release and reconnect, every mount made earlier wrote
+  without the descriptor cache for the rest of the process, which on Windows
+  can cost seconds per write.
+- A proxy error containing a control character was JSON the Docker CLI could
+  not parse.
+
+### Upgrading
+
+- **A script that stops a busy session needs `-f`** now, per the commands under
+  Workspace commands. `restart --force` is now also `-f`.
+- `remote status` exits 1 when its verdict is not ready, and `machine status`
+  when the machine is not running. The output is unchanged.
+- **A container created from an `rd-<client>-cwd` volume mounts nothing** until
+  it is recreated once, as for any stale volume. `remote gc` then removes the
+  old volume.
+- A union an older agent left serving is waited out rather than mounted over,
+  so on a VM workspace a `write=back` or `write=ephemeral` mount of that
+  directory is refused until the containers holding the old union are gone.
 
 ## 0.7.0 — 2026-09-08
 
