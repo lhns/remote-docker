@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
 )
 
@@ -36,25 +35,6 @@ func idleExpired(ctx context.Context, s *session.Session, idle time.Duration) <-
 		}
 	}()
 	return expired
-}
-
-// daemonIdle is how long a background session may sit with nothing to do.
-// Zero means the DEFAULT and negative means NEVER; setting 0 for "never" is
-// a known mistake.
-func daemonIdle(configured time.Duration) time.Duration {
-	if configured == 0 {
-		return config.DefaultDaemonIdle
-	}
-	return configured
-}
-
-// daemonStandby is how long a session holds the workspace with nothing to do.
-// Zero and negative as for daemonIdle.
-func daemonStandby(configured time.Duration) time.Duration {
-	if configured == 0 {
-		return config.DefaultDaemonStandby
-	}
-	return configured
 }
 
 // standbyWhenIdle lets go of the workspace whenever nothing has needed it,

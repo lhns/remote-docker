@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -86,21 +87,18 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	// needs, the same mechanism as any other attribute rather than a parallel one.
 	rest := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
 	component := ""
-	for _, a := range h.attrs {
+	take := func(a slog.Attr) bool {
 		if h.prefix && a.Key == ComponentKey {
 			component = a.Value.String()
-			continue
+		} else {
+			rest = append(rest, a)
 		}
-		rest = append(rest, a)
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		if h.prefix && a.Key == ComponentKey {
-			component = a.Value.String()
-			return true
-		}
-		rest = append(rest, a)
 		return true
-	})
+	}
+	for _, a := range h.attrs {
+		take(a)
+	}
+	r.Attrs(take)
 
 	if component != "" {
 		b.WriteString("[")
@@ -143,7 +141,7 @@ func render(v slog.Value) string {
 
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	next := *h
-	next.attrs = append(append([]slog.Attr{}, h.attrs...), attrs...)
+	next.attrs = slices.Concat(h.attrs, attrs)
 	return &next
 }
 

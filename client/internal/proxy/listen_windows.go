@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -24,9 +25,7 @@ func DefaultEndpoint() string { return defaultPipe }
 // port: whoever reaches it can mount this machine's files, and only a pipe
 // carries an ACL.
 func Listen(endpoint string) (net.Listener, error) {
-	if endpoint == "" {
-		endpoint = defaultPipe
-	}
+	endpoint = cmp.Or(endpoint, DefaultEndpoint())
 
 	cfg := &winio.PipeConfig{SecurityDescriptor: ownerOnlySDDL()}
 
@@ -70,9 +69,7 @@ func ownerOnlySDDL() string {
 
 // DockerHost is the DOCKER_HOST value addressing this endpoint.
 func DockerHost(endpoint string) string {
-	if endpoint == "" {
-		endpoint = defaultPipe
-	}
+	endpoint = cmp.Or(endpoint, DefaultEndpoint())
 	name := strings.TrimPrefix(endpoint, `\\.\pipe\`)
 	return "npipe:////./pipe/" + name
 }

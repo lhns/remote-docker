@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"cmp"
 	"fmt"
 	"net"
 	"os"
@@ -25,9 +26,7 @@ type Lock struct {
 // LockPath is keyed on the endpoint, not the workspace: two workspaces
 // configured with one endpoint must contend for one lock.
 func LockPath(endpoint string) string {
-	if endpoint == "" {
-		endpoint = DefaultEndpoint()
-	}
+	endpoint = cmp.Or(endpoint, DefaultEndpoint())
 	return filepath.Join(lockDir(), sanitizeLockName(endpoint)+".lock")
 }
 

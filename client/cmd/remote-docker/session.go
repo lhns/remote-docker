@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -86,10 +87,11 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	}
 
 	// Standby drops the connection and watches but keeps the endpoint;
-	// shutdown, below, also takes the endpoint.
-	go standbyWhenIdle(ctx, s, daemonStandby(cfg.DaemonStandby))
+	// shutdown, below, also takes the endpoint. Zero is the default and
+	// negative is never, so cmp.Or keeps a negative setting.
+	go standbyWhenIdle(ctx, s, cmp.Or(cfg.DaemonStandby, config.DefaultDaemonStandby))
 
-	idle := daemonIdle(cfg.DaemonIdle)
+	idle := cmp.Or(cfg.DaemonIdle, config.DefaultDaemonIdle)
 	select {
 	case <-ctx.Done():
 	case <-s.Stopped():

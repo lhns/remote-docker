@@ -4,6 +4,7 @@ package main
 // (ADR 0026).
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -90,30 +91,18 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) machine.S
 	}
 	if recorded != nil && recorded.Machine != nil {
 		m := recorded.Machine
-		if spec.Port == 0 {
-			spec.Port = recorded.Port
-		}
-		if spec.Account == "" {
-			spec.Account = recorded.User
-		}
-		if spec.CPUs == 0 {
-			spec.CPUs = m.CPUs
-		}
-		if spec.MemoryMB == 0 {
-			spec.MemoryMB = m.MemoryMB
-		}
+		spec.Port = cmp.Or(spec.Port, recorded.Port)
+		spec.Account = cmp.Or(spec.Account, recorded.User)
+		spec.CPUs = cmp.Or(spec.CPUs, m.CPUs)
+		spec.MemoryMB = cmp.Or(spec.MemoryMB, m.MemoryMB)
 		if spec.Rootfs == "" && m.Image == spec.Image && m.Rootfs != "" {
 			if _, err := os.Stat(m.Rootfs); err == nil {
 				spec.Rootfs = m.Rootfs
 			}
 		}
 	}
-	if spec.Port == 0 {
-		spec.Port = config.DefaultSSHPort
-	}
-	if spec.Account == "" {
-		spec.Account = config.DefaultUser()
-	}
+	spec.Port = cmp.Or(spec.Port, config.DefaultSSHPort)
+	spec.Account = cmp.Or(spec.Account, config.DefaultUser())
 	return spec
 }
 
@@ -360,9 +349,6 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	if err := file.Set(name, ws); err != nil {
 		return err
 	}
-	if file.Default == "" {
-		file.Default = name
-	}
 	if err := config.Save(file, ""); err != nil {
 		return err
 	}
@@ -380,7 +366,8 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 }
 
 // enrolledPublicKey is this machine's public half, generating the pair if this
-// is the first thing that has needed it.
+// is the first thing that has needed it. The comment is what attributes a key
+// to a machine in authorized_keys.d, and a key loaded from disk carries none.
 func enrolledPublicKey() (string, error) {
 	key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
 	if err != nil {

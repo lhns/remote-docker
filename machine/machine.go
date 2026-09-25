@@ -19,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -264,9 +266,7 @@ func firstIPv4(fields []string) string {
 	for _, f := range fields {
 		f = strings.TrimSpace(f)
 		// A prefix length is the machine's, not ours: 172.24.110.158/20.
-		if i := strings.IndexByte(f, '/'); i >= 0 {
-			f = f[:i]
-		}
+		f, _, _ = strings.Cut(f, "/")
 		if strings.Count(f, ".") != 3 || strings.HasPrefix(f, "169.254.") {
 			continue
 		}
@@ -379,11 +379,7 @@ func Find(name string) (Backend, error) {
 		return b, nil
 	}
 
-	names := make([]string, 0, len(available))
-	for n := range available {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(available))
 
 	if len(names) == 0 {
 		return nil, fmt.Errorf(

@@ -305,10 +305,7 @@ func isHijack(resp *http.Response) bool {
 
 // contentType returns the media type with any parameters stripped.
 func contentType(resp *http.Response) string {
-	ct := resp.Header.Get("Content-Type")
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
+	ct, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
 	return strings.ToLower(strings.TrimSpace(ct))
 }
 

@@ -10,9 +10,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	dockerconfig "github.com/docker/cli/cli/config"
@@ -38,11 +39,7 @@ func checkCredentialHelpers(cf *configfile.ConfigFile, lookPath func(string) (st
 		return nil
 	}
 
-	var lost []string
-	for registry := range cf.AuthConfigs {
-		lost = append(lost, registry)
-	}
-	sort.Strings(lost)
+	lost := slices.Sorted(maps.Keys(cf.AuthConfigs))
 
 	if len(lost) == 0 {
 		_, _ = fmt.Fprintf(warn,
@@ -96,7 +93,7 @@ func drop(cf *configfile.ConfigFile, lookPath func(string) (string, error)) []st
 		missing = append(missing, credentialHelperPrefix+store)
 	}
 
-	sort.Strings(missing)
+	slices.Sort(missing)
 	return missing
 }
 

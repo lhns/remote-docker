@@ -155,10 +155,10 @@ func CacheVolumeForExport(client, exportPath string) (string, error) {
 // and the share it backs. A volume from before clients were named reports an
 // empty client, and is still ours.
 func ParseVolumeName(name string) (client, share string, ok bool) {
-	if !IsManagedVolume(name) {
+	rest, ok := strings.CutPrefix(name, VolumeNamePrefix)
+	if !ok {
 		return "", "", false
 	}
-	rest := strings.TrimPrefix(name, VolumeNamePrefix)
 
 	// A cache volume is its share's, or nothing claims it and its disk is
 	// never collected.

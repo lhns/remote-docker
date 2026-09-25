@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"cmp"
 	"fmt"
 	"net"
 	"os"
@@ -12,13 +13,20 @@ import (
 // DefaultEndpoint is where the proxy listens when nothing else is asked for.
 // Never "": callers append to it for a named workspace, and "" + "-dev" is a
 // relative path. Deliberately not /var/run/docker.sock, which is root-owned.
-func DefaultEndpoint() string { return defaultSocketPath() }
+func DefaultEndpoint() string {
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return filepath.Join(dir, "remote-docker", "docker.sock")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "remote-docker", "docker.sock")
+	}
+	return filepath.Join(home, ".local", "state", "remote-docker", "docker.sock")
+}
 
 // Listen binds the local Docker endpoint on a unix socket.
 func Listen(endpoint string) (net.Listener, error) {
-	if endpoint == "" {
-		endpoint = defaultSocketPath()
-	}
+	endpoint = cmp.Or(endpoint, DefaultEndpoint())
 	if err := os.MkdirAll(filepath.Dir(endpoint), 0o700); err != nil {
 		return nil, fmt.Errorf("proxy: creating socket directory: %w", err)
 	}
@@ -52,19 +60,5 @@ func Listen(endpoint string) (net.Listener, error) {
 
 // DockerHost is the DOCKER_HOST value addressing this endpoint.
 func DockerHost(endpoint string) string {
-	if endpoint == "" {
-		endpoint = defaultSocketPath()
-	}
-	return "unix://" + endpoint
-}
-
-func defaultSocketPath() string {
-	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return filepath.Join(dir, "remote-docker", "docker.sock")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "remote-docker", "docker.sock")
-	}
-	return filepath.Join(home, ".local", "state", "remote-docker", "docker.sock")
+	return "unix://" + cmp.Or(endpoint, DefaultEndpoint())
 }

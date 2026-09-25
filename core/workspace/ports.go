@@ -1,7 +1,8 @@
 package workspace
 
 import (
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -68,16 +69,11 @@ func (r RequestedPorts) String() string {
 	if len(r) == 0 {
 		return ""
 	}
-	keys := make([]string, 0, len(r))
-	for k := range r {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(r))
 
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		ports := append([]int(nil), r[k]...)
-		sort.Ints(ports)
+		ports := slices.Sorted(slices.Values(r[k]))
 
 		numbers := make([]string, 0, len(ports))
 		for _, p := range ports {

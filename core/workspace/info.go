@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -256,12 +257,7 @@ func (i Info) Encode(w io.Writer) error {
 		{keyNow, strconv.FormatInt(i.Now, 10)},
 	}
 
-	extraKeys := make([]string, 0, len(i.Extra))
-	for k := range i.Extra {
-		extraKeys = append(extraKeys, k)
-	}
-	sort.Strings(extraKeys)
-	for _, k := range extraKeys {
+	for _, k := range slices.Sorted(maps.Keys(i.Extra)) {
 		pairs = append(pairs, [2]string{k, i.Extra[k]})
 	}
 

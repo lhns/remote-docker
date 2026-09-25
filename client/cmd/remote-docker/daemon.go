@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,9 +29,15 @@ const (
 // waitForEndpoint blocks until the endpoint is reachable, or stops being, and
 // reports whether it got there before the deadline.
 func waitForEndpoint(endpoint string, want bool, timeout time.Duration) bool {
+	return pollUntil(timeout, func() bool { return proxy.Reachable(endpoint) == want })
+}
+
+// pollUntil asks done every 100ms and reports whether it said yes before the
+// deadline.
+func pollUntil(timeout time.Duration, done func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if proxy.Reachable(endpoint) == want {
+		if done() {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -95,14 +102,7 @@ func waitForExit(pid int, timeout time.Duration) bool {
 	if pid <= 0 {
 		return true
 	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !processAlive(pid) {
-			return true
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return false
+	return pollUntil(timeout, func() bool { return !processAlive(pid) })
 }
 
 func newStopCommand() *cobra.Command {
@@ -364,12 +364,7 @@ func warnVersionMismatch(st proxy.Status) {
 		st.PID, differentBuild(st), ourCommand("restart"), ourCommand("restart -f"))
 }
 
-func orUnknown(v string) string {
-	if v == "" {
-		return "unknown"
-	}
-	return v
-}
+func orUnknown(v string) string { return cmp.Or(v, "unknown") }
 
 // restartDaemon stops a running session and starts one from this binary. A
 // lingering process only warns; any other stop failure aborts.

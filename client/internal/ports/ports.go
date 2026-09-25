@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -145,13 +147,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	// Open new forwards in sorted order, so two containers wanting one local
 	// port do not trade it between reconciles.
-	ids := make([]string, 0, len(wanted))
-	for id := range wanted {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
-	for _, id := range ids {
+	for _, id := range slices.Sorted(maps.Keys(wanted)) {
 		container := wanted[id]
 		existing, ok := m.active[id]
 		if !ok {

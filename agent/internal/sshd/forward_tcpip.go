@@ -129,11 +129,7 @@ func (p localPolicy) AllowDial(ctx gssh.Context, host string, port uint32) bool 
 // the SSH port. It also means two accounts can publish 8080 at once without
 // colliding, because those are two namespaces.
 func (p localPolicy) Dial(ctx gssh.Context, dest string) (net.Conn, error) {
-	account, ok := accountFor(ctx)
-	if !ok {
-		return nil, errNoAccount
-	}
-	return p.s.dialForNetwork(ctx, account, "tcp", dest)
+	return p.dial(ctx, "tcp", dest)
 }
 
 // DialUDP is Dial for datagrams, which reach a published UDP port (ADR 0038).
@@ -142,11 +138,15 @@ func (p localPolicy) Dial(ctx gssh.Context, dest string) (net.Conn, error) {
 // connected UDP socket is a net.Conn whose reads and writes are whole
 // datagrams, so nothing above has to reassemble anything.
 func (p localPolicy) DialUDP(ctx gssh.Context, dest string) (net.Conn, error) {
+	return p.dial(ctx, "udp", dest)
+}
+
+func (p localPolicy) dial(ctx gssh.Context, network, dest string) (net.Conn, error) {
 	account, ok := accountFor(ctx)
 	if !ok {
 		return nil, errNoAccount
 	}
-	return p.s.dialForNetwork(ctx, account, "udp", dest)
+	return p.s.dialForNetwork(ctx, account, network, dest)
 }
 
 func (s *Server) dialForNetwork(ctx context.Context, account sessionAccount, network, dest string) (net.Conn, error) {
