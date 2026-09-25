@@ -80,13 +80,7 @@ export REMOTE_DOCKER_IDLE_TIMEOUT=8s
 
 echo
 echo "== 3. enrol this machine =="
-mkdir -p "$WORK/keys" "$WORK/wsstate"
-if enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
-    ok "keypair generated and staged as $ACCOUNT.pub"
-else
-    bad "enroll produced no public key"
-    exit 1
-fi
+enrol_machine "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"
 
 echo
 echo "== 4. start the workspace =="
@@ -97,25 +91,8 @@ echo "== 4. start the workspace =="
 # The WebSocket port is published for section 19's reverse proxy.
 # WORKSPACE_DIND_MOUNTS declares paths the workspace daemon resolves, which 9d
 # binds (ADR 0041). With the shared daemon the source side is what it sees.
-if start_workspace false -p "$WS_PORT:2280" \
-    -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro; then
-    ok "workspace container started"
-else
-    bad "workspace container failed to start"
-    exit 1
-fi
-
-info "waiting for the account to be provisioned"
-if wait_provisioned "$ACCOUNT"; then
-    ok "the agent provisioned the account"
-else
-    bad "the account was never provisioned"
-    dump_workspace_log 30
-    exit 1
-fi
-
-info "waiting for dockerd inside the workspace"
-wait_parent_dockerd
+workspace_up false "$ACCOUNT" -p "$WS_PORT:2280" \
+    -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro
 
 echo
 echo "== 5. status =="
@@ -157,14 +134,7 @@ echo "== 6. open a session =="
 # --foreground: the suite needs a child it can kill and whose log it can read.
 "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
-
-if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    ok "the local Docker endpoint answers"
-else
-    bad "the Docker endpoint never came up"
-    sed 's/^/        /' "$WORK/up.log"
-    exit 1
-fi
+endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/up.log" || exit 1
 
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
@@ -327,15 +297,7 @@ run_interrupted() {
         >"$WORK/$name.log" 2>&1 </dev/null &
     local pid=$!
 
-    local running=no
-    for _ in $(seq 1 60); do
-        if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = "true" ]; then
-            running=yes
-            break
-        fi
-        sleep 1
-    done
-    if [ "$running" = no ]; then
+    if ! wait_output '^true$' 60 docker inspect -f '{{.State.Running}}' "$name"; then
         bad "$name never started: $(head -3 "$WORK/$name.log")"
         kill -KILL "$pid" 2>/dev/null
         wait "$pid" 2>/dev/null
@@ -641,20 +603,10 @@ else
 
     # Retried rather than sent once: the forward opens when the ports manager
     # next reconciles, and the probe has to be listening by then.
-    answered=false
-    for _ in $(seq 1 45); do
-        reply=$("$PROJECT/udpecho" send 127.0.0.1:15353 "through the tunnel" 2>/dev/null)
-        if [ "$reply" = "through the tunnel" ]; then
-            answered=true
-            break
-        fi
-        sleep 1
-    done
-
-    if [ "$answered" = true ]; then
+    if wait_output '^through the tunnel$' 45 "$PROJECT/udpecho" send 127.0.0.1:15353 "through the tunnel"; then
         ok "a datagram reached the container and its answer came back"
     else
-        bad "no answer came back from 127.0.0.1:15353"
+        bad "no answer came back from 127.0.0.1:15353: [$LAST_OUTPUT]"
         dockert logs itest-udp 2>&1 | sed 's/^/        probe: /' | tail -5
         sed 's/^/        /' "$WORK/up.log" | tail -8
     fi
@@ -909,8 +861,7 @@ if ! wait_provisioned "$OTHER"; then
     bad "the second account was never provisioned"
     hostdocker logs "$CONTAINER" 2>&1 | tail -15 | sed 's/^/        /' 
 else
-    # `status` prints a human table, not KEY=VALUE.
-    first_port=$(awk '/^account/ {print $NF}' "$WORK/status.log")
+    first_port=$(tunnel_port <"$WORK/status.log")
     if [ -z "$first_port" ]; then
         bad "could not determine the first account's port"
     else
@@ -1050,16 +1001,7 @@ services:
 COMPOSE
 
 if timeout 240 docker compose -f "$PROJECT/net/compose.yaml" up -d >"$WORK/compose-net.log" 2>&1; then
-    reached=false
-    for _ in $(seq 1 60); do
-        if [ -f "$PROJECT/net/out/status" ] && grep -q reached "$PROJECT/net/out/status" 2>/dev/null; then
-            reached=true
-            break
-        fi
-        sleep 1
-    done
-
-    if [ "$reached" = true ]; then
+    if wait_output reached 60 cat "$PROJECT/net/out/status"; then
         ok "a compose service resolved and reached another by service name"
     else
         bad "one compose service never reached the other"
@@ -1359,8 +1301,7 @@ echo "== 15. does replay make a container's watcher fire? =="
 # one reverse-tunnel port (ADR 0029). The probe starts through the new client
 # because a session connects on demand (ADR 0015), and one that never connects
 # never opens the notification channel.
-kill "$CLIENT_PID" 2>/dev/null
-wait "$CLIENT_PID" 2>/dev/null
+stop_pid "$CLIENT_PID"
 CLIENT_PID=""
 
 REPLAYDIR="$WORK/replayed"
@@ -1454,16 +1395,10 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # actimeo=60 lets the kernel trust its copy for a minute: without the
         # watcher's poke this reads "first" until then.
         echo "second" >"$CACHEDIR/marker"
-        seen=""
-        for _ in $(seq 1 20); do
-            seen=$(docker exec itest-cached cat /w/marker 2>&1)
-            [ "$seen" = "second" ] && break
-            sleep 1
-        done
-        if [ "$seen" = "second" ]; then
+        if wait_output '^second$' 20 docker exec itest-cached cat /w/marker; then
             ok "an edit here is visible through the cached mount"
         else
-            bad "the cached mount still reads [$seen] after 20s"
+            bad "the cached mount still reads [$LAST_OUTPUT] after 20s"
         fi
     else
         bad "a container would not start against a cached mount"
@@ -1523,15 +1458,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # The read above passes with an empty cache too, since a miss falls
         # through. Write-back is gated on a complete fill, so a fill that did
         # nothing would otherwise surface later as a write that never arrived.
-        filled=""
-        for _ in $(seq 1 20); do
-            if outputs "$UNIONDIR: .*, cached\$" "$WORK/remote-docker" remote status; then
-                filled=yes
-                break
-            fi
-            sleep 1
-        done
-        if [ -n "$filled" ]; then
+        if wait_output "$UNIONDIR: .*, cached\$" 20 "$WORK/remote-docker" remote status; then
             ok "the fill completed, so the share is cached rather than only live"
         else
             bad "the share never reported a complete cache: [$LAST_OUTPUT]"
@@ -1541,16 +1468,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         # the live export. Retried because the NFS attribute cache and libfuse's
         # entry cache (about a second each) sit in between; the time is reported.
         echo "arrived after the fill" >"$UNIONDIR/late.txt"
-        fell=""
-        for i in $(seq 1 15); do
-            if outputs '^arrived after the fill$' docker exec itest-deleg cat /w/late.txt; then
-                fell=$i
-                break
-            fi
-            sleep 1
-        done
-        if [ -n "$fell" ]; then
-            ok "a file the cache does not have falls through to the live export (${fell}s)"
+        if wait_output '^arrived after the fill$' 15 docker exec itest-deleg cat /w/late.txt; then
+            ok "a file the cache does not have falls through to the live export (${WAITED}s)"
         else
             bad "the union never fell through: [$LAST_OUTPUT]"
         fi
@@ -1564,38 +1483,21 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "the mount source is [$LAST_OUTPUT], want a union"
         fi
 
-        # A write lands in the container's own view first.
-        docker exec itest-deleg sh -c 'echo "from the container" >/w/written-there' >/dev/null 2>&1
-        if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
-            ok "the container can write into its own view"
-        else
-            bad "writing into the union: [$LAST_OUTPUT]"
-        fi
         # Write-back: an overlay's cache layer IS the record of what the
         # container changed (ADR 0044). Polled, so it takes seconds.
-        if back=$(wait_for_content "$UNIONDIR/written-there" "from the container" 30); then
-            ok "a container's write reaches this machine"
-        else
-            bad "the container's write never arrived here: [$back]"
+        write_comes_back docker itest-deleg "$UNIONDIR" "read=cached,write=back" back ||
             share_diagnostics
-        fi
 
         # An edit here reaches the container, because the workspace writes it
         # THROUGH the union rather than into the layer underneath (ADR 0044).
         echo "edited here" >"$UNIONDIR/marker"
-        seen=""
-        for edit_i in $(seq 1 20); do
-            seen=$(docker exec itest-deleg cat /w/marker 2>&1)
-            [ "$seen" = "edited here" ] && break
-            sleep 1
-        done
         # The lower carries the share's read mode (actimeo=60), so the edit
         # arriving in seconds proves the watcher's replayed SETATTR refreshes
         # it. The time is printed so a pass at nineteen seconds shows as such.
-        if [ "$seen" = "edited here" ]; then
-            ok "an edit here reaches a running write=back container (${edit_i}s, under actimeo=60)"
+        if wait_output '^edited here$' 20 docker exec itest-deleg cat /w/marker; then
+            ok "an edit here reaches a running write=back container (${WAITED}s, under actimeo=60)"
         else
-            bad "the cache stayed stale after an edit: [$seen]"
+            bad "the cache stayed stale after an edit: [$LAST_OUTPUT]"
             share_diagnostics
         fi
 
@@ -1728,16 +1630,10 @@ union_corner() {
     fi
 
     echo "edited here" >"$dir/marker"
-    local seen="" i
-    for i in $(seq 1 20); do
-        seen=$(docker exec "$name" cat /w/marker 2>&1)
-        [ "$seen" = "edited here" ] && break
-        sleep 1
-    done
-    if [ "$seen" = "edited here" ]; then
-        ok "$mode: an edit here reaches the container (${i}s)"
+    if wait_output '^edited here$' 20 docker exec "$name" cat /w/marker; then
+        ok "$mode: an edit here reaches the container (${WAITED}s)"
     else
-        bad "$mode: the union stayed stale after an edit: [$seen]"
+        bad "$mode: the union stayed stale after an edit: [$LAST_OUTPUT]"
         share_diagnostics
     fi
 
@@ -1749,34 +1645,6 @@ union_corner() {
         share_diagnostics
     fi
     return 0
-}
-
-# A container's write, and whether it comes back here. `want` is the content
-# expected here, or "" for "must never arrive".
-write_comes_back() {
-    local name=$1 dir=$2 mode=$3 want=$4
-    docker exec "$name" sh -c 'echo "from the container" >/w/written-there' >/dev/null 2>&1
-    if ! outputs '^from the container$' docker exec "$name" cat /w/written-there; then
-        bad "$mode: the container could not write into its own view: [$LAST_OUTPUT]"
-        return
-    fi
-    local back
-    back=$(wait_for_content "$dir/written-there" "$want" 30)
-    if [ -n "$want" ]; then
-        if [ "$back" = "$want" ]; then
-            ok "$mode: a container's write reaches this machine"
-        else
-            bad "$mode: the container's write never arrived here: [$back]"
-            share_diagnostics
-        fi
-    else
-        if [ -z "$back" ]; then
-            ok "$mode: a container's write stays in the workspace, 30s on"
-        else
-            bad "$mode: an ephemeral write arrived here: [$back]"
-            share_diagnostics
-        fi
-    fi
 }
 
 # nothing_prefetched asserts the status line for a share reports nothing sent.
@@ -1794,7 +1662,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     # prefetched.
     DIRECTBACK="$WORK/direct-back"
     if union_corner itest-direct-back "$DIRECTBACK" "read=direct,write=back"; then
-        write_comes_back itest-direct-back "$DIRECTBACK" "read=direct,write=back" "from the container"
+        write_comes_back docker itest-direct-back "$DIRECTBACK" "read=direct,write=back" back ||
+            share_diagnostics
         nothing_prefetched "read=direct,write=back" "$DIRECTBACK"
         dockert rm -f itest-direct-back >/dev/null 2>&1
     fi
@@ -1804,7 +1673,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     # released.
     EPHDIR="$WORK/direct-ephemeral"
     if union_corner itest-direct-eph "$EPHDIR" "read=direct,write=ephemeral"; then
-        write_comes_back itest-direct-eph "$EPHDIR" "read=direct,write=ephemeral" ""
+        write_comes_back docker itest-direct-eph "$EPHDIR" "read=direct,write=ephemeral" ephemeral ||
+            share_diagnostics
         nothing_prefetched "read=direct,write=ephemeral" "$EPHDIR"
         dockert rm -f itest-direct-eph >/dev/null 2>&1
         sleep 10
@@ -1821,18 +1691,11 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     # 16, which asserts it survives a client restart.
     CEPHDIR="$WORK/cached-ephemeral"
     if union_corner itest-cached-eph "$CEPHDIR" "read=cached,write=ephemeral"; then
-        write_comes_back itest-cached-eph "$CEPHDIR" "read=cached,write=ephemeral" ""
+        write_comes_back docker itest-cached-eph "$CEPHDIR" "read=cached,write=ephemeral" ephemeral ||
+            share_diagnostics
         # Polled: the walk yields to reads for a couple of seconds before it
         # fills the rest (ADR 0045).
-        sent=""
-        for _ in $(seq 1 20); do
-            if outputs "$CEPHDIR: .* [1-9][0-9.]*[KMG]?B sent" "$WORK/remote-docker" remote status; then
-                sent=yes
-                break
-            fi
-            sleep 1
-        done
-        if [ -n "$sent" ]; then
+        if wait_output "$CEPHDIR: .* [1-9][0-9.]*[KMG]?B sent" 20 "$WORK/remote-docker" remote status; then
             ok "read=cached,write=ephemeral: the union was prefetched"
         else
             bad "read=cached,write=ephemeral: nothing was ever sent: [$LAST_OUTPUT]"
@@ -1898,8 +1761,7 @@ echo "== 16. a background session, with no terminal held open =="
 # `start --foreground` IS the daemon body, so this is the same session detached,
 # stopped by asking rather than signalling, and reclaiming itself when idle.
 # The suite's own session stops first: an endpoint has one owner.
-kill "$CLIENT_PID" 2>/dev/null
-wait "$CLIENT_PID" 2>/dev/null
+stop_pid "$CLIENT_PID"
 CLIENT_PID=""
 sleep 2
 
@@ -1925,7 +1787,7 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         # channel it was prepared on died with the client, and its container
         # still runs. A file the CONTAINER wrote proves mount and cache layer
         # are the same; a union released under a container cannot be repaired.
-        if outputs '^from the container$' docker exec itest-deleg cat /w/written-there; then
+        if outputs '^written by itest-deleg$' docker exec itest-deleg cat /w/written-there; then
             ok "a container's union survives the client restarting"
         else
             bad "the union did not survive a client restart: [$LAST_OUTPUT]"
@@ -1934,7 +1796,7 @@ if out=$(dockert run --rm alpine:3 echo through-the-daemon 2>&1); then
         docker rm -f itest-deleg >/dev/null 2>&1
         # And the ephemeral one section 15e left running, whose upper holds
         # only what the container wrote: that write must still be there.
-        if outputs '^from the container$' docker exec itest-cached-eph cat /w/written-there; then
+        if outputs '^written by itest-cached-eph$' docker exec itest-cached-eph cat /w/written-there; then
             ok "an ephemeral union survives the client restarting"
         else
             bad "the ephemeral union did not survive a client restart: [$LAST_OUTPUT]"
@@ -2457,8 +2319,7 @@ NGINX
     hostdocker unpause itest-proxy >/dev/null 2>&1
     timeout 60 docker -H "unix://$WORK/ws.sock" rm -f itest-ws-hold >/dev/null 2>&1
 
-    kill "$WS_PID" 2>/dev/null
-    wait "$WS_PID" 2>/dev/null
+    stop_pid "$WS_PID"
     hostdocker rm -f itest-proxy >/dev/null 2>&1
 else
     info "no openssl on this runner; the proxy section did not run"

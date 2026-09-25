@@ -1,6 +1,6 @@
-# Shared MECHANICS for the test/*.sh suites, and only those: the assertions
-# stay in the suites, each of which states the setup it tests (daemon mode,
-# clients, workspace image).
+# Shared MECHANICS for the test/*.sh suites, and the few assertions more than
+# one suite makes the same way. Each suite still states the setup it tests
+# (daemon mode, clients, workspace image).
 #
 # Sourced, not executed. The counters and `outputs` need nothing; the rest
 # needs the caller's REPO, WORK, IMAGE, CONTAINER and SSH_PORT.
@@ -71,6 +71,12 @@ build_client() {
     (cd "$REPO/client" && CGO_ENABLED=0 go build -o "$WORK/remote-docker" ./cmd/remote-docker)
 }
 
+# build_all builds the image and the client, and ends the suite on a failure.
+build_all() {
+    if build_image; then ok "image builds"; else bad "image build failed"; exit 1; fi
+    if build_client; then ok "client builds"; else bad "client build failed"; exit 1; fi
+}
+
 # build_probe builds one of test/probes into <dest>: static and for Linux, so
 # it runs under plain alpine straight off a share, with no image build.
 #
@@ -89,12 +95,18 @@ cleanup_suite() {
     echo
     echo "== cleanup =="
     for pid in "$@"; do
-        [ -n "$pid" ] || continue
-        kill "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
+        stop_pid "$pid"
     done
     hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
-    rm -rf "$WORK"
+    # The agent's host keys are owned by root.
+    rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true
+}
+
+# stop_pid kills a background process and waits for it; an empty pid is skipped.
+stop_pid() {
+    [ -n "${1:-}" ] || return 0
+    kill "$1" 2>/dev/null
+    wait "$1" 2>/dev/null
 }
 
 # genkey is separate from enrol because test/two-clients.sh stages two
@@ -111,6 +123,19 @@ enrol() {
     local account=$1 statedir=$2
     genkey "$statedir" || return 1
     cp "$statedir/id_ed25519.pub" "$WORK/keys/$account.pub"
+}
+
+# enrol_machine enrols <account> with a key in <statedir>, and ends the suite
+# on a failure.
+enrol_machine() {
+    local account=$1 statedir=$2
+    mkdir -p "$WORK/keys" "$WORK/wsstate"
+    if enrol "$account" "$statedir"; then
+        ok "keypair generated and staged as $account.pub"
+    else
+        bad "enroll produced no public key"
+        exit 1
+    fi
 }
 
 # ssh_account runs one command as an enrolled account with a STOCK ssh: the
@@ -161,6 +186,33 @@ wait_provisioned() {
         sleep 1
     done
     return 1
+}
+
+# workspace_up starts the workspace and waits for every account in the
+# space-separated <accounts> and for the workspace's own dockerd. It ends the
+# suite if the container or an account never comes up.
+#
+#   workspace_up <per_user_dind> <accounts> [docker-run-arg...]
+workspace_up() {
+    local per_user_dind=$1 accounts
+    read -ra accounts <<<"$2"
+    shift 2
+    if start_workspace "$per_user_dind" "$@"; then
+        ok "workspace container started with WORKSPACE_PER_USER_DIND=$per_user_dind"
+    else
+        bad "workspace container failed to start"
+        exit 1
+    fi
+    info "waiting for ${accounts[*]} to be provisioned"
+    if wait_provisioned "${accounts[@]}"; then
+        ok "the agent provisioned ${accounts[*]}"
+    else
+        bad "${accounts[*]} never provisioned"
+        dump_workspace_log 40
+        exit 1
+    fi
+    info "waiting for dockerd inside the workspace"
+    wait_parent_dockerd
 }
 
 # load_image_into_workspace copies an image from the RUNNER's daemon into the
@@ -223,28 +275,51 @@ wait_endpoint() {
     return 1
 }
 
-# wait_ready waits for watchprobe's READY line: a change made before its watch
-# is registered proves nothing either way.
+# endpoint_up reports whether a session's endpoint answers, printing the
+# client's log when it does not.
 #
-#   wait_ready <container> <secs>
-wait_ready() {
-    local container=$1 secs=$2 _
-    for _ in $(seq 1 "$secs"); do
-        outputs '^READY' docker logs "$container" && return 0
+#   endpoint_up <socket> <pid> <log>
+endpoint_up() {
+    if wait_endpoint "$1" "$2"; then
+        ok "the local Docker endpoint answers"
+        return 0
+    fi
+    bad "the Docker endpoint never came up"
+    sed 's/^/        /' "$3"
+    return 1
+}
+
+# wait_output runs a command once a second until its output matches <regex>,
+# for up to <secs> tries. LAST_OUTPUT holds the last answer and WAITED the
+# number of tries it took.
+#
+#   wait_output <regex> <secs> <cmd...>
+WAITED=0
+wait_output() {
+    local re=$1 secs=$2 i
+    shift 2
+    for i in $(seq 1 "$secs"); do
+        if outputs "$re" "$@"; then
+            # shellcheck disable=SC2034  # read by the suites
+            WAITED=$i
+            return 0
+        fi
         sleep 1
     done
     return 1
 }
 
+# wait_ready waits for watchprobe's READY line: a change made before its watch
+# is registered proves nothing either way.
+#
+#   wait_ready <container> <secs>
+wait_ready() { wait_output '^READY' "$2" docker logs "$1"; }
+
 #   wait_url <url> <regex> <secs>
-wait_url() {
-    local url=$1 re=$2 secs=$3 _
-    for _ in $(seq 1 "$secs"); do
-        outputs "$re" curl -fsS --max-time 3 "$url" && return 0
-        sleep 1
-    done
-    return 1
-}
+wait_url() { wait_output "$2" "$3" curl -fsS --max-time 3 "$1"; }
+
+# tunnel_port reads the reverse-tunnel port off `remote status` on stdin.
+tunnel_port() { awk '/^account/ {print $NF}'; }
 
 dump_workspace_log() {
     echo "== workspace log =="
@@ -280,6 +355,38 @@ wait_gone() {
             _ "$path" && return 0
         sleep 1
     done
+    return 1
+}
+
+# write_comes_back writes a line naming <container> into its union, reads it
+# back there, then waits 30s for it in <dir>. <expect> is `back` for a write
+# that must arrive here, or `ephemeral` for one that never may.
+#
+#   write_comes_back <exec-fn> <container> <dir> <label> back|ephemeral
+write_comes_back() {
+    local exec_fn=$1 name=$2 dir=$3 label=$4 expect=$5 back
+    local content="written by $name"
+    # shellcheck disable=SC2016  # expanded by the container's sh
+    "$exec_fn" exec "$name" sh -c 'echo "$1" >/w/written-there' _ "$content" >/dev/null 2>&1
+    # Read back first, or the ephemeral case passes on a write that never happened.
+    if ! outputs "^$content\$" "$exec_fn" exec "$name" cat /w/written-there; then
+        bad "$label: the container could not write into its own view: [$LAST_OUTPUT]"
+        return 1
+    fi
+    if [ "$expect" = back ]; then
+        if back=$(wait_for_content "$dir/written-there" "$content" 30); then
+            ok "$label: a container's write reaches this machine"
+            return 0
+        fi
+        bad "$label: the container's write never arrived here: [$back]"
+        return 1
+    fi
+    back=$(wait_for_content "$dir/written-there" "" 30)
+    if [ -z "$back" ]; then
+        ok "$label: a container's write stays in the workspace, 30s on"
+        return 0
+    fi
+    bad "$label: an ephemeral write arrived here: [$back]"
     return 1
 }
 

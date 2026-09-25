@@ -43,25 +43,12 @@ fi
 
 echo
 echo "== 2. a session against it =="
-mkdir -p "$WORK/keys" "$WORK/wsstate" "$WORK/project"
+mkdir -p "$WORK/project"
 echo "written on this machine" >"$WORK/project/marker"
 
-if ! enrol "$ACCOUNT" "$WORK/state"; then
-    bad "could not enrol"
-    exit 1
-fi
-
+enrol_machine "$ACCOUNT" "$WORK/state"
 # The shared daemon: the oldest deployment shape.
-if ! start_workspace false; then
-    bad "workspace container failed to start"
-    exit 1
-fi
-if ! wait_provisioned "$ACCOUNT"; then
-    bad "the account was never provisioned"
-    dump_workspace_log 40
-    exit 1
-fi
-wait_parent_dockerd
+workspace_up false "$ACCOUNT"
 
 SOCK="$WORK/client.sock"
 CLIENT_PID=$(start_session "$WORK/state" "$ACCOUNT" "$SOCK" "$WORK/client.log" "$WORK/project")

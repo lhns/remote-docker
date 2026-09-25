@@ -75,51 +75,16 @@ fi
 
 echo
 echo "== 3. build the workspace image and the client =="
-if build_image; then
-    ok "image builds"
-else
-    bad "image build failed"
-    exit 1
-fi
-if build_client; then
-    ok "client builds"
-else
-    bad "client build failed"
-    exit 1
-fi
+build_all
 
 export REMOTE_DOCKER_STATE_DIR="$WORK/state"
 export REMOTE_DOCKER_ENDPOINT="$WORK/docker.sock"
 
 echo
 echo "== 4. enrol this machine and start the workspace =="
-mkdir -p "$WORK/keys" "$WORK/wsstate"
-if enrol "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"; then
-    ok "keypair generated and staged as $ACCOUNT.pub"
-else
-    bad "enroll produced no public key"
-    exit 1
-fi
-
+enrol_machine "$ACCOUNT" "$REMOTE_DOCKER_STATE_DIR"
 # The SHARED daemon, so `docker load` below lands in the workspace's own dockerd.
-if start_workspace false; then
-    ok "workspace container started"
-else
-    bad "workspace container failed to start"
-    exit 1
-fi
-
-info "waiting for the account to be provisioned"
-if wait_provisioned "$ACCOUNT"; then
-    ok "the agent provisioned the account"
-else
-    bad "the account was never provisioned"
-    dump_workspace_log 30
-    exit 1
-fi
-
-info "waiting for dockerd inside the workspace"
-wait_parent_dockerd
+workspace_up false "$ACCOUNT"
 
 echo
 echo "== 5. open a session =="
@@ -127,14 +92,7 @@ echo "== 5. open a session =="
 mkdir -p "$WORK/share"
 CLIENT_PID=$(start_session "$REMOTE_DOCKER_STATE_DIR" "$ACCOUNT" \
     "$REMOTE_DOCKER_ENDPOINT" "$WORK/up.log" "$WORK/share")
-
-if wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
-    ok "the local Docker endpoint answers"
-else
-    bad "the Docker endpoint never came up"
-    sed 's/^/        /' "$WORK/up.log"
-    exit 1
-fi
+endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/up.log" || exit 1
 
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
