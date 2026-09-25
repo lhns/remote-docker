@@ -570,11 +570,7 @@ func (f *shares) all() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	out := make([]string, 0, len(f.roots))
-	for share := range f.roots {
-		out = append(out, share)
-	}
-	return out
+	return keys(f.roots)
 }
 
 func (f *shares) get(share string) (shareState, bool) {

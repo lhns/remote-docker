@@ -9,7 +9,6 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
-	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/spf13/cobra"
 )
 
@@ -88,9 +87,7 @@ account there.`,
 				return err
 			}
 
-			// The comment is what attributes a key to a machine in
-			// authorized_keys.d.
-			key, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
+			key, err := enrolledPublicKey()
 			if err != nil {
 				return err
 			}
@@ -100,8 +97,7 @@ account there.`,
 			_, _ = fmt.Fprintf(out, "It must be saved as: authorized_keys.d/%s.pub\n", cfg.User)
 			_, _ = fmt.Fprintln(out, "(the filename becomes your account name there)")
 			_, _ = fmt.Fprintln(out)
-			// Again: a key loaded from disk carries no comment of its own.
-			_, _ = fmt.Fprintln(out, key.AuthorizedKey(config.KeyComment()))
+			_, _ = fmt.Fprintln(out, key)
 			return nil
 		},
 	}

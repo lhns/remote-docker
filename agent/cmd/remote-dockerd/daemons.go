@@ -164,7 +164,7 @@ func resetDaemons(cmd *cobra.Command, m daemonResetter, accounts []string, purge
 // process that shares only the workspace's configuration. It reads the same
 // environment, so `daemons ls` names the containers the running agent would.
 func managerForCommands() (*daemons.Manager, error) {
-	stateDir := envOr(envStateDir, "/etc/workspace")
+	stateDir := envOr(envStateDir, defaultStateDir)
 	id, err := daemons.WorkspaceID(stateDir)
 	if err != nil {
 		return nil, err

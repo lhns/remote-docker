@@ -6,9 +6,10 @@ package dircache
 // mechanism, kept pure so sim_test.go can measure it.
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -276,14 +277,7 @@ func (t *Tree) place(entries []Entry) []placed {
 		if len(window) == 0 {
 			return
 		}
-		// Smallest first, path breaking ties so both ends and successive
-		// runs derive the same tree from the same input.
-		sort.SliceStable(window, func(i, j int) bool {
-			if window[i].Size != window[j].Size {
-				return window[i].Size < window[j].Size
-			}
-			return window[i].Path < window[j].Path
-		})
+		slices.SortStableFunc(window, bySizePath)
 		out = append(out, t.cut(window)...)
 		window, acc = nil, 0
 	}
@@ -498,13 +492,7 @@ func (t *Tree) promote(n *node) bool {
 		return false
 	}
 	mean := float64(n.unfetched()) / float64(n.unfetchedFiles())
-	f := mean / float64(bdp)
-	if f < t.layout.FMin {
-		f = t.layout.FMin
-	}
-	if f > 1 {
-		f = 1
-	}
+	f := min(max(mean/float64(bdp), t.layout.FMin), 1)
 	return float64(n.read) >= f*float64(n.unfetched())
 }
 
@@ -612,12 +600,8 @@ func (t *Tree) Unstored(maxBytes int64, maxFiles int) []Entry {
 			}
 		}
 	}
-	sort.SliceStable(cands, func(i, j int) bool {
-		a, b := cands[i].leaf.entries[cands[i].idx], cands[j].leaf.entries[cands[j].idx]
-		if a.Size != b.Size {
-			return a.Size < b.Size
-		}
-		return a.Path < b.Path
+	slices.SortStableFunc(cands, func(x, y cand) int {
+		return bySizePath(x.leaf.entries[x.idx], y.leaf.entries[y.idx])
 	})
 
 	var out []Entry
@@ -631,4 +615,10 @@ func (t *Tree) Unstored(maxBytes int64, maxFiles int) []Entry {
 		size += e.Size
 	}
 	return out
+}
+
+// bySizePath orders smallest first, path breaking ties, so both ends and
+// successive runs derive the same tree from the same input.
+func bySizePath(a, b Entry) int {
+	return cmp.Or(cmp.Compare(a.Size, b.Size), cmp.Compare(a.Path, b.Path))
 }

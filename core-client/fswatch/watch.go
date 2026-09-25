@@ -207,10 +207,9 @@ func New(opts Options) (*Watcher, error) {
 	w.be = be
 
 	out := make(chan notify.Frame, opts.QueueLen)
-	w.wg.Add(3)
-	go func() { defer w.wg.Done(); w.drain() }()
-	go func() { defer w.wg.Done(); w.process(out) }()
-	go func() { defer w.wg.Done(); w.send(out) }()
+	w.wg.Go(w.drain)
+	w.wg.Go(func() { w.process(out) })
+	w.wg.Go(func() { w.send(out) })
 	return w, nil
 }
 
@@ -253,22 +252,22 @@ func (w *Watcher) SetObserver(o Observer) {
 
 // lost tells the observer that something was missed, if there is one.
 func (w *Watcher) lost(notice notify.Notice) {
-	w.mu.Lock()
-	o := w.observer
-	w.mu.Unlock()
-	if o != nil {
+	if o := w.current(); o != nil {
 		o.Lost(notice)
 	}
 }
 
 // observe tells the observer, if there is one.
 func (w *Watcher) observe(event notify.Event) {
-	w.mu.Lock()
-	o := w.observer
-	w.mu.Unlock()
-	if o != nil {
+	if o := w.current(); o != nil {
 		o.Observe(event)
 	}
+}
+
+func (w *Watcher) current() Observer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.observer
 }
 
 // SetSink attaches a connection; nil detaches it without disturbing the

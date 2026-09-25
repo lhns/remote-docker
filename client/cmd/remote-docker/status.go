@@ -5,6 +5,7 @@ package main
 // never at the end.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -159,12 +160,7 @@ func dockerReach(cfg config.Config) string {
 
 // contextHint is what to type after `workspace use`, which is the workspace's
 // name rather than the context's when they differ.
-func contextHint(cfg config.Config) string {
-	if cfg.Name != "" {
-		return cfg.Name
-	}
-	return cfg.ContextName()
-}
+func contextHint(cfg config.Config) string { return cmp.Or(cfg.Name, cfg.ContextName()) }
 
 func currentDockerContext() string {
 	cf, err := dockerconfig.Load(dockerconfig.Dir())
@@ -201,11 +197,7 @@ func versionsLine(f facts) string {
 	parts := []string{"client " + orUnknown(version)}
 
 	if f.infoErr == nil {
-		agent := f.info.Agent
-		if agent == "" {
-			agent = "not reported"
-		}
-		parts = append(parts, "agent "+agent)
+		parts = append(parts, "agent "+cmp.Or(f.info.Agent, "not reported"))
 	}
 	if f.answering && versionDiffers(f.local) {
 		parts = append(parts, "session "+orUnknown(f.local.Version)+" (DIFFERENT)")
@@ -215,10 +207,8 @@ func versionsLine(f facts) string {
 
 // firstLine keeps a verdict to one line.
 func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return strings.TrimSpace(s[:i])
-	}
-	return strings.TrimSpace(s)
+	line, _, _ := strings.Cut(s, "\n")
+	return strings.TrimSpace(line)
 }
 
 func newStatusCommand() *cobra.Command {

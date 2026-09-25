@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -119,7 +120,7 @@ func serve(addr, wsAddr string) error {
 
 	perUserDind := envOr(envPerUserDind, "true") == "true"
 
-	stateDir := envOr(envStateDir, "/etc/workspace")
+	stateDir := envOr(envStateDir, defaultStateDir)
 	keysDir := envOr(envKeysDir, filepath.Join(stateDir, "authorized_keys.d"))
 	hostKeyDir := envOr(envHostKeys, filepath.Join(stateDir, "host_keys"))
 
@@ -254,10 +255,7 @@ func serve(addr, wsAddr string) error {
 		// daemons.DefaultImage. elevate sets WORKSPACE_IMAGE from the container
 		// it inspected; a deployment that does not elevate sets it in the stack
 		// file; without either the stock image is used.
-		image := os.Getenv(envDindImage)
-		if image == "" {
-			image = os.Getenv(elevate.ImageEnv)
-		}
+		image := envOr(envDindImage, os.Getenv(elevate.ImageEnv))
 		if image != "" {
 			log.Info("per-account daemons run an image", "image", image)
 		}
@@ -498,12 +496,11 @@ func generateHostKey(path string) ([]byte, error) {
 	return encoded, nil
 }
 
-func envOr(name, fallback string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-	return fallback
-}
+func envOr(name, fallback string) string { return cmp.Or(os.Getenv(name), fallback) }
+
+// defaultStateDir is where the agent keeps its state unless WORKSPACE_STATE_DIR
+// says otherwise, for the serving agent and `daemons` alike.
+const defaultStateDir = "/etc/workspace"
 
 // readySeconds reads WORKSPACE_DAEMON_READY_TIMEOUT.
 //

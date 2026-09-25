@@ -106,18 +106,10 @@ type docker interface {
 }
 
 // realDocker is the docker command itself.
-type realDocker struct{ cli dockercli.CLI }
-
-func (r realDocker) Line(ctx context.Context, args ...string) (string, error) {
-	return r.cli.Line(ctx, args...)
-}
-
-func (r realDocker) Run(ctx context.Context, what string, args ...string) error {
-	return r.cli.Run(ctx, what, args...)
-}
+type realDocker struct{ dockercli.CLI }
 
 func (r realDocker) Output(ctx context.Context, args ...string) ([]byte, error) {
-	return r.cli.Cmd(ctx, args...).CombinedOutput()
+	return r.Cmd(ctx, args...).CombinedOutput()
 }
 
 // client is the docker command for one daemon. An empty host is the parent.

@@ -40,9 +40,5 @@ func nameTheEmbeddedCLI() {
 // dockerVersionLine is what `docker --version` prints, in docker's shape
 // because scripts parse it.
 func dockerVersionLine() string {
-	v := embeddedCLIVersion()
-	if v == "" {
-		v = "unknown"
-	}
-	return fmt.Sprintf("Docker version %s, build remote-docker %s", v, version)
+	return fmt.Sprintf("Docker version %s, build remote-docker %s", orUnknown(embeddedCLIVersion()), version)
 }

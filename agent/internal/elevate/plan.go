@@ -9,6 +9,7 @@
 package elevate
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 )
@@ -171,19 +172,13 @@ func Plan(self ContainerInfo, opts Options) (RunSpec, error) {
 				"elevating again would fork containers indefinitely", elevatedEnv)
 	}
 
-	hostSocket := opts.HostSocket
-	if hostSocket == "" {
-		hostSocket = DefaultHostSocket
-	}
+	hostSocket := cmp.Or(opts.HostSocket, DefaultHostSocket)
 
 	// The child joins OUR network namespace. This is the whole reason the
 	// scheme works: Swarm publishes the port into this task's namespace, and a
 	// container started outside Swarm has no published port of its own. Get
 	// this wrong and nothing can connect, with no error to explain why.
-	target := self.ID
-	if target == "" {
-		target = self.Name
-	}
+	target := cmp.Or(self.ID, self.Name)
 
 	return RunSpec{
 		Name:       childName(self.Name),

@@ -1,7 +1,9 @@
 package fswatch
 
 import (
+	"maps"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -247,12 +249,7 @@ func (c *coalescer) flush(now time.Time) ([]notify.Event, []notify.Notice) {
 
 	var notices []notify.Notice
 	if len(c.lost) > 0 {
-		exports := make([]string, 0, len(c.lost))
-		for export := range c.lost {
-			exports = append(exports, export)
-		}
-		sort.Strings(exports)
-		for _, export := range exports {
+		for _, export := range slices.Sorted(maps.Keys(c.lost)) {
 			l := c.lost[export]
 			notices = append(notices, notify.Notice{
 				Export:  export,

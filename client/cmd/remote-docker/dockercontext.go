@@ -38,22 +38,16 @@ func dockerProgram(lookPath func(string) (string, error), executable func() (str
 	return self
 }
 
-type installedContext struct {
-	name     string
-	endpoint string
-}
-
 // installContext writes one workspace's context, refusing to replace a context
 // this client did not create.
-func installContext(cfg config.Config) (installedContext, error) {
+func installContext(cfg config.Config) error {
 	name := cfg.ContextName()
-	endpoint := dockerHostOf(cfg)
 
 	if contextIsOurs(name) {
 		// Replaced rather than updated, so no stale endpoint survives.
 		_ = dockerCmd("context", "rm", "-f", name).Run()
-	} else if contextExists(name) {
-		return installedContext{}, fmt.Errorf(
+	} else if dockerCmd("context", "inspect", name).Run() == nil {
+		return fmt.Errorf(
 			"a docker context named %q already exists and was not created by remote-docker, "+
 				"so it will not be replaced; rename the workspace, or remove that context yourself",
 			name)
@@ -61,11 +55,11 @@ func installContext(cfg config.Config) (installedContext, error) {
 
 	create := dockerCmd("context", "create", name,
 		"--description", contextMarker,
-		"--docker", "host="+endpoint)
+		"--docker", "host="+dockerHostOf(cfg))
 	if out, err := create.CombinedOutput(); err != nil {
-		return installedContext{}, fmt.Errorf("creating the docker context: %w: %s", err, out)
+		return fmt.Errorf("creating the docker context: %w: %s", err, out)
 	}
-	return installedContext{name: name, endpoint: endpoint}, nil
+	return nil
 }
 
 // contextIsOurs reports whether a docker context carries our marker.
@@ -86,8 +80,4 @@ func contextIsOurs(name string) bool {
 		return false
 	}
 	return strings.TrimSpace(contexts[0].Metadata.Description) == contextMarker
-}
-
-func contextExists(name string) bool {
-	return dockerCmd("context", "inspect", name).Run() == nil
 }

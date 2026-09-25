@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func lockDir() string { return filepath.Dir(defaultSocketPath()) }
+func lockDir() string { return filepath.Dir(DefaultEndpoint()) }
 
 // acquireLock takes an exclusive, non-blocking flock, which the kernel
 // releases when the holder dies, so it cannot go stale.

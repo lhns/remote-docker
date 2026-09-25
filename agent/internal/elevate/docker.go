@@ -2,6 +2,7 @@ package elevate
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -196,11 +197,10 @@ func containerIDFromMountinfo(path string) string {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
-		i := strings.Index(line, marker)
-		if i < 0 {
+		_, rest, ok := strings.Cut(line, marker)
+		if !ok {
 			continue
 		}
-		rest := line[i+len(marker):]
 		id, _, _ := strings.Cut(rest, "/")
 		// Container ids are 64 hex characters; anything else is a coincidence
 		// of path naming rather than the id we want.
@@ -227,13 +227,7 @@ func (r *Runner) docker(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 func (r *Runner) hostSocket() string {
-	if r.HostSocket != "" {
-		return r.HostSocket
-	}
-	if s := os.Getenv(hostSocketEnv); s != "" {
-		return s
-	}
-	return DefaultHostSocket
+	return cmp.Or(r.HostSocket, os.Getenv(hostSocketEnv), DefaultHostSocket)
 }
 
 // log is the runner's logger, or silence. See logx.Or.

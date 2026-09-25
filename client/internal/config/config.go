@@ -3,13 +3,15 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -167,12 +169,7 @@ type Machine struct {
 
 // Names lists the configured workspaces in a stable order.
 func (f File) Names() []string {
-	names := make([]string, 0, len(f.Workspaces))
-	for name := range f.Workspaces {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(f.Workspaces))
 }
 
 // selected picks which workspace a request refers to: the name given, else
@@ -251,10 +248,7 @@ func Resolve(o Overrides, path string) (Config, error) {
 		return Config{}, err
 	}
 
-	want := o.Workspace
-	if want == "" {
-		want = os.Getenv(EnvWorkspace)
-	}
+	want := cmp.Or(o.Workspace, os.Getenv(EnvWorkspace))
 	name, ws, err := file.selected(want)
 	if err != nil {
 		return Config{}, err
@@ -557,20 +551,14 @@ func KnownHostsPath() string { return filepath.Join(StateDir(), "known_hosts") }
 
 // SharesPath records which local directories a workspace has exported. Per
 // workspace, so one workspace's record never answers another's mount.
-func SharesPath(workspace string) string {
-	if workspace == "" {
-		workspace = "default"
-	}
-	return filepath.Join(StateDir(), "shares", workspace+".json")
-}
+func SharesPath(workspace string) string { return perWorkspace("shares", workspace) }
 
 // CachedPath records which files a delegated share's cache was filled with,
 // per workspace like SharesPath.
-func CachedPath(workspace string) string {
-	if workspace == "" {
-		workspace = "default"
-	}
-	return filepath.Join(StateDir(), "caches", workspace+".json")
+func CachedPath(workspace string) string { return perWorkspace("caches", workspace) }
+
+func perWorkspace(dir, workspace string) string {
+	return filepath.Join(StateDir(), dir, cmp.Or(workspace, "default")+".json")
 }
 
 // KeyComment identifies this machine on the key it generates, so whoever
@@ -580,13 +568,7 @@ func KeyComment() string {
 	if err != nil || host == "" {
 		host = "unknown"
 	}
-	user := ""
-	for _, key := range []string{"USER", "USERNAME", "LOGNAME"} {
-		if v := os.Getenv(key); v != "" {
-			user = v
-			break
-		}
-	}
+	user := localUser()
 	if user == "" {
 		return "remote-docker-" + host
 	}
@@ -596,12 +578,14 @@ func KeyComment() string {
 // DefaultUser guesses the workspace account from the local username, because
 // the enrolled .pub file is usually named after it.
 func DefaultUser() string {
-	for _, key := range []string{"USER", "USERNAME", "LOGNAME"} {
-		if v := os.Getenv(key); v != "" {
-			return sanitizeUser(v)
-		}
+	if u := localUser(); u != "" {
+		return sanitizeUser(u)
 	}
 	return "user"
+}
+
+func localUser() string {
+	return cmp.Or(os.Getenv("USER"), os.Getenv("USERNAME"), os.Getenv("LOGNAME"))
 }
 
 // sanitizeUser reduces a name to a workspace account name, by the workspace's
@@ -690,10 +674,7 @@ func (f *File) Set(name string, ws Workspace) error {
 		// Its watch mode, its consistency rules and above all its `machine`
 		// belong to that workspace; left at the top level they become a base,
 		// and the new workspace silently inherits a machine it does not have.
-		flat := f.Default
-		if flat == "" {
-			flat = f.Host
-		}
+		flat := cmp.Or(f.Default, f.Host)
 		if flat != name {
 			f.Workspaces = map[string]Workspace{flat: f.Workspace}
 		}

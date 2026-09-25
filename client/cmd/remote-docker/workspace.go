@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -300,12 +299,11 @@ func where(cfg config.Config) string {
 // reportContext creates the docker context for a workspace, reporting rather
 // than failing. A workspace is still usable without one.
 func reportContext(out io.Writer, cfg config.Config) {
-	installed, err := installContext(cfg)
-	if err != nil {
+	if err := installContext(cfg); err != nil {
 		_, _ = fmt.Fprintf(out, "workspace saved, but its docker context was not created: %v\n", err)
 		return
 	}
-	_, _ = fmt.Fprintf(out, "docker context %q -> %s\n", installed.name, installed.endpoint)
+	_, _ = fmt.Fprintf(out, "docker context %q -> %s\n", cfg.ContextName(), dockerHostOf(cfg))
 }
 
 // useContext selects a workspace's context as docker's current one, reporting
@@ -341,11 +339,10 @@ func removeContextFor(out io.Writer, cfg config.Config) {
 // enrolledKey returns this machine's public key line, or a hint if it cannot
 // be read. Never fatal: it is printed as advice.
 func enrolledKey() string {
-	kp, err := keys.LoadOrCreateKey(config.KeyPath(), config.KeyComment())
-	if err != nil {
-		return "(run `" + ourCommand("enroll") + "` to generate one)"
+	if key, err := enrolledPublicKey(); err == nil {
+		return key
 	}
-	return strings.TrimSpace(kp.AuthorizedKey(config.KeyComment()))
+	return "(run `" + ourCommand("enroll") + "` to generate one)"
 }
 
 // newWorkspaceInspectCommand shows everything about one workspace in one place.

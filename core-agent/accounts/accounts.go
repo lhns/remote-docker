@@ -347,9 +347,7 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 func nextUID(uids map[string]int, base int) int {
 	highest := base - 1
 	for _, uid := range uids {
-		if uid > highest {
-			highest = uid
-		}
+		highest = max(highest, uid)
 	}
 	return highest + 1
 }
