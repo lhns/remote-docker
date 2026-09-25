@@ -124,8 +124,10 @@ type Notice struct {
 
 // Hello is the agent's opening line, sent before anything else.
 type Hello struct {
-	Version int    `json:"v"`
-	Agent   string `json:"a,omitempty"`
+	Version int `json:"v"`
+	// Agent is unused: no agent sends it and no client reads it. Kept only
+	// for compatibility with the published wire format.
+	Agent string `json:"a,omitempty"`
 }
 
 // Frame is one line of the stream. Exactly one payload field is set.
