@@ -304,8 +304,7 @@ func (s *Server) servePTY(session gssh.Session, cmd *exec.Cmd, winCh <-chan gssh
 }
 
 func exitCode(err error) int {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exit.ExitCode()
 	}
 	return 1

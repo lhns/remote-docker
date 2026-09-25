@@ -67,8 +67,8 @@ func (k *KnownHosts) Callback() ssh.HostKeyCallback {
 			return nil
 		}
 
-		var keyErr *knownhosts.KeyError
-		if !errors.As(err, &keyErr) {
+		keyErr, ok := errors.AsType[*knownhosts.KeyError](err)
+		if !ok {
 			return err
 		}
 

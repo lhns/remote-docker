@@ -93,8 +93,7 @@ func (r *Runner) launch(ctx context.Context, spec RunSpec) (int, error) {
 			// `docker run` proxies the signal onward and then exits when the
 			// container does, so keep waiting rather than exiting here.
 		case err := <-done:
-			var exit *exec.ExitError
-			if errors.As(err, &exit) {
+			if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 				return exit.ExitCode(), nil
 			}
 			if err != nil {

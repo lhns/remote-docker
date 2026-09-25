@@ -192,8 +192,8 @@ func TestAGreetingNobodySendsEndsAtTheDeadline(t *testing.T) {
 
 	select {
 	case err := <-done:
-		var silent *silentError
-		if !errors.As(err, &silent) {
+		silent, ok := errors.AsType[*silentError](err)
+		if !ok {
 			t.Fatalf("openCache = %v, want a silentError", err)
 		}
 		// The TEXT, not just the type. The duration must be the budget this
@@ -228,8 +228,7 @@ func TestACancelledCallerIsNotReportedAsSilence(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("openCache = %v, want it to carry context.Canceled", err)
 		}
-		var silent *silentError
-		if errors.As(err, &silent) {
+		if _, ok := errors.AsType[*silentError](err); ok {
 			t.Errorf("openCache = %v, want no silentError for a caller that gave up", err)
 		}
 		if strings.Contains(err.Error(), "said nothing") {
@@ -251,8 +250,7 @@ func TestACommandAnOlderWorkspaceDoesNotServe(t *testing.T) {
 	client := startWorkspace(t, func(string) (string, bool) { return "", true })
 
 	_, err := openCache(t.Context(), client)
-	var notServed *notServedError
-	if !errors.As(err, &notServed) {
+	if _, ok := errors.AsType[*notServedError](err); !ok {
 		t.Fatalf("openCache = %v, want a notServedError", err)
 	}
 }

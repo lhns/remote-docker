@@ -33,8 +33,7 @@ func TestListenRefusesASecondOwner(t *testing.T) {
 		t.Fatal("a second Listen succeeded; it has taken the endpoint from the first")
 	}
 
-	var locked *ErrLocked
-	if !errors.As(err, &locked) {
+	if _, ok := errors.AsType[*ErrLocked](err); !ok {
 		t.Errorf("second Listen failed with %v, want an ErrLocked naming the owner", err)
 	}
 }

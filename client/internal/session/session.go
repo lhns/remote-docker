@@ -244,7 +244,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			// The watches stay; what is missed meanwhile is announced on the
 			// next connection.
 			if s.watch != nil {
-				s.watch.ClearSink()
+				s.watch.SetSink(nil)
 			}
 			live.close()
 		},

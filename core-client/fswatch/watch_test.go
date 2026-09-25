@@ -217,7 +217,7 @@ func TestReconnectAnnouncesWhatWasMissed(t *testing.T) {
 	w, be, first := startWatcher(t, ModePartial, root)
 	watched := w.Stats().Watched
 
-	w.ClearSink()
+	w.SetSink(nil)
 	be.events <- fsnotify.Event{Name: filepath.Join(root, "src", "while-away.go"), Op: fsnotify.Write}
 	waitFor(t, "the event to be dropped", func() bool { return w.Stats().Dropped > 0 })
 

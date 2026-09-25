@@ -65,12 +65,10 @@ func resultOf(err error) string {
 	if err == nil {
 		return "ok"
 	}
-	var own result
-	if errors.As(err, &own) {
+	if own, ok := errors.AsType[result](err); ok {
 		return string(own)
 	}
-	var errno unix.Errno
-	if errors.As(err, &errno) {
+	if errno, ok := errors.AsType[unix.Errno](err); ok {
 		if name := unix.ErrnoName(errno); name != "" {
 			return name
 		}
