@@ -57,9 +57,9 @@ holds, where it used to answer `Stale file handle`.
 
 ### Workspace commands
 
-- **`remote stop`, `machine stop`, `machine rebuild`, `rm` of a machine
-  workspace and the agent's `daemons reset` refuse while their target is in
-  use**, as `restart` already did and as `docker rm` does. `-f` goes ahead.
+- **`remote stop`, `rm`, `machine stop`, `machine rebuild` and the agent's
+  `daemons reset` refuse while their target is in use**, as `restart` already
+  did and as `docker rm` does. `-f` goes ahead.
 - The machine commands take an optional name, falling back to `--workspace` and
   then the default, and so do `start`, `stop`, `restart`, `status`, `gc` and
   `enroll`.
