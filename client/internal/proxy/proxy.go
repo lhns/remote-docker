@@ -357,11 +357,7 @@ func splice(client net.Conn, clientReader *bufio.Reader, upstream io.ReadWriteCl
 // writeError reports a proxy-level failure in the shape the Docker CLI
 // expects, so it prints a message rather than "unexpected EOF".
 func writeError(w io.Writer, err error) {
-	body := fmt.Sprintf("{\"message\":%q}", err.Error())
-	_, _ = fmt.Fprintf(w, "HTTP/1.1 500 Internal Server Error\r\n"+
-		"Content-Type: application/json\r\n"+
-		"Content-Length: %d\r\n"+
-		"Connection: close\r\n\r\n%s", len(body), body)
+	writeControl(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 }
 
 // log is the proxy's logger, or silence. See logx.Or.

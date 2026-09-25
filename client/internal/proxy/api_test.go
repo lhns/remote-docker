@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -140,6 +142,71 @@ func TestEventsStreamsAfterTheResponseHead(t *testing.T) {
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("no %q event arrived", want)
+		}
+	}
+}
+
+// TestAPIErrorStrings pins what each call says when the daemon refuses it and
+// when its reply is not JSON.
+func TestAPIErrorStrings(t *testing.T) {
+	var status atomic.Int64
+	var reply atomic.Value
+	daemon := startDaemon(t, func(_ *fakeDaemon, _ *http.Request, conn net.Conn, _ *bufio.Reader) {
+		respondJSON(conn, int(status.Load()), reply.Load().(string))
+	})
+	client := &APIClient{Dialer: &tcpDialer{addr: daemon.listener.Addr().String()}}
+	ctx := context.Background()
+
+	calls := map[string]func() error{
+		"EnsureVolume": func() error { return client.EnsureVolume(ctx, "v", nil, nil) },
+		"RemoveVolume": func() error { return client.RemoveVolume(ctx, "v") },
+		"ListContainers": func() error {
+			_, err := client.ListContainers(ctx)
+			return err
+		},
+		"ListVolumes": func() error {
+			_, err := client.ListVolumes(ctx)
+			return err
+		},
+		"VolumesInUse": func() error {
+			_, err := client.VolumesInUse(ctx)
+			return err
+		},
+	}
+
+	// A want ending in ": " is a prefix, since the decoder's own text follows.
+	for _, tc := range []struct {
+		status int
+		reply  string
+		want   map[string]string
+	}{
+		{http.StatusInternalServerError, `{"message":"boom"}`, map[string]string{
+			"EnsureVolume":   "proxy: creating volume v: boom",
+			"RemoveVolume":   "proxy: removing volume v: boom",
+			"ListContainers": "proxy: listing containers: boom",
+			"ListVolumes":    "proxy: listing volumes: boom",
+			"VolumesInUse":   "proxy: listing containers: boom",
+		}},
+		{http.StatusOK, `not json`, map[string]string{
+			"ListContainers": "proxy: decoding container list: ",
+			"ListVolumes":    "proxy: decoding volume list: ",
+			"VolumesInUse":   "proxy: decoding container mounts: ",
+		}},
+	} {
+		status.Store(int64(tc.status))
+		reply.Store(tc.reply)
+		for name, call := range calls {
+			want, err := tc.want[name], call()
+			var got string
+			if err != nil {
+				got = err.Error()
+			}
+			if strings.HasSuffix(want, ": ") && strings.HasPrefix(got, want) {
+				continue
+			}
+			if got != want {
+				t.Errorf("%d %s: error %q, want %q", tc.status, name, got, want)
+			}
 		}
 	}
 }

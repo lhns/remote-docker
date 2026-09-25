@@ -70,6 +70,28 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any) (*htt
 	return resp, conn, nil
 }
 
+// call makes one request and decodes a successful reply into out, unless out
+// is nil. Errors read "proxy: <what>: ..." and "proxy: decoding <decoded>: ...".
+func (c *APIClient) call(ctx context.Context, method, path string, body, out any, what, decoded string) error {
+	resp, conn, err := c.do(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("proxy: %s: %s", what, apiError(resp))
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("proxy: decoding %s: %w", decoded, err)
+	}
+	return nil
+}
+
 // closeOnCancel closes conn when ctx is done, until stop is called. stop waits
 // for the goroutine, or one would leak per call under the session's context.
 func closeOnCancel(ctx context.Context, conn io.Closer) (stop func()) {
@@ -103,17 +125,7 @@ func (c *APIClient) EnsureVolume(ctx context.Context, name string, driverOpts, l
 		"Labels":     labels,
 	}
 
-	resp, conn, err := c.do(ctx, http.MethodPost, "/volumes/create", body)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("proxy: creating volume %s: %s", name, apiError(resp))
-	}
-	return nil
+	return c.call(ctx, http.MethodPost, "/volumes/create", body, nil, "creating volume "+name, "")
 }
 
 // replaceIfStale removes a managed volume whose driver options have changed,
@@ -147,21 +159,8 @@ type volumeDetail struct {
 // volume create will report what is wrong.
 func (c *APIClient) inspectVolume(ctx context.Context, name string) (volumeDetail, bool) {
 	var detail volumeDetail
-
-	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil)
-	if err != nil {
-		return detail, false
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return detail, false
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
-		return detail, false
-	}
-	return detail, true
+	err := c.call(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, &detail, "inspecting volume "+name, "volume "+name)
+	return detail, err == nil
 }
 
 // Container is the subset of container state the client needs.
@@ -185,20 +184,9 @@ type Container struct {
 
 // ListContainers returns the running containers.
 func (c *APIClient) ListContainers(ctx context.Context) ([]Container, error) {
-	resp, conn, err := c.do(ctx, http.MethodGet, "/containers/json", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("proxy: listing containers: %s", apiError(resp))
-	}
-
 	var containers []Container
-	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
-		return nil, fmt.Errorf("proxy: decoding container list: %w", err)
+	if err := c.call(ctx, http.MethodGet, "/containers/json", nil, &containers, "listing containers", "container list"); err != nil {
+		return nil, err
 	}
 	return containers, nil
 }
@@ -262,58 +250,26 @@ func apiError(resp *http.Response) string {
 
 // ListVolumes returns every volume on the workspace daemon.
 func (c *APIClient) ListVolumes(ctx context.Context) ([]rewrite.Volume, error) {
-	resp, conn, err := c.do(ctx, http.MethodGet, "/volumes", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("proxy: listing volumes: %s", apiError(resp))
-	}
-
 	var payload struct {
 		Volumes []rewrite.Volume
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("proxy: decoding volume list: %w", err)
+	if err := c.call(ctx, http.MethodGet, "/volumes", nil, &payload, "listing volumes", "volume list"); err != nil {
+		return nil, err
 	}
 	return payload.Volumes, nil
 }
 
 // RemoveVolume deletes a volume by name.
 func (c *APIClient) RemoveVolume(ctx context.Context, name string) error {
-	resp, conn, err := c.do(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("proxy: removing volume %s: %s", name, apiError(resp))
-	}
-	return nil
+	return c.call(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil, nil, "removing volume "+name, "")
 }
 
 // VolumesInUse names the volumes referenced by any container, stopped ones
 // included: removing one would fail that container's next start.
 func (c *APIClient) VolumesInUse(ctx context.Context) (map[string]bool, error) {
-	resp, conn, err := c.do(ctx, http.MethodGet, "/containers/json?all=true", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("proxy: listing containers: %s", apiError(resp))
-	}
-
 	var containers []Container
-	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
-		return nil, fmt.Errorf("proxy: decoding container mounts: %w", err)
+	if err := c.call(ctx, http.MethodGet, "/containers/json?all=true", nil, &containers, "listing containers", "container mounts"); err != nil {
+		return nil, err
 	}
 
 	inUse := map[string]bool{}
