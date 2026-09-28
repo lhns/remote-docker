@@ -127,6 +127,45 @@ func TestResolveRejectsOutOfRangePort(t *testing.T) {
 	}
 }
 
+// The workspace lowercases the key file's name, so Pierre.pub enrols pierre and
+// a user set as "Pierre" from any source must log in as that.
+func TestResolveFoldsTheUser(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "absent.json")
+	cases := map[string]func(t *testing.T) (Config, error){
+		"flag": func(*testing.T) (Config, error) { return Resolve(Overrides{User: "Pierre"}, absent) },
+		"environment": func(t *testing.T) (Config, error) {
+			t.Setenv(EnvUser, "Pierre")
+			return Resolve(Overrides{}, absent)
+		},
+		"file": func(t *testing.T) (Config, error) {
+			return Resolve(Overrides{}, writeConfig(t, `{"user":"Pierre"}`))
+		},
+		"workspace entry": func(t *testing.T) (Config, error) {
+			return Resolve(Overrides{}, writeConfig(t, `{"workspaces":{"dev":{"host":"h","user":"Pierre"}}}`))
+		},
+	}
+	for name, resolve := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := resolve(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.User != "pierre" {
+				t.Errorf("User = %q, want pierre", cfg.User)
+			}
+		})
+	}
+}
+
+// A user no account name can be derived from is refused by name, not
+// replaced with the default's "user".
+func TestResolveRefusesAnUnderivableUser(t *testing.T) {
+	_, err := Resolve(Overrides{User: "123"}, filepath.Join(t.TempDir(), "absent.json"))
+	if err == nil || !strings.Contains(err.Error(), `"123"`) {
+		t.Errorf("Resolve with user 123 = %v, want an error naming it", err)
+	}
+}
+
 func TestRequireHost(t *testing.T) {
 	if err := (Config{Host: "workspace"}).RequireHost(); err != nil {
 		t.Errorf("a configured host was rejected: %v", err)

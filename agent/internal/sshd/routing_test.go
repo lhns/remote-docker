@@ -268,6 +268,38 @@ func TestAuthenticationWarmsTheAccountsDaemon(t *testing.T) {
 	}
 }
 
+// Pierre.pub enrols pierre, so the login name Pierre must reach it, and the
+// session must carry the enrolled name rather than the one typed.
+func TestAuthenticationFoldsTheLoginName(t *testing.T) {
+	keysDir := t.TempDir()
+	key := generateKey(t)
+	if err := os.WriteFile(filepath.Join(keysDir, "Pierre.pub"), ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := accounts.New(keysDir, t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
+	if err := store.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	targets := twoAccounts()
+	s := &Server{cfg: Config{Accounts: store, Daemons: targets}}
+
+	ctx := newFakeContext("Pierre")
+	if !s.authenticate(ctx, key) {
+		t.Fatal("the login name Pierre was refused the account Pierre.pub enrolled")
+	}
+	if account, ok := accountFor(ctx); !ok || account.Name() != "pierre" {
+		t.Errorf("the connection carries %+v, want pierre", account)
+	}
+	if len(targets.warmed) != 1 || targets.warmed[0] != "pierre" {
+		t.Errorf("warmed %v, want [pierre]", targets.warmed)
+	}
+
+	// A name nothing can be derived from is refused, as it was before folding.
+	if s.authenticate(newFakeContext("123"), key) {
+		t.Error("the login name 123 was accepted")
+	}
+}
+
 // A server built without a resolver serves the shared daemon rather than
 // panicking on the first session. New is the only constructor, and a nil
 // dereference at the first connection is a poor way to learn that.

@@ -8,6 +8,18 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- An account name with capitals works. `Pierre.pub` enrols `pierre`, but a
+  `--user Pierre`, `REMOTE_DOCKER_USER`, `"user"` in the config or
+  `remote machine create --user` was sent as typed and refused with "no such
+  account". The client and the workspace both fold the name now, so a stock
+  `ssh Pierre@ws` reaches `pierre` too, and `remote enroll` names the file
+  `pierre.pub`. A name no account can be made from is an error naming it
+  rather than a silent `user`.
+
 ## 0.8.0 — 2026-09-25
 
 ### Security fixes
