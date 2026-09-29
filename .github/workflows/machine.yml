@@ -146,6 +146,17 @@ jobs:
           $out
           if ($out -notmatch 'from the runner') { throw "the bind mount did not resolve" }
 
+      # The CLI half-closes stdin over the endpoint pipe, which go-winio does
+      # only in message mode. The failure is a hang, hence the timeout.
+      - name: piped stdin reaches EOF in docker run -i
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $out = ("hi" | .\client\rd.exe run --rm -i alpine:3 cat) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "run -i exited $LASTEXITCODE" }
+          $out
+          if ($out -notmatch 'hi') { throw "run -i did not echo its stdin" }
+
       - name: GNU tar sets attributes on files it wrote, and a non-root uid can mkdir
         shell: pwsh
         # GNU tar sets attributes on the descriptor it just wrote, which the
@@ -190,6 +201,13 @@ jobs:
           $out = (.\client\rd.exe ps -a --filter name=survivor --format '{{.Names}}') -join "`n"
           $out
           if ($out -notmatch 'survivor') { throw "the container did not survive a restart" }
+          # The field repro. Started again in case the machine restart stopped it.
+          .\client\rd.exe start survivor
+          if ($LASTEXITCODE -ne 0) { throw "could not restart the survivor" }
+          $out = ("hi" | .\client\rd.exe exec -i survivor cat) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "exec -i exited $LASTEXITCODE" }
+          $out
+          if ($out -notmatch 'hi') { throw "exec -i did not echo its stdin" }
           .\client\rd.exe rm -f survivor
 
       # An idle session disconnects after a minute (ADR 0015) and WSL stops

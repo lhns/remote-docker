@@ -16,6 +16,8 @@ software.
   set as `Pierre` was sent as typed and refused with "no such account". Both
   ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account
   can be made from is an error naming it rather than a silent `user`.
+- On Windows, piped stdin ends: `echo hi | docker exec -i c cat` printed `hi`
+  and hung, which is where kind stopped at "Writing configuration".
 
 ## 0.8.0 — 2026-09-25
 
