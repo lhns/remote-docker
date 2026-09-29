@@ -260,6 +260,14 @@ func Resolve(o Overrides, path string) (Config, error) {
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
 
+	// The workspace lowercases the key file's name, so a user set as "Pierre"
+	// logs in as the account that Pierre.pub enrolled.
+	account, err := workspace.AccountName(cfg.User)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: user: %w", err)
+	}
+	cfg.User = account
+
 	// Defaulted only for a bare host. A host with a scheme says its own port or
 	// gets its scheme's default from Transport, and a 2222 put here would be
 	// indistinguishable from a `port` somebody set: wss:// would inherit it

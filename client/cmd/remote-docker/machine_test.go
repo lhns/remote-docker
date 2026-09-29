@@ -79,7 +79,7 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 		Machine: &config.Machine{Backend: "wsl", Name: "dev", Image: image, Rootfs: rootfs, CPUs: 4, MemoryMB: 8192},
 	}
 
-	unset := (&machineOptions{backend: "wsl"}).spec("dev", recorded)
+	unset := mustSpec(t, &machineOptions{backend: "wsl"}, "dev", recorded)
 	if unset.CPUs != 4 || unset.MemoryMB != 8192 || unset.Rootfs != rootfs {
 		t.Errorf("spec with no flags = cpus %d, memory %d, rootfs %q; want the recorded 4, 8192, %s",
 			unset.CPUs, unset.MemoryMB, unset.Rootfs, rootfs)
@@ -91,14 +91,14 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 		t.Errorf("spec with no flags = port %d, account %q; want the recorded 2222, alice", unset.Port, unset.Account)
 	}
 
-	set := (&machineOptions{backend: "wsl", cpus: 2, memoryMB: 1024, rootfs: "/mine.tar"}).spec("dev", recorded)
+	set := mustSpec(t, &machineOptions{backend: "wsl", cpus: 2, memoryMB: 1024, rootfs: "/mine.tar"}, "dev", recorded)
 	if set.CPUs != 2 || set.MemoryMB != 1024 || set.Rootfs != "/mine.tar" {
 		t.Errorf("spec with flags = cpus %d, memory %d, rootfs %q; want the flags to win",
 			set.CPUs, set.MemoryMB, set.Rootfs)
 	}
-	overrides = config.Overrides{Port: 2200, User: "bob"}
-	if got := (&machineOptions{backend: "wsl"}).spec("dev", recorded); got.Port != 2200 || got.Account != "bob" {
-		t.Errorf("spec with remote's flags = port %d, account %q; want the flags to win", got.Port, got.Account)
+	overrides = config.Overrides{Port: 2200, User: "Bob"}
+	if got := mustSpec(t, &machineOptions{backend: "wsl"}, "dev", recorded); got.Port != 2200 || got.Account != "bob" {
+		t.Errorf("spec with remote's flags = port %d, account %q; want the flags to win, folded to bob", got.Port, got.Account)
 	}
 	overrides = config.Overrides{}
 
@@ -109,7 +109,7 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 	olderMachine := *recorded.Machine
 	olderMachine.Image = "ghcr.io/example/workspace:older"
 	older.Machine = &olderMachine
-	if got := (&machineOptions{backend: "wsl"}).spec("dev", &older).Rootfs; got != "" {
+	if got := mustSpec(t, &machineOptions{backend: "wsl"}, "dev", &older).Rootfs; got != "" {
 		t.Errorf("rootfs = %q for a record of another image, want it fetched afresh", got)
 	}
 
@@ -119,14 +119,31 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 	prunedMachine := *recorded.Machine
 	prunedMachine.Rootfs = filepath.Join(t.TempDir(), "gone.tar")
 	pruned.Machine = &prunedMachine
-	if got := (&machineOptions{backend: "wsl"}).spec("dev", &pruned).Rootfs; got != "" {
+	if got := mustSpec(t, &machineOptions{backend: "wsl"}, "dev", &pruned).Rootfs; got != "" {
 		t.Errorf("rootfs = %q for a record naming a missing file, want it fetched afresh", got)
 	}
 
 	// Create passes no record, so the defaults, not the record, are what it
 	// compares the machine against.
-	got := (&machineOptions{backend: "wsl", cpus: 1}).spec("dev", nil)
+	got := mustSpec(t, &machineOptions{backend: "wsl", cpus: 1}, "dev", nil)
 	if got.CPUs != 1 || got.Rootfs != "" || got.Port != config.DefaultSSHPort || got.Account != config.DefaultUser() {
 		t.Errorf("spec with no record = %+v, want the flags and the defaults alone", got)
+	}
+}
+
+func mustSpec(t *testing.T, o *machineOptions, name string, recorded *config.Workspace) machine.Spec {
+	t.Helper()
+	spec, err := o.spec(name, recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return spec
+}
+
+func TestMachineSpecRefusesUnderivableUser(t *testing.T) {
+	overrides = config.Overrides{User: "123"}
+	defer func() { overrides = config.Overrides{} }()
+	if _, err := (&machineOptions{backend: "wsl"}).spec("dev", nil); err == nil || !strings.Contains(err.Error(), `"123"`) {
+		t.Errorf("spec with --user 123 = %v, want an error naming it", err)
 	}
 }

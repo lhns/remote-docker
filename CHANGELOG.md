@@ -8,6 +8,15 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- A username with capitals works. `Pierre.pub` enrols `pierre`, but a user
+  set as `Pierre` was sent as typed and refused with "no such account". Both
+  ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account
+  can be made from is an error naming it rather than a silent `user`.
+
 ## 0.8.0 — 2026-09-25
 
 ### Security fixes

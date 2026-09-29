@@ -283,7 +283,7 @@ default.**
 | `REMOTE_DOCKER_PORT` | `port` | `--port` | `2222`, or the scheme's (443 for `wss`, 80 for `ws`). Optional |
 | `REMOTE_DOCKER_CA_FILE` | `caFile` | `remote create --ca-file` | system roots |
 | `REMOTE_DOCKER_INSECURE` | `insecure` | `remote create --insecure` | off |
-| `REMOTE_DOCKER_USER` | `user` | `--user` | your local username |
+| `REMOTE_DOCKER_USER` | `user` | `--user` | your local username, lowercased as the workspace does |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
 | `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
@@ -812,7 +812,8 @@ from that directory) it says so and starts the daemon anyway.
 
 Out of band: someone with access drops a `<account>.pub` into the keys
 directory, one key per line. The filename is the account name a client logs in
-as; the unix user behind it is `rd-<account>`
+as, lowercased, so `Pierre.pub` enrols `pierre` and `ssh Pierre@...` reaches it;
+the unix user behind it is `rd-<account>`
 ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Emptying or removing the
 file revokes access but keeps the account and its home directory.
 

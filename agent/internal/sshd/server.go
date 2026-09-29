@@ -179,9 +179,14 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// authenticate accepts a key only for the account it is enrolled against.
+// authenticate accepts a key only for the account it is enrolled against. The
+// login name is folded as the key file's name was, so Pierre reaches pierre.
 func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
-	name := ctx.User()
+	name, err := workspace.AccountName(ctx.User())
+	if err != nil {
+		s.log().Warn("refused a connection: no such account", "login", ctx.User(), "from", ctx.RemoteAddr())
+		return false
+	}
 
 	account, ok := s.cfg.Accounts.Lookup(name)
 	if !ok {

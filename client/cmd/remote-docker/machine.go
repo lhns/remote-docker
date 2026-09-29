@@ -15,6 +15,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/core-client/keys"
+	"github.com/lhns/remote-docker/core/workspace"
 	"github.com/lhns/remote-docker/machine"
 )
 
@@ -77,7 +78,7 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // them all: otherwise rebuilding a `--port 2222` machine builds one on 22 that
 // `status` calls out of date forever. The recorded rootfs is reused only for
 // the same image and while the file still exists.
-func (o *machineOptions) spec(name string, recorded *config.Workspace) machine.Spec {
+func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.Spec, error) {
 	spec := machine.Spec{
 		Name:    name,
 		Backend: o.backend,
@@ -103,7 +104,12 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) machine.S
 	}
 	spec.Port = cmp.Or(spec.Port, config.DefaultSSHPort)
 	spec.Account = cmp.Or(spec.Account, config.DefaultUser())
-	return spec
+	account, err := workspace.AccountName(spec.Account)
+	if err != nil {
+		return machine.Spec{}, fmt.Errorf("user: %w", err)
+	}
+	spec.Account = account
+	return spec, nil
 }
 
 // recordedWorkspace is the workspace entry a machine was registered under,
@@ -137,7 +143,11 @@ is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
 		// Flags alone, not the record, or a mismatch could never show.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createMachine(cmd, args[0], opts.spec(args[0], nil), false)
+			spec, err := opts.spec(args[0], nil)
+			if err != nil {
+				return err
+			}
+			return createMachine(cmd, args[0], spec, false)
 		},
 	}
 	opts.install(cmd)
@@ -172,7 +182,11 @@ session is in use; -f overrides.`,
 					return err
 				}
 			}
-			return createMachine(cmd, name, opts.spec(name, recordedWorkspace(name)), true)
+			spec, err := opts.spec(name, recordedWorkspace(name))
+			if err != nil {
+				return err
+			}
+			return createMachine(cmd, name, spec, true)
 		},
 	}
 	opts.install(cmd)
