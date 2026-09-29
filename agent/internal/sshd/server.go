@@ -179,11 +179,8 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// authenticate accepts a key only for the account it is enrolled against.
-//
-// The login name is folded the way the key file's name was, so `ssh Pierre@ws`
-// reaches the account Pierre.pub enrolled. Everything past here reads the
-// account from sessionAccount, never from the login name.
+// authenticate accepts a key only for the account it is enrolled against. The
+// login name is folded as the key file's name was, so Pierre reaches pierre.
 func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	name, err := workspace.AccountName(ctx.User())
 	if err != nil {

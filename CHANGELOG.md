@@ -12,13 +12,10 @@ software.
 
 ### Fixes
 
-- An account name with capitals works. `Pierre.pub` enrols `pierre`, but a
-  `--user Pierre`, `REMOTE_DOCKER_USER`, `"user"` in the config or
-  `remote machine create --user` was sent as typed and refused with "no such
-  account". The client and the workspace both fold the name now, so a stock
-  `ssh Pierre@ws` reaches `pierre` too, and `remote enroll` names the file
-  `pierre.pub`. A name no account can be made from is an error naming it
-  rather than a silent `user`.
+- A username with capitals works. `Pierre.pub` enrols `pierre`, but a user
+  set as `Pierre` was sent as typed and refused with "no such account". Both
+  ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account
+  can be made from is an error naming it rather than a silent `user`.
 
 ## 0.8.0 — 2026-09-25
 

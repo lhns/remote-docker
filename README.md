@@ -283,7 +283,7 @@ default.**
 | `REMOTE_DOCKER_PORT` | `port` | `--port` | `2222`, or the scheme's (443 for `wss`, 80 for `ws`). Optional |
 | `REMOTE_DOCKER_CA_FILE` | `caFile` | `remote create --ca-file` | system roots |
 | `REMOTE_DOCKER_INSECURE` | `insecure` | `remote create --insecure` | off |
-| `REMOTE_DOCKER_USER` | `user` | `--user` | your local username. Folded as the workspace folds a key file's name: `Pierre` logs in as `pierre` |
+| `REMOTE_DOCKER_USER` | `user` | `--user` | your local username, lowercased as the workspace does |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
 | `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
