@@ -127,8 +127,12 @@ type Rewriter struct {
 }
 
 // ownedByDaemon reports whether the workspace resolves this source itself.
-// Only for a source this machine lacks, so a typo still fails.
+// Only for a source this machine lacks, so a typo still fails; the Docker
+// socket is the exception, since a socket cannot cross a share (ADR 0049).
 func (r *Rewriter) ownedByDaemon(source string) bool {
+	if isDockerSocket(source) || (r.PosixSource != nil && isDockerSocket(r.PosixSource(source))) {
+		return true
+	}
 	if r.declared(source) {
 		return !r.localExists(source)
 	}
@@ -137,6 +141,10 @@ func (r *Rewriter) ownedByDaemon(source string) bool {
 		return !r.localExists(source)
 	}
 	return false
+}
+
+func isDockerSocket(source string) bool {
+	return path.Clean(source) == "/var/run/docker.sock"
 }
 
 // declared reports whether the workspace named this path or one above it.

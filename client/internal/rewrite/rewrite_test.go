@@ -763,3 +763,65 @@ func TestASecondReadingIsOnlyTakenWhenTheWorkspaceDeclaredIt(t *testing.T) {
 		t.Error("a path this machine has was handed to the workspace")
 	}
 }
+
+// A docker.sock bind is the container's own daemon (ADR 0049): passed through
+// with its options, minus our mode words, even though this machine has one.
+func TestADockerSocketBindIsPassedThrough(t *testing.T) {
+	const sock = "/var/run/docker.sock"
+	r, sharer, volumes := newDaemonRewriter(nil, sock)
+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{
+		"Binds":["/var/run/docker.sock:/var/run/docker.sock:ro,read=cached","//var/run/docker.sock:/s"],
+		"Mounts":[{"Type":"bind","Source":"/var/run/docker.sock","Target":"/m","ReadOnly":true,"Consistency":"write=back"}]
+	}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	host := decodeHostConfig(t, out)
+	if binds := host["Binds"].([]any); binds[0] != sock+":"+sock+":ro" || binds[1] != "//var/run/docker.sock:/s" {
+		t.Errorf("binds = %v, want both passed through with ro kept", binds)
+	}
+	mount := host["Mounts"].([]any)[0].(map[string]any)
+	if mount["Type"] != "bind" || mount["Source"] != sock || mount["ReadOnly"] != true || mount["Consistency"] != nil {
+		t.Errorf("mount = %v, want the bind untouched but for our mode word", mount)
+	}
+	if len(sharer.shared) != 0 || len(volumes.created) != 0 {
+		t.Errorf("the socket was exported: shared %v, volumes %v", sharer.shared, volumes.created)
+	}
+}
+
+// Git Bash turns the source into a path under its installation (ADR 0040).
+func TestAMangledDockerSocketIsPassedThrough(t *testing.T) {
+	const mangled = `C:\Program Files\Git\var\run\docker.sock`
+	r, sharer, _ := newDaemonRewriter(nil)
+	r.PosixSource = func(source string) string {
+		return strings.ReplaceAll(strings.TrimPrefix(source, `C:\Program Files\Git`), `\`, "/")
+	}
+	spec, err := json.Marshal(mangled + ":/var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+string(spec)+`]}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if binds := decodeHostConfig(t, out)["Binds"].([]any); binds[0] != mangled+":/var/run/docker.sock" {
+		t.Errorf("the bind was rewritten to %v", binds[0])
+	}
+	if len(sharer.shared) != 0 {
+		t.Errorf("the socket was exported: %v", sharer.shared)
+	}
+}
+
+// Only the socket itself: its neighbours are ordinary paths on this machine.
+func TestOnlyTheDockerSocketItselfIsPassedThrough(t *testing.T) {
+	r, sharer, _ := newDaemonRewriter(nil)
+	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[
+		"/var/run:/a","/var/run/docker.sock.bak:/b","/run/docker.sock:/c"
+	]}}`)); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if len(sharer.shared) != 3 {
+		t.Errorf("exported %v, want all three", sharer.shared)
+	}
+}

@@ -344,6 +344,10 @@ premise of the project, and it applies to building it too. So:
   A SOCKET is refused with the reason, not with "not a directory": what crosses
   a file share is the name and not the kernel object behind it, which is equally
   true of a socket inside a shared directory.
+- **A docker.sock bind is the container's own daemon, never the parent's**
+  (ADR 0049). `/var/run/docker.sock` as a bind source is passed through, even
+  when this machine has one. Never list it in `WORKSPACE_DIND_MOUNTS`, which
+  would hand every account the parent; `ParseMounts` refuses it.
 - **A mode word is `read=X` or `write=Y`, nothing else, and it is consumed,
   never forwarded** (ADR 0042). It arrives in a `-v` option list or in
   `--mount consistency=` and describes the mount THIS program makes; the

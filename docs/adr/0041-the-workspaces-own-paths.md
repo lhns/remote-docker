@@ -68,6 +68,7 @@ Rules at the use site:
   passthrough is not.
 - **This machine wins when both could claim it**, so a Linux client's own `/etc`
   is still its own. The list is consulted only for a source that is not here.
+  The one exception is `/var/run/docker.sock`, which always passes through (ADR 0049).
 - **A passed-through bind is not touched at all**, so `ro` and every other option
   survive by construction.
 

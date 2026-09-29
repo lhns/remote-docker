@@ -335,6 +335,10 @@ never runs. The alternative was `--tlsverify` on 2376, which would have left an
 authenticated port nobody presents a certificate to and put certificate
 generation on every daemon's startup path.
 
+A `-v /var/run/docker.sock` bind is not the same exposure: the client passes it
+through, it reaches only the daemon the container runs on, and only when asked
+for (ADR 0049).
+
 The first word of the command is the whole control, so it is pinned in two
 places for each daemon:
 

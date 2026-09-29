@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/lhns/remote-docker/agent/internal/elevate"
@@ -302,7 +303,9 @@ func ParseMounts(spec string) ([]elevate.Mount, error) {
 		if !strings.HasPrefix(source, "/") || !strings.HasPrefix(destination, "/") {
 			return nil, fmt.Errorf("daemons: %q needs absolute paths on both sides", entry)
 		}
-		if destination == socketMount || destination == "/var/lib/docker" {
+		// The socket too: a container binding it must get its own daemon (ADR 0049).
+		switch path.Clean(destination) {
+		case socketMount, "/var/lib/docker", "/var/run/docker.sock":
 			return nil, fmt.Errorf("daemons: %q mounts over %s, which every daemon needs for itself",
 				entry, destination)
 		}

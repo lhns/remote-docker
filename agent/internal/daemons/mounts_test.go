@@ -48,6 +48,8 @@ func TestParseMountsRefusesTheDaemonsOwnPaths(t *testing.T) {
 	for _, spec := range []string{
 		"/somewhere:" + socketMount,
 		"/somewhere:/var/lib/docker",
+		"/var/run/docker.sock:/var/run/docker.sock",
+		"/somewhere:/var/run/docker.sock/",
 	} {
 		_, err := ParseMounts(spec)
 		if err == nil {
