@@ -8,21 +8,32 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.8.1 — 2026-09-30
 
 ### Fixes
 
-- A username with capitals works. `Pierre.pub` enrols `pierre`, but a user
+- **Piped stdin on Windows reaches its end.** `echo hi | docker exec -i c cat`
+  printed `hi` and never exited, and so did a piped `docker run -i`: the local
+  endpoint pipe could not carry end-of-input. kind stopped at "Writing
+  configuration" for this.
+- **`-v /var/run/docker.sock:/var/run/docker.sock` works.** It failed with
+  "cannot export". It now reaches the daemon the container runs on: the
+  account's own, or the shared one, never the workspace's parent
+  ([ADR 0049](docs/adr/0049-a-docker-sock-bind-names-the-containers-daemon.md)).
+- **A username with capitals works.** `Pierre.pub` enrols `pierre`, but a user
   set as `Pierre` was sent as typed and refused with "no such account". Both
-  ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account
-  can be made from is an error naming it rather than a silent `user`.
-- On Windows, `echo hi | docker exec -i c cat` no longer hangs after `hi`,
-  which stopped kind at "Writing configuration".
-- `-v /var/run/docker.sock:/var/run/docker.sock` works. It failed with "cannot
-  export"; it now reaches the daemon the container runs on, the account's own.
-- A workspace path typed in Git Bash, such as `-v /lib/modules:/lib/modules:ro`,
-  was matched and then sent on as `C:\Program Files\Git\lib\modules`, which the
-  daemon refuses. It is sent as the POSIX path now.
+  ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account can
+  be made from is an error naming it rather than a silent `user`.
+- **A workspace path typed in Git Bash is sent as a POSIX path.**
+  `-v /lib/modules:/lib/modules:ro` reached the daemon as
+  `C:\Program Files\Git\lib\modules`, which it refuses.
+
+### Upgrading
+
+- **The agent refuses to start when `WORKSPACE_DIND_MOUNTS` names
+  `/var/run/docker.sock` as a destination**, since that would hand every account
+  the workspace's parent daemon. Remove the entry. A trailing-slash spelling of
+  `/rd-sock` or `/var/lib/docker` is refused the same way.
 
 ## 0.8.0 — 2026-09-25
 
