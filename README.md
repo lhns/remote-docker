@@ -812,7 +812,7 @@ from that directory) it says so and starts the daemon anyway.
 
 Out of band: someone with access drops a `<account>.pub` into the keys
 directory, one key per line. The filename is the account name a client logs in
-as, lowercased, so `Pierre.pub` enrols `pierre` and `ssh Pierre@...` reaches it;
+as, lowercased, so `Alice.pub` enrols `alice` and `ssh Alice@...` reaches it;
 the unix user behind it is `rd-<account>`
 ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Emptying or removing the
 file revokes access but keeps the account and its home directory.

@@ -1333,6 +1333,8 @@ its pure planning function was.
 - No `--` interjections, and few em-dashes. A dash almost always carries a
   clause that wanted its own sentence, and reading around one means holding
   the first half open while the second runs underneath it.
+- **Examples, tests and docs never use a real person's name, username or home
+  path.** Use alice/bob, `/home/alice` and `C:\Users\alice`.
 - bash in `test/`. There is no shell left in the image: `image/` is a
   Dockerfile and nothing else.
 - **An assertion matches captured output, never `cmd | grep -q`.** `outputs

@@ -11,7 +11,7 @@ import (
 // Windows program actually receives.
 const (
 	testRoot = `C:\Program Files\Git`
-	testTemp = `C:\Users\pierr\AppData\Local\Temp`
+	testTemp = `C:\Users\alice\AppData\Local\Temp`
 
 	// What testRoot normalises to. Windows paths are compared in slash form,
 	// because path/filepath follows the HOST's rules and these are Windows paths
@@ -69,11 +69,11 @@ func TestUnmangleBind(t *testing.T) {
 		want    string
 	}{
 		{"a directory and a target",
-			`C:\Users\pierr\x;C:\Program Files\Git\app`,
-			`C:\Users\pierr\x:/app`},
+			`C:\Users\alice\x;C:\Program Files\Git\app`,
+			`C:\Users\alice\x:/app`},
 		{"read-only survives",
-			`C:\Users\pierr\x;C:\Program Files\Git\app;ro`,
-			`C:\Users\pierr\x:/app:ro`},
+			`C:\Users\alice\x;C:\Program Files\Git\app;ro`,
+			`C:\Users\alice\x:/app:ro`},
 		{"a single-letter target became a drive",
 			`C:\Program Files\Git\etc\hostname;X:\`,
 			`C:\Program Files\Git\etc\hostname:/x`},
@@ -81,7 +81,7 @@ func TestUnmangleBind(t *testing.T) {
 			`.\rel;C:\Program Files\Git\app`,
 			`.\rel:/app`},
 		{"a target under TEMP, which is not under the root",
-			`C:\data;C:\Users\pierr\AppData\Local\Temp\cache`,
+			`C:\data;C:\Users\alice\AppData\Local\Temp\cache`,
 			`C:\data:/tmp/cache`},
 		{"a nested target",
 			`C:\data;C:\Program Files\Git\etc\nginx\nginx.conf`,
@@ -122,8 +122,8 @@ func TestUnmangleBindLeavesEverythingElse(t *testing.T) {
 	m := testMSYS()
 	for _, value := range []string{
 		`x_named:/app`,             // a named volume, never converted
-		`C:\Users\pierr\x:/app`,    // typed in Windows form, never converted
-		`C:\Users\pierr\x:/app:ro`, //
+		`C:\Users\alice\x:/app`,    // typed in Windows form, never converted
+		`C:\Users\alice\x:/app:ro`, //
 		`/home/me/project:/app`,    // a POSIX pair from a real shell
 		`C:\my;dir:/app`,           // a semicolon in a NAME, which NTFS allows
 		`a;b;c;d`,                  // too many fields to be a bind
@@ -172,8 +172,8 @@ func TestUnmangleBindReportsATargetItCannotRestore(t *testing.T) {
 
 func TestRepairArgs(t *testing.T) {
 	m := testMSYS()
-	const mangled = `C:\Users\pierr\x;C:\Program Files\Git\app;ro`
-	const want = `C:\Users\pierr\x:/app:ro`
+	const mangled = `C:\Users\alice\x;C:\Program Files\Git\app;ro`
+	const want = `C:\Users\alice\x:/app:ro`
 
 	got, notes := m.repairArgs([]string{
 		"run", "--rm",
@@ -211,7 +211,7 @@ func TestRepairArgsWithNothingAfterTheFlag(t *testing.T) {
 }
 
 func TestRepairArgsDoesNothingOutsideGitBash(t *testing.T) {
-	args := []string{"-v", `C:\Users\pierr\x;C:\Program Files\Git\app`}
+	args := []string{"-v", `C:\Users\alice\x;C:\Program Files\Git\app`}
 	got, notes := msys{}.repairArgs(args)
 	if !reflect.DeepEqual(got, args) || notes != nil {
 		t.Errorf("repairArgs without Git Bash = %q, %v", got, notes)
@@ -253,11 +253,11 @@ func TestPosixSource(t *testing.T) {
 		{`C:\Program Files\Git\lib\modules`, "/lib/modules"},
 		{`C:\Program Files\Git\etc`, "/etc"},
 		{`C:\Program Files\Git`, "/"},
-		{`C:\Users\pierr\AppData\Local\Temp\x`, "/tmp/x"},
+		{`C:\Users\alice\AppData\Local\Temp\x`, "/tmp/x"},
 
 		// Not something MSYS produced from a POSIX path, so there is no second
 		// reading to offer: a real Windows source, and a relative one.
-		{`C:\Users\pierr\project`, ""},
+		{`C:\Users\alice\project`, ""},
 		{`.\rel`, ""},
 		{`/already/posix`, ""},
 	} {

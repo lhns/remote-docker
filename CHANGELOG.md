@@ -19,9 +19,9 @@ software.
   "cannot export". It now reaches the daemon the container runs on: the
   account's own, or the shared one, never the workspace's parent
   ([ADR 0049](docs/adr/0049-a-docker-sock-bind-names-the-containers-daemon.md)).
-- **A username with capitals works.** `Pierre.pub` enrols `pierre`, but a user
-  set as `Pierre` was sent as typed and refused with "no such account". Both
-  ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account can
+- **A username with capitals works.** `Alice.pub` enrols `alice`, but a user
+  set as `Alice` was sent as typed and refused with "no such account". Both
+  ends lowercase it now, a stock `ssh Alice@ws` included. A name no account can
   be made from is an error naming it rather than a silent `user`.
 - **A workspace path typed in Git Bash is sent as a POSIX path.**
   `-v /lib/modules:/lib/modules:ro` reached the daemon as
