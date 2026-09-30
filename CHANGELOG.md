@@ -16,6 +16,8 @@ software.
   set as `Pierre` was sent as typed and refused with "no such account". Both
   ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account
   can be made from is an error naming it rather than a silent `user`.
+- On Windows, `echo hi | docker exec -i c cat` no longer hangs after `hi`,
+  which stopped kind at "Writing configuration".
 - `-v /var/run/docker.sock:/var/run/docker.sock` works. It failed with "cannot
   export"; it now reaches the daemon the container runs on, the account's own.
 - A workspace path typed in Git Bash, such as `-v /lib/modules:/lib/modules:ro`,

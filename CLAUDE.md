@@ -283,7 +283,9 @@ premise of the project, and it applies to building it too. So:
   one stream and their copies had drifted to OPPOSITE fallbacks. `Splice`
   leaves a stream that cannot half-close alone; `SpliceAndClose` closes it, and
   that difference is deliberate -- a port forward carries no output stream and
-  must not leak a blocked reader. A test pins both.
+  must not leak a blocked reader. A test pins both. On Windows the endpoint
+  pipe is MESSAGE mode, the only one where go-winio has CloseWrite; without it
+  the CLI skips the half-close and `exec -i` hangs.
 - **The transport is handed its auth and decides none of it** (ADR 0021).
   `core-client/tunnelclient` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
   `client/internal/session` builds both and is the only place that knows

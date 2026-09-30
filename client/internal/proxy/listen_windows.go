@@ -27,7 +27,14 @@ func DefaultEndpoint() string { return defaultPipe }
 func Listen(endpoint string) (net.Listener, error) {
 	endpoint = cmp.Or(endpoint, DefaultEndpoint())
 
-	cfg := &winio.PipeConfig{SecurityDescriptor: ownerOnlySDDL()}
+	// As dockerd: go-winio has CloseWrite only in message mode, and the CLI
+	// ends `exec -i`'s stdin with it.
+	cfg := &winio.PipeConfig{
+		SecurityDescriptor: ownerOnlySDDL(),
+		MessageMode:        true,
+		InputBufferSize:    65536,
+		OutputBufferSize:   65536,
+	}
 
 	// Taken for the pid record only; the pipe bind below is what excludes.
 	lock, err := acquireLock(endpoint)
