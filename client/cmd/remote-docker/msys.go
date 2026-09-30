@@ -140,7 +140,7 @@ func (m msys) unmangleTarget(field string) (target, note string) {
 
 // posixSource reports the POSIX path a converted path may have been, or "".
 // A candidate only: `C:\Program Files\Git\etc` is both `/etc` and
-// `/c/Program Files/Git/etc` (rewrite.ownedByDaemon decides, ADR 0041).
+// `/c/Program Files/Git/etc` (rewrite.daemonSource decides, ADR 0041).
 func (m msys) posixSource(p string) string {
 	p = slashed(p)
 	switch {
