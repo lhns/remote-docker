@@ -303,9 +303,8 @@ func ParseMounts(spec string) ([]elevate.Mount, error) {
 		if !strings.HasPrefix(source, "/") || !strings.HasPrefix(destination, "/") {
 			return nil, fmt.Errorf("daemons: %q needs absolute paths on both sides", entry)
 		}
-		// The socket too: a container binding it must get its own daemon (ADR 0049).
 		switch path.Clean(destination) {
-		case socketMount, "/var/lib/docker", "/var/run/docker.sock":
+		case socketMount, "/var/lib/docker":
 			return nil, fmt.Errorf("daemons: %q mounts over %s, which every daemon needs for itself",
 				entry, destination)
 		}
