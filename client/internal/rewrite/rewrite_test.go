@@ -622,7 +622,7 @@ func TestADaemonOwnedSourceIsLeftAlone(t *testing.T) {
 }
 
 // A subdirectory of an owned path is owned; a name that merely starts with the
-// same letters is not.
+// same letters is not. Of the Docker socket's neighbours, none is (ADR 0049).
 func TestDaemonOwnershipMatchesOnPathBoundaries(t *testing.T) {
 	r, _, _ := newDaemonRewriter([]string{"/lib/modules"})
 
@@ -634,9 +634,15 @@ func TestDaemonOwnershipMatchesOnPathBoundaries(t *testing.T) {
 		{"/lib/modules/5.15", true},
 		{"/lib/modules-backup", false},
 		{"/lib", false},
+		{"/var/run/docker.sock", true},
+		{"//var/run/docker.sock", true},
+		{"/var/run/docker.sock/", true},
+		{"/var/run", false},
+		{"/var/run/docker.sock.bak", false},
+		{"/run/docker.sock", false},
 	} {
-		if got := r.ownedByDaemon(c.source); got != c.owned {
-			t.Errorf("ownedByDaemon(%q) = %v, want %v", c.source, got, c.owned)
+		if _, got := r.daemonSource(c.source); got != c.owned {
+			t.Errorf("daemonSource(%q) = %v, want %v", c.source, got, c.owned)
 		}
 	}
 }
@@ -705,31 +711,43 @@ func TestNoDaemonPathsIsTheOldBehaviour(t *testing.T) {
 // restored blind (ADR 0040) -- so a workspace path typed there arrives as a
 // Windows path under the Git installation and would match nothing. The two
 // features have to compose, or `-v /lib/modules:/lib/modules:ro` works for kind
-// and fails for the person testing the same command by hand.
+// and fails for the person testing the same command by hand. The daemon gets
+// the POSIX reading: it refuses a Windows source as `invalid mode` in Binds and
+// `mount path must be absolute` in Mounts.
 func TestAMangledSourceStillMatchesADaemonPath(t *testing.T) {
-	const mangled = `C:\Program Files\Git\lib\modules`
+	const git = `C:\Program Files\Git`
 
 	r, sharer, _ := newDaemonRewriter([]string{"/lib/modules"})
 	r.PosixSource = func(source string) string {
-		if strings.HasPrefix(source, `C:\Program Files\Git`) {
-			return strings.ReplaceAll(strings.TrimPrefix(source, `C:\Program Files\Git`), `\`, "/")
+		if strings.HasPrefix(source, git) {
+			return strings.ReplaceAll(strings.TrimPrefix(source, git), `\`, "/")
 		}
 		return ""
 	}
 
 	// Encoded rather than pasted: a Windows path is full of backslashes, which
 	// are escapes in JSON.
-	spec, err := json.Marshal(mangled + ":/lib/modules:ro")
+	body, err := json.Marshal(map[string]any{"HostConfig": map[string]any{
+		"Binds": []string{
+			git + `\lib\modules:/lib/modules:ro`,
+			git + `\var\run\docker.sock:/var/run/docker.sock`,
+		},
+		"Mounts": []map[string]any{{"Type": "bind", "Source": git + `\lib\modules`, "Target": "/m"}},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := r.ContainerCreate(t.Context(),
-		[]byte(`{"HostConfig":{"Binds":[`+string(spec)+`]}}`))
+	out, err := r.ContainerCreate(t.Context(), body)
 	if err != nil {
 		t.Fatalf("ContainerCreate: %v", err)
 	}
-	if binds := decodeHostConfig(t, out)["Binds"].([]any); binds[0] != mangled+":/lib/modules:ro" {
-		t.Errorf("the bind was rewritten to %v", binds[0])
+	host := decodeHostConfig(t, out)
+	if binds := host["Binds"].([]any); binds[0] != "/lib/modules:/lib/modules:ro" ||
+		binds[1] != "/var/run/docker.sock:/var/run/docker.sock" {
+		t.Errorf("binds = %v, want their POSIX readings", binds)
+	}
+	if source := host["Mounts"].([]any)[0].(map[string]any)["Source"]; source != "/lib/modules" {
+		t.Errorf("mount source = %v, want its POSIX reading", source)
 	}
 	if len(sharer.shared) != 0 {
 		t.Errorf("a workspace path was exported from this machine: %v", sharer.shared)
@@ -761,5 +779,31 @@ func TestASecondReadingIsOnlyTakenWhenTheWorkspaceDeclaredIt(t *testing.T) {
 	}
 	if len(sharer.shared) != 1 {
 		t.Error("a path this machine has was handed to the workspace")
+	}
+}
+
+// A docker.sock bind is the container's own daemon (ADR 0049): passed through
+// with its options, minus our mode words, even though this machine has one.
+func TestADockerSocketBindIsPassedThrough(t *testing.T) {
+	const sock = "/var/run/docker.sock"
+	r, sharer, volumes := newDaemonRewriter(nil, sock)
+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{
+		"Binds":["/var/run/docker.sock:/var/run/docker.sock:ro,read=cached","//var/run/docker.sock:/s"],
+		"Mounts":[{"Type":"bind","Source":"/var/run/docker.sock","Target":"/m","ReadOnly":true,"Consistency":"write=back"}]
+	}}`))
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	host := decodeHostConfig(t, out)
+	if binds := host["Binds"].([]any); binds[0] != sock+":"+sock+":ro" || binds[1] != "//var/run/docker.sock:/s" {
+		t.Errorf("binds = %v, want both passed through with ro kept", binds)
+	}
+	mount := host["Mounts"].([]any)[0].(map[string]any)
+	if mount["Type"] != "bind" || mount["Source"] != sock || mount["ReadOnly"] != true || mount["Consistency"] != nil {
+		t.Errorf("mount = %v, want the bind untouched but for our mode word", mount)
+	}
+	if len(sharer.shared) != 0 || len(volumes.created) != 0 {
+		t.Errorf("the socket was exported: shared %v, volumes %v", sharer.shared, volumes.created)
 	}
 }

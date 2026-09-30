@@ -136,7 +136,7 @@ db() { dockerat "$B_SOCK" "$@"; }
 # Pulled per account (a layer cache each), so "Unable to find image locally"
 # stays out of the output assertions read.
 info "pulling test images into each account's daemon"
-for image in alpine:3 nginx:alpine; do
+for image in alpine:3 nginx:alpine docker:cli; do
     da pull -q "$image" >/dev/null 2>&1 || info "could not pre-pull $image for $A"
     db pull -q "$image" >/dev/null 2>&1 || info "could not pre-pull $image for $B"
 done
@@ -584,6 +584,22 @@ case "$reach" in
 *REFUSED*)   ok "a container in $A's daemon finds nothing on 2375" ;;
 *)           bad "the 2375 probe said nothing, so it proves nothing: [$reach]" ;;
 esac
+
+echo
+echo "== 15. a docker.sock bind reaches the account's own daemon =="
+# Passed through, not exported (ADR 0049): inside $A's dind the path is $A's
+# daemon, never $B's and never the workspace's parent.
+ida=$(da info --format '{{.ID}}' 2>/dev/null)
+idb=$(db info --format '{{.ID}}' 2>/dev/null)
+idp=$(hostdocker exec "$CONTAINER" docker info --format '{{.ID}}' 2>/dev/null)
+if [ -z "$ida" ] || [ "$ida" = "$idb" ] || [ "$ida" = "$idp" ]; then
+    bad "cannot tell the daemons apart: $A [$ida], $B [$idb], parent [$idp]"
+elif outputs "^$ida\$" da run --rm -e DOCKER_HOST=unix:///var/run/docker.sock \
+    -v /var/run/docker.sock:/var/run/docker.sock docker:cli docker info --format '{{.ID}}'; then
+    ok "a docker.sock bind reached $A's own daemon, not $B's or the parent's"
+else
+    bad "the container reached [$LAST_OUTPUT], want $A's [$ida], not $B's [$idb] or the parent's [$idp]"
+fi
 
 echo
 if [ "$FAIL" -ne 0 ]; then

@@ -18,6 +18,11 @@ software.
   can be made from is an error naming it rather than a silent `user`.
 - On Windows, `echo hi | docker exec -i c cat` no longer hangs after `hi`,
   which stopped kind at "Writing configuration".
+- `-v /var/run/docker.sock:/var/run/docker.sock` works. It failed with "cannot
+  export"; it now reaches the daemon the container runs on, the account's own.
+- A workspace path typed in Git Bash, such as `-v /lib/modules:/lib/modules:ro`,
+  was matched and then sent on as `C:\Program Files\Git\lib\modules`, which the
+  daemon refuses. It is sent as the POSIX path now.
 
 ## 0.8.0 — 2026-09-25
 
