@@ -13,11 +13,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/endpointtest"
 )
 
-type closeWriter interface{ CloseWrite() error }
-
-// go-winio half-closes only a message-mode pipe. Without it the CLI's
-// CloseWrite is a silent no-op and `echo hi | docker exec -i c cat` never
-// sees stdin end.
+// Without message mode the CLI's half-close of stdin is a silent no-op.
 func TestEndpointPipeHalfCloses(t *testing.T) {
 	endpoint := endpointtest.Endpoint(t)
 	l, err := Listen(endpoint)
@@ -28,11 +24,7 @@ func TestEndpointPipeHalfCloses(t *testing.T) {
 
 	accepted := make(chan net.Conn, 1)
 	go func() {
-		c, err := l.Accept()
-		if err != nil {
-			close(accepted)
-			return
-		}
+		c, _ := l.Accept()
 		accepted <- c
 	}()
 
@@ -42,8 +34,8 @@ func TestEndpointPipeHalfCloses(t *testing.T) {
 		t.Fatalf("dialling the endpoint: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	server, ok := <-accepted
-	if !ok {
+	server := <-accepted
+	if server == nil {
 		t.Fatal("accept failed")
 	}
 	t.Cleanup(func() { _ = server.Close() })
@@ -53,22 +45,18 @@ func TestEndpointPipeHalfCloses(t *testing.T) {
 }
 
 func halfClose(t *testing.T, from, to net.Conn) {
-	t.Helper()
-	cw, ok := from.(closeWriter)
+	cw, ok := from.(interface{ CloseWrite() error })
 	if !ok {
 		t.Fatalf("%T has no CloseWrite: the pipe is not in message mode", from)
 	}
-	// Read concurrently, as the proxy does: CloseWrite flushes, which waits
-	// for the peer to drain the pipe.
+	// Read concurrently: go-winio's CloseWrite blocks until the peer drains.
 	_ = to.SetReadDeadline(time.Now().Add(5 * time.Second))
-	type result struct {
-		got []byte
-		err error
-	}
-	read := make(chan result, 1)
+	var got []byte
+	read := make(chan error, 1)
 	go func() {
-		got, err := io.ReadAll(to)
-		read <- result{got, err}
+		var err error
+		got, err = io.ReadAll(to)
+		read <- err
 	}()
 
 	if _, err := from.Write([]byte("hi")); err != nil {
@@ -77,12 +65,7 @@ func halfClose(t *testing.T, from, to net.Conn) {
 	if err := cw.CloseWrite(); err != nil {
 		t.Fatalf("CloseWrite: %v", err)
 	}
-	r := <-read
-	got, err := r.got, r.err
-	if err != nil {
-		t.Fatalf("read %q, then %v rather than EOF", got, err)
-	}
-	if string(got) != "hi" {
-		t.Fatalf("read %q, want %q", got, "hi")
+	if err := <-read; err != nil || string(got) != "hi" {
+		t.Fatalf("read %q, %v; want %q, EOF", got, err, "hi")
 	}
 }

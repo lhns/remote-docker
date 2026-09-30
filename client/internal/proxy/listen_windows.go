@@ -27,8 +27,8 @@ func DefaultEndpoint() string { return defaultPipe }
 func Listen(endpoint string) (net.Listener, error) {
 	endpoint = cmp.Or(endpoint, DefaultEndpoint())
 
-	// dockerd's own settings. go-winio half-closes only a message-mode pipe,
-	// and without that the CLI cannot end `exec -i`'s stdin.
+	// As dockerd: go-winio has CloseWrite only in message mode, and the CLI
+	// ends `exec -i`'s stdin with it.
 	cfg := &winio.PipeConfig{
 		SecurityDescriptor: ownerOnlySDDL(),
 		MessageMode:        true,
