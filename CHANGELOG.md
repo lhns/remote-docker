@@ -12,27 +12,23 @@ software.
 
 ### Fixes
 
-- **Piped stdin on Windows reaches its end.** `echo hi | docker exec -i c cat`
-  printed `hi` and never exited, and so did a piped `docker run -i`: the local
-  endpoint pipe could not carry end-of-input.
-- **`-v /var/run/docker.sock:/var/run/docker.sock` works.** It failed with
-  "cannot export". It now reaches the daemon the container runs on: the
-  account's own, or the shared one, never the workspace's parent
+- **Piping input into a container on Windows no longer hangs.**
+  `echo hi | docker exec -i c cat` printed `hi` and then waited forever, and so
+  did a piped `docker run -i`: the container never learned that the input had
+  ended.
+- **Containers can use the Docker socket.**
+  `-v /var/run/docker.sock:/var/run/docker.sock` failed with "cannot export".
+  The container now gets the Docker daemon it runs on, as with a local Docker
   ([ADR 0049](docs/adr/0049-a-docker-sock-bind-names-the-containers-daemon.md)).
-- **A username with capitals works.** `Alice.pub` enrols `alice`, but a user
-  set as `Alice` was sent as typed and refused with "no such account". Both
-  ends lowercase it now, a stock `ssh Alice@ws` included. A name no account can
-  be made from is an error naming it rather than a silent `user`.
-- **A workspace path typed in Git Bash is sent as a POSIX path.**
-  `-v /lib/modules:/lib/modules:ro` reached the daemon as
-  `C:\Program Files\Git\lib\modules`, which it refuses.
-
-### Upgrading
-
-- **The agent refuses to start when `WORKSPACE_DIND_MOUNTS` names
-  `/var/run/docker.sock` as a destination**, since that would hand every account
-  the workspace's parent daemon. Remove the entry. A trailing-slash spelling of
-  `/rd-sock` or `/var/lib/docker` is refused the same way.
+- **A username with capital letters works.** A user set as `Alice` was refused
+  with "no such account", because the workspace names accounts in lowercase.
+  The name is lowercased before connecting now, a plain `ssh Alice@...`
+  included. A name no account name can be made from is an error that says so.
+- **Mounting a workspace path from Git Bash works.** Git Bash turns any
+  argument starting with `/` into a Windows path before remote-docker sees it.
+  For a path that exists on the workspace rather than on your machine, such as
+  `-v /lib/modules:/lib/modules:ro`, the mount failed. remote-docker now undoes
+  that conversion.
 
 ## 0.8.0 — 2026-09-25
 

@@ -27,8 +27,6 @@ POSIX path, and the daemon resolves it in its own filesystem:
   exported anyway.
 - **Only that path.** `/run/docker.sock` is not mapped: tools name
   `/var/run/docker.sock`, and one fixed path needs no workspace-info key.
-- **`ParseMounts` refuses it as a `WORKSPACE_DIND_MOUNTS` destination**, beside
-  `/rd-sock` and `/var/lib/docker`.
 
 ## Why it grants nothing new
 
