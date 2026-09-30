@@ -14,15 +14,14 @@ software.
 
 - **Piped stdin on Windows reaches its end.** `echo hi | docker exec -i c cat`
   printed `hi` and never exited, and so did a piped `docker run -i`: the local
-  endpoint pipe could not carry end-of-input. kind stopped at "Writing
-  configuration" for this.
+  endpoint pipe could not carry end-of-input.
 - **`-v /var/run/docker.sock:/var/run/docker.sock` works.** It failed with
   "cannot export". It now reaches the daemon the container runs on: the
   account's own, or the shared one, never the workspace's parent
   ([ADR 0049](docs/adr/0049-a-docker-sock-bind-names-the-containers-daemon.md)).
-- **A username with capitals works.** `Pierre.pub` enrols `pierre`, but a user
-  set as `Pierre` was sent as typed and refused with "no such account". Both
-  ends lowercase it now, a stock `ssh Pierre@ws` included. A name no account can
+- **A username with capitals works.** `Alice.pub` enrols `alice`, but a user
+  set as `Alice` was sent as typed and refused with "no such account". Both
+  ends lowercase it now, a stock `ssh Alice@ws` included. A name no account can
   be made from is an error naming it rather than a silent `user`.
 - **A workspace path typed in Git Bash is sent as a POSIX path.**
   `-v /lib/modules:/lib/modules:ro` reached the daemon as

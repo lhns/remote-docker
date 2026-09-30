@@ -180,7 +180,7 @@ func New(cfg Config) (*Server, error) {
 }
 
 // authenticate accepts a key only for the account it is enrolled against. The
-// login name is folded as the key file's name was, so Pierre reaches pierre.
+// login name is folded as the key file's name was, so Alice reaches alice.
 func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	name, err := workspace.AccountName(ctx.User())
 	if err != nil {

@@ -127,21 +127,21 @@ func TestResolveRejectsOutOfRangePort(t *testing.T) {
 	}
 }
 
-// The workspace lowercases the key file's name, so Pierre.pub enrols pierre and
-// a user set as "Pierre" from any source must log in as that.
+// The workspace lowercases the key file's name, so Alice.pub enrols alice and
+// a user set as "Alice" from any source must log in as that.
 func TestResolveFoldsTheUser(t *testing.T) {
 	absent := filepath.Join(t.TempDir(), "absent.json")
 	cases := map[string]func(t *testing.T) (Config, error){
-		"flag": func(*testing.T) (Config, error) { return Resolve(Overrides{User: "Pierre"}, absent) },
+		"flag": func(*testing.T) (Config, error) { return Resolve(Overrides{User: "Alice"}, absent) },
 		"environment": func(t *testing.T) (Config, error) {
-			t.Setenv(EnvUser, "Pierre")
+			t.Setenv(EnvUser, "Alice")
 			return Resolve(Overrides{}, absent)
 		},
 		"file": func(t *testing.T) (Config, error) {
-			return Resolve(Overrides{}, writeConfig(t, `{"user":"Pierre"}`))
+			return Resolve(Overrides{}, writeConfig(t, `{"user":"Alice"}`))
 		},
 		"workspace entry": func(t *testing.T) (Config, error) {
-			return Resolve(Overrides{}, writeConfig(t, `{"workspaces":{"dev":{"host":"h","user":"Pierre"}}}`))
+			return Resolve(Overrides{}, writeConfig(t, `{"workspaces":{"dev":{"host":"h","user":"Alice"}}}`))
 		},
 	}
 	for name, resolve := range cases {
@@ -150,8 +150,8 @@ func TestResolveFoldsTheUser(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.User != "pierre" {
-				t.Errorf("User = %q, want pierre", cfg.User)
+			if cfg.User != "alice" {
+				t.Errorf("User = %q, want alice", cfg.User)
 			}
 		})
 	}

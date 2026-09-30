@@ -20,7 +20,7 @@ home: https://github.com/lhns/remote-docker
 sources:
   - https://github.com/lhns/remote-docker
 maintainers:
-  - name: Pierre Kisters
+  - name: lhns
     url: https://github.com/lhns
 icon: ""
 annotations:

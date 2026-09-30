@@ -260,8 +260,8 @@ func Resolve(o Overrides, path string) (Config, error) {
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
 
-	// The workspace lowercases the key file's name, so a user set as "Pierre"
-	// logs in as the account that Pierre.pub enrolled.
+	// The workspace lowercases the key file's name, so a user set as "Alice"
+	// logs in as the account that Alice.pub enrolled.
 	account, err := workspace.AccountName(cfg.User)
 	if err != nil {
 		return Config{}, fmt.Errorf("config: user: %w", err)

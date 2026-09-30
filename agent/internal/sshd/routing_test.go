@@ -268,12 +268,12 @@ func TestAuthenticationWarmsTheAccountsDaemon(t *testing.T) {
 	}
 }
 
-// Pierre.pub enrols pierre, so the login name Pierre must reach it, and the
+// Alice.pub enrols alice, so the login name Alice must reach it, and the
 // session must carry the enrolled name rather than the one typed.
 func TestAuthenticationFoldsTheLoginName(t *testing.T) {
 	keysDir := t.TempDir()
 	key := generateKey(t)
-	if err := os.WriteFile(filepath.Join(keysDir, "Pierre.pub"), ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(keysDir, "Alice.pub"), ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := accounts.New(keysDir, t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
@@ -283,15 +283,15 @@ func TestAuthenticationFoldsTheLoginName(t *testing.T) {
 	targets := twoAccounts()
 	s := &Server{cfg: Config{Accounts: store, Daemons: targets}}
 
-	ctx := newFakeContext("Pierre")
+	ctx := newFakeContext("Alice")
 	if !s.authenticate(ctx, key) {
-		t.Fatal("the login name Pierre was refused the account Pierre.pub enrolled")
+		t.Fatal("the login name Alice was refused the account Alice.pub enrolled")
 	}
-	if account, ok := accountFor(ctx); !ok || account.Name() != "pierre" {
-		t.Errorf("the connection carries %+v, want pierre", account)
+	if account, ok := accountFor(ctx); !ok || account.Name() != "alice" {
+		t.Errorf("the connection carries %+v, want alice", account)
 	}
-	if len(targets.warmed) != 1 || targets.warmed[0] != "pierre" {
-		t.Errorf("warmed %v, want [pierre]", targets.warmed)
+	if len(targets.warmed) != 1 || targets.warmed[0] != "alice" {
+		t.Errorf("warmed %v, want [alice]", targets.warmed)
 	}
 
 	// A name nothing can be derived from is refused, as it was before folding.
