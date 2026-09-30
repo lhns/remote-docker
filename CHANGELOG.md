@@ -14,8 +14,7 @@ software.
 
 - **Piped stdin on Windows reaches its end.** `echo hi | docker exec -i c cat`
   printed `hi` and never exited, and so did a piped `docker run -i`: the local
-  endpoint pipe could not carry end-of-input. kind stopped at "Writing
-  configuration" for this.
+  endpoint pipe could not carry end-of-input.
 - **`-v /var/run/docker.sock:/var/run/docker.sock` works.** It failed with
   "cannot export". It now reaches the daemon the container runs on: the
   account's own, or the shared one, never the workspace's parent
