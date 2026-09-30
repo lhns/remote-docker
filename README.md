@@ -1003,9 +1003,13 @@ symlink from an ordinary Windows account, since the runner is elevated.
 A bind mount becomes an NFS-backed volume, so what crosses is file CONTENT.
 These do not work, and say so up front:
 
-- **Sockets** (`/var/run/docker.sock` above all), **devices and FIFOs**, alone
-  or inside a shared directory: a file share carries the name, not the kernel
-  object. (`--device` is unaffected; it names a device on the workspace.)
+- **Sockets, devices and FIFOs**, alone or inside a shared directory: a file
+  share carries the name, not the kernel object. (`--device` is unaffected; it
+  names a device on the workspace.)
+- **The one exception is the Docker socket.** `-v
+  /var/run/docker.sock:/var/run/docker.sock` is passed through, not exported,
+  and reaches the daemon the container runs on: your account's own, never the
+  workspace's parent (ADR 0049).
 - **Windows named pipes** (`npipe` mounts) pass through untouched, so the
   workspace looks for a pipe path that means nothing there.
 

@@ -46,6 +46,7 @@ writes are not synchronous is a union over the live export.
 | [0045](0045-prefetch-follows-the-reads.md) | Prefetch follows the reads: an escalating tree over small files | |
 | [0046](0046-a-share-reports-wide-mode-bits.md) | A share reports wide mode bits, owned by the account | |
 | [0047](0047-a-forked-go-nfs.md) | A forked go-nfs, consumed through a `replace` | |
+| [0049](0049-a-docker-sock-bind-names-the-containers-daemon.md) | A docker.sock bind names the daemon the container runs on | |
 
 ## Code layout
 

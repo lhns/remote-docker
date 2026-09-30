@@ -139,7 +139,7 @@ endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/up.log" || exit 1
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
 
 info "pulling test images through the workspace"
-for image in alpine:3 nginx:alpine; do
+for image in alpine:3 nginx:alpine docker:cli; do
     timeout 300 docker pull -q "$image" >/dev/null 2>&1 \
         || info "could not pre-pull $image; the test may be slower"
 done
@@ -516,6 +516,21 @@ elif out=$(dockert run --rm -v /etc/hostname:/x:ro alpine:3 cat /x 2>&1) &&
     ok "a path this machine also has was exported from here, not the workspace"
 else
     bad "the tie-break read [$(echo "$out" | head -1)], want the runner's [$runner_host]"
+fi
+
+echo
+echo "== 9e. a docker.sock bind reaches the daemon the container runs on =="
+# Passed through, not exported (ADR 0049), although the runner has a socket of
+# its own, so this is also the precedence over "this machine wins".
+ws_id=$(dockert info --format '{{.ID}}' 2>/dev/null)
+runner_id=$(hostdocker info --format '{{.ID}}' 2>/dev/null)
+if [ -z "$ws_id" ] || [ "$ws_id" = "$runner_id" ]; then
+    bad "cannot tell the daemons apart: workspace [$ws_id], runner [$runner_id]"
+elif outputs "^$ws_id\$" dockert run --rm -e DOCKER_HOST=unix:///var/run/docker.sock \
+    -v /var/run/docker.sock:/var/run/docker.sock docker:cli docker info --format '{{.ID}}'; then
+    ok "a docker.sock bind reached the workspace's daemon, not the runner's"
+else
+    bad "the container reached [$LAST_OUTPUT], want the workspace's [$ws_id], not the runner's [$runner_id]"
 fi
 
 echo

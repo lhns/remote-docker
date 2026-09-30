@@ -68,8 +68,10 @@ Rules at the use site:
   passthrough is not.
 - **This machine wins when both could claim it**, so a Linux client's own `/etc`
   is still its own. The list is consulted only for a source that is not here.
+  Except `/var/run/docker.sock`, which always passes through (ADR 0049).
 - **A passed-through bind is not touched at all**, so `ro` and every other option
-  survive by construction.
+  survive by construction. Only a Git Bash source is respelled, as its POSIX
+  reading, which is the one the daemon accepts (ADR 0040).
 
 **A missing source is refused at startup.** docker CREATES a missing bind source,
 so `WORKSPACE_DIND_MOUNTS=/typo:/lib/modules` would hand the daemon an empty

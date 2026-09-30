@@ -126,17 +126,34 @@ type Rewriter struct {
 	PosixSource func(source string) string
 }
 
-// ownedByDaemon reports whether the workspace resolves this source itself.
-// Only for a source this machine lacks, so a typo still fails.
-func (r *Rewriter) ownedByDaemon(source string) bool {
-	if r.declared(source) {
-		return !r.localExists(source)
+// daemonSource reports whether the daemon resolves this source itself, and
+// the spelling to send it: a named volume, a path the workspace declared and
+// this machine lacks, so a typo still fails (ADR 0041), or the Docker socket
+// (ADR 0049). A Git Bash reading goes as POSIX: the daemon refuses a Windows
+// path (ADR 0040).
+func (r *Rewriter) daemonSource(source string) (string, bool) {
+	if !IsLocalPath(source) {
+		return source, true
 	}
-	// A candidate only; the workspace declaring it is what makes it credible.
-	if r.PosixSource != nil && r.declared(r.PosixSource(source)) {
-		return !r.localExists(source)
+	posix := "" // a candidate only; the workspace declaring it makes it credible
+	if r.PosixSource != nil {
+		posix = r.PosixSource(source)
 	}
-	return false
+	switch {
+	case isDockerSocket(source):
+		return source, true
+	case isDockerSocket(posix):
+		return posix, true
+	case r.declared(source) && !r.localExists(source):
+		return source, true
+	case r.declared(posix) && !r.localExists(source):
+		return posix, true
+	}
+	return source, false
+}
+
+func isDockerSocket(source string) bool {
+	return path.Clean(source) == "/var/run/docker.sock"
 }
 
 // declared reports whether the workspace named this path or one above it.
@@ -304,13 +321,13 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.
 		}
 		// Never rewrite a named volume (it is the user's data) or a path the
 		// workspace owns. Either keeps every option but ours.
-		if !IsLocalPath(parsed.Source) || r.ownedByDaemon(parsed.Source) {
+		if source, daemon := r.daemonSource(parsed.Source); daemon {
 			options, err := withoutOurWords(parsed.Options)
 			if err != nil {
 				return nil, err
 			}
-			if options != parsed.Options {
-				parsed.Options = options
+			if options != parsed.Options || source != parsed.Source {
+				parsed.Options, parsed.Source = options, source
 				spec = parsed.String()
 				*changed = true
 			}
@@ -449,12 +466,18 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace
 				continue
 			}
 		}
-		if mountType != "bind" || !IsLocalPath(source) || r.ownedByDaemon(source) {
-			dropped, err := dropOurConsistency(mount)
+		if daemonSource, daemon := r.daemonSource(source); mountType != "bind" || daemon {
+			edited, err := dropOurConsistency(mount)
 			if err != nil {
 				return err
 			}
-			touched = touched || dropped
+			if daemonSource != source {
+				if mount["Source"], err = json.Marshal(daemonSource); err != nil {
+					return fmt.Errorf("rewrite: encoding Source: %w", err)
+				}
+				edited = true
+			}
+			touched = touched || edited
 			continue
 		}
 

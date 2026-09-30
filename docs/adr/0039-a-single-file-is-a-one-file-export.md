@@ -63,7 +63,7 @@ between a container and the user's files.
 needs the kernel object, and a file share carries the name and nothing behind
 it. Equally true of a socket inside an exported directory, which is why the
 message says so — "not a directory" pointed at single files and hid the
-cause.
+cause. `/var/run/docker.sock` is never exported at all: ADR 0049.
 
 **Refused early on a workspace that cannot do it.** `Subpath` is API v1.45, so
 Docker 26; the version is already in `workspace.Info`, and an older daemon is
