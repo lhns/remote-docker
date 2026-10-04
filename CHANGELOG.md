@@ -21,6 +21,16 @@ software.
   arriving just as the first finished could stop the union just mounted and
   start another, under a container that may already have been given the first.
   Found by a unit test; nobody has reported it.
+- **`remote machine create` without `--rootfs` can be run again.** The second
+  run refused with "built from different settings" while `machine status`
+  said the settings were current, and a `machine rebuild` did not cure it. The
+  path the published image was downloaded to was counted as a setting.
+
+### Upgrading
+
+- A machine created without `--rootfs` by 0.8.1 or earlier is still refused by
+  `machine create`, naming `machine rebuild`. The machine itself works; one
+  rebuild clears the refusal, and discards the images and containers inside it.
 
 ## 0.8.1 — 2026-09-30
 

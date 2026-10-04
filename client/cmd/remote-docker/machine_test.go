@@ -131,6 +131,41 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 	}
 }
 
+// `machine create` without --rootfs, run again, and `machine rebuild` must hash
+// the fetched rootfs as the first create did, or create refuses the machine it
+// built. The record holds only the path, so rebuild relies on IsFetched, which
+// is also what repairs a machine recorded before Spec.Fetched.
+func TestAFetchedRootfsHashesTheSameOnEveryPath(t *testing.T) {
+	saved := overrides
+	t.Cleanup(func() { overrides = saved })
+	overrides = config.Overrides{}
+
+	// Where EnsureRootfs keeps what it fetched, so IsFetched recognises it.
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	fetched := filepath.Join(os.Getenv("LOCALAPPDATA"), "remote-docker", "rootfs", "sha256-0123.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(fetched), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fetched, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &machineOptions{backend: "wsl"}
+	// What createMachine builds once EnsureRootfs has filled in the path.
+	built := mustSpec(t, opts, "dev", nil)
+	built.Rootfs, built.Fetched = fetched, true
+
+	observed := machine.Observed{State: machine.Running, Generation: built.Generation()}
+	if got := machine.Plan(mustSpec(t, opts, "dev", nil), observed); got != machine.Nothing {
+		t.Errorf("creating it again plans %v, want Nothing", got)
+	}
+
+	recorded := &config.Workspace{Port: config.DefaultSSHPort, User: config.DefaultUser(), Machine: machineRecord(built)}
+	if got := mustSpec(t, opts, "dev", recorded); got.Rootfs != fetched || got.Generation() != built.Generation() {
+		t.Errorf("rebuild = rootfs %q generation %s, want %q and %s", got.Rootfs, got.Generation(), fetched, built.Generation())
+	}
+}
+
 func mustSpec(t *testing.T, o *machineOptions, name string, recorded *config.Workspace) machine.Spec {
 	t.Helper()
 	spec, err := o.spec(name, recorded)

@@ -77,7 +77,8 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // Unset settings fall back to the recorded ones, since Spec.Generation hashes
 // them all: otherwise rebuilding a `--port 2222` machine builds one on 22 that
 // `status` calls out of date forever. The recorded rootfs is reused only for
-// the same image and while the file still exists.
+// the same image and while the file still exists, and one EnsureRootfs fetched
+// stays Fetched, so the rebuild hashes as a create without --rootfs does.
 func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.Spec, error) {
 	spec := machine.Spec{
 		Name:    name,
@@ -99,6 +100,7 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 		if spec.Rootfs == "" && m.Image == spec.Image && m.Rootfs != "" {
 			if _, err := os.Stat(m.Rootfs); err == nil {
 				spec.Rootfs = m.Rootfs
+				spec.Fetched = machine.IsFetched(m.Rootfs)
 			}
 		}
 	}
@@ -290,6 +292,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
 				return err
 			}
+			spec.Fetched = true
 		}
 
 		_, _ = fmt.Fprintf(out, "creating the %s machine %q\n", spec.Backend, spec.Name)
@@ -351,15 +354,7 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	ws.Host = machinePlaceholderHost
 	ws.Port = spec.Port
 	ws.User = spec.Account
-	ws.Machine = &config.Machine{
-		Backend:    spec.Backend,
-		Name:       spec.Name,
-		Image:      spec.Image,
-		Rootfs:     spec.Rootfs,
-		CPUs:       spec.CPUs,
-		MemoryMB:   spec.MemoryMB,
-		Generation: spec.Generation(),
-	}
+	ws.Machine = machineRecord(spec)
 	if err := file.Set(name, ws); err != nil {
 		return err
 	}
@@ -377,6 +372,19 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	}
 	_, _ = fmt.Fprintf(out, "\nTry `%s`.\n", programName()+" run --rm -v .:/w alpine ls /w")
 	return nil
+}
+
+// machineRecord is what a workspace entry records about the machine spec built.
+func machineRecord(spec machine.Spec) *config.Machine {
+	return &config.Machine{
+		Backend:    spec.Backend,
+		Name:       spec.Name,
+		Image:      spec.Image,
+		Rootfs:     spec.Rootfs,
+		CPUs:       spec.CPUs,
+		MemoryMB:   spec.MemoryMB,
+		Generation: spec.Generation(),
+	}
 }
 
 // enrolledPublicKey is this machine's public half, generating the pair if this
