@@ -34,6 +34,13 @@ software.
   It suggested a bare `run`, which reaches the default workspace, and `create`
   does not make the new machine the default. When docker would reach another
   workspace, the hint now starts with `remote use <name>`.
+- **A rebuilt machine can be used straight away.** After
+  `remote machine rebuild`, or `remote rm` and `remote machine create`, every
+  docker command failed with `host key ... has CHANGED` until the entry was
+  removed from `known_hosts` by hand. A machine's host key is now made when it
+  is built and accepted at whatever address the machine has
+  ([ADR 0026](docs/adr/0026-a-machine-is-a-workspace-we-provision.md)). A
+  machine built by an earlier version keeps the old check until it is rebuilt.
 
 ### Upgrading
 

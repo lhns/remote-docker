@@ -1,7 +1,7 @@
 # 0026. A machine is a workspace we provision
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md)
-- Date: 2026-08-11
+- Date: 2026-08-11; amended 2026-10-04 (host keys)
 
 ## Context
 
@@ -18,19 +18,21 @@ another continent. There is **no second data path**. What is added is a
 lifecycle, in one config block:
 
 ```json
-"machine": { "backend": "wsl", "name": "rd-dev", "image": "...", "generation": "..." }
+"machine": { "backend": "wsl", "name": "rd-dev", "image": "...", "generation": "...", "hostKey": "ssh-ed25519 ..." }
 ```
 
-Its presence changes two things:
+Its presence changes three things:
 
 - **`remote rm`** has a machine to destroy as well as an entry to delete.
 - **A session locates the machine** before dialling it, in `session.connect`
   and nowhere else. A machine is started on demand and given its address at
   boot, so `host` in the entry is a placeholder and the address is asked at
   every connection.
+- **A session accepts the host key the machine was built with**, not
+  known_hosts' answer for its address (see below).
 
-Both were measured on 2026-08-11 in `machine.yml`'s `a machine on wsl` job
-(re-check: one run of that workflow):
+Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
+`a machine on wsl` job (re-check: one run of that workflow):
 
 - With the machine running and its agent listening, Windows could not reach
   `127.0.0.1:2222` and reached the machine's own `172.24.110.158:2222` at once:
@@ -39,6 +41,39 @@ Both were measured on 2026-08-11 in `machine.yml`'s `a machine on wsl` job
   not count as use: a machine stopped two and a half minutes after its agent
   reported listening. So locating a machine starts it, and a hold keeps it
   running (a `wsl.exe` session held open; `machine.Hold`).
+
+## A machine's host key is made with it, and pinned per machine
+
+- **Forced by:** `machine rebuild` on a WSL machine, after which every command
+  failed with `host key for 172.18.12.79:2222 has CHANGED` (2026-10-04).
+  known_hosts keys trust on an address, and a machine's address names nothing:
+  it is given out at boot and every WSL distribution shares the WSL VM's. A
+  rebuild, `rm` then `create`, or another machine on the same port all offer a
+  new key at a recorded address.
+- **Decision:** the client makes the host key when it builds the machine
+  (`keys.NewHostKey`) and writes the private half where the agent loads it,
+  before the agent first starts:
+
+  | Backend | How the private half goes in |
+  |---|---|
+  | WSL | `wsl.exe` stdin into `sh -c 'umask 077 && cat > ...'`, never argv |
+  | Hyper-V | one more file in the Ignition document, mode 0600 |
+
+  The public half is the machine block's `hostKey`, recorded before the agent
+  is waited for, so a build that fails after it cannot leave the destroyed
+  machine's key pinned. A session accepts that key and no other, at any
+  address, and never reads or writes known_hosts for it
+  (`session.hostKeyRule`).
+- **Rejected:** forgetting known_hosts entries on rebuild and `rm`. Still trusts
+  whatever answers first, and misses the address being reused by another
+  machine.
+- **Rejected:** reading the agent's generated key out of the machine. WSL could;
+  Hyper-V cannot, as there is no way into a Linux guest but the SSH it opens.
+- **Costs:**
+  - The private key passes through the client, and for Hyper-V stays in
+    `config.ign` beside the disk that holds it anyway.
+  - A record without `hostKey` falls back to known_hosts: a machine built
+    before this, and `rm --keep-machine` then `create`, which builds nothing.
 
 ## The Hyper-V backend was merged unverified, on purpose
 

@@ -182,6 +182,12 @@ func wslWriteArgs(name, path, content string) []string {
 	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
 }
 
+// wslWriteStdinArgs writes a file readable by root alone from standard input,
+// for a secret: a command line is visible to every process on Windows.
+func wslWriteStdinArgs(name, path string) []string {
+	return wslRunArgs(name, "sh", "-c", "umask 077 && cat > "+path)
+}
+
 // shellQuote wraps a string in single quotes for `sh -c`, so a newline in the
 // content does not end the command.
 func shellQuote(s string) string {

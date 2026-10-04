@@ -184,6 +184,26 @@ jobs:
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
 
+      # A rebuilt machine serves a new key at an address known_hosts may hold
+      # another for (ADR 0026). A pinned machine never writes known_hosts, so
+      # the stale entry is planted, at the rebuilt machine's own address.
+      - name: rebuild, then docker run on the rebuilt machine
+        shell: pwsh
+        run: |
+          # -f: a session from the steps above may still be serving.
+          .\client\rd.exe remote machine rebuild ci -f --rootfs .\rootfs.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw "machine rebuild failed" }
+
+          $addr = (wsl -d rd-ci --user root -- ip -4 -o addr show eth0) -join ' '
+          $ip = ([regex]::Match($addr, 'inet\s+(\d+\.\d+\.\d+\.\d+)')).Groups[1].Value
+          if (-not $ip) { throw "the machine reported no address: $addr" }
+          "[${ip}]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIeCAfBZ9vXtpOOxmrA9VH412GcPMVODP3cqF/sOMJ2b" |
+            Out-File -Encoding ascii -Append "$env:REMOTE_DOCKER_STATE_DIR\known_hosts"
+
+          $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
+          $out
+          if ($out -notmatch 'from the runner') { throw "the rebuilt machine did not answer as the one just built" }
+
       # A stop must not discard what is inside the machine; only a rebuild does.
       - name: it survives being stopped and started
         shell: pwsh
