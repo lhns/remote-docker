@@ -25,6 +25,15 @@ software.
   run refused with "built from different settings" while `machine status`
   said the settings were current, and a `machine rebuild` did not cure it. The
   path the published image was downloaded to was counted as a setting.
+- **`remote machine status` checks the agent.** A running machine whose agent
+  was gone still printed `state running` and `settings current`. Status now
+  dials the agent at the machine's own address, and when nothing answers it
+  prints `not answering on <address>:<port>` and exits 1. A stopped machine is
+  still reported as stopped and is not started.
+- **`remote machine create` suggests a command that reaches the new machine.**
+  It suggested a bare `run`, which reaches the default workspace, and `create`
+  does not make the new machine the default. When docker would reach another
+  workspace, the hint now starts with `remote use <name>`.
 
 ### Upgrading
 

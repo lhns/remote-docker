@@ -11,8 +11,12 @@ package main
 // developed on, that refusal is exactly what happens and is what this pins.
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -180,5 +184,120 @@ func TestMachineSpecRefusesUnderivableUser(t *testing.T) {
 	defer func() { overrides = config.Overrides{} }()
 	if _, err := (&machineOptions{backend: "wsl"}).spec("dev", nil); err == nil || !strings.Contains(err.Error(), `"123"`) {
 		t.Errorf("spec with --user 123 = %v, want an error naming it", err)
+	}
+}
+
+func TestReportAgent(t *testing.T) {
+	wsl := &config.Machine{Backend: "wsl", Name: "dev"}
+	hyperv := &config.Machine{Backend: "hyperv", Name: "dev"}
+	up, down := listeningAgent(t), closedPort(t)
+	at := func(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
+
+	for _, tc := range []struct {
+		name    string
+		m       *config.Machine
+		backend *fakeBackend
+		port    int
+		ok      bool
+		want    []string
+		reject  []string
+	}{
+		{
+			name:    "answering",
+			m:       wsl,
+			backend: &fakeBackend{addr: "127.0.0.1"},
+			port:    up,
+			ok:      true,
+			want:    []string{"answering on " + at(up)},
+		},
+		{
+			// What was dialled and the remedy, never a guess at why.
+			name:    "refused, wsl",
+			m:       wsl,
+			backend: &fakeBackend{addr: "127.0.0.1"},
+			port:    down,
+			want:    []string{"not answering on " + at(down), "  fix: ", machine.WSLAgentLog, "machine rebuild dev"},
+		},
+		{
+			// The log path is WSL's.
+			name:    "refused, hyperv",
+			m:       hyperv,
+			backend: &fakeBackend{addr: "127.0.0.1"},
+			port:    down,
+			want:    []string{"not answering on " + at(down), "machine rebuild dev"},
+			reject:  []string{machine.WSLAgentLog},
+		},
+		{
+			name:    "no address",
+			m:       wsl,
+			backend: &fakeBackend{},
+			port:    up,
+			want:    []string{"not checked", "no address"},
+		},
+		{
+			name:    "address unreadable",
+			m:       wsl,
+			backend: &fakeBackend{addrErr: errors.New("wsl -d rd-dev ip: exit status 1\nmore detail")},
+			port:    up,
+			want:    []string{"not checked", "exit status 1"},
+			reject:  []string{"more detail"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if got := reportAgent(context.Background(), &out, tc.backend, tc.m, tc.port); got != tc.ok {
+				t.Errorf("reportAgent = %v, want %v", got, tc.ok)
+			}
+			text := out.String()
+			for _, w := range tc.want {
+				if !strings.Contains(text, w) {
+					t.Errorf("output does not contain %q:\n%s", w, text)
+				}
+			}
+			for _, r := range tc.reject {
+				if strings.Contains(text, r) {
+					t.Errorf("output contains %q:\n%s", r, text)
+				}
+			}
+			// One row, and at most one fix line under it.
+			lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+			if len(lines) > 2 || (len(lines) == 2 && !strings.HasPrefix(lines[1], "  fix: ")) {
+				t.Errorf("want one row and at most one fix line, got:\n%s", text)
+			}
+		})
+	}
+}
+
+// The hint create prints must reach the machine just made, which is not the
+// default when the computer already has one.
+func TestCreateHintReachesTheNewMachine(t *testing.T) {
+	ours := map[string]string{"dev": "dev", "old": "old"}
+
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		current string
+		def     string
+		want    bool
+	}{
+		{name: "the only workspace, so the default", def: "dev", want: true},
+		{name: "another workspace is the default", def: "old", want: false},
+		{name: "its context is selected", current: "dev", def: "old", want: true},
+		{name: "another workspace's context is selected", current: "old", def: "dev", want: false},
+		{name: "a context that is not ours", current: "desktop", def: "dev", want: false},
+		{name: "DOCKER_HOST elsewhere", env: map[string]string{"DOCKER_HOST": "tcp://box:2375"}, def: "dev", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reachedByDocker("dev", tc.def, fakeLookups(tc.env, tc.current, ours)); got != tc.want {
+				t.Errorf("reachedByDocker = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if hint := tryHint("dev", true); strings.Contains(hint, " use ") {
+		t.Errorf("hint for the workspace docker reaches = %q, want the run alone", hint)
+	}
+	if hint := tryHint("dev", false); !strings.Contains(hint, "remote use dev") || !strings.Contains(hint, "alpine ls /w") {
+		t.Errorf("hint for a workspace docker does not reach = %q, want `remote use dev` then the run", hint)
 	}
 }
