@@ -163,8 +163,7 @@ func ignition(spec Spec, publicKey string) (string, error) {
 		// here is that afterwards there is no way in (see hyperVEnrolment).
 		ignitionFile("/etc/workspace/authorized_keys.d/"+spec.Account+".pub", strings.TrimSpace(publicKey)+"\n"),
 	}
-	// The host key the client pins (Spec.HostKey). /etc/workspace is the
-	// directory hyperVUnit mounts into the workspace container.
+	// hyperVUnit mounts /etc/workspace into the workspace container.
 	if spec.HostKey != "" {
 		files = append(files, ignitionFile(hostKeyFile, spec.HostKey))
 	}

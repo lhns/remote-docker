@@ -184,22 +184,21 @@ jobs:
           $out
           if ($out -notmatch 'nothing to do') { throw "create was not idempotent" }
 
-      # A rebuilt machine serves a new host key at an address every WSL machine
-      # shares, which known_hosts refused as CHANGED on every command after it.
-      # The stale entry is planted so the step does not depend on WSL handing
-      # out the same address again; the record's pinned key must win over it.
+      # A rebuilt machine serves a new key at an address known_hosts may hold
+      # another for (ADR 0026). A pinned machine never writes known_hosts, so
+      # the stale entry is planted, at the rebuilt machine's own address.
       - name: rebuild, then docker run on the rebuilt machine
         shell: pwsh
         run: |
+          # -f: a session from the steps above may still be serving.
+          .\client\rd.exe remote machine rebuild ci -f --rootfs .\rootfs.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw "machine rebuild failed" }
+
           $addr = (wsl -d rd-ci --user root -- ip -4 -o addr show eth0) -join ' '
           $ip = ([regex]::Match($addr, 'inet\s+(\d+\.\d+\.\d+\.\d+)')).Groups[1].Value
           if (-not $ip) { throw "the machine reported no address: $addr" }
           "[${ip}]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIeCAfBZ9vXtpOOxmrA9VH412GcPMVODP3cqF/sOMJ2b" |
             Out-File -Encoding ascii -Append "$env:REMOTE_DOCKER_STATE_DIR\known_hosts"
-
-          # -f: a session from the steps above may still be serving.
-          .\client\rd.exe remote machine rebuild ci -f --rootfs .\rootfs.tar.gz
-          if ($LASTEXITCODE -ne 0) { throw "machine rebuild failed" }
 
           $out = (.\client\rd.exe run --rm -v "${PWD}:/w" alpine:3 cat /w/marker) -join "`n"
           $out

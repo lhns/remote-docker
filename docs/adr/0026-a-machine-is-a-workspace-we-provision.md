@@ -29,7 +29,7 @@ Its presence changes three things:
   boot, so `host` in the entry is a placeholder and the address is asked at
   every connection.
 - **A session accepts the host key the machine was built with**, not
-  known_hosts' answer for that address (see the host key section below).
+  known_hosts' answer for its address (see below).
 
 Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 `a machine on wsl` job (re-check: one run of that workflow):
@@ -44,39 +44,36 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 
 ## A machine's host key is made with it, and pinned per machine
 
-Amended 2026-10-04, after a `machine rebuild` on a real WSL machine refused
-every later command: `host key for 172.18.12.79:2222 has CHANGED`.
+- **Forced by:** `machine rebuild` on a WSL machine, after which every command
+  failed with `host key for 172.18.12.79:2222 has CHANGED` (2026-10-04).
+  known_hosts keys trust on an address, and a machine's address names nothing:
+  it is given out at boot and every WSL distribution shares the WSL VM's. A
+  rebuild, `rm` then `create`, or another machine on the same port all offer a
+  new key at a recorded address.
+- **Decision:** the client makes the host key when it builds the machine
+  (`keys.NewHostKey`) and writes the private half where the agent loads it,
+  before the agent first starts:
 
-- **Why known_hosts cannot work here.** It keys trust on an address, and a
-  machine's address names nothing: it is given out at boot, and every WSL
-  distribution shares the one WSL VM address. A rebuild, an `rm` then `create`
-  on the same port, or another machine on that port all present a new key at
-  an address already recorded, which known_hosts must refuse.
-- **Decision: the client generates the host key when it builds the machine.**
-  `keys.NewHostKey` makes an ed25519 pair; the private half goes in as
-  `Spec.HostKey` and is written to the file the agent loads before its first
-  start (WSL: through stdin into `/etc/workspace/host_keys`; Hyper-V: one more
-  file in the Ignition document). The public half is recorded in the machine
-  block as `hostKey`, before the agent is waited for, so a build that then
-  fails cannot leave the previous machine's key pinned.
-- **A session with a recorded key accepts that key and no other**
-  (`session.hostKeyRule`, `keys.PinnedHostKey`), at whatever address the
-  machine has today, and never reads or writes known_hosts for it. Nothing is
-  trusted on first network use, and the rule is still built by the session and
-  handed to the transport (ADR 0021).
-- **Rejected: forgetting known_hosts entries on rebuild, rm and create.** It
-  keeps trusting whatever answers first, and cannot cover the address being
-  reused by a different machine or by a WSL VM that restarted.
-- **Rejected: reading the key the agent generated out of the machine.** WSL
-  could (`wsl -d ... cat`), Hyper-V cannot: the guest is Linux, so PowerShell
-  Direct does not apply, the same reason a login key is enrolled only at
-  creation.
-- **Costs.** The private host key passes through the client, and for Hyper-V
-  sits in `config.ign` beside the disk that holds it anyway. A machine built
-  before this has no `hostKey` and keeps known_hosts until it is rebuilt.
-  `create` on a machine that already matches builds nothing and keeps the
-  recorded key, so `rm --keep-machine` followed by `create` falls back to
-  known_hosts too.
+  | Backend | How the private half goes in |
+  |---|---|
+  | WSL | `wsl.exe` stdin into `sh -c 'umask 077 && cat > ...'`, never argv |
+  | Hyper-V | one more file in the Ignition document, mode 0600 |
+
+  The public half is the machine block's `hostKey`, recorded before the agent
+  is waited for, so a build that fails after it cannot leave the destroyed
+  machine's key pinned. A session accepts that key and no other, at any
+  address, and never reads or writes known_hosts for it
+  (`session.hostKeyRule`).
+- **Rejected:** forgetting known_hosts entries on rebuild and `rm`. Still trusts
+  whatever answers first, and misses the address being reused by another
+  machine.
+- **Rejected:** reading the agent's generated key out of the machine. WSL could;
+  Hyper-V cannot, as there is no way into a Linux guest but the SSH it opens.
+- **Costs:**
+  - The private key passes through the client, and for Hyper-V stays in
+    `config.ign` beside the disk that holds it anyway.
+  - A record without `hostKey` falls back to known_hosts: a machine built
+    before this, and `rm --keep-machine` then `create`, which builds nothing.
 
 ## The Hyper-V backend was merged unverified, on purpose
 

@@ -182,9 +182,8 @@ func wslWriteArgs(name, path, content string) []string {
 	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
 }
 
-// wslWriteStdinArgs writes a file inside a distribution from the command's
-// standard input, readable by root alone. For the host key: on a command line
-// it would be readable by every process on Windows that lists them.
+// wslWriteStdinArgs writes a file readable by root alone from standard input,
+// for a secret: a command line is visible to every process on Windows.
 func wslWriteStdinArgs(name, path string) []string {
 	return wslRunArgs(name, "sh", "-c", "umask 077 && cat > "+path)
 }

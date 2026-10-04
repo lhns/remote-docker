@@ -108,8 +108,7 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 			return err
 		}
 	}
-	// Before the first boot, which would otherwise generate one nobody here
-	// knows.
+	// Before the boot command first runs the agent, which would generate one.
 	if spec.HostKey != "" {
 		if _, err := b.wslInput(ctx, spec.HostKey, wslWriteStdinArgs(distro, hostKeyFile)...); err != nil {
 			return fmt.Errorf("writing the machine's host key: %w", err)

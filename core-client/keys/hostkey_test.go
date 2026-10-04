@@ -3,7 +3,6 @@ package keys
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -114,68 +113,5 @@ func TestNewKnownHostsCreatesTheFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("known_hosts was not created: %v", err)
-	}
-}
-
-// The private half is what the agent loads and the public half is what the
-// record pins, so they have to be one key, in a format the agent parses.
-func TestNewHostKeyHalvesMatch(t *testing.T) {
-	hk, err := NewHostKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.ParsePrivateKey(hk.Private)
-	if err != nil {
-		t.Fatalf("the agent could not load the private half: %v", err)
-	}
-	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hk.Public))
-	if err != nil {
-		t.Fatalf("the public half %q does not parse: %v", hk.Public, err)
-	}
-	if ssh.FingerprintSHA256(pub) != ssh.FingerprintSHA256(signer.PublicKey()) {
-		t.Errorf("public half %s is not the private half's %s",
-			ssh.FingerprintSHA256(pub), ssh.FingerprintSHA256(signer.PublicKey()))
-	}
-	if again, _ := NewHostKey(); again.Public == hk.Public {
-		t.Error("two host keys came out the same")
-	}
-}
-
-// A rebuilt machine at the address an old one used: the key is all that is
-// checked.
-func TestPinnedHostKeyIgnoresTheAddress(t *testing.T) {
-	hk, err := NewHostKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.ParsePrivateKey(hk.Private)
-	if err != nil {
-		t.Fatal(err)
-	}
-	refused := func(offered ssh.PublicKey) error {
-		return fmt.Errorf("refused %s", ssh.FingerprintSHA256(offered))
-	}
-	check, err := PinnedHostKey(hk.Public, refused)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, addr := range []string{"172.18.12.79:2222", "172.24.110.158:2200"} {
-		remote, _ := net.ResolveTCPAddr("tcp", addr)
-		if err := check(addr, remote, signer.PublicKey()); err != nil {
-			t.Errorf("the pinned key at %s was refused: %v", addr, err)
-		}
-	}
-
-	other := testHostKey(t)
-	err = check("172.18.12.79:2222", nil, other)
-	if err == nil || !strings.Contains(err.Error(), ssh.FingerprintSHA256(other)) {
-		t.Errorf("another key = %v, want mismatch's error naming it", err)
-	}
-}
-
-func TestPinnedHostKeyRefusesAnUnreadableRecord(t *testing.T) {
-	if _, err := PinnedHostKey("not a key", func(ssh.PublicKey) error { return nil }); err == nil {
-		t.Error("an unreadable record was accepted, which pins nothing")
 	}
 }

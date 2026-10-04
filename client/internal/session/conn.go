@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -161,16 +162,22 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 }
 
 // hostKeyRule is the host key a workspace must offer. A machine this program
-// built answers with the key built into it, pinned per machine because its
-// address is given out at boot and reused (ADR 0026); everything else is
-// trusted on first use and refused when it changes (known_hosts).
+// built must offer the key it was built with, at whatever address it has
+// (ADR 0026); anything else goes through known_hosts.
 func hostKeyRule(cfg config.Config) (ssh.HostKeyCallback, error) {
 	if m := cfg.Machine; m != nil && m.HostKey != "" {
-		return keys.PinnedHostKey(m.HostKey, func(offered ssh.PublicKey) error {
+		want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(m.HostKey))
+		if err != nil {
+			return nil, fmt.Errorf("the host key recorded for %q cannot be read: %w", cfg.Name, err)
+		}
+		return func(_ string, _ net.Addr, offered ssh.PublicKey) error {
+			if bytes.Equal(offered.Marshal(), want.Marshal()) {
+				return nil
+			}
 			return fmt.Errorf("the %s machine %q answered with a host key it was not built with (%s)\n"+
-				"  fix: stop whatever else listens on port %d, or `remote machine rebuild %s` if this program did not build what runs there",
-				m.Backend, m.Name, ssh.FingerprintSHA256(offered), cfg.Port, cfg.Name)
-		})
+				"  fix: stop whatever else listens on port %d, or `remote machine rebuild %s`",
+				m.Backend, cfg.Name, ssh.FingerprintSHA256(offered), cfg.Port, cfg.Name)
+		}, nil
 	}
 	known, err := keys.NewKnownHosts(config.KnownHostsPath())
 	if err != nil {

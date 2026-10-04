@@ -4,17 +4,14 @@
 package keys
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -57,14 +54,9 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 		return KeyPair{}, fmt.Errorf("keys: creating key directory: %w", err)
 	}
 
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	signer, block, err := newKey(comment)
 	if err != nil {
-		return KeyPair{}, fmt.Errorf("keys: generating key: %w", err)
-	}
-
-	block, err := ssh.MarshalPrivateKey(priv, comment)
-	if err != nil {
-		return KeyPair{}, fmt.Errorf("keys: marshalling private key: %w", err)
+		return KeyPair{}, err
 	}
 
 	// O_EXCL so a key created by a concurrent invocation is never clobbered:
@@ -91,11 +83,6 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 		return KeyPair{}, fmt.Errorf("keys: writing key file: %w", err)
 	}
 
-	signer, err = ssh.NewSignerFromKey(priv)
-	if err != nil {
-		return KeyPair{}, fmt.Errorf("keys: building signer: %w", err)
-	}
-
 	pub := ssh.MarshalAuthorizedKey(signer.PublicKey())
 	if comment != "" {
 		pub = append(pub[:len(pub)-1], []byte(" "+comment+"\n")...)
@@ -108,55 +95,40 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 }
 
 // HostKey is a host key made here for a workspace this program builds, so its
-// public half is known before anything has been dialled (ADR 0026).
+// public half is known before anything is dialled (ADR 0026).
 type HostKey struct {
-	// Private is the PEM the workspace's agent loads as its host key.
-	Private []byte
-
-	// Public is the public half in authorized_keys form, which the workspace
-	// record pins.
-	Public string
+	Private []byte // PEM, which the workspace's agent loads
+	Public  string // authorized_keys form, which the workspace record pins
 }
 
-// NewHostKey generates an ed25519 host key, the type the agent generates for
-// itself when it has none.
+// NewHostKey generates an ed25519 host key, the type the agent would otherwise
+// generate for itself.
 func NewHostKey() (HostKey, error) {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	signer, block, err := newKey("remote-docker workspace")
 	if err != nil {
-		return HostKey{}, fmt.Errorf("keys: generating host key: %w", err)
-	}
-	block, err := ssh.MarshalPrivateKey(priv, "remote-docker workspace")
-	if err != nil {
-		return HostKey{}, fmt.Errorf("keys: marshalling host key: %w", err)
-	}
-	signer, err := ssh.NewSignerFromKey(priv)
-	if err != nil {
-		return HostKey{}, fmt.Errorf("keys: building host key signer: %w", err)
+		return HostKey{}, err
 	}
 	return HostKey{
 		Private: pem.EncodeToMemory(block),
-		Public:  strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))),
+		Public:  KeyPair{Signer: signer}.AuthorizedKey(""),
 	}, nil
 }
 
-// PinnedHostKey accepts exactly one host key, whatever address offers it, and
-// asks mismatch for the error to return about any other.
-//
-// For a workspace whose host key was made with it (NewHostKey). A machine's
-// address is given out at boot and shared with every other machine on the same
-// virtual network, so an address names no machine, and a known_hosts entry
-// keyed on one is refused as CHANGED the moment that machine is rebuilt.
-func PinnedHostKey(authorized string, mismatch func(offered ssh.PublicKey) error) (ssh.HostKeyCallback, error) {
-	want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(authorized))
+// newKey generates an ed25519 key and its PEM block.
+func newKey(comment string) (ssh.Signer, *pem.Block, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("keys: the recorded host key cannot be read: %w", err)
+		return nil, nil, fmt.Errorf("keys: generating key: %w", err)
 	}
-	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		if bytes.Equal(key.Marshal(), want.Marshal()) {
-			return nil
-		}
-		return mismatch(key)
-	}, nil
+	block, err := ssh.MarshalPrivateKey(priv, comment)
+	if err != nil {
+		return nil, nil, fmt.Errorf("keys: marshalling private key: %w", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("keys: building signer: %w", err)
+	}
+	return signer, block, nil
 }
 
 func loadKey(path string) (ssh.Signer, error) {

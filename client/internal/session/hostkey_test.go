@@ -1,8 +1,5 @@
 package session
 
-// Which host key a workspace must offer. A machine this program built pins the
-// key built into it; everything else keeps known_hosts (ADR 0026).
-
 import (
 	"net"
 	"os"
@@ -16,7 +13,7 @@ import (
 	"github.com/lhns/remote-docker/core-client/keys"
 )
 
-// The address every WSL machine shares, and the one the bug was found at.
+// The address every WSL machine shares.
 const wslAddr = "172.18.12.79:2222"
 
 func hostKeyPair(t *testing.T) (keys.HostKey, ssh.PublicKey) {
@@ -44,8 +41,7 @@ func tcpAddr(t *testing.T, addr string) net.Addr {
 // A rebuilt machine at an address known_hosts already holds another key for:
 // what `machine rebuild`, and `rm` then `create`, left behind.
 func TestARebuiltMachineIgnoresKnownHosts(t *testing.T) {
-	state := t.TempDir()
-	t.Setenv("REMOTE_DOCKER_STATE_DIR", state)
+	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
 
 	_, previous := hostKeyPair(t)
 	stale := knownhosts.Line([]string{knownhosts.Normalize(wslAddr)}, previous) + "\n"
@@ -113,5 +109,13 @@ func TestWithoutAPinnedKeyKnownHostsDecides(t *testing.T) {
 				t.Errorf("a changed key = %v, want it refused", err)
 			}
 		})
+	}
+}
+
+// A record that pins nothing readable must not fall back to trusting anyone.
+func TestAnUnreadablePinIsRefused(t *testing.T) {
+	cfg := config.Config{Name: "dev", Machine: &config.Machine{Backend: "wsl", Name: "dev", HostKey: "not a key"}}
+	if _, err := hostKeyRule(cfg); err == nil {
+		t.Error("an unreadable host key record was accepted")
 	}
 }
