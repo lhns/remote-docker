@@ -38,7 +38,8 @@ from a machine that has it, or the `workspace-rootfs` artifact of a
 ```powershell
 remote-docker remote machine create dev --rootfs .\rootfs.tar
 remote-docker remote ls                       # dev, marked (wsl)
-remote-docker remote machine status dev       # running, settings current
+remote-docker remote machine status dev       # running, settings current, agent answering
+remote-docker remote use dev                  # if create's hint names it: dev is not the default
 remote-docker run --rm -v .:/w alpine ls /w   # the point of all of it
 ```
 
@@ -56,6 +57,22 @@ remote-docker remote machine create dev --rootfs .\rootfs.tar
 Expected: `"dev" already matches; nothing to do`. It must NOT create a second
 distribution or restart anything.
 
+### That the published image is fetched, and creating again changes nothing
+
+With network access to ghcr.io, and no `--rootfs`:
+
+```powershell
+remote-docker remote machine create pub
+remote-docker remote machine create pub
+remote-docker remote machine status pub       # running, settings current
+remote-docker remote rm pub
+```
+
+Expected: the first fetches the filesystem into
+`%LOCALAPPDATA%\remote-docker\rootfs` and creates the machine; the second
+says `"pub" already matches; nothing to do`. A refusal naming `machine rebuild`
+means the cache path is being hashed as a setting again (ADR 0026).
+
 ### That a changed setting is reported, not acted on
 
 ```powershell
@@ -67,11 +84,13 @@ or discard its images.
 
 ### That rebuild repairs a genuinely broken machine
 
-Break it first, or the test proves nothing:
+Break it first, or the test proves nothing. Removing the binary alone leaves the
+running agent serving from the deleted file, so stop it as well:
 
 ```powershell
 wsl -d rd-dev --user root -- rm -f /usr/local/bin/remote-dockerd
-remote-docker remote machine status dev       # expect trouble
+wsl -d rd-dev --user root -- pkill remote-dockerd
+remote-docker remote machine status dev       # agent not answering on <address>:<port>, exit 1
 remote-docker remote machine rebuild dev --rootfs .\rootfs.tar
 remote-docker run --rm -v .:/w alpine ls /w   # works again
 ```

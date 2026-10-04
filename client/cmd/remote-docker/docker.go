@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -15,7 +16,9 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
+	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -59,7 +62,7 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	// docker's own root setup. It puts the client options on Flags(), not
 	// PersistentFlags(): --context's -c clashes with build's --cpu-shares and
 	// panics `docker build --help` if persistent.
-	opts, _ := cli.SetupRootCommand(cmd)
+	_, _ = cli.SetupRootCommand(cmd)
 
 	// Held, not raised: see the PersistentPreRunE below.
 	var session error
@@ -79,35 +82,61 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 		return cmd
 	}
 
-	opts.SetDefaultOptions(cmd.Flags())
-
-	if err := dockerCli.Initialize(opts); err != nil {
-		cmd.RunE = func(*cobra.Command, []string) error {
-			return fmt.Errorf("initialising the docker client: %w", err)
-		}
-		return cmd
+	var credentials error
+	initialised := dockerCli.Initialize(clientOptions(os.Args[1:]))
+	if initialised != nil {
+		initialised = fmt.Errorf("initialising the docker client: %w", initialised)
+	} else {
+		// After Initialize, which loads the config file.
+		credentials = checkCredentialHelpers(dockerCli.ConfigFile(), exec.LookPath, os.Stderr)
 	}
-
-	// After Initialize, which loads the config file.
-	credentials := checkCredentialHelpers(dockerCli.ConfigFile(), exec.LookPath, os.Stderr)
 
 	commands.AddCommands(cmd, dockerCli)
 	installModernBuilder(cmd, dockerCli)
 	installCompose(cmd, dockerCli)
 
 	// Raised when a command runs, never by leaving commands out of the tree:
-	// that made `docker run --rm` fail with "unknown flag: --rm". Cobra runs
-	// the closest PersistentPreRunE, so `docker stack` (which sets its own)
-	// skips this. The session error wins: it is why the command cannot run.
-	// Not cmp.Or: staticcheck misreads the generic's nil error as always true.
-	deferred := session
-	if deferred == nil {
-		deferred = credentials
-	}
-	if deferred != nil {
+	// that made `docker run --rm` fail with "unknown flag: --rm" and `--help`
+	// fail outright. Cobra runs only the closest PersistentPreRunE; compose
+	// chains to this one itself. The session error wins: it is why the command
+	// cannot run.
+	if deferred := firstError(session, initialised, credentials); deferred != nil {
 		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return deferred }
 	}
 	return cmd
+}
+
+// firstError is the first non-nil error. Not cmp.Or: staticcheck misreads the
+// generic's nil error as always true.
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clientOptions reads docker's root flags off the command line, as far as the
+// subcommand. The client is initialised while the tree is built, before cobra
+// has parsed anything, so the root's own option values are still defaults then,
+// and initialising with those silently ignored `--context`, `-H` and the rest.
+// Docker parses them ahead of cobra for the same reason
+// (cli.TopLevelCommand.HandleGlobalFlags, docker/cli v29.8.1).
+//
+// Into a flag set of its own, because cobra parses the root's flags again and
+// `-H` refuses a second value. A flag it does not know, `--help` among them,
+// ends the parse: cobra then refuses the line, or runs something that needs no
+// daemon.
+func clientOptions(args []string) *cliflags.ClientOptions {
+	opts := cliflags.NewClientOptions()
+	flags := pflag.NewFlagSet("docker", pflag.ContinueOnError)
+	flags.SetInterspersed(false)
+	flags.SetOutput(io.Discard)
+	opts.InstallFlags(flags)
+	_ = flags.Parse(args)
+	opts.SetDefaultOptions(flags)
+	return opts
 }
 
 // arrangeSession makes a session available and points the embedded CLI at it,

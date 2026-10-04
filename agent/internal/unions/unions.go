@@ -255,6 +255,13 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 				return "", ctx.Err()
 			}
 		}
+		// Another Prepare mounted this share and finished since it was looked
+		// at above, so pending is empty again: ask about that union instead
+		// of mounting over it.
+		if m.shares[k] != existing {
+			m.mu.Unlock()
+			continue
+		}
 		wait := make(chan struct{})
 		if m.pending == nil {
 			m.pending = map[string]chan struct{}{}
