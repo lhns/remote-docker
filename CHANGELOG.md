@@ -8,6 +8,15 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **`--context` works.** `docker --context dev ps` used whatever context was
+  current, and a context that did not exist gave no error. Only
+  `DOCKER_CONTEXT` worked. The same was true of `--config`, `-H`, `-D`,
+  `--log-level` and the TLS flags, which now all take effect.
+
 ## 0.8.1 — 2026-09-30
 
 ### Fixes

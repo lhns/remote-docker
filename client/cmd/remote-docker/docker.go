@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -15,7 +16,9 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
+	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -59,7 +62,7 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 	// docker's own root setup. It puts the client options on Flags(), not
 	// PersistentFlags(): --context's -c clashes with build's --cpu-shares and
 	// panics `docker build --help` if persistent.
-	opts, _ := cli.SetupRootCommand(cmd)
+	_, _ = cli.SetupRootCommand(cmd)
 
 	// Held, not raised: see the PersistentPreRunE below.
 	var session error
@@ -79,36 +82,89 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 		return cmd
 	}
 
-	opts.SetDefaultOptions(cmd.Flags())
-
-	if err := dockerCli.Initialize(opts); err != nil {
-		cmd.RunE = func(*cobra.Command, []string) error {
-			return fmt.Errorf("initialising the docker client: %w", err)
-		}
-		return cmd
+	// From the command line, not from opts: see clientOptions.
+	var credentials error
+	initialised := dockerCli.Initialize(clientOptions(cmd, os.Args[1:]))
+	if initialised != nil {
+		initialised = fmt.Errorf("initialising the docker client: %w", initialised)
+	} else {
+		// After Initialize, which loads the config file.
+		credentials = checkCredentialHelpers(dockerCli.ConfigFile(), exec.LookPath, os.Stderr)
 	}
-
-	// After Initialize, which loads the config file.
-	credentials := checkCredentialHelpers(dockerCli.ConfigFile(), exec.LookPath, os.Stderr)
 
 	commands.AddCommands(cmd, dockerCli)
 	installModernBuilder(cmd, dockerCli)
 	installCompose(cmd, dockerCli)
 
 	// Raised when a command runs, never by leaving commands out of the tree:
-	// that made `docker run --rm` fail with "unknown flag: --rm". Cobra runs
-	// the closest PersistentPreRunE, so `docker stack` (which sets its own)
-	// skips this. The session error wins: it is why the command cannot run.
-	// Not cmp.Or: staticcheck misreads the generic's nil error as always true.
-	deferred := session
-	if deferred == nil {
-		deferred = credentials
-	}
-	if deferred != nil {
+	// that made `docker run --rm` fail with "unknown flag: --rm", and kept
+	// `--help` from working. Cobra runs only the closest PersistentPreRunE;
+	// compose chains to this one itself. The session error wins: it is why the
+	// command cannot run.
+	if deferred := firstError(session, initialised, credentials); deferred != nil {
 		cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return deferred }
 	}
 	return cmd
 }
+
+// firstError is the first non-nil error. Not cmp.Or: staticcheck misreads the
+// generic's nil error as always true.
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clientOptions reads docker's root flags off the command line, as far as the
+// subcommand, the way the root's own parse will.
+//
+// The client is initialised while the tree is built, which is before cobra has
+// parsed anything, so the options the root's flags fill are still their
+// defaults then. Initialising with those made `--context`, `--config`, `-H`,
+// `-D` and the TLS flags reach nothing, and only their environment variables
+// worked. Docker parses its root flags ahead of cobra for the same reason
+// (cli.TopLevelCommand.HandleGlobalFlags, docker/cli v29.8.1).
+//
+// Into options of their own rather than through the root's flags, because cobra
+// parses those again later and `-H` refuses a second value. A command line this
+// cannot parse is left for cobra to refuse, with whatever came before it.
+//
+// Not a second scanRootArgs: this is pflag reading the root's own flag
+// definitions, so it cannot disagree with cobra about which flags take a value.
+func clientOptions(root *cobra.Command, args []string) *cliflags.ClientOptions {
+	opts := cliflags.NewClientOptions()
+	flags := pflag.NewFlagSet(root.Name(), pflag.ContinueOnError)
+	flags.SetInterspersed(false)
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {}
+	opts.InstallFlags(flags)
+
+	// The root's other flags, --help and --version among them, so the parse
+	// knows which of them take a value and does not stop at the first.
+	root.InitDefaultHelpFlag()
+	root.InitDefaultVersionFlag()
+	known := func(f *pflag.Flag) {
+		if flags.Lookup(f.Name) == nil {
+			flags.AddFlag(&pflag.Flag{Name: f.Name, Shorthand: f.Shorthand, NoOptDefVal: f.NoOptDefVal, Value: discard{}})
+		}
+	}
+	root.Flags().VisitAll(known)
+	root.PersistentFlags().VisitAll(known)
+
+	_ = flags.Parse(args)
+	opts.SetDefaultOptions(flags)
+	return opts
+}
+
+// discard is a flag value nobody reads.
+type discard struct{}
+
+func (discard) String() string   { return "" }
+func (discard) Set(string) error { return nil }
+func (discard) Type() string     { return "string" }
 
 // arrangeSession makes a session available and points the embedded CLI at it,
 // unless the invocation targets a daemon that is not ours (target.go). Only
