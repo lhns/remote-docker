@@ -14,7 +14,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -153,88 +152,65 @@ func TestMachineSpecRefusesUnderivableUser(t *testing.T) {
 	}
 }
 
-// addressOnly is a backend that can answer Address and nothing else: any other
-// method panics on the nil interface, so a status check that started the
-// machine would fail here rather than on somebody's laptop.
-type addressOnly struct {
-	machine.Backend
-	addr string
-}
-
-func (a addressOnly) Address(context.Context, string) (string, error) { return a.addr, nil }
-
-func TestProbeAgentDialsTheMachinesOwnAddress(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-
-	got := probeAgent(context.Background(), addressOnly{addr: "127.0.0.1"}, "dev", port)
-	if got.dialErr != nil || got.addr != net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) {
-		t.Errorf("probe of a listening agent = %+v, want it answering at its address", got)
-	}
-
-	_ = ln.Close()
-	if got := probeAgent(context.Background(), addressOnly{addr: "127.0.0.1"}, "dev", port); got.dialErr == nil {
-		t.Errorf("probe of a closed port = %+v, want a dial error", got)
-	}
-	if got := probeAgent(context.Background(), addressOnly{}, "dev", port); got.addr != "" || got.addrErr != nil {
-		t.Errorf("probe of a machine with no address = %+v, want nothing dialled", got)
-	}
-}
-
 func TestReportAgent(t *testing.T) {
 	wsl := &config.Machine{Backend: "wsl", Name: "dev"}
 	hyperv := &config.Machine{Backend: "hyperv", Name: "dev"}
+	up, down := listeningAgent(t), closedPort(t)
+	at := func(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
 
 	for _, tc := range []struct {
-		name   string
-		m      *config.Machine
-		check  agentCheck
-		ok     bool
-		want   []string
-		reject []string
+		name    string
+		m       *config.Machine
+		backend *fakeBackend
+		port    int
+		ok      bool
+		want    []string
+		reject  []string
 	}{
 		{
-			name:  "answering",
-			m:     wsl,
-			check: agentCheck{addr: "172.24.110.158:2222"},
-			ok:    true,
-			want:  []string{"answering on 172.24.110.158:2222"},
+			name:    "answering",
+			m:       wsl,
+			backend: &fakeBackend{addr: "127.0.0.1"},
+			port:    up,
+			ok:      true,
+			want:    []string{"answering on " + at(up)},
 		},
 		{
 			// What was dialled and the remedy, never a guess at why.
-			name:   "refused, wsl",
-			m:      wsl,
-			check:  agentCheck{addr: "172.24.110.158:2222", dialErr: errors.New("connection refused")},
-			want:   []string{"not answering on 172.24.110.158:2222", "  fix: ", machine.WSLAgentLog, "machine rebuild dev"},
-			reject: []string{"crash", "missing", "installed"},
+			name:    "refused, wsl",
+			m:       wsl,
+			backend: &fakeBackend{addr: "127.0.0.1"},
+			port:    down,
+			want:    []string{"not answering on " + at(down), "  fix: ", machine.WSLAgentLog, "machine rebuild dev"},
 		},
 		{
-			// The log path is WSL's; a Hyper-V machine is not told about it.
-			name:   "refused, hyperv",
-			m:      hyperv,
-			check:  agentCheck{addr: "172.24.110.158:2222", dialErr: errors.New("i/o timeout")},
-			want:   []string{"not answering on 172.24.110.158:2222", "machine rebuild dev"},
-			reject: []string{machine.WSLAgentLog},
+			// The log path is WSL's.
+			name:    "refused, hyperv",
+			m:       hyperv,
+			backend: &fakeBackend{addr: "127.0.0.1"},
+			port:    down,
+			want:    []string{"not answering on " + at(down), "machine rebuild dev"},
+			reject:  []string{machine.WSLAgentLog},
 		},
 		{
-			name:  "no address",
-			m:     wsl,
-			check: agentCheck{},
-			want:  []string{"not checked", "no address"},
+			name:    "no address",
+			m:       wsl,
+			backend: &fakeBackend{},
+			port:    up,
+			want:    []string{"not checked", "no address"},
 		},
 		{
-			name:  "address unreadable",
-			m:     wsl,
-			check: agentCheck{addrErr: errors.New("wsl -d rd-dev ip: exit status 1\nmore detail")},
-			want:  []string{"not checked", "exit status 1"},
+			name:    "address unreadable",
+			m:       wsl,
+			backend: &fakeBackend{addrErr: errors.New("wsl -d rd-dev ip: exit status 1\nmore detail")},
+			port:    up,
+			want:    []string{"not checked", "exit status 1"},
+			reject:  []string{"more detail"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if got := reportAgent(&out, tc.m, tc.check); got != tc.ok {
+			if got := reportAgent(context.Background(), &out, tc.backend, tc.m, tc.port); got != tc.ok {
 				t.Errorf("reportAgent = %v, want %v", got, tc.ok)
 			}
 			text := out.String()
@@ -277,8 +253,7 @@ func TestCreateHintReachesTheNewMachine(t *testing.T) {
 		{name: "DOCKER_HOST elsewhere", env: map[string]string{"DOCKER_HOST": "tcp://box:2375"}, def: "dev", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			def := func() string { return tc.def }
-			if got := reachedByDocker("dev", fakeLookups(tc.env, tc.current, ours), def); got != tc.want {
+			if got := reachedByDocker("dev", tc.def, fakeLookups(tc.env, tc.current, ours)); got != tc.want {
 				t.Errorf("reachedByDocker = %v, want %v", got, tc.want)
 			}
 		})

@@ -378,14 +378,18 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	if err == nil {
 		reportContext(out, cfg)
 	}
-	_, _ = fmt.Fprintln(out, "\n"+tryHint(name, reachedByDocker(name, realLookups(), defaultWorkspace)))
+	defaultName := ""
+	if def, err := config.Resolve(config.Overrides{}, ""); err == nil {
+		defaultName = def.Name
+	}
+	_, _ = fmt.Fprintln(out, "\n"+tryHint(name, reachedByDocker(name, defaultName, realLookups())))
 	return nil
 }
 
-// tryHint is the command create suggests, which has to reach the machine it
-// just made. Create does not make it the default, so on a computer that already
-// has one a bare `docker run` reaches THAT workspace. `remote use` first is
-// spelled the same in every shell, where a DOCKER_CONTEXT prefix is not.
+// tryHint is the command create suggests. Create does not make the machine
+// the default, so when docker would reach another workspace the hint has
+// `remote use` first, which is spelled the same in every shell where a
+// DOCKER_CONTEXT prefix is not.
 func tryHint(name string, reached bool) string {
 	run := programName() + " run --rm -v .:/w alpine ls /w"
 	if reached {
@@ -394,11 +398,10 @@ func tryHint(name string, reached bool) string {
 	return fmt.Sprintf("Try `%s`, then `%s`.", ourCommand("use "+name), run)
 }
 
-// reachedByDocker says whether a docker command with no flags would reach the
-// named workspace, by the rule a docker command itself follows (decideTarget):
-// a context of ours names its workspace, and with none selected it is the
-// configured default.
-func reachedByDocker(name string, look lookups, defaultName func() string) bool {
+// reachedByDocker says whether a docker command with no flags reaches the named
+// workspace, by the rule a docker command itself follows (decideTarget).
+// defaultName is the configured default workspace.
+func reachedByDocker(name, defaultName string, look lookups) bool {
 	aim := decideTarget([]string{"run"}, look)
 	switch {
 	case !aim.ensure:
@@ -406,18 +409,8 @@ func reachedByDocker(name string, look lookups, defaultName func() string) bool 
 	case aim.workspace != "":
 		return aim.workspace == name
 	default:
-		return defaultName() == name
+		return defaultName == name
 	}
-}
-
-// defaultWorkspace is the workspace a command naming none resolves to, or ""
-// when that cannot be decided.
-func defaultWorkspace() string {
-	cfg, err := config.Resolve(config.Overrides{}, "")
-	if err != nil {
-		return ""
-	}
-	return cfg.Name
 }
 
 // enrolledPublicKey is this machine's public half, generating the pair if this
@@ -521,7 +514,7 @@ dialled on a running one.`,
 				if observed.State != machine.Running {
 					return errNotReady
 				}
-				if !reportAgent(out, m, probeAgent(ctx, b, m.Name, ws.Port)) {
+				if !reportAgent(ctx, out, b, m, ws.Port) {
 					return errNotReady
 				}
 				return nil
@@ -530,79 +523,48 @@ dialled on a running one.`,
 	}
 }
 
-// agentCheck is what `machine status` found when it dialled the agent.
-type agentCheck struct {
-	// addr is the host:port dialled, or "" when there was nothing to dial.
-	addr string
-	// addrErr is asking the machine for its address failing.
-	addrErr error
-	// dialErr is the dial failing.
-	dialErr error
-}
-
-// agentCheckTimeout bounds the whole check, so status answers in seconds about
-// a machine whose agent is gone rather than waiting the minutes Locate gives a
-// booting one.
+// agentCheckTimeout bounds asking the machine for its address and dialling the
+// agent, so status answers in seconds where Locate would wait minutes.
 const agentCheckTimeout = 10 * time.Second
 
-// agentDialTimeout bounds the dial alone. A refused connection answers at
-// once; this is for an address that answers nothing at all.
-const agentDialTimeout = 3 * time.Second
-
-// probeAgent dials the agent once at the machine's own address.
+// reportAgent dials the agent once, prints its row, and reports whether it
+// answered. It says what was dialled and never why it did not answer: a
+// refused port looks the same whether the agent crashed or is still waiting
+// for dockerd.
 //
-// Not machine.Locate: that STARTS the machine, waits minutes for the agent and
-// is what create and start mean by "usable". Status asks about a machine
-// Inspect has just seen running, and asking WSL for the address is itself a
-// `wsl -d`, which would start a stopped one. Its own address and never
-// loopback, for the reason in ADR 0026: WSL's localhost relay was measured
-// refusing a listening agent.
-func probeAgent(ctx context.Context, b machine.Backend, name string, port int) agentCheck {
+// Not machine.Locate, which starts the machine. Called only on a machine
+// Inspect saw running, because WSL's Address is a `wsl -d` and would start a
+// stopped one. The machine's own address rather than loopback, for the reason
+// in ADR 0026.
+func reportAgent(ctx context.Context, out io.Writer, b machine.Backend, m *config.Machine, port int) bool {
 	ctx, cancel := context.WithTimeout(ctx, agentCheckTimeout)
 	defer cancel()
 
-	host, err := b.Address(ctx, name)
+	host, err := b.Address(ctx, m.Name)
 	if err != nil {
-		return agentCheck{addrErr: err}
+		rowf(out, "agent", "not checked: the machine's address could not be read: %s", firstLine(err.Error()))
+		return false
 	}
 	if host == "" {
-		return agentCheck{}
-	}
-	check := agentCheck{addr: net.JoinHostPort(host, strconv.Itoa(port))}
-	dialer := net.Dialer{Timeout: agentDialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", check.addr)
-	if err != nil {
-		check.dialErr = err
-		return check
-	}
-	_ = conn.Close()
-	return check
-}
-
-// reportAgent prints the agent row, with a fix line when it did not answer,
-// and reports whether it answered. It says what was dialled and what happened,
-// never why: a refused port looks the same whether the agent crashed, was
-// never installed or is still waiting for dockerd.
-func reportAgent(out io.Writer, m *config.Machine, check agentCheck) bool {
-	switch {
-	case check.addrErr != nil:
-		rowf(out, "agent", "not checked: the machine's address could not be read: %s", firstLine(check.addrErr.Error()))
-		return false
-	case check.addr == "":
 		row(out, "agent", "not checked: the machine reports no address yet")
 		return false
-	case check.dialErr != nil:
-		rowf(out, "agent", "not answering on %s", check.addr)
-		fix := fmt.Sprintf("`%s` replaces the machine", ourCommand("machine rebuild "+m.Name))
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		rowf(out, "agent", "not answering on %s", addr)
+		fix := fmt.Sprintf("`%s` replaces the machine, discarding its images and containers",
+			ourCommand("machine rebuild "+m.Name))
 		if m.Backend == "wsl" {
 			fix = fmt.Sprintf("its log is %s inside the machine; %s", machine.WSLAgentLog, fix)
 		}
 		_, _ = fmt.Fprintf(out, "  fix: %s\n", fix)
 		return false
-	default:
-		rowf(out, "agent", "answering on %s", check.addr)
-		return true
 	}
+	_ = conn.Close()
+	rowf(out, "agent", "answering on %s", addr)
+	return true
 }
 
 // reportGeneration says whether the machine matches its recorded settings.

@@ -17,10 +17,10 @@ software.
   dials the agent at the machine's own address, and when nothing answers it
   prints `not answering on <address>:<port>` and exits 1. A stopped machine is
   still reported as stopped and is not started.
-- **The command `remote machine create` suggests reaches the new machine.** It
-  suggested a bare `run`, which reaches the default workspace, and `create`
-  does not make the machine the default. When it is not, the hint now says
-  `remote use <name>` first.
+- **`remote machine create` suggests a command that reaches the new machine.**
+  It suggested a bare `run`, which reaches the default workspace, and `create`
+  does not make the new machine the default. When docker would reach another
+  workspace, the hint now starts with `remote use <name>`.
 
 ## 0.8.1 — 2026-09-30
 

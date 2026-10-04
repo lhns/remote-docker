@@ -74,12 +74,12 @@ func fakeSession(t *testing.T, safe bool, log *events) string {
 	return endpoint
 }
 
-// fakeBackend is a machine backend that records what it is asked. Its address
-// is addr, which `machine status` dials the agent at.
+// fakeBackend is a machine backend that records what it is asked.
 type fakeBackend struct {
-	log   *events
-	state machine.State
-	addr  string
+	log     *events
+	state   machine.State
+	addr    string
+	addrErr error
 }
 
 func (b *fakeBackend) Name() string                    { return "fake" }
@@ -96,10 +96,20 @@ func (b *fakeBackend) Start(context.Context, string) error { b.log.add("start");
 func (b *fakeBackend) Hold(context.Context, string) (io.Closer, error) {
 	return nil, errors.New("fakeBackend: no hold")
 }
-func (b *fakeBackend) Address(context.Context, string) (string, error) { return b.addr, nil }
+func (b *fakeBackend) Address(context.Context, string) (string, error) {
+	return b.addr, b.addrErr
+}
+func (b *fakeBackend) Stop(_ context.Context, name string) error {
+	b.log.add("stop " + name)
+	return nil
+}
+func (b *fakeBackend) Destroy(_ context.Context, name string) error {
+	b.log.add("destroy " + name)
+	return nil
+}
 
-// listeningAgent is a port on loopback that accepts connections, standing in
-// for a machine's agent.
+// listeningAgent is a loopback port that accepts connections, standing in for
+// a machine's agent.
 func listeningAgent(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -109,13 +119,17 @@ func listeningAgent(t *testing.T) int {
 	t.Cleanup(func() { _ = l.Close() })
 	return l.Addr().(*net.TCPAddr).Port
 }
-func (b *fakeBackend) Stop(_ context.Context, name string) error {
-	b.log.add("stop " + name)
-	return nil
-}
-func (b *fakeBackend) Destroy(_ context.Context, name string) error {
-	b.log.add("destroy " + name)
-	return nil
+
+// closedPort is a loopback port nothing listens on.
+func closedPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return port
 }
 
 // withBackend makes every machine command find b.
@@ -261,16 +275,9 @@ func TestMachineStatusExitsOneWhenNotRunning(t *testing.T) {
 	}
 }
 
-// A running machine whose agent does not answer is not ready, and status says
-// where it dialled.
+// A running machine whose agent does not answer is not ready.
 func TestMachineStatusExitsOneWhenTheAgentDoesNotAnswer(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-
+	port := closedPort(t)
 	withConfig(t, &config.File{Default: "dev", Workspaces: map[string]config.Workspace{"dev": {
 		Host: "127.0.0.1", Port: port, Endpoint: unreachableEndpoint(t),
 		Machine: &config.Machine{Backend: "fake", Name: "dev"},

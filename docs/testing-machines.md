@@ -39,13 +39,9 @@ from a machine that has it, or the `workspace-rootfs` artifact of a
 remote-docker remote machine create dev --rootfs .\rootfs.tar
 remote-docker remote ls                       # dev, marked (wsl)
 remote-docker remote machine status dev       # running, settings current, agent answering
-remote-docker remote use dev                  # only if dev is not already the default
+remote-docker remote use dev                  # if create's hint names it: dev is not the default
 remote-docker run --rm -v .:/w alpine ls /w   # the point of all of it
 ```
-
-`create` does not make the machine the default workspace, so on a computer that
-already has one, `run` reaches THAT workspace until `remote use dev`. The hint
-`create` ends with includes the `use` exactly when it is needed.
 
 The last line exercises the session, the SSH transport, the NFS export, the
 bind rewriting and the daemon in the machine, in one command. Expected: the
