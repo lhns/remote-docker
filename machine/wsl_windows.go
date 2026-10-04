@@ -24,8 +24,17 @@ type wslBackend struct{}
 func (wslBackend) Name() string { return "wsl" }
 
 // wsl runs wsl.exe and returns its output, decoded.
-func (wslBackend) wsl(ctx context.Context, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "wsl.exe", args...).CombinedOutput()
+func (b wslBackend) wsl(ctx context.Context, args ...string) ([]byte, error) {
+	return b.wslInput(ctx, "", args...)
+}
+
+// wslInput is wsl with input on its standard input.
+func (wslBackend) wslInput(ctx context.Context, input string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "wsl.exe", args...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("wsl %s: %w: %s",
 			strings.Join(args, " "), err, strings.TrimSpace(decodeWSLOutput(out)))
@@ -97,6 +106,13 @@ func (b wslBackend) Create(ctx context.Context, spec Spec) error {
 	} {
 		if _, err := b.wsl(ctx, args...); err != nil {
 			return err
+		}
+	}
+	// Before the first boot, which would otherwise generate one nobody here
+	// knows.
+	if spec.HostKey != "" {
+		if _, err := b.wslInput(ctx, spec.HostKey, wslWriteStdinArgs(distro, hostKeyFile)...); err != nil {
+			return fmt.Errorf("writing the machine's host key: %w", err)
 		}
 	}
 

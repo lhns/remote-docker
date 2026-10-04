@@ -275,6 +275,10 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return fmt.Errorf("cannot tell what is there: %w", err)
 	}
 
+	// The public half of a host key built in below, or "" to keep the recorded
+	// one: a machine nothing rebuilt still serves with it.
+	var hostKey string
+
 	switch action := machine.Plan(spec, observed); {
 	case rebuild && observed.State != machine.Absent:
 		_, _ = fmt.Fprintf(out, "destroying %q; images and containers inside it are lost\n", name)
@@ -292,9 +296,23 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 			}
 		}
 
+		// Made here, so the key is pinned per machine and never learned
+		// from whatever answers at its address (ADR 0026).
+		hk, err := keys.NewHostKey()
+		if err != nil {
+			return err
+		}
+		spec.HostKey = string(hk.Private)
+
 		_, _ = fmt.Fprintf(out, "creating the %s machine %q\n", spec.Backend, spec.Name)
 		if err := backend.Create(ctx, spec); err != nil {
 			return fmt.Errorf("creating %s: %w", name, err)
+		}
+		// Recorded before waiting for the agent: if that fails, the next
+		// create builds nothing and would keep the destroyed machine's key.
+		hostKey = hk.Public
+		if err := recordMachine(name, spec, hostKey); err != nil {
+			return err
 		}
 
 	case action == machine.Start:
@@ -332,20 +350,18 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return fmt.Errorf("enrolling this machine's key: %w", err)
 	}
 
-	return saveMachineWorkspace(cmd, name, spec)
+	return saveMachineWorkspace(cmd, name, spec, hostKey)
 }
 
 // machinePlaceholderHost stands in for an address nobody should read.
 const machinePlaceholderHost = "127.0.0.1"
 
-// saveMachineWorkspace writes the workspace entry.
-func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) error {
-	file, err := config.Load("")
-	if err != nil {
-		return err
+// machineEntry is the workspace entry for a machine built from spec. hostKey is
+// the public half of a host key just built in, or "" to keep the recorded one.
+func machineEntry(ws config.Workspace, spec machine.Spec, hostKey string) config.Workspace {
+	if hostKey == "" && ws.Machine != nil {
+		hostKey = ws.Machine.HostKey
 	}
-
-	ws := file.Workspaces[name]
 	// The real address changes at boot and is located at every connection
 	// (session.connect).
 	ws.Host = machinePlaceholderHost
@@ -359,11 +375,26 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 		CPUs:       spec.CPUs,
 		MemoryMB:   spec.MemoryMB,
 		Generation: spec.Generation(),
+		HostKey:    hostKey,
 	}
-	if err := file.Set(name, ws); err != nil {
+	return ws
+}
+
+// recordMachine writes the workspace entry (machineEntry).
+func recordMachine(name string, spec machine.Spec, hostKey string) error {
+	file, err := config.Load("")
+	if err != nil {
 		return err
 	}
-	if err := config.Save(file, ""); err != nil {
+	if err := file.Set(name, machineEntry(file.Workspaces[name], spec, hostKey)); err != nil {
+		return err
+	}
+	return config.Save(file, "")
+}
+
+// saveMachineWorkspace writes the workspace entry and its docker context.
+func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec, hostKey string) error {
+	if err := recordMachine(name, spec, hostKey); err != nil {
 		return err
 	}
 

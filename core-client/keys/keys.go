@@ -4,14 +4,17 @@
 package keys
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -102,6 +105,58 @@ func LoadOrCreateKey(path, comment string) (KeyPair, error) {
 	}
 
 	return KeyPair{Signer: signer}, nil
+}
+
+// HostKey is a host key made here for a workspace this program builds, so its
+// public half is known before anything has been dialled (ADR 0026).
+type HostKey struct {
+	// Private is the PEM the workspace's agent loads as its host key.
+	Private []byte
+
+	// Public is the public half in authorized_keys form, which the workspace
+	// record pins.
+	Public string
+}
+
+// NewHostKey generates an ed25519 host key, the type the agent generates for
+// itself when it has none.
+func NewHostKey() (HostKey, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return HostKey{}, fmt.Errorf("keys: generating host key: %w", err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "remote-docker workspace")
+	if err != nil {
+		return HostKey{}, fmt.Errorf("keys: marshalling host key: %w", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		return HostKey{}, fmt.Errorf("keys: building host key signer: %w", err)
+	}
+	return HostKey{
+		Private: pem.EncodeToMemory(block),
+		Public:  strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))),
+	}, nil
+}
+
+// PinnedHostKey accepts exactly one host key, whatever address offers it, and
+// asks mismatch for the error to return about any other.
+//
+// For a workspace whose host key was made with it (NewHostKey). A machine's
+// address is given out at boot and shared with every other machine on the same
+// virtual network, so an address names no machine, and a known_hosts entry
+// keyed on one is refused as CHANGED the moment that machine is rebuilt.
+func PinnedHostKey(authorized string, mismatch func(offered ssh.PublicKey) error) (ssh.HostKeyCallback, error) {
+	want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(authorized))
+	if err != nil {
+		return nil, fmt.Errorf("keys: the recorded host key cannot be read: %w", err)
+	}
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if bytes.Equal(key.Marshal(), want.Marshal()) {
+			return nil
+		}
+		return mismatch(key)
+	}, nil
 }
 
 func loadKey(path string) (ssh.Signer, error) {

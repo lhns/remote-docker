@@ -131,6 +131,40 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 	}
 }
 
+// The record pins the host key the machine was last BUILT with: a rebuild, or
+// a create after `rm`, replaces it, and a create that builds nothing keeps it.
+func TestMachineEntryPinsTheBuiltHostKey(t *testing.T) {
+	spec := machine.Spec{Name: "dev", Backend: "wsl", Port: 2222, Account: "alice"}
+	const old, rebuilt = "ssh-ed25519 AAAAold", "ssh-ed25519 AAAAnew"
+	recorded := config.Workspace{Host: "127.0.0.1", Port: 2222, User: "alice",
+		Machine: &config.Machine{Backend: "wsl", Name: "dev", HostKey: old}}
+
+	for _, tc := range []struct {
+		name    string
+		prev    config.Workspace
+		hostKey string
+		wantPin string
+		because string
+	}{
+		{"rebuild", recorded, rebuilt, rebuilt, "the destroyed machine's key would refuse the new one"},
+		{"create, nothing built", recorded, "", old, "the machine still serves with the key it was built with"},
+		{"create after rm", config.Workspace{}, rebuilt, rebuilt, "rm took the old record with it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := machineEntry(tc.prev, spec, tc.hostKey)
+			if got.Machine.HostKey != tc.wantPin {
+				t.Errorf("pinned %q, want %q: %s", got.Machine.HostKey, tc.wantPin, tc.because)
+			}
+			if got.Host != machinePlaceholderHost || got.Machine.Generation != spec.Generation() {
+				t.Errorf("entry = %+v, machine %+v", got, *got.Machine)
+			}
+		})
+	}
+	if recorded.Machine.HostKey != old {
+		t.Error("machineEntry changed the record it was handed")
+	}
+}
+
 func mustSpec(t *testing.T, o *machineOptions, name string, recorded *config.Workspace) machine.Spec {
 	t.Helper()
 	spec, err := o.spec(name, recorded)

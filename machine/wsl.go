@@ -182,6 +182,13 @@ func wslWriteArgs(name, path, content string) []string {
 	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
 }
 
+// wslWriteStdinArgs writes a file inside a distribution from the command's
+// standard input, readable by root alone. For the host key: on a command line
+// it would be readable by every process on Windows that lists them.
+func wslWriteStdinArgs(name, path string) []string {
+	return wslRunArgs(name, "sh", "-c", "umask 077 && cat > "+path)
+}
+
 // shellQuote wraps a string in single quotes for `sh -c`, so a newline in the
 // content does not end the command.
 func shellQuote(s string) string {

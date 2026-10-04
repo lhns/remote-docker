@@ -84,6 +84,17 @@ func TestEveryFieldChangesTheGeneration(t *testing.T) {
 	}
 }
 
+// The keys are made per build, so a build with them in the generation would
+// never match its own record, and a rotated login key would ask for a rebuild.
+func TestKeysLeaveTheGenerationAlone(t *testing.T) {
+	keyed := spec()
+	keyed.PublicKey = "ssh-ed25519 AAAA alice@laptop"
+	keyed.HostKey = "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+	if keyed.Generation() != spec().Generation() {
+		t.Error("a key changed the generation")
+	}
+}
+
 func TestGenerationIsStable(t *testing.T) {
 	first, second := spec().Generation(), spec().Generation()
 	if first != second {

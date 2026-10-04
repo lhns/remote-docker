@@ -157,24 +157,21 @@ func parseVMAddress(raw string) string {
 func ignition(spec Spec, publicKey string) (string, error) {
 	unit := hyperVUnit(spec)
 
+	files := []any{
+		// The account's key, written where the agent's watcher looks. This is
+		// the whole of enrolment on this backend, and the reason it happens
+		// here is that afterwards there is no way in (see hyperVEnrolment).
+		ignitionFile("/etc/workspace/authorized_keys.d/"+spec.Account+".pub", strings.TrimSpace(publicKey)+"\n"),
+	}
+	// The host key the client pins (Spec.HostKey). /etc/workspace is the
+	// directory hyperVUnit mounts into the workspace container.
+	if spec.HostKey != "" {
+		files = append(files, ignitionFile(hostKeyFile, spec.HostKey))
+	}
+
 	doc := map[string]any{
 		"ignition": map[string]any{"version": "3.4.0"},
-		"storage": map[string]any{
-			"files": []any{
-				// The account's key, written where the agent's watcher looks.
-				// This is the whole of enrolment on this backend, and the
-				// reason it happens here is that afterwards there is no way in
-				// (see hyperVEnrolment).
-				map[string]any{
-					"path":      "/etc/workspace/authorized_keys.d/" + spec.Account + ".pub",
-					"mode":      0o600,
-					"overwrite": true,
-					"contents": map[string]any{
-						"source": "data:," + urlEncode(strings.TrimSpace(publicKey)+"\n"),
-					},
-				},
-			},
-		},
+		"storage":  map[string]any{"files": files},
 		"systemd": map[string]any{
 			"units": []any{
 				map[string]any{
@@ -191,6 +188,16 @@ func ignition(spec Spec, publicKey string) (string, error) {
 		return "", fmt.Errorf("building the machine's configuration: %w", err)
 	}
 	return string(raw), nil
+}
+
+// ignitionFile is one file Ignition writes, readable by root alone.
+func ignitionFile(path, content string) map[string]any {
+	return map[string]any{
+		"path":      path,
+		"mode":      0o600,
+		"overwrite": true,
+		"contents":  map[string]any{"source": "data:," + urlEncode(content)},
+	}
 }
 
 // hyperVUnit is the systemd unit that runs the workspace.

@@ -79,7 +79,23 @@ type Spec struct {
 	// rebuild deciding itself, and a rebuild discards every image in the
 	// machine (ADR 0026).
 	PublicKey string
+
+	// HostKey is the private host key the machine's agent serves with, as PEM,
+	// written in before the agent first starts. Made by the caller with the
+	// machine, so the caller knows the public half before anything is dialled
+	// and pins it per machine rather than per address (ADR 0026). Empty leaves
+	// the agent to generate its own.
+	//
+	// Not part of Generation either: a new one is made for every build, so a
+	// build would otherwise never match its own record.
+	HostKey string
 }
+
+// hostKeyFile is where the agent reads its host key, and generates one when the
+// file is absent: WORKSPACE_HOSTKEY_DIR, set by wslConf and by the image, plus
+// the file name agent/cmd/remote-dockerd's loadHostKeys reads. Spelled again
+// here because this module imports nothing from this repository (ADR 0021).
+const hostKeyFile = "/etc/workspace/host_keys/ssh_host_ed25519_key"
 
 // Generation identifies a Spec, so a machine built from older settings can be
 // recognised without inspecting it.

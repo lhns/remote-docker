@@ -223,6 +223,58 @@ func TestIgnition(t *testing.T) {
 	}
 }
 
+// The host key the client pins goes in at first boot, where the container
+// hyperVUnit runs reads it; without one the agent makes its own.
+func TestIgnitionCarriesTheHostKey(t *testing.T) {
+	const hostKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn+/=\n-----END OPENSSH PRIVATE KEY-----\n"
+	base := Spec{Name: "dev", Account: "dev", Port: 2222, Image: "example.com/ws:1"}
+
+	keyed := base
+	keyed.HostKey = hostKey
+	raw, err := ignition(keyed, "ssh-ed25519 AAAA dev@host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Storage struct {
+			Files []struct {
+				Path     string `json:"path"`
+				Mode     int    `json:"mode"`
+				Contents struct {
+					Source string `json:"source"`
+				} `json:"contents"`
+			} `json:"files"`
+		} `json:"storage"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range doc.Storage.Files {
+		if f.Path != hostKeyFile {
+			continue
+		}
+		found = true
+		if f.Contents.Source != "data:,"+urlEncode(hostKey) || f.Mode != 0o600 {
+			t.Errorf("host key file = mode %o, source %q", f.Mode, f.Contents.Source)
+		}
+	}
+	if !found {
+		t.Errorf("no %s in:\n%s", hostKeyFile, raw)
+	}
+	if !strings.Contains(hyperVUnit(keyed), "-v /etc/workspace:/etc/workspace") {
+		t.Error("the workspace container does not see the directory the host key is written to")
+	}
+
+	raw, err = ignition(base, "ssh-ed25519 AAAA dev@host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, hostKeyFile) {
+		t.Errorf("a spec with no host key wrote one:\n%s", raw)
+	}
+}
+
 func TestHyperVUnit(t *testing.T) {
 	unit := hyperVUnit(Spec{Port: 2222, Image: "example.com/ws:1"})
 

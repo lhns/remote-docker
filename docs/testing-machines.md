@@ -76,6 +76,12 @@ remote-docker remote machine rebuild dev --rootfs .\rootfs.tar
 remote-docker run --rm -v .:/w alpine ls /w   # works again
 ```
 
+The rebuilt machine serves a new host key at the address the old one had, and
+the session must accept it without anybody touching `known_hosts`: the
+workspace entry pins the key `rebuild` made (`hostKey` in its `machine` block,
+ADR 0026). `host key ... has CHANGED` after a rebuild is that failing. So is a
+create after `remote rm dev`, on the same port, which must work the same way.
+
 ### That it leaves nothing behind
 
 ```powershell
@@ -93,7 +99,9 @@ cannot, it must refuse and leave the entry: the only record the machine exists.
 
 Since 2026-08-11, `machine.yml` runs this WSL section on windows-latest on every
 change to the backend: create, a `docker run` with a bind mount from the Windows
-side, create again for idempotence, and `rm` taking the distribution with it. A
+side, create again for idempotence, a rebuild followed by a `docker run` with a
+stale `known_hosts` entry planted for the machine's address (since
+2026-10-04), and `rm` taking the distribution with it. A
 report from a real machine is about what differs from that runner: another
 Windows build, a hand-configured WSL, an existing distribution list, a machine
 left running for days. Before reading a failure:

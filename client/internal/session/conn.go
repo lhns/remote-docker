@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -32,7 +34,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// The workspace derives the same id from the key it authenticated (ADR 0029).
 	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
 
-	known, err := keys.NewKnownHosts(config.KnownHostsPath())
+	hostKey, err := hostKeyRule(s.opts.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +77,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Port:    transport.Port,
 		User:    s.opts.Config.User,
 		Signer:  key.Signer,
-		HostKey: known.Callback(),
+		HostKey: hostKey,
 		Dial:    dial,
 	})
 	if err != nil {
@@ -156,6 +158,25 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		s.log().Info("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	}
 	return live, nil
+}
+
+// hostKeyRule is the host key a workspace must offer. A machine this program
+// built answers with the key built into it, pinned per machine because its
+// address is given out at boot and reused (ADR 0026); everything else is
+// trusted on first use and refused when it changes (known_hosts).
+func hostKeyRule(cfg config.Config) (ssh.HostKeyCallback, error) {
+	if m := cfg.Machine; m != nil && m.HostKey != "" {
+		return keys.PinnedHostKey(m.HostKey, func(offered ssh.PublicKey) error {
+			return fmt.Errorf("the %s machine %q answered with a host key it was not built with (%s)\n"+
+				"  fix: stop whatever else listens on port %d, or `remote machine rebuild %s` if this program did not build what runs there",
+				m.Backend, m.Name, ssh.FingerprintSHA256(offered), cfg.Port, cfg.Name)
+		})
+	}
+	known, err := keys.NewKnownHosts(config.KnownHostsPath())
+	if err != nil {
+		return nil, err
+	}
+	return known.Callback(), nil
 }
 
 // dialerFor returns the WebSocket dialer (ADR 0034), or nil to dial TCP.

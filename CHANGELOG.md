@@ -8,6 +8,19 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **A rebuilt machine can be used straight away.** After
+  `remote machine rebuild`, or `remote rm` and `remote machine create` again,
+  every docker command failed with `host key ... has CHANGED` until the entry
+  was removed from `known_hosts` by hand. A machine is now built with a host
+  key made by remote-docker, and its workspace accepts that key and no other,
+  whatever address the machine has
+  ([ADR 0026](docs/adr/0026-a-machine-is-a-workspace-we-provision.md)). A
+  machine built by an earlier version keeps the old check until it is rebuilt.
+
 ## 0.8.1 — 2026-09-30
 
 ### Fixes

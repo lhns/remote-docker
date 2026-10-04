@@ -1,7 +1,7 @@
 # 0026. A machine is a workspace we provision
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md)
-- Date: 2026-08-11
+- Date: 2026-08-11; amended 2026-10-04 (host keys)
 
 ## Context
 
@@ -18,19 +18,21 @@ another continent. There is **no second data path**. What is added is a
 lifecycle, in one config block:
 
 ```json
-"machine": { "backend": "wsl", "name": "rd-dev", "image": "...", "generation": "..." }
+"machine": { "backend": "wsl", "name": "rd-dev", "image": "...", "generation": "...", "hostKey": "ssh-ed25519 ..." }
 ```
 
-Its presence changes two things:
+Its presence changes three things:
 
 - **`remote rm`** has a machine to destroy as well as an entry to delete.
 - **A session locates the machine** before dialling it, in `session.connect`
   and nowhere else. A machine is started on demand and given its address at
   boot, so `host` in the entry is a placeholder and the address is asked at
   every connection.
+- **A session accepts the host key the machine was built with**, not
+  known_hosts' answer for that address (see the host key section below).
 
-Both were measured on 2026-08-11 in `machine.yml`'s `a machine on wsl` job
-(re-check: one run of that workflow):
+Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
+`a machine on wsl` job (re-check: one run of that workflow):
 
 - With the machine running and its agent listening, Windows could not reach
   `127.0.0.1:2222` and reached the machine's own `172.24.110.158:2222` at once:
@@ -39,6 +41,42 @@ Both were measured on 2026-08-11 in `machine.yml`'s `a machine on wsl` job
   not count as use: a machine stopped two and a half minutes after its agent
   reported listening. So locating a machine starts it, and a hold keeps it
   running (a `wsl.exe` session held open; `machine.Hold`).
+
+## A machine's host key is made with it, and pinned per machine
+
+Amended 2026-10-04, after a `machine rebuild` on a real WSL machine refused
+every later command: `host key for 172.18.12.79:2222 has CHANGED`.
+
+- **Why known_hosts cannot work here.** It keys trust on an address, and a
+  machine's address names nothing: it is given out at boot, and every WSL
+  distribution shares the one WSL VM address. A rebuild, an `rm` then `create`
+  on the same port, or another machine on that port all present a new key at
+  an address already recorded, which known_hosts must refuse.
+- **Decision: the client generates the host key when it builds the machine.**
+  `keys.NewHostKey` makes an ed25519 pair; the private half goes in as
+  `Spec.HostKey` and is written to the file the agent loads before its first
+  start (WSL: through stdin into `/etc/workspace/host_keys`; Hyper-V: one more
+  file in the Ignition document). The public half is recorded in the machine
+  block as `hostKey`, before the agent is waited for, so a build that then
+  fails cannot leave the previous machine's key pinned.
+- **A session with a recorded key accepts that key and no other**
+  (`session.hostKeyRule`, `keys.PinnedHostKey`), at whatever address the
+  machine has today, and never reads or writes known_hosts for it. Nothing is
+  trusted on first network use, and the rule is still built by the session and
+  handed to the transport (ADR 0021).
+- **Rejected: forgetting known_hosts entries on rebuild, rm and create.** It
+  keeps trusting whatever answers first, and cannot cover the address being
+  reused by a different machine or by a WSL VM that restarted.
+- **Rejected: reading the key the agent generated out of the machine.** WSL
+  could (`wsl -d ... cat`), Hyper-V cannot: the guest is Linux, so PowerShell
+  Direct does not apply, the same reason a login key is enrolled only at
+  creation.
+- **Costs.** The private host key passes through the client, and for Hyper-V
+  sits in `config.ign` beside the disk that holds it anyway. A machine built
+  before this has no `hostKey` and keeps known_hosts until it is rebuilt.
+  `create` on a machine that already matches builds nothing and keeps the
+  recorded key, so `rm --keep-machine` followed by `create` falls back to
+  known_hosts too.
 
 ## The Hyper-V backend was merged unverified, on purpose
 
