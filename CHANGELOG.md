@@ -8,6 +8,16 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **Two containers starting together on one cached directory no longer race.**
+  With `write=back` or `write=ephemeral`, a second request for the same share
+  arriving just as the first finished could stop the union just mounted and
+  start another, under a container that may already have been given the first.
+  Found by a unit test; nobody has reported it.
+
 ## 0.8.1 — 2026-09-30
 
 ### Fixes
