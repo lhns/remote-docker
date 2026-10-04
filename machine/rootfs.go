@@ -144,6 +144,14 @@ func extract(img v1.Image, path string) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// IsFetched reports whether path is a filesystem EnsureRootfs wrote, which is
+// how a recorded rootfs is told apart from one somebody named with --rootfs
+// (see Spec.Fetched).
+func IsFetched(path string) bool {
+	dir, err := rootfsCacheDir()
+	return err == nil && path != "" && filepath.Dir(filepath.Clean(path)) == dir
+}
+
 // rootfsCacheDir is where pulled filesystems are kept.
 //
 // Beside the machines rather than inside one: the file outlives any machine

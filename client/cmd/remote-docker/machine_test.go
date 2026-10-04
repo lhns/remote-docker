@@ -11,6 +11,8 @@ package main
 // developed on, that refusal is exactly what happens and is what this pins.
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +130,76 @@ func TestSpecFallsBackToTheRecordedMachine(t *testing.T) {
 	got := mustSpec(t, &machineOptions{backend: "wsl", cpus: 1}, "dev", nil)
 	if got.CPUs != 1 || got.Rootfs != "" || got.Port != config.DefaultSSHPort || got.Account != config.DefaultUser() {
 		t.Errorf("spec with no record = %+v, want the flags and the defaults alone", got)
+	}
+}
+
+// `machine create` with no --rootfs fetches the published image, and running
+// it again has to find the machine current rather than refuse it as built from
+// different settings, which is what hashing the cache path did. `status` and
+// `rebuild` must give the same answer.
+func TestCreatingTwiceWithoutARootfsChangesNothing(t *testing.T) {
+	saved, savedEnsure := overrides, ensureRootfs
+	t.Cleanup(func() { overrides, ensureRootfs = saved, savedEnsure })
+	overrides = config.Overrides{}
+
+	// Where EnsureRootfs keeps what it fetched, so IsFetched recognises it.
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	ensureRootfs = func(context.Context, string, io.Writer) (string, error) {
+		path := filepath.Join(os.Getenv("LOCALAPPDATA"), "remote-docker", "rootfs", "sha256-0123.tar.gz")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return "", err
+		}
+		return path, os.WriteFile(path, nil, 0o600)
+	}
+
+	opts := &machineOptions{backend: "wsl"}
+	built, err := fetchRootfs(context.Background(), mustSpec(t, opts, "dev", nil), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the backend writes into the machine and the workspace records.
+	observed := machine.Observed{State: machine.Running, Generation: built.Generation()}
+	record := machineRecord(built)
+
+	if got := machine.Plan(mustSpec(t, opts, "dev", nil), observed); got != machine.Nothing {
+		t.Errorf("creating it again plans %v, want Nothing", got)
+	}
+	var status strings.Builder
+	reportGeneration(&status, record, observed)
+	if !strings.Contains(status.String(), "current") {
+		t.Errorf("status says %q about the machine create just found current", status.String())
+	}
+
+	recorded := &config.Workspace{Port: config.DefaultSSHPort, User: config.DefaultUser(), Machine: record}
+	rebuilt := mustSpec(t, opts, "dev", recorded)
+	if rebuilt.Rootfs != built.Rootfs || rebuilt.Generation() != built.Generation() {
+		t.Errorf("rebuild = rootfs %q generation %s, want the fetched %q and %s",
+			rebuilt.Rootfs, rebuilt.Generation(), built.Rootfs, built.Generation())
+	}
+
+	// A record from before the fix hashed the cache path. Create refuses that
+	// machine naming rebuild, and the rebuild is what repairs it.
+	old := *record
+	stale := built
+	stale.Fetched = false
+	old.Generation = stale.Generation()
+	if got := machine.Plan(mustSpec(t, opts, "dev", nil), machine.Observed{State: machine.Running, Generation: old.Generation}); got != machine.Recreate {
+		t.Errorf("a machine recorded under the old generation plans %v, want Recreate", got)
+	}
+	recorded.Machine = &old
+	if got := mustSpec(t, opts, "dev", recorded).Generation(); got != built.Generation() {
+		t.Errorf("rebuilding an old record hashes %s, want %s so create agrees afterwards", got, built.Generation())
+	}
+
+	// A setting that did change is still a mismatch.
+	overrides = config.Overrides{Port: 2299}
+	if got := machine.Plan(mustSpec(t, opts, "dev", nil), observed); got != machine.Recreate {
+		t.Errorf("a changed port plans %v, want Recreate", got)
+	}
+	overrides = config.Overrides{}
+	named := &machineOptions{backend: "wsl", rootfs: filepath.Join(t.TempDir(), "mine.tar.gz")}
+	if got := machine.Plan(mustSpec(t, named, "dev", nil), observed); got != machine.Recreate {
+		t.Errorf("a different --rootfs plans %v, want Recreate", got)
 	}
 }
 

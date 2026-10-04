@@ -8,6 +8,21 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **`remote machine create` without `--rootfs` can be run again.** The second
+  run refused with "built from different settings" while `machine status`
+  said the settings were current, and a `machine rebuild` did not cure it. The
+  path the published image was downloaded to was counted as a setting.
+
+### Upgrading
+
+- A machine created without `--rootfs` by 0.8.1 or earlier is still refused by
+  `machine create`, naming `machine rebuild`. The machine itself works; one
+  rebuild clears the refusal, and discards the images and containers inside it.
+
 ## 0.8.1 — 2026-09-30
 
 ### Fixes

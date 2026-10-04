@@ -113,6 +113,18 @@ of date" is a fact (the trick `daemons.reconcile` uses with its spec label). A
 backend that cannot read one counts it as a match: recreating a machine because
 a label could not be read destroys work for bookkeeping.
 
+- **The generation hashes what was ASKED for, not where it was cached.** A
+  rootfs named with `--rootfs` is a setting; one `EnsureRootfs` fetched is a
+  path under `%LOCALAPPDATA%\remote-docker\rootfs` that the image reference
+  already identifies, so it is left out (`Spec.Fetched`). Hashing it made every
+  `machine create` without `--rootfs` after the first refuse a machine `status`
+  called current, since create compares its flags and they name no cache path
+  (found by hand 2026-10-04; `machine.yml` always passes `--rootfs`).
+- A machine built before that fix carries the old hash: `create` refuses it
+  naming `rebuild`, as it already did, and one rebuild repairs it.
+  `machine.IsFetched` recognises the recorded cache path, so the rebuild hashes
+  it as fetched rather than as named.
+
 ## Consequences
 
 - **`remote rm` refuses rather than orphaning.** If the machine cannot be

@@ -58,3 +58,21 @@ func TestRootfsCacheDirIsBesideTheMachines(t *testing.T) {
 		t.Errorf("the cache lives under a machine: %q", dir)
 	}
 }
+
+// IsFetched is what lets a rebuild keep a fetched rootfs out of the generation,
+// including for a machine recorded before Spec.Fetched existed.
+func TestIsFetched(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", filepath.Join("C:", "Users", "alice", "AppData", "Local"))
+	dir, err := rootfsCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path := filepath.Join(dir, "sha256-0123.tar.gz"); !IsFetched(path) {
+		t.Errorf("IsFetched(%q) = false for a file in the cache", path)
+	}
+	for _, path := range []string{"", filepath.Join("C:", "Users", "alice", "rootfs.tar.gz"), filepath.Join(dir, "sub", "x.tar.gz")} {
+		if IsFetched(path) {
+			t.Errorf("IsFetched(%q) = true for a file outside the cache", path)
+		}
+	}
+}
