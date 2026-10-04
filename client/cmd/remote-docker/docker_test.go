@@ -74,11 +74,9 @@ func TestNoSessionEnvStopsIt(t *testing.T) {
 	}
 }
 
-// A root flag reaches the client the command runs with. The client is
-// initialised while the tree is built, before cobra parses anything, and was
-// handed options nothing had filled yet: `--context bob-ws` was ignored and the
-// command went wherever DOCKER_CONTEXT or the current context pointed.
-// `context show` prints the context the client resolved and needs no daemon;
+// A root flag reaches the client the command runs with, which it did not while
+// the client was initialised with options cobra had not filled yet. `context
+// show` prints the context the client resolved and needs no daemon, and
 // DOCKER_CONTEXT names another, so only the flag winning passes.
 func TestARootFlagReachesTheDockerClient(t *testing.T) {
 	t.Setenv("DOCKER_CONTEXT", "alice-ws")

@@ -2108,12 +2108,9 @@ fi
 # A context we did NOT create must be left entirely alone. Arranging the
 # endpoint by setting DOCKER_HOST, which outranks --context, silently resolved
 # every foreign context to us, and nothing inside the process can see that: the
-# command must FAIL against a daemon that is not there. The context must EXIST,
-# or naming it fails anyway and reports a pass.
-#
-# Failing is not enough. itest-ws is the current context here, and an embedded
-# CLI that ignores --context fails too, against OUR endpoint with no session
-# arranged for it. So the failure has to name the foreign context's address.
+# command must FAIL against a daemon that is not there, NAMING its address: a
+# CLI that ignores --context fails too, against our endpoint with no session.
+# The context must EXIST, or naming it fails anyway and reports a pass.
 if ! hostdocker context create itest-foreign --docker host=tcp://127.0.0.1:1 >/dev/null 2>&1; then
     bad "could not create a foreign context, so nothing was asked of one"
 elif outputs '127\.0\.0\.1:1([^0-9]|$)' timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-foreign ps &&
@@ -2124,9 +2121,9 @@ else
     info "output: $(echo "$LAST_OUTPUT" | head -3 | tr '\n' '; ')"
 fi
 
-# And ours, named explicitly, reaches the workspace it names. Against
-# DOCKER_CONTEXT naming the foreign one, which the flag outranks: with itest-ws
-# current as well, this passed while the embedded CLI ignored --context.
+# And ours, named explicitly, reaches the workspace it names. DOCKER_CONTEXT
+# names the foreign one, so only the flag winning passes: itest-ws is also the
+# current context, which alone passed with --context ignored.
 if outputs '^CONTAINER ID' timeout 60 env -u DOCKER_HOST DOCKER_CONTEXT=itest-foreign \
     "$WORK/remote-docker" --context itest-ws ps; then
     ok "--context <ours> reaches that workspace"
@@ -2136,8 +2133,8 @@ else
 fi
 hostdocker context rm -f itest-foreign >/dev/null 2>&1
 
-# A context that does not exist is refused by name, which only the embedded CLI
-# reading --context can do: ignored, the command fails against the current one.
+# A context that does not exist is refused by name. Ignored, it fails against
+# the current context instead.
 if outputs 'itest-nosuch' timeout 30 env -u DOCKER_HOST "$WORK/remote-docker" --context itest-nosuch ps &&
    [ "$LAST_STATUS" -ne 0 ]; then
     ok "--context <nonexistent> is refused naming the context"
