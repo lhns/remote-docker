@@ -114,16 +114,14 @@ backend that cannot read one counts it as a match: recreating a machine because
 a label could not be read destroys work for bookkeeping.
 
 - **The generation hashes what was ASKED for, not where it was cached.** A
-  rootfs named with `--rootfs` is a setting; one `EnsureRootfs` fetched is a
-  path under `%LOCALAPPDATA%\remote-docker\rootfs` that the image reference
-  already identifies, so it is left out (`Spec.Fetched`). Hashing it made every
-  `machine create` without `--rootfs` after the first refuse a machine `status`
-  called current, since create compares its flags and they name no cache path
-  (found by hand 2026-10-04; `machine.yml` always passes `--rootfs`).
-- A machine built before that fix carries the old hash: `create` refuses it
-  naming `rebuild`, as it already did, and one rebuild repairs it.
-  `machine.IsFetched` recognises the recorded cache path, so the rebuild hashes
-  it as fetched rather than as named.
+  `--rootfs` path is a setting; a rootfs `EnsureRootfs` fetched is a cache path
+  the image reference already identifies, so `Spec.Fetched` leaves it out.
+  Hashed, `machine create` without `--rootfs`, whose flags name no path,
+  refused on every run after the first (found by hand 2026-10-04;
+  `machine.yml` always passes `--rootfs`).
+- The record holds only the path, so `machine.IsFetched` (the path is in the
+  cache directory) is what a rebuild decides by. A machine built before
+  `Spec.Fetched` carries the old hash, and one rebuild repairs it.
 
 ## Consequences
 

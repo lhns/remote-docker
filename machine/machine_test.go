@@ -84,9 +84,8 @@ func TestEveryFieldChangesTheGeneration(t *testing.T) {
 	}
 }
 
-// A fetched rootfs is a cache path for Image, which the generation already
-// holds, and `machine create` without --rootfs has no path to compare. So it
-// hashes as no rootfs at all, while a path somebody named still counts.
+// A fetched rootfs hashes as no rootfs, which is what `machine create` without
+// --rootfs compares against; a path somebody named still counts.
 func TestAFetchedRootfsIsNotASetting(t *testing.T) {
 	asked := spec()
 	asked.Rootfs = ""

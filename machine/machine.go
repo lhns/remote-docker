@@ -58,10 +58,8 @@ type Spec struct {
 	// client, and the caller is where that decision belongs.
 	Rootfs string
 
-	// Fetched says Rootfs is where EnsureRootfs cached Image rather than a file
-	// somebody named. Image already identifies that filesystem, so Generation
-	// leaves the path out; hashed, a `machine create` without --rootfs, whose
-	// flags name no path, could never match the machine it built (ADR 0026).
+	// Fetched says Rootfs is EnsureRootfs's copy of Image rather than a file
+	// somebody named, so Generation leaves the path out (ADR 0026).
 	Fetched bool
 
 	// CPUs and MemoryMB are what the machine is given. Zero means the

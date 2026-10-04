@@ -288,8 +288,11 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	case action == machine.Create:
 		// Fetched only when building: it is several hundred megabytes.
-		if spec, err = fetchRootfs(ctx, spec, out); err != nil {
-			return err
+		if spec.Rootfs == "" {
+			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
+				return err
+			}
+			spec.Fetched = true
 		}
 
 		_, _ = fmt.Fprintf(out, "creating the %s machine %q\n", spec.Backend, spec.Name)
@@ -333,23 +336,6 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 
 	return saveMachineWorkspace(cmd, name, spec)
-}
-
-// ensureRootfs is machine.EnsureRootfs, replaced in tests.
-var ensureRootfs = machine.EnsureRootfs
-
-// fetchRootfs fills in the published image's filesystem when no --rootfs named
-// one, marking it Fetched so the cache path stays out of the generation.
-func fetchRootfs(ctx context.Context, spec machine.Spec, out io.Writer) (machine.Spec, error) {
-	if spec.Rootfs != "" {
-		return spec, nil
-	}
-	path, err := ensureRootfs(ctx, spec.Image, out)
-	if err != nil {
-		return spec, err
-	}
-	spec.Rootfs, spec.Fetched = path, true
-	return spec, nil
 }
 
 // machinePlaceholderHost stands in for an address nobody should read.

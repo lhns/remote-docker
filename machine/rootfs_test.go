@@ -59,8 +59,6 @@ func TestRootfsCacheDirIsBesideTheMachines(t *testing.T) {
 	}
 }
 
-// IsFetched is what lets a rebuild keep a fetched rootfs out of the generation,
-// including for a machine recorded before Spec.Fetched existed.
 func TestIsFetched(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", filepath.Join("C:", "Users", "alice", "AppData", "Local"))
 	dir, err := rootfsCacheDir()

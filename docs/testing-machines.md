@@ -70,7 +70,7 @@ remote-docker remote rm pub
 Expected: the first fetches the filesystem into
 `%LOCALAPPDATA%\remote-docker\rootfs` and creates the machine; the second
 says `"pub" already matches; nothing to do`. A refusal naming `machine rebuild`
-here is the bug fixed on 2026-10-04: the cached path was hashed as a setting.
+means the cache path is being hashed as a setting again (ADR 0026).
 
 ### That a changed setting is reported, not acted on
 
