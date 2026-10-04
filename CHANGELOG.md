@@ -12,6 +12,10 @@ software.
 
 ### Fixes
 
+- **`--context` works.** `docker --context dev ps` used whatever context was
+  current, and a context that did not exist gave no error. Only
+  `DOCKER_CONTEXT` worked. The same was true of `--config`, `-H`, `-D`,
+  `--log-level` and the TLS flags, which now all take effect.
 - **Two containers starting together on one cached directory no longer race.**
   With `write=back` or `write=ephemeral`, a second request for the same share
   arriving just as the first finished could stop the union just mounted and
