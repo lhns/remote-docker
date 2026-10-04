@@ -20,11 +20,11 @@ import (
 // enough to recreate.
 const generationFile = "/etc/remote-docker-generation"
 
-// agentLog is where the agent's output goes inside the machine. WSL's boot
+// WSLAgentLog is where the agent's output goes inside the machine. WSL's boot
 // command has no console, so without this an agent that refuses to start is a
 // machine that is simply unreachable, with the reason written to a closed file
 // descriptor.
-const agentLog = "/var/log/remote-dockerd.log"
+const WSLAgentLog = "/var/log/remote-dockerd.log"
 
 // decodeWSLOutput turns wsl.exe's output into a string.
 //
@@ -143,7 +143,7 @@ func wslConf(spec Spec) string {
 	// authenticates every connection by key.
 	return "[boot]\nsystemd=false\ncommand=/usr/bin/env " +
 		strings.Join(env, " ") +
-		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, agentLog)
+		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, WSLAgentLog)
 }
 
 // wslAddressArgs asks a distribution for its own address.

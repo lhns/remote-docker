@@ -38,9 +38,14 @@ from a machine that has it, or the `workspace-rootfs` artifact of a
 ```powershell
 remote-docker remote machine create dev --rootfs .\rootfs.tar
 remote-docker remote ls                       # dev, marked (wsl)
-remote-docker remote machine status dev       # running, settings current
+remote-docker remote machine status dev       # running, settings current, agent answering
+remote-docker remote use dev                  # only if dev is not already the default
 remote-docker run --rm -v .:/w alpine ls /w   # the point of all of it
 ```
+
+`create` does not make the machine the default workspace, so on a computer that
+already has one, `run` reaches THAT workspace until `remote use dev`. The hint
+`create` ends with includes the `use` exactly when it is needed.
 
 The last line exercises the session, the SSH transport, the NFS export, the
 bind rewriting and the daemon in the machine, in one command. Expected: the
@@ -67,11 +72,13 @@ or discard its images.
 
 ### That rebuild repairs a genuinely broken machine
 
-Break it first, or the test proves nothing:
+Break it first, or the test proves nothing. Removing the binary alone leaves the
+running agent serving from the deleted file, so stop it as well:
 
 ```powershell
 wsl -d rd-dev --user root -- rm -f /usr/local/bin/remote-dockerd
-remote-docker remote machine status dev       # expect trouble
+wsl -d rd-dev --user root -- pkill remote-dockerd
+remote-docker remote machine status dev       # agent not answering on <address>:<port>, exit 1
 remote-docker remote machine rebuild dev --rootfs .\rootfs.tar
 remote-docker run --rm -v .:/w alpine ls /w   # works again
 ```

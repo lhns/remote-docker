@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -72,10 +74,12 @@ func fakeSession(t *testing.T, safe bool, log *events) string {
 	return endpoint
 }
 
-// fakeBackend is a machine backend that records what it is asked.
+// fakeBackend is a machine backend that records what it is asked. Its address
+// is addr, which `machine status` dials the agent at.
 type fakeBackend struct {
 	log   *events
 	state machine.State
+	addr  string
 }
 
 func (b *fakeBackend) Name() string                    { return "fake" }
@@ -92,7 +96,19 @@ func (b *fakeBackend) Start(context.Context, string) error { b.log.add("start");
 func (b *fakeBackend) Hold(context.Context, string) (io.Closer, error) {
 	return nil, errors.New("fakeBackend: no hold")
 }
-func (b *fakeBackend) Address(context.Context, string) (string, error) { return "", nil }
+func (b *fakeBackend) Address(context.Context, string) (string, error) { return b.addr, nil }
+
+// listeningAgent is a port on loopback that accepts connections, standing in
+// for a machine's agent.
+func listeningAgent(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l.Addr().(*net.TCPAddr).Port
+}
 func (b *fakeBackend) Stop(_ context.Context, name string) error {
 	b.log.add("stop " + name)
 	return nil
@@ -224,8 +240,12 @@ func TestStatusExitsOneWhenNotReady(t *testing.T) {
 func TestMachineStatusExitsOneWhenNotRunning(t *testing.T) {
 	for state, want := range map[machine.State]int{machine.Running: 0, machine.Stopped: 1, machine.Absent: 1} {
 		t.Run(state.String(), func(t *testing.T) {
-			oneWorkspace(t, unreachableEndpoint(t), true)
-			withBackend(t, &fakeBackend{log: &events{}, state: state})
+			withConfig(t, &config.File{Default: "dev", Workspaces: map[string]config.Workspace{"dev": {
+				Host: "127.0.0.1", Port: listeningAgent(t), Endpoint: unreachableEndpoint(t),
+				Machine: &config.Machine{Backend: "fake", Name: "dev"},
+			}}})
+			log := &events{}
+			withBackend(t, &fakeBackend{log: log, state: state, addr: "127.0.0.1"})
 			out, err := runOut(t, "remote", "machine", "status")
 			if exitCode(err) != want {
 				t.Errorf("exit %d (%v), want %d", exitCode(err), err, want)
@@ -233,18 +253,48 @@ func TestMachineStatusExitsOneWhenNotRunning(t *testing.T) {
 			if !strings.Contains(out, state.String()) {
 				t.Errorf("the state is missing:\n%s", out)
 			}
+			// A machine that is not running is left that way.
+			if strings.Contains(log.String(), "start") {
+				t.Errorf("status started the machine: %q", log)
+			}
 		})
+	}
+}
+
+// A running machine whose agent does not answer is not ready, and status says
+// where it dialled.
+func TestMachineStatusExitsOneWhenTheAgentDoesNotAnswer(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+
+	withConfig(t, &config.File{Default: "dev", Workspaces: map[string]config.Workspace{"dev": {
+		Host: "127.0.0.1", Port: port, Endpoint: unreachableEndpoint(t),
+		Machine: &config.Machine{Backend: "fake", Name: "dev"},
+	}}})
+	withBackend(t, &fakeBackend{log: &events{}, state: machine.Running, addr: "127.0.0.1"})
+
+	out, err := runOut(t, "remote", "machine", "status")
+	if exitCode(err) != 1 {
+		t.Errorf("exit %d (%v), want 1", exitCode(err), err)
+	}
+	if want := "not answering on 127.0.0.1:" + strconv.Itoa(port); !strings.Contains(out, want) {
+		t.Errorf("the output does not say %q:\n%s", want, out)
 	}
 }
 
 // A machine command takes its [name], else --workspace, else the default.
 func TestMachineCommandsSelectAWorkspace(t *testing.T) {
 	m := func(name string) *config.Machine { return &config.Machine{Backend: "fake", Name: name} }
+	agent := listeningAgent(t)
 	withConfig(t, &config.File{
 		Default: "main",
 		Workspaces: map[string]config.Workspace{
-			"main":  {Host: "127.0.0.1", Machine: m("main")},
-			"other": {Host: "127.0.0.1", Machine: m("other")},
+			"main":  {Host: "127.0.0.1", Port: agent, Machine: m("main")},
+			"other": {Host: "127.0.0.1", Port: agent, Machine: m("other")},
 		},
 	})
 
@@ -258,7 +308,7 @@ func TestMachineCommandsSelectAWorkspace(t *testing.T) {
 	} {
 		t.Run(strings.Join(tc.args[1:], " "), func(t *testing.T) {
 			log := &events{}
-			withBackend(t, &fakeBackend{log: log, state: machine.Running})
+			withBackend(t, &fakeBackend{log: log, state: machine.Running, addr: "127.0.0.1"})
 			if err := run(t, tc.args...); err != nil {
 				t.Fatal(err)
 			}

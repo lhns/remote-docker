@@ -8,6 +8,20 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **`remote machine status` checks the agent.** A running machine whose agent
+  was gone still printed `state running` and `settings current`. Status now
+  dials the agent at the machine's own address, and when nothing answers it
+  prints `not answering on <address>:<port>` and exits 1. A stopped machine is
+  still reported as stopped and is not started.
+- **The command `remote machine create` suggests reaches the new machine.** It
+  suggested a bare `run`, which reaches the default workspace, and `create`
+  does not make the machine the default. When it is not, the hint now says
+  `remote use <name>` first.
+
 ## 0.8.1 — 2026-09-30
 
 ### Fixes

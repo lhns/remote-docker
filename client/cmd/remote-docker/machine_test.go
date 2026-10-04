@@ -11,8 +11,13 @@ package main
 // developed on, that refusal is exactly what happens and is what this pins.
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -145,5 +150,144 @@ func TestMachineSpecRefusesUnderivableUser(t *testing.T) {
 	defer func() { overrides = config.Overrides{} }()
 	if _, err := (&machineOptions{backend: "wsl"}).spec("dev", nil); err == nil || !strings.Contains(err.Error(), `"123"`) {
 		t.Errorf("spec with --user 123 = %v, want an error naming it", err)
+	}
+}
+
+// addressOnly is a backend that can answer Address and nothing else: any other
+// method panics on the nil interface, so a status check that started the
+// machine would fail here rather than on somebody's laptop.
+type addressOnly struct {
+	machine.Backend
+	addr string
+}
+
+func (a addressOnly) Address(context.Context, string) (string, error) { return a.addr, nil }
+
+func TestProbeAgentDialsTheMachinesOwnAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	got := probeAgent(context.Background(), addressOnly{addr: "127.0.0.1"}, "dev", port)
+	if got.dialErr != nil || got.addr != net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) {
+		t.Errorf("probe of a listening agent = %+v, want it answering at its address", got)
+	}
+
+	_ = ln.Close()
+	if got := probeAgent(context.Background(), addressOnly{addr: "127.0.0.1"}, "dev", port); got.dialErr == nil {
+		t.Errorf("probe of a closed port = %+v, want a dial error", got)
+	}
+	if got := probeAgent(context.Background(), addressOnly{}, "dev", port); got.addr != "" || got.addrErr != nil {
+		t.Errorf("probe of a machine with no address = %+v, want nothing dialled", got)
+	}
+}
+
+func TestReportAgent(t *testing.T) {
+	wsl := &config.Machine{Backend: "wsl", Name: "dev"}
+	hyperv := &config.Machine{Backend: "hyperv", Name: "dev"}
+
+	for _, tc := range []struct {
+		name   string
+		m      *config.Machine
+		check  agentCheck
+		ok     bool
+		want   []string
+		reject []string
+	}{
+		{
+			name:  "answering",
+			m:     wsl,
+			check: agentCheck{addr: "172.24.110.158:2222"},
+			ok:    true,
+			want:  []string{"answering on 172.24.110.158:2222"},
+		},
+		{
+			// What was dialled and the remedy, never a guess at why.
+			name:   "refused, wsl",
+			m:      wsl,
+			check:  agentCheck{addr: "172.24.110.158:2222", dialErr: errors.New("connection refused")},
+			want:   []string{"not answering on 172.24.110.158:2222", "  fix: ", machine.WSLAgentLog, "machine rebuild dev"},
+			reject: []string{"crash", "missing", "installed"},
+		},
+		{
+			// The log path is WSL's; a Hyper-V machine is not told about it.
+			name:   "refused, hyperv",
+			m:      hyperv,
+			check:  agentCheck{addr: "172.24.110.158:2222", dialErr: errors.New("i/o timeout")},
+			want:   []string{"not answering on 172.24.110.158:2222", "machine rebuild dev"},
+			reject: []string{machine.WSLAgentLog},
+		},
+		{
+			name:  "no address",
+			m:     wsl,
+			check: agentCheck{},
+			want:  []string{"not checked", "no address"},
+		},
+		{
+			name:  "address unreadable",
+			m:     wsl,
+			check: agentCheck{addrErr: errors.New("wsl -d rd-dev ip: exit status 1\nmore detail")},
+			want:  []string{"not checked", "exit status 1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if got := reportAgent(&out, tc.m, tc.check); got != tc.ok {
+				t.Errorf("reportAgent = %v, want %v", got, tc.ok)
+			}
+			text := out.String()
+			for _, w := range tc.want {
+				if !strings.Contains(text, w) {
+					t.Errorf("output does not contain %q:\n%s", w, text)
+				}
+			}
+			for _, r := range tc.reject {
+				if strings.Contains(text, r) {
+					t.Errorf("output contains %q:\n%s", r, text)
+				}
+			}
+			// One row, and at most one fix line under it.
+			lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+			if len(lines) > 2 || (len(lines) == 2 && !strings.HasPrefix(lines[1], "  fix: ")) {
+				t.Errorf("want one row and at most one fix line, got:\n%s", text)
+			}
+		})
+	}
+}
+
+// The hint create prints must reach the machine just made, which is not the
+// default when the computer already has one.
+func TestCreateHintReachesTheNewMachine(t *testing.T) {
+	ours := map[string]string{"dev": "dev", "old": "old"}
+
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		current string
+		def     string
+		want    bool
+	}{
+		{name: "the only workspace, so the default", def: "dev", want: true},
+		{name: "another workspace is the default", def: "old", want: false},
+		{name: "its context is selected", current: "dev", def: "old", want: true},
+		{name: "another workspace's context is selected", current: "old", def: "dev", want: false},
+		{name: "a context that is not ours", current: "desktop", def: "dev", want: false},
+		{name: "DOCKER_HOST elsewhere", env: map[string]string{"DOCKER_HOST": "tcp://box:2375"}, def: "dev", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := func() string { return tc.def }
+			if got := reachedByDocker("dev", fakeLookups(tc.env, tc.current, ours), def); got != tc.want {
+				t.Errorf("reachedByDocker = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if hint := tryHint("dev", true); strings.Contains(hint, " use ") {
+		t.Errorf("hint for the workspace docker reaches = %q, want the run alone", hint)
+	}
+	if hint := tryHint("dev", false); !strings.Contains(hint, "remote use dev") || !strings.Contains(hint, "alpine ls /w") {
+		t.Errorf("hint for a workspace docker does not reach = %q, want `remote use dev` then the run", hint)
 	}
 }
