@@ -58,6 +58,10 @@ type Spec struct {
 	// client, and the caller is where that decision belongs.
 	Rootfs string
 
+	// Fetched says Rootfs is EnsureRootfs's copy of Image rather than a file
+	// somebody named, so Generation leaves the path out (ADR 0026).
+	Fetched bool
+
 	// CPUs and MemoryMB are what the machine is given. Zero means the
 	// backend's own default, because a number invented here would be worse
 	// than the one the platform already chose.
@@ -93,11 +97,15 @@ type Spec struct {
 func (s Spec) Generation() string {
 	// Every field of Spec that decides what is built must be listed here, or
 	// changing it silently stops changing the generation; nothing checks that.
+	rootfs := s.Rootfs
+	if s.Fetched {
+		rootfs = ""
+	}
 	parts := []string{
 		"name=" + s.Name,
 		"backend=" + s.Backend,
 		"image=" + s.Image,
-		"rootfs=" + s.Rootfs,
+		"rootfs=" + rootfs,
 		fmt.Sprintf("cpus=%d", s.CPUs),
 		fmt.Sprintf("memory=%d", s.MemoryMB),
 		fmt.Sprintf("port=%d", s.Port),

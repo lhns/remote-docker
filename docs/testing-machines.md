@@ -57,6 +57,22 @@ remote-docker remote machine create dev --rootfs .\rootfs.tar
 Expected: `"dev" already matches; nothing to do`. It must NOT create a second
 distribution or restart anything.
 
+### That the published image is fetched, and creating again changes nothing
+
+With network access to ghcr.io, and no `--rootfs`:
+
+```powershell
+remote-docker remote machine create pub
+remote-docker remote machine create pub
+remote-docker remote machine status pub       # running, settings current
+remote-docker remote rm pub
+```
+
+Expected: the first fetches the filesystem into
+`%LOCALAPPDATA%\remote-docker\rootfs` and creates the machine; the second
+says `"pub" already matches; nothing to do`. A refusal naming `machine rebuild`
+means the cache path is being hashed as a setting again (ADR 0026).
+
 ### That a changed setting is reported, not acted on
 
 ```powershell

@@ -84,6 +84,23 @@ func TestEveryFieldChangesTheGeneration(t *testing.T) {
 	}
 }
 
+// A fetched rootfs hashes as no rootfs, which is what `machine create` without
+// --rootfs compares against; a path somebody named still counts.
+func TestAFetchedRootfsIsNotASetting(t *testing.T) {
+	asked := spec()
+	asked.Rootfs = ""
+
+	fetched := spec()
+	fetched.Fetched = true
+	if fetched.Generation() != asked.Generation() {
+		t.Errorf("a fetched rootfs moved the generation: %s, want %s as with no rootfs",
+			fetched.Generation(), asked.Generation())
+	}
+	if spec().Generation() == asked.Generation() {
+		t.Error("a rootfs named with --rootfs left the generation where no rootfs puts it")
+	}
+}
+
 func TestGenerationIsStable(t *testing.T) {
 	first, second := spec().Generation(), spec().Generation()
 	if first != second {
