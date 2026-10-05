@@ -97,3 +97,8 @@ is either a prompt nobody is there to answer or an acceptance of anybody.
 - **A machine workspace cannot use it.** A machine is told its address at boot
   and reached over ssh (ADR 0026), so a WebSocket host for one is refused rather
   than half-honoured.
+- **Enrolment rides it too (2026-10-05).** A token redemption (ADR 0051) is an
+  ordinary SSH connection with a `+token:` login, so it reaches the workspace
+  through the same proxy, and the invite names the proxied address
+  (`WORKSPACE_PUBLIC_URL`). Its global failure limiter is global because, behind
+  a proxy, every connection has the proxy's address.

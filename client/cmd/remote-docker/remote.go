@@ -78,9 +78,10 @@ func newEnrollCommand() *cobra.Command {
 		Short: "Print the public key to hand to whoever runs the workspace",
 		Long: `Generates this machine's keypair on first use and prints the public half.
 
-Enrolment is out of band: someone with access to the workspace saves the key
-as authorized_keys.d/<your account>.pub, and the filename becomes your unix
-account there.`,
+With an enrolment token there is nothing to hand over: "remote create <name>
+--token <invite>" enrols this key itself. Without one, someone with access to
+the workspace saves the key as authorized_keys.d/<your account>.pub, and the
+filename becomes your account there.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolve(args)
@@ -99,6 +100,9 @@ account there.`,
 			_, _ = fmt.Fprintln(out, "(the filename becomes your account name there)")
 			_, _ = fmt.Fprintln(out)
 			_, _ = fmt.Fprintln(out, key)
+			_, _ = fmt.Fprintln(out)
+			_, _ = fmt.Fprintf(out, "With an enrolment token instead, nobody has to save it: `%s`\n",
+				ourCommand("create <name> --token <invite>"))
 			return nil
 		},
 	}

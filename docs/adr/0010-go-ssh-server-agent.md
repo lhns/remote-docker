@@ -142,3 +142,10 @@ the second read being the next event or the next poll; a file that is *absent*
 still revokes at once, having no write window to be caught in. The file is
 parsed line by line for the same reason — several keys per file is the format,
 and one corrupt line should cost that line rather than every key under it.
+
+**A key can now enrol itself (2026-10-05).** Out of band by file is still how
+an operator enrols somebody, and no longer the only way: a single-use token the
+operator mints lets a device log in with its own key as `+token:<id>` and have
+the agent save that key (ADR 0051). The surface this record calls small grows
+by one unauthenticated step, a token id lookup, and one command on a
+connection that can open nothing else.

@@ -73,6 +73,7 @@ jobs:
           render --set ingress.host=ws.example.com \
                  --set authorizedKeys.ci="ssh-ed25519 AAAAtest ci@runner" \
                  --set 'ephemeral.accounts={ci}' --set ephemeral.cleanupContainers=true
+          render --set ingress.enabled=false --set publicURL=wss://ws.example.com/
 
       # Ephemeral accounts (ADR 0050): every variable rendered, nothing for an
       # empty list, an env entry winning, and each bad value refused by name.
@@ -367,6 +368,45 @@ jobs:
           out=$(timeout 240 "$RUNNER_TEMP/remote-docker" run --rm \
                   -v "$RUNNER_TEMP/project:/w" alpine:3 cat /w/marker)
           test "$out" = "from the runner"
+
+      # ADR 0051: a second device enrols its own key with a token, through the
+      # ingress. The key lands on the state volume, and the authorizedKeys
+      # Secret is the operator's and stays as it was.
+      - name: redeem an enrolment token through the ingress
+        run: |
+          set -eux
+          secret_before=$(kubectl get secret -n rd ws-remote-docker-workspace-keys -o jsonpath='{.data}')
+
+          # The invite's address is WORKSPACE_PUBLIC_URL, derived from the ingress.
+          line=$(kubectl exec -n rd "$POD" -- remote-dockerd token create --account dana)
+          echo "$line"
+          invite=$(awk '/--token/ {print $NF}' <<<"$line")
+          case "$line" in
+            "docker remote create ws --token rdt1."*) ;;
+            *) echo "token create printed no command to run"; exit 1 ;;
+          esac
+
+          export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state2"
+          export HOME="$RUNNER_TEMP/home2"
+          mkdir -p "$HOME"
+          "$RUNNER_TEMP/remote-docker" remote create k8s2 --token "$invite" --no-context
+
+          key=$(cut -d' ' -f2 "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub")
+          enrolled=$(kubectl exec -n rd "$POD" -- cat /etc/workspace/enrolled_keys.d/dana.pub)
+          echo "$enrolled"
+          grep -qF "$key" <<<"$enrolled"
+          test "$(kubectl get secret -n rd ws-remote-docker-workspace-keys -o jsonpath='{.data}')" = "$secret_before"
+
+          out=$(REMOTE_DOCKER_WORKSPACE=k8s2 "$RUNNER_TEMP/remote-docker" remote status || true)
+          echo "$out"
+          grep -q "tunnel port" <<<"$out"
+
+          if out=$("$RUNNER_TEMP/remote-docker" remote create k8s3 --token "$invite" --no-context 2>&1); then
+            echo "a used token was redeemed again: $out"
+            exit 1
+          fi
+          echo "$out"
+          grep -q "unknown, used or expired" <<<"$out"
 
       - name: helm upgrade keeps it running
         run: |

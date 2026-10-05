@@ -11,8 +11,7 @@ tunnel, so nothing is copied or synced.
 helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace \
   --version 0.2.1 \
   --namespace remote-docker --create-namespace \
-  --set ingress.host=ws.example.com \
-  --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
+  --set ingress.host=ws.example.com
 ```
 
 The pod is privileged, because dockerd sets up its own bridge and iptables rules
@@ -23,13 +22,23 @@ label the namespace or the pod is never admitted:
 kubectl label namespace remote-docker pod-security.kubernetes.io/enforce=privileged
 ```
 
-Then, from a machine with no Docker installed:
+Mint a single-use enrolment token for an account:
 
 ```bash
-remote-docker remote enroll                      # prints the key to enrol above
-remote-docker remote create dev --host wss://ws.example.com --user alice
+kubectl exec -n remote-docker ws-remote-docker-workspace-0 -- \
+  remote-dockerd token create --account alice
+```
+
+It prints one line. Run it on a machine with no Docker installed, and that
+machine enrols its own key:
+
+```bash
+docker remote create ws --token rdt1.eyJ1Ijoi...
 docker run --rm -v ${PWD}:/w alpine:3 ls /w      # /w is this machine's directory
 ```
+
+Keys can also be enrolled by file, with `--set-file
+authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub`.
 
 ## Verify the chart and image (cosign keyless)
 
@@ -51,6 +60,7 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 | `image.tag` | `""` | the chart's appVersion |
 | `authorizedKeys` | `{}` | one entry per account; **the entry name is the account a client logs in as** (unix user `rd-<name>`) |
 | `existingSecret` | `""` | use a Secret you manage instead |
+| `publicURL` | `""` | the address an enrolment token's invite names; empty is `wss://<ingress.host>/`, or `ws://` without TLS |
 | `perUserDind` | `true` | a dockerd per account (ADR 0019), or one shared (ADR 0012) |
 | `dockerdArgs` | `--storage-driver=fuse-overlayfs` | see below |
 | `dindImage` | `""` | the image an account's daemon runs; empty means this chart's |

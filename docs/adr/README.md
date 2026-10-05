@@ -110,6 +110,7 @@ What the binary is, what it answers to, and where it can run.
 | [0026](0026-a-machine-is-a-workspace-we-provision.md) | A machine is a workspace we provision |
 | [0034](0034-ssh-inside-a-websocket.md) | SSH inside a WebSocket |
 | [0035](0035-the-workspace-on-kubernetes.md) | The workspace on Kubernetes |
+| [0051](0051-enrolling-a-key-with-a-single-use-token.md) | Enrolling a key with a single-use token |
 | [0052](0052-operator-keys-directories-and-one-enrolled-keys-directory.md) | Operator keys directories, and one enrolled keys directory |
 
 ## Retired numbers

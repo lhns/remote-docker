@@ -86,6 +86,10 @@ spec:
             {{- with include "remote-docker-workspace.ephemeralEnv" . | trim }}
             {{- . | nindent 12 }}
             {{- end }}
+            {{- with and (not (hasKey .Values.env "WORKSPACE_PUBLIC_URL")) (include "remote-docker-workspace.publicURL" .) }}
+            - name: WORKSPACE_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

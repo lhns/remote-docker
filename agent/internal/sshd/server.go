@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -18,7 +19,9 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/ephemeral"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/accounts"
+	"github.com/lhns/remote-docker/core-agent/tokens"
 	"github.com/lhns/remote-docker/core-agent/tunnelserver"
+	"github.com/lhns/remote-docker/core/enrol"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/tunnel"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -67,6 +70,12 @@ type Config struct {
 	// their ports. Nil is a registry with the defaults and no record.
 	Runs *ephemeral.Registry
 
+	// Tokens are the enrolment tokens a `+token:` login may redeem (ADR
+	// 0051), and Limiter bounds failed redemptions. Nil Tokens refuses every
+	// token login; nil Limiter is tokens.NewLimiter.
+	Tokens  *tokens.Store
+	Limiter *tokens.Limiter
+
 	Log *slog.Logger
 }
 
@@ -84,7 +93,8 @@ type Server struct {
 	// need to see which host a question went to. Nil is the real CLI.
 	query func(ctx context.Context, host string, args ...string) (string, error)
 
-	conns conns // see revoke.go
+	conns   conns // see revoke.go
+	limiter *tokens.Limiter
 
 	mu     sync.Mutex
 	closed bool
@@ -142,7 +152,10 @@ func New(cfg Config) (*Server, error) {
 		cfg.Runs = &ephemeral.Registry{Ports: cfg.Ports, Log: cfg.Log}
 	}
 
-	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}
+	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping), limiter: cfg.Limiter}
+	if s.limiter == nil {
+		s.limiter = tokens.NewLimiter()
+	}
 	s.forward.Ports = cfg.Ports
 	s.tcpip = tunnelserver.Forwards{
 		Reverse: reversePolicy{s},
@@ -155,6 +168,7 @@ func New(cfg Config) (*Server, error) {
 	s.ssh = &gssh.Server{
 		Addr:             cfg.Addr,
 		PublicKeyHandler: s.authenticate,
+		BannerHandler:    banner,
 
 		// A client that vanishes without saying so must still end its
 		// connection here, because that is what releases its reverse-tunnel
@@ -193,7 +207,7 @@ func New(cfg Config) (*Server, error) {
 			tunnel.UDPChannelType: s.tcpip.HandleUDPChannel,
 		},
 
-		Handler: s.handleSession,
+		Handler: s.route,
 	}
 
 	for _, key := range cfg.HostKeys {
@@ -205,6 +219,11 @@ func New(cfg Config) (*Server, error) {
 // authenticate accepts a key only for the account it is enrolled against. The
 // login name is folded as the key file's name was, so Alice reaches alice.
 func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
+	// Before folding, which would turn the prefix into part of a name.
+	if id, ok := strings.CutPrefix(ctx.User(), enrol.LoginPrefix); ok {
+		return s.authenticateToken(ctx, id, key)
+	}
+
 	name, err := workspace.AccountName(ctx.User())
 	if err != nil {
 		s.log().Warn("refused a connection: no such account", "login", ctx.User(), "from", ctx.RemoteAddr())
@@ -233,6 +252,7 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 		session.client = workspace.ClientID(key.Marshal())
 	}
 	ctx.SetValue(contextKey{}, session)
+	ctx.SetValue(redeemerKey{}, nil)
 	if !s.authenticated(ctx, account.Name, key) {
 		s.log().Warn("refused a connection: the key was revoked during the handshake", "account", name, "from", ctx.RemoteAddr())
 		return false
