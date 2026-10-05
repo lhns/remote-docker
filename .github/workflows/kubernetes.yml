@@ -549,7 +549,8 @@ jobs:
             runs=$(ws remote-dockerd ephemeral ls 2>&1)
             vols=$(ws docker exec rd-dind-pods docker volume ls -q \
                      --filter label=com.github.lhns.remote-docker.owner=pods 2>&1)
-            others=$(echo "$vols" | grep -v "^rd-$kept-")
+            # grep -v selecting nothing is the success case, and exits 1 under bash -e.
+            others=$(echo "$vols" | grep -v "^rd-$kept-" || true)
             if [ "$(echo "$runs" | grep -c '^pods ')" -eq 1 ] &&
                [ "$(echo "$runs" | awk -v c="$kept" '$1 == "pods" && $2 == c' | grep -c .)" -eq 1 ] &&
                [ -n "$vols" ] && [ -z "$others" ]; then

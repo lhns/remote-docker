@@ -126,13 +126,10 @@ fi
 
 # GitHub's runner image installs Rust into /etc/skel (actions/runner-images,
 # install-rust.sh), and the agent's `useradd --create-home` copies all of it,
-# holding the accounts lock a redeem waits on. Emptied here, restored by cleanup.
+# holding the accounts lock a redeem waits on: 801M and 170s for one account
+# (measured 2026-10-05, PR 268; re-check with `time sudo useradd -m probe`).
+# Emptied here, restored by cleanup.
 info "/etc/skel holds $(sudo du -sh /etc/skel 2>/dev/null | cut -f1); this suite provisions from an empty one"
-# DIAGNOSTIC, removed before merge: what one account costs with that skel.
-t0=$(date +%s)
-sudo useradd --create-home rd-skelprobe
-info "useradd --create-home with the runner's skel took $(($(date +%s) - t0))s"
-sudo userdel -r rd-skelprobe >/dev/null 2>&1
 sudo mv /etc/skel "$SKEL_ASIDE" && sudo mkdir -m 755 /etc/skel
 
 # Only shared mode mounts NFS (and a union) on the machine itself; reported
