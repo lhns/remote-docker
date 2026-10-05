@@ -451,10 +451,10 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	return nil
 }
 
-// tryHint is the command create suggests. Create does not make the machine
-// the default, so when docker would reach another workspace the hint has
-// `remote use` first, which is spelled the same in every shell where a
-// DOCKER_CONTEXT prefix is not.
+// tryHint is the command create suggests. Create makes the machine the default
+// only when no workspace is the default yet, so when docker would reach another
+// workspace the hint has `remote use` first, which is spelled the same in every
+// shell where a DOCKER_CONTEXT prefix is not.
 func tryHint(name string, reached bool) string {
 	run := programName() + " run --rm -v .:/w alpine ls /w"
 	if reached {
@@ -632,7 +632,13 @@ func reportAgent(ctx context.Context, out io.Writer, b machine.Backend, m *confi
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		rowf(out, "agent", "not answering on %s", addr)
-		fix := fmt.Sprintf("`%s` replaces the machine, discarding its images and containers",
+		// Restarting first: booting the machine again reruns whatever starts
+		// the agent (WSL's `[boot] command`, Hyper-V's unit), and nothing else
+		// restarts a WSL agent that died. Two commands rather than `&&`, which
+		// Windows PowerShell 5.1 does not parse.
+		fix := fmt.Sprintf("`%s`, then `%s`, restarts it and keeps its images and containers; "+
+			"`%s` replaces it, discarding them",
+			ourCommand("machine stop "+m.Name), ourCommand("machine start "+m.Name),
 			ourCommand("machine rebuild "+m.Name))
 		if m.Backend == "wsl" {
 			fix = fmt.Sprintf("its log is %s inside the machine; %s", machine.WSLAgentLog, fix)
