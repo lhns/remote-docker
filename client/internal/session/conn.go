@@ -136,6 +136,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 			live.close()
 			return nil, err
 		}
+		live.rewriter.NFSPort = live.info.NFSPort // a run's, chosen by the bind
 	}
 
 	liveCtx, cancel := context.WithCancel(s.ctx)
@@ -302,6 +303,10 @@ func (s *Session) startNFS(live *liveConn) error {
 		return fmt.Errorf("reserving %s on the workspace: %w%s", addr, err, s.refusalReason(live))
 	}
 	live.nfsTunnel = l
+	// An ephemeral run with no port yet asked for 0 and was given one (ADR 0050).
+	if a, ok := l.Addr().(*net.TCPAddr); ok && live.info.NFSPort == 0 {
+		live.info.NFSPort = a.Port
+	}
 
 	// The session's server, so its handles survive the reconnect (Session.nfs).
 	live.wg.Go(func() {

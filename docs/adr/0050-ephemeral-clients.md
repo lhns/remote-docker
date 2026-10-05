@@ -23,8 +23,11 @@ ADR 0029 both ways of enrolling them fail:
 - **A run is one client process**, which spans many SSH connections because idle
   ones are released (ADR 0015). Keyed on the connection, every idle reconnect
   would rename the port and the volumes under running containers (ADR 0032).
-- **The run id**: 128 random bits, hex, minted in `session.Open` and sent
-  nowhere but the run request.
+- **The run id**: 128 random bits, hex, minted by the background session and
+  sent nowhere but the run request. A one-off command on the same machine
+  (`remote status`, `remote gc`, every `withQuerySession`) asks the endpoint for
+  it (`/_remote-docker/run`) and presents it, so it is the same client; with no
+  session serving it mints its own.
 - **The run request** `workspace.RunRequest` (`remote-docker-run`): an SSH
   global request, payload the run id, sent after the handshake and before
   anything else.
@@ -42,14 +45,22 @@ ADR 0029 both ways of enrolling them fail:
 | an account not listed | acknowledged, ignored | everything as before | acknowledged, ignored |
 | an ephemeral account | sets the client | `workspace-info`, `workspace-notify`, `workspace-cache` and the reverse forward refused; a shell, the docker socket and local forwards served | refused |
 
-- **One live connection per run.** A second connection naming a live run is
-  refused with a `fix:` line. The claim ends with the connection's context,
-  which is when the workspace notices (`armDeadPeerDetection`, `wslisten`).
+- **A run's port is allocated by its reverse forward, never by workspace-info.**
+  Info reports the port on record, or `WORKSPACE_NFS_PORT=0` beside
+  `WORKSPACE_CLIENT` for a run that has bound nothing; the hosting client then
+  asks `tcpip-forward` for port 0 and is told the one allocated (RFC 4254 7.1).
+  So a query allocates nothing.
+- **Any number of connections may name one run; one may host it.** A run has
+  one port and a port one holder (`ForwardPolicy.Bind`), so a second hosting
+  connection is refused at the forward, and a run asking for another run's port
+  is refused by `runPort`. The reservation ends when the workspace notices the
+  connection end (`armDeadPeerDetection`, `wslisten`).
 - **Before the run is named the connection has no client**, and that must stay
   a refusal: `Ports.For` answers an empty client with the account's base port,
   so an info served then would silently hand a run another client's export
   port.
-- **Takeover needs both halves**: the authenticated key and the run id.
+- **Takeover needs both halves**: the authenticated key and the run id, which
+  leaves the machine only through the endpoint's own lock and ACL.
 
 ### Compatibility
 
@@ -68,9 +79,8 @@ a machine.
 - **Not yet fit to enable.** Until the registry, `Ports.Free` and cleanup land,
   each run is allocated a port that `clientports` keeps for ever, and its
   volumes outlive it. Hence no README row and no changelog entry yet.
-- **Every process is a run, a query session included.** `remote status`
-  allocates a port per call, and `remote gc` collects only its own run's
-  volumes, which is none.
+- **A one-off command with no session running is a run of its own**, so `gc`
+  then collects nothing of an earlier run's. It allocates no port.
 - **One more round trip per connection, for every account**, since the client
   cannot know an account is ephemeral before asking.
 - **Exports are not isolated between runs of one account.** `AllowDial` gates
@@ -78,13 +88,16 @@ a machine.
   container of the account reaches every run's export. Accepted, as between
   ADR 0029's machines.
 - **A reconnect before the workspace notices the previous connection ended is
-  refused**, for up to the ~60s of dead-peer detection: the wait ADR 0028's
-  port reservation already imposes on a machine.
-- **32 bits of id per run.** A collision between two live runs of one account
-  is refused as one run: loud, and negligible at a handful of runs.
+  refused its forward**, for up to the ~60s of dead-peer detection: the wait
+  ADR 0028's port reservation already imposes on a machine.
+- **32 bits of id per run.** Two live runs of one account colliding share a
+  port, and the second is refused its forward: loud, and negligible at a
+  handful of runs.
 
 ## Verification
 
 Unit tests only: `core/workspace` (`client_test.go`, `TestInfoClient`),
-`agent/internal/sshd/run_test.go`, `TestEphemeralAccounts`, and
-`client/internal/session/run_test.go`. `test/ephemeral.sh` arrives with cleanup.
+`agent/internal/sshd/run_test.go` (a real SSH conversation; its session half
+runs on Linux only), `TestEphemeralAccounts`, `client/internal/session/run_test.go`
+and `TestRunOfAsksTheBackgroundSession`. `test/ephemeral.sh` arrives with
+cleanup.

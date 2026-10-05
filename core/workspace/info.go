@@ -97,7 +97,8 @@ type Info struct {
 
 	// Client is the id the agent derived for an ephemeral run (ADR 0050), used
 	// in place of ClientID. Empty, and not emitted, for any other account; an
-	// agent that predates the key reads the same.
+	// agent that predates the key reads the same. With it, NFSPort may be 0: the
+	// run has no port until it binds one.
 	Client string
 
 	// Extra carries keys the client did not recognise. Preserving them keeps
@@ -242,7 +243,9 @@ func ParseInfo(r io.Reader) (Info, error) {
 	if info.User == "" {
 		return Info{}, fmt.Errorf("workspace: info reported an empty %s", keyUser)
 	}
-	if info.NFSPort < 1 || info.NFSPort > MaxPort {
+	// 0 only for a run that has not bound its forward yet (ADR 0050).
+	unbound := info.NFSPort == 0 && info.Client != ""
+	if !unbound && (info.NFSPort < 1 || info.NFSPort > MaxPort) {
 		return Info{}, fmt.Errorf("workspace: info reported %s=%d, not a valid port", keyNFSPort, info.NFSPort)
 	}
 	return info, nil

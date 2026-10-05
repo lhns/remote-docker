@@ -61,6 +61,39 @@ func TestTheRunIDIsOnePerProcess(t *testing.T) {
 	}
 }
 
+// A one-off command joins the background session's run: given its id, the
+// query presents it, so the workspace derives the client that session is.
+func TestAQueryPresentsTheRunItWasGiven(t *testing.T) {
+	const run = "00112233445566778899aabbccddeeff"
+	var mu sync.Mutex
+	var seen string
+	ws := startWorkspaceWith(t, &silentWorkspace{global: func(req *ssh.Request) (bool, []byte) {
+		mu.Lock()
+		seen = string(req.Payload)
+		mu.Unlock()
+		return true, nil
+	}})
+
+	s, err := Open(context.Background(), Options{
+		Config: config.Config{Host: "workspace.invalid", User: "alice", Port: 22},
+		Role:   Query,
+		RunID:  run,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if err := s.announceRun(t.Context(), ws.dial(t)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if seen != run {
+		t.Errorf("the query presented %q, want the background session's %q", seen, run)
+	}
+}
+
 // An agent that predates runs refuses the request with no reason, and the
 // client carries on as the machine its key names.
 func TestAnOlderAgentLeavesAMachine(t *testing.T) {

@@ -24,6 +24,7 @@ type fakeControl struct {
 
 func (f *fakeControl) Status() any { return f.status }
 func (f *fakeControl) Idle() any   { return Idle{Safe: f.safe} }
+func (f *fakeControl) Run() any    { return Run{Run: "0123"} }
 func (f *fakeControl) Shutdown()   { f.shutdowns.Add(1) }
 
 // waitForShutdown polls rather than reading once, for the same reason: the

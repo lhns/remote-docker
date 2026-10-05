@@ -42,6 +42,10 @@ type Options struct {
 
 	Role Role
 
+	// RunID joins the run the background session already is (ADR 0050), so a
+	// one-off query is the same client. Empty mints this process's own.
+	RunID string
+
 	// Watch replays this machine's filesystem changes into the workspace
 	// (ADR 0016). Off by default.
 	Watch        fswatch.Mode
@@ -180,6 +184,9 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = DefaultIdleTimeout
 	}
+	if !workspace.ValidRunID(opts.RunID) {
+		opts.RunID = workspace.NewRunID()
+	}
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
@@ -187,7 +194,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	nfsserve.SetLogger(opts.Log)
 
 	s := &Session{
-		runID:   workspace.NewRunID(),
+		runID:   opts.RunID,
 		opts:    opts,
 		ctx:     runCtx,
 		cancel:  cancel,

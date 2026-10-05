@@ -81,12 +81,7 @@ type Server struct {
 
 	mu     sync.Mutex
 	closed bool
-
-	// runs holds each ephemeral run with a live connection (ADR 0050).
-	runs map[runKey]struct{}
 }
-
-type runKey struct{ account, client string }
 
 // errNoAccount is returned when a forward arrives on a connection with no
 // authenticated account, which cannot happen and must not be treated as

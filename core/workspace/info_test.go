@@ -271,4 +271,12 @@ func TestInfoClient(t *testing.T) {
 	if _, err := ParseInfo(strings.NewReader(bad)); err == nil {
 		t.Error("a client id that is not one was accepted")
 	}
+
+	// A run that has bound nothing has no port; anything else must have one.
+	if _, err := ParseInfo(strings.NewReader("WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=0\nWORKSPACE_CLIENT=0123abcd\n")); err != nil {
+		t.Errorf("an unbound run's info was refused: %v", err)
+	}
+	if _, err := ParseInfo(strings.NewReader("WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=0\n")); err == nil {
+		t.Error("port 0 was accepted without a run")
+	}
 }

@@ -1,35 +1,50 @@
 package sshd
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/core-agent/accounts"
-	"github.com/lhns/remote-docker/core/cache"
-	"github.com/lhns/remote-docker/core/notify"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// A run's identity (ADR 0050): one key, many runs, each its own client.
+// A run's identity (ADR 0050), over a real SSH conversation: the run request,
+// workspace-info and the reverse forward are three requests whose ORDER is the
+// subject, so they go through the server rather than around it.
 
 const (
 	runA = "00112233445566778899aabbccddeeff"
 	runB = "ffeeddccbbaa99887766554433221100"
 )
 
-// runServer enrols alice and bob with one key each, alice's clients ephemeral.
-func runServer(t *testing.T) (*Server, ssh.PublicKey, ssh.PublicKey) {
+type runWorkspace struct {
+	addr       string
+	ports      *accounts.Ports
+	alice, bob ssh.Signer
+}
+
+// startRunWorkspace enrols alice and bob with a key each, alice's clients
+// ephemeral, on the shared daemon so a forward binds in this namespace.
+func startRunWorkspace(t *testing.T) *runWorkspace {
 	t.Helper()
+	w := &runWorkspace{alice: newSigner(t), bob: newSigner(t)}
+
 	keysDir := t.TempDir()
-	aliceKey, bobKey := generateKey(t), generateKey(t)
-	for name, key := range map[string]ssh.PublicKey{"alice": aliceKey, "bob": bobKey} {
-		if err := os.WriteFile(filepath.Join(keysDir, name+".pub"), ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
+	for name, key := range map[string]ssh.Signer{"alice": w.alice, "bob": w.bob} {
+		if err := os.WriteFile(filepath.Join(keysDir, name+".pub"), ssh.MarshalAuthorizedKey(key.PublicKey()), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,170 +52,238 @@ func runServer(t *testing.T) (*Server, ssh.PublicKey, ssh.PublicKey) {
 	if err := store.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
+	w.ports = &accounts.Ports{Dir: t.TempDir(), Mapping: workspace.DefaultMapping()}
+
 	s, err := New(Config{
 		Accounts:  store,
 		Mapping:   workspace.DefaultMapping(),
-		Daemons:   twoAccounts(),
+		Daemons:   daemons.Shared(""),
+		Ports:     w.ports,
 		Ephemeral: map[string]bool{"alice": true},
+		HostKeys:  []ssh.Signer{newSigner(t)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s, aliceKey, bobKey
-}
+	s.query = func(context.Context, string, ...string) (string, error) { return "", errors.New("no daemon here") }
 
-// connect authenticates one connection, which ends when the test does unless
-// the returned cancel ends it first.
-func connect(t *testing.T, s *Server, user string, key ssh.PublicKey) (*fakeContext, context.CancelFunc) {
-	t.Helper()
-	ctx := newFakeContext(user)
-	var cancel context.CancelFunc
-	ctx.Context, cancel = context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	if !s.authenticate(ctx, key) {
-		t.Fatalf("%s's own key was refused", user)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return ctx, cancel
+	go func() { _ = s.ServeListener(l) }()
+	t.Cleanup(func() { _ = s.Close(); _ = l.Close() })
+	w.addr = l.Addr().String()
+	return w
 }
 
-func sendRun(s *Server, ctx *fakeContext, run string) (bool, string) {
-	ok, reply := s.handleRun(ctx, nil, &ssh.Request{Type: workspace.RunRequest, Payload: []byte(run)})
+func newSigner(t *testing.T) ssh.Signer {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+// dial connects, and names run when it is not empty.
+func (w *runWorkspace) dial(t *testing.T, user string, key ssh.Signer, run string) *ssh.Client {
+	t.Helper()
+	c, err := ssh.Dial("tcp", w.addr, &ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if run != "" {
+		if ok, why := sendRun(t, c, run); !ok {
+			t.Fatalf("run %s refused: %s", run, why)
+		}
+	}
+	return c
+}
+
+func sendRun(t *testing.T, c *ssh.Client, run string) (bool, string) {
+	t.Helper()
+	ok, reply, err := c.SendRequest(workspace.RunRequest, true, []byte(run))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return ok, string(reply)
 }
 
-func TestARunIsNamedOncePerConnection(t *testing.T) {
-	s, key, _ := runServer(t)
-	ctx, _ := connect(t, s, "alice", key)
-
-	if ok, why := sendRun(s, ctx, runA); !ok {
-		t.Fatalf("the first run id was refused: %s", why)
-	}
-	account, _ := accountFor(ctx)
-	if want := workspace.EphemeralClientID(key.Marshal(), runA); account.Client() != want {
-		t.Errorf("client = %q, want %q", account.Client(), want)
-	}
-
-	ok, why := sendRun(s, ctx, runB)
-	if ok {
-		t.Fatal("a second run id on one connection was accepted")
-	}
-	if !strings.Contains(why, "already named its run") {
-		t.Errorf("the refusal says %q", why)
-	}
-	if again, _ := accountFor(ctx); again.Client() != account.Client() {
-		t.Errorf("the refused run changed the client to %q", again.Client())
-	}
-
-	if ok, _ := sendRun(s, connectOnly(t, s, key), "not-a-run"); ok {
-		t.Error("a malformed run id was accepted")
-	}
-}
-
-func connectOnly(t *testing.T, s *Server, key ssh.PublicKey) *fakeContext {
+// needSessions skips where the agent refuses every session (session_other.go).
+func needSessions(t *testing.T) {
 	t.Helper()
-	ctx, _ := connect(t, s, "alice", key)
-	return ctx
+	if runtime.GOOS != "linux" {
+		t.Skip("sessions are served on Linux only")
+	}
 }
 
-// Before its run is named, an ephemeral connection has no client, so nothing
-// that is per client may be served: not the export's port, not notify, not the
-// cache, not the reverse forward.
-func TestRequestsNeedingAClientWaitForTheRun(t *testing.T) {
-	s, key, _ := runServer(t)
-	ctx, _ := connect(t, s, "alice", key)
-	account, _ := accountFor(ctx)
-
-	for _, command := range []string{workspace.InfoCommand, notify.Command, cache.Command} {
-		if !needsClient(command) {
-			t.Errorf("%s does not need a client", command)
-		}
+// info runs workspace-info, failing with what the workspace said.
+func info(t *testing.T, c *ssh.Client) workspace.Info {
+	t.Helper()
+	got, stderr, err := tryInfo(c)
+	if err != nil {
+		t.Fatalf("workspace-info: %v: %s", err, stderr)
 	}
-	for _, command := range []string{workspace.DialStdioCommand, "", "ls"} {
-		if needsClient(command) {
-			t.Errorf("%q needs a client; a shell or the daemon does not", command)
-		}
-	}
+	return got
+}
 
-	if account.Client() != "" {
-		t.Fatalf("client = %q before the run was named", account.Client())
+func tryInfo(c *ssh.Client) (workspace.Info, string, error) {
+	session, err := c.NewSession()
+	if err != nil {
+		return workspace.Info{}, "", err
 	}
+	defer func() { _ = session.Close() }()
+	var stdout, stderr bytes.Buffer
+	session.Stdout, session.Stderr = &stdout, &stderr
+	if err := session.Run(workspace.InfoCommand); err != nil {
+		return workspace.Info{}, stderr.String(), err
+	}
+	got, err := workspace.ParseInfo(&stdout)
+	return got, stderr.String(), err
+}
 
-	port, err := workspace.DefaultMapping().PortForUID(account.UID())
+// host binds the reverse forward as a hosting client does: on the port info
+// reported, which is 0 for a run that has none yet.
+func host(c *ssh.Client, port int) (net.Listener, error) {
+	return c.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+}
+
+// recorded reports whether clientports holds a port for this client.
+func (w *runWorkspace) recorded(t *testing.T, account, client string) bool {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(w.ports.Dir, "clientports"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := (reversePolicy{s}).Allow(ctx, "127.0.0.1", uint32(port)); ok {
-		t.Fatal("a reverse forward was allowed before the run was named")
+	return strings.Contains(string(b), account+":"+client+":")
+}
+
+func (w *runWorkspace) run(run string) string {
+	return workspace.EphemeralClientID(w.alice.PublicKey().Marshal(), run)
+}
+
+func TestARunIsNamedOncePerConnection(t *testing.T) {
+	w := startRunWorkspace(t)
+	c := w.dial(t, "alice", w.alice, runA)
+
+	if ok, why := sendRun(t, c, runB); ok || !strings.Contains(why, "already named its run") {
+		t.Errorf("a second run id on one connection: ok=%v, %q", ok, why)
+	}
+	if ok, why := sendRun(t, w.dial(t, "alice", w.alice, ""), "not-a-run"); ok || why == "" {
+		t.Errorf("a malformed run id: ok=%v, %q; want a refusal with a reason", ok, why)
 	}
 
-	if ok, why := sendRun(s, ctx, runA); !ok {
-		t.Fatalf("run refused: %s", why)
-	}
-	if _, ok := (reversePolicy{s}).Allow(ctx, "127.0.0.1", uint32(port)); !ok {
-		t.Error("the reverse forward was refused after the run was named")
+	needSessions(t)
+	if got := info(t, c).Client; got != w.run(runA) {
+		t.Errorf("client = %q, want %q", got, w.run(runA))
 	}
 }
 
-// An account not opted in is what it was: the request is acknowledged and the
-// client stays the digest of the key.
-func TestAMachineAccountIgnoresTheRun(t *testing.T) {
-	s, _, key := runServer(t)
-	ctx, _ := connect(t, s, "bob", key)
+// Before its run is named an ephemeral connection has no client, so nothing per
+// client is served: Ports.For would answer the account's base port.
+func TestRequestsNeedingAClientWaitForTheRun(t *testing.T) {
+	w := startRunWorkspace(t)
+	c := w.dial(t, "alice", w.alice, "")
 
-	if ok, why := sendRun(s, ctx, runA); !ok {
-		t.Fatalf("bob's run request was refused: %s", why)
+	if l, err := host(c, 0); err == nil {
+		_ = l.Close()
+		t.Error("a reverse forward was allowed before the run was named")
 	}
-	if ok, why := sendRun(s, ctx, runB); !ok {
+
+	needSessions(t)
+	if _, stderr, err := tryInfo(c); err == nil || !strings.Contains(stderr, "named no run") {
+		t.Errorf("workspace-info before the run: err=%v, stderr %q", err, stderr)
+	}
+}
+
+// An account not listed is what it was: acknowledged, keyed on the key, and
+// given its port by workspace-info.
+func TestAMachineAccountIgnoresTheRun(t *testing.T) {
+	needSessions(t)
+	w := startRunWorkspace(t)
+	c := w.dial(t, "bob", w.bob, runA)
+	if ok, why := sendRun(t, c, runB); !ok {
 		t.Fatalf("bob's second run request was refused: %s", why)
 	}
-	account, _ := accountFor(ctx)
-	if account.Client() != workspace.ClientID(key.Marshal()) {
-		t.Errorf("client = %q, want the digest of bob's key", account.Client())
+
+	if got := info(t, c); got.Client != "" || got.NFSPort == 0 {
+		t.Errorf("bob's info: client %q, port %d; want no client and a port", got.Client, got.NFSPort)
+	}
+	if !w.recorded(t, "bob", workspace.ClientID(w.bob.PublicKey().Marshal())) {
+		t.Error("bob's port is not recorded against his key")
 	}
 }
 
-// A run is one process, so a second live connection naming it is refused; once
-// the first ends, a reconnect for the same run is the same client.
-func TestOneLiveConnectionPerRun(t *testing.T) {
-	s, key, _ := runServer(t)
-	first, closeFirst := connect(t, s, "alice", key)
-	if ok, why := sendRun(s, first, runA); !ok {
-		t.Fatalf("run refused: %s", why)
-	}
-
-	second, closeSecond := connect(t, s, "alice", key)
-	ok, why := sendRun(s, second, runA)
-	if ok {
-		t.Fatal("a second live connection for one run was accepted")
-	}
-	if !strings.Contains(why, "already has a live connection") || !strings.Contains(why, "\n  fix: ") {
-		t.Errorf("the refusal says %q", why)
-	}
-	// The refused connection ending must not release the first's claim.
-	closeSecond()
-	time.Sleep(50 * time.Millisecond)
-	if ok, _ := sendRun(s, connectOnly(t, s, key), runA); ok {
-		t.Fatal("a refused connection ending released the live one's run")
-	}
-
-	if ok, why := sendRun(s, connectOnly(t, s, key), runB); !ok {
-		t.Errorf("another run of the same key was refused: %s", why)
-	}
-
-	closeFirst()
-	waitFor(t, func() bool {
-		ok, _ := sendRun(s, connectOnly(t, s, key), runA)
-		return ok
-	})
-}
-
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	for range 200 {
-		if cond() {
-			return
+// `remote status` with no session running is a run of its own each time.
+// Asking for info allocates nothing; only binding the forward does.
+func TestInfoAllocatesNoPortForARun(t *testing.T) {
+	needSessions(t)
+	w := startRunWorkspace(t)
+	for _, run := range []string{runA, runB} {
+		if port := info(t, w.dial(t, "alice", w.alice, run)).NFSPort; port != 0 {
+			t.Errorf("run %s was told port %d before binding anything", run, port)
 		}
-		time.Sleep(10 * time.Millisecond)
+		if w.recorded(t, "alice", w.run(run)) {
+			t.Errorf("asking for info allocated run %s a port", run)
+		}
 	}
-	t.Fatal("the run was never released after its connection ended")
+}
+
+// The background session hosts; a one-off command presents the same run while
+// it lives, and is the same client on the same port.
+func TestAQueryJoinsALiveRun(t *testing.T) {
+	needSessions(t)
+	w := startRunWorkspace(t)
+	hosting := w.dial(t, "alice", w.alice, runA)
+	l, err := host(hosting, info(t, hosting).NFSPort)
+	if err != nil {
+		t.Fatalf("the hosting connection was refused its forward: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	query := w.dial(t, "alice", w.alice, runA)
+	if got, want := info(t, query).NFSPort, l.Addr().(*net.TCPAddr).Port; got != want {
+		t.Errorf("a query of the live run was told port %d, want the hosting one's %d", got, want)
+	}
+}
+
+// One port per run and one holder per port: a second hosting connection for
+// the run is refused, and so is another run asking for this run's port.
+func TestASecondHostingConnectionIsRefused(t *testing.T) {
+	needSessions(t)
+	w := startRunWorkspace(t)
+	first := w.dial(t, "alice", w.alice, runA)
+	l, err := host(first, info(t, first).NFSPort)
+	if err != nil {
+		t.Fatalf("the first hosting connection was refused: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	port := l.Addr().(*net.TCPAddr).Port
+
+	for _, c := range []struct {
+		run   string
+		asked int
+	}{{runA, 0}, {runA, port}, {runB, port}} {
+		second := w.dial(t, "alice", w.alice, "")
+		if ok, _ := sendRun(t, second, c.run); !ok {
+			continue // refused at the run, which also keeps it out
+		}
+		if l2, err := host(second, c.asked); err == nil {
+			_ = l2.Close()
+			t.Errorf("run %s bound port %d while the first held %d", c.run, c.asked, port)
+		}
+	}
 }

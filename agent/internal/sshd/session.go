@@ -44,11 +44,16 @@ func (s *Server) handleSession(session gssh.Session) {
 
 	command := strings.Join(session.Command(), " ")
 
-	if account.client == "" && needsClient(command) {
-		_, _ = fmt.Fprintf(session.Stderr(), "%s: account %s gives each client run its own identity, and this connection named no run\n"+
-			"  fix: upgrade remote-docker on this machine\n", command, account.Name())
-		_ = session.Exit(1)
-		return
+	switch command {
+	case workspace.InfoCommand, notify.Command, cache.Command:
+		// Each depends on which client asks, and an ephemeral connection that
+		// has not named its run has none (ADR 0050).
+		if account.client == "" {
+			_, _ = fmt.Fprintf(session.Stderr(), "%s: account %s gives each client run its own identity, and this connection named no run\n"+
+				"  fix: upgrade remote-docker on this machine\n", command, account.Name())
+			_ = session.Exit(1)
+			return
+		}
 	}
 
 	switch command {
@@ -71,7 +76,16 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 	// The uid still decides the first one, so a workspace anybody reaches from
 	// one computer is on exactly the port it always was; a second computer is
 	// given one of its own rather than being refused the first one's.
-	port, err := s.cfg.Ports.For(account.Name(), account.UID(), account.Client())
+	//
+	// A run is given its port when it binds (runPort), never here: every
+	// one-off command is a connection asking for info (ADR 0050).
+	var port int
+	var err error
+	if account.ephemeral {
+		port, _, err = s.cfg.Ports.Lookup(account.Name(), account.Client())
+	} else {
+		port, err = s.cfg.Ports.For(account.Name(), account.UID(), account.Client())
+	}
 	if err != nil {
 		_, _ = fmt.Fprintln(session.Stderr(), "workspace-info:", err)
 		_ = session.Exit(1)
@@ -110,7 +124,7 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		// the two machines rather than assume they agree (ADR 0044).
 		Now: time.Now().UnixNano(),
 	}
-	// The run's id, which the client cannot derive alone (ADR 0050).
+	// The client cannot derive a run's id alone (ADR 0050).
 	if account.ephemeral {
 		info.Client = account.Client()
 	}

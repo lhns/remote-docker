@@ -716,11 +716,14 @@ premise of the project, and it applies to building it too. So:
   the agent had just handed out.
 - **For an ephemeral account the client is the RUN, one client process, never
   the SSH connection** (ADR 0050): keyed on the connection, an idle reconnect
-  renames the port and volumes under running containers. Until the run is
-  named nothing per client is served, because `Ports.For` answers an empty
-  client with the account's base port. A new agent's refusal of the run always
-  carries a reason: an empty one reads as an older agent and the client
-  silently becomes a machine.
+  renames the port and volumes under running containers. A one-off command
+  presents the background session's run, so `gc` is that client. A run's port
+  is allocated by its reverse forward (port 0), never by workspace-info, or every
+  `status` keeps a port for ever; the port is also what keeps a run to one
+  hosting connection. Until the run is named nothing per client is served,
+  because `Ports.For` answers an empty client with the account's base port. A
+  new agent's refusal of the run always carries a reason: an empty one reads as
+  an older agent and the client silently becomes a machine.
 
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,

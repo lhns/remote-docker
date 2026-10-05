@@ -32,30 +32,37 @@ type localPolicy struct{ s *Server }
 //
 // It RESERVES as well as permits, and returns the token that gives the
 // reservation up again; see forward.go's reservation for why a token.
-func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64, bool) {
+func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64, uint32, bool) {
 	s := p.s
 	account, ok := accountFor(ctx)
 	if !ok {
-		return 0, false
+		return 0, 0, false
 	}
 	// The reverse forward is the client's export, so it needs the client.
 	if account.client == "" {
 		s.log().Warn("refused a reverse forward: this connection named no run",
 			"host", host, "port", port, "account", account.Name())
-		return 0, false
+		return 0, 0, false
+	}
+	if account.ephemeral {
+		if port, ok = s.runPort(account, port); !ok {
+			return 0, 0, false
+		}
 	}
 
 	allowed, why := s.forward.Allow(account, host, port)
 	if !allowed {
 		s.log().Warn("refused a reverse forward", "host", host, "port", port, "account", account.Name(), "why", why)
-		return 0, false
+		return 0, 0, false
 	}
+	// For a run this is also what keeps it to one hosting connection: a run
+	// has one port, and a port one holder.
 	token, ok := s.forward.Bind(account, host, port)
 	if !ok {
 		holder, _ := s.forward.Holder(host, port)
 		s.log().Warn("refused a reverse forward: the port is already held",
 			"host", host, "port", port, "account", account.Name(), "holder", holder)
-		return 0, false
+		return 0, 0, false
 	}
 
 	// Released when the connection ends, so a dropped client does not keep its
@@ -67,7 +74,24 @@ func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64
 	}()
 
 	s.log().Info("forwarding", "account", account.Name(), "host", host, "port", port)
-	return token, true
+	return token, port, true
+}
+
+// runPort is the port an ephemeral run binds, allocated here and nowhere
+// earlier (ADR 0050). A run asks for 0, or for the port workspace-info already
+// reported; any other number is another run's.
+func (s *Server) runPort(account sessionAccount, asked uint32) (uint32, bool) {
+	port, err := s.cfg.Ports.For(account.Name(), account.UID(), account.client)
+	if err != nil {
+		s.log().Warn("refused a reverse forward", "account", account.Name(), "err", err)
+		return 0, false
+	}
+	if asked != 0 && asked != uint32(port) {
+		s.log().Warn("refused a reverse forward: not this run's port",
+			"account", account.Name(), "asked", asked, "port", port)
+		return 0, false
+	}
+	return uint32(port), true
 }
 
 func (p reversePolicy) Release(token uint64, host string, port uint32) {

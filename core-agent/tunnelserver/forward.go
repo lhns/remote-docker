@@ -61,8 +61,11 @@ type remoteForwardChannelData struct {
 // failed bind delete the first machine's live reservation. The machinery holds
 // the token and hands it back on every path that ends the forward, including
 // the one where Listen itself fails.
+//
+// bound is the port to listen on: port itself, or the one the policy chose
+// when the client asked for 0 (RFC 4254 7.1), which the reply reports.
 type Reverse interface {
-	Allow(ctx gssh.Context, host string, port uint32) (token uint64, ok bool)
+	Allow(ctx gssh.Context, host string, port uint32) (token uint64, bound uint32, ok bool)
 	Release(token uint64, host string, port uint32)
 	Listen(ctx gssh.Context, addr string) (net.Listener, error)
 }
@@ -129,10 +132,11 @@ func (f *Forwards) HandleRequest(ctx gssh.Context, _ *gssh.Server, req *gossh.Re
 }
 
 func (f *Forwards) open(ctx gssh.Context, conn *gossh.ServerConn, payload remoteForwardRequest) (bool, []byte) {
-	token, allowed := f.Reverse.Allow(ctx, payload.BindAddr, payload.BindPort)
+	token, bound, allowed := f.Reverse.Allow(ctx, payload.BindAddr, payload.BindPort)
 	if !allowed {
 		return false, []byte("port forwarding is disabled")
 	}
+	payload.BindPort = bound
 
 	addr := net.JoinHostPort(payload.BindAddr, strconv.Itoa(int(payload.BindPort)))
 	ln, err := f.Reverse.Listen(ctx, addr)

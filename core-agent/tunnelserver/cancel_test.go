@@ -17,7 +17,9 @@ type reserving struct {
 	released []uint64
 }
 
-func (r *reserving) Allow(gssh.Context, string, uint32) (uint64, bool) { return 7, true }
+func (r *reserving) Allow(_ gssh.Context, _ string, port uint32) (uint64, uint32, bool) {
+	return 7, port, true
+}
 func (r *reserving) Release(token uint64, _ string, _ uint32) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

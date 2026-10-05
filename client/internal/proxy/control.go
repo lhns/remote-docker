@@ -25,6 +25,10 @@ type Control interface {
 	// Idle is separate from Status because it costs a round trip to the
 	// workspace.
 	Idle() any
+
+	// Run names the session's run (ADR 0050). A secret of this machine's, as
+	// the endpoint is: its lock and ACL are what keep it here.
+	Run() any
 }
 
 func isControl(req *http.Request) bool {
@@ -45,6 +49,9 @@ func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 
 	case "idle":
 		writeControl(client, http.StatusOK, p.Control.Idle())
+
+	case "run":
+		writeControl(client, http.StatusOK, p.Control.Run())
 
 	case "shutdown":
 		if req.Method != http.MethodPost {
@@ -96,6 +103,11 @@ type Status struct {
 	// Drops counts reconnects after a dead connection; otherwise invisible.
 	Drops    int    `json:"drops,omitempty"`
 	LastDrop string `json:"lastDrop,omitempty"`
+}
+
+// Run is the daemon's run id, which a one-off query presents as its own.
+type Run struct {
+	Run string `json:"run"`
 }
 
 // Idle is what the daemon reports about whether it can be ended.
