@@ -66,7 +66,7 @@ type machineOptions struct {
 
 func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.backend, "backend", "",
-		"wsl, or hyperv (never executed by anybody -- see docs/testing-machines.md); defaults to the existing machine's, else wsl")
+		"wsl, or hyperv (run by hand once, never in CI; see docs/testing-machines.md); defaults to the existing machine's, else wsl")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
@@ -278,7 +278,7 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
 }
 
-// unproven names the backends never executed, which warn rather than refuse.
+// unproven names the backends no CI runs, which warn rather than refuse.
 // Must agree with CLAUDE.md's NOT-tested list.
 var unproven = map[string]bool{"hyperv": true}
 
@@ -296,7 +296,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 
 	if unproven[spec.Backend] {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has never been run by anybody\n"+
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has been run by hand once and is not tested by CI\n"+
 			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
 			spec.Backend)
 	}
@@ -377,6 +377,15 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	// refusing connections to a listening agent (machine.yml, 2026-08-11).
 	if _, err := machine.Locate(ctx, spec.Backend, name, spec.Port); err != nil {
 		return err
+	}
+
+	// On every create, so running it again retries a removal that failed. A
+	// warning, because the machine itself works.
+	if r, ok := backend.(machine.Retracter); ok {
+		if err := r.Retract(ctx, name); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the machine's private host key is still in its Hyper-V KVP items: %v\n"+
+				"  fix: `%s` again, with the options it was built with, removes them\n", err, ourCommand("machine create "+name))
+		}
 	}
 
 	// Every time, so a rotated key reaches an existing machine.

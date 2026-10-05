@@ -12,6 +12,18 @@ software.
 
 ### Fixes
 
+- **The Hyper-V backend works, on the one machine it has run on.** Its first
+  run, by hand on 2026-10-05 (Windows 11 25H2, Flatcar 4757.2.1), found three
+  bugs that each stopped every machine: `machine create` always failed with
+  `cannot tell what is there: exit status 1:`, the machine never received its
+  configuration and booted with no way in, and the first command after a boot
+  failed with `has no address yet`. The configuration now goes to the guest
+  over Hyper-V's KVP exchange, the way Flatcar reads it, and is removed from
+  there once the machine has applied it, since it holds the machine's private
+  host key. A booting machine is waited for, `remote rm` completes on a
+  machine whose VM was deleted by hand, and the runbook's download link, which
+  had stopped working, is corrected. No CI can run Hyper-V, so it still warns
+  when used.
 - **`remote machine rebuild` rebuilds a Hyper-V machine as a Hyper-V machine.**
   Without `--backend` it tried to build a WSL machine of the same name from the
   Flatcar disk, which WSL happened to refuse. `machine create` without
