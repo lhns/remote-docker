@@ -6,9 +6,7 @@ package machine
 //
 // Everything it decides lives in hyperv.go and is tested on any platform. What
 // is here is process running, kept thinner than the WSL backend's because that
-// one at least runs in CI. This runs nowhere: GitHub's runners do not offer
-// Hyper-V and nobody working on this has it, so `docs/testing-machines.md` is
-// the whole of its verification.
+// one at least runs in CI and this one runs in none (ADR 0026).
 
 import (
 	"context"
@@ -27,14 +25,20 @@ type hyperVBackend struct{}
 
 func (hyperVBackend) Name() string { return "hyperv" }
 
-// ps runs one PowerShell command and returns its output.
+// ps runs one PowerShell script, wrapped by psScript, and returns its output.
 //
 // -NoProfile because a user's profile can print banners into what is parsed
 // here, and -NonInteractive so a cmdlet that wants confirmation fails instead
 // of waiting for a keystroke nobody will send.
-func (hyperVBackend) ps(ctx context.Context, script string) (string, error) {
+func (b hyperVBackend) ps(ctx context.Context, script string) (string, error) {
+	return b.psWithInput(ctx, script, "")
+}
+
+// psWithInput is ps with stdin, for data that must not be on a command line.
+func (hyperVBackend) psWithInput(ctx context.Context, script, stdin string) (string, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe",
-		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psScript(script))
+	cmd.Stdin = strings.NewReader(stdin)
 
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
@@ -75,8 +79,7 @@ func (b hyperVBackend) Available(ctx context.Context) error {
 }
 
 // look reads a machine's state and its recorded notes, in one call (psGetVM) so
-// the two cannot disagree. A machine that is not there prints nothing, because
-// psGetVM asks with -ErrorAction SilentlyContinue.
+// the two cannot disagree. A machine that is not there prints nothing.
 func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNotes, error) {
 	out, err := b.ps(ctx, psGetVM(machineName(name)))
 	if err != nil {
@@ -94,7 +97,8 @@ func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, erro
 	return observeVM(b.look(ctx, name))
 }
 
-// Create builds the machine from a Flatcar image and one Ignition document.
+// Create builds the machine from a Flatcar image and one Ignition document,
+// handed to it over KVP before its first boot (psAddKVP).
 //
 // The image is a file the user downloaded, named by --rootfs, exactly as the
 // WSL backend takes a rootfs. Nothing is fetched here.
@@ -102,6 +106,19 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	if spec.Rootfs == "" {
 		return errors.New("no image to build from: a Hyper-V machine is created from a Flatcar disk image\n" +
 			"  fix: see docs/testing-machines.md for the one command that downloads it")
+	}
+
+	// Before the copy, which is over a gigabyte.
+	if strings.TrimSpace(spec.PublicKey) == "" {
+		return errors.New("no key to enrol: a Hyper-V machine has no way in but the key it is built with")
+	}
+	config, err := ignition(spec, spec.PublicKey)
+	if err != nil {
+		return err
+	}
+	input, err := kvpInput(ignitionKVP(config))
+	if err != nil {
+		return err
 	}
 
 	dir, err := stateDir(spec.Name)
@@ -120,22 +137,11 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("copying the disk image: %w", err)
 	}
 
-	if strings.TrimSpace(spec.PublicKey) == "" {
-		return errors.New("no key to enrol: a Hyper-V machine has no way in but the key it is built with")
-	}
-	config, err := ignition(spec, spec.PublicKey)
-	if err != nil {
-		return err
-	}
-
-	// Written beside the disk, where Flatcar's Hyper-V image reads it from the
-	// host through the data-source Ignition uses on this platform.
-	if err := os.WriteFile(filepath.Join(dir, "config.ign"), []byte(config), 0o600); err != nil {
-		return fmt.Errorf("writing the machine's configuration: %w", err)
-	}
-
 	if _, err := b.ps(ctx, psNewVM(machineName(spec.Name), vhd, dir, spec)); err != nil {
 		return fmt.Errorf("creating the machine: %w", err)
+	}
+	if _, err := b.psWithInput(ctx, psAddKVP(machineName(spec.Name)), input); err != nil {
+		return fmt.Errorf("handing the machine its configuration: %w", err)
 	}
 
 	// The single point at which a machine becomes "built": recorded after
@@ -149,6 +155,13 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	return b.Start(ctx, spec.Name)
 }
 
+// Retract removes the Ignition document's KVP items, private host key
+// included. Removing items already gone succeeds.
+func (b hyperVBackend) Retract(ctx context.Context, name string) error {
+	_, err := b.ps(ctx, psRemoveKVP(machineName(name)))
+	return err
+}
+
 // Enrol reports whether this key already reaches the machine. It cannot write
 // one: see hyperVEnrolment.
 func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) error {
@@ -160,7 +173,7 @@ func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) err
 }
 
 func (b hyperVBackend) Start(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, fmt.Sprintf("Start-VM -Name %s -ErrorAction SilentlyContinue", psQuote(machineName(name))))
+	_, err := b.ps(ctx, psStart(machineName(name)))
 	return err
 }
 
@@ -178,11 +191,8 @@ func (b hyperVBackend) Address(ctx context.Context, name string) (string, error)
 	return parseVMAddress(out), nil
 }
 
-// Stop shuts the machine down and waits for it. Stop-VM without -TurnOff, so
-// the guest flushes its docker state; -Force means "do not ask about signed-in
-// users", not "pull the plug".
 func (b hyperVBackend) Stop(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(machineName(name))))
+	_, err := b.ps(ctx, psStop(machineName(name)))
 	return err
 }
 

@@ -8,7 +8,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -62,8 +65,8 @@ type machineOptions struct {
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&o.backend, "backend", "wsl",
-		"wsl, or hyperv (never executed by anybody -- see docs/testing-machines.md)")
+	cmd.Flags().StringVar(&o.backend, "backend", "",
+		"wsl, or hyperv (run by hand once, never in CI; see docs/testing-machines.md); defaults to the existing machine's, else wsl")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
@@ -77,11 +80,16 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // Unset settings fall back to the recorded ones, since Spec.Generation hashes
 // them all: otherwise rebuilding a `--port 2222` machine builds one on 22 that
 // `status` calls out of date forever. The recorded rootfs is reused only for
-// the same image and while the file still exists.
+// the same image and while the file still exists, and one EnsureRootfs fetched
+// stays Fetched, so the rebuild hashes as a create without --rootfs does.
 func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.Spec, error) {
+	backend, err := o.backendFor(name, recorded)
+	if err != nil {
+		return machine.Spec{}, err
+	}
 	spec := machine.Spec{
 		Name:    name,
-		Backend: o.backend,
+		Backend: backend,
 		// Part of the generation, so a new client version rebuilds (ADR 0026).
 		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
@@ -99,6 +107,7 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 		if spec.Rootfs == "" && m.Image == spec.Image && m.Rootfs != "" {
 			if _, err := os.Stat(m.Rootfs); err == nil {
 				spec.Rootfs = m.Rootfs
+				spec.Fetched = machine.IsFetched(m.Rootfs)
 			}
 		}
 	}
@@ -110,6 +119,27 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 	}
 	spec.Account = account
 	return spec, nil
+}
+
+// defaultBackend is what a machine nothing was recorded for is built with.
+const defaultBackend = "wsl"
+
+// backendFor is the backend a machine command acts on: --backend, else the
+// recorded machine's, else defaultBackend. Only the backend that built a
+// machine can inspect or destroy it, so naming another one for an existing
+// machine is refused: it would build a second machine beside the first and
+// overwrite the only record that the first exists.
+func (o *machineOptions) backendFor(name string, recorded *config.Workspace) (string, error) {
+	if recorded == nil || recorded.Machine == nil {
+		return cmp.Or(o.backend, defaultBackend), nil
+	}
+	built := recorded.Machine.Backend
+	if o.backend != "" && o.backend != built {
+		return "", fmt.Errorf("%q is a %s machine and cannot be moved to %s\n"+
+			"  fix: `%s` destroys it, then `%s` builds the new one",
+			name, built, o.backend, ourCommand("rm "+name), ourCommand("machine create "+name+" --backend "+o.backend))
+	}
+	return built, nil
 }
 
 // recordedWorkspace is the workspace entry a machine was registered under,
@@ -141,10 +171,15 @@ nothing. Run against one built from different settings, it reports the mismatch
 rather than acting on it, because recreating discards what is inside and that
 is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
-		// Flags alone, not the record, or a mismatch could never show.
+		// Flags alone, not the record, or a mismatch could never show. The
+		// backend is the exception: it is not a setting to compare but where
+		// the machine is, and asking another backend finds nothing there.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec, err := opts.spec(args[0], nil)
 			if err != nil {
+				return err
+			}
+			if spec.Backend, err = opts.backendFor(args[0], recordedWorkspace(args[0])); err != nil {
 				return err
 			}
 			return createMachine(cmd, args[0], spec, false)
@@ -169,7 +204,10 @@ nothing to repair in place.
 
 Images, containers and volumes INSIDE the machine are lost. Your files are not:
 they are on this machine and are served to it. Refused while the workspace's
-session is in use; -f overrides.`,
+session is in use; -f overrides.
+
+It keeps the backend it was built with. Moving it to another is "remote rm",
+then "machine create --backend".`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, err := machineName(args)
@@ -240,7 +278,7 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
 }
 
-// unproven names the backends never executed, which warn rather than refuse.
+// unproven names the backends no CI runs, which warn rather than refuse.
 // Must agree with CLAUDE.md's NOT-tested list.
 var unproven = map[string]bool{"hyperv": true}
 
@@ -258,7 +296,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 
 	if unproven[spec.Backend] {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has never been run by anybody\n"+
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has been run by hand once and is not tested by CI\n"+
 			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
 			spec.Backend)
 	}
@@ -290,11 +328,25 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
 				return err
 			}
+			spec.Fetched = true
 		}
+
+		// Made here so the record can pin it, rather than learning it from
+		// whatever answers at the machine's address (ADR 0026).
+		hk, err := keys.NewHostKey()
+		if err != nil {
+			return err
+		}
+		spec.HostKey = string(hk.Private)
 
 		_, _ = fmt.Fprintf(out, "creating the %s machine %q\n", spec.Backend, spec.Name)
 		if err := backend.Create(ctx, spec); err != nil {
 			return fmt.Errorf("creating %s: %w", name, err)
+		}
+		// Recorded before waiting for the agent: if that fails, the next
+		// create builds nothing and would keep the destroyed machine's key.
+		if err := recordMachine(name, spec, hk.Public); err != nil {
+			return err
 		}
 
 	case action == machine.Start:
@@ -327,6 +379,15 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return err
 	}
 
+	// On every create, so running it again retries a removal that failed. A
+	// warning, because the machine itself works.
+	if r, ok := backend.(machine.Retracter); ok {
+		if err := r.Retract(ctx, name); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the machine's private host key is still in its Hyper-V KVP items: %v\n"+
+				"  fix: `%s` again, with the options it was built with, removes them\n", err, ourCommand("machine create "+name))
+		}
+	}
+
 	// Every time, so a rotated key reaches an existing machine.
 	if err := backend.Enrol(ctx, name, spec.Account, key); err != nil {
 		return fmt.Errorf("enrolling this machine's key: %w", err)
@@ -338,32 +399,39 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 // machinePlaceholderHost stands in for an address nobody should read.
 const machinePlaceholderHost = "127.0.0.1"
 
-// saveMachineWorkspace writes the workspace entry.
-func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) error {
-	file, err := config.Load("")
-	if err != nil {
-		return err
+// machineEntry is the workspace entry for a machine built from spec. hostKey is
+// the public half of a host key just built in, or "" to keep the recorded one:
+// a machine nothing rebuilt still serves with it.
+func machineEntry(ws config.Workspace, spec machine.Spec, hostKey string) config.Workspace {
+	if hostKey == "" && ws.Machine != nil {
+		hostKey = ws.Machine.HostKey
 	}
-
-	ws := file.Workspaces[name]
 	// The real address changes at boot and is located at every connection
 	// (session.connect).
 	ws.Host = machinePlaceholderHost
 	ws.Port = spec.Port
 	ws.User = spec.Account
-	ws.Machine = &config.Machine{
-		Backend:    spec.Backend,
-		Name:       spec.Name,
-		Image:      spec.Image,
-		Rootfs:     spec.Rootfs,
-		CPUs:       spec.CPUs,
-		MemoryMB:   spec.MemoryMB,
-		Generation: spec.Generation(),
-	}
-	if err := file.Set(name, ws); err != nil {
+	ws.Machine = machineRecord(spec)
+	ws.Machine.HostKey = hostKey
+	return ws
+}
+
+// recordMachine writes the workspace entry (machineEntry).
+func recordMachine(name string, spec machine.Spec, hostKey string) error {
+	file, err := config.Load("")
+	if err != nil {
 		return err
 	}
-	if err := config.Save(file, ""); err != nil {
+	if err := file.Set(name, machineEntry(file.Workspaces[name], spec, hostKey)); err != nil {
+		return err
+	}
+	return config.Save(file, "")
+}
+
+// saveMachineWorkspace writes the workspace entry, keeping its host key, and
+// reports its docker context.
+func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) error {
+	if err := recordMachine(name, spec, ""); err != nil {
 		return err
 	}
 
@@ -375,8 +443,52 @@ func saveMachineWorkspace(cmd *cobra.Command, name string, spec machine.Spec) er
 	if err == nil {
 		reportContext(out, cfg)
 	}
-	_, _ = fmt.Fprintf(out, "\nTry `%s`.\n", programName()+" run --rm -v .:/w alpine ls /w")
+	defaultName := ""
+	if def, err := config.Resolve(config.Overrides{}, ""); err == nil {
+		defaultName = def.Name
+	}
+	_, _ = fmt.Fprintln(out, "\n"+tryHint(name, reachedByDocker(name, defaultName, realLookups())))
 	return nil
+}
+
+// tryHint is the command create suggests. Create makes the machine the default
+// only when no workspace is the default yet, so when docker would reach another
+// workspace the hint has `remote use` first, which is spelled the same in every
+// shell where a DOCKER_CONTEXT prefix is not.
+func tryHint(name string, reached bool) string {
+	run := programName() + " run --rm -v .:/w alpine ls /w"
+	if reached {
+		return fmt.Sprintf("Try `%s`.", run)
+	}
+	return fmt.Sprintf("Try `%s`, then `%s`.", ourCommand("use "+name), run)
+}
+
+// reachedByDocker says whether a docker command with no flags reaches the named
+// workspace, by the rule a docker command itself follows (decideTarget).
+// defaultName is the configured default workspace.
+func reachedByDocker(name, defaultName string, look lookups) bool {
+	aim := decideTarget([]string{"run"}, look)
+	switch {
+	case !aim.ensure:
+		return false
+	case aim.workspace != "":
+		return aim.workspace == name
+	default:
+		return defaultName == name
+	}
+}
+
+// machineRecord is what a workspace entry records about the machine spec built.
+func machineRecord(spec machine.Spec) *config.Machine {
+	return &config.Machine{
+		Backend:    spec.Backend,
+		Name:       spec.Name,
+		Image:      spec.Image,
+		Rootfs:     spec.Rootfs,
+		CPUs:       spec.CPUs,
+		MemoryMB:   spec.MemoryMB,
+		Generation: spec.Generation(),
+	}
 }
 
 // enrolledPublicKey is this machine's public half, generating the pair if this
@@ -460,9 +572,12 @@ while the session is in use; -f overrides.`,
 func newMachineStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status [name]",
-		Short: "Show whether the machine exists, runs, and matches its settings",
-		Long:  `Exits 1 when the machine is not running.`,
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Show whether the machine runs, matches its settings, and answers",
+		Long: `Exits 1 when the machine is not running or its agent does not answer.
+
+A stopped machine is reported as stopped and left stopped: the agent is only
+dialled on a running one.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args, func(ctx context.Context, b machine.Backend, _ string, ws config.Workspace) error {
 				m := ws.Machine
@@ -477,10 +592,63 @@ func newMachineStatusCommand() *cobra.Command {
 				if observed.State != machine.Running {
 					return errNotReady
 				}
+				if !reportAgent(ctx, out, b, m, ws.Port) {
+					return errNotReady
+				}
 				return nil
 			})
 		},
 	}
+}
+
+// agentCheckTimeout bounds asking the machine for its address and dialling the
+// agent, so status answers in seconds where Locate would wait minutes.
+const agentCheckTimeout = 10 * time.Second
+
+// reportAgent dials the agent once, prints its row, and reports whether it
+// answered. It says what was dialled and never why it did not answer: a
+// refused port looks the same whether the agent crashed or is still waiting
+// for dockerd.
+//
+// Not machine.Locate, which starts the machine. Called only on a machine
+// Inspect saw running, because WSL's Address is a `wsl -d` and would start a
+// stopped one. The machine's own address rather than loopback, for the reason
+// in ADR 0026.
+func reportAgent(ctx context.Context, out io.Writer, b machine.Backend, m *config.Machine, port int) bool {
+	ctx, cancel := context.WithTimeout(ctx, agentCheckTimeout)
+	defer cancel()
+
+	host, err := b.Address(ctx, m.Name)
+	if err != nil {
+		rowf(out, "agent", "not checked: the machine's address could not be read: %s", firstLine(err.Error()))
+		return false
+	}
+	if host == "" {
+		row(out, "agent", "not checked: the machine reports no address yet")
+		return false
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		rowf(out, "agent", "not answering on %s", addr)
+		// Restarting first: booting the machine again reruns whatever starts
+		// the agent (WSL's `[boot] command`, Hyper-V's unit), and nothing else
+		// restarts a WSL agent that died. Two commands rather than `&&`, which
+		// Windows PowerShell 5.1 does not parse.
+		fix := fmt.Sprintf("`%s`, then `%s`, restarts it and keeps its images and containers; "+
+			"`%s` replaces it, discarding them",
+			ourCommand("machine stop "+m.Name), ourCommand("machine start "+m.Name),
+			ourCommand("machine rebuild "+m.Name))
+		if m.Backend == "wsl" {
+			fix = fmt.Sprintf("its log is %s inside the machine; %s", machine.WSLAgentLog, fix)
+		}
+		_, _ = fmt.Fprintf(out, "  fix: %s\n", fix)
+		return false
+	}
+	_ = conn.Close()
+	rowf(out, "agent", "answering on %s", addr)
+	return true
 }
 
 // reportGeneration says whether the machine matches its recorded settings.

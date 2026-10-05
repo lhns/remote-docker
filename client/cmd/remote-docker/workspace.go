@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -260,28 +261,58 @@ func newWorkspaceListCommand() *cobra.Command {
 				return nil
 			}
 
-			_, _ = fmt.Fprintf(out, "%-14s %-30s %s\n", "NAME", "WORKSPACE", "ENDPOINT")
+			rows := make([]listRow, 0, len(names))
 			for _, name := range names {
-				cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
-				if err != nil {
-					_, _ = fmt.Fprintf(out, "%-14s %v\n", name, err)
-					continue
-				}
 				marker := " "
 				if name == file.Default {
 					marker = "*"
 				}
-				where := where(cfg)
+				row := listRow{name: marker + name}
+				cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
+				if err != nil {
+					row.err = err
+					rows = append(rows, row)
+					continue
+				}
+				row.where = where(cfg)
 				if m := file.Workspaces[name].Machine; m != nil {
 					// Shown because `rm` destroys it.
-					where += " (" + m.Backend + ")"
+					row.where += " (" + m.Backend + ")"
 				}
-				_, _ = fmt.Fprintf(out, "%s%-13s %-30s %s\n",
-					marker, name, where, dockerHostOf(cfg))
+				row.endpoint = dockerHostOf(cfg)
+				rows = append(rows, row)
 			}
+			printWorkspaces(out, rows)
 			_, _ = fmt.Fprintln(out, "\n* default")
 			return nil
 		},
+	}
+}
+
+// listRow is one line of `remote ls`. name carries the default marker.
+type listRow struct {
+	name, where, endpoint string
+	err                   error
+}
+
+// printWorkspaces writes the table with each column as wide as its widest
+// entry. A row that could not be resolved prints its error where the
+// workspace would be, and does not widen that column.
+func printWorkspaces(out io.Writer, rows []listRow) {
+	nameW, whereW := len("NAME"), len("WORKSPACE")
+	for _, r := range rows {
+		nameW = max(nameW, utf8.RuneCountInString(r.name))
+		if r.err == nil {
+			whereW = max(whereW, utf8.RuneCountInString(r.where))
+		}
+	}
+	_, _ = fmt.Fprintf(out, "%-*s   %-*s   %s\n", nameW, "NAME", whereW, "WORKSPACE", "ENDPOINT")
+	for _, r := range rows {
+		if r.err != nil {
+			_, _ = fmt.Fprintf(out, "%-*s   %v\n", nameW, r.name, r.err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "%-*s   %-*s   %s\n", nameW, r.name, whereW, r.where, r.endpoint)
 	}
 }
 

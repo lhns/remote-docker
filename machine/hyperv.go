@@ -2,26 +2,27 @@ package machine
 
 // The Hyper-V backend's decisions, separated from running anything.
 //
-// The same split as the WSL backend and for a stronger reason: nobody anywhere
-// can run this one. GitHub's runners do not offer Hyper-V, so
-// `docs/testing-machines.md` is its whole verification and every line that can
-// be a pure function of a string is one.
+// The same split as the WSL backend and for a stronger reason: GitHub's runners
+// do not offer Hyper-V, so `docs/testing-machines.md` is its whole verification
+// and every line that can be a pure function of a string is one.
 //
 // What runs here is Flatcar Container Linux with the workspace image as a
 // privileged container, which is the compose deployment unchanged (ADR 0026).
 // Flatcar for the property the design rests on: no package manager, an
-// immutable /usr, and one Ignition file applied at first boot.
-// (Checked 2026-08-11: `curl -sI https://stable.release.flatcar-linux.net/\
-// amd64-usr/current/flatcar_production_hyperv_image.vhd.bz2` and
-// https://www.flatcar.org/docs/latest/installing/vms/hyper-v/. Fedora CoreOS is
-// the equivalent alternative if that stops being true.)
+// immutable /usr, and one Ignition document applied at first boot.
+// (Checked 2026-10-05: `curl -sI https://stable.release.flatcar-linux.net/\
+// amd64-usr/current/flatcar_production_hyperv_vhdx_image.vhdx.zip` and
+// https://www.flatcar.org/docs/latest/deploy/virt-options/hyper-v/. Fedora
+// CoreOS is the equivalent alternative if that stops being true.)
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // hyperVSwitch is the network the machine is attached to: the Default Switch,
@@ -145,7 +146,8 @@ func parseVMAddress(raw string) string {
 	}))
 }
 
-// ignition is the machine's entire configuration, applied at first boot.
+// ignition is the machine's entire configuration, applied at first boot and
+// delivered over KVP (ignitionKVP).
 //
 // One declarative document and no second step, which is what makes a Hyper-V
 // machine defined by its Spec rather than by whatever happened to it since.
@@ -157,24 +159,20 @@ func parseVMAddress(raw string) string {
 func ignition(spec Spec, publicKey string) (string, error) {
 	unit := hyperVUnit(spec)
 
+	files := []any{
+		// The account's key, written where the agent's watcher looks. This is
+		// the whole of enrolment on this backend, and the reason it happens
+		// here is that afterwards there is no way in (see hyperVEnrolment).
+		ignitionFile("/etc/workspace/authorized_keys.d/"+spec.Account+".pub", strings.TrimSpace(publicKey)+"\n"),
+	}
+	// hyperVUnit mounts /etc/workspace into the workspace container.
+	if spec.HostKey != "" {
+		files = append(files, ignitionFile(hostKeyFile, spec.HostKey))
+	}
+
 	doc := map[string]any{
 		"ignition": map[string]any{"version": "3.4.0"},
-		"storage": map[string]any{
-			"files": []any{
-				// The account's key, written where the agent's watcher looks.
-				// This is the whole of enrolment on this backend, and the
-				// reason it happens here is that afterwards there is no way in
-				// (see hyperVEnrolment).
-				map[string]any{
-					"path":      "/etc/workspace/authorized_keys.d/" + spec.Account + ".pub",
-					"mode":      0o600,
-					"overwrite": true,
-					"contents": map[string]any{
-						"source": "data:," + urlEncode(strings.TrimSpace(publicKey)+"\n"),
-					},
-				},
-			},
-		},
+		"storage":  map[string]any{"files": files},
 		"systemd": map[string]any{
 			"units": []any{
 				map[string]any{
@@ -191,6 +189,16 @@ func ignition(spec Spec, publicKey string) (string, error) {
 		return "", fmt.Errorf("building the machine's configuration: %w", err)
 	}
 	return string(raw), nil
+}
+
+// ignitionFile is one file Ignition writes, readable by root alone.
+func ignitionFile(path, content string) map[string]any {
+	return map[string]any{
+		"path":      path,
+		"mode":      0o600,
+		"overwrite": true,
+		"contents":  map[string]any{"source": "data:," + urlEncode(content)},
+	}
 }
 
 // hyperVUnit is the systemd unit that runs the workspace.
@@ -248,24 +256,107 @@ func urlEncode(s string) string {
 	return b.String()
 }
 
+// ignitionKVPChunk is the longest value one KVP item carries to the guest.
+//
+// Hyper-V refuses a host-to-guest value of 1024 characters or more (ADR 0026),
+// so 1000 leaves a margin. Counted in bytes, which are never fewer than the
+// UTF-16 characters Hyper-V counts.
+const ignitionKVPChunk = 1000
+
+// ignitionKVPPrefix starts the name of every KVP item carrying the document.
+const ignitionKVPPrefix = "ignition.config."
+
+// kvpItem is one key-value pair handed to the guest through Hyper-V's KVP
+// exchange, named as kvpScript reads it.
+type kvpItem struct{ Name, Data string }
+
+// ignitionKVP splits the Ignition document into the KVP items Flatcar reads it
+// back from: `ignition.config.0`, `ignition.config.1` and so on, which its
+// Hyper-V provider concatenates in order. This is how Flatcar's Hyper-V image
+// takes a configuration (`kvpctl add-ign` in containers/libhvee does the same),
+// and the only way: a file beside the disk is never read (ADR 0026).
+//
+// Cut at rune boundaries, so no item holds half a character it cannot encode.
+func ignitionKVP(config string) []kvpItem {
+	var items []kvpItem
+	for len(config) > 0 {
+		n := min(ignitionKVPChunk, len(config))
+		for n < len(config) && !utf8.RuneStart(config[n]) {
+			n--
+		}
+		items = append(items, kvpItem{Name: fmt.Sprintf("%s%d", ignitionKVPPrefix, len(items)), Data: config[:n]})
+		config = config[n:]
+	}
+	return items
+}
+
+// kvpInput is what psAddKVP reads on its stdin: the items as one JSON array.
+//
+// Stdin rather than the command line, because the data holds the machine's
+// private host key and a command line is readable by every process on this
+// computer.
+func kvpInput(items []kvpItem) (string, error) {
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return "", fmt.Errorf("encoding the machine's configuration: %w", err)
+	}
+	return string(raw), nil
+}
+
 // The PowerShell each operation runs. Each takes the VM name ALREADY PREFIXED:
 // a bare name reaching Get-VM is a machine somebody else made.
 
-// psGetVM asks for a machine's state and its notes in one call.
+// psScript is how every one of them is run: any error stops the script and
+// fails it, and a script that reaches its end succeeds.
+//
+// powershell.exe -Command exits with whether its LAST statement succeeded,
+// which is not whether the script did: an error silenced with -ErrorAction
+// still exits 1 with nothing printed, and a cmdlet failing mid-script does not
+// stop the next one (ADR 0026).
+func psScript(body string) string {
+	return "$ErrorActionPreference = 'Stop'; try { " + body +
+		"; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 }"
+}
+
+// psVM finds a machine by exact name, and finds nothing when it is not there.
+//
+// Filtered from the whole list rather than asked for with `Get-VM -Name`,
+// which fails on a missing machine and reads the name as a wildcard pattern.
+// Absence is then an empty answer, and every error is a real one, such as not
+// being allowed to ask.
+func psVM(vm string) string {
+	return fmt.Sprintf("Get-VM | Where-Object { $_.Name -eq %s } | Select-Object -First 1", psQuote(vm))
+}
+
+// psGetVM asks for a machine's state and its notes in one call, and prints
+// nothing for a machine that is not there.
 //
 // One call rather than two, so the state and the generation cannot disagree
 // about a machine that changed between them.
 func psGetVM(vm string) string {
-	return fmt.Sprintf(
-		"$vm = Get-VM -Name %s -ErrorAction SilentlyContinue; "+
-			"if ($vm) { $vm.State.ToString(); $vm.Notes }", psQuote(vm))
+	return psVM(vm) + " | ForEach-Object { $_.State.ToString(); $_.Notes }"
+}
+
+// psStart starts a machine. Start-VM on one already running only warns, which
+// is what lets Locate start rather than inspect first. On a missing one it
+// fails, and that is not silenced: Locate would otherwise wait out its whole
+// budget for an address from a machine somebody removed by hand.
+func psStart(vm string) string {
+	return fmt.Sprintf("Start-VM -Name %s", psQuote(vm))
+}
+
+// psStop shuts the machine down and waits for it. Without -TurnOff, so the
+// guest flushes its docker state; -Force means "do not ask about signed-in
+// users", not "pull the plug".
+func psStop(vm string) string {
+	return fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(vm))
 }
 
 // psAddress asks the guest, through the integration services, what address it
-// was given.
+// was given. Its KVP daemon reports one about 30 seconds after Start-VM and
+// nothing until then (2026-10-05), which Locate waits out.
 func psAddress(vm string) string {
-	return fmt.Sprintf(
-		"(Get-VMNetworkAdapter -VMName %s -ErrorAction SilentlyContinue).IPAddresses -join ','", psQuote(vm))
+	return fmt.Sprintf("(Get-VMNetworkAdapter -VMName %s).IPAddresses -join ','", psQuote(vm))
 }
 
 // psNewVM creates the machine and attaches its disk.
@@ -276,7 +367,7 @@ func psAddress(vm string) string {
 // boots unsigned code the user chose to download.
 func psNewVM(vm, vhd, dir string, spec Spec) string {
 	cmd := []string{
-		fmt.Sprintf("New-VM -Name %s -Generation 2 -VHDPath %s -Path %s -SwitchName %s",
+		fmt.Sprintf("New-VM -Name %s -Generation 2 -VHDPath %s -Path %s -SwitchName %s | Out-Null",
 			psQuote(vm), psQuote(vhd), psQuote(dir), psQuote(hyperVSwitch)),
 		fmt.Sprintf("Set-VMFirmware -VMName %s -EnableSecureBoot Off", psQuote(vm)),
 		// Marked as unfinished, not as built: psSetNotes is the single point
@@ -295,6 +386,28 @@ func psNewVM(vm, vhd, dir string, spec Spec) string {
 	return strings.Join(cmd, "; ")
 }
 
+// kvpScript adds and removes a machine's KVP items, through the WMI calls
+// `kvpctl add-ign` makes.
+//
+//go:embed hyperv_kvp.ps1
+var kvpScript string
+
+// psKVP runs kvpScript as a script block, so it runs inside psScript like every
+// other script here, against the machine psVM finds.
+func psKVP(vm, args string) string {
+	return "& {\n" + kvpScript + "\n} -VM (" + psVM(vm) + ") " + args
+}
+
+// psAddKVP hands the machine the items kvpInput wrote on stdin. Before its
+// first start, because Ignition reads them once, at first boot.
+func psAddKVP(vm string) string { return psKVP(vm, "-Add") }
+
+// psRemoveKVP removes the Ignition items, which hold the machine's private host
+// key, once it has applied them (hyperVBackend.Retract).
+func psRemoveKVP(vm string) string {
+	return psKVP(vm, "-Remove "+psQuote(ignitionKVPPrefix))
+}
+
 // psSetNotes records what a machine was built from and with.
 func psSetNotes(vm string, notes hyperVNotes) string {
 	return fmt.Sprintf("Set-VM -Name %s -Notes %s", psQuote(vm), psQuote(encodeNotes(notes)))
@@ -303,15 +416,16 @@ func psSetNotes(vm string, notes hyperVNotes) string {
 // psRemoveVM destroys a machine and the disk under it.
 //
 // The disk is deleted explicitly: Remove-VM leaves it, which would silently
-// keep gigabytes per machine somebody thought they had removed. Stop first with
-// -TurnOff, because a machine being destroyed has nothing to flush and a clean
-// shutdown can wait indefinitely on a guest that is not listening.
+// keep gigabytes per machine somebody thought they had removed, so a disk that
+// cannot be deleted is an error. A VM somebody already removed by hand is
+// skipped, not an error, or `rm` could never finish and the disk would stay.
+// Stop first with -TurnOff, because a machine being destroyed has nothing to
+// flush and a clean shutdown can wait indefinitely on a guest that is not
+// listening; on one already off it only warns.
 func psRemoveVM(vm, dir string) string {
-	return fmt.Sprintf(
-		"Stop-VM -Name %s -TurnOff -Force -ErrorAction SilentlyContinue; "+
-			"Remove-VM -Name %s -Force; "+
-			"Remove-Item -LiteralPath %s -Recurse -Force -ErrorAction SilentlyContinue",
-		psQuote(vm), psQuote(vm), psQuote(dir))
+	return "$vm = " + psVM(vm) + "; " +
+		"if ($vm) { Stop-VM -VM $vm -TurnOff -Force; Remove-VM -VM $vm -Force }; " +
+		fmt.Sprintf("if (Test-Path -LiteralPath %[1]s) { Remove-Item -LiteralPath %[1]s -Recurse -Force }", psQuote(dir))
 }
 
 // psQuote wraps a string as a PowerShell single-quoted literal.

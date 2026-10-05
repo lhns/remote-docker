@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/ports"
@@ -32,7 +35,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	// The workspace derives the same id from the key it authenticated (ADR 0029).
 	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
 
-	known, err := keys.NewKnownHosts(config.KnownHostsPath())
+	hostKey, err := hostKeyRule(s.opts.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +78,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Port:    transport.Port,
 		User:    s.opts.Config.User,
 		Signer:  key.Signer,
-		HostKey: known.Callback(),
+		HostKey: hostKey,
 		Dial:    dial,
 	})
 	if err != nil {
@@ -156,6 +159,31 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		s.log().Info("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	}
 	return live, nil
+}
+
+// hostKeyRule is the host key a workspace must offer. A machine this program
+// built must offer the key it was built with, at whatever address it has
+// (ADR 0026); anything else goes through known_hosts.
+func hostKeyRule(cfg config.Config) (ssh.HostKeyCallback, error) {
+	if m := cfg.Machine; m != nil && m.HostKey != "" {
+		want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(m.HostKey))
+		if err != nil {
+			return nil, fmt.Errorf("the host key recorded for %q cannot be read: %w", cfg.Name, err)
+		}
+		return func(_ string, _ net.Addr, offered ssh.PublicKey) error {
+			if bytes.Equal(offered.Marshal(), want.Marshal()) {
+				return nil
+			}
+			return fmt.Errorf("the %s machine %q answered with a host key it was not built with (%s)\n"+
+				"  fix: stop whatever else listens on port %d, or `remote machine rebuild %s`",
+				m.Backend, cfg.Name, ssh.FingerprintSHA256(offered), cfg.Port, cfg.Name)
+		}, nil
+	}
+	known, err := keys.NewKnownHosts(config.KnownHostsPath())
+	if err != nil {
+		return nil, err
+	}
+	return known.Callback(), nil
 }
 
 // dialerFor returns the WebSocket dialer (ADR 0034), or nil to dial TCP.

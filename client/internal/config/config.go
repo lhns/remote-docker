@@ -165,6 +165,12 @@ type Machine struct {
 
 	// Generation hashes the build settings; a mismatch means out of date.
 	Generation string `json:"generation,omitempty"`
+
+	// HostKey is the public half of the host key this program built the
+	// machine with, in authorized_keys form. A session accepts that key and no
+	// other, at whatever address the machine has today (ADR 0026). Empty for a
+	// machine built before keys were made here, which falls back to known_hosts.
+	HostKey string `json:"hostKey,omitempty"`
 }
 
 // Names lists the configured workspaces in a stable order.

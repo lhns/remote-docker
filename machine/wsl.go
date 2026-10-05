@@ -20,11 +20,11 @@ import (
 // enough to recreate.
 const generationFile = "/etc/remote-docker-generation"
 
-// agentLog is where the agent's output goes inside the machine. WSL's boot
+// WSLAgentLog is where the agent's output goes inside the machine. WSL's boot
 // command has no console, so without this an agent that refuses to start is a
 // machine that is simply unreachable, with the reason written to a closed file
 // descriptor.
-const agentLog = "/var/log/remote-dockerd.log"
+const WSLAgentLog = "/var/log/remote-dockerd.log"
 
 // decodeWSLOutput turns wsl.exe's output into a string.
 //
@@ -143,7 +143,7 @@ func wslConf(spec Spec) string {
 	// authenticates every connection by key.
 	return "[boot]\nsystemd=false\ncommand=/usr/bin/env " +
 		strings.Join(env, " ") +
-		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, agentLog)
+		fmt.Sprintf(" /usr/local/bin/remote-dockerd serve --addr :%d >>%s 2>&1\n", spec.Port, WSLAgentLog)
 }
 
 // wslAddressArgs asks a distribution for its own address.
@@ -180,6 +180,12 @@ func wslReadGenerationArgs(name string) []string {
 // and nothing that differs between the shells a rootfs might ship.
 func wslWriteArgs(name, path, content string) []string {
 	return wslRunArgs(name, "sh", "-c", "printf '%s' "+shellQuote(content)+" > "+path)
+}
+
+// wslWriteStdinArgs writes a file readable by root alone from standard input,
+// for a secret: a command line is visible to every process on Windows.
+func wslWriteStdinArgs(name, path string) []string {
+	return wslRunArgs(name, "sh", "-c", "umask 077 && cat > "+path)
 }
 
 // shellQuote wraps a string in single quotes for `sh -c`, so a newline in the

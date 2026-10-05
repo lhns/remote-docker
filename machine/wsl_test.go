@@ -6,6 +6,7 @@ package machine
 // the Windows speaks.
 
 import (
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -167,6 +168,24 @@ func TestWSLWriteArgs(t *testing.T) {
 	}
 	if !strings.Contains(last, "printf") {
 		t.Errorf("expected printf, got %q", last)
+	}
+}
+
+// The host key arrives on stdin, so it is never on a command line, and lands
+// readable by root alone, where the agent the boot command starts reads it.
+func TestWSLWriteStdinArgs(t *testing.T) {
+	args := wslWriteStdinArgs("rd-dev", hostKeyFile)
+	if args[1] != "rd-dev" {
+		t.Errorf("not run in the machine: %q", args)
+	}
+	last := args[len(args)-1]
+	if last != "umask 077 && cat > "+hostKeyFile {
+		t.Errorf("the write command is %q", last)
+	}
+
+	conf := wslConf(Spec{Name: "dev", Port: 2222})
+	if !strings.Contains(conf, "WORKSPACE_HOSTKEY_DIR="+path.Dir(hostKeyFile)+" ") {
+		t.Errorf("the agent does not read its host key from where it is written, %s:\n%s", hostKeyFile, conf)
 	}
 }
 

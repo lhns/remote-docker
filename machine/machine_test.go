@@ -84,6 +84,34 @@ func TestEveryFieldChangesTheGeneration(t *testing.T) {
 	}
 }
 
+// The keys are made per build, so a build with them in the generation would
+// never match its own record, and a rotated login key would ask for a rebuild.
+func TestKeysLeaveTheGenerationAlone(t *testing.T) {
+	keyed := spec()
+	keyed.PublicKey = "ssh-ed25519 AAAA alice@laptop"
+	keyed.HostKey = "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+	if keyed.Generation() != spec().Generation() {
+		t.Error("a key changed the generation")
+	}
+}
+
+// A fetched rootfs hashes as no rootfs, which is what `machine create` without
+// --rootfs compares against; a path somebody named still counts.
+func TestAFetchedRootfsIsNotASetting(t *testing.T) {
+	asked := spec()
+	asked.Rootfs = ""
+
+	fetched := spec()
+	fetched.Fetched = true
+	if fetched.Generation() != asked.Generation() {
+		t.Errorf("a fetched rootfs moved the generation: %s, want %s as with no rootfs",
+			fetched.Generation(), asked.Generation())
+	}
+	if spec().Generation() == asked.Generation() {
+		t.Error("a rootfs named with --rootfs left the generation where no rootfs puts it")
+	}
+}
+
 func TestGenerationIsStable(t *testing.T) {
 	first, second := spec().Generation(), spec().Generation()
 	if first != second {

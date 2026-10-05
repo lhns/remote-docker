@@ -109,3 +109,24 @@ func TestPrivateKeyPermissions(t *testing.T) {
 		t.Errorf("private key mode = %04o, want 0600", perm)
 	}
 }
+
+// The agent loads the private half and the record pins the public half, so
+// they must be one key.
+func TestNewHostKeyHalvesMatch(t *testing.T) {
+	hk, err := NewHostKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.ParsePrivateKey(hk.Private)
+	if err != nil {
+		t.Fatalf("the agent could not load the private half: %v", err)
+	}
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hk.Public))
+	if err != nil {
+		t.Fatalf("the public half %q does not parse: %v", hk.Public, err)
+	}
+	if ssh.FingerprintSHA256(pub) != ssh.FingerprintSHA256(signer.PublicKey()) {
+		t.Errorf("public half %s is not the private half's %s",
+			ssh.FingerprintSHA256(pub), ssh.FingerprintSHA256(signer.PublicKey()))
+	}
+}

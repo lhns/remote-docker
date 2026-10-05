@@ -148,6 +148,58 @@ func TestPrepareStartsOneUnionForConcurrentRequests(t *testing.T) {
 	}
 }
 
+// A Prepare that found the share down, and was overtaken by another Prepare
+// that mounted it and returned, answers with that mount.
+//
+// It used to look at m.pending alone once it had the lock, which was empty
+// again by then, and mount a second union, tearing down the first under
+// whatever container had just been handed its path. Seen as
+// TestPrepareStartsOneUnionForConcurrentRequests failing in CI.
+func TestPrepareOvertakenByAnotherDoesNotMountAgain(t *testing.T) {
+	m := manager(t)
+	hold(m, "alice", coldExport)
+
+	var starts atomic.Int64
+	m.onStart = func(union.Spec) { starts.Add(1) }
+
+	// The first probe is the late Prepare finding the held union down, and it
+	// is answered only after the other Prepare has mounted and returned.
+	probing := make(chan struct{})
+	overtaken := make(chan struct{})
+	var probes atomic.Int64
+	m.probe = func(context.Context, union.Spec) error {
+		if probes.Add(1) == 1 {
+			close(probing)
+			<-overtaken
+			return errors.New("union: nothing is mounted there")
+		}
+		if starts.Load() == 0 {
+			return errors.New("union: nothing is mounted there")
+		}
+		return nil
+	}
+
+	req := prepareFor(t, coldExport)
+	late := make(chan error, 1)
+	go func() {
+		_, err := m.Prepare(context.Background(), "alice", thisClient, Daemon{}, req)
+		late <- err
+	}()
+	<-probing
+
+	if _, err := m.Prepare(context.Background(), "alice", thisClient, Daemon{}, req); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	close(overtaken)
+	if err := <-late; err != nil {
+		t.Fatalf("the overtaken Prepare: %v", err)
+	}
+
+	if got := starts.Load(); got != 1 {
+		t.Errorf("two Prepares for one share started %d unions", got)
+	}
+}
+
 // A wedged FUSE server answers nothing, and the cache session's context has no
 // deadline to stop waiting on it.
 //
