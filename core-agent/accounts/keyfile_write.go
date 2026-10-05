@@ -44,7 +44,8 @@ var (
 	// writer holds one for milliseconds, so this is a crashed writer's.
 	lockStale = 30 * time.Second
 
-	// lockWait is how long a writer waits for a lock that is not stale.
+	// lockWait is how long a writer waits on one holder. A queue of writers
+	// that keeps moving is waited out however long it is.
 	lockWait = 10 * time.Second
 )
 
@@ -255,7 +256,7 @@ func (s *Store) edit(account string, change func(name, path string) error) error
 // lockFile takes a lock that holds across hosts: mkdir is atomic on NFS and
 // CephFS as well as locally.
 func lockFile(path string) (unlock func(), err error) {
-	deadline := time.Now().Add(lockWait)
+	var holder, deadline time.Time // the lock's mtime names its holder
 	for {
 		err := os.Mkdir(path, 0o700)
 		if err == nil {
@@ -270,7 +271,10 @@ func lockFile(path string) (unlock func(), err error) {
 			breakLock(path)
 			continue
 		}
-		if time.Now().After(deadline) {
+		if info, err := os.Stat(path); err == nil && !info.ModTime().Equal(holder) {
+			holder, deadline = info.ModTime(), time.Now().Add(lockWait)
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
 			return nil, fmt.Errorf("%s is held by another writer", path)
 		}
 		time.Sleep(20 * time.Millisecond)

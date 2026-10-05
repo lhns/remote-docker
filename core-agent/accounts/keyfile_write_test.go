@@ -223,6 +223,44 @@ func TestALiveLockIsNotBroken(t *testing.T) {
 	}
 }
 
+// A queue of writers outlasting lockWait is waited out: the limit is on one
+// holder. A new mtime is how a waiter sees the lock change hands.
+func TestAMovingQueueIsWaitedOut(t *testing.T) {
+	s := newStore(t)
+	wait := lockWait
+	lockWait = 100 * time.Millisecond
+	t.Cleanup(func() { lockWait = wait })
+
+	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.AppendKey("alice", newKey(t), "")
+		done <- err
+	}()
+
+	for i := range 10 { // 500ms of holders, five times lockWait
+		time.Sleep(50 * time.Millisecond)
+		select {
+		case err := <-done:
+			t.Fatalf("AppendKey returned while the lock was held: %v", err)
+		default:
+		}
+		next := time.Now().Add(time.Duration(i+1) * time.Second)
+		if err := os.Chtimes(lock, next, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("AppendKey behind a moving queue: %v", err)
+	}
+}
+
 // Removing only the enrolled copy of a key the operator also enrols would leave
 // it working, so the change is refused, naming the operator's file.
 func TestAnOperatorKeyIsNotRemovedHere(t *testing.T) {
