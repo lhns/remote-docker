@@ -3,7 +3,7 @@
 // Every CI step resolves through this file except one: ci.yml lists each module
 // with GOWORK=off, as the image build does, so a go.mod missing a require fails
 // there rather than only in the image.
-go 1.26.3
+go 1.26.8
 
 use (
 	./core
