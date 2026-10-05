@@ -30,6 +30,9 @@ software.
 
 ### Fixes
 
+- **Revoking a user's key now ends their open sessions.** Deleting or
+  emptying their key file used to stop only new connections, and anything
+  already connected kept working.
 - **`remote create` no longer turns a machine workspace into a plain one.**
   Doing so left `remote rm` unable to remove the machine.
 - **`remote create` refuses an address or user that cannot work.** Before, it

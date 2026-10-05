@@ -795,6 +795,14 @@ premise of the project, and it applies to building it too. So:
   into place and deletes a file left with no key; never remove a key from the
   enrolled directory that an operator directory still enrols, because that
   leaves it working while saying it was removed.
+- **Revocation disconnects.** A key is checked only at the handshake, so a
+  revoked key kept every connection it had, and its reverse-tunnel port with
+  it. `Store.Subscribe` runs after every swap and `sshd/revoke.go` closes each
+  connection whose account no longer enrols its key; closing releases the
+  ports (ADR 0028). The two-read rule still decides WHEN an emptied file
+  revokes. A connection records who it is under the registry's lock and asks
+  again there, or a sync landing mid-handshake would sweep before there was
+  anything to close.
 - **A key file is parsed line by line.** Several keys per file is the format,
   and reading it as one stream stopped at the first line it could not parse, so
   a typo or a BOM on the top line silently dropped every key under it. A bad

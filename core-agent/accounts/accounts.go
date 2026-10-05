@@ -130,6 +130,9 @@ type Store struct {
 	// the previous sync. Revoking on one read cannot tell a deliberate emptying
 	// from the middle of somebody's save, so it takes two, per directory.
 	unusable map[keyFile]bool
+
+	subMu sync.Mutex
+	subs  []func()
 }
 
 // keyFile is one account's file in one directory.
@@ -250,7 +253,25 @@ func (s *Store) Sync() error {
 		}
 	}
 
-	return s.reconcile(found, unusable, uids)
+	if err := s.reconcile(found, unusable, uids); err != nil {
+		return err
+	}
+	s.subMu.Lock()
+	subs := slices.Clone(s.subs)
+	s.subMu.Unlock()
+	for _, fn := range subs {
+		fn()
+	}
+	return nil
+}
+
+// Subscribe runs fn after every sync that swaps the accounts in, outside the
+// lock Lookup reads through. Sync waits for it, so a revocation has been acted
+// on by the time Sync returns; fn must not call Sync.
+func (s *Store) Subscribe(fn func()) {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	s.subs = append(s.subs, fn)
 }
 
 // namedFile is a key file and the account it enrols.

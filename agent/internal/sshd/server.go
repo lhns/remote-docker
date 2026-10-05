@@ -84,6 +84,8 @@ type Server struct {
 	// need to see which host a question went to. Nil is the real CLI.
 	query func(ctx context.Context, host string, args ...string) (string, error)
 
+	conns conns // see revoke.go
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -148,6 +150,8 @@ func New(cfg Config) (*Server, error) {
 		Log:     cfg.Log,
 	}
 
+	cfg.Accounts.Subscribe(s.sweep)
+
 	s.ssh = &gssh.Server{
 		Addr:             cfg.Addr,
 		PublicKeyHandler: s.authenticate,
@@ -155,8 +159,9 @@ func New(cfg Config) (*Server, error) {
 		// A client that vanishes without saying so must still end its
 		// connection here, because that is what releases its reverse-tunnel
 		// port. See armDeadPeerDetection.
-		ConnCallback: func(_ gssh.Context, conn net.Conn) net.Conn {
+		ConnCallback: func(ctx gssh.Context, conn net.Conn) net.Conn {
 			armDeadPeerDetection(conn)
+			s.conns.track(ctx, conn)
 			return conn
 		},
 
@@ -228,6 +233,10 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 		session.client = workspace.ClientID(key.Marshal())
 	}
 	ctx.SetValue(contextKey{}, session)
+	if !s.authenticated(ctx, account.Name, key) {
+		s.log().Warn("refused a connection: the key was revoked during the handshake", "account", name, "from", ctx.RemoteAddr())
+		return false
+	}
 
 	// Start this account's daemon now, in the background, so its boot hides
 	// behind the round trips that follow: workspace-info, then the reverse
