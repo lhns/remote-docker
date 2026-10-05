@@ -962,12 +962,17 @@ manage every account:
 docker remote token create --account carol     # or --unbound: the device names it
 docker remote user ls
 docker remote user rm bob                      # -f while bob's containers run
+docker remote user rm bob --purge              # and delete everything bob had
 docker remote key rm SHA256:… --account bob
 ```
 
 `user rm` revokes the account's keys and closes its connections, withdraws its
 tokens, and removes its daemon container. Its images, volumes, home directory
 and uid are kept, so a new token for the same name brings it back as it was.
+`--purge` also deletes its images, containers and volumes, its home directory,
+its unix user and its port records, and cannot be undone. Its uid is still
+kept, so the name is never given to anybody else, and a new token for it
+starts empty. With a shared daemon the containers on it are left alone.
 An admin cannot remove its own account, nor the last admin who holds a key,
 nor an account or key an operator's keys directory enrols. Only the operator
 edits `WORKSPACE_ADMINS`: removing an admin still named there says so, since

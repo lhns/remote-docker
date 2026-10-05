@@ -83,7 +83,7 @@ func (s *Server) operate(ctx context.Context, caller sessionAccount, req enrol.R
 		if req.Account == "" {
 			return failed(&enrol.Error{Code: enrol.CodeName, Msg: "name the account to remove"})
 		}
-		return s.userRemove(ctx, caller, target, req.Force, audit)
+		return s.userRemove(ctx, caller, target, req.Force, req.Purge, audit)
 	case enrol.OpKeyList:
 		return s.keyList(caller, target)
 	case enrol.OpKeyAdd:
@@ -217,8 +217,9 @@ func (s *Server) users() []enrol.User {
 }
 
 // userRemove revokes an account and removes its daemon container, keeping
-// its storage, home, unix user, uid and ports, so it can come back.
-func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target string, force bool, audit *slog.Logger) enrol.Reply {
+// its storage, home, unix user, uid and ports, so it can come back. purge
+// removes all of those but the uid, which is never reused.
+func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target string, force, purge bool, audit *slog.Logger) enrol.Reply {
 	c := s.checkFor(enrol.OpUserRemove, caller, target)
 	a, ok := s.cfg.Accounts.Lookup(target)
 	if ok {
@@ -263,22 +264,37 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 			}
 		}
 	}
-	if err := s.cfg.Daemons.Reset(ctx, target, false); err != nil {
-		audit.Warn("could not remove a removed account's daemon", "account", target, "err", err)
+	if err := s.cfg.Daemons.Reset(ctx, target, purge); err != nil {
+		audit.Warn("could not remove a removed account's daemon", "account", target, "purge", purge, "err", err)
+		fix := "`remote-dockerd daemons reset " + target + " -f` inside the workspace"
+		if purge {
+			fix = "`remote-dockerd daemons reset " + target + " --purge -f` inside the workspace"
+		}
 		reply.Notices = append(reply.Notices, &enrol.Error{
-			Msg: fmt.Sprintf("%s's keys are removed, but their daemon is not: %v", target, err),
-			Fix: "`remote-dockerd daemons reset " + target + " -f` inside the workspace"})
+			Msg: fmt.Sprintf("%s's keys are removed, but their daemon is not: %v", target, err), Fix: fix})
+	}
+	if purge {
+		if err := s.cfg.Accounts.Purge(target); err != nil {
+			audit.Warn("could not purge a removed account", "account", target, "err", err)
+			reply.Notices = append(reply.Notices, &enrol.Error{
+				Msg: fmt.Sprintf("%s's keys are removed, but not all of their files: %v", target, err)})
+		}
+		if err := s.cfg.Ports.Forget(target); err != nil {
+			audit.Warn("could not forget a removed account's ports", "account", target, "err", err)
+			reply.Notices = append(reply.Notices, &enrol.Error{
+				Msg: fmt.Sprintf("%s's ports are still recorded: %v", target, err)})
+		}
 	}
 	if s.cfg.Daemons.Mode() == workspace.ModeShared {
 		reply.Notices = append(reply.Notices, &enrol.Error{
-			Msg: fmt.Sprintf("this workspace shares one daemon, so %s's containers were not touched", target)})
+			Msg: fmt.Sprintf("this workspace shares one daemon, so %s's containers, images and volumes were not touched", target)})
 	}
 	if s.cfg.Admins[target] {
 		reply.Notices = append(reply.Notices, &enrol.Error{
 			Msg: fmt.Sprintf("%s is still named in WORKSPACE_ADMINS, so whoever is enrolled as %s next is an admin", target, target),
 			Fix: "remove " + target + " from WORKSPACE_ADMINS"})
 	}
-	audit.Info("removed an account", "account", target, "force", force)
+	audit.Info("removed an account", "account", target, "force", force, "purge", purge)
 	return reply
 }
 

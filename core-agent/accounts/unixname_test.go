@@ -84,3 +84,22 @@ func TestClaimWithoutAPrefix(t *testing.T) {
 		t.Errorf("claim(alice, \"\", postgres) = %v, want refuse", got)
 	}
 }
+
+// Remove deletes only the user Ensure would adopt.
+func TestRemoval(t *testing.T) {
+	for _, tc := range []struct {
+		holder, want string
+		refused      bool
+	}{
+		{"", "", false},
+		{"rd-alice", "rd-alice", false},
+		{"alice", "alice", false},
+		{"postgres", "", true},
+		{"rd-bob", "", true},
+	} {
+		got, err := removal("alice", "rd-", tc.holder, 10001)
+		if got != tc.want || (err != nil) != tc.refused {
+			t.Errorf("removal(alice, %q) = %q, %v; want %q, refused %v", tc.holder, got, err, tc.want, tc.refused)
+		}
+	}
+}

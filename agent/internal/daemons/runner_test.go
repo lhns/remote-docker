@@ -25,6 +25,11 @@ type fakeDocker struct {
 	// line, and ran records every command it was asked to Run.
 	listing string
 	ran     *[]string
+
+	// labelled is what the parent answers `volume ls` filtered by the
+	// managed labels with; volume is what an unfiltered `volume ls` lists.
+	labelled string
+	volume   string
 }
 
 func (f *fakeDocker) Line(_ context.Context, args ...string) (string, error) {
@@ -37,6 +42,10 @@ func (f *fakeDocker) Line(_ context.Context, args ...string) (string, error) {
 		return f.state, nil
 	case f.host == "" && strings.HasPrefix(joined, "ps"):
 		return f.listing, nil
+	case f.host == "" && strings.HasPrefix(joined, "volume ls") && strings.Contains(joined, "label="):
+		return f.labelled, nil
+	case f.host == "" && strings.HasPrefix(joined, "volume ls"):
+		return f.volume, nil
 	case f.host != "" && strings.HasPrefix(joined, "ps"):
 		if f.unreachable {
 			return "", errors.New("cannot connect to the docker daemon")

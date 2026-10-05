@@ -737,6 +737,88 @@ else
 fi
 
 echo
+echo "== 17. user rm --purge keeps only the uid (ADR 0053) =="
+# $B is back since section 16, on the second redemption's key.
+# shellcheck disable=SC2016  # awk's fields, not the shell's
+home_of() { hostdocker exec "$CONTAINER" awk -F: -v u="rd-$1" '$1 == u {print $6}' /etc/passwd; }
+# shellcheck disable=SC2016
+ports_of() { hostdocker exec "$CONTAINER" awk -F: -v a="$1" '$1 == a' /etc/workspace/clientports; }
+
+uid_before=$(uid_of "$B")
+home=$(home_of "$B")
+if [ -z "$home" ]; then
+    bad "rd-$B has no home in /etc/passwd before the purge"
+else
+    hostdocker exec "$CONTAINER" sh -c "echo left >'$home/marker'"
+fi
+info "$B's clientports before the purge: [$(ports_of "$B" | tr '\n' ' ')]"
+wait_dind "$B" 90 || info "$B's daemon is not answering before the purge"
+hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker run -d --name bob-busy2 alpine:3 sleep 600 >/dev/null 2>&1
+
+if outputs "$B's daemon is running 1 container" remote_as "$A" user rm "$B" --purge; then
+    ok "a purge while a container runs needs -f too"
+else
+    bad "a purge with a container running was not refused: [$LAST_OUTPUT]"
+fi
+if outputs "^removed $B and their storage, keeping only their uid" remote_as "$A" user rm "$B" --purge -f; then
+    ok "$A purged $B"
+else
+    bad "$A could not purge $B: [$LAST_OUTPUT]"
+fi
+if hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$B-lib" >/dev/null 2>&1; then
+    bad "rd-dind-$B-lib is still there after a purge"
+else
+    ok "rd-dind-$B-lib is gone"
+fi
+if [ -n "$home" ] && hostdocker exec "$CONTAINER" test -e "$home"; then
+    bad "$B's home $home is still there after a purge"
+else
+    ok "$B's home is gone"
+fi
+if hostdocker exec "$CONTAINER" id "rd-$B" >/dev/null 2>&1; then
+    bad "the unix user rd-$B is still there"
+else
+    ok "the unix user rd-$B is gone"
+fi
+if [ -n "$(ports_of "$B")" ]; then
+    bad "clientports still records $B: [$(ports_of "$B" | tr '\n' ' ')]"
+else
+    ok "clientports no longer records $B"
+fi
+if [ -n "$uid_before" ] && [ "$(uid_of "$B")" = "$uid_before" ]; then
+    ok "the uidmap keeps $B at uid $uid_before"
+else
+    bad "the uidmap has $B at [$(uid_of "$B")], was [$uid_before]"
+fi
+
+outputs . remote_as "$A" token create --account "$B"
+invite=$(invite_of "$LAST_OUTPUT")
+if [ -z "$invite" ]; then
+    bad "$A's token for $B printed no invite: [$LAST_OUTPUT]"
+elif outputs "joined the account $B" device "$WORK/state-$B-3" create ws --token "$invite" --no-context; then
+    if outputs "^$uid_before\$" hostdocker exec "$CONTAINER" id -u "rd-$B"; then
+        ok "$B redeems again as the same uid $uid_before"
+    else
+        bad "rd-$B came back as uid [$LAST_OUTPUT], was [$uid_before]"
+    fi
+    # The shell starts a daemon on a new, empty graph volume.
+    # shellcheck disable=SC2016  # expanded by the remote shell
+    if outputs '^IMAGES=0$' ssh_account "$WORK/state-$B-3/id_ed25519" "$B" 240 \
+        'echo IMAGES=$(docker images -q | wc -l)'; then
+        ok "$B's daemon starts empty"
+    else
+        bad "$B's daemon is not empty after a purge: [$LAST_OUTPUT]"
+    fi
+    if hostdocker exec "$CONTAINER" test -e "$home/marker"; then
+        bad "$B's new home still has the old marker"
+    else
+        ok "$B's new home does not have what the old one held"
+    fi
+else
+    bad "$B could not redeem after a purge: [$LAST_OUTPUT]"
+fi
+
+echo
 if [ "$FAIL" -ne 0 ]; then
     # 200, not 60: a daemon that will not stay up logs "container is not
     # running" every 2s, which pushes its first failure off a shorter tail.

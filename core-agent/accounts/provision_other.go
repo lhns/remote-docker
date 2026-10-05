@@ -9,3 +9,8 @@ import "fmt"
 func (p *UnixProvisioner) Ensure(name string, _ int, _ string) (string, string, error) {
 	return "", "", fmt.Errorf("accounts: cannot provision %s: the workspace agent only runs on Linux", name)
 }
+
+// Remove fails off Linux, for the reason on Ensure.
+func (p *UnixProvisioner) Remove(name string, _ int) error {
+	return fmt.Errorf("accounts: cannot remove %s: the workspace agent only runs on Linux", name)
+}

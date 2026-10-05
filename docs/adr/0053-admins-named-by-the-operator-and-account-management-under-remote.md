@@ -1,8 +1,7 @@
 # 0053 — Admins named by the operator, and account management under remote
 
-- Status: Accepted. `user rm --purge` is to come; until then removal never
-  deletes data.
-- Date: 2026-10-05
+- Status: Accepted
+- Date: 2026-10-05, amended 2026-10-06 (`user rm --purge`)
 
 ## What forced it
 
@@ -33,7 +32,7 @@ workspace as root. Most of that belongs to the people using it.
 | `token.create` | `remote token create [--account X \| --unbound] [--expires] [--note]` | bound to self only | anybody, or unbound |
 | `token.ls` / `token.rm` | `remote token ls`, `remote token rm <id>` | tokens bound to self | all |
 | `user.ls` | `remote user ls` | no | yes |
-| `user.rm` | `remote user rm <account> [-f]` | no | see below |
+| `user.rm` | `remote user rm <account> [--purge] [-f]` | no | see below |
 | `key.ls` / `key.add` / `key.rm` | `remote key ls\|add\|rm [--account X]` | own keys | anybody's |
 
 A refusal is one line and a fix: `only an admin can create a token for another
@@ -62,6 +61,24 @@ token create --account carol\``.
 Kept: `rd-dind-<account>-lib`, the home directory, the unix user, the uid and
 the port records. A new bound token for the name brings the account back as it
 was; an unbound one never takes the name (the uidmap keeps it).
+
+### `user rm --purge`
+
+The same checks and steps, `-f` included, then:
+
+1. `Daemons.Reset(purge=true)`: `rd-dind-<account>-lib` goes, and only if it
+   carries both the managed and the account label;
+2. `Store.Purge`: the home directory, only if it is the `Home` the store
+   recorded for that account, a real directory owned by its uid and with
+   nothing mounted inside; never a path a daemon reported. Then
+   `Provisioner.Remove`, `userdel` by uid, of a user `Ensure` would adopt;
+3. `Ports.Forget`: the account's `clientports` lines.
+
+The uidmap entry is KEPT, so the name and the uid are never reused, and a
+later bound token gets the same uid on a clean slate: an empty daemon, a new
+home. On the shared daemon steps 2 and 3 run and the reply says the daemon's
+containers, images and volumes were not touched. A step that fails is a
+notice in the reply; the keys are already revoked.
 
 - Removing an admin still named in `WORKSPACE_ADMINS` succeeds and says so,
   `fix: remove bob from WORKSPACE_ADMINS`: the name keeps the rights for
@@ -104,8 +121,11 @@ to upgrade it`.
 - **Names in `WORKSPACE_ADMINS` are rights before they are accounts.** An admin
   name nobody holds is reserved: an unbound token never takes it. A bound token
   from the operator or an admin is the only way in.
-- **Removal is revocation, not deletion.** Disk is not freed until `--purge`
-  exists, and an operator can still `remote-dockerd daemons reset --purge`.
+- **Removal is revocation, not deletion.** Disk is freed only by `--purge`,
+  which cannot be undone, or by an operator's `remote-dockerd daemons reset
+  --purge`.
+- **A purged name is spent.** Its uid stays in the uidmap for ever, so only a
+  bound token can bring it back, and an unbound one never takes it.
 - **The containers check asks the daemon**, and a daemon that cannot answer
   counts as running. `-f` is then the only way through.
 - **A hand edit in the enrolled directory is still not an admin operation**: it
@@ -124,3 +144,10 @@ to upgrade it`.
   images, alice not removing alice, removing carol naming `WORKSPACE_ADMINS`,
   the last admin's key protected); `test/two-clients.sh` section 3b (the second
   machine enrols by a token the first made).
+- Purge, unit: `TestUserRemovePurgeTakesTheStorageAndThePortsAndKeepsTheUID`
+  (sshd), `TestAPurgeRemovesOnlyTheLabelledVolume` (daemons), and in
+  `core-agent/accounts` `TestPurgeRemovesTheHomeAndTheUserAndKeepsTheUID`, the
+  `removeHome` refusals, `TestRemoval` and `TestForgetDropsOneAccountsMachines`.
+  End to end: `per-user-dind.sh` section 17 (`user rm bob --purge -f` removes
+  `-lib`, the home, the unix user and the `clientports` lines, the uidmap keeps
+  bob, and a bound token brings bob back with the same uid and no images).

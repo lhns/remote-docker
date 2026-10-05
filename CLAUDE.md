@@ -833,7 +833,10 @@ premise of the project, and it applies to building it too. So:
   an account or key an operator directory enrols. `user rm` revokes, withdraws
   the account's tokens and removes its daemon container, and keeps `-lib`, the
   home, the unix user, the uid and the ports, so a bound token brings it back
-  as it was. A request that revokes its own connection (`key rm -f` of the
+  as it was. `--purge` deletes all of those but the uid, which the uidmap keeps
+  so a name is never reused; it removes `-lib` only with both labels and the
+  home only if it is the `Home` the store recorded, owned by that uid, never a
+  path a daemon reported. A request that revokes its own connection (`key rm -f` of the
   connected key) still gets its reply: `serveEnrol` holds the connection
   through the sweep.
 - **A key file is parsed line by line.** Several keys per file is the format,
@@ -1161,7 +1164,9 @@ while its own token enrols a machine, `user rm` refused while a container runs
 and with `-f` removing `rd-dind-<account>` and keeping `-lib`, the account
 redeeming again with its uid and images, an admin unable to remove itself or
 the last admin's key, and removing an admin still in `WORKSPACE_ADMINS`
-saying so.
+saying so. Section 17 is `user rm --purge -f`: `-lib`, the home, the unix user
+and the `clientports` lines gone, the uidmap keeping the name, and a bound token
+bringing it back with the same uid and an empty daemon.
 
 `test/nfs-resilience.sh` asks what a mount DOES when the thing behind it goes
 away, on both layers and both ways a connection can end: a session released, a

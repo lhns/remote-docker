@@ -38,6 +38,7 @@ type Request struct {
 	Key         string        `json:"key,omitempty"` // key.add: an authorized_keys line
 	Fingerprint string        `json:"fingerprint,omitempty"`
 	Force       bool          `json:"force,omitempty"`
+	Purge       bool          `json:"purge,omitempty"` // user.rm: the account's storage, home and unix user too
 }
 
 // Reply is the one answer. Error is set on a refusal; Notices are things the

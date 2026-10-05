@@ -30,6 +30,12 @@ software.
   volumes and files, so a new token brings it back as it was. It is refused
   while its containers run unless you add `-f`. An admin cannot remove
   themselves or the last admin.
+- **`remote user rm bob --purge` deletes everything bob had.** On top of what
+  `user rm` does, it deletes bob's images, containers and volumes, home
+  directory and unix user, and forgets bob's ports. It cannot be undone. The
+  name is still never given to anybody else: a new token for bob brings bob
+  back with the same uid and nothing else. With a shared daemon, the
+  containers on it are left alone.
 - **`remote set` changes some of a workspace's settings.** `remote set dev
   --user bob` keeps everything else.
 - **A workspace reads keys from several directories.** `WORKSPACE_KEYS_DIR`
