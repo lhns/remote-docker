@@ -37,10 +37,11 @@ func TestServeReturnsWhenTheSSHPortIsTaken(t *testing.T) {
 	}
 }
 
-// WORKSPACE_EPHEMERAL_ACCOUNTS names accounts as their key files do, and a
-// name that is no account refuses the start, naming the variable.
-func TestEphemeralAccounts(t *testing.T) {
-	got, err := ephemeralAccounts(" CI, bob ,,")
+// WORKSPACE_EPHEMERAL_ACCOUNTS and WORKSPACE_ADMINS name accounts as their key
+// files do, and a name that is no account refuses the start, naming the
+// variable.
+func TestAccountSet(t *testing.T) {
+	got, err := accountSet(envAdmins, " CI, bob ,,")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +49,11 @@ func TestEphemeralAccounts(t *testing.T) {
 		t.Errorf("got %v, want ci and bob", got)
 	}
 
-	if got, err := ephemeralAccounts(""); err != nil || len(got) != 0 {
+	if got, err := accountSet(envAdmins, ""); err != nil || len(got) != 0 {
 		t.Errorf("unset gave %v, %v; want none", got, err)
 	}
 
-	if _, err := ephemeralAccounts("ci,123"); err == nil || !strings.Contains(err.Error(), envEphemeral) {
+	if _, err := accountSet(envEphemeral, "ci,123"); err == nil || !strings.Contains(err.Error(), envEphemeral) {
 		t.Errorf("err = %v, want one naming %s", err, envEphemeral)
 	}
 }

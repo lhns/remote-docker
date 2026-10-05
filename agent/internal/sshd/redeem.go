@@ -38,7 +38,8 @@ func redeemerFor(ctx gssh.Context) (redeemer, bool) {
 	return r, ok
 }
 
-// reservedNames are never given to an unbound token's account.
+// reservedNames are never given to an unbound token's account, and nor are
+// the admins' names.
 var reservedNames = map[string]bool{
 	"root": true, "admin": true, "administrator": true, "nobody": true,
 	"operator": true, "docker": true, "workspace": true,
@@ -71,11 +72,15 @@ func banner(ctx gssh.Context) string {
 	return ""
 }
 
-// route sends a token login's sessions to the redeem, and every other to
-// handleSession.
+// route sends a token login's sessions to the redeem, account management to
+// serveEnrol, and every other to handleSession.
 func (s *Server) route(session gssh.Session) {
 	if r, ok := redeemerFor(session.Context()); ok {
 		s.serveRedeem(session, r)
+		return
+	}
+	if account, ok := accountFor(session.Context()); ok && strings.Join(session.Command(), " ") == enrol.EnrolCommand {
+		s.serveEnrol(session, account)
 		return
 	}
 	s.handleSession(session)
@@ -176,7 +181,7 @@ func (s *Server) redeemName(bound, asked string) (string, bool, *enrol.Error) {
 	case asked == "":
 		return "", false, &enrol.Error{Code: enrol.CodeName,
 			Msg: "this token creates a new account, and no name was given", Fix: "name it with --user"}
-	case reservedNames[asked]:
+	case reservedNames[asked] || s.cfg.Admins[asked]:
 		return "", false, &enrol.Error{Code: enrol.CodeName,
 			Msg: fmt.Sprintf("the name %s is reserved", asked), Fix: "choose another name with --user"}
 	}

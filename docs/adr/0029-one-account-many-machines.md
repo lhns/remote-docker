@@ -163,3 +163,10 @@ accepted.** The remedy is a convention: `COMPOSE_PROJECT_NAME` or
   (neither refused its tunnel), 5 (a port each, remembered), 6 (each mounts its
   own files), 7 (both see one daemon) and 8 (neither collects the other's
   volumes).
+
+**A second machine enrols itself (2026-10-05).** `remote token create` on the
+first machine mints a token bound to the account, and the second redeems it
+with its own key (ADR 0051, ADR 0053): no operator, and no admin either, since
+an account may mint for itself. `test/two-clients.sh` enrols its second machine
+this way. `remote key ls` lists an account's machines by key, and `key rm`
+of another machine's key closes that machine's connections.

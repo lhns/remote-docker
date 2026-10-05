@@ -8,6 +8,11 @@ Enrol a device with a single-use token. Mint one for an account:
 It prints a `docker remote create ... --token ...` line: run that on the
 device, which enrols its own key. The key is stored on the state volume, not
 in the authorizedKeys Secret.
+{{- if .Values.admins }}
+
+Admins ({{ join ", " .Values.admins }}) can then mint tokens and remove
+accounts from their own machines: `docker remote token create --account bob`.
+{{- end }}
 
 {{- if not .Values.authorizedKeys }}
 {{- if not .Values.existingSecret }}

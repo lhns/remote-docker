@@ -103,6 +103,10 @@ const (
 	envEphemeralMax   = "WORKSPACE_EPHEMERAL_MAX_CLIENTS"
 	envEphemeralGrace = "WORKSPACE_EPHEMERAL_GRACE"
 
+	// envAdmins names, comma-separated, the accounts that manage every
+	// account under `remote` (ADR 0053). Only the operator edits it.
+	envAdmins = "WORKSPACE_ADMINS"
+
 	// envEphemeralContainers also removes an expired run's containers and
 	// its compose networks.
 	envEphemeralContainers = "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS"
@@ -169,9 +173,17 @@ func serve(addr, wsAddr string) error {
 		return err
 	}
 
-	ephemeralSet, err := ephemeralAccounts(os.Getenv(envEphemeral))
+	ephemeralSet, err := accountSet(envEphemeral, os.Getenv(envEphemeral))
 	if err != nil {
 		return err
+	}
+	admins, err := accountSet(envAdmins, os.Getenv(envAdmins))
+	if err != nil {
+		return err
+	}
+	if len(admins) > 0 {
+		log.Info("these accounts are admins", "var", envAdmins,
+			"accounts", strings.Join(slices.Sorted(maps.Keys(admins)), ","))
 	}
 	maxRuns, grace, err := ephemeralLimits(os.Getenv(envEphemeralMax), os.Getenv(envEphemeralGrace))
 	if err != nil {
@@ -455,6 +467,7 @@ func serve(addr, wsAddr string) error {
 		Ephemeral:   ephemeralSet,
 		Runs:        runs,
 		Tokens:      tokenStore,
+		Admins:      admins,
 		Log:         logger("sshd"),
 	})
 	if err != nil {
@@ -624,10 +637,11 @@ func readySeconds(log *slog.Logger) time.Duration {
 	return d
 }
 
-// ephemeralAccounts reads WORKSPACE_EPHEMERAL_ACCOUNTS. Each name is folded as
-// a key file's is, so it names the account that file enrols; a name nothing
-// can be derived from refuses the start rather than being dropped.
-func ephemeralAccounts(raw string) (map[string]bool, error) {
+// accountSet reads a comma-separated list of accounts from the variable env,
+// such as WORKSPACE_EPHEMERAL_ACCOUNTS. Each name is folded as a key file's
+// is, so it names the account that file enrols; a name nothing can be derived
+// from refuses the start rather than being dropped.
+func accountSet(env, raw string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, field := range strings.Split(raw, ",") {
 		if field = strings.TrimSpace(field); field == "" {
@@ -635,7 +649,7 @@ func ephemeralAccounts(raw string) (map[string]bool, error) {
 		}
 		name, err := workspace.AccountName(field)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", envEphemeral, err)
+			return nil, fmt.Errorf("%s: %w", env, err)
 		}
 		out[name] = true
 	}

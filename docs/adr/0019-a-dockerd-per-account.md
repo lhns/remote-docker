@@ -249,3 +249,10 @@ position. The code does not differ; the blast radius does.)*
 - Two things became correct for free: `rd-cwd` stopped colliding across accounts,
   and "loopback" in a local forward means the account's own dind's loopback rather
   than the agent's, where the SSH port lives.
+
+**Removing an account removes its daemon, through the resolver (2026-10-05).**
+`Targets` gained `Running` and `Reset`, which `remote user rm` asks (ADR 0053):
+refused while the daemon runs containers unless `-f`, then the container is
+removed and `rd-dind-<account>-lib` kept, so the account comes back as it was.
+`Shared` answers 0 and removes nothing, so the use site never asks which mode
+it is in.

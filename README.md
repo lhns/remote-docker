@@ -210,7 +210,8 @@ are is in [`docs/threat-model.md`](docs/threat-model.md).
 ## One account from two machines
 
 A laptop and a desktop enrolled in one account with a key each share the
-daemon, images and containers. Files are not shared, and neither are published
+daemon, images and containers. The second enrols itself: run
+`remote token create` on the first, and the line it prints on the second. Files are not shared, and neither are published
 ports: each machine opens the number its own containers asked for, and sees the
 other machine's containers at whatever port the workspace published them on.
 
@@ -303,6 +304,10 @@ that is ours lives under `remote`:
 | `remote-docker remote use <name>` | make it the default here, and docker's current context |
 | `remote-docker remote inspect [name]` | settings, endpoint, context, whether a session is up |
 | `remote-docker remote machine …` | `create`, `rebuild`, `start`, `stop`, `status` a [local workspace](#a-workspace-on-this-machine-windows) |
+| `remote-docker remote token create` | a token that enrols another machine into your account; [admins](#admins) may name any `--account`, or `--unbound` |
+| `remote-docker remote token ls` / `rm <id>` | your tokens not yet redeemed, or every one for an admin |
+| `remote-docker remote key ls` / `add <file\|->` / `rm <fingerprint>` | your account's keys; an admin's with `--account` |
+| `remote-docker remote user ls` / `rm <account>` | every account, and removing one ([admins](#admins) only) |
 
 A command about one workspace takes its name as an argument, else
 `--workspace`, else the default. `stop`, `restart`, `machine stop`,
@@ -755,6 +760,7 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_HOSTKEY_DIR` | `<state>/host_keys` | |
 | `WORKSPACE_TOKENS_DIR` | `<state>/tokens` | single-use [enrolment tokens](#enrolment), one file each, holding a hash of the secret |
 | `WORKSPACE_PUBLIC_URL` | empty | the address an enrolment invite names, such as `wss://ws.example/`; `token create --url` overrides it |
+| `WORKSPACE_ADMINS` | empty | accounts, comma-separated, that manage every account from their own machine; see [Admins](#admins) |
 | `WORKSPACE_KEY_POLL_INTERVAL` | `60` | seconds; every keys directory is polled as well as watched |
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
@@ -941,6 +947,36 @@ hand edit in the enrolled directory does not.
 Every directory is re-read on change and polled every 60 seconds, because
 inotify never fires for a change made on another host when that directory is
 on shared storage.
+
+### Admins
+
+Any account manages its own tokens and keys from its own machine:
+`remote token create` prints a line that enrols another machine into the
+account, and `remote key ls|add|rm` lists and changes its keys. Removing the
+key this machine connects with, or the last one, needs `-f`.
+
+The accounts in `WORKSPACE_ADMINS` (comma-separated; `admins` in the chart)
+manage every account:
+
+```bash
+docker remote token create --account carol     # or --unbound: the device names it
+docker remote user ls
+docker remote user rm bob                      # -f while bob's containers run
+docker remote key rm SHA256:… --account bob
+```
+
+`user rm` revokes the account's keys and closes its connections, withdraws its
+tokens, and removes its daemon container. Its images, volumes, home directory
+and uid are kept, so a new token for the same name brings it back as it was.
+An admin cannot remove its own account, nor the last admin who holds a key,
+nor an account or key an operator's keys directory enrols. Only the operator
+edits `WORKSPACE_ADMINS`: removing an admin still named there says so, since
+the name keeps its rights. The first admin enrols with a token the operator
+mints: `remote-dockerd token create --account alice`
+([ADR 0053](docs/adr/0053-admins-named-by-the-operator-and-account-management-under-remote.md)).
+
+An admin can create accounts, and an account is a privileged daemon, so name
+admins as you would give somebody a shell on the host.
 
 ### A daemon per account
 

@@ -76,6 +76,11 @@ type Config struct {
 	Tokens  *tokens.Store
 	Limiter *tokens.Limiter
 
+	// Admins are the accounts named in WORKSPACE_ADMINS, folded, which may
+	// manage every account (ADR 0053). Their names are never given to an
+	// unbound token.
+	Admins map[string]bool
+
 	Log *slog.Logger
 }
 
@@ -120,6 +125,9 @@ type sessionAccount struct {
 	client    string
 	ephemeral bool
 	key       []byte
+
+	// fingerprint is the key this connection authenticated with.
+	fingerprint string
 }
 
 func (s sessionAccount) Name() string   { return s.name }
@@ -242,7 +250,7 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 		return false
 	}
 
-	session := sessionAccount{name: account.Name, uid: account.UID}
+	session := sessionAccount{name: account.Name, uid: account.UID, fingerprint: ssh.FingerprintSHA256(key)}
 	if s.cfg.Ephemeral[account.Name] {
 		session.ephemeral = true
 		session.key = key.Marshal()
