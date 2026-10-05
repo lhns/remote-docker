@@ -1,7 +1,7 @@
 # 0050 — Ephemeral clients
 
-- Status: Accepted. Implemented. The end-to-end suites below were merged
-  before their first CI run (2026-10-05).
+- Status: Accepted. Implemented. The end-to-end suites below first ran green on
+  main on 2026-10-06 (commit a87a300).
 - Date: 2026-10-05
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
