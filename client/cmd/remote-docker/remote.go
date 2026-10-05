@@ -40,6 +40,7 @@ workspace the current docker context names.`,
 	cmd.AddCommand(
 		// The remotes themselves.
 		newWorkspaceCreateCommand(),
+		newWorkspaceSetCommand(),
 		newWorkspaceListCommand(),
 		newWorkspaceRemoveCommand(),
 		newWorkspaceUseCommand(),

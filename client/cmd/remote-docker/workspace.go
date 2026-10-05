@@ -7,8 +7,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -16,41 +18,44 @@ import (
 // as a side effect. Reached as `remote create` etc. (ADR 0024); the code keeps
 // the noun "workspace", as the config, wire protocol and agent do.
 func newWorkspaceCreateCommand() *cobra.Command {
-	var host, user, endpoint, watch, consistency, caFile string
-	var port int
-	var makeDefault, noContext, insecure bool
+	var flags workspaceFlags
+	var makeDefault, noContext bool
 
 	cmd := &cobra.Command{
 		Use:     "create <name>",
 		Aliases: []string{"add"},
 		Short:   "Create a workspace and its docker context",
-		Args:    cobra.ExactArgs(1),
+		Long: `Adds a workspace to this machine's configuration and creates a docker
+context for it.
+
+Given a name that already exists, it replaces every setting of that workspace.
+"remote set" changes only the settings you name, and is the only way to change
+a workspace made by "remote machine create".`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			if host == "" {
+			if flags.host == "" {
 				return fmt.Errorf("--host is required\n  fix: `%s`", ourCommand("create "+name+" --host <host>"))
-			}
-			// Only for a bare host: Transport refuses a port beside a URL.
-			if port == 0 && !strings.Contains(host, "://") {
-				port = config.DefaultSSHPort
 			}
 
 			file, err := config.Load("")
 			if err != nil {
 				return err
 			}
-			_, existed := file.Workspaces[name]
+			old, existed := file.Workspaces[name]
+			if m := old.Machine; m != nil {
+				// Replacing the entry drops the only record of the machine, and
+				// `rm` would then leave it running.
+				return fmt.Errorf("workspace %q runs on the %s machine %q, which create would lose track of\n  fix: `%s` changes its settings",
+					name, m.Backend, m.Name, ourCommand("set "+name+" ..."))
+			}
 
-			// Refused here rather than on the first container.
-			if _, err := workspace.ParseMode(consistency); err != nil {
+			var ws config.Workspace
+			flags.apply(&ws)
+			if err := file.Set(name, ws); err != nil {
 				return err
 			}
-
-			ws := config.Workspace{
-				Host: host, Port: port, User: user, Endpoint: endpoint, Watch: watch,
-				Consistency: consistency, CAFile: caFile, Insecure: insecure,
-			}
-			if err := file.Set(name, ws); err != nil {
+			if err := checkWorkspace(file, name); err != nil {
 				return err
 			}
 			if makeDefault {
@@ -82,21 +87,176 @@ func newWorkspaceCreateCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&host, "host", "",
-		"workspace address (required): a host, or ssh://, ws:// or wss:// with one")
-	cmd.Flags().StringVar(&caFile, "ca-file", "",
-		"verify a ws:// endpoint against this CA instead of the system roots")
-	cmd.Flags().BoolVar(&insecure, "insecure", false,
-		"accept any certificate from a ws:// endpoint; ssh still authenticates both ends")
-	cmd.Flags().IntVar(&port, "port", 0, "ssh port")
-	cmd.Flags().StringVar(&user, "user", "", "workspace account; defaults to your local username")
-	cmd.Flags().StringVar(&endpoint, "endpoint", "", "override where the local Docker API is served")
-	cmd.Flags().StringVar(&watch, "watch", "", "replay file changes: off, partial or coarse")
-	cmd.Flags().StringVar(&consistency, "consistency", "",
-		"how shares are mounted: read=<direct|cached>,write=<through|back|ephemeral>")
+	flags.register(cmd, "workspace address (required): a host, or ssh://, ws:// or wss:// with one")
 	cmd.Flags().BoolVar(&makeDefault, "default", false, "make this the default workspace")
 	cmd.Flags().BoolVar(&noContext, "no-context", false, "do not create a docker context")
 	return cmd
+}
+
+func newWorkspaceSetCommand() *cobra.Command {
+	var flags workspaceFlags
+
+	cmd := &cobra.Command{
+		Use:   "set <name>",
+		Short: "Change some of a workspace's settings",
+		Long: `Changes the settings named on the command line and keeps every other one.
+
+Changing --host without --port goes back to the default port: 2222 for a bare
+host, or the scheme's own for an ssh://, ws:// or wss:// address.
+
+A workspace made by "remote machine create" keeps its machine. Its address is
+found each time it connects, so --host is refused for it.
+
+A running session keeps its old settings until it is restarted, and a new
+--endpoint is refused while it runs.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if !flags.anyGiven() {
+				return fmt.Errorf("no setting given to change\n  fix: `%s` lists them", ourCommand("set --help"))
+			}
+			file, err := config.Load("")
+			if err != nil {
+				return err
+			}
+			ws, ok := file.Workspaces[name]
+			if !ok {
+				return noWorkspaceNamed(name)
+			}
+			if m := ws.Machine; m != nil && flags.given("host") {
+				return fmt.Errorf("workspace %q runs on the %s machine %q, whose address is found when it connects\n  fix: leave out --host",
+					name, m.Backend, m.Name)
+			}
+
+			// Read before the change: a running session is on the old endpoint.
+			before, err := resolve(args)
+			if err != nil {
+				return err
+			}
+			running := proxy.Reachable(endpointOf(before))
+
+			flags.apply(&ws)
+			if err := file.Set(name, ws); err != nil {
+				return err
+			}
+			if err := checkWorkspace(file, name); err != nil {
+				return err
+			}
+			next := before
+			next.Endpoint = ws.Endpoint
+			moved := flags.given("endpoint") && endpointOf(next) != endpointOf(before)
+			if moved && running {
+				// `restart` would look for it at the new endpoint.
+				return fmt.Errorf("%s serves at %s, and moving the endpoint would leave it running there\n  fix: `%s` first",
+					sessionOf(before), dockerHostOf(before), ourCommand("stop "+name))
+			}
+			if err := config.Save(file, ""); err != nil {
+				return err
+			}
+			after, err := config.Resolve(config.Overrides{Workspace: name}, "")
+			if err != nil {
+				return err
+			}
+
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(out, "updated workspace %q: %s\n", name, where(after))
+			if moved && contextIsOurs(after.ContextName()) {
+				reportContext(out, after)
+			}
+			if running {
+				_, _ = fmt.Fprintf(out, "%s still uses the old settings\n  fix: `%s`\n",
+					sessionOf(before), ourCommand("restart "+name))
+			}
+			return nil
+		},
+	}
+
+	flags.register(cmd, "workspace address: a host, or ssh://, ws:// or wss:// with one")
+	return cmd
+}
+
+// workspaceFlags are the settings create and set share.
+type workspaceFlags struct {
+	host, user, endpoint, watch, consistency, caFile string
+	port                                             int
+	insecure                                         bool
+
+	set *pflag.FlagSet
+}
+
+func (f *workspaceFlags) register(cmd *cobra.Command, hostUsage string) {
+	f.set = pflag.NewFlagSet("workspace", pflag.ContinueOnError)
+	f.set.StringVar(&f.host, "host", "", hostUsage)
+	f.set.StringVar(&f.caFile, "ca-file", "",
+		"verify a ws:// endpoint against this CA instead of the system roots")
+	f.set.BoolVar(&f.insecure, "insecure", false,
+		"accept any certificate from a ws:// endpoint; ssh still authenticates both ends")
+	f.set.IntVar(&f.port, "port", 0, "ssh port")
+	f.set.StringVar(&f.user, "user", "", "workspace account; defaults to your local username")
+	f.set.StringVar(&f.endpoint, "endpoint", "", "override where the local Docker API is served")
+	f.set.StringVar(&f.watch, "watch", "", "replay file changes: off, partial or coarse")
+	f.set.StringVar(&f.consistency, "consistency", "",
+		"how shares are mounted: read=<direct|cached>,write=<through|back|ephemeral>")
+	cmd.Flags().AddFlagSet(f.set)
+}
+
+// given reports whether a flag of ours was on the command line. The *Flag is
+// shared with the command's set, which is the one that parses.
+func (f *workspaceFlags) given(name string) bool { return f.set.Lookup(name).Changed }
+
+func (f *workspaceFlags) anyGiven() bool {
+	found := false
+	f.set.VisitAll(func(fl *pflag.Flag) { found = found || fl.Changed })
+	return found
+}
+
+// apply copies the flags given into ws and leaves every other field.
+func (f *workspaceFlags) apply(ws *config.Workspace) {
+	given := f.given
+	if given("host") && f.host != ws.Host {
+		ws.Host = f.host
+		ws.Port = defaultPort(f.host)
+	}
+	if given("port") {
+		ws.Port = f.port
+	}
+	if given("user") {
+		ws.User = f.user
+	}
+	if given("endpoint") {
+		ws.Endpoint = f.endpoint
+	}
+	if given("watch") {
+		ws.Watch = f.watch
+	}
+	if given("consistency") {
+		ws.Consistency = f.consistency
+	}
+	if given("ca-file") {
+		ws.CAFile = f.caFile
+	}
+	if given("insecure") {
+		ws.Insecure = f.insecure
+	}
+}
+
+// defaultPort is the port a new host starts with. Only a bare host gets one:
+// Transport refuses a port beside a URL that disagrees with it.
+func defaultPort(host string) int {
+	if strings.Contains(host, "://") {
+		return 0
+	}
+	return config.DefaultSSHPort
+}
+
+// checkWorkspace refuses an entry that would otherwise fail only on the first
+// docker command.
+func checkWorkspace(file config.File, name string) error {
+	if _, err := workspace.ParseMode(file.Workspaces[name].Consistency); err != nil {
+		return err
+	}
+	_, err := file.Transport(name)
+	return err
 }
 
 func newWorkspaceRemoveCommand() *cobra.Command {

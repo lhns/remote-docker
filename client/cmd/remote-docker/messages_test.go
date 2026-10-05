@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -104,6 +105,48 @@ func TestNoWorkspaceConfiguredNamesTheRemedy(t *testing.T) {
 func TestCreateWithoutAHostNamesTheRemedy(t *testing.T) {
 	withConfig(t, nil)
 	requireFixLine(t, run(t, "remote", "create", "dev"), "remote create dev --host")
+}
+
+// Refused before saving, rather than on the first docker command.
+func TestAnHTTPSHostIsRefusedWithTheWebSocketSpelling(t *testing.T) {
+	before := config.File{Workspaces: map[string]config.Workspace{"dev": {Host: "dev.example"}}}
+	for _, args := range [][]string{
+		{"remote", "create", "dev", "--host", "https://ws.example/tunnel"},
+		{"remote", "create", "new", "--host", "https://ws.example/tunnel"},
+		{"remote", "set", "dev", "--host", "https://ws.example/tunnel"},
+	} {
+		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
+			withConfig(t, &before)
+			requireFixLine(t, run(t, args...), "wss://ws.example/tunnel")
+			if got, _ := config.Load(""); !reflect.DeepEqual(got.Workspaces, before.Workspaces) {
+				t.Errorf("saved %+v", got.Workspaces)
+			}
+		})
+	}
+	_, err := config.Config{Host: "http://ws.example/"}.Transport()
+	requireFixLine(t, err, "use ws://ws.example/")
+}
+
+// Re-running create used to drop the machine block, so `rm` left the machine
+// running with nothing pointing at it.
+func TestCreateRefusesToReplaceAMachineWorkspace(t *testing.T) {
+	m := &config.Machine{Backend: "wsl", Name: "rd-wsl"}
+	withConfig(t, &config.File{Workspaces: map[string]config.Workspace{
+		"wsl": {Host: "127.0.0.1", Port: 2222, User: "alice", Machine: m},
+	}})
+
+	requireFixLine(t, run(t, "remote", "create", "wsl", "--host", "dev.example"), "remote set wsl")
+	file, _ := config.Load("")
+	if got := file.Workspaces["wsl"].Machine; !reflect.DeepEqual(got, m) {
+		t.Errorf("machine is now %+v", got)
+	}
+
+	requireFixLine(t, run(t, "remote", "set", "wsl", "--host", "dev.example"), "leave out --host")
+}
+
+func TestSetWithNothingToSetNamesTheFlags(t *testing.T) {
+	withConfig(t, &config.File{Workspaces: map[string]config.Workspace{"dev": {Host: "dev.example"}}})
+	requireFixLine(t, run(t, "remote", "set", "dev"), "remote set --help")
 }
 
 // inspect with no name answers for --workspace, as every other command does,
