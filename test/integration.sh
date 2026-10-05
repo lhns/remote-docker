@@ -1065,6 +1065,74 @@ else
 fi
 
 echo
+echo "== 11h. a device enrols its own key with a token =="
+# ADR 0051: the operator mints a token inside the workspace, and a client with
+# a key nobody has seen redeems it. Each redeemer is a machine of its own: its
+# own state directory, key and config, and none of the suite's settings.
+token_line() {
+    hostdocker exec "$CONTAINER" remote-dockerd token create --url "ssh://127.0.0.1:$SSH_PORT" "$@" 2>&1
+}
+invite_of() { awk '/--token/ {print $NF}' <<<"$1"; }
+redeemer() {
+    local who=$1
+    shift
+    mkdir -p "$WORK/redeem-home-$who"
+    env -u REMOTE_DOCKER_HOST -u REMOTE_DOCKER_PORT -u REMOTE_DOCKER_USER -u REMOTE_DOCKER_ENDPOINT \
+        HOME="$WORK/redeem-home-$who" REMOTE_DOCKER_STATE_DIR="$WORK/redeem-state-$who" \
+        timeout 60 "$WORK/remote-docker" remote "$@"
+}
+
+line=$(token_line --account itest4)
+invite=$(invite_of "$line")
+if [ -z "$invite" ]; then
+    bad "token create printed no invite: $line"
+elif ! outputs "created the account itest4" redeemer a create tok --token "$invite" --no-context; then
+    bad "a bound token did not redeem: $LAST_OUTPUT"
+    dump_workspace_log 20
+else
+    ok "a bound token creates its account"
+    if outputs '^AUTH-OK' ssh_account "$WORK/redeem-state-a/id_ed25519" itest4 20 'echo AUTH-OK'; then
+        ok "and the redeemed key authenticates"
+    else
+        bad "the redeemed key does not authenticate: $(tail -3 <<<"$LAST_OUTPUT" | tr '\n' ' ')"
+    fi
+    key=$(cut -d' ' -f2 "$WORK/redeem-state-a/id_ed25519.pub")
+    outputs . hostdocker exec "$CONTAINER" cat /etc/workspace/enrolled_keys.d/itest4.pub
+    if grep -qF "$key" <<<"$LAST_OUTPUT"; then
+        ok "the key is in the enrolled directory"
+    else
+        bad "the enrolled directory does not hold the key: $LAST_OUTPUT"
+    fi
+    if [ -e "$WORK/keys/itest4.pub" ]; then
+        bad "the redeem wrote into the operator's directory"
+    fi
+    if outputs "unknown, used or expired" redeemer b create tok --token "$invite" --no-context; then
+        ok "a used token is refused"
+    else
+        bad "a used token was not refused as one: $LAST_OUTPUT"
+    fi
+fi
+
+line=$(token_line --unbound)
+invite=$(invite_of "$line")
+if [ -z "$invite" ]; then
+    bad "token create --unbound printed no invite: $line"
+else
+    if outputs "already exists" redeemer c create tok --token "$invite" --user "$ACCOUNT" --no-context; then
+        ok "an unbound token refuses a name that is taken"
+    else
+        bad "an unbound token took an existing account's name: $LAST_OUTPUT"
+    fi
+    if outputs "created the account itest5" redeemer c create tok --token "$invite" --user itest5 --no-context &&
+        outputs '^AUTH-OK' ssh_account "$WORK/redeem-state-c/id_ed25519" itest5 20 'echo AUTH-OK'; then
+        ok "and creates an account under a new one"
+    else
+        bad "an unbound token did not create itest5: $LAST_OUTPUT"
+        dump_workspace_log 20
+    fi
+fi
+
+echo
 echo "== 12. docker compose =="
 # Compose speaks the Engine API and never shells out to `docker`, which is why
 # ADR 0005 translates at the API. It expands ./html to an absolute path on THIS

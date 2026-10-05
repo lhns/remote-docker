@@ -12,6 +12,14 @@ software.
 
 ### New
 
+- **A device can enrol itself with a one-time token.** Whoever runs the
+  workspace runs `remote-dockerd token create --account alice` inside it, and
+  hands over the line it prints. Running that line on your machine,
+  `docker remote create <name> --token rdt1.…`, adds the workspace and enrols
+  your key. Nobody has to copy a key file anywhere. A token works once and
+  expires after a day. It also tells your machine which host key to expect, so
+  the first connection is checked too. On Kubernetes the chart's `publicURL`
+  is the address a token sends people to; by default it is the ingress.
 - **`remote set` changes some of a workspace's settings.** `remote set dev
   --user bob` keeps everything else.
 - **A workspace reads keys from several directories.** `WORKSPACE_KEYS_DIR`

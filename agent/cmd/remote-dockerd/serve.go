@@ -30,6 +30,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/supervise"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/accounts"
+	"github.com/lhns/remote-docker/core-agent/tokens"
 	"github.com/lhns/remote-docker/core-agent/wslisten"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -142,8 +143,8 @@ func serve(addr, wsAddr string) error {
 
 	stateDir := envOr(envStateDir, defaultStateDir)
 	keysDirs := dirList(os.Getenv(envKeysDir), filepath.Join(stateDir, "authorized_keys.d"))
-	enrolledDir := envOr(envEnrolledKeys, filepath.Join(stateDir, "enrolled_keys.d"))
-	hostKeyDir := envOr(envHostKeys, filepath.Join(stateDir, "host_keys"))
+	enrolledDir := enrolledDirFor(stateDir)
+	hostKeyDir := hostKeyDirFor(stateDir)
 
 	for _, dir := range append([]string{stateDir, hostKeyDir}, keysDirs...) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -437,6 +438,9 @@ func serve(addr, wsAddr string) error {
 	}
 	wg.Go(func() { runs.Run(ctx) })
 
+	tokenStore := &tokens.Store{Dir: tokensDirFor(stateDir)}
+	wg.Go(func() { sweepTokens(ctx, tokenStore, log) })
+
 	server, err := sshd.New(sshd.Config{
 		Addr:     addr,
 		HostKeys: hostKeys,
@@ -450,6 +454,7 @@ func serve(addr, wsAddr string) error {
 		DaemonPaths: daemonPaths,
 		Ephemeral:   ephemeralSet,
 		Runs:        runs,
+		Tokens:      tokenStore,
 		Log:         logger("sshd"),
 	})
 	if err != nil {
@@ -570,6 +575,23 @@ func generateHostKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("writing host key: %w", err)
 	}
 	return encoded, nil
+}
+
+// sweepTokens deletes expired tokens hourly, so a listing shows what can
+// still be redeemed.
+func sweepTokens(ctx context.Context, store *tokens.Store, log *slog.Logger) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if _, err := store.Sweep(); err != nil {
+			log.Warn("could not sweep the enrolment tokens", "dir", store.Dir, "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func envOr(name, fallback string) string { return cmp.Or(os.Getenv(name), fallback) }

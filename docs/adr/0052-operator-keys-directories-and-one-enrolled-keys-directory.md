@@ -1,8 +1,8 @@
 # 0052 — Operator keys directories, and one enrolled keys directory
 
-- Status: Accepted. The reading, the checks and the writer are implemented;
-  nothing calls the writer yet. Enrolment tokens and account management (ADR
-  0051, ADR 0053, both to come) are its callers.
+- Status: Accepted. The reading, the checks and the writer are implemented.
+  Redeeming an enrolment token (ADR 0051) is the writer's first caller; account
+  management (ADR 0053, to come) is the next.
 - Date: 2026-10-05
 
 ## What forced it

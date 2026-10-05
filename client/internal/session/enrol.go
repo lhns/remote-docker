@@ -16,6 +16,6 @@ func enrolmentHint(err error, user string, signer ssh.Signer) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"\n  fix: enrol this key as authorized_keys.d/%s.pub; it is read within a minute\n  key: %s",
+		"\n  fix: redeem a token with `remote create <name> --token <invite>`, or enrol this key as authorized_keys.d/%s.pub, read within a minute\n  key: %s",
 		user, ssh.FingerprintSHA256(signer.PublicKey()))
 }

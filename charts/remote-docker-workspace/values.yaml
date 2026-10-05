@@ -30,6 +30,12 @@ image:
 # keeps its home directory.
 authorizedKeys: {}
 
+# The address devices reach this workspace at, written into every enrolment
+# token's invite (WORKSPACE_PUBLIC_URL). Empty derives it from the ingress:
+# wss://<ingress.host>/ with TLS, ws:// without. Set it when something other
+# than this chart's ingress fronts the workspace.
+publicURL: ""
+
 # Use a Secret you manage instead -- sealed-secrets, an external secrets
 # operator, or one you created by hand. Its keys are filenames and must be
 # account names. Set this and `authorizedKeys` is ignored.
@@ -146,8 +152,8 @@ service:
 ingress:
   enabled: true
 
-  # Required when enabled. Clients then use:
-  #   remote-docker remote create dev --host wss://<host> --user <account>
+  # Required when enabled. Devices enrol with a token whose invite names it;
+  # NOTES.txt prints the command that mints one.
   host: ""
 
   className: ""

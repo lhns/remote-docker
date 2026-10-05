@@ -122,4 +122,28 @@ else
     bad "the refusal took ${took}s, which is a hang wearing a deadline"
 fi
 
+echo
+echo "== 5. an enrolment token is refused as unknown to it =="
+# ADR 0051: a workspace that predates tokens refuses the login without the
+# enrolment banner, and the client says that rather than that the token was bad.
+# The invite pins the workspace's real host key, so the refusal is the login's.
+fingerprint=$(ssh-keyscan -t ed25519 -p "$SSH_PORT" 127.0.0.1 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
+invite="rdt1.$(printf '{"u":"ssh://127.0.0.1:%s","k":"%s","a":"bob","t":"aaaaaaaa.AAAAAAAAAAAAAAAAAAAAAA"}' \
+    "$SSH_PORT" "$fingerprint" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+mkdir -p "$WORK/token-home"
+if [ -z "$fingerprint" ]; then
+    bad "could not read the workspace's host key"
+elif outputs 'predates enrolment tokens' env -u REMOTE_DOCKER_HOST -u REMOTE_DOCKER_USER \
+    HOME="$WORK/token-home" REMOTE_DOCKER_STATE_DIR="$WORK/token-state" \
+    timeout 60 "$WORK/remote-docker" remote create old --token "$invite" --no-context; then
+    ok "the client says the workspace predates tokens"
+    if grep -q 'fix: ask its operator to upgrade it' <<<"$LAST_OUTPUT"; then
+        ok "and what to do instead"
+    else
+        bad "the refusal carries no remedy: $LAST_OUTPUT"
+    fi
+else
+    bad "an old workspace's refusal was not named as one: $LAST_OUTPUT"
+fi
+
 summary

@@ -1,12 +1,45 @@
 package tunnelclient
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
+
+// A banner reaches the caller, which is how a token login tells a workspace
+// that knows tokens from one that predates them.
+func TestABannerReachesTheCaller(t *testing.T) {
+	ts := startTestServer(t)
+	host, port := hostPort(t, ts.Addr.String())
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	c, err := Dial(t.Context(), Config{
+		Host: host, Port: port, User: "alice", Signer: signer,
+		HostKey: ssh.FixedHostKey(ts.HostKey),
+		Banner:  func(msg string) { got = append(got, msg) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if len(got) != 1 || got[0] != "banner for alice" {
+		t.Errorf("banners: %q", got)
+	}
+}
 
 // A caller with no host key rule has no host key rule, and that must be said
 // rather than discovered.

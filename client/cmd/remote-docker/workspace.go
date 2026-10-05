@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
+	"github.com/lhns/remote-docker/client/internal/session"
+	"github.com/lhns/remote-docker/core/enrol"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -21,16 +24,31 @@ import (
 func newWorkspaceCreateCommand() *cobra.Command {
 	var flags workspaceFlags
 	var makeDefault, noContext bool
+	var token string
 
 	cmd := &cobra.Command{
 		Use:     "create <name>",
 		Aliases: []string{"add"},
 		Short:   "Create a workspace and its docker context",
 		Long: `Adds a workspace and its docker context. For a name that exists, every
-setting is replaced; "remote set" changes only the ones you name.`,
+setting is replaced; "remote set" changes only the ones you name.
+
+With --token, the invite an operator or admin gave you enrols this machine's
+key first, and nothing is saved unless it does. The invite carries the
+workspace's address, which --host overrides, and its host key.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			var invite enrol.Invite
+			if cmd.Flags().Changed("token") {
+				var err error
+				if invite, err = enrol.ParseInvite(token); err != nil {
+					return fmt.Errorf("--token is not an enrolment invite, which starts %s\n  fix: paste the whole invite you were given", enrol.InvitePrefix)
+				}
+				if !flags.given("host") {
+					_ = flags.set.Set("host", invite.URL)
+				}
+			}
 			if flags.host == "" {
 				return fmt.Errorf("--host is required\n  fix: `%s`", ourCommand("create "+name+" --host <host>"))
 			}
@@ -58,6 +76,21 @@ setting is replaced; "remote set" changes only the ones you name.`,
 			if err != nil {
 				return err
 			}
+			var enrolled *enrol.RedeemReply
+			if invite.Token != "" {
+				reply, err := redeem(cmd, cfg, invite, flags)
+				if err != nil {
+					return err
+				}
+				enrolled = &reply
+				ws.User = reply.Account
+				if err := file.Set(name, ws); err != nil {
+					return err
+				}
+				if cfg, err = resolveChecked(file, name); err != nil {
+					return err
+				}
+			}
 			if err := config.Save(file, ""); err != nil {
 				return err
 			}
@@ -69,18 +102,28 @@ setting is replaced; "remote set" changes only the ones you name.`,
 			}
 			_, _ = fmt.Fprintf(out, "%s workspace %q: %s\n", verb, name, where(cfg))
 
+			if enrolled != nil {
+				how := "joined the account"
+				if enrolled.Created {
+					how = "created the account"
+				}
+				_, _ = fmt.Fprintf(out, "this machine's key %s %s\n", how, enrolled.Account)
+			}
 			if !noContext {
 				reportContext(out, cfg)
 			}
 
-			_, _ = fmt.Fprintf(out,
-				"\nIf this machine is not enrolled there yet, hand this to whoever runs it:\n\n    %s\n",
-				enrolledKey())
+			if enrolled == nil {
+				_, _ = fmt.Fprintf(out,
+					"\nIf this machine is not enrolled there yet, ask for an enrolment token and run\n`%s`, or hand this to whoever runs it:\n\n    %s\n",
+					ourCommand("create "+name+" --token <invite>"), enrolledKey())
+			}
 			return nil
 		},
 	}
 
-	flags.register(cmd, "workspace address (required): a host, or ssh://, ws:// or wss:// with one")
+	flags.register(cmd, "workspace address (required without --token): a host, or ssh://, ws:// or wss:// with one")
+	cmd.Flags().StringVar(&token, "token", "", "enrol this machine's key with an invite first")
 	cmd.Flags().BoolVar(&makeDefault, "default", false, "make this the default workspace")
 	cmd.Flags().BoolVar(&noContext, "no-context", false, "do not create a docker context")
 	return cmd
@@ -240,6 +283,29 @@ func (f *workspaceFlags) refuseForMachine(name string, m *config.Machine) error 
 	}
 	return fmt.Errorf("workspace %q is the %s machine %q, which was built for its port and user\n  fix: `%s`, which discards its containers",
 		name, m.Backend, m.Name, ourCommand(rebuild))
+}
+
+// redeem enrols this machine's key with an invite, as the account --user
+// names, or the one the token is bound to, or this machine's user name for a
+// token that makes a new account.
+func redeem(cmd *cobra.Command, cfg config.Config, invite enrol.Invite, flags workspaceFlags) (enrol.RedeemReply, error) {
+	account := ""
+	if flags.given("user") {
+		account = flags.user
+	} else if invite.Account == "" {
+		account = cfg.User
+	}
+	reply, err := session.Redeem(cmd.Context(), cfg, invite, account)
+	return reply, redeemError(err, flags.host)
+}
+
+// redeemError words a failed redemption for the person at this machine.
+func redeemError(err error, host string) error {
+	if errors.Is(err, session.ErrPredatesTokens) {
+		return fmt.Errorf("the workspace at %s predates enrolment tokens\n  fix: ask its operator to upgrade it, or to enrol this key by file: `%s`",
+			host, ourCommand("enroll"))
+	}
+	return err
 }
 
 // resolveChecked resolves the named workspace in file, refusing what would

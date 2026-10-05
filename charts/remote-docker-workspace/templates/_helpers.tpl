@@ -52,6 +52,17 @@ app.kubernetes.io/name: {{ include "remote-docker-workspace.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+The address an enrolment invite names: publicURL, or the ingress's.
+*/}}
+{{- define "remote-docker-workspace.publicURL" -}}
+{{- if .Values.publicURL -}}
+{{- .Values.publicURL -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- ternary "wss" "ws" .Values.ingress.tls.enabled }}://{{ .Values.ingress.host }}/
+{{- end -}}
+{{- end -}}
+
 {{- define "remote-docker-workspace.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "remote-docker-workspace.fullname" .) .Values.serviceAccount.name -}}
