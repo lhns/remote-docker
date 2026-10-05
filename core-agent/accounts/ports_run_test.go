@@ -115,3 +115,30 @@ func TestHoldRestoresARunsPort(t *testing.T) {
 		t.Error("Hold gave a run bob's port")
 	}
 }
+
+// A purged account's machines are dropped from the record, and nobody else's.
+func TestForgetDropsOneAccountsMachines(t *testing.T) {
+	p := newPorts(t)
+	for _, c := range []string{"aabbccdd", "11223344"} {
+		if _, err := p.For("bob", 10002, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alice, err := p.For("alice", 10001, "aabbccdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Forget("bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	reread := &Ports{Dir: p.Dir, Mapping: p.Mapping}
+	for _, c := range []string{"aabbccdd", "11223344"} {
+		if port, known, err := reread.Lookup("bob", c); err != nil || known {
+			t.Errorf("bob's machine %s is still recorded at %d (%v)", c, port, err)
+		}
+	}
+	if port, known, _ := reread.Lookup("alice", "aabbccdd"); !known || port != alice {
+		t.Errorf("alice's machine: %d %v, want %d", port, known, alice)
+	}
+}

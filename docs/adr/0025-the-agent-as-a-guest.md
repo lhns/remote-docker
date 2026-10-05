@@ -1,7 +1,7 @@
 # 0025. The agent as a guest on a machine it does not own
 
 - Status: Accepted; extends [ADR 0010](0010-go-ssh-server-agent.md)
-- Date: 2026-08-11, amended 2026-08-14
+- Date: 2026-08-11, amended 2026-08-14 and 2026-10-06
 - Current answer: one agent, three deployments (container, VM, Kubernetes) and
   no mode flag. The operator supplies what the guest may not assume: dockerd
   (`WORKSPACE_ENABLE_DIND=false`) and, in shared-daemon mode only, the NFS
@@ -64,7 +64,10 @@ decides what the agent is a guest of, and the agent has no `if onKubernetes`.
   are disposable; here they persist, own files on the machine's own disks, and
   sit in the same passwd file as its service accounts. That is what the unix
   account prefix and the uid-adoption rule are for, and they are a decision of
-  their own rather than a detail of this one.
+  their own rather than a detail of this one. Only `remote user rm --purge`
+  (ADR 0053, 2026-10-06) removes one: `userdel` by uid, of a user the
+  adoption rule would adopt, after deleting the home only if it is the one the
+  account recorded.
 - **ADR 0019's sentence gets harder.** A per-account dind is separation, not
   isolation: each daemon runs privileged, so a determined account can break
   out. In a container it breaks out into the workspace container. On a VM it

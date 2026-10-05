@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -855,8 +856,28 @@ func (m *Manager) Reset(ctx context.Context, account string, purge bool) error {
 	if !purge {
 		return nil
 	}
-	return m.parent().Run(ctx, "daemons: removing "+account+"'s storage",
-		"volume", "rm", VolumeName(account))
+	return m.removeStorage(ctx, account)
+}
+
+// removeStorage removes an account's graph volume, and only one carrying the
+// labels ensure created it with: a volume merely named like it is not ours.
+func (m *Manager) removeStorage(ctx context.Context, account string) error {
+	name := VolumeName(account)
+	listed := func(args ...string) (bool, error) {
+		out, err := m.parent().Line(ctx, append([]string{"volume", "ls", "--format", "{{.Name}}"}, args...)...)
+		return slices.Contains(strings.Fields(out), name), err
+	}
+	ours, err := listed("--filter", "label="+ManagedLabel+"=1", "--filter", "label="+AccountLabel+"="+account)
+	if err != nil {
+		return fmt.Errorf("daemons: listing %s's storage: %w", account, err)
+	}
+	if !ours {
+		if exists, err := listed(); err != nil || exists {
+			return fmt.Errorf("daemons: %s does not carry the labels of %s's storage, so it was not removed", name, account)
+		}
+		return nil
+	}
+	return m.parent().Run(ctx, "daemons: removing "+account+"'s storage", "volume", "rm", name)
 }
 
 // Accounts lists the accounts that currently have a daemon, running or not.

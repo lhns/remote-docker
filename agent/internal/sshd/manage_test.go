@@ -9,7 +9,9 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
+	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core/enrol"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Account management (ADR 0053), one operation per request, over real SSH
@@ -19,11 +21,13 @@ import (
 type manageWorkspace struct {
 	*tokenWorkspace
 	targets *fakeTargets
+	ports   *accounts.Ports
 }
 
 func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 	t.Helper()
 	targets := &fakeTargets{byAccount: map[string]daemons.Target{}, running: map[string]int{}}
+	ports := &accounts.Ports{Dir: t.TempDir(), Mapping: workspace.DefaultMapping()}
 	set := map[string]bool{}
 	for _, a := range admins {
 		set[a] = true
@@ -31,8 +35,9 @@ func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 	w := startTokenWorkspace(t, "", func(c *Config) {
 		c.Admins = set
 		c.Daemons = targets
+		c.Ports = ports
 	})
-	return &manageWorkspace{tokenWorkspace: w, targets: targets}
+	return &manageWorkspace{tokenWorkspace: w, targets: targets, ports: ports}
 }
 
 // enrolKey writes key into the enrolled directory, as a token would.
@@ -211,6 +216,38 @@ func TestUserRemoveRefusesRunningContainersUnlessForced(t *testing.T) {
 	}
 	if _, _, err := w.login("bob", bob); err == nil {
 		t.Error("a removed account still authenticates")
+	}
+}
+
+func TestUserRemovePurgeTakesTheStorageAndThePortsAndKeepsTheUID(t *testing.T) {
+	w := startManageWorkspace(t, "alice")
+	ports := w.ports
+	alice, bob := newSigner(t), newSigner(t)
+	w.enrol(t, "alice", alice)
+	w.enrolKey(t, "bob", bob)
+	before, _ := w.store.Lookup("bob")
+	if _, err := ports.For("bob", before.UID, "aabbccdd"); err != nil {
+		t.Fatal(err)
+	}
+	ca := w.dial(t, "alice", alice)
+
+	w.targets.running["bob"] = 1
+	wantRefused(t, manageOn(t, ca, enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Purge: true}), enrol.CodeForce,
+		"bob's daemon is running 1 container(s)")
+	wantOK(t, manageOn(t, ca, enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Purge: true, Force: true}))
+
+	if got := strings.Join(w.targets.reset, ","); got != "bob purge=true" {
+		t.Errorf("reset %q, want bob's daemon with its storage", got)
+	}
+	if _, known, _ := ports.Lookup("bob", "aabbccdd"); known {
+		t.Error("bob's machine is still in clientports")
+	}
+	after, ok := w.store.Lookup("bob")
+	if !ok || len(after.Keys) != 0 || after.UID != before.UID {
+		t.Errorf("bob after a purge: %+v, want revoked with uid %d", after, before.UID)
+	}
+	if known, err := w.store.Known("bob"); err != nil || !known {
+		t.Errorf("the name bob is free again (%v); the uidmap must keep it", err)
 	}
 }
 

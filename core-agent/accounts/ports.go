@@ -183,6 +183,27 @@ func (p *Ports) Free(account, client string, token uint64) bool {
 	return false
 }
 
+// Forget drops every machine of a purged account from the record, so it comes
+// back on a clean slate. An ephemeral run's port is Free's to release.
+func (p *Ports) Forget(account string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.load(); err != nil {
+		return err
+	}
+	changed := false
+	for k, e := range p.assigned {
+		if k.account == account && !e.ephemeral {
+			delete(p.assigned, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return p.save()
+}
+
 // Lookup returns the port already recorded for this client, allocating
 // nothing: an ephemeral run is given one only when it binds (ADR 0050).
 func (p *Ports) Lookup(account, client string) (port int, known bool, err error) {

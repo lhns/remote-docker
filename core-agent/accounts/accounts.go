@@ -95,6 +95,10 @@ type Provisioner interface {
 	// is provisioned as `rd-alice`, and an older workspace's `alice` is adopted
 	// under the name it already has (ADR 0025).
 	Ensure(name string, uid int, shell string) (unix, home string, err error)
+
+	// Remove deletes the unix user holding uid, if Ensure would adopt it for
+	// name, and leaves its home alone. Nobody holding it is not an error.
+	Remove(name string, uid int) error
 }
 
 // Store holds the accounts derived from the keys directories.

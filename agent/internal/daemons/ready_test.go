@@ -3,6 +3,7 @@ package daemons
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -77,5 +78,33 @@ func TestResetForgetsTheRecordedFailure(t *testing.T) {
 	}
 	if _, ok := m.failed["alice"]; ok {
 		t.Error("Reset left the last failure behind, so the next caller is told about it")
+	}
+}
+
+// A purge removes the graph volume only when it carries the labels this
+// package gives it, and says so when it does not.
+func TestAPurgeRemovesOnlyTheLabelledVolume(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		labelled, volume string
+		wantRemoved      bool
+		wantErr          bool
+	}{
+		{"labelled", "rd-dind-bob-lib", "rd-dind-bob-lib", true, false},
+		{"unlabelled", "", "rd-dind-bob-lib", false, true},
+		{"already gone", "", "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ran []string
+			m := manager(fakeDocker{ran: &ran, labelled: tc.labelled, volume: tc.volume})
+			err := m.Reset(t.Context(), "bob", true)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Reset: %v, want an error %v", err, tc.wantErr)
+			}
+			removed := slices.Contains(ran, "volume rm rd-dind-bob-lib")
+			if removed != tc.wantRemoved {
+				t.Errorf("ran %q, want the volume removed %v", ran, tc.wantRemoved)
+			}
+		})
 	}
 }

@@ -1,6 +1,10 @@
 package accounts
 
-import "github.com/lhns/remote-docker/core/workspace"
+import (
+	"fmt"
+
+	"github.com/lhns/remote-docker/core/workspace"
+)
 
 // maxNameLength is the account-name cap. core/workspace owns it because the
 // client derives the same name from the local username (workspace.AccountName).
@@ -40,6 +44,18 @@ func claim(account, prefix, holder string) action {
 	default:
 		return refuseAccount
 	}
+}
+
+// removal is the unix user Remove deletes for an account: the one claim would
+// adopt, nobody when the uid is free, and a refusal for a stranger.
+func removal(account, prefix, holder string, uid int) (string, error) {
+	switch claim(account, prefix, holder) {
+	case createAccount:
+		return "", nil
+	case adoptAccount:
+		return holder, nil
+	}
+	return "", fmt.Errorf("accounts: uid %d belongs to %q, which this workspace did not create, so it was not removed", uid, holder)
 }
 
 // action is what claim decided.

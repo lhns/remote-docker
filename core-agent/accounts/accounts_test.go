@@ -20,7 +20,11 @@ import (
 // in CI, and why this is behind an interface.
 type fakeProvisioner struct {
 	created map[string]int
+	removed map[string]int
 	err     error
+
+	// homes, when set, is where Ensure creates a real home directory.
+	homes string
 }
 
 func (f *fakeProvisioner) Ensure(name string, uid int, _ string) (string, string, error) {
@@ -34,7 +38,19 @@ func (f *fakeProvisioner) Ensure(name string, uid int, _ string) (string, string
 	// Prefixed, as the real one does, so a test that confuses the account name
 	// with the unix name fails here rather than on a workspace.
 	unix := DefaultPrefix + name
+	if f.homes != "" {
+		home := filepath.Join(f.homes, unix)
+		return unix, home, os.MkdirAll(home, 0o755)
+	}
 	return unix, "/home/" + unix, nil
+}
+
+func (f *fakeProvisioner) Remove(name string, uid int) error {
+	if f.removed == nil {
+		f.removed = map[string]int{}
+	}
+	f.removed[name] = uid
+	return nil
 }
 
 // testStore has one operator directory, keysDir, and an enrolled one.

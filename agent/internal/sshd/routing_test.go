@@ -358,6 +358,8 @@ func (fakeProvisioner) Ensure(name string, _ int, _ string) (string, string, err
 	return name, "/home/" + name, nil
 }
 
+func (fakeProvisioner) Remove(string, int) error { return nil }
+
 // fakeContext is a gssh.Context with no connection behind it: the user it
 // claims, and a place for authenticate to record the account.
 type fakeContext struct {

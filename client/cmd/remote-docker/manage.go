@@ -222,7 +222,7 @@ func keyCounts(sources []enrol.KeySource) string {
 }
 
 func newUserRemoveCommand() *cobra.Command {
-	var force bool
+	var force, purge bool
 	cmd := &cobra.Command{
 		Use:     "rm <account>",
 		Aliases: []string{"remove"},
@@ -230,17 +230,27 @@ func newUserRemoveCommand() *cobra.Command {
 		Long: `Revokes every key the workspace enrolled for the account, closes its
 connections and removes its daemon container. Its images, containers' storage,
 home directory, uid and ports are kept, so a new token for the same name brings
-it back as it was. Refused while its daemon runs containers, unless -f.`,
+it back as it was. Refused while its daemon runs containers, unless -f.
+
+--purge also deletes its images, containers and volumes, its home directory,
+its unix user and its port records. Its uid is kept, so the name is never
+given to anybody else, and a new token for it starts empty.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, _, _, err := manage(cmd, enrol.Request{Op: enrol.OpUserRemove, Account: args[0], Force: force}); err != nil {
+			req := enrol.Request{Op: enrol.OpUserRemove, Account: args[0], Force: force, Purge: purge}
+			if _, _, _, err := manage(cmd, req); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed %s, keeping their uid and storage\n", args[0])
+			done := "removed %s, keeping their uid and storage\n"
+			if purge {
+				done = "removed %s and their storage, keeping only their uid\n"
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), done, args[0])
 			return nil
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "remove it even while its containers run")
+	cmd.Flags().BoolVar(&purge, "purge", false, "also delete its images, volumes, home directory and unix user")
 	return cmd
 }
 

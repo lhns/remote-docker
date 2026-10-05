@@ -320,7 +320,11 @@ it was removed while leaving it working (ADR 0052).
 
 **D — losing somebody's work.** `user rm` refuses while the account's daemon
 runs containers, or cannot say, unless `-f`, and never deletes
-`rd-dind-<account>-lib`, the home directory or the uid. Tokens bound to the
+`rd-dind-<account>-lib`, the home directory or the uid. `--purge` deletes the
+first two, the unix user and the port records, by design and only when an
+admin asks: the volume only with both its labels, the home only if it is the
+one the account recorded, owned by its uid, with nothing mounted inside. The
+uid is never deleted. Tokens bound to the
 account are revoked, or a token the account minted for itself beforehand would
 bring it back.
 

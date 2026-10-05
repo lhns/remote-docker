@@ -26,6 +26,8 @@ func (b *blockingProvisioner) Ensure(name string, _ int, _ string) (string, stri
 	return unix, "/home/" + unix, nil
 }
 
+func (*blockingProvisioner) Remove(string, int) error { return nil }
+
 // A sync that is provisioning must not block authentication.
 func TestLookupDoesNotWaitForProvisioning(t *testing.T) {
 	s := newStore(t)
@@ -153,6 +155,8 @@ func (f *failingProvisioner) Ensure(name string, _ int, _ string) (string, strin
 	unix := DefaultPrefix + name
 	return unix, "/home/" + unix, nil
 }
+
+func (*failingProvisioner) Remove(string, int) error { return nil }
 
 // A provisioner failing on a later poll must not withdraw access from an
 // account that is already enrolled: the symptom is a key that stops working.

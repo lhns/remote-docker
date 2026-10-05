@@ -20,15 +20,8 @@ import (
 // uidmap binds it, the reverse-tunnel port comes from it, and the files are
 // owned by it. See claim() in unixname.go for the three answers.
 func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, string, error) {
-	prefix := p.Prefix
-	if prefix == "" {
-		prefix = DefaultPrefix
-	}
-
-	var holder string
-	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
-		holder = u.Username
-	}
+	prefix := p.prefix()
+	holder := holderOf(uid)
 
 	switch claim(name, prefix, holder) {
 	case adoptAccount:
@@ -92,6 +85,35 @@ func (p *UnixProvisioner) Ensure(name string, uid int, shell string) (string, st
 	}
 
 	return name, u.HomeDir, nil
+}
+
+// Remove deletes the unix user behind an account, by uid, and only one Ensure
+// would adopt. Its home is left to Store.Purge, which checks it first.
+func (p *UnixProvisioner) Remove(name string, uid int) error {
+	unix, err := removal(name, p.prefix(), holderOf(uid), uid)
+	if err != nil || unix == "" {
+		return err
+	}
+	if out, err := exec.Command("userdel", unix).CombinedOutput(); err != nil {
+		return fmt.Errorf("userdel %s: %w: %s", unix, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// prefix is Prefix, or DefaultPrefix when it is empty.
+func (p *UnixProvisioner) prefix() string {
+	if p.Prefix == "" {
+		return DefaultPrefix
+	}
+	return p.Prefix
+}
+
+// holderOf is the unix user holding uid, or "" for nobody.
+func holderOf(uid int) string {
+	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
+		return u.Username
+	}
+	return ""
 }
 
 // reconcileGroups brings an existing account's membership into line: out of

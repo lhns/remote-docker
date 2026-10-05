@@ -175,6 +175,21 @@ func TestUserRemoveSaysWhatWasKeptAndWhatIsStillTrue(t *testing.T) {
 	}
 }
 
+func TestUserRemovePurgeAsksForItAndSaysSo(t *testing.T) {
+	m := startManageServer(t, `{}`, 0)
+	withManageServer(t, m)
+	out, err := runOut(t, "remote", "user", "rm", "carol", "--purge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-m.got; got["op"] != "user.rm" || got["account"] != "carol" || got["purge"] != true || got["force"] != nil {
+		t.Errorf("sent %v", got)
+	}
+	if want := "removed carol and their storage, keeping only their uid"; !strings.Contains(out, want) {
+		t.Errorf("output %q lacks %q", out, want)
+	}
+}
+
 func TestUserListShowsKeysPerSource(t *testing.T) {
 	withManageServer(t, startManageServer(t, `{"users":[
 		{"name":"alice","uid":2000,"sources":[{"dir":"/etc/workspace/authorized_keys.d","operator":true,"keys":1},{"dir":"/etc/workspace/enrolled_keys.d","keys":2}],"admin":true,"state":"connected"},

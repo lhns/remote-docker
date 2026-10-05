@@ -4,8 +4,8 @@ package accounts
 // tooling does the locking between passwd, group and gshadow that editing the
 // files by hand gets wrong.
 //
-// Untagged, with only Ensure per platform, so a field cannot exist on one
-// platform and not the other.
+// Untagged, with only Ensure and Remove per platform, so a field cannot exist
+// on one platform and not the other.
 type UnixProvisioner struct {
 	// Groups the account joins, and is reconciled INTO if it already exists.
 	// Empty means no --groups; the caller states them in both modes.
