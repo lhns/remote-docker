@@ -49,6 +49,10 @@ const (
 	envPollSecs   = "WORKSPACE_KEY_POLL_INTERVAL"
 )
 
+// envEnrolledKeys is the one keys directory the agent writes; WORKSPACE_KEYS_DIR
+// is the operator's, a comma-separated list the agent only reads (ADR 0052).
+const envEnrolledKeys = "WORKSPACE_ENROLLED_KEYS_DIR"
+
 // preferredPortTimeout bounds asking a machine's volumes which port they
 // were built for. Generous, because it may include a cold daemon's boot, and
 // paid only by a machine this workspace has no record of.
@@ -133,13 +137,23 @@ func serve(addr, wsAddr string) error {
 	perUserDind := envOr(envPerUserDind, "true") == "true"
 
 	stateDir := envOr(envStateDir, defaultStateDir)
-	keysDir := envOr(envKeysDir, filepath.Join(stateDir, "authorized_keys.d"))
+	keysDirs := dirList(os.Getenv(envKeysDir), filepath.Join(stateDir, "authorized_keys.d"))
+	enrolledDir := envOr(envEnrolledKeys, filepath.Join(stateDir, "enrolled_keys.d"))
 	hostKeyDir := envOr(envHostKeys, filepath.Join(stateDir, "host_keys"))
 
-	for _, dir := range []string{stateDir, keysDir, hostKeyDir} {
+	for _, dir := range append([]string{stateDir, hostKeyDir}, keysDirs...) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
+	}
+	if err := accounts.CheckDirs(keysDirs, enrolledDir); err != nil {
+		return fmt.Errorf("%s, %s: %w", envKeysDir, envEnrolledKeys, err)
+	}
+	// Not fatal: the operator's keys still work without it, and only enrolling
+	// a key needs it (ADR 0052).
+	if err := os.MkdirAll(enrolledDir, 0o755); err != nil {
+		log.Warn("cannot create the enrolled keys directory; this workspace cannot store keys",
+			"dir", enrolledDir, "err", err)
 	}
 
 	mapping := workspace.Mapping{
@@ -205,9 +219,12 @@ func serve(addr, wsAddr string) error {
 		provisioner.Revoke = []string{"docker"}
 	}
 
-	store := accounts.New(keysDir, stateDir, mapping,
+	store := accounts.New(keysDirs, enrolledDir, stateDir, mapping,
 		provisioner, logger("accounts"))
 	store.Shell = envOr(envShell, "/bin/bash")
+	if err := store.CheckWritable(); err != nil {
+		log.Warn("this workspace cannot store keys; serving anyway", "err", err)
+	}
 
 	if err := ensureGroups(perUserDind); err != nil {
 		log.Warn(err.Error())
@@ -585,6 +602,20 @@ func ephemeralAccounts(raw string) (map[string]bool, error) {
 		out[name] = true
 	}
 	return out, nil
+}
+
+// dirList reads a comma-separated list of directories, or fallback for none.
+func dirList(raw, fallback string) []string {
+	var out []string
+	for field := range strings.SplitSeq(raw, ",") {
+		if field = strings.TrimSpace(field); field != "" {
+			out = append(out, field)
+		}
+	}
+	if len(out) == 0 {
+		return []string{fallback}
+	}
+	return out
 }
 
 // ephemeralLimits reads WORKSPACE_EPHEMERAL_MAX_CLIENTS and

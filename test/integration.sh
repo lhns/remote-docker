@@ -944,6 +944,37 @@ else
 fi
 
 echo
+echo "== 11f. a key in the operator directory and one in the enrolled directory =="
+# ADR 0052: the account's file in WORKSPACE_KEYS_DIR (mounted read-only) and
+# its file in the enrolled directory, which defaults to <state>/enrolled_keys.d,
+# are merged. Written from inside the workspace, which owns that directory.
+ENROLLED_KEY_DIR="$WORK/enrolled-key"
+mkdir -p "$ENROLLED_KEY_DIR"
+if ! genkey "$ENROLLED_KEY_DIR"; then
+    bad "could not generate a second key"
+elif ! hostdocker exec -i "$CONTAINER" sh -c \
+    "cat > /etc/workspace/enrolled_keys.d/$ACCOUNT.pub" <"$ENROLLED_KEY_DIR/id_ed25519.pub"; then
+    bad "could not write into the enrolled keys directory"
+else
+    # The watcher syncs within a second; the 60s poll is the fallback.
+    for _ in $(seq 1 30); do
+        outputs '^AUTH-OK' ssh_account "$ENROLLED_KEY_DIR/id_ed25519" "$ACCOUNT" 20 'echo AUTH-OK' && break
+        sleep 1
+    done
+    if grep -q '^AUTH-OK' <<<"$LAST_OUTPUT"; then
+        ok "a key in the enrolled directory authenticates"
+    else
+        bad "the enrolled key never authenticated: $(tail -3 <<<"$LAST_OUTPUT" | tr '\n' ' ')"
+        dump_workspace_log 20
+    fi
+    if outputs '^AUTH-OK' ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$ACCOUNT" 20 'echo AUTH-OK'; then
+        ok "and the operator directory's key still does"
+    else
+        bad "the operator key stopped authenticating: $(tail -3 <<<"$LAST_OUTPUT" | tr '\n' ' ')"
+    fi
+fi
+
+echo
 echo "== 12. docker compose =="
 # Compose speaks the Engine API and never shells out to `docker`, which is why
 # ADR 0005 translates at the API. It expands ./html to an absolute path on THIS

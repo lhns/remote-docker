@@ -111,8 +111,9 @@ spec:
             - name: graph
               mountPath: /var/lib/docker
             {{- /* Over a subdirectory of the state volume, which is where the
-                  agent looks. Read-only: the workspace never writes an
-                  enrolment, it only reads what it was given. */}}
+                  agent looks. Read-only: the agent writes the keys it
+                  enrols to enrolled_keys.d on the state volume, never
+                  here (ADR 0052). */}}
             - name: keys
               mountPath: /etc/workspace/authorized_keys.d
               readOnly: true

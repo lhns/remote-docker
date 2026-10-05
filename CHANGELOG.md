@@ -14,6 +14,10 @@ software.
 
 - **`remote set` changes some of a workspace's settings.** `remote set dev
   --user bob` keeps everything else.
+- **A workspace reads keys from several directories.** `WORKSPACE_KEYS_DIR`
+  takes a comma-separated list, and the workspace also reads
+  `WORKSPACE_ENROLLED_KEYS_DIR` (`<state>/enrolled_keys.d`), the one directory
+  it will write keys into. An account's keys in all of them are merged.
 
 ### Fixes
 
@@ -47,6 +51,9 @@ software.
 
 ### Upgrading
 
+- A workspace whose `WORKSPACE_KEYS_DIR` contains `<state>/enrolled_keys.d`
+  refuses to start until `WORKSPACE_ENROLLED_KEYS_DIR` names a directory
+  outside it.
 - A machine created without `--rootfs` by 0.8.1 or earlier still needs one
   `machine rebuild` before `machine create` accepts it again. The rebuild
   discards the images and containers inside it.

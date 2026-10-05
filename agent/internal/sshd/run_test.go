@@ -48,7 +48,7 @@ func startRunWorkspace(t *testing.T) *runWorkspace {
 			t.Fatal(err)
 		}
 	}
-	store := accounts.New(keysDir, t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
+	store := accounts.New([]string{keysDir}, "", t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
 	if err := store.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}

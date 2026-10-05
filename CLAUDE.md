@@ -765,9 +765,9 @@ premise of the project, and it applies to building it too. So:
   between runs on a fresh workspace. `Sync` sorts the key files precisely so
   collisions resolve deterministically; passing the result on as a map threw
   that away. It presented as a test failing about one run in eight.
-- **The keys watcher polls as well as using inotify.** The keys directory is
-  expected to be on CephFS/NFS, where inotify never fires for changes made on
-  another host.
+- **The keys watcher polls as well as using inotify, every directory.** A keys
+  directory is expected to be on CephFS/NFS, where inotify never fires for
+  changes made on another host.
 - **Revoking on an unusable key file takes two reads; a missing one takes
   one.** An account is enrolled exactly while its file holds a key, so emptying
   the file is how you revoke somebody and must keep working. But a file being
@@ -775,7 +775,19 @@ premise of the project, and it applies to building it too. So:
   an emptying meant on purpose. It used to revoke on the first read and log
   "its key file is gone" about a file that was right there, which presents as
   access being withdrawn at random rather than as a race. A file that is
-  actually absent has no write window and revokes at once.
+  actually absent has no write window and revokes at once. The rule is PER
+  DIRECTORY: an unusable file's first read carries forward what that
+  directory contributed last time, so a save in one directory never costs the
+  keys of another.
+- **The operator's keys directories are read, never written, and the agent
+  writes exactly one other** (ADR 0052). `WORKSPACE_KEYS_DIR` is a list the
+  agent only reads, because it is a read-only Secret or `:ro` bind in every
+  deployment; `WORKSPACE_ENROLLED_KEYS_DIR` is the one it writes, and startup
+  refuses the two overlapping. An account's files in all of them merge into one
+  `Keys`. Write only through `keyfile_write.go`, which locks per file, renames
+  into place and deletes a file left with no key; never remove a key from the
+  enrolled directory that an operator directory still enrols, because that
+  leaves it working while saying it was removed.
 - **A key file is parsed line by line.** Several keys per file is the format,
   and reading it as one stream stopped at the first line it could not parse, so
   a typo or a BOM on the top line silently dropped every key under it. A bad

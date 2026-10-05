@@ -191,7 +191,7 @@ func TestWindowsLineEndingsParse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys, skipped, err := parseKeys(path)
+	keys, _, skipped, err := parseKeys(path)
 	if err != nil {
 		t.Fatalf("a CRLF key file was refused: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestByteOrderMarks(t *testing.T) {
 		if err := os.WriteFile(path, append([]byte{0xef, 0xbb, 0xbf}, line...), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		keys, _, err := parseKeys(path)
+		keys, _, _, err := parseKeys(path)
 		if err != nil {
 			t.Fatalf("a UTF-8 BOM refused the file: %v", err)
 		}
@@ -231,7 +231,7 @@ func TestByteOrderMarks(t *testing.T) {
 		if err := os.WriteFile(path, utf16, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := parseKeys(path)
+		_, _, _, err := parseKeys(path)
 		if err == nil {
 			t.Fatal("a UTF-16 key file was accepted")
 		}
@@ -251,7 +251,7 @@ func TestTheReasonNamesWhatIsWrong(t *testing.T) {
 	if err := os.WriteFile(empty, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := parseKeys(empty); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, _, _, err := parseKeys(empty); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Errorf("an empty file reads as: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestTheReasonNamesWhatIsWrong(t *testing.T) {
 	if err := os.WriteFile(junk, []byte("hello\nthere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, skipped, err := parseKeys(junk)
+	_, _, skipped, err := parseKeys(junk)
 	if err == nil {
 		t.Fatal("a file of prose was accepted")
 	}

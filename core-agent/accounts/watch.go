@@ -7,16 +7,16 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// defaultPollInterval is how often the keys directory is re-read regardless of
-// notifications.
+// defaultPollInterval is how often the keys directories are re-read regardless
+// of notifications.
 const defaultPollInterval = 60 * time.Second
 
-// Watch keeps accounts in step with the keys directory until ctx is done.
+// Watch keeps accounts in step with the keys directories until ctx is done.
 //
-// It both watches and polls, and the polling is not belt-and-braces. The keys
-// directory is expected to live on shared storage (CephFS, NFS) where
-// inotify never fires for a change made on another host. A deployment where
-// enrolment happens from a management node would silently never see a new key.
+// It both watches and polls, and the polling is not belt-and-braces. A keys
+// directory is expected to live on shared storage (CephFS, NFS) where inotify
+// never fires for a change made on another host. A deployment where enrolment
+// happens from a management node would silently never see a new key.
 //
 // This is the same lesson ADR 0014 records from the other side: a network
 // filesystem carries no change notification, so anything depending on one must
@@ -32,26 +32,25 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 		return err
 	}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		// Not fatal: polling alone is a complete implementation, just a
-		// slower one. Refusing to start over this would be worse.
-		s.log().Warn("cannot watch the keys directory; polling instead",
-			"dir", s.KeysDir, "err", err, "every", poll)
-		s.pollOnly(ctx, poll)
-		return nil
-	}
-	defer func() { _ = watcher.Close() }()
-
-	if err := watcher.Add(s.KeysDir); err != nil {
-		s.log().Warn("cannot watch the keys directory; polling instead",
-			"dir", s.KeysDir, "err", err, "every", poll)
-		s.pollOnly(ctx, poll)
-		return nil
-	}
-
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+
+	// A directory that cannot be watched is still polled. Not fatal: polling
+	// alone is a complete implementation, just a slower one.
+	var events <-chan fsnotify.Event
+	var errs <-chan error
+	if watcher, err := fsnotify.NewWatcher(); err != nil {
+		s.log().Warn("cannot watch the keys directories; polling instead", "err", err, "every", poll)
+	} else {
+		defer func() { _ = watcher.Close() }()
+		for _, dir := range s.dirs() {
+			if err := watcher.Add(dir); err != nil {
+				s.log().Warn("cannot watch a keys directory; polling it instead",
+					"dir", dir, "err", err, "every", poll)
+			}
+		}
+		events, errs = watcher.Events, watcher.Errors
+	}
 
 	// Changes arrive in bursts: an editor writing a key file produces
 	// several events, so a change schedules one sync shortly after rather
@@ -63,34 +62,28 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 		case <-ctx.Done():
 			return nil
 
-		case <-watcher.Events:
+		// Every event, dotfiles included: a Kubernetes Secret volume changes
+		// by swapping its `..data` link.
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
 			if pending == nil {
 				pending = time.After(250 * time.Millisecond)
 			}
 
-		case err, ok := <-watcher.Errors:
+		case err, ok := <-errs:
 			if !ok {
-				return nil
+				errs = nil
+				continue
 			}
-			s.log().Warn("watching the keys directory", "dir", s.KeysDir, "err", err)
+			s.log().Warn("watching the keys directories", "err", err)
 
 		case <-pending:
 			pending = nil
 			s.syncLogged()
 
-		case <-ticker.C:
-			s.syncLogged()
-		}
-	}
-}
-
-func (s *Store) pollOnly(ctx context.Context, poll time.Duration) {
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
 		case <-ticker.C:
 			s.syncLogged()
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -53,6 +54,39 @@ func TestEphemeralAccounts(t *testing.T) {
 
 	if _, err := ephemeralAccounts("ci,123"); err == nil || !strings.Contains(err.Error(), envEphemeral) {
 		t.Errorf("err = %v, want one naming %s", err, envEphemeral)
+	}
+}
+
+func TestDirList(t *testing.T) {
+	if got := dirList(" /a/keys, /b/keys ,,", "/fallback"); !reflect.DeepEqual(got, []string{"/a/keys", "/b/keys"}) {
+		t.Errorf("got %v", got)
+	}
+	if got := dirList(" , ", "/fallback"); !reflect.DeepEqual(got, []string{"/fallback"}) {
+		t.Errorf("an empty list gave %v, want the fallback", got)
+	}
+}
+
+// An enrolled keys directory inside the operator's would have the agent write
+// into the operator's keys, so the start is refused, naming both variables.
+func TestServeRefusesAnEnrolledDirectoryInsideTheOperators(t *testing.T) {
+	t.Setenv(envEnableDind, "false")
+	t.Setenv(envPerUserDind, "false")
+	state := t.TempDir()
+	t.Setenv(envStateDir, state)
+	keys := filepath.Join(state, "keys")
+	t.Setenv(envKeysDir, keys)
+	t.Setenv("WORKSPACE_ENROLLED_KEYS_DIR", filepath.Join(keys, "enrolled"))
+
+	returned := make(chan error, 1)
+	go func() { returned <- serve("127.0.0.1:0", "") }()
+
+	select {
+	case err := <-returned:
+		if err == nil || !strings.Contains(err.Error(), "WORKSPACE_ENROLLED_KEYS_DIR") {
+			t.Errorf("err = %v, want one naming WORKSPACE_ENROLLED_KEYS_DIR", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("serve started with the enrolled keys directory inside the operator's")
 	}
 }
 

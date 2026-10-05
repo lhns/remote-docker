@@ -1,6 +1,7 @@
 // Package accounts provisions one workspace account per enrolled public key.
 //
-// A file named alice.pub becomes the account "alice"; uids are allocated once
+// A file named alice.pub, in any of the keys directories (ADR 0052), becomes
+// the account "alice"; uids are allocated once
 // and persisted, so an account keeps the same uid, and therefore the same
 // reverse-tunnel port and the same file ownership, across container
 // recreations. Authentication happens in this process, so port ownership is a
@@ -34,11 +35,15 @@ type Account struct {
 	GID  int
 	Home string
 
-	// Keys are the public keys enrolled for this account. A file may hold
-	// several, one per line, and any of them authenticates. Empty means the
-	// file was removed or emptied: access is revoked, but the account and its
+	// Keys are the public keys enrolled for this account: the union of every
+	// directory's file for it, one key per fingerprint. A file may hold
+	// several, one per line, and any of them authenticates. Empty means no
+	// directory enrols it any more: access is revoked, but the account and its
 	// home directory stay.
 	Keys []ssh.PublicKey
+
+	// Sources are what each directory contributed to Keys, in directory order.
+	Sources []KeySource
 
 	// Unix is the unix user behind this account, which is NOT its name:
 	// `alice` is provisioned as `rd-alice` (ADR 0025). Anything asking the
@@ -46,6 +51,25 @@ type Account struct {
 	// in a shell -- has to ask about this one, and asking about Name instead
 	// silently finds nothing rather than failing.
 	Unix string
+}
+
+// KeySource is one directory's file for an account.
+type KeySource struct {
+	Dir      string
+	Keys     []ssh.PublicKey
+	Comments []string // parallel to Keys
+}
+
+// source returns what dir contributed to the account, if anything.
+func (a *Account) source(dir string) KeySource {
+	if a != nil {
+		for _, src := range a.Sources {
+			if src.Dir == dir {
+				return src
+			}
+		}
+	}
+	return KeySource{}
 }
 
 // Authorized reports whether a key may authenticate as this account.
@@ -73,9 +97,15 @@ type Provisioner interface {
 	Ensure(name string, uid int, shell string) (unix, home string, err error)
 }
 
-// Store holds the accounts derived from a directory of public keys.
+// Store holds the accounts derived from the keys directories.
 type Store struct {
-	KeysDir  string
+	// KeysDirs are the operator's directories, which the agent only reads.
+	KeysDirs []string
+
+	// EnrolledDir is the one directory the agent writes, through
+	// keyfile_write.go. Empty means there is none and every write is refused.
+	EnrolledDir string
+
 	StateDir string
 	Shell    string
 	Mapping  workspace.Mapping
@@ -96,23 +126,27 @@ type Store struct {
 	// included, means a new *Account in a new map.
 	accounts map[string]*Account
 
-	// unusable is the accounts whose key file was present but held no usable
-	// key on the previous sync. Revoking on one read cannot tell a deliberate
-	// emptying from the middle of somebody's save, so it takes two.
-	unusable map[string]bool
+	// unusable is the key files that were present but held no usable key on
+	// the previous sync. Revoking on one read cannot tell a deliberate emptying
+	// from the middle of somebody's save, so it takes two, per directory.
+	unusable map[keyFile]bool
 }
 
+// keyFile is one account's file in one directory.
+type keyFile struct{ dir, account string }
+
 // New returns an empty store.
-func New(keysDir, stateDir string, mapping workspace.Mapping, p Provisioner, log *slog.Logger) *Store {
+func New(keysDirs []string, enrolledDir, stateDir string, mapping workspace.Mapping, p Provisioner, log *slog.Logger) *Store {
 	return &Store{
-		KeysDir:     keysDir,
+		KeysDirs:    keysDirs,
+		EnrolledDir: enrolledDir,
 		StateDir:    stateDir,
 		Shell:       "/bin/bash",
 		Mapping:     mapping,
 		Provisioner: p,
 		Log:         log,
 		accounts:    map[string]*Account{},
-		unusable:    map[string]bool{},
+		unusable:    map[keyFile]bool{},
 	}
 }
 
@@ -143,19 +177,96 @@ func (s *Store) List() []*Account {
 // reverse-tunnel port and the ownership of everything it has written.
 func (s *Store) uidmapPath() string { return filepath.Join(s.StateDir, "uidmap") }
 
-// Sync reads the keys directory and brings accounts into line with it.
+// dirs is every keys directory: the operator's first, the enrolled one last.
+func (s *Store) dirs() []string {
+	if s.EnrolledDir == "" {
+		return s.KeysDirs
+	}
+	return append(slices.Clone(s.KeysDirs), s.EnrolledDir)
+}
+
+// Sync reads every keys directory and brings accounts into line with them.
+//
+// Each directory is read by the same rules and the results are merged by
+// account, Keys being the union deduplicated by fingerprint (ADR 0052).
 func (s *Store) Sync() error {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 
-	entries, err := os.ReadDir(s.KeysDir)
-	if err != nil {
-		return fmt.Errorf("accounts: reading %s: %w", s.KeysDir, err)
-	}
-
 	uids, err := s.loadUIDs()
 	if err != nil {
 		return err
+	}
+
+	// Read without mu: only a sync writes these, and syncMu is held.
+	prev, wasUnusable := s.accounts, s.unusable
+
+	found := map[string]*Account{}
+	unusable := map[keyFile]bool{}
+
+	for _, dir := range s.dirs() {
+		files, err := s.keyFiles(dir)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			keys, comments, skipped, err := parseKeys(filepath.Join(dir, f.file))
+			src := KeySource{Dir: dir, Keys: keys, Comments: comments}
+			if err != nil {
+				s.log().Warn("a key file holds no usable public key", "dir", dir, "file", f.file, "err", err)
+				id := keyFile{dir, f.account}
+				unusable[id] = true
+				if wasUnusable[id] {
+					continue // the second read: it contributes nothing
+				}
+				// The first read may be the middle of a save, so the file
+				// contributes what it did last time.
+				if src = prev[f.account].source(dir); len(src.Keys) == 0 {
+					continue
+				}
+			} else if skipped > 0 {
+				s.log().Warn("a key file has lines that are not public keys; the rest are enrolled",
+					"dir", dir, "file", f.file, "keys", len(keys), "skipped", skipped)
+			}
+
+			a, ok := found[f.account]
+			if !ok {
+				a = &Account{Name: f.account}
+				found[f.account] = a
+			}
+			a.Sources = append(a.Sources, src)
+		}
+	}
+
+	for _, a := range found {
+		seen := map[string]bool{}
+		for _, src := range a.Sources {
+			for _, k := range src.Keys {
+				if fp := ssh.FingerprintSHA256(k); !seen[fp] {
+					seen[fp] = true
+					a.Keys = append(a.Keys, k)
+				}
+			}
+		}
+	}
+
+	return s.reconcile(found, unusable, uids)
+}
+
+// namedFile is a key file and the account it enrols.
+type namedFile struct{ file, account string }
+
+// keyFiles lists one directory's key files and the account each enrols.
+//
+// A missing enrolled directory is empty, because the agent serves without one;
+// a missing operator directory is an error, as it always was (ADR 0052).
+func (s *Store) keyFiles(dir string) ([]namedFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) && dir == s.EnrolledDir {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("accounts: reading %s: %w", dir, err)
 	}
 
 	// Sorted, so a collision is decided by name rather than by directory order,
@@ -163,9 +274,11 @@ func (s *Store) Sync() error {
 	// ALREADY the account name go first, so alice.pub beats Alice.pub for
 	// "alice": sorted order alone would hand it to Alice.pub, uppercase sorting
 	// first, which is deterministic but arbitrary.
+	//
+	// Dotfiles are skipped: the writer's locks and temporary files are dotfiles.
 	var exact, folded []string
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pub") {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasSuffix(e.Name(), ".pub") {
 			continue
 		}
 		base := strings.TrimSuffix(e.Name(), ".pub")
@@ -177,61 +290,43 @@ func (s *Store) Sync() error {
 	}
 	sort.Strings(exact)
 	sort.Strings(folded)
-	names := append(exact, folded...)
 
-	found := map[string]*Account{}
+	var out []namedFile
 	claimed := map[string]string{} // account name -> file that claimed it
-	unusable := map[string]bool{}  // account name -> its file is there and holds nothing
-
-	for _, file := range names {
-		base := strings.TrimSuffix(file, ".pub")
-		name, err := workspace.AccountName(base)
+	for _, file := range append(exact, folded...) {
+		name, err := workspace.AccountName(strings.TrimSuffix(file, ".pub"))
 		if err != nil {
-			s.log().Warn("ignoring a key file", "file", file, "err", err)
+			s.log().Warn("ignoring a key file", "dir", dir, "file", file, "err", err)
 			continue
 		}
 
 		// Alice.pub and alice.pub both yield "alice", and picking one would
 		// hand somebody an account they did not ask for.
-		if other, taken := claimed[name]; taken {
-			s.log().Warn("ignoring a key file: its account name is already claimed",
-				"file", file, "account", name, "claimedBy", other)
-			continue
-		}
-
+		//
 		// Claimed before it is parsed. A file being written is empty for a
 		// moment, and if the claim waited for a key then Alice.pub could take
-		// "alice" during that moment, which is the takeover the rule above
-		// exists to refuse.
-		claimed[name] = file
-
-		keys, skipped, err := parseKeys(filepath.Join(s.KeysDir, file))
-		if err != nil {
-			s.log().Warn("a key file holds no usable public key", "file", file, "err", err)
-			unusable[name] = true
+		// "alice" during that moment, which is the takeover this refuses.
+		if other, taken := claimed[name]; taken {
+			s.log().Warn("ignoring a key file: its account name is already claimed",
+				"dir", dir, "file", file, "account", name, "claimedBy", other)
 			continue
 		}
-		if skipped > 0 {
-			s.log().Warn("a key file has lines that are not public keys; the rest are enrolled",
-				"file", file, "keys", len(keys), "skipped", skipped)
-		}
-
-		found[name] = &Account{Name: name, Keys: keys}
+		claimed[name] = file
+		out = append(out, namedFile{file, name})
 	}
-
-	return s.reconcile(found, unusable, uids)
+	return out, nil
 }
 
-// reconcile provisions new accounts and revokes ones whose key file no longer
-// enrols them.
+// reconcile provisions new accounts and revokes ones no directory enrols any
+// more.
 //
-// unusable names the accounts whose file is still there but held no key this
-// time round. See the revoke loop for why that is not the same thing as gone.
+// Sync has already applied the two-read rule; unusable is only recorded for
+// the next sync and used to name the reason for a revocation.
 //
 // Four phases, and only the last holds s.mu, because provisioning shells out
 // to useradd per account and Lookup reads through that lock. See the syncMu
 // and accounts fields.
-func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, uids map[string]int) error {
+func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, uids map[string]int) error {
 	// 1. Decide the uids. No lock and no exec.
 	//
 	// Sorted, because this loop ASSIGNS uids to accounts that do not have one
@@ -282,7 +377,7 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	// 3. Build the next map, seeded from the current one so an account whose
 	// Ensure failed this round is carried forward and keeps authenticating: a
 	// transient useradd failure must not present as a key that stopped working.
-	// With the file's keys, though, or a key replaced in it would keep working.
+	// With the files' keys, though, or a key replaced in one would keep working.
 	next := make(map[string]*Account, len(s.accounts)+len(found))
 	maps.Copy(next, s.accounts)
 	for _, name := range names {
@@ -290,6 +385,7 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 			if known, ok := s.accounts[name]; ok {
 				carried := *known
 				carried.Keys = found[name].Keys
+				carried.Sources = found[name].Sources
 				next[name] = &carried
 			}
 			continue
@@ -304,12 +400,12 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 	// lose whatever the user left there, and a key file is removed far more
 	// often than a person leaves for good.
 	//
-	// An account is enrolled exactly while its file holds a key, so emptying
-	// the file revokes: that is the interface. But a file being saved is empty
-	// for a moment, and one read cannot tell that moment from an emptying
-	// meant on purpose. So a file that is THERE and holds nothing has to say so
-	// twice, the second read being the next event or the next poll. A file that
-	// is GONE revokes at once: there is no write window to be caught in.
+	// An account is enrolled exactly while some file holds a key for it, so
+	// emptying the files revokes: that is the interface. But a file being
+	// saved is empty for a moment, and one read cannot tell that moment from an
+	// emptying meant on purpose. So a file that is THERE and holds nothing has
+	// to say so twice, which Sync decides per directory. A file that is GONE
+	// revokes at once: there is no write window to be caught in.
 	//
 	// A COPY with no keys, never Keys=nil on an account already published: see
 	// the accounts field.
@@ -317,26 +413,26 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[string]bool, u
 		if _, still := found[name]; still {
 			continue
 		}
-		if unusable[name] && !s.unusable[name] {
-			continue
-		}
 		if len(account.Keys) == 0 {
 			continue
 		}
 		reason := "its key file is gone"
-		if unusable[name] {
-			reason = "its key file holds no usable public key"
+		for id := range unusable {
+			if id.account == name {
+				reason = "its key file holds no usable public key"
+			}
 		}
 		s.log().Info("revoking an account: "+reason+". the account and its home are kept",
 			"account", name)
 
 		revoked := *account
 		revoked.Keys = nil
+		revoked.Sources = nil
 		next[name] = &revoked
 	}
 
-	// 4. Swap. s.unusable is what the two-read rule above reads next time, so
-	// it changes with the map it was computed against.
+	// 4. Swap. s.unusable is what Sync's two-read rule reads next time, so it
+	// changes with the map it was computed against.
 	s.accounts = next
 	s.unusable = unusable
 	return nil
@@ -391,47 +487,71 @@ func (s *Store) saveUIDs(uids map[string]int) error {
 // that line. Read as one stream it stopped at the first thing it could not
 // parse, so a typo, a wrapped paste or a BOM on the top line took every key
 // under it, and the account was revoked over a line nobody had touched.
-func parseKeys(path string) (keys []ssh.PublicKey, skipped int, err error) {
+func parseKeys(path string) (keys []ssh.PublicKey, comments []string, skipped int, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
-	// A file saved by PowerShell's Out-File or by an older Notepad opens with a
-	// byte order mark. UTF-8's is invisible in every editor and makes the first
-	// line unreadable, so it is dropped; UTF-16 cannot be repaired here and is
-	// named instead, because "no valid public key found" about a file that
-	// plainly holds one sends the reader looking in the wrong place.
-	if after, found := bytes.CutPrefix(data, []byte{0xef, 0xbb, 0xbf}); found {
-		data = after
-	} else if bytes.HasPrefix(data, []byte{0xff, 0xfe}) || bytes.HasPrefix(data, []byte{0xfe, 0xff}) {
-		return nil, 0, fmt.Errorf("the file is UTF-16; save it as UTF-8")
+	data, err = stripBOM(data)
+	if err != nil {
+		return nil, nil, 0, err
 	}
 
 	scan := bufio.NewScanner(bytes.NewReader(data))
 	for scan.Scan() {
-		line := bytes.TrimSpace(scan.Bytes())
-		if len(line) == 0 || line[0] == '#' {
-			continue
-		}
-		key, _, _, _, err := ssh.ParseAuthorizedKey(line)
-		if err != nil {
+		key, comment, isKey, blank := parseKeyLine(scan.Bytes())
+		switch {
+		case blank:
+		case !isKey:
 			skipped++
-			continue
+		default:
+			keys = append(keys, key)
+			comments = append(comments, comment)
 		}
-		keys = append(keys, key)
 	}
 	if err := scan.Err(); err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
 	if len(keys) == 0 {
 		if skipped == 0 {
-			return nil, 0, fmt.Errorf("the file is empty")
+			return nil, nil, 0, fmt.Errorf("the file is empty")
 		}
-		return nil, skipped, fmt.Errorf("none of its %d lines is a public key", skipped)
+		return nil, nil, skipped, fmt.Errorf("none of its %d lines is a public key", skipped)
 	}
-	return keys, skipped, nil
+	return keys, comments, skipped, nil
+}
+
+// stripBOM drops a UTF-8 byte order mark and refuses UTF-16.
+//
+// A file saved by PowerShell's Out-File or by an older Notepad opens with a
+// byte order mark. UTF-8's is invisible in every editor and makes the first
+// line unreadable, so it is dropped; UTF-16 cannot be repaired here and is
+// named instead, because "no valid public key found" about a file that
+// plainly holds one sends the reader looking in the wrong place.
+func stripBOM(data []byte) ([]byte, error) {
+	if after, found := bytes.CutPrefix(data, []byte{0xef, 0xbb, 0xbf}); found {
+		return after, nil
+	}
+	if bytes.HasPrefix(data, []byte{0xff, 0xfe}) || bytes.HasPrefix(data, []byte{0xfe, 0xff}) {
+		return nil, fmt.Errorf("the file is UTF-16; save it as UTF-8")
+	}
+	return data, nil
+}
+
+// parseKeyLine reads one line of a key file. blank is a line that is empty or a
+// comment; otherwise isKey says whether it held a public key.
+func parseKeyLine(raw []byte) (key ssh.PublicKey, comment string, isKey, blank bool) {
+	line := bytes.TrimSpace(raw)
+	if len(line) == 0 || line[0] == '#' {
+		return nil, "", false, true
+	}
+	key, comment, _, _, err := ssh.ParseAuthorizedKey(line)
+	if err != nil {
+		return nil, "", false, false
+	}
+	return key, comment, true, false
 }
 
 // log is the store's logger, or silence. See logx.Or.
