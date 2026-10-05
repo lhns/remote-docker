@@ -48,10 +48,12 @@ func nothingListening(t *testing.T) int {
 type fakeBackend struct {
 	name string
 
-	calls    []string
-	address  string
-	startErr error
-	addrErr  error
+	calls   []string
+	address string
+	// addresses, when set, is answered one per ask before address is.
+	addresses []string
+	startErr  error
+	addrErr   error
 
 	held   int
 	closed int
@@ -92,6 +94,11 @@ func (f *fakeBackend) Hold(context.Context, string) (io.Closer, error) {
 
 func (f *fakeBackend) Address(context.Context, string) (string, error) {
 	f.calls = append(f.calls, "address")
+	if len(f.addresses) > 0 {
+		next := f.addresses[0]
+		f.addresses = f.addresses[1:]
+		return next, f.addrErr
+	}
 	return f.address, f.addrErr
 }
 
@@ -135,16 +142,65 @@ func TestLocateStartsBeforeAsking(t *testing.T) {
 	}
 }
 
+// shortWaits shortens Locate's budget and its address polling for one test, or
+// it would take the three minutes a real machine is allowed. The durations
+// themselves are argued for where they are declared.
+func shortWaits(t *testing.T, budget time.Duration) {
+	t.Helper()
+
+	timeout, poll := agentStartTimeout, addressPollInterval
+	agentStartTimeout, addressPollInterval = budget, 10*time.Millisecond
+	t.Cleanup(func() { agentStartTimeout, addressPollInterval = timeout, poll })
+}
+
 func TestLocateRefusesAMachineWithNoAddress(t *testing.T) {
-	// A machine that is up but has not been given an address yet -- DHCP has not
-	// finished, or the integration services have not reported. Returning the
-	// empty string here would have the caller dial ":2222", which connects to
-	// something on this computer or fails saying nothing about the machine.
+	// A machine that is up but has not been given an address by the end of the
+	// budget. Returning the empty string here would have the caller dial
+	// ":2222", which connects to something on this computer or fails saying
+	// nothing about the machine.
 	fake := &fakeBackend{name: "fake", address: ""}
 	register(t, fake)
+	shortWaits(t, 200*time.Millisecond)
 
-	if _, err := Locate(context.Background(), "fake", "dev", 2222); err == nil {
+	_, err := Locate(context.Background(), "fake", "dev", 2222)
+	if err == nil {
 		t.Fatal("a machine with no address was reported as reachable")
+	}
+	if !strings.Contains(err.Error(), "no address") {
+		t.Errorf("the error does not say what is missing: %v", err)
+	}
+}
+
+// The bug this pins: Locate asked once, right after Start-VM, and a Hyper-V
+// machine reports its address about 30 seconds later, so every create and the
+// first command after `machine stop` failed with "has no address yet".
+func TestLocateWaitsForAnAddress(t *testing.T) {
+	fake := &fakeBackend{name: "fake", addresses: []string{"", "", "127.0.0.1"}}
+	register(t, fake)
+	shortWaits(t, time.Minute)
+
+	got, err := Locate(context.Background(), "fake", "dev", listening(t))
+	if err != nil {
+		t.Fatalf("a machine whose address arrived on the third ask was not located: %v", err)
+	}
+	if got != "127.0.0.1" {
+		t.Errorf("Locate = %q", got)
+	}
+}
+
+// Failing to ask is not a machine still booting, and waiting would only delay
+// the error by the whole budget.
+func TestLocateDoesNotWaitOutAnAddressError(t *testing.T) {
+	fake := &fakeBackend{name: "fake", addrErr: errors.New("powershell.exe: access denied")}
+	register(t, fake)
+	shortWaits(t, time.Minute)
+
+	start := time.Now()
+	if _, err := Locate(context.Background(), "fake", "dev", 2222); err == nil {
+		t.Fatal("a failed address query located the machine")
+	}
+	if waited := time.Since(start); waited > 10*time.Second {
+		t.Errorf("Locate waited %s on an error waiting cannot cure", waited)
 	}
 }
 
@@ -181,11 +237,7 @@ func TestLocateWaitsForTheAgent(t *testing.T) {
 	fake := &fakeBackend{name: "fake", address: "127.0.0.1"}
 	register(t, fake)
 
-	// Shortened, or this test would take the three minutes a real machine is
-	// allowed. The duration itself is argued for where it is declared.
-	restore := agentStartTimeout
-	agentStartTimeout = 2 * time.Second
-	t.Cleanup(func() { agentStartTimeout = restore })
+	shortWaits(t, 2*time.Second)
 
 	_, err := Locate(context.Background(), "fake", "dev", port)
 	if err == nil {
@@ -205,9 +257,7 @@ func TestLocateReturnsAsSoonAsTheAgentAnswers(t *testing.T) {
 	fake := &fakeBackend{name: "fake", address: "127.0.0.1"}
 	register(t, fake)
 
-	restore := agentStartTimeout
-	agentStartTimeout = time.Minute
-	t.Cleanup(func() { agentStartTimeout = restore })
+	shortWaits(t, time.Minute)
 
 	start := time.Now()
 	if _, err := Locate(context.Background(), "fake", "dev", listening(t)); err != nil {

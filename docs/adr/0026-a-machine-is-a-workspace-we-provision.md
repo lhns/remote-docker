@@ -1,7 +1,11 @@
 # 0026. A machine is a workspace we provision
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md)
-- Date: 2026-08-11; amended 2026-10-04 (host keys)
+- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand, Ignition over KVP)
+- Current answer: a machine is an ordinary workspace plus a lifecycle, with its
+  host key made and pinned by the client. WSL runs in CI; Hyper-V has run by
+  hand on one computer and takes its Ignition document over KVP, removed once
+  the agent answers.
 
 ## Context
 
@@ -57,7 +61,7 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   | Backend | How the private half goes in |
   |---|---|
   | WSL | `wsl.exe` stdin into `sh -c 'umask 077 && cat > ...'`, never argv |
-  | Hyper-V | one more file in the Ignition document, mode 0600 |
+  | Hyper-V | one more file in the Ignition document, mode 0600, handed over KVP |
 
   The public half is the machine block's `hostKey`, recorded before the agent
   is waited for, so a build that fails after it cannot leave the destroyed
@@ -70,29 +74,81 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 - **Rejected:** reading the agent's generated key out of the machine. WSL could;
   Hyper-V cannot, as there is no way into a Linux guest but the SSH it opens.
 - **Costs:**
-  - The private key passes through the client, and for Hyper-V stays in
-    `config.ign` beside the disk that holds it anyway.
+  - The private key passes through the client. For Hyper-V it also sits in
+    the VM's KVP items, readable by any Hyper-V administrator on this
+    computer, until the machine has applied it (see the KVP section below).
   - A record without `hostKey` falls back to known_hosts: a machine built
     before this, and `rm --keep-machine` then `create`, which builds nothing.
 
-## The Hyper-V backend was merged unverified, on purpose
+## The Hyper-V backend was merged unverified, and has been run by hand once
 
-The plan was that a backend merges once somebody has run
-`docs/testing-machines.md` against it and reported. WSL cleared that. Hyper-V
-cannot: no CI offers it and nobody involved has it, so the bar would hold the
-code in a branch indefinitely. It merged unrun because it costs nothing until
-somebody types `--backend hyperv`: no other path reaches it, and the WSL
-backend imports none of it.
+- **Merged unrun, on purpose.** The plan was that a backend merges once
+  somebody has run `docs/testing-machines.md` against it and reported. WSL
+  cleared that. Hyper-V could not: no CI offers it, so the bar would have held
+  the code in a branch indefinitely. It cost nothing until somebody typed
+  `--backend hyperv`: no other path reaches it, and the WSL backend imports
+  none of it.
+- **The first run, 2026-10-05:** Windows 11 Pro 25H2 build 26200.9457, Hyper-V
+  vmms 10.0.26100.8875, Flatcar stable 4757.2.1 (kernel 6.12.111) from
+  `flatcar_production_hyperv_vhdx_image.vhdx.zip`, a Gen 2 VM with secure boot
+  off on the Default Switch, the user in Hyper-V Administrators. Three bugs,
+  each of which alone stopped every machine:
 
-The price is honesty, in four places that must stay in step:
+  | Found | Cause | Fix |
+  |---|---|---|
+  | `create` always failed: `cannot tell what is there: exit status 1:`, nothing printed | `powershell.exe -Command` exits 1 when the LAST statement left `$?` false, and `Get-VM -Name x -ErrorAction SilentlyContinue` on a missing VM does | every script runs in `psScript`: errors stop it, reaching the end is success |
+  | Ignition never applied: guest at `localhost login:`, no key, no unit, 2222 closed | Flatcar's Hyper-V image reads Ignition over KVP, never from a file beside the disk | the KVP section below |
+  | `has no address yet` right after `Start-VM`, and on the first command after `machine stop` | the guest reports its address about 30s after boot; `Locate` asked once | `Locate` waits for it within the same budget as the agent |
 
-- a warning the program prints on every `machine create` with that backend;
-- `--backend`'s help;
-- CLAUDE.md's NOT-tested list, where it is the strongest entry;
-- the README, which says it has never been run by anybody.
+  With those fixed, on the same computer: create in one go (93s), status
+  answering, a bind mount read, create again a no-op, rebuild then `docker run`
+  with the new host key pinned and no known_hosts edit, stop then `docker run`
+  (19s, a new address), and `rm` leaving no VM, no disk and no context. A
+  second run the same day found the Ignition items present from `New-VM`
+  until the agent answered (93s) and gone when `create` returned, a rebuilt
+  machine booting configured, and `rm` completing on a VM deleted by hand.
+- **It still warns on every `machine create`**, because one computer is not
+  coverage. Four places say so and must stay in step: that warning,
+  `--backend`'s help, CLAUDE.md's NOT-tested list and the README. All four say
+  "run by hand once", never "tested".
 
-The first goes away when somebody has run the runbook and reported. Until
-then it is a written-down attempt, and anything saying otherwise is wrong.
+## A Hyper-V machine's Ignition goes over KVP
+
+- **Forced by:** the first run. `config.ign` written beside the disk was never
+  read: the VM had 0 KVP items and 0 DVD drives, so the guest had nothing to
+  read, and booted with no key, no host key and no unit. Flatcar's Hyper-V
+  provider reads the KVP exchange, as `kvpctl add-ign` (containers/libhvee)
+  writes it. *(Checked 2026-10-05 at
+  https://www.flatcar.org/docs/latest/deploy/virt-options/hyper-v/; re-check
+  there, since no command asks.)*
+- **Decision:** `Create` adds the document as host KVP items through WMI
+  (`Msvm_VirtualSystemManagementService.AddKvpItems`, Source 0) after
+  `New-VM` and before the first `Start-VM`, split as `ignition.config.0`,
+  `ignition.config.1` and so on, which the guest concatenates.
+- **Limit, measured 2026-10-05 on vmms 10.0.26100.8875:** Hyper-V refuses a
+  host value of 1024 characters or more (job `ErrorCode` 32773) and accepts
+  1023. Chunks are 1000 bytes (`ignitionKVPChunk`), cut on rune boundaries.
+  A machine's document is about 1.4 KB, so two items.
+- **The data never touches a command line or a file.** It holds the private
+  host key, so the script (`machine/hyperv_kvp.ps1`) reads it on stdin as a
+  JSON array, and an error names the item and its code, never its value.
+- **Removed once applied.** Hyper-V keeps host items for the VM's life: both
+  were still in its `HostExchangeItems` after first boot (2026-10-05). So
+  `machine create` removes every `ignition.config.*` item
+  (`RemoveKvpItems`, `machine.Retracter`) once the agent answers, which only
+  an applied Ignition document can make happen. It does so on every run:
+  removing an item that is not there succeeds (measured 2026-10-05), so a
+  later `create` retries a removal that failed.
+- **Costs:**
+  - From creation until the agent first answers, about 90 seconds, the
+    private host key is readable through WMI by anybody who may administer
+    Hyper-V on this computer, without access to the disk under
+    `%LOCALAPPDATA%`.
+  - If the removal fails, `create` warns and succeeds, and the key stays in
+    the KVP items until a later `create` removes it or `rebuild` or `rm`
+    destroys the VM.
+  - Hyper-V has no cmdlet for this, so it is WMI, and the call may finish as a
+    job (4096) whose state has to be polled for the real answer.
 
 ## Both backends are located the same way, and Hyper-V uses no hvsock
 
@@ -102,8 +158,12 @@ agent change, while hvsock needs a pluggable listener in the agent, AF_HYPERV
 on the Linux side, a service GUID per machine on the host and a new
 dependency, all in code no CI can run. So a Hyper-V machine is on the Default
 Switch (NAT with DHCP Hyper-V maintains) and `Address` asks
-`Get-VMNetworkAdapter`. If that fails on a real machine, hvsock is the
-fallback and this record is where to start.
+`Get-VMNetworkAdapter`.
+
+- **Measured 2026-10-05, it works:** the guest's `hv_kvp_daemon` reports an
+  address about 30 seconds after `Start-VM`, a different one after every boot
+  (`172.19.86.205`, then `172.19.85.188` after a stop and start), so no hvsock
+  fallback is needed.
 
 Two platform differences from WSL:
 
@@ -165,8 +225,9 @@ a label could not be read destroys work for bookkeeping.
   the only record a Linux system was built.
 - **The decisions are pure functions and the platform calls an interface**
   (the `machine` module, ADR 0021), as in `elevate` and `daemons`. Here it
-  matters more: **nobody working on this has WSL or Hyper-V**, so everything
-  that is not a pure function ships without having run.
+  matters more: **no CI has Hyper-V and nobody working on this has WSL**, so
+  everything that is not a pure function ships having run once by hand at
+  best.
 - **A GitHub Windows runner can run WSL2**: `HypervisorPresent: True`, an
   imported rootfs reporting `6.18.33.2-microsoft-standard-WSL2`, `wsl -l -v`
   showing `VERSION 2`. *(Checked 2026-08-11, run 31496228112. Re-check by
