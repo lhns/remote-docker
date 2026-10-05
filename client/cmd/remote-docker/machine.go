@@ -65,8 +65,8 @@ type machineOptions struct {
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&o.backend, "backend", "wsl",
-		"wsl, or hyperv (run by hand once, never in CI; see docs/testing-machines.md)")
+	cmd.Flags().StringVar(&o.backend, "backend", "",
+		"wsl, or hyperv (run by hand once, never in CI; see docs/testing-machines.md); defaults to the existing machine's, else wsl")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
@@ -83,9 +83,13 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 // the same image and while the file still exists, and one EnsureRootfs fetched
 // stays Fetched, so the rebuild hashes as a create without --rootfs does.
 func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.Spec, error) {
+	backend, err := o.backendFor(name, recorded)
+	if err != nil {
+		return machine.Spec{}, err
+	}
 	spec := machine.Spec{
 		Name:    name,
-		Backend: o.backend,
+		Backend: backend,
 		// Part of the generation, so a new client version rebuilds (ADR 0026).
 		Image:    machine.DefaultImage(version),
 		Rootfs:   o.rootfs,
@@ -117,6 +121,27 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 	return spec, nil
 }
 
+// defaultBackend is what a machine nothing was recorded for is built with.
+const defaultBackend = "wsl"
+
+// backendFor is the backend a machine command acts on: --backend, else the
+// recorded machine's, else defaultBackend. Only the backend that built a
+// machine can inspect or destroy it, so naming another one for an existing
+// machine is refused: it would build a second machine beside the first and
+// overwrite the only record that the first exists.
+func (o *machineOptions) backendFor(name string, recorded *config.Workspace) (string, error) {
+	if recorded == nil || recorded.Machine == nil {
+		return cmp.Or(o.backend, defaultBackend), nil
+	}
+	built := recorded.Machine.Backend
+	if o.backend != "" && o.backend != built {
+		return "", fmt.Errorf("%q is a %s machine and cannot be moved to %s\n"+
+			"  fix: `%s` destroys it, then `%s` builds the new one",
+			name, built, o.backend, ourCommand("rm "+name), ourCommand("machine create "+name+" --backend "+o.backend))
+	}
+	return built, nil
+}
+
 // recordedWorkspace is the workspace entry a machine was registered under,
 // which holds the settings it was built from, or nil when there is no entry or
 // it names no machine.
@@ -146,10 +171,15 @@ nothing. Run against one built from different settings, it reports the mismatch
 rather than acting on it, because recreating discards what is inside and that
 is not a thing a create command should decide.`,
 		Args: cobra.ExactArgs(1),
-		// Flags alone, not the record, or a mismatch could never show.
+		// Flags alone, not the record, or a mismatch could never show. The
+		// backend is the exception: it is not a setting to compare but where
+		// the machine is, and asking another backend finds nothing there.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec, err := opts.spec(args[0], nil)
 			if err != nil {
+				return err
+			}
+			if spec.Backend, err = opts.backendFor(args[0], recordedWorkspace(args[0])); err != nil {
 				return err
 			}
 			return createMachine(cmd, args[0], spec, false)
@@ -174,7 +204,10 @@ nothing to repair in place.
 
 Images, containers and volumes INSIDE the machine are lost. Your files are not:
 they are on this machine and are served to it. Refused while the workspace's
-session is in use; -f overrides.`,
+session is in use; -f overrides.
+
+It keeps the backend it was built with. Moving it to another is "remote rm",
+then "machine create --backend".`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, err := machineName(args)
