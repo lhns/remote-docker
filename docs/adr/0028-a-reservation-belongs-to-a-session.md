@@ -98,6 +98,9 @@ using, which breaks the mounts on the containers already running against it.
 Being refused is the honest answer, and the per-client port makes the question
 stop arising.
 
+An ephemeral run's port assignment (ADR 0050) carries a token of the same kind,
+so a late `Ports.Free` for a run since given a port again frees nothing.
+
 ## Verification
 
 `TestAFailedBindDoesNotReleaseTheLiveHolder` walks the reported sequence and

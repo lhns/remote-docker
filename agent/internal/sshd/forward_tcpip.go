@@ -78,10 +78,11 @@ func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64
 }
 
 // runPort is the port an ephemeral run binds, allocated here and nowhere
-// earlier (ADR 0050). A run asks for 0, or for the port workspace-info already
-// reported; any other number is another run's.
+// earlier (ADR 0050), and kept through the run's grace period. A run asks for
+// 0, or for the port workspace-info already reported; any other number is
+// another run's.
 func (s *Server) runPort(account sessionAccount, asked uint32) (uint32, bool) {
-	port, err := s.cfg.Ports.For(account.Name(), account.UID(), account.client)
+	port, err := s.cfg.Runs.Port(account.Name(), account.client)
 	if err != nil {
 		s.log().Warn("refused a reverse forward", "account", account.Name(), "err", err)
 		return 0, false

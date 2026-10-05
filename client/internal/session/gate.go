@@ -28,6 +28,9 @@ type connGate[T any] struct {
 	// idle is how long an unused connection is kept; <= 0 never releases.
 	idle time.Duration
 
+	// keep reports a connection never released for idleness; nil means none.
+	keep func(conn T) bool
+
 	log *slog.Logger
 
 	mu       sync.Mutex
@@ -115,7 +118,8 @@ func (g *connGate[T]) sweep(ctx context.Context) bool {
 	}
 
 	g.mu.Lock()
-	if !g.held || g.idle <= 0 || g.users > 0 || time.Since(g.lastUsed) < g.idle {
+	if !g.held || g.idle <= 0 || g.users > 0 || time.Since(g.lastUsed) < g.idle ||
+		(g.keep != nil && g.keep(g.conn)) {
 		g.mu.Unlock()
 		return false
 	}
