@@ -52,7 +52,8 @@ Writing into any of these either fails or fights the thing that owns it.
      older than 30s is a crashed writer's and is renamed aside, under a second
      lock (`.lock.break`) and only after its age is checked again there: two
      writers that both saw it stale would otherwise each move a lock the other
-     had just taken.
+     had just taken. A waiter gives up after 10s on one holder, told apart by
+     the lock's mtime, and waits out a queue that keeps moving however long.
   2. Read the file, keeping every line that is not the one changed.
   3. Append idempotently by fingerprint, or remove the matching lines. A
      comment is folded onto one line, since a newline in it would be a line of
