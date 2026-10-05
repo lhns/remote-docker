@@ -377,10 +377,14 @@ func TestPSCommands(t *testing.T) {
 		t.Errorf("start = %s", psStart("rd-dev"))
 	}
 
+	if psStop("rd-dev") != "Stop-VM -Name 'rd-dev' -Force" {
+		t.Errorf("stop = %s, which is not the clean shutdown that flushes the guest", psStop("rd-dev"))
+	}
+
 	// Nothing is silenced. psScript makes every error fail the script, and an
 	// error silenced by -ErrorAction still made powershell.exe exit 1, with
 	// nothing printed to say why.
-	for _, script := range []string{get, psAddress("rd-dev"), psStart("rd-dev"), create, remove, psAddKVP("rd-dev"), psRemoveKVP("rd-dev")} {
+	for _, script := range []string{get, psAddress("rd-dev"), psStart("rd-dev"), psStop("rd-dev"), create, remove, psAddKVP("rd-dev"), psRemoveKVP("rd-dev")} {
 		if strings.Contains(script, "ErrorAction") {
 			t.Errorf("an error is silenced:\n%s", script)
 		}
@@ -394,10 +398,8 @@ func TestPSCommands(t *testing.T) {
 	}
 }
 
-// The wrapper every script runs in. powershell.exe -Command exits with whether
-// its LAST statement succeeded: a missing machine asked for with -ErrorAction
-// SilentlyContinue exited 1 with nothing printed, and a cmdlet failing midway
-// did not stop the next one (2026-10-05).
+// The wrapper every script runs in, because powershell.exe -Command exits with
+// whether its LAST statement succeeded (psScript).
 func TestPSScript(t *testing.T) {
 	got := psScript("Get-VM")
 	if !strings.HasPrefix(got, "$ErrorActionPreference = 'Stop'; try { ") {

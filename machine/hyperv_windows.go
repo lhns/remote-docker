@@ -6,9 +6,7 @@ package machine
 //
 // Everything it decides lives in hyperv.go and is tested on any platform. What
 // is here is process running, kept thinner than the WSL backend's because that
-// one at least runs in CI. This runs in no CI: GitHub's runners do not offer
-// Hyper-V, so `docs/testing-machines.md` is the whole of its verification, run
-// by hand once on 2026-10-05 (ADR 0026).
+// one at least runs in CI and this one runs in none (ADR 0026).
 
 import (
 	"context"
@@ -110,6 +108,19 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 			"  fix: see docs/testing-machines.md for the one command that downloads it")
 	}
 
+	// Before the copy, which is over a gigabyte.
+	if strings.TrimSpace(spec.PublicKey) == "" {
+		return errors.New("no key to enrol: a Hyper-V machine has no way in but the key it is built with")
+	}
+	config, err := ignition(spec, spec.PublicKey)
+	if err != nil {
+		return err
+	}
+	input, err := kvpInput(ignitionKVP(config))
+	if err != nil {
+		return err
+	}
+
 	dir, err := stateDir(spec.Name)
 	if err != nil {
 		return err
@@ -126,20 +137,8 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("copying the disk image: %w", err)
 	}
 
-	if strings.TrimSpace(spec.PublicKey) == "" {
-		return errors.New("no key to enrol: a Hyper-V machine has no way in but the key it is built with")
-	}
-	config, err := ignition(spec, spec.PublicKey)
-	if err != nil {
-		return err
-	}
-
 	if _, err := b.ps(ctx, psNewVM(machineName(spec.Name), vhd, dir, spec)); err != nil {
 		return fmt.Errorf("creating the machine: %w", err)
-	}
-	input, err := kvpInput(ignitionKVP(config))
-	if err != nil {
-		return err
 	}
 	if _, err := b.psWithInput(ctx, psAddKVP(machineName(spec.Name)), input); err != nil {
 		return fmt.Errorf("handing the machine its configuration: %w", err)
@@ -192,11 +191,8 @@ func (b hyperVBackend) Address(ctx context.Context, name string) (string, error)
 	return parseVMAddress(out), nil
 }
 
-// Stop shuts the machine down and waits for it. Stop-VM without -TurnOff, so
-// the guest flushes its docker state; -Force means "do not ask about signed-in
-// users", not "pull the plug".
 func (b hyperVBackend) Stop(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(machineName(name))))
+	_, err := b.ps(ctx, psStop(machineName(name)))
 	return err
 }
 

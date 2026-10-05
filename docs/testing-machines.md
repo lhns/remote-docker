@@ -261,7 +261,10 @@ docker context ls                        # no dev
 
 `rm` removes the disk too. `Remove-VM` alone leaves it, silently keeping
 gigabytes per machine, so the directory being gone is the thing to check. A
-VM already removed by hand (`Remove-VM`) does not stop it.
+VM already removed by hand (`Remove-VM`) does not stop it, though for about
+half a minute after that `rm` may refuse because the session cannot say
+whether it is in use; that passes once the session notices the connection is
+dead, or `rm -f` goes ahead.
 
 ## What to capture when something fails
 

@@ -4,8 +4,7 @@ package machine
 //
 // The same split as the WSL backend and for a stronger reason: GitHub's runners
 // do not offer Hyper-V, so `docs/testing-machines.md` is its whole verification
-// and every line that can be a pure function of a string is one. It has been
-// run by hand once, on 2026-10-05 (ADR 0026).
+// and every line that can be a pure function of a string is one.
 //
 // What runs here is Flatcar Container Linux with the workspace image as a
 // privileged container, which is the compose deployment unchanged (ADR 0026).
@@ -259,11 +258,9 @@ func urlEncode(s string) string {
 
 // ignitionKVPChunk is the longest value one KVP item carries to the guest.
 //
-// Hyper-V refuses a host-to-guest value of 1024 characters or more (the job
-// ends with ErrorCode 32773; 1023 was accepted), measured 2026-10-05 on vmms
-// 10.0.26100.8875. 1000 leaves a margin, and is what the first machine that
-// booted with its configuration applied was built with. Counted in bytes, which
-// are never fewer than the UTF-16 characters Hyper-V counts.
+// Hyper-V refuses a host-to-guest value of 1024 characters or more (ADR 0026),
+// so 1000 leaves a margin. Counted in bytes, which are never fewer than the
+// UTF-16 characters Hyper-V counts.
 const ignitionKVPChunk = 1000
 
 // ignitionKVPPrefix starts the name of every KVP item carrying the document.
@@ -313,11 +310,9 @@ func kvpInput(items []kvpItem) (string, error) {
 // fails it, and a script that reaches its end succeeds.
 //
 // powershell.exe -Command exits with whether its LAST statement succeeded,
-// which is not whether the script did. A cmdlet told -ErrorAction
-// SilentlyContinue still leaves $? false, so asking for a machine that was not
-// there exited 1 with nothing printed, and `machine create` failed every time
-// with "cannot tell what is there: exit status 1:" (2026-10-05). The other
-// direction is as wrong: a cmdlet failing mid-script did not stop the next one.
+// which is not whether the script did: an error silenced with -ErrorAction
+// still exits 1 with nothing printed, and a cmdlet failing mid-script does not
+// stop the next one (ADR 0026).
 func psScript(body string) string {
 	return "$ErrorActionPreference = 'Stop'; try { " + body +
 		"; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 }"
@@ -348,6 +343,13 @@ func psGetVM(vm string) string {
 // budget for an address from a machine somebody removed by hand.
 func psStart(vm string) string {
 	return fmt.Sprintf("Start-VM -Name %s", psQuote(vm))
+}
+
+// psStop shuts the machine down and waits for it. Without -TurnOff, so the
+// guest flushes its docker state; -Force means "do not ask about signed-in
+// users", not "pull the plug".
+func psStop(vm string) string {
+	return fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(vm))
 }
 
 // psAddress asks the guest, through the integration services, what address it

@@ -1,7 +1,11 @@
 # 0026. A machine is a workspace we provision
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md)
-- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand)
+- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand, Ignition over KVP)
+- Current answer: a machine is an ordinary workspace plus a lifecycle, with its
+  host key made and pinned by the client. WSL runs in CI; Hyper-V has run by
+  hand on one computer and takes its Ignition document over KVP, removed once
+  the agent answers.
 
 ## Context
 
@@ -78,9 +82,6 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 
 ## The Hyper-V backend was merged unverified, and has been run by hand once
 
-- **Current answer:** run end to end by hand once, on 2026-10-05, and in no
-  CI. It still warns on every `machine create`, because one machine is not
-  coverage.
 - **Merged unrun, on purpose.** The plan was that a backend merges once
   somebody has run `docs/testing-machines.md` against it and reported. WSL
   cleared that. Hyper-V could not: no CI offers it, so the bar would have held
@@ -99,13 +100,17 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   | Ignition never applied: guest at `localhost login:`, no key, no unit, 2222 closed | Flatcar's Hyper-V image reads Ignition over KVP, never from a file beside the disk | the KVP section below |
   | `has no address yet` right after `Start-VM`, and on the first command after `machine stop` | the guest reports its address about 30s after boot; `Locate` asked once | `Locate` waits for it within the same budget as the agent |
 
-  With those fixed, on the same machine: create in one go (93s), status
+  With those fixed, on the same computer: create in one go (93s), status
   answering, a bind mount read, create again a no-op, rebuild then `docker run`
   with the new host key pinned and no known_hosts edit, stop then `docker run`
-  (19s, a new address), and `rm` leaving no VM, no disk and no context.
-- **Honesty is kept in four places that must stay in step:** the warning on
-  `machine create`, `--backend`'s help, CLAUDE.md's NOT-tested list and the
-  README. All four say "run by hand once", never "tested".
+  (19s, a new address), and `rm` leaving no VM, no disk and no context. A
+  second run the same day found the Ignition items present from `New-VM`
+  until the agent answered (93s) and gone when `create` returned, a rebuilt
+  machine booting configured, and `rm` completing on a VM deleted by hand.
+- **It still warns on every `machine create`**, because one computer is not
+  coverage. Four places say so and must stay in step: that warning,
+  `--backend`'s help, CLAUDE.md's NOT-tested list and the README. All four say
+  "run by hand once", never "tested".
 
 ## A Hyper-V machine's Ignition goes over KVP
 
@@ -155,11 +160,10 @@ dependency, all in code no CI can run. So a Hyper-V machine is on the Default
 Switch (NAT with DHCP Hyper-V maintains) and `Address` asks
 `Get-VMNetworkAdapter`.
 
-- **Measured 2026-10-05, it works:** the guest's `hv_kvp_daemon` reports its
+- **Measured 2026-10-05, it works:** the guest's `hv_kvp_daemon` reports an
   address about 30 seconds after `Start-VM`, a different one after every boot
-  (`172.19.86.205`, then `172.19.85.188` after a stop and start). So the
-  hvsock fallback is unnecessary, and `Locate` waits for an address rather
-  than asking once.
+  (`172.19.86.205`, then `172.19.85.188` after a stop and start), so no hvsock
+  fallback is needed.
 
 Two platform differences from WSL:
 

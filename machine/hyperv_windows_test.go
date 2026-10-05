@@ -19,6 +19,7 @@ func TestPSScriptsParse(t *testing.T) {
 		"add":    psAddKVP("rd-dev"),
 		"remove": psRemoveKVP("rd-dev"),
 		"rm":     psRemoveVM("rd-dev", `C:\m`),
+		"get":    psGetVM("rd-dev"),
 		"new":    psNewVM("rd-dev", `C:\m\disk.vhdx`, `C:\m`, Spec{Name: "dev", CPUs: 2, MemoryMB: 2048}),
 	} {
 		cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
