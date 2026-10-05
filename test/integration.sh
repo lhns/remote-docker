@@ -975,6 +975,96 @@ else
 fi
 
 echo
+echo "== 11g. revoking a key ends its open connections =="
+# The handshake is the only place a key is checked, so a revoked key used to
+# keep every connection it had, and its reverse-tunnel port with it (ADR 0028).
+# Its own account, so nothing else in the suite loses its session.
+REVOKED=itest3
+REVOKED_KEY_DIR="$WORK/revoked-key"
+REVOKED_PUB="$WORK/keys/$REVOKED.pub"
+mkdir -p "$REVOKED_KEY_DIR"
+
+# open_session starts a shell that would run for two minutes, and waits for it
+# to be live. REVOKED_PID is the ssh client; its log is $WORK/revoked.log.
+open_session() {
+    ssh_account "$REVOKED_KEY_DIR/id_ed25519" "$REVOKED" 150 'echo LIVE; sleep 120; echo DONE' \
+        >"$WORK/revoked.log" 2>&1 &
+    REVOKED_PID=$!
+    for _ in $(seq 1 30); do
+        grep -q '^LIVE' "$WORK/revoked.log" && return 0
+        kill -0 "$REVOKED_PID" 2>/dev/null || return 1
+        sleep 1
+    done
+    return 1
+}
+
+# session_ends waits <secs> for the ssh client to exit, and fails if it ran its
+# command to the end instead of being cut off.
+session_ends() {
+    local secs=$1 _
+    for _ in $(seq 1 "$secs"); do
+        if ! kill -0 "$REVOKED_PID" 2>/dev/null; then
+            wait "$REVOKED_PID" 2>/dev/null
+            ! grep -q '^DONE' "$WORK/revoked.log"
+            return
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+unusable_reads() {
+    hostdocker logs "$CONTAINER" 2>&1 | grep 'no usable public key' | grep -c "$REVOKED.pub"
+}
+
+if ! genkey "$REVOKED_KEY_DIR"; then
+    bad "could not generate a key for $REVOKED"
+else
+    cp "$REVOKED_KEY_DIR/id_ed25519.pub" "$REVOKED_PUB"
+    if ! wait_provisioned "$REVOKED" || ! open_session; then
+        bad "could not open a session as $REVOKED: $(tr '\n' ' ' <"$WORK/revoked.log")"
+    else
+        rm -f "$REVOKED_PUB"
+        if session_ends 30; then
+            ok "deleting a key file ends its open session"
+        else
+            bad "the session outlived its deleted key file: $(tr '\n' ' ' <"$WORK/revoked.log")"
+            kill "$REVOKED_PID" 2>/dev/null
+            dump_workspace_log 20
+        fi
+    fi
+
+    # Emptied rather than deleted: the first read may be the middle of a save,
+    # so only the second revokes. The second write is the second read; the 60s
+    # poll may take it first, which the log then shows.
+    cp "$REVOKED_KEY_DIR/id_ed25519.pub" "$REVOKED_PUB"
+    for _ in $(seq 1 30); do
+        outputs '^AUTH-OK' ssh_account "$REVOKED_KEY_DIR/id_ed25519" "$REVOKED" 20 'echo AUTH-OK' && break
+        sleep 1
+    done
+    if ! open_session; then
+        bad "could not reopen a session as $REVOKED: $(tr '\n' ' ' <"$WORK/revoked.log")"
+    else
+        before=$(unusable_reads)
+        : >"$REVOKED_PUB"
+        sleep 3
+        if ! kill -0 "$REVOKED_PID" 2>/dev/null && [ "$(unusable_reads)" -lt $((before + 2)) ]; then
+            bad "one read of an emptied key file ended the session: $(tr '\n' ' ' <"$WORK/revoked.log")"
+        else
+            echo '# revoked' >"$REVOKED_PUB"
+            if session_ends 30; then
+                ok "emptying a key file ends its open session on the second read"
+            else
+                bad "the session outlived its emptied key file: $(tr '\n' ' ' <"$WORK/revoked.log")"
+                kill "$REVOKED_PID" 2>/dev/null
+                dump_workspace_log 20
+            fi
+        fi
+    fi
+    rm -f "$REVOKED_PUB"
+fi
+
+echo
 echo "== 12. docker compose =="
 # Compose speaks the Engine API and never shells out to `docker`, which is why
 # ADR 0005 translates at the API. It expands ./html to an absolute path on THIS

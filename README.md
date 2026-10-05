@@ -843,7 +843,8 @@ directory, one key per line. The filename is the account name a client logs in
 as, lowercased, so `Alice.pub` enrols `alice` and `ssh Alice@...` reaches it;
 the unix user behind it is `rd-<account>`
 ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Emptying or removing the
-file revokes access but keeps the account and its home directory.
+file revokes access, and ends every connection that key has open, but keeps
+the account and its home directory.
 
 `WORKSPACE_KEYS_DIR` may name several directories, separated by commas, and the
 agent only ever reads them. It writes keys it enrols itself into one other
