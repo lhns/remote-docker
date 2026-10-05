@@ -772,7 +772,10 @@ premise of the project, and it applies to building it too. So:
   which it must: `useradd` per account under the lock `Lookup` reads through
   meant no session could authenticate for the length of a key-directory pass,
   and `Sync` runs on a 60s poll. `syncMu` is then the only thing keeping two
-  syncs from handing one uid to two accounts.
+  syncs from handing one uid to two accounts, and it is never held across a
+  `useradd` either: `Known`, the redeem and every key write take it, and one
+  `useradd` took 170s (PR 268). A new account is provisioned in the
+  background, once per process, and published when that finishes.
 - **Never range a map to assign something durable.** Account uids are handed
   out in `accounts.reconcile`, which used to range the `found` map -- so which
   account got which uid, and therefore which reverse-tunnel port, differed

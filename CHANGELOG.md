@@ -84,6 +84,10 @@ software.
 - **`remote ls` lines up its columns.**
 - **Two containers starting at once on one `write=back` or `write=ephemeral`
   directory no longer race.**
+- **Redeeming a token and managing keys no longer wait for another account
+  to be created.** Creating an account copies `/etc/skel`, which has taken
+  minutes. A redeem that creates an account waits for it up to 30s, then says
+  the account is still being created rather than hanging.
 
 ### Upgrading
 

@@ -108,6 +108,10 @@ workspace's address, which --host overrides, and its host key.`,
 					how = "created the account"
 				}
 				_, _ = fmt.Fprintf(out, "this machine's key %s %s\n", how, enrolled.Account)
+				if enrolled.Pending {
+					_, _ = fmt.Fprintf(out, "the account %s is still being created on the workspace, which refuses this key until it is\n"+
+						"  fix: wait a minute or two before the first docker command\n", enrolled.Account)
+				}
 			}
 			if !noContext {
 				reportContext(out, cfg)

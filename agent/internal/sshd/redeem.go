@@ -137,8 +137,13 @@ func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) enro
 		return refuse(enrol.Refused, "another redemption took the token")
 	}
 
+	// A key for an account still being created cannot authenticate yet, and is
+	// kept: the account appears when its useradd finishes.
 	created, undo, err := s.enrolKey(name, create, r.key, req.Comment)
-	if err == nil && !s.stillAuthorized(name, r.key) {
+	pending := errors.Is(err, accounts.ErrProvisioning)
+	if pending {
+		err = nil
+	} else if err == nil && !s.stillAuthorized(name, r.key) {
 		undo()
 		err = errors.New("the key was written but does not authenticate")
 	}
@@ -154,8 +159,8 @@ func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) enro
 	if err := claim.Done(); err != nil {
 		audit.Warn("the redeemed token could not be deleted", "err", err)
 	}
-	audit.Info("redeemed a token", "account", name, "created", created, "bound", tok.Account != "")
-	return enrol.RedeemReply{Account: name, Created: created}
+	audit.Info("redeemed a token", "account", name, "created", created, "bound", tok.Account != "", "pending", pending)
+	return enrol.RedeemReply{Account: name, Created: created, Pending: pending}
 }
 
 // redeemName is the account a token enrols into, and whether it must be new.
@@ -195,27 +200,29 @@ func (s *Server) redeemName(bound, asked string) (string, bool, *enrol.Error) {
 	return asked, true, nil
 }
 
-// enrolKey writes the key, and returns how to take it out again.
+// enrolKey writes the key, and returns how to take it out again. The key is
+// written when err is nil or accounts.ErrProvisioning.
 func (s *Server) enrolKey(name string, create bool, key ssh.PublicKey, comment string) (created bool, undo func(), err error) {
 	if create {
-		if err := s.cfg.Accounts.CreateAccount(name, key, comment); err != nil {
+		err := s.cfg.Accounts.CreateAccount(name, key, comment)
+		if err != nil && !errors.Is(err, accounts.ErrProvisioning) {
 			return false, nil, err
 		}
-		return true, func() { _ = s.cfg.Accounts.RemoveAccountFile(name) }, nil
+		return true, func() { _ = s.cfg.Accounts.RemoveAccountFile(name) }, err
 	}
 	known, err := s.cfg.Accounts.Known(name)
 	if err != nil {
 		return false, nil, err
 	}
 	added, err := s.cfg.Accounts.AppendKey(name, key, comment)
-	if err != nil {
+	if err != nil && !errors.Is(err, accounts.ErrProvisioning) {
 		return false, nil, err
 	}
 	return !known, func() {
 		if added {
 			_, _ = s.cfg.Accounts.RemoveKey(name, ssh.FingerprintSHA256(key))
 		}
-	}, nil
+	}, err
 }
 
 func nameTaken(name string) *enrol.Error {

@@ -60,7 +60,8 @@ host key on first use, with nothing to check it against.
    CephFS as well as locally
 6. `CreateAccount` (unbound) or `AppendKey` (bound), each ending in `Sync`
 7. the key now authenticates the account; otherwise undo the write and
-   `Restore` the token
+   `Restore` the token. An account still being created after 30s is not
+   undone: the reply says `pending` and the key works once it exists
 8. `Done` deletes it
 9. an audit line, `component=audit op=token.redeem token key account from`
 10. the reply
@@ -86,6 +87,7 @@ The uidmap never forgets a name, so an unbound token never reuses one.
 | refused at login with the banner, or by the redeem | `the workspace refused the token: it is unknown, used or expired` / `fix: ask for a new one` |
 | refused at login without the banner | `the workspace at <url> predates enrolment tokens` / `fix: ask its operator to upgrade it, or to enrol this key by file` |
 | the host key is not the pinned one | names both fingerprints |
+| the reply says `pending` | `the account <name> is still being created on the workspace, which refuses this key until it is` / `fix: wait a minute or two before the first docker command` |
 
 Never which of unknown, used or expired: that would be an oracle.
 

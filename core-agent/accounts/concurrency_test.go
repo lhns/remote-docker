@@ -6,9 +6,12 @@ package accounts
 
 import (
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // blockingProvisioner parks inside Ensure until it is released, which is what
@@ -160,6 +163,7 @@ func (*failingProvisioner) Remove(string, int) error { return nil }
 
 // A provisioner failing on a later poll must not withdraw access from an
 // account that is already enrolled: the symptom is a key that stops working.
+// It holds because Ensure runs once per account per process.
 func TestFailedProvisioningKeepsAKnownAccount(t *testing.T) {
 	s := newStore(t)
 	prov := &failingProvisioner{}
@@ -212,5 +216,146 @@ func TestFailedProvisioningStillTakesTheFilesKeys(t *testing.T) {
 	}
 	if !alice.Authorized(fresh) {
 		t.Error("the key now in alice.pub does not authenticate because a later useradd failed")
+	}
+}
+
+// gatedProvisioner parks inside Ensure for one account until released, and
+// provisions every other at once: one useradd copying a big /etc/skel.
+type gatedProvisioner struct {
+	gated   string
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedProvisioner(gated string) *gatedProvisioner {
+	return &gatedProvisioner{gated: gated, entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *gatedProvisioner) Ensure(name string, _ int, _ string) (string, string, error) {
+	if name == g.gated {
+		g.once.Do(func() { close(g.entered) })
+		<-g.release
+	}
+	unix := DefaultPrefix + name
+	return unix, "/home/" + unix, nil
+}
+
+// prompt fails the test if fn has not returned within 100ms.
+func prompt(t *testing.T, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Errorf("%s waited for another account's provisioning", what)
+		<-done
+	}
+}
+
+// A redeem asks Known, and account management writes keys, while a sync may be
+// creating somebody else; one useradd has taken 170s (PR 268).
+func TestKnownAndKeyWritesDoNotWaitForProvisioning(t *testing.T) {
+	s := newStore(t)
+	prov := newGatedProvisioner("a")
+	s.Provisioner = prov
+	s.writeKey(t, "b.pub")
+	if err := s.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	s.writeKey(t, "a.pub")
+	synced := make(chan error, 1)
+	go func() { synced <- s.Sync() }()
+	<-prov.entered
+
+	// A goroutine stands in for the 170s, so a failure below still ends.
+	go func() {
+		time.Sleep(2 * time.Second)
+		close(prov.release)
+	}()
+
+	prompt(t, "Known", func() {
+		if known, err := s.Known("c"); err != nil || known {
+			t.Errorf("Known(c) = %v, %v; want false", known, err)
+		}
+		if known, err := s.Known("b"); err != nil || !known {
+			t.Errorf("Known(b) = %v, %v; want true", known, err)
+		}
+	})
+
+	fresh := newKey(t)
+	prompt(t, "AppendKey for an account already provisioned", func() {
+		if _, err := s.AppendKey("b", fresh, ""); err != nil {
+			t.Error(err)
+		}
+	})
+	if b, ok := s.Lookup("b"); !ok || !b.Authorized(fresh) {
+		t.Error("the key added to b does not authenticate once AppendKey returns")
+	}
+
+	prompt(t, "RemoveKey", func() {
+		if _, err := s.RemoveKey("b", ssh.FingerprintSHA256(fresh)); err != nil {
+			t.Error(err)
+		}
+	})
+	if b, _ := s.Lookup("b"); b.Authorized(fresh) {
+		t.Error("the key removed from b still authenticates once RemoveKey returns")
+	}
+
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Lookup("a"); !ok {
+		t.Error("a was not published once its provisioning finished")
+	}
+}
+
+// Known reads the uidmap that syncs write. Run under -race.
+func TestKnownAgainstConcurrentSyncs(t *testing.T) {
+	s := newStore(t)
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := s.Known("n3"); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+
+	var syncs sync.WaitGroup
+	for i := range 8 {
+		s.writeKey(t, "n"+strconv.Itoa(i)+".pub")
+		syncs.Add(1)
+		go func() {
+			defer syncs.Done()
+			if err := s.Sync(); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	syncs.Wait()
+	close(stop)
+	readers.Wait()
+
+	for i := range 8 {
+		if known, err := s.Known("n" + strconv.Itoa(i)); err != nil || !known {
+			t.Errorf("Known(n%d) = %v, %v after its sync", i, known, err)
+		}
 	}
 }
