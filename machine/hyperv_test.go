@@ -2,16 +2,18 @@ package machine
 
 // The Hyper-V backend's decisions, tested on a machine with no Hyper-V.
 //
-// This is the only coverage this backend has or can have. GitHub's runners do
-// not offer Hyper-V and nobody working on this project has it, so what is not
-// pinned here ships unexecuted -- which is why so much of the backend is a
-// function of a string.
+// This is the only automated coverage this backend has or can have. GitHub's
+// runners do not offer Hyper-V, so what is not pinned here is checked only when
+// somebody runs docs/testing-machines.md by hand, which is why so much of the
+// backend is a function of a string.
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseVMState(t *testing.T) {
@@ -81,8 +83,8 @@ func TestObserveVM(t *testing.T) {
 		t.Error("a PowerShell failure on a running machine was swallowed")
 	}
 
-	// Absence has its own signal and needs no error: psGetVM asks with
-	// -ErrorAction SilentlyContinue and prints nothing when the VM is not there.
+	// Absence has its own signal and needs no error: psGetVM prints nothing
+	// when the VM is not there.
 	got, err := observeVM(Absent, hyperVNotes{}, nil)
 	if err != nil {
 		t.Fatalf("a machine that is simply not there was reported as a failure: %v", err)
@@ -347,9 +349,10 @@ func TestPSCommands(t *testing.T) {
 	}
 
 	// Destroy takes the disk with it. Remove-VM alone leaves it, which quietly
-	// keeps gigabytes per machine somebody believes they removed.
+	// keeps gigabytes per machine somebody believes they removed, and a disk
+	// that cannot be deleted is reported rather than silenced.
 	remove := psRemoveVM("rd-dev", `C:\m`)
-	if !strings.Contains(remove, "Remove-Item") || !strings.Contains(remove, `'C:\m'`) {
+	if !strings.Contains(remove, `Remove-Item -LiteralPath 'C:\m' -Recurse -Force }`) {
 		t.Errorf("destroy leaves the disk behind:\n%s", remove)
 	}
 	if !strings.Contains(remove, "Remove-VM -Name 'rd-dev' -Force") {
@@ -359,11 +362,28 @@ func TestPSCommands(t *testing.T) {
 	// State and notes in one call, so they cannot disagree about a machine that
 	// changed between two.
 	get := psGetVM("rd-dev")
-	if !strings.Contains(get, "$vm.State") || !strings.Contains(get, "$vm.Notes") {
+	if !strings.Contains(get, "$_.State.ToString(); $_.Notes") {
 		t.Errorf("state and notes are not read together:\n%s", get)
+	}
+	// By exact name: `Get-VM -Name` fails on a missing machine and reads the
+	// name as a wildcard pattern.
+	if strings.Contains(get, "-Name") || !strings.Contains(get, "$_.Name -eq 'rd-dev'") {
+		t.Errorf("the machine is not looked up by exact name:\n%s", get)
 	}
 	if !strings.Contains(psAddress("rd-dev"), "Get-VMNetworkAdapter -VMName 'rd-dev'") {
 		t.Errorf("the address is not read from the machine's adapter: %s", psAddress("rd-dev"))
+	}
+	if psStart("rd-dev") != "Start-VM -Name 'rd-dev'" {
+		t.Errorf("start = %s", psStart("rd-dev"))
+	}
+
+	// Nothing is silenced. psScript makes every error fail the script, and an
+	// error silenced by -ErrorAction still made powershell.exe exit 1, with
+	// nothing printed to say why.
+	for _, script := range []string{get, psAddress("rd-dev"), psStart("rd-dev"), create, remove, psAddKVP("rd-dev")} {
+		if strings.Contains(script, "ErrorAction") {
+			t.Errorf("an error is silenced:\n%s", script)
+		}
 	}
 
 	// The key fingerprint is recorded only after the machine exists, so one
@@ -371,5 +391,131 @@ func TestPSCommands(t *testing.T) {
 	notes := psSetNotes("rd-dev", hyperVNotes{Generation: "g", Key: "k"})
 	if !strings.Contains(notes, "Set-VM -Name 'rd-dev' -Notes") || !strings.Contains(notes, `"key":"k"`) {
 		t.Errorf("the notes command does not record what the machine was built with: %s", notes)
+	}
+}
+
+// The wrapper every script runs in. powershell.exe -Command exits with whether
+// its LAST statement succeeded: a missing machine asked for with -ErrorAction
+// SilentlyContinue exited 1 with nothing printed, and a cmdlet failing midway
+// did not stop the next one (2026-10-05).
+func TestPSScript(t *testing.T) {
+	got := psScript("Get-VM")
+	if !strings.HasPrefix(got, "$ErrorActionPreference = 'Stop'; try { ") {
+		t.Errorf("errors do not stop the script:\n%s", got)
+	}
+	// A script that reaches its end succeeds whatever $? says, and one that
+	// does not fails, saying why.
+	for _, want := range []string{"Get-VM; exit 0 }", "catch { [Console]::Error.WriteLine($_); exit 1 }"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("psScript is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Hyper-V refuses a host KVP value of 1024 characters or more, so the Ignition
+// document goes over in pieces Flatcar concatenates back.
+func TestIgnitionKVP(t *testing.T) {
+	for _, tc := range []struct {
+		size  int
+		items int
+	}{
+		{0, 0},
+		{1, 1},
+		{ignitionKVPChunk, 1},
+		{ignitionKVPChunk + 1, 2},
+		// The last length Hyper-V accepted and the first it refused: both are
+		// split, because the chunk keeps a margin below either.
+		{1023, 2},
+		{1024, 2},
+		{2 * ignitionKVPChunk, 2},
+		{2*ignitionKVPChunk + 1, 3},
+	} {
+		config := strings.Repeat("x", tc.size)
+		items := ignitionKVP(config)
+		if len(items) != tc.items {
+			t.Errorf("%d bytes: %d items, want %d", tc.size, len(items), tc.items)
+		}
+		var joined strings.Builder
+		for i, item := range items {
+			if want := fmt.Sprintf("ignition.config.%d", i); item.Name != want {
+				t.Errorf("%d bytes: item %d is named %q, want %q", tc.size, i, item.Name, want)
+			}
+			if item.Data == "" || len(item.Data) >= 1024 {
+				t.Errorf("%d bytes: item %d holds %d bytes", tc.size, i, len(item.Data))
+			}
+			joined.WriteString(item.Data)
+		}
+		if joined.String() != config {
+			t.Errorf("%d bytes: the items do not concatenate back to the document", tc.size)
+		}
+	}
+
+	// A character is never cut in two: Hyper-V stores each value as UTF-16,
+	// where half a character cannot be represented.
+	config := strings.Repeat("x", ignitionKVPChunk-1) + "\u00e9" + strings.Repeat("y", 10)
+	items := ignitionKVP(config)
+	if len(items) != 2 || items[0].Data+items[1].Data != config {
+		t.Fatalf("split into %d items", len(items))
+	}
+	for i, item := range items {
+		if !utf8.ValidString(item.Data) {
+			t.Errorf("item %d cuts a character: %q", i, item.Data)
+		}
+	}
+}
+
+// What psAddKVP reads, one item per line with a tab after the name, is only
+// unambiguous if the document holds neither. The unit and the host key inside
+// it both have newlines.
+func TestKVPInputCarriesTheDocumentIntact(t *testing.T) {
+	// As long as a real ed25519 key in OpenSSH's format, about 400 bytes.
+	spec := Spec{Name: "dev", Account: "dev", Port: 2222, Image: "example.com/ws:1",
+		HostKey: "-----BEGIN OPENSSH PRIVATE KEY-----\n" + strings.Repeat("b3Blbn\t\n", 50) + "-----END OPENSSH PRIVATE KEY-----\n"}
+	config, err := ignition(spec, "ssh-ed25519 AAAA dev@host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(config, "\t\n\r") {
+		t.Fatalf("the document holds a separator kvpInput relies on it not holding:\n%s", config)
+	}
+	if len(config) <= ignitionKVPChunk {
+		t.Fatalf("the document is %d bytes, so this test does not split it", len(config))
+	}
+
+	var joined strings.Builder
+	for i, line := range strings.Split(strings.TrimSuffix(kvpInput(ignitionKVP(config)), "\n"), "\n") {
+		name, data, ok := strings.Cut(line, "\t")
+		if !ok || name != fmt.Sprintf("ignition.config.%d", i) {
+			t.Fatalf("line %d is %q", i, line)
+		}
+		joined.WriteString(data)
+	}
+	if joined.String() != config {
+		t.Error("the lines do not carry the document back")
+	}
+}
+
+func TestPSAddKVP(t *testing.T) {
+	script := psAddKVP("rd-dev")
+	for _, want := range []string{
+		"$_.Name -eq 'rd-dev'",
+		"Msvm_VirtualSystemManagementService",
+		"Msvm_KvpExchangeDataItem",
+		// Source 0 is the host's pool, the one Ignition reads in the guest.
+		"$item.Source = 0",
+		"AddKvpItems",
+		// From stdin, never the command line: the data holds the host key.
+		"[Console]::OpenStandardInput()",
+		// The call can finish as a job, and only the job says whether it worked.
+		"$code -eq 4096",
+		"$job.ErrorCode",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("psAddKVP is missing %q:\n%s", want, script)
+		}
+	}
+	// The refusal names the item and the code, never the data.
+	if !strings.Contains(script, `throw "Hyper-V refused the KVP item $name with code $code"`) {
+		t.Errorf("the refusal is not the one that leaves the data out:\n%s", script)
 	}
 }

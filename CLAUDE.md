@@ -1154,14 +1154,18 @@ its pure planning function was.
   stack file leans on one thing the code does prove: the privileged child joins
   the TASK's network namespace, so the mesh delivers where the child listens
   and `mode: host` is not required.
-- **Hyper-V, entirely.** Implemented and NEVER EXECUTED. GitHub's runners do
-  not offer it and nobody working on this has it, so it has no automated
-  coverage and cannot get any: `docs/testing-machines.md` is its whole
-  verification. Its decisions are unit tested as far as a string can be -- the
-  PowerShell it builds, the Ignition document, the state and address parsing,
-  the key fingerprint -- and everything past `powershell.exe` is unproven. The
-  least certain part, named in the runbook, is whether Flatcar's Hyper-V image
-  reads the Ignition config from where `Create` writes it. This is the
+- **Hyper-V beyond one machine, by hand, once.** Run end to end by hand on
+  2026-10-05 and nowhere else: Windows 11 Pro 25H2 build 26200.9457, vmms
+  10.0.26100.8875, Flatcar stable 4757.2.1 (kernel 6.12.111), a Gen 2 VM on
+  the Default Switch. That run found three bugs and its fixes were verified on
+  the same machine (ADR 0026): create, status, a bind mount, create again,
+  rebuild with the host key pinned, stop then `docker run`, and `rm`. GitHub's
+  runners do not offer Hyper-V, so it has no automated coverage and cannot get
+  any: `docs/testing-machines.md` is its whole verification, and any other
+  Windows build, Flatcar release or network setup is unproven. Its decisions
+  are unit tested as far as a string can be -- the PowerShell it builds, the
+  Ignition document and its KVP chunks, the state and address parsing, the key
+  fingerprint. Say "run by hand once", never "tested". This is still the
   strongest entry on this list: WSL at least runs on a runner.
 - **Windows and WSL beyond one runner image.** `machine.yml` takes a session
   end to end on windows-latest against a WSL workspace, which is one Windows

@@ -6,10 +6,11 @@
 // continent does. What this package adds is a lifecycle, not a second data
 // path (ADR 0026).
 //
-// Nobody working on this project has WSL or Hyper-V, so every decision here is
-// a pure function of a string and the platform calls are behind Backend. The
+// Every decision here is a pure function of a string and the platform calls are
+// behind Backend, because only CI runs WSL and no CI runs Hyper-V. The
 // _windows.go files are all that is left outside that: wsl_windows.go runs in
-// CI on a Windows runner, and hyperv_windows.go runs nowhere at all.
+// CI on a Windows runner, and hyperv_windows.go has run by hand once (ADR
+// 0026).
 package machine
 
 import (
@@ -327,32 +328,58 @@ func Locate(ctx context.Context, backendName, name string, port int) (string, er
 	if err := backend.Start(ctx, name); err != nil {
 		return "", fmt.Errorf("starting the %s machine %q: %w", backendName, name, err)
 	}
-	addr, err := backend.Address(ctx, name)
+
+	// "Located" has to mean "dialable", and here rather than in each caller.
+	// One budget covers both waits, because both are the same machine booting.
+	deadline := time.Now().Add(agentStartTimeout)
+
+	// A machine that was just started has no address yet: a Hyper-V guest
+	// reports one through its KVP daemon about 30 seconds after Start-VM
+	// (measured 2026-10-05, ADR 0026).
+	addr, err := waitForAddress(ctx, backend, name, deadline)
 	if err != nil {
 		return "", err
 	}
 	if addr == "" {
-		return "", fmt.Errorf("the %s machine %q has no address yet", backendName, name)
+		return "", fmt.Errorf("the %s machine %q has no address after %s", backendName, name, agentStartTimeout)
 	}
 
-	// "Located" has to mean "dialable", and here rather than in each caller. A
-	// machine that was stopped is up before its agent is, since the agent
-	// generates a host key and waits for dockerd before it listens, so
-	// returning the address at boot hands the caller a refused connection that
-	// works on the next attempt.
-	if err := waitForListener(ctx, addr, port); err != nil {
+	// And it is up before its agent is, since the agent generates a host key
+	// and waits for dockerd before it listens, so returning the address at boot
+	// hands the caller a refused connection that works on the next attempt.
+	if err := waitForListener(ctx, addr, port, deadline); err != nil {
 		return "", fmt.Errorf("the %s machine %q is running but %w", backendName, name, err)
 	}
 	return addr, nil
 }
 
+// waitForAddress asks for the machine's address until it has one or the
+// deadline passes, and returns "" then. A failure to ask is returned at once:
+// it is not something waiting cures.
+func waitForAddress(ctx context.Context, backend Backend, name string, deadline time.Time) (string, error) {
+	for {
+		addr, err := backend.Address(ctx, name)
+		if err != nil || addr != "" || !time.Now().Before(deadline) {
+			return addr, err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(addressPollInterval):
+		}
+	}
+}
+
+// addressPollInterval is how often a machine with no address is asked again.
+// Each ask is a powershell.exe or wsl.exe start, so not much more often.
+var addressPollInterval = 2 * time.Second
+
 // waitForListener blocks until something accepts a connection at the address.
 //
 // A dial rather than a handshake: this asks whether the listener is open, and
 // anything further is the session's job to report properly.
-func waitForListener(ctx context.Context, host string, port int) error {
+func waitForListener(ctx context.Context, host string, port int, deadline time.Time) error {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	deadline := time.Now().Add(agentStartTimeout)
 
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -369,11 +396,13 @@ func waitForListener(ctx context.Context, host string, port int) error {
 	return fmt.Errorf("its agent is not answering on %s", addr)
 }
 
-// agentStartTimeout is how long the agent has to open its listener.
+// agentStartTimeout is how long a started machine has to report an address
+// and open its agent's listener, together.
 //
-// Longer than the agent's own ninety-second wait for dockerd, deliberately:
-// the agent serves anyway once that expires, so a client waiting the same
-// ninety seconds would give up at the exact moment the agent starts answering.
+// Longer than the agent's own ninety-second wait for dockerd plus the half
+// minute an address takes, deliberately: the agent serves anyway once its wait
+// expires, so a client waiting only as long would give up at the exact moment
+// the agent starts answering.
 var agentStartTimeout = 3 * time.Minute
 
 // Backends returns the backends compiled into this build, by name.

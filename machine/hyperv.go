@@ -2,19 +2,19 @@ package machine
 
 // The Hyper-V backend's decisions, separated from running anything.
 //
-// The same split as the WSL backend and for a stronger reason: nobody anywhere
-// can run this one. GitHub's runners do not offer Hyper-V, so
-// `docs/testing-machines.md` is its whole verification and every line that can
-// be a pure function of a string is one.
+// The same split as the WSL backend and for a stronger reason: GitHub's runners
+// do not offer Hyper-V, so `docs/testing-machines.md` is its whole verification
+// and every line that can be a pure function of a string is one. It has been
+// run by hand once, on 2026-10-05 (ADR 0026).
 //
 // What runs here is Flatcar Container Linux with the workspace image as a
 // privileged container, which is the compose deployment unchanged (ADR 0026).
 // Flatcar for the property the design rests on: no package manager, an
-// immutable /usr, and one Ignition file applied at first boot.
-// (Checked 2026-08-11: `curl -sI https://stable.release.flatcar-linux.net/\
-// amd64-usr/current/flatcar_production_hyperv_image.vhd.bz2` and
-// https://www.flatcar.org/docs/latest/installing/vms/hyper-v/. Fedora CoreOS is
-// the equivalent alternative if that stops being true.)
+// immutable /usr, and one Ignition document applied at first boot.
+// (Checked 2026-10-05: `curl -sI https://stable.release.flatcar-linux.net/\
+// amd64-usr/current/flatcar_production_hyperv_vhdx_image.vhdx.zip` and
+// https://www.flatcar.org/docs/latest/deploy/virt-options/hyper-v/. Fedora
+// CoreOS is the equivalent alternative if that stops being true.)
 
 import (
 	"crypto/sha256"
@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // hyperVSwitch is the network the machine is attached to: the Default Switch,
@@ -145,7 +146,8 @@ func parseVMAddress(raw string) string {
 	}))
 }
 
-// ignition is the machine's entire configuration, applied at first boot.
+// ignition is the machine's entire configuration, applied at first boot and
+// delivered over KVP (ignitionKVP).
 //
 // One declarative document and no second step, which is what makes a Hyper-V
 // machine defined by its Spec rather than by whatever happened to it since.
@@ -254,24 +256,104 @@ func urlEncode(s string) string {
 	return b.String()
 }
 
+// ignitionKVPChunk is the longest value one KVP item carries to the guest.
+//
+// Hyper-V refuses a host-to-guest value of 1024 characters or more (the job
+// ends with ErrorCode 32773; 1023 was accepted), measured 2026-10-05 on vmms
+// 10.0.26100.8875. 1000 leaves a margin, and is what the first machine that
+// booted with its configuration applied was built with. Counted in bytes, which
+// are never fewer than the UTF-16 characters Hyper-V counts.
+const ignitionKVPChunk = 1000
+
+// kvpItem is one key-value pair handed to the guest through Hyper-V's KVP
+// exchange.
+type kvpItem struct{ Name, Data string }
+
+// ignitionKVP splits the Ignition document into the KVP items Flatcar reads it
+// back from: `ignition.config.0`, `ignition.config.1` and so on, which its
+// Hyper-V provider concatenates in order. This is how Flatcar's Hyper-V image
+// takes a configuration (`kvpctl add-ign` in containers/libhvee does the same),
+// and the only way: a file beside the disk is never read (ADR 0026).
+//
+// Cut at rune boundaries, so no item holds half a character it cannot encode.
+func ignitionKVP(config string) []kvpItem {
+	var items []kvpItem
+	for len(config) > 0 {
+		n := min(ignitionKVPChunk, len(config))
+		for n < len(config) && !utf8.RuneStart(config[n]) {
+			n--
+		}
+		items = append(items, kvpItem{Name: fmt.Sprintf("ignition.config.%d", len(items)), Data: config[:n]})
+		config = config[n:]
+	}
+	return items
+}
+
+// kvpInput is what psAddKVP reads on its stdin: one item per line, the name and
+// the data separated by a tab.
+//
+// Stdin rather than the command line, because the data holds the machine's
+// private host key and a command line is readable by every process on this
+// computer. Neither separator can occur in the data: the Ignition document is
+// JSON from json.Marshal, which escapes both inside strings and emits neither
+// between tokens.
+func kvpInput(items []kvpItem) string {
+	var b strings.Builder
+	for _, item := range items {
+		b.WriteString(item.Name + "\t" + item.Data + "\n")
+	}
+	return b.String()
+}
+
 // The PowerShell each operation runs. Each takes the VM name ALREADY PREFIXED:
 // a bare name reaching Get-VM is a machine somebody else made.
 
-// psGetVM asks for a machine's state and its notes in one call.
+// psScript is how every one of them is run: any error stops the script and
+// fails it, and a script that reaches its end succeeds.
+//
+// powershell.exe -Command exits with whether its LAST statement succeeded,
+// which is not whether the script did. A cmdlet told -ErrorAction
+// SilentlyContinue still leaves $? false, so asking for a machine that was not
+// there exited 1 with nothing printed, and `machine create` failed every time
+// with "cannot tell what is there: exit status 1:" (2026-10-05). The other
+// direction is as wrong: a cmdlet failing mid-script did not stop the next one.
+func psScript(body string) string {
+	return "$ErrorActionPreference = 'Stop'; try { " + body +
+		"; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 }"
+}
+
+// psVM finds a machine by exact name, and finds nothing when it is not there.
+//
+// Filtered from the whole list rather than asked for with `Get-VM -Name`,
+// which fails on a missing machine and reads the name as a wildcard pattern.
+// Absence is then an empty answer, and every error is a real one, such as not
+// being allowed to ask.
+func psVM(vm string) string {
+	return fmt.Sprintf("Get-VM | Where-Object { $_.Name -eq %s } | Select-Object -First 1", psQuote(vm))
+}
+
+// psGetVM asks for a machine's state and its notes in one call, and prints
+// nothing for a machine that is not there.
 //
 // One call rather than two, so the state and the generation cannot disagree
 // about a machine that changed between them.
 func psGetVM(vm string) string {
-	return fmt.Sprintf(
-		"$vm = Get-VM -Name %s -ErrorAction SilentlyContinue; "+
-			"if ($vm) { $vm.State.ToString(); $vm.Notes }", psQuote(vm))
+	return psVM(vm) + " | ForEach-Object { $_.State.ToString(); $_.Notes }"
+}
+
+// psStart starts a machine. Start-VM on one already running only warns, which
+// is what lets Locate start rather than inspect first. On a missing one it
+// fails, and that is not silenced: Locate would otherwise wait out its whole
+// budget for an address from a machine somebody removed by hand.
+func psStart(vm string) string {
+	return fmt.Sprintf("Start-VM -Name %s", psQuote(vm))
 }
 
 // psAddress asks the guest, through the integration services, what address it
-// was given.
+// was given. Its KVP daemon reports one about 30 seconds after Start-VM and
+// nothing until then (2026-10-05), which Locate waits out.
 func psAddress(vm string) string {
-	return fmt.Sprintf(
-		"(Get-VMNetworkAdapter -VMName %s -ErrorAction SilentlyContinue).IPAddresses -join ','", psQuote(vm))
+	return fmt.Sprintf("(Get-VMNetworkAdapter -VMName %s).IPAddresses -join ','", psQuote(vm))
 }
 
 // psNewVM creates the machine and attaches its disk.
@@ -282,7 +364,7 @@ func psAddress(vm string) string {
 // boots unsigned code the user chose to download.
 func psNewVM(vm, vhd, dir string, spec Spec) string {
 	cmd := []string{
-		fmt.Sprintf("New-VM -Name %s -Generation 2 -VHDPath %s -Path %s -SwitchName %s",
+		fmt.Sprintf("New-VM -Name %s -Generation 2 -VHDPath %s -Path %s -SwitchName %s | Out-Null",
 			psQuote(vm), psQuote(vhd), psQuote(dir), psQuote(hyperVSwitch)),
 		fmt.Sprintf("Set-VMFirmware -VMName %s -EnableSecureBoot Off", psQuote(vm)),
 		// Marked as unfinished, not as built: psSetNotes is the single point
@@ -301,6 +383,35 @@ func psNewVM(vm, vhd, dir string, spec Spec) string {
 	return strings.Join(cmd, "; ")
 }
 
+// psAddKVP hands the items kvpInput wrote on stdin to the machine, through the
+// WMI call `kvpctl add-ign` makes. Before the machine first starts, because
+// Ignition reads them once, at first boot.
+//
+// Hyper-V has no cmdlet for this: it is
+// Msvm_VirtualSystemManagementService.AddKvpItems with a
+// Msvm_KvpExchangeDataItem whose Source 0 means "from the host". The call may
+// finish as a job (4096), and only the job says whether it worked. The error
+// names the item and the code, never the data, which holds the host key.
+func psAddKVP(vm string) string {
+	const ns = `root\virtualization\v2`
+	return strings.Join([]string{
+		"$vm = " + psVM(vm),
+		"if (-not $vm) { throw " + psQuote("no machine named "+vm) + " }",
+		"$cs = Get-WmiObject -Namespace " + psQuote(ns) + " -Class Msvm_ComputerSystem -Filter \"Name='$($vm.Id)'\"",
+		"$svc = Get-WmiObject -Namespace " + psQuote(ns) + " -Class Msvm_VirtualSystemManagementService",
+		"$in = New-Object IO.StreamReader([Console]::OpenStandardInput(), (New-Object Text.UTF8Encoding $false))",
+		"while ($null -ne ($line = $in.ReadLine())) { " +
+			"$name, $data = $line -split \"`t\", 2; " +
+			"$item = ([wmiclass]" + psQuote(ns+":Msvm_KvpExchangeDataItem") + ").CreateInstance(); " +
+			"$item.Name = $name; $item.Data = $data; $item.Source = 0; " +
+			"$r = $svc.AddKvpItems($cs, @($item.PSBase.GetText(1))); $code = $r.ReturnValue; " +
+			"if ($code -eq 4096) { $job = [wmi]$r.Job; " +
+			"while ($job.JobState -lt 7) { Start-Sleep -Milliseconds 200; $job = [wmi]$r.Job }; " +
+			"$code = $job.ErrorCode }; " +
+			"if ($code -ne 0) { throw \"Hyper-V refused the KVP item $name with code $code\" } }",
+	}, "; ")
+}
+
 // psSetNotes records what a machine was built from and with.
 func psSetNotes(vm string, notes hyperVNotes) string {
 	return fmt.Sprintf("Set-VM -Name %s -Notes %s", psQuote(vm), psQuote(encodeNotes(notes)))
@@ -309,15 +420,17 @@ func psSetNotes(vm string, notes hyperVNotes) string {
 // psRemoveVM destroys a machine and the disk under it.
 //
 // The disk is deleted explicitly: Remove-VM leaves it, which would silently
-// keep gigabytes per machine somebody thought they had removed. Stop first with
-// -TurnOff, because a machine being destroyed has nothing to flush and a clean
-// shutdown can wait indefinitely on a guest that is not listening.
+// keep gigabytes per machine somebody thought they had removed, so a disk that
+// cannot be deleted is an error. Stop first with -TurnOff, because a machine
+// being destroyed has nothing to flush and a clean shutdown can wait
+// indefinitely on a guest that is not listening; on one already off it only
+// warns.
 func psRemoveVM(vm, dir string) string {
 	return fmt.Sprintf(
-		"Stop-VM -Name %s -TurnOff -Force -ErrorAction SilentlyContinue; "+
+		"Stop-VM -Name %s -TurnOff -Force; "+
 			"Remove-VM -Name %s -Force; "+
-			"Remove-Item -LiteralPath %s -Recurse -Force -ErrorAction SilentlyContinue",
-		psQuote(vm), psQuote(vm), psQuote(dir))
+			"if (Test-Path -LiteralPath %s) { Remove-Item -LiteralPath %s -Recurse -Force }",
+		psQuote(vm), psQuote(vm), psQuote(dir), psQuote(dir))
 }
 
 // psQuote wraps a string as a PowerShell single-quoted literal.

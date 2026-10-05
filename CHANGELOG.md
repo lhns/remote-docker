@@ -12,6 +12,15 @@ software.
 
 ### Fixes
 
+- **The Hyper-V backend works, on the one machine it has run on.** Its first
+  run, by hand on 2026-10-05 (Windows 11 25H2, Flatcar 4757.2.1), found three
+  bugs that each stopped every machine: `machine create` always failed with
+  `cannot tell what is there: exit status 1:`, the machine never received its
+  configuration and booted with no way in, and the first command after a boot
+  failed with `has no address yet`. The configuration now goes to the guest
+  over Hyper-V's KVP exchange, the way Flatcar reads it, and a booting machine
+  is waited for. The runbook's download link, which had stopped working, is
+  corrected. No CI can run Hyper-V, so it still warns when used.
 - **`--context` works.** `docker --context dev ps` used whatever context was
   current, and a context that did not exist gave no error. Only
   `DOCKER_CONTEXT` worked. The same was true of `--config`, `-H`, `-D`,

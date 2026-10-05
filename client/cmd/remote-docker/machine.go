@@ -66,7 +66,7 @@ type machineOptions struct {
 
 func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.backend, "backend", "wsl",
-		"wsl, or hyperv (never executed by anybody -- see docs/testing-machines.md)")
+		"wsl, or hyperv (run by hand once, never in CI; see docs/testing-machines.md)")
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
@@ -245,7 +245,7 @@ func stopSessionFor(cmd *cobra.Command, name string) {
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "stopped the session using it")
 }
 
-// unproven names the backends never executed, which warn rather than refuse.
+// unproven names the backends no CI runs, which warn rather than refuse.
 // Must agree with CLAUDE.md's NOT-tested list.
 var unproven = map[string]bool{"hyperv": true}
 
@@ -263,7 +263,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	}
 
 	if unproven[spec.Backend] {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has never been run by anybody\n"+
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the %s backend has been run by hand once and is not tested by CI\n"+
 			"  fix: docs/testing-machines.md is its only verification, and a report of what happens is worth more than a patch\n",
 			spec.Backend)
 	}
