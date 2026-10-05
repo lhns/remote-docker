@@ -1,6 +1,8 @@
 package sshd
 
 import (
+	"context"
+
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
@@ -13,7 +15,7 @@ import (
 //
 // Any number of connections may name one run, which is how a one-off command
 // joins the background session's; the reverse forward is what only one of
-// them can hold.
+// them can hold. Each is counted in the registry until it ends.
 func (s *Server) handleRun(ctx gssh.Context, _ *gssh.Server, req *ssh.Request) (bool, []byte) {
 	account, ok := accountFor(ctx)
 	if !ok {
@@ -34,7 +36,13 @@ func (s *Server) handleRun(ctx gssh.Context, _ *gssh.Server, req *ssh.Request) (
 	if !workspace.ValidRunID(run) {
 		return refuse("the run id is malformed")
 	}
-	account.client = workspace.EphemeralClientID(account.key, run)
+	client := workspace.EphemeralClientID(account.key, run)
+	release, err := s.cfg.Runs.Attach(account.Name(), client)
+	if err != nil {
+		return refuse(err.Error())
+	}
+	context.AfterFunc(ctx, release)
+	account.client = client
 	ctx.SetValue(contextKey{}, account)
 	return true, nil
 }

@@ -1,8 +1,8 @@
 # 0050 — Ephemeral clients
 
-- Status: Accepted in part. The identity is implemented; the registry and grace
-  period, the per-run port and its release, cleanup, and the compose default
-  follow, and this record gains a section for each.
+- Status: Accepted in part. The identity, the registry with its grace period
+  and limit, and the per-run port are implemented; cleanup and the compose
+  default follow, and this record gains a section for each.
 - Date: 2026-10-05
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
@@ -74,11 +74,69 @@ A new agent's refusal always carries its reason as the payload. An empty one is
 read as an older agent, so a reasonless refusal would silently make the client
 a machine.
 
+## Decision: a registry of runs, per account
+
+`agent/internal/ephemeral.Registry`, keyed on (account, client id). The run id
+is never stored: with the key it takes a run over.
+
+| state | means | becomes |
+|---|---|---|
+| live | at least one connection named the run | grace when the last ends, or gone if it never bound a port |
+| grace | no connection, for at most `WORKSPACE_EPHEMERAL_GRACE` | live on a reconnect; cleaning when it runs out |
+| cleaning | expired | gone once `Cleanup` succeeds and the port is freed; a connection naming it is refused until then |
+
+- **Each connection naming a run is counted** from its run request to its end
+  (`context.AfterFunc`), so a one-off command joining a live run holds it too.
+- **A run that never bound a port ends with its last connection**: nothing can
+  name it, so it holds no slot. This is every `remote status` with no session.
+
+### Grace
+
+- `WORKSPACE_EPHEMERAL_GRACE`, default `2m`: longer than the ~60s to notice a
+  dead peer over TCP (`armDeadPeerDetection`) or a WebSocket (`wslisten`).
+- A reconnect within it reattaches: same client id, same port, same volumes.
+- A sweep every quarter of the grace (at least 1s) expires what has run out, so
+  a run outlives its last connection by between one and 1.25 graces.
+
+### Limit
+
+- `WORKSPACE_EPHEMERAL_MAX_CLIENTS`, default 8, counts live, grace and cleaning
+  runs: an expired run still holds its port and objects until it is gone.
+- A new run past it is refused at the run request, with the reason as the
+  payload, so the client exits at once naming it:
+  `ephemeral: account ci has 8 clients` / `  fix: raise WORKSPACE_EPHEMERAL_MAX_CLIENTS or wait`.
+- Either variable unusable refuses the agent's start, naming it.
+
+### Ports
+
+- **The same downward allocator as a second machine's** (`Ports.ForRun`), never
+  the account's derived port, and asking `Preferred` first, since a run's
+  volumes name its port (ADR 0032).
+- **Marked ephemeral and never written to `clientports`**: that file would
+  otherwise gain a line per run for ever.
+- **Freed by `Ports.Free(account, client, token)`, only after `Cleanup` says
+  nothing names the port**, so a volume never mounts another run's export. The
+  token is minted per assignment, so a late free for a run since given a port
+  again frees nothing (ADR 0028).
+
+### Agent restart
+
+- The registry writes `<state>/ephemeral-runs`, one
+  `account:client:port:state:last-seen` line per run with a port. A cache: the
+  run's volumes are the record (ADR 0032).
+- On start every run has lost its connections: a live one starts its grace
+  then, one in grace keeps its deadline, and the sweep cleans the rest. Each is
+  given its port back (`Ports.Hold`) unless somebody else now has it, which
+  expires it.
+
 ## Costs
 
-- **Not yet fit to enable.** Until the registry, `Ports.Free` and cleanup land,
-  each run is allocated a port that `clientports` keeps for ever, and its
-  volumes outlive it. Hence no README row and no changelog entry yet.
+- **Not yet fit to enable.** Until cleanup lands nothing is removed: an expired
+  run's volumes outlive it, and its port is freed while they still name it, so
+  a later run of the account may be given it. Hence no changelog entry yet.
+- **A run idle past the client's idle release plus its grace expires while its
+  process lives** (ADR 0015 releases the connection after a minute). The next
+  command starts it again under the same client id, on a port allocated afresh.
 - **A one-off command with no session running is a run of its own**, so `gc`
   then collects nothing of an earlier run's. It allocates no port.
 - **One more round trip per connection, for every account**, since the client
@@ -99,5 +157,8 @@ a machine.
 Unit tests only: `core/workspace` (`client_test.go`, `TestInfoClient`),
 `agent/internal/sshd/run_test.go` (a real SSH conversation; its session half
 runs on Linux only), `TestEphemeralAccounts`, `client/internal/session/run_test.go`
-and `TestRunOfAsksTheBackgroundSession`. `test/ephemeral.sh` arrives with
-cleanup.
+and `TestRunOfAsksTheBackgroundSession`. The registry: its state machine,
+limit and restart record in `agent/internal/ephemeral/registry_test.go`, the
+ports in `core-agent/accounts/ports_run_test.go`, the limit and the record over
+SSH in `agent/internal/sshd/run_registry_test.go`, and `TestEphemeralLimits`.
+`test/ephemeral.sh` arrives with cleanup.

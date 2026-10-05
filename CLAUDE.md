@@ -141,6 +141,8 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the volume lookup core-agent/replay asks for
     unions/              the union mounts behind delegated shares (ADR 0044):
                          the Docker glue around core-agent/union
+    ephemeral/           an ephemeral account's runs: their grace period,
+                         their limit and their ports (ADR 0050)
 
 image/                   the workspace container (Dockerfile only)
 installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.

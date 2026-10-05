@@ -25,6 +25,7 @@ import (
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/elevate"
+	"github.com/lhns/remote-docker/agent/internal/ephemeral"
 	"github.com/lhns/remote-docker/agent/internal/sshd"
 	"github.com/lhns/remote-docker/agent/internal/supervise"
 	"github.com/lhns/remote-docker/agent/internal/unions"
@@ -91,6 +92,11 @@ const (
 	// envEphemeral names, comma-separated, the accounts whose clients are
 	// ephemeral: each client run is its own client (ADR 0050).
 	envEphemeral = "WORKSPACE_EPHEMERAL_ACCOUNTS"
+
+	// envEphemeralMax caps an account's runs, live or in grace, and
+	// envEphemeralGrace is how long a run outlives its last connection.
+	envEphemeralMax   = "WORKSPACE_EPHEMERAL_MAX_CLIENTS"
+	envEphemeralGrace = "WORKSPACE_EPHEMERAL_GRACE"
 )
 
 func newServeCommand() *cobra.Command {
@@ -144,13 +150,18 @@ func serve(addr, wsAddr string) error {
 		return err
 	}
 
-	ephemeral, err := ephemeralAccounts(os.Getenv(envEphemeral))
+	ephemeralSet, err := ephemeralAccounts(os.Getenv(envEphemeral))
 	if err != nil {
 		return err
 	}
-	if len(ephemeral) > 0 {
+	maxRuns, grace, err := ephemeralLimits(os.Getenv(envEphemeralMax), os.Getenv(envEphemeralGrace))
+	if err != nil {
+		return err
+	}
+	if len(ephemeralSet) > 0 {
 		log.Info("these accounts' clients are ephemeral", "var", envEphemeral,
-			"accounts", strings.Join(slices.Sorted(maps.Keys(ephemeral)), ","))
+			"accounts", strings.Join(slices.Sorted(maps.Keys(ephemeralSet)), ","),
+			"max-clients", maxRuns, "grace", grace)
 	}
 
 	var wg sync.WaitGroup
@@ -378,6 +389,21 @@ func serve(addr, wsAddr string) error {
 		Log:     logger("unions"),
 	}
 
+	// Restored before serving, so a run reattaching finds its port. Kept for
+	// every account, since a run recorded under an earlier setting still has
+	// to expire.
+	runs := &ephemeral.Registry{
+		Ports: ports,
+		Max:   maxRuns,
+		Grace: grace,
+		Dir:   stateDir,
+		Log:   logger("ephemeral"),
+	}
+	if err := runs.Restore(); err != nil {
+		log.Warn("could not restore the ephemeral runs", "err", err)
+	}
+	wg.Go(func() { runs.Run(ctx) })
+
 	server, err := sshd.New(sshd.Config{
 		Addr:     addr,
 		HostKeys: hostKeys,
@@ -389,7 +415,8 @@ func serve(addr, wsAddr string) error {
 		Unions:   unionManager,
 
 		DaemonPaths: daemonPaths,
-		Ephemeral:   ephemeral,
+		Ephemeral:   ephemeralSet,
+		Runs:        runs,
 		Log:         logger("sshd"),
 	})
 	if err != nil {
@@ -558,6 +585,28 @@ func ephemeralAccounts(raw string) (map[string]bool, error) {
 		out[name] = true
 	}
 	return out, nil
+}
+
+// ephemeralLimits reads WORKSPACE_EPHEMERAL_MAX_CLIENTS and
+// WORKSPACE_EPHEMERAL_GRACE. Unset is the default; anything else unusable
+// refuses the start, naming the variable.
+func ephemeralLimits(maxRaw, graceRaw string) (int, time.Duration, error) {
+	maxRuns, grace := ephemeral.DefaultMax, ephemeral.DefaultGrace
+	if maxRaw != "" {
+		n, err := strconv.Atoi(maxRaw)
+		if err != nil || n < 1 {
+			return 0, 0, fmt.Errorf("%s: %q is not a count of at least 1", envEphemeralMax, maxRaw)
+		}
+		maxRuns = n
+	}
+	if graceRaw != "" {
+		d, err := time.ParseDuration(graceRaw)
+		if err != nil || d <= 0 {
+			return 0, 0, fmt.Errorf("%s: %q is not a positive duration, such as 2m", envEphemeralGrace, graceRaw)
+		}
+		grace = d
+	}
+	return maxRuns, grace, nil
 }
 
 func envInt(name string, fallback int) int {

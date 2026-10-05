@@ -117,6 +117,8 @@ Three properties this has to keep, and each is a way of being wrong:
   workspace may name. Here it is remembered by the WORKSPACE, because what
   outlives it is an address the workspace binds. The question to ask of the next
   one is which side owns the thing, not which side is convenient.
+- **An ephemeral run's port is never in `clientports`** (ADR 0050). Its volumes
+  are its record, and the port is freed only once nothing names it.
 
 ## Amendment, 2026-08-15: a record that cannot be read is refused, not guessed
 
