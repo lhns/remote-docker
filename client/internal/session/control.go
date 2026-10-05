@@ -230,6 +230,16 @@ func (s *Session) Idle() any {
 // on this machine to join (ADR 0050).
 func (s *Session) Run() any { return proxy.Run{Run: s.runID} }
 
+// Client names this session's client, satisfying proxy.Control. Unlike Status
+// it connects: an ephemeral run's id is the workspace's to derive.
+func (s *Session) Client(ctx context.Context) (any, error) {
+	info, err := s.Info(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.Client{Client: info.Client}, nil
+}
+
 // Shutdown asks the session to stop, satisfying proxy.Control. It returns at
 // once: the caller's control connection is what Close shuts.
 func (s *Session) Shutdown() {

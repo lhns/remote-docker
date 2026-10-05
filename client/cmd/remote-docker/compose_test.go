@@ -10,6 +10,7 @@ package main
 // minute.
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -17,7 +18,97 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/docker/cli/cli/command"
+	cliflags "github.com/docker/cli/cli/flags"
+	"github.com/spf13/cobra"
 )
+
+// composeTree is the compose command alone, asking client for the run's id.
+// Built inside captureStdout's fn: the CLI binds stdout when constructed.
+func composeTree(t *testing.T, client func() string) *cobra.Command {
+	t.Helper()
+	dockerCli, err := command.NewDockerCli()
+	if err != nil {
+		t.Fatalf("docker cli: %v", err)
+	}
+	if err := dockerCli.Initialize(cliflags.NewClientOptions()); err != nil {
+		t.Fatalf("initialising the docker cli: %v", err)
+	}
+	root := &cobra.Command{Use: "docker", TraverseChildren: true, SilenceUsage: true, SilenceErrors: true}
+	installCompose(root, dockerCli, client)
+	return root
+}
+
+// projectNameOf runs `compose config` over a project in a directory named
+// app, its file starting with body, and returns the name compose resolved.
+func projectNameOf(t *testing.T, body string, client func() string, flags ...string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "app")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(file, []byte(body+"services:\n  web:\n    image: nginx:alpine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	out := captureStdout(t, func() {
+		root := composeTree(t, client)
+		args := append([]string{"compose", "-f", file}, flags...)
+		root.SetArgs(append(args, "config", "--format", "json"))
+		err = root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("compose config: %v\n%s", err, out)
+	}
+	var project struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(out), &project); err != nil {
+		t.Fatalf("decoding the resolved project: %v\n%s", err, out)
+	}
+	return project.Name
+}
+
+// An ephemeral run names its projects after itself, so two runs of one account
+// bringing up one file are two projects (ADR 0050).
+func TestComposeNamesAnEphemeralRunsProject(t *testing.T) {
+	t.Setenv("COMPOSE_PROJECT_NAME", "")
+	if got := projectNameOf(t, "", func() string { return "c1" }); got != "app-c1" {
+		t.Errorf("project = %q, want app-c1", got)
+	}
+	// A file's own name is the base, as the directory's is without one.
+	if got := projectNameOf(t, "name: shop\n", func() string { return "c1" }); got != "shop-c1" {
+		t.Errorf("named file: project = %q, want shop-c1", got)
+	}
+}
+
+func TestComposeKeepsAnExplicitProjectName(t *testing.T) {
+	run := func() string { return "c1" }
+
+	t.Setenv("COMPOSE_PROJECT_NAME", "")
+	if got := projectNameOf(t, "", run, "-p", "mine"); got != "mine" {
+		t.Errorf("with -p: project = %q, want mine", got)
+	}
+
+	t.Setenv("COMPOSE_PROJECT_NAME", "fromenv")
+	if got := projectNameOf(t, "", run); got != "fromenv" {
+		t.Errorf("with COMPOSE_PROJECT_NAME: project = %q, want fromenv", got)
+	}
+}
+
+// A machine has no run id, and an invocation that is not ours is not asked.
+func TestComposeLeavesAMachinesProjectName(t *testing.T) {
+	t.Setenv("COMPOSE_PROJECT_NAME", "")
+	if got := projectNameOf(t, "", func() string { return "" }); got != "app" {
+		t.Errorf("machine: project = %q, want app", got)
+	}
+	if got := projectNameOf(t, "", nil); got != "app" {
+		t.Errorf("not ours: project = %q, want app", got)
+	}
+}
 
 // composeFile writes a project and returns its path.
 func composeFile(t *testing.T, body string) string {

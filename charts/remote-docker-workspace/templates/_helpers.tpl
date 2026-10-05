@@ -66,6 +66,43 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
+The ephemeral accounts' environment (ADR 0050), refused here rather than by an
+agent that will not start. Empty while no account is listed; a variable `env`
+names is left to it.
+*/}}
+{{- define "remote-docker-workspace.ephemeralEnv" -}}
+{{- $e := .Values.ephemeral -}}
+{{- if $e.accounts -}}
+{{- $grace := toString $e.grace -}}
+{{- if not (and (regexMatch "^([0-9]*[.]?[0-9]+(ns|us|µs|ms|s|m|h))+$" $grace) (regexMatch "[1-9]" $grace)) -}}
+{{- fail (printf "ephemeral.grace: %q is not a positive duration, such as 2m" $grace) -}}
+{{- end -}}
+{{- $max := toString $e.maxClients -}}
+{{- if or (not (regexMatch "^[0-9]+$" $max)) (lt (atoi $max) 1) -}}
+{{- fail (printf "ephemeral.maxClients: %q is not a count of at least 1" $max) -}}
+{{- end -}}
+{{- if not .Values.existingSecret -}}
+{{- range $e.accounts -}}
+{{- if not (get $.Values.authorizedKeys (toString .)) -}}
+{{- fail (printf "ephemeral.accounts: %q has no key in authorizedKeys; add one, or set existingSecret" (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $vars := dict
+      "WORKSPACE_EPHEMERAL_ACCOUNTS" (join "," $e.accounts)
+      "WORKSPACE_EPHEMERAL_MAX_CLIENTS" $max
+      "WORKSPACE_EPHEMERAL_GRACE" $grace
+      "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS" (toString $e.cleanupContainers) -}}
+{{- range $name, $value := $vars }}
+{{- if not (hasKey $.Values.env $name) }}
+- name: {{ $name }}
+  value: {{ $value | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The Secret holding authorized keys: the one this chart renders, or the one the
 operator manages.
 */}}

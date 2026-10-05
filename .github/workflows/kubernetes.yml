@@ -70,6 +70,70 @@ jobs:
                  --set persistence.state.existingClaim=state-x
           render --set ingress.host=ws.example.com \
                  --set persistence.graph.existingClaim=graph-x
+          render --set ingress.host=ws.example.com \
+                 --set authorizedKeys.ci="ssh-ed25519 AAAAtest ci@runner" \
+                 --set 'ephemeral.accounts={ci}' --set ephemeral.cleanupContainers=true
+
+      # Ephemeral accounts (ADR 0050): every variable rendered, nothing for an
+      # empty list, an env entry winning, and each bad value refused by name.
+      - name: ephemeral accounts render, and bad values are refused
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+              --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+          }
+          key='authorizedKeys.ci=ssh-ed25519 AAAAtest ci@runner'
+          # The value under a variable's name, as rendered.
+          has() {
+            case "$1" in
+              *"name: $2
+                        value: \"$3\""*) ;;
+              *) echo "$2 is not \"$3\":"; echo "$1"; exit 1 ;;
+            esac
+          }
+
+          all=$(render --set "$key" --set 'ephemeral.accounts={ci}' \
+                       --set ephemeral.maxClients=4 --set ephemeral.grace=90s \
+                       --set ephemeral.cleanupContainers=true)
+          has "$all" WORKSPACE_EPHEMERAL_ACCOUNTS ci
+          has "$all" WORKSPACE_EPHEMERAL_MAX_CLIENTS 4
+          has "$all" WORKSPACE_EPHEMERAL_GRACE 90s
+          has "$all" WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS true
+          case "$all" in
+            *checksum/ephemeral:*) ;;
+            *) echo "no checksum/ephemeral annotation:"; echo "$all"; exit 1 ;;
+          esac
+
+          none=$(render --set "$key")
+          case "$none" in
+            *WORKSPACE_EPHEMERAL*|*checksum/ephemeral*) echo "an empty list set something:"; echo "$none"; exit 1 ;;
+          esac
+
+          over=$(render --set "$key" --set 'ephemeral.accounts={ci}' --set env.WORKSPACE_EPHEMERAL_GRACE=5m)
+          has "$over" WORKSPACE_EPHEMERAL_GRACE 5m
+          case "$over" in
+            *'value: "2m"'*) echo "the chart's grace was rendered beside the env entry:"; echo "$over"; exit 1 ;;
+          esac
+
+          # An existingSecret is not read at render time, so its accounts are trusted.
+          secret=$(render --set existingSecret=my-keys --set 'ephemeral.accounts={ci}')
+          has "$secret" WORKSPACE_EPHEMERAL_ACCOUNTS ci
+
+          refused() {
+            want=$1; shift
+            if out=$(render "$@" 2>&1); then
+              echo "rendered; wanted a refusal naming $want"; exit 1
+            fi
+            case "$out" in
+              *"$want"*) ;;
+              *) echo "refused, but not naming $want: $out"; exit 1 ;;
+            esac
+          }
+          refused ephemeral.grace --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.grace=soon
+          refused ephemeral.grace --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.grace=0s
+          refused ephemeral.maxClients --set "$key" --set 'ephemeral.accounts={ci}' --set ephemeral.maxClients=0
+          refused '"bob" has no key' --set "$key" --set 'ephemeral.accounts={ci,bob}'
 
       # A volume is EITHER a supplied claim or a template. Both directions fail
       # silently: a claim named nowhere is a pod with no storage, one named

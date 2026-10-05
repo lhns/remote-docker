@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,13 +30,18 @@ type Control interface {
 	// Run names the session's run (ADR 0050). A secret of this machine's, as
 	// the endpoint is: its lock and ACL are what keep it here.
 	Run() any
+
+	// Client names the client the workspace knows this session as, connecting
+	// if it must: an ephemeral run's id is derived there (ADR 0050).
+	Client(ctx context.Context) (any, error)
 }
 
 func isControl(req *http.Request) bool {
 	return strings.HasPrefix(req.URL.Path, ControlPrefix)
 }
 
-// serveControl answers a control request. It never reaches the workspace.
+// serveControl answers a control request. Only "client" reaches the workspace,
+// and through the session, never by forwarding the request.
 func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 	if p.Control == nil {
 		writeControl(client, http.StatusNotFound,
@@ -52,6 +58,14 @@ func (p *Proxy) serveControl(client net.Conn, req *http.Request) {
 
 	case "run":
 		writeControl(client, http.StatusOK, p.Control.Run())
+
+	case "client":
+		answer, err := p.Control.Client(req.Context())
+		if err != nil {
+			writeControl(client, http.StatusBadGateway, map[string]string{"message": err.Error()})
+			return
+		}
+		writeControl(client, http.StatusOK, answer)
 
 	case "shutdown":
 		if req.Method != http.MethodPost {
@@ -108,6 +122,12 @@ type Status struct {
 // Run is the daemon's run id, which a one-off query presents as its own.
 type Run struct {
 	Run string `json:"run"`
+}
+
+// Client is the workspace's id for the session's client: an ephemeral run's,
+// or empty for a machine (ADR 0050).
+type Client struct {
+	Client string `json:"client,omitempty"`
 }
 
 // Idle is what the daemon reports about whether it can be ended.

@@ -66,8 +66,9 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 
 	// Held, not raised: see the PersistentPreRunE below.
 	var session error
+	var endpoint string
 	if invokingDocker() {
-		session = arrangeSession()
+		endpoint, session = arrangeSession()
 	}
 
 	// After SetupRootCommand, whose template would print "Docker version" twice.
@@ -93,7 +94,7 @@ Nothing needs to be installed on this machine beyond this binary. Rename it to
 
 	commands.AddCommands(cmd, dockerCli)
 	installModernBuilder(cmd, dockerCli)
-	installCompose(cmd, dockerCli)
+	installCompose(cmd, dockerCli, sessionClient(endpoint))
 
 	// Raised when a command runs, never by leaving commands out of the tree:
 	// that made `docker run --rm` fail with "unknown flag: --rm" and `--help`
@@ -143,28 +144,29 @@ func clientOptions(args []string) *cliflags.ClientOptions {
 // unless the invocation targets a daemon that is not ours (target.go). Only
 // for docker commands: `remote gc` or `--help` must not open a session that
 // races the command's own. Its error is returned, since otherwise the CLI
-// reports only a missing daemon.
-func arrangeSession() error {
+// reports only a missing daemon. The endpoint is the session's, or "" when the
+// invocation is not ours.
+func arrangeSession() (string, error) {
 	aim := decideTarget(os.Args[1:], realLookups())
 	if !aim.ensure {
-		return nil
+		return "", nil
 	}
 
 	cfg, err := resolveOverrides(config.Overrides{Workspace: aim.workspace})
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	endpoint := endpointOf(cfg)
 	if err := ensureDaemon(cfg, endpoint); err != nil {
-		return err
+		return "", err
 	}
 
 	// Not when a context already points at it: DOCKER_HOST outranks --context.
 	if aim.setHost {
 		_ = os.Setenv("DOCKER_HOST", proxy.DockerHost(endpoint))
 	}
-	return nil
+	return endpoint, nil
 }
 
 // NoSessionEnv is set on docker commands this program runs itself, since

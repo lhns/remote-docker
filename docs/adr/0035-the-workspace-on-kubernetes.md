@@ -62,6 +62,12 @@ inspecting the container they are running in; a pod cannot do that, so the chart
 passes `WORKSPACE_DIND_IMAGE`. Found by the cluster test, in a restart loop that
 said `exec: "fuse-overlayfs": executable file not found in $PATH`.
 
+**Ephemeral accounts (ADR 0050) are values checked at render time.**
+`ephemeral.*` renders the four `WORKSPACE_EPHEMERAL_*` variables only while an
+account is listed, yields to an `env` entry naming the same variable, and
+refuses a bad grace, a `maxClients` below 1 or an account with no key, rather
+than leaving an agent that will not start.
+
 ## Consequences
 
 - **`helm upgrade` stops the pod before starting the new one**, and a node

@@ -8,6 +8,7 @@ go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29
+	github.com/compose-spec/compose-go/v2 v2.15.0
 	github.com/docker/buildx v0.37.2
 	github.com/docker/cli v29.8.2+incompatible
 	github.com/docker/compose/v5 v5.5.1
@@ -55,7 +56,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
-	github.com/compose-spec/compose-go/v2 v2.15.0 // indirect
 	github.com/containerd/console v1.0.5 // indirect
 	github.com/containerd/containerd/api v1.11.1 // indirect
 	github.com/containerd/containerd/v2 v2.3.6 // indirect

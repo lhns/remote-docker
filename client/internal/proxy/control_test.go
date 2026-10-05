@@ -2,11 +2,14 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 type fakeControl struct {
 	status    any
 	safe      bool
+	clientErr error
 	shutdowns atomic.Int64
 }
 
@@ -26,6 +30,13 @@ func (f *fakeControl) Status() any { return f.status }
 func (f *fakeControl) Idle() any   { return Idle{Safe: f.safe} }
 func (f *fakeControl) Run() any    { return Run{Run: "0123"} }
 func (f *fakeControl) Shutdown()   { f.shutdowns.Add(1) }
+
+func (f *fakeControl) Client(context.Context) (any, error) {
+	if f.clientErr != nil {
+		return nil, f.clientErr
+	}
+	return Client{Client: "c1"}, nil
+}
 
 // waitForShutdown polls rather than reading once, for the same reason: the
 // acknowledgement arrives before the action, so a bare read races the handler
@@ -198,5 +209,34 @@ func TestIdleReportsWhetherARestartIsSafe(t *testing.T) {
 		if got.Safe != safe {
 			t.Errorf("safe = %v, want %v", got.Safe, safe)
 		}
+	}
+}
+
+// The client id an ephemeral run's compose projects are named after, and the
+// reason when the session could not reach the workspace to learn it.
+func TestClientNamesTheRunOrSaysWhyNot(t *testing.T) {
+	ctrl := &fakeControl{}
+	addr := startProxy(t, &Proxy{Dialer: &tcpDialer{addr: "127.0.0.1:1"}, Control: ctrl})
+
+	resp, err := http.Get("http://" + addr + ControlPrefix + "client")
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	var got Client
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	_ = resp.Body.Close()
+	if err != nil || got.Client != "c1" {
+		t.Errorf("client = %+v (%v), want c1", got, err)
+	}
+
+	ctrl.clientErr = errors.New("the workspace is unreachable")
+	resp, err = http.Get("http://" + addr + ControlPrefix + "client")
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "unreachable") {
+		t.Errorf("a failed lookup answered %s: %s", resp.Status, body)
 	}
 }
