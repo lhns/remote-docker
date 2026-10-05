@@ -584,6 +584,8 @@ jobs:
           esac
 
           export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state2"
+          # kubectl finds its config under HOME, which is about to move.
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
           export HOME="$RUNNER_TEMP/home2"
           mkdir -p "$HOME"
           "$RUNNER_TEMP/remote-docker" remote create k8s2 --token "$invite" --no-context
