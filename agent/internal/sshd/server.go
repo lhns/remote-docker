@@ -58,6 +58,11 @@ type Config struct {
 	// alone instead of exporting it. Empty is the old behaviour.
 	DaemonPaths []string
 
+	// Ephemeral names the accounts whose clients are ephemeral, from
+	// WORKSPACE_EPHEMERAL_ACCOUNTS (ADR 0050): each client run is a client of
+	// its own. Every other account is unaffected.
+	Ephemeral map[string]bool
+
 	Log *slog.Logger
 }
 
@@ -77,7 +82,13 @@ type Server struct {
 
 	mu     sync.Mutex
 	closed bool
+
+	// runs are the ephemeral runs with a live connection, by account and
+	// derived client id: one connection per run (ADR 0050).
+	runs map[runKey]bool
 }
+
+type runKey struct{ account, client string }
 
 // errNoAccount is returned when a forward arrives on a connection with no
 // authenticated account, which cannot happen and must not be treated as
@@ -93,7 +104,12 @@ type sessionAccount struct {
 	// that just authenticated rather than from anything the client sent. Two
 	// of somebody's machines share an account and a daemon; only this tells
 	// their exports and volumes apart.
-	client string
+	//
+	// For an ephemeral account it names the RUN instead, and is empty until
+	// the run request arrives (ADR 0050); key is what it is derived from.
+	client    string
+	ephemeral bool
+	key       []byte
 }
 
 func (s sessionAccount) Name() string   { return s.name }
@@ -159,6 +175,7 @@ func New(cfg Config) (*Server, error) {
 		RequestHandlers: map[string]gssh.RequestHandler{
 			"tcpip-forward":        s.tcpip.HandleRequest,
 			"cancel-tcpip-forward": s.tcpip.HandleRequest,
+			workspace.RunRequest:   s.handleRun,
 		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
@@ -200,13 +217,16 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 		return false
 	}
 
-	ctx.SetValue(contextKey{}, sessionAccount{
-		name: account.Name,
-		uid:  account.UID,
+	session := sessionAccount{name: account.Name, uid: account.UID}
+	if s.cfg.Ephemeral[account.Name] {
+		session.ephemeral = true
+		session.key = key.Marshal()
+	} else {
 		// From the key that just passed, which is what makes the id
 		// authenticated rather than asserted.
-		client: workspace.ClientID(key.Marshal()),
-	})
+		session.client = workspace.ClientID(key.Marshal())
+	}
+	ctx.SetValue(contextKey{}, session)
 
 	// Start this account's daemon now, in the background, so its boot hides
 	// behind the round trips that follow: workspace-info, then the reverse

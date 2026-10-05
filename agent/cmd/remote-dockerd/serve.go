@@ -8,9 +8,11 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,6 +87,10 @@ const (
 	// envDindMounts adds bind mounts to every account's daemon; the format and
 	// what it is for are on daemons.ParseMounts.
 	envDindMounts = "WORKSPACE_DIND_MOUNTS"
+
+	// envEphemeral names, comma-separated, the accounts whose clients are
+	// ephemeral: each client run is its own client (ADR 0050).
+	envEphemeral = "WORKSPACE_EPHEMERAL_ACCOUNTS"
 )
 
 func newServeCommand() *cobra.Command {
@@ -136,6 +142,15 @@ func serve(addr, wsAddr string) error {
 	}
 	if err := mapping.Validate(); err != nil {
 		return err
+	}
+
+	ephemeral, err := ephemeralAccounts(os.Getenv(envEphemeral))
+	if err != nil {
+		return err
+	}
+	if len(ephemeral) > 0 {
+		log.Info("these accounts' clients are ephemeral", "var", envEphemeral,
+			"accounts", strings.Join(slices.Sorted(maps.Keys(ephemeral)), ","))
 	}
 
 	var wg sync.WaitGroup
@@ -374,6 +389,7 @@ func serve(addr, wsAddr string) error {
 		Unions:   unionManager,
 
 		DaemonPaths: daemonPaths,
+		Ephemeral:   ephemeral,
 		Log:         logger("sshd"),
 	})
 	if err != nil {
@@ -524,6 +540,24 @@ func readySeconds(log *slog.Logger) time.Duration {
 	d := time.Duration(secs) * time.Second
 	log.Info("a cold daemon has this long to answer", "var", envDindReady, "timeout", d)
 	return d
+}
+
+// ephemeralAccounts reads WORKSPACE_EPHEMERAL_ACCOUNTS. Each name is folded as
+// a key file's is, so it names the account that file enrols; a name nothing
+// can be derived from refuses the start rather than being dropped.
+func ephemeralAccounts(raw string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, field := range strings.Split(raw, ",") {
+		if field = strings.TrimSpace(field); field == "" {
+			continue
+		}
+		name, err := workspace.AccountName(field)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", envEphemeral, err)
+		}
+		out[name] = true
+	}
+	return out, nil
 }
 
 func envInt(name string, fallback int) int {

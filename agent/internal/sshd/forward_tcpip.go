@@ -38,6 +38,12 @@ func (p reversePolicy) Allow(ctx gssh.Context, host string, port uint32) (uint64
 	if !ok {
 		return 0, false
 	}
+	// The reverse forward is the client's export, so it needs the client.
+	if why := clientRefusal(account); why != "" {
+		s.log().Warn("refused a reverse forward: this connection named no run",
+			"host", host, "port", port, "account", account.Name())
+		return 0, false
+	}
 
 	allowed, why := s.forward.Allow(account, host, port)
 	if !allowed {

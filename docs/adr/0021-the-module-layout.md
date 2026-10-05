@@ -89,6 +89,9 @@ Two things did NOT become feature packages, and the reasons are the useful part:
   concepts -- the published port and the reverse-tunnel port -- and splitting
   one out would put two similar names in two packages. `client/internal/ports`
   also already owns the name.
+- **The run request sits in `workspace`, beside `ClientID`** (ADR 0050):
+  `RunRequest` is one SSH global request with no version or frames, and what it
+  derives, `EphemeralClientID`, is a name both ends compute.
 
 Structural rules:
 

@@ -95,6 +95,13 @@ type Info struct {
 	// is the old behaviour.
 	Now int64
 
+	// Client is the id the agent derived for this connection when the account's
+	// clients are ephemeral (ADR 0050), and the client uses it wherever it would
+	// use ClientID. Empty for any other account, and from an agent that predates
+	// the key; both read as "derive ClientID from the key", the old behaviour.
+	// Emitted only when set, so an account not opted in gets today's reply.
+	Client string
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -114,6 +121,7 @@ const (
 	keyDaemonPaths = "WORKSPACE_DAEMON_PATHS"
 	keyUnion       = "WORKSPACE_UNION"
 	keyNow         = "WORKSPACE_NOW"
+	keyClient      = "WORKSPACE_CLIENT"
 )
 
 // What Union says. A reason rather than a boolean: "no" with nothing after it
@@ -205,6 +213,12 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Now, err = strconv.ParseInt(value, 10, 64)
 		case keyDocker:
 			info.Docker = value
+		case keyClient:
+			// It names volumes, so a malformed one is refused here.
+			if !ValidClientID(value) {
+				err = fmt.Errorf("%q is not a client id", value)
+			}
+			info.Client = value
 		default:
 			if info.Extra == nil {
 				info.Extra = map[string]string{}
@@ -255,6 +269,9 @@ func (i Info) Encode(w io.Writer) error {
 		{keyDaemonPaths, strings.Join(i.DaemonPaths, ",")},
 		{keyUnion, i.Union},
 		{keyNow, strconv.FormatInt(i.Now, 10)},
+	}
+	if i.Client != "" {
+		pairs = append(pairs, [2]string{keyClient, i.Client})
 	}
 
 	for _, k := range slices.Sorted(maps.Keys(i.Extra)) {

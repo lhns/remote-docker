@@ -32,9 +32,6 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
-	// The workspace derives the same id from the key it authenticated (ADR 0029).
-	s.clientID = workspace.ClientID(key.Signer.PublicKey().Marshal())
-
 	hostKey, err := hostKeyRule(s.opts.Config)
 	if err != nil {
 		return nil, err
@@ -88,6 +85,11 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
+	if err := s.announceRun(ctx, client); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+
 	// Timed: one request and one reply is the round trip prefetch decides on.
 	started := time.Now()
 	info, err := readInfo(ctx, client)
@@ -96,6 +98,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 	s.rtt.Store(int64(time.Since(started)))
+	s.clientID = clientIDFor(info, key.Signer.PublicKey().Marshal())
 
 	s.registry.SetAttrs(attrsFor(info))
 
@@ -159,6 +162,33 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		s.log().Info("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	}
 	return live, nil
+}
+
+// announceRun names this process's run to the workspace (ADR 0050), before
+// anything that depends on which client asks.
+func (s *Session) announceRun(ctx context.Context, client *tunnelclient.Client) error {
+	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+
+	ok, reply, err := client.SendRequest(ctx, workspace.RunRequest, []byte(s.runID))
+	if err != nil {
+		return fmt.Errorf("naming this run to the workspace: %w", err)
+	}
+	// A refusal with no reason is an agent that predates runs, and this client
+	// is then a machine, as it always was.
+	if !ok && len(reply) > 0 {
+		return fmt.Errorf("the workspace refused this run: %s", reply)
+	}
+	return nil
+}
+
+// clientIDFor is the id this client goes by: the one the workspace derived for
+// an ephemeral run, which needs the run id, or else the key's (ADR 0029).
+func clientIDFor(info workspace.Info, publicKeyWire []byte) string {
+	if info.Client != "" {
+		return info.Client
+	}
+	return workspace.ClientID(publicKeyWire)
 }
 
 // hostKeyRule is the host key a workspace must offer. A machine this program

@@ -44,6 +44,14 @@ func (s *Server) handleSession(session gssh.Session) {
 
 	command := strings.Join(session.Command(), " ")
 
+	if needsClient(command) {
+		if why := clientRefusal(account); why != "" {
+			_, _ = fmt.Fprintln(session.Stderr(), command+": "+why)
+			_ = session.Exit(1)
+			return
+		}
+	}
+
 	switch command {
 	case workspace.InfoCommand:
 		s.serveInfo(session, account)
@@ -102,6 +110,10 @@ func (s *Server) serveInfo(session gssh.Session, account sessionAccount) {
 		// This workspace's clock, so the client can measure the offset between
 		// the two machines rather than assume they agree (ADR 0044).
 		Now: time.Now().UnixNano(),
+	}
+	// The run's id, which the client cannot derive alone (ADR 0050).
+	if account.ephemeral {
+		info.Client = account.Client()
 	}
 
 	if err := info.Encode(session); err != nil {

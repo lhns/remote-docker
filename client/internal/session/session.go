@@ -107,8 +107,13 @@ type Session struct {
 	registry *nfsserve.Registry
 	nfs      *nfsserve.Server
 
-	// clientID names this machine, derived from its key on the first connect.
+	// clientID names this machine, or this run of an ephemeral account, as
+	// the first connect learned it.
 	clientID string
+
+	// runID names this process to the workspace, minted once so every
+	// reconnect is the same run (ADR 0050). It goes nowhere else.
+	runID string
 
 	// shares and cache are nil on a query session, which restores and caches
 	// nothing.
@@ -176,12 +181,18 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		opts.IdleTimeout = DefaultIdleTimeout
 	}
 
+	runID, err := workspace.NewRunID()
+	if err != nil {
+		return nil, err
+	}
+
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	// go-nfs otherwise logs straight to the user's terminal.
 	nfsserve.SetLogger(opts.Log)
 
 	s := &Session{
+		runID:   runID,
 		opts:    opts,
 		ctx:     runCtx,
 		cancel:  cancel,

@@ -2,6 +2,8 @@ package main
 
 import (
 	"net"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,5 +33,25 @@ func TestServeReturnsWhenTheSSHPortIsTaken(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("serve hung after failing to bind its SSH port")
+	}
+}
+
+// WORKSPACE_EPHEMERAL_ACCOUNTS names accounts as their key files do, and a
+// name that is no account refuses the start, naming the variable.
+func TestEphemeralAccounts(t *testing.T) {
+	got, err := ephemeralAccounts(" CI, bob ,,")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, map[string]bool{"ci": true, "bob": true}) {
+		t.Errorf("got %v, want ci and bob", got)
+	}
+
+	if got, err := ephemeralAccounts(""); err != nil || len(got) != 0 {
+		t.Errorf("unset gave %v, %v; want none", got, err)
+	}
+
+	if _, err := ephemeralAccounts("ci,123"); err == nil || !strings.Contains(err.Error(), envEphemeral) {
+		t.Errorf("err = %v, want one naming %s", err, envEphemeral)
 	}
 }
