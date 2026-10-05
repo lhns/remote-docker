@@ -341,3 +341,19 @@ that passes without proving anything.
 - **The standing temptation**: putting helpers in `core` because both sides want
   them today. That is how a contract package becomes a utility dump. Both rules
   are narrow on purpose.
+
+## `core/enrol` and `core-agent/tokens` (2026-10-05)
+
+Enrolling a key with a token (ADR 0051) followed the rules above without
+needing a new one:
+
+- **`core/enrol` is one protocol package, whole**: the `+token:` login, the
+  banner and its version, `workspace-redeem`, the frames, the error codes and
+  the invite codec, because both binaries must agree on all of them.
+- **`core-agent/tokens` is the store**: minting, the single-use rename, expiry
+  and the failure limiter. Workspace side and Docker-free, so `core-agent`;
+  stdlib and `core/enrol` only.
+- **The transport still decides no auth.** `tunnelclient.Config` gained
+  `Banner`, which hands a banner to the caller and decides nothing;
+  `client/internal/session` builds the host key rule that pins the invite's
+  fingerprint and then asks `known_hosts`.

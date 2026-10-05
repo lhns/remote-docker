@@ -2,9 +2,9 @@ package session
 
 // The one thing an authentication failure has to say.
 //
-// The workspace enrols a key by filename, out of band, so a refusal is nearly
-// always a key that is not in the directory yet or a file that has just been
-// written and not yet re-read. x/crypto's message names none of that.
+// A key is enrolled by redeeming a token or by a file saved out of band, so a
+// refusal is nearly always a key that is not enrolled yet or a file that has
+// just been written and not yet re-read. x/crypto's message names none of that.
 
 import (
 	"errors"
@@ -32,6 +32,10 @@ func TestAnAuthFailureSaysHowToEnrol(t *testing.T) {
 		"ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain"),
 		"alice", signer)
 
+	// A token first: it needs nobody to save a file.
+	if i := strings.Index(hint, "--token"); i < 0 || i > strings.Index(hint, "authorized_keys.d") {
+		t.Errorf("the hint does not offer a token first:\n%s", hint)
+	}
 	// The file, because the name of it is the whole instruction.
 	if !strings.Contains(hint, "authorized_keys.d/alice.pub") {
 		t.Errorf("the hint does not name the file to create:\n%s", hint)

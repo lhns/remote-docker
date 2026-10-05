@@ -12,6 +12,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 WORK=$(mktemp -d)
 SSH_PORT=${SSH_PORT:-2299}
 ACCOUNT=vmtest
+TOKEN_ACCOUNT=vmtoken
 AGENT_PID=
 CLIENT_PID=
 
@@ -26,6 +27,7 @@ cleanup() {
     hostdocker rm -f "rd-dind-$ACCOUNT" >/dev/null 2>&1
     hostdocker volume rm -f "rd-dind-$ACCOUNT-lib" >/dev/null 2>&1
     sudo userdel -r "rd-$ACCOUNT" >/dev/null 2>&1
+    sudo userdel -r "rd-$TOKEN_ACCOUNT" >/dev/null 2>&1
     sudo rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -195,6 +197,39 @@ if id "$ACCOUNT" >/dev/null 2>&1; then
     bad "the account took the bare name in this machine's passwd file"
 else
     ok "the machine's own namespace is untouched by the account name"
+fi
+
+echo
+echo "== 3b. a token, with the directories it defaults to =="
+# Neither WORKSPACE_TOKENS_DIR nor WORKSPACE_ENROLLED_KEYS_DIR is set, so both
+# are under the state directory (ADR 0051, ADR 0052).
+line=$(sudo env WORKSPACE_STATE_DIR="$WORK/wsstate" WORKSPACE_HOSTKEY_DIR="$WORK/wsstate/host_keys" \
+    "$WORK/remote-dockerd" token create --account "$TOKEN_ACCOUNT" --url "ssh://127.0.0.1:$SSH_PORT" 2>&1)
+invite=$(awk '/--token/ {print $NF}' <<<"$line")
+if [ -n "$invite" ] && outputs '\.json$' sudo ls "$WORK/wsstate/tokens"; then
+    ok "the token is in <state>/tokens"
+else
+    bad "no token in <state>/tokens: $line"
+fi
+mkdir -p "$WORK/token-home"
+if outputs "created the account $TOKEN_ACCOUNT" env -u REMOTE_DOCKER_HOST -u REMOTE_DOCKER_PORT \
+    -u REMOTE_DOCKER_USER -u REMOTE_DOCKER_ENDPOINT \
+    HOME="$WORK/token-home" REMOTE_DOCKER_STATE_DIR="$WORK/token-state" \
+    timeout 60 "$WORK/remote-docker" remote create vm --token "$invite" --no-context; then
+    ok "a device redeemed it"
+else
+    bad "the token did not redeem: $LAST_OUTPUT"
+    dump_agent_log true
+fi
+if sudo test -s "$WORK/wsstate/enrolled_keys.d/$TOKEN_ACCOUNT.pub"; then
+    ok "its key is in <state>/enrolled_keys.d"
+else
+    bad "no key file in <state>/enrolled_keys.d"
+fi
+if outputs '^$' sudo ls "$WORK/wsstate/tokens"; then
+    ok "and the redeemed token is gone"
+else
+    bad "the redeemed token is still there: $LAST_OUTPUT"
 fi
 
 echo

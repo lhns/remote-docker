@@ -53,6 +53,7 @@ func startTestServer(t *testing.T) *testServer {
 	ts := &testServer{}
 	srv := &gssh.Server{
 		PublicKeyHandler: func(gssh.Context, gssh.PublicKey) bool { return true },
+		BannerHandler:    func(ctx gssh.Context) string { return "banner for " + ctx.User() },
 
 		// Both directions are permitted here; restricting them is the
 		// workspace agent's job, not the transport's.

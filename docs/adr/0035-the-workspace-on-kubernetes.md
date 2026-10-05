@@ -84,3 +84,10 @@ than leaving an agent that will not start.
   tested on the strength of `helm template`.
 - **Only ingress-nginx is proven.** The chart's WebSocket annotations for other
   controllers are suggestions, and the values say so.
+- **Enrolling a device needs no `helm upgrade` (2026-10-05).** `kubectl exec
+  <release>-0 -- remote-dockerd token create --account alice` mints a token
+  whose invite names `publicURL`, by default `wss://<ingress.host>/`, passed as
+  `WORKSPACE_PUBLIC_URL` (ADR 0051). The redeemed key lands in
+  `enrolled_keys.d` on the state volume; the `authorizedKeys` Secret stays the
+  operator's and read-only. Still no Kubernetes API: the token is a file on that
+  volume. CI redeems one through the ingress and checks the Secret is unchanged.

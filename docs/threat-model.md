@@ -179,6 +179,85 @@ is no audit of what happened *inside* a container, and none is claimed.
 
 ---
 
+## Flow 1b: redeeming an enrolment token
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Op as Operator
+    participant Tokens as tokens/ (state volume)
+    participant Agent as remote-dockerd (root)
+    participant Client as remote-docker
+    participant KH as known_hosts
+
+    Op->>Agent: remote-dockerd token create --account alice
+    Agent->>Tokens: <id>.json: sha256(secret), account, expiry
+    Op-->>Client: invite: address, host key fingerprint, token
+    Client->>Agent: SSH connect, login +token:<id>, its own key
+    Agent-->>Client: host key
+    Client->>Client: offered == the invite's fingerprint?
+    Client->>KH: record, or refuse a changed key
+    Agent->>Tokens: is <id> live? (read only)
+    Agent-->>Client: banner, accepted as a redeemer, no account
+    Client->>Agent: workspace-redeem {secret, account?}
+    Agent->>Tokens: check, then rename: one winner
+    Agent->>Agent: enrolled_keys.d/alice.pub += the connection's key
+    Agent-->>Client: {account: alice}
+```
+
+The new unauthenticated surface is steps 8 and 11: a token id looked up at
+login, and a secret checked on a connection that can open nothing else
+(ADR 0051).
+
+**What a token grants.** A token bound to an account adds a key to it. An
+unbound one, or one bound to a name that does not exist yet, creates an
+account, and an account is a privileged dind, which is close to root on the
+host (ADR 0019). So a token is as valuable as an enrolled key, for a day.
+
+**S — guessing a token (8, 11).** The id is 40 bits and public; the secret is
+128 bits from `crypto/rand`, and only its sha256 is on disk, compared in
+constant time. A connection gets one redeem, `MaxAuthTries` bounds logins, and
+a GLOBAL bucket (10 failures, then one per 6s) bounds the rest, global because
+behind an ingress every connection arrives from one address. *Covered by*
+`core-agent/tokens` and `agent/internal/sshd/redeem_test.go`.
+
+**S — learning which tokens exist (8, 11).** No oracle: unknown, used and
+expired are one message, at login and at the redeem. A live id does answer the
+login differently from a dead one, which tells a guesser an id exists and
+nothing about its secret.
+
+**S — impersonating the workspace to a redeemer (5, 6).** The invite carries
+the host key's fingerprint and the client refuses any other key BEFORE
+`known_hosts` records it, so the token replaces trust on first use; a key that
+changed since is still refused. *Covered by*
+`client/internal/session/redeem_test.go`.
+
+**E — a redeemer doing anything else (9, 10).** The connection has a `redeemer`
+and no `sessionAccount`, so the forwards, `workspace-info`, the docker socket,
+a shell and the run request all refuse it through `accountFor`. *Covered by*
+`TestATokenLoginCanOnlyRedeem`.
+
+**E — an unbound token taking somebody's name (10, 12).** Only a name the uidmap
+and every keys directory have never held, and not a reserved one. The uidmap
+never forgets, so a removed account's name stays its own. Only the operator
+mints tokens for now.
+
+**T — the write (11, 12).** Only the enrolled directory is written, under its lock,
+and the key written is the one the connection authenticated with. The
+operator's directories are never written. The token is renamed out of the store
+before the write, so of two redemptions one wins on NFS and CephFS too.
+
+**D.** Anybody can drain the failure bucket, which delays honest redemptions
+until it refills. Accepted: it costs a retry, and a per-address bucket would
+be one bucket behind an ingress anyway.
+
+**R.** Every redeem, refused or not, is a `component=audit` line with the
+token id, the key's fingerprint and the source address, never the secret. A
+login refused for a dead id is an sshd warning, naming the id only when it has
+an id's shape, since a pasted token would carry its secret there.
+
+---
+
 ## Flow 2: reaching the workspace through a proxy
 
 The tunnel can be an HTTP upgrade rather than a TCP connection to an SSH port

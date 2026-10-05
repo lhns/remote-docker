@@ -48,6 +48,10 @@ type Config struct {
 	KeepAlive time.Duration
 
 	Timeout time.Duration
+
+	// Banner, if set, is handed any banner the workspace sends during
+	// authentication. Nil ignores them.
+	Banner func(string)
 }
 
 // dial opens the connection SSH runs over: the caller's, or TCP to Addr.
@@ -122,6 +126,12 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		Timeout:         cfg.Timeout,
 	}
 	clientCfg.Ciphers = defaultCiphers
+	if cfg.Banner != nil {
+		clientCfg.BannerCallback = func(msg string) error {
+			cfg.Banner(msg)
+			return nil
+		}
+	}
 
 	conn, err := cfg.dial(ctx)
 	if err != nil {

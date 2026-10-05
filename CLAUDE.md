@@ -44,6 +44,9 @@ core/go.mod              THE SHARED MODULE (ADR 0021). No third-party
                          its codecs and the tar its payload carries. A protocol
                          package holds the whole agreement -- the name and the
                          version it negotiates cannot sit in two packages
+  enrol/                 ENROLLING A KEY WITH A TOKEN (ADR 0051): the +token:
+                         login, the banner, workspace-redeem and its frames,
+                         the token and invite codecs
 
 dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          local copy of a tree in a bounded order, invalidate
@@ -117,6 +120,8 @@ core-agent/go.mod        THE WORKSPACE SIDE, minus Docker. Reaches none of
   tunnelserver/          answering the tunnel: the forwarding protocol, given
                          who may bind what and which namespace it goes in.
   accounts/              one unix account per enrolled key, and the ports
+  tokens/                single-use enrolment tokens: mint, claim by rename,
+                         expiry, and the global failure limiter (ADR 0051)
   replay/                replays the client's changes as real syscalls
   netns/                 run a function inside another process's netns
                          (an empty path means this one -- ADR 0019)
@@ -291,7 +296,8 @@ premise of the project, and it applies to building it too. So:
 - **The transport is handed its auth and decides none of it** (ADR 0021).
   `core-client/tunnelclient` takes an `ssh.Signer` and an `ssh.HostKeyCallback`;
   `client/internal/session` builds both and is the only place that knows
-  enrolment is a file in `authorized_keys.d`. There is no default host key rule, because
+  how a key is enrolled: a file in `authorized_keys.d`, or a token whose
+  invite pins the host key (`session.Redeem`). There is no default host key rule, because
   every default is either a prompt nobody is there to answer or an acceptance of
   anybody -- so a nil callback is refused by name rather than mid-handshake.
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
@@ -795,6 +801,27 @@ premise of the project, and it applies to building it too. So:
   into place and deletes a file left with no key; never remove a key from the
   enrolled directory that an operator directory still enrols, because that
   leaves it working while saying it was removed.
+- **Revocation disconnects.** A key is checked only at the handshake, so a
+  revoked key kept every connection it had, and its reverse-tunnel port with
+  it. `Store.Subscribe` runs after every swap and `sshd/revoke.go` closes each
+  connection whose account no longer enrols its key; closing releases the
+  ports (ADR 0028). The two-read rule still decides WHEN an emptied file
+  revokes. A connection records who it is under the registry's lock and asks
+  again there, or a sync landing mid-handshake would sweep before there was
+  anything to close.
+- **A token login has no account, and may only redeem, once** (ADR 0051).
+  `+token:<id>` is checked BEFORE the login is folded, and accepts any key for
+  a live id, read-only. The connection carries a `redeemer` and never a
+  `sessionAccount`, so every path that asks `accountFor` refuses it; `route`
+  sends its sessions to `workspace-redeem` and nothing else. The key enrolled is
+  the one the connection authenticated with, never a field the client sent.
+  Nothing is spent before the name rules pass and the enrolled directory is
+  writable, and every refusal of the token is the one `enrol.Refused`, because
+  saying unknown, used or expired apart is an oracle. The banner goes to
+  `+token:` logins only: its absence is how a client knows the workspace
+  predates tokens, and stock ssh must not see it. The client checks the
+  invite's host key fingerprint BEFORE `known_hosts`, which records whatever it
+  accepts.
 - **A key file is parsed line by line.** Several keys per file is the format,
   and reading it as one stream stopped at the first line it could not parse, so
   a typo or a BOM on the top line silently dropped every key under it. A bad
@@ -1092,8 +1119,10 @@ the user's machine and the only one of these that fails silently.
 `.github/workflows/kubernetes.yml` installs the chart on a kind cluster behind
 ingress-nginx on every pull request and takes a session through it: a file
 written on the runner, read inside a container in the cluster through a bind
-mount. It also runs `helm lint` and eight renders through `kubeconform`, which is
-eight seconds and always worth it. What is NOT covered: any ingress controller
+mount, and an enrolment token redeemed through the ingress, whose key lands in
+`enrolled_keys.d` with the `authorizedKeys` Secret unchanged. It also runs
+`helm lint` and nine renders through `kubeconform`, which is eight seconds and
+always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 
 `test/vm.sh` runs the agent ON THE RUNNER with no container

@@ -1,16 +1,24 @@
 {{ include "remote-docker-workspace.fullname" . }} is installed.
 
+Enrol a device with a single-use token. Mint one for an account:
+
+    kubectl exec -n {{ .Release.Namespace }} {{ include "remote-docker-workspace.fullname" . }}-0 -- \
+      remote-dockerd token create --account alice{{ if not (include "remote-docker-workspace.publicURL" .) }} --url <address devices reach>{{ end }}
+
+It prints a `docker remote create ... --token ...` line: run that on the
+device, which enrols its own key. The key is stored on the state volume, not
+in the authorizedKeys Secret.
+
 {{- if not .Values.authorizedKeys }}
 {{- if not .Values.existingSecret }}
 
-NOBODY CAN LOG IN YET. No keys are enrolled, so the workspace is running and
-will refuse every connection. Add one per account:
+Or enrol a key by file, one per account:
 
     helm upgrade {{ .Release.Name }} <chart> --reuse-values \
       --set-file authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub
 
-The name you use ("alice" above) becomes the unix account, and it is what
-clients pass as --user.
+The name you use ("alice" above) is the account, and what clients pass as
+--user.
 {{- end }}
 {{- end }}
 
@@ -27,10 +35,8 @@ admitted and the StatefulSet will report it:
 
 {{- if .Values.ingress.enabled }}
 
-Reach it from a laptop with no Docker installed:
+Reach it from a laptop with no Docker installed, once its token is redeemed:
 
-    remote-docker remote create dev --host wss://{{ .Values.ingress.host }} --user <account>
-    remote-docker remote enroll        # prints the key to enrol above
     docker run --rm -v ${PWD}:/w alpine:3 ls /w
 
 The directory is served from the machine you typed that on, over the same

@@ -23,20 +23,25 @@ You also need a workspace; if nobody has set one up, see
 [Running a workspace](#running-a-workspace).
 
 ```bash
-# 1. say where the workspace is
-export REMOTE_DOCKER_HOST=workspace.example
+# 1. run the line whoever runs the workspace gave you: it enrols this
+#    machine's key and adds the workspace, with nothing to hand back
+remote-docker remote create dev --token rdt1.eyJ1Ijoi...
 
-# 2. print your public key and hand it to whoever runs the workspace
-remote-docker remote enroll
-
-# 3. once your key is enrolled, start a session
+# 2. start a session
 remote-docker remote start
 
-# 4. and then it is just docker
+# 3. and then it is just docker
 remote-docker run --rm -v .:/w alpine ls /w
 ```
 
 `start` prints the endpoint and returns. No terminal has to stay open.
+
+**Without a token**, add the workspace and hand your public key over instead:
+
+```bash
+remote-docker remote create dev --host workspace.example
+remote-docker remote enroll      # prints the key, to be saved as <account>.pub
+```
 
 **On Android, in Termux**, take the `android_arm64` archive (`android_amd64` on
 an emulator or a Chromebook) and run it from a directory you can execute. The
@@ -290,6 +295,7 @@ that is ours lives under `remote`:
 | `remote-docker remote status` | is it working, and what is it talking to; exits 1 when not ready |
 | `remote-docker remote gc` | remove share volumes nothing is using |
 | `remote-docker remote version` | |
+| `remote-docker remote create <name> --token …` | enrol this machine's key with an [enrolment token](#enrolment), then add the workspace |
 | `remote-docker remote create <name> --host …` | add a workspace and its docker context |
 | `remote-docker remote set <name> --user …` | [change](#changing-a-remote) some of its settings, keeping the rest |
 | `remote-docker remote rm <name>` | stop its session and remove both again |
@@ -625,8 +631,10 @@ kubectl label namespace remote-docker pod-security.kubernetes.io/enforce=privile
 ```
 
 One privileged pod with its image store and host keys on volumes, reached
-through an ordinary Ingress (the tunnel is an HTTP upgrade). Then
-`remote create dev --host wss://ws.example.com`.
+through an ordinary Ingress (the tunnel is an HTTP upgrade). Enrol a device
+with `kubectl exec -n remote-docker ws-remote-docker-workspace-0 --
+remote-dockerd token create --account alice`, whose invite names `wss://ws.example.com/`, or with
+`authorizedKeys` as above.
 
 [`charts/remote-docker-workspace/README.md`](charts/remote-docker-workspace/README.md)
 has the values, which storage driver your volumes need, and why both volumes are
@@ -745,6 +753,8 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_KEYS_DIR` | `<state>/authorized_keys.d` | the operator's keys, one `<account>.pub` per user; a comma-separated list for several directories. The agent only reads them |
 | `WORKSPACE_ENROLLED_KEYS_DIR` | `<state>/enrolled_keys.d` | the one directory the agent writes keys into; must not overlap a keys directory |
 | `WORKSPACE_HOSTKEY_DIR` | `<state>/host_keys` | |
+| `WORKSPACE_TOKENS_DIR` | `<state>/tokens` | single-use [enrolment tokens](#enrolment), one file each, holding a hash of the secret |
+| `WORKSPACE_PUBLIC_URL` | empty | the address an enrolment invite names, such as `wss://ws.example/`; `token create --url` overrides it |
 | `WORKSPACE_KEY_POLL_INTERVAL` | `60` | seconds; every keys directory is polled as well as watched |
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
@@ -883,12 +893,39 @@ from that directory) it says so and starts the daemon anyway.
 
 ### Enrolment
 
-Out of band: someone with access drops a `<account>.pub` into the keys
-directory, one key per line. The filename is the account name a client logs in
+**With a token**, the device enrols its own key. Inside the workspace, mint one:
+
+```bash
+docker exec <workspace> remote-dockerd token create --account alice
+kubectl exec <release>-0 -- remote-dockerd token create --account alice
+```
+
+It prints one line to run on the device:
+
+```text
+docker remote create ws --token rdt1.eyJ1Ijoi...
+single use, for account alice, expires 2026-10-06 12:00 UTC
+```
+
+The invite carries the workspace's address (`--url`, else
+`WORKSPACE_PUBLIC_URL`), the fingerprint of its host key, which the client
+then requires instead of trusting the first key it sees, and the token. The
+device logs in with the token and its own key, and the agent saves that key in
+the enrolled directory below. A token is single use and lives 24 hours by
+default (`--expires`, at most 7 days). `--account` adds the key to that
+account, creating it if need be; `--unbound` creates a new account under the
+name the device gives with `--user`, never one that exists or ever existed.
+`token ls` and `token rm <id>` list and withdraw tokens. A workspace whose
+enrolled directory is not writable refuses to mint one
+([ADR 0051](docs/adr/0051-enrolling-a-key-with-a-single-use-token.md)).
+
+**By file**, out of band: someone with access drops a `<account>.pub` into the
+keys directory, one key per line. The filename is the account name a client logs in
 as, lowercased, so `Alice.pub` enrols `alice` and `ssh Alice@...` reaches it;
 the unix user behind it is `rd-<account>`
 ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Emptying or removing the
-file revokes access but keeps the account and its home directory.
+file revokes access, and ends every connection that key has open, but keeps
+the account and its home directory.
 
 `WORKSPACE_KEYS_DIR` may name several directories, separated by commas, and the
 agent only ever reads them. It writes keys it enrols itself into one other

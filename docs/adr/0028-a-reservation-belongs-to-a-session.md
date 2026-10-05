@@ -2,6 +2,7 @@
 
 - Status: Accepted; corrects [ADR 0010](0010-go-ssh-server-agent.md)
 - Date: 2026-08-11
+- Amended 2026-10-05: revoking a key closes every connection it authenticated (`agent/internal/sshd/revoke.go`), so its reservations are released by the same path as any connection that ends.
 
 ## Context
 
