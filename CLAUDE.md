@@ -1367,16 +1367,11 @@ its pure planning function was.
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
   the section skips and says so.
-- **Ephemeral clients, until their suites have run green.** `test/ephemeral.sh`
-  and `kubernetes.yml`'s client Deployment were merged on 2026-10-05 before
-  either had run, because the hosted runners were down. Until a green run on
-  main, everything said about them under "Proven end to end" is what they
-  assert, not what has been seen; delete this entry once it has been. Re-check
-  with `gh run list -w integration -b main` and the `ephemeral runs of one key`
-  jobs. Beyond them: a run's union mount (`write != through`) is released by
-  cleanup in unit tests only, and the reattach from the grace period after a
-  dropped connection (rather than an agent restart) needs the agent to notice
-  the drop, which takes ~60s and is longer than any outage either suite makes.
+- **Two parts of ephemeral clients.** A run's union mount (`write != through`)
+  is released by cleanup in unit tests only, and the reattach from the grace
+  period after a dropped connection (rather than an agent restart) needs the
+  agent to notice the drop, which takes ~60s and is longer than any outage
+  either suite makes.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.
