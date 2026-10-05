@@ -226,6 +226,10 @@ func (s *Session) Idle() any {
 	return proxy.Idle{Safe: safe}
 }
 
+// Run names this session's run, satisfying proxy.Control, for a one-off query
+// on this machine to join (ADR 0050).
+func (s *Session) Run() any { return proxy.Run{Run: s.runID} }
+
 // Shutdown asks the session to stop, satisfying proxy.Control. It returns at
 // once: the caller's control connection is what Close shuts.
 func (s *Session) Shutdown() {

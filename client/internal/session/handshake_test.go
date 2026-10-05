@@ -34,11 +34,21 @@ import (
 type silentWorkspace struct {
 	addr   net.Addr
 	answer func(cmd string) (string, bool)
+
+	// global answers global requests; nil refuses them all, with no reason,
+	// as an agent that knows none of ours does.
+	global func(*ssh.Request) (bool, []byte)
 }
 
 // startWorkspace runs one and connects to it, which is all any test here wants
 // of it.
 func startWorkspace(t *testing.T, answer func(cmd string) (string, bool)) *tunnelclient.Client {
+	t.Helper()
+	return startWorkspaceWith(t, &silentWorkspace{answer: answer}).dial(t)
+}
+
+// startWorkspaceWith runs ws, for a test that dials it more than once.
+func startWorkspaceWith(t *testing.T, ws *silentWorkspace) *silentWorkspace {
 	t.Helper()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -63,7 +73,7 @@ func startWorkspace(t *testing.T, answer func(cmd string) (string, bool)) *tunne
 	}
 	t.Cleanup(func() { _ = l.Close() })
 
-	ws := &silentWorkspace{addr: l.Addr(), answer: answer}
+	ws.addr = l.Addr()
 	go func() {
 		for {
 			conn, err := l.Accept()
@@ -73,7 +83,7 @@ func startWorkspace(t *testing.T, answer func(cmd string) (string, bool)) *tunne
 			go ws.serve(conn, cfg)
 		}
 	}()
-	return ws.dial(t)
+	return ws
 }
 
 func (w *silentWorkspace) serve(conn net.Conn, cfg *ssh.ServerConfig) {
@@ -81,7 +91,17 @@ func (w *silentWorkspace) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 	if err != nil {
 		return
 	}
-	go ssh.DiscardRequests(reqs)
+	go func() {
+		for req := range reqs {
+			ok, reply := false, []byte(nil)
+			if w.global != nil {
+				ok, reply = w.global(req)
+			}
+			if req.WantReply {
+				_ = req.Reply(ok, reply)
+			}
+		}
+	}()
 	for newCh := range chans {
 		if newCh.ChannelType() != "session" {
 			_ = newCh.Reject(ssh.UnknownChannelType, "no")

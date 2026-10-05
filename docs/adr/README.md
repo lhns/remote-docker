@@ -91,6 +91,7 @@ What the binary is, what it answers to, and where it can run.
 | [0017](0017-a-background-session-per-workspace.md) | A background session per workspace |
 | [0028](0028-a-reservation-belongs-to-a-session.md) | A port reservation belongs to a session, not to an account |
 | [0029](0029-one-account-many-machines.md) | One account, many machines |
+| [0050](0050-ephemeral-clients.md) | Ephemeral clients |
 
 ## Watching for changes
 

@@ -95,6 +95,12 @@ type Info struct {
 	// is the old behaviour.
 	Now int64
 
+	// Client is the id the agent derived for an ephemeral run (ADR 0050), used
+	// in place of ClientID. Empty, and not emitted, for any other account; an
+	// agent that predates the key reads the same. With it, NFSPort may be 0: the
+	// run has no port until it binds one.
+	Client string
+
 	// Extra carries keys the client did not recognise. Preserving them keeps
 	// an older client usable against a newer server instead of failing on a
 	// field it has no opinion about.
@@ -114,6 +120,7 @@ const (
 	keyDaemonPaths = "WORKSPACE_DAEMON_PATHS"
 	keyUnion       = "WORKSPACE_UNION"
 	keyNow         = "WORKSPACE_NOW"
+	keyClient      = "WORKSPACE_CLIENT"
 )
 
 // What Union says. A reason rather than a boolean: "no" with nothing after it
@@ -205,6 +212,12 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Now, err = strconv.ParseInt(value, 10, 64)
 		case keyDocker:
 			info.Docker = value
+		case keyClient:
+			// It names volumes, so a malformed one is refused here.
+			if !ValidClientID(value) {
+				err = fmt.Errorf("%q is not a client id", value)
+			}
+			info.Client = value
 		default:
 			if info.Extra == nil {
 				info.Extra = map[string]string{}
@@ -230,7 +243,9 @@ func ParseInfo(r io.Reader) (Info, error) {
 	if info.User == "" {
 		return Info{}, fmt.Errorf("workspace: info reported an empty %s", keyUser)
 	}
-	if info.NFSPort < 1 || info.NFSPort > MaxPort {
+	// 0 only for a run that has not bound its forward yet (ADR 0050).
+	unbound := info.NFSPort == 0 && info.Client != ""
+	if !unbound && (info.NFSPort < 1 || info.NFSPort > MaxPort) {
 		return Info{}, fmt.Errorf("workspace: info reported %s=%d, not a valid port", keyNFSPort, info.NFSPort)
 	}
 	return info, nil
@@ -255,6 +270,9 @@ func (i Info) Encode(w io.Writer) error {
 		{keyDaemonPaths, strings.Join(i.DaemonPaths, ",")},
 		{keyUnion, i.Union},
 		{keyNow, strconv.FormatInt(i.Now, 10)},
+	}
+	if i.Client != "" {
+		pairs = append(pairs, [2]string{keyClient, i.Client})
 	}
 
 	for _, k := range slices.Sorted(maps.Keys(i.Extra)) {

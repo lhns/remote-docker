@@ -100,7 +100,11 @@ func reportStatus(out io.Writer, f facts) {
 	if f.infoErr == nil {
 		_, _ = fmt.Fprintln(out)
 		row(out, "daemon", daemonLine(f.info))
-		rowf(out, "account", "%s (uid %d), tunnel port %d", f.info.User, f.info.UID, f.info.NFSPort)
+		tunnel := fmt.Sprintf("tunnel port %d", f.info.NFSPort)
+		if f.info.NFSPort == 0 {
+			tunnel = "no tunnel port yet" // an ephemeral run that has bound nothing (ADR 0050)
+		}
+		rowf(out, "account", "%s (uid %d), %s", f.info.User, f.info.UID, tunnel)
 	}
 
 	// How much of each cached share is local (ADR 0044).

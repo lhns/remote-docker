@@ -249,6 +249,28 @@ func (c *Client) Listen(addr string) (net.Listener, error) {
 	return l, nil
 }
 
+// SendRequest sends a global request and returns the workspace's answer, or
+// ctx's error if none arrives in time.
+func (c *Client) SendRequest(ctx context.Context, name string, payload []byte) (bool, []byte, error) {
+	type answer struct {
+		ok    bool
+		reply []byte
+		err   error
+	}
+	// Buffered, so the goroutine is never left blocked on a receive that has gone.
+	ch := make(chan answer, 1)
+	go func() {
+		ok, reply, err := c.ssh.SendRequest(name, true, payload)
+		ch <- answer{ok, reply, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return false, nil, ctx.Err()
+	case a := <-ch:
+		return a.ok, a.reply, a.err
+	}
+}
+
 // DialRemote opens a connection from the workspace to addr. This is the
 // outbound half of ssh -L, used to reach published container ports and the
 // Docker socket.

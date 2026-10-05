@@ -113,6 +113,12 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	return p.decide(key, base, want)
 }
 
+// Lookup returns the port already recorded for this client, allocating
+// nothing: an ephemeral run is given one only when it binds (ADR 0050).
+func (p *Ports) Lookup(account, client string) (port int, known bool, err error) {
+	return p.lookup(assignment{account: account, client: client})
+}
+
 // lookup answers for a machine the record already knows, which is every
 // ordinary connect.
 func (p *Ports) lookup(key assignment) (port int, known bool, err error) {

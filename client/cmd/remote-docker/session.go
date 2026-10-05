@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/session"
 	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core/logx"
@@ -115,10 +117,12 @@ func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session
 	ctx, cancel := signalContext()
 	defer cancel()
 
+	endpoint := endpointOf(cfg)
 	s, err := session.Open(ctx, session.Options{
 		Config:   cfg,
-		Endpoint: endpointOf(cfg),
+		Endpoint: endpoint,
 		Role:     session.Query,
+		RunID:    runOf(endpoint),
 		Log:      logger(),
 	})
 	if err != nil {
@@ -127,6 +131,21 @@ func withQuerySession(cfg config.Config, fn func(ctx context.Context, s *session
 	defer func() { _ = s.Close() }()
 
 	return fn(ctx, s)
+}
+
+// runOf is the run of the background session serving endpoint, so a query is
+// the same client as the session (ADR 0050). "" with none serving, or one too
+// old to say: the query is then a run of its own, which binds nothing and so is
+// given no port.
+func runOf(endpoint string) string {
+	if !proxy.Reachable(endpoint) {
+		return ""
+	}
+	var r proxy.Run
+	if control(endpoint, http.MethodGet, "run", &r) != nil {
+		return ""
+	}
+	return r.Run
 }
 
 // signalContext cancels on Ctrl-C so a session is torn down rather than

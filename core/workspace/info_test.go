@@ -239,3 +239,44 @@ func TestDaemonPathsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The derived id of an ephemeral run (ADR 0050). Absent for any other account,
+// so that reply is unchanged, and kept in Extra by an older client.
+func TestInfoClient(t *testing.T) {
+	base := Info{User: "alice", NFSPort: 30000}
+
+	var plain strings.Builder
+	if err := base.Encode(&plain); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.String(), keyClient) {
+		t.Errorf("a reply with no client names one:\n%s", plain.String())
+	}
+
+	withClient := base
+	withClient.Client = "0123abcd"
+	var buf strings.Builder
+	if err := withClient.Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseInfo(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatalf("ParseInfo: %v", err)
+	}
+	if got.Client != "0123abcd" {
+		t.Errorf("Client = %q from:\n%s", got.Client, buf.String())
+	}
+
+	bad := "WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=30000\nWORKSPACE_CLIENT=../x\n"
+	if _, err := ParseInfo(strings.NewReader(bad)); err == nil {
+		t.Error("a client id that is not one was accepted")
+	}
+
+	// A run that has bound nothing has no port; anything else must have one.
+	if _, err := ParseInfo(strings.NewReader("WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=0\nWORKSPACE_CLIENT=0123abcd\n")); err != nil {
+		t.Errorf("an unbound run's info was refused: %v", err)
+	}
+	if _, err := ParseInfo(strings.NewReader("WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=0\n")); err == nil {
+		t.Error("port 0 was accepted without a run")
+	}
+}

@@ -119,7 +119,8 @@ depends on nothing (ADR 0021). That makes it:
   machine may be using it.
 - **The same key on two machines makes them one client** (a synced config
   directory), and they collide as two sessions on one machine would. The
-  remedy is a key each.
+  remedy is a key each, or, for an account listed in
+  `WORKSPACE_EPHEMERAL_ACCOUNTS`, a client per run ([ADR 0050](0050-ephemeral-clients.md)).
 - **Rejected: a second account for the phone.** Works with no code, and
   splits the daemon: two image caches, two sets of containers, and the phone
   cannot see what the PC started, which is most of the value.
