@@ -216,6 +216,8 @@ live mount: the container keeps running and the files it wrote are gone.
   truthful "none mounted" would delete the cache under a running container.
   The ids come from the mounts under `/run/rd-union/<client>` and the client
   digest from the authenticated key, so a machine hears only of its own caches.
+- The agent's own cleanup of an expired ephemeral run (ADR 0050) asks
+  `MountedCaches` the same way, and keeps a cache volume it names.
 
 ### A union outlives the channel that asked for it
 

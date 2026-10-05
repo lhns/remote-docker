@@ -117,6 +117,7 @@ func (r *Registry) Attach(account, client string) (release func(), err error) {
 	switch {
 	case ru == nil:
 		if n := r.count(account); n >= r.max() {
+			r.log().Warn("refused a run: the account is at its limit", "account", account, "client", client, "runs", n)
 			return nil, fmt.Errorf("ephemeral: account %s has %d clients\n"+
 				"  fix: raise WORKSPACE_EPHEMERAL_MAX_CLIENTS or wait", account, n)
 		}
@@ -126,6 +127,7 @@ func (r *Registry) Attach(account, client string) (release func(), err error) {
 		}
 		r.runs[k] = ru
 	case ru.state == Cleaning:
+		r.log().Warn("refused a run being cleaned up", "account", account, "client", client)
 		return nil, fmt.Errorf("ephemeral: run %s of account %s has expired and is being cleaned up\n"+
 			"  fix: retry in a moment", client, account)
 	case ru.state == Grace:
@@ -238,7 +240,9 @@ func (r *Registry) Sweep(ctx context.Context) {
 				continue
 			}
 		}
-		r.Ports.Free(d.k.account, d.k.client, d.token)
+		if !r.Ports.Free(d.k.account, d.k.client, d.token) {
+			r.log().Warn("a run's port was not its own to free", "account", d.k.account, "client", d.k.client, "port", d.port)
+		}
 
 		r.mu.Lock()
 		if r.runs[d.k] == d.ru {
@@ -250,17 +254,18 @@ func (r *Registry) Sweep(ctx context.Context) {
 	}
 }
 
-// Run sweeps until ctx ends.
+// Run sweeps at once, which cleans what the record says has expired, and then
+// until ctx ends.
 func (r *Registry) Run(ctx context.Context) {
 	every := max(r.grace()/4, time.Second)
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
+		r.Sweep(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			r.Sweep(ctx)
 		}
 	}
 }
@@ -302,7 +307,9 @@ func (r *Registry) log() *slog.Logger { return logx.Or(r.Log) }
 // The record: account:client:port:state:last-seen, one run per line, readable
 // with `cat`. A cache: a run's volumes name its port anyway (ADR 0032).
 
-func (r *Registry) path() string { return filepath.Join(r.Dir, "ephemeral-runs") }
+func (r *Registry) path() string { return recordPath(r.Dir) }
+
+func recordPath(dir string) string { return filepath.Join(dir, "ephemeral-runs") }
 
 // save writes the record. The caller holds mu. Only runs with a port are
 // written, because only they leave anything to come back to.
@@ -337,7 +344,55 @@ func (r *Registry) Restore() error {
 	}
 
 	now := r.clock()
-	err := accounts.ReadRecord(r.path(), func(line string) {
+	err := readRecord(r.path(), func(e Entry) {
+		ru := &run{port: e.Port, state: e.State, lastSeen: e.LastSeen}
+		if e.State == Live {
+			ru.state, ru.lastSeen = Grace, now
+		}
+
+		token, ok := r.Ports.Hold(e.Account, e.Client, e.Port)
+		if !ok {
+			// Somebody has the port now, so the run cannot come back on it.
+			r.log().Warn("a run's port is taken; expiring it", "account", e.Account, "client", e.Client, "port", e.Port)
+			ru.state = Cleaning
+		}
+		ru.token = token
+		r.runs[key{e.Account, e.Client}] = ru
+	})
+	if err != nil {
+		return fmt.Errorf("ephemeral: reading %s: %w", r.path(), err)
+	}
+	if len(r.runs) > 0 {
+		r.log().Info("restored ephemeral runs", "count", len(r.runs))
+	}
+	r.save()
+	return nil
+}
+
+// Entry is one run as the record has it.
+type Entry struct {
+	Account  string
+	Client   string
+	Port     int
+	State    State
+	LastSeen time.Time
+}
+
+// List reads the record the serving agent keeps in dir, for
+// `remote-dockerd ephemeral ls`. A run is as it was last written: one whose
+// grace has run out shows grace until the next sweep.
+func List(dir string) ([]Entry, error) {
+	var out []Entry
+	path := recordPath(dir)
+	if err := readRecord(path, func(e Entry) { out = append(out, e) }); err != nil {
+		return nil, fmt.Errorf("ephemeral: reading %s: %w", path, err)
+	}
+	return out, nil
+}
+
+// readRecord calls fn for each well-formed line of the record.
+func readRecord(path string, fn func(Entry)) error {
+	return accounts.ReadRecord(path, func(line string) {
 		f := strings.Split(line, ":")
 		if len(f) != 5 {
 			return
@@ -350,29 +405,13 @@ func (r *Registry) Restore() error {
 		if err != nil {
 			return
 		}
-		ru := &run{port: port, state: Grace, lastSeen: time.Unix(secs, 0)}
+		e := Entry{Account: f[0], Client: f[1], Port: port, State: Grace, LastSeen: time.Unix(secs, 0)}
 		switch f[3] {
 		case Live.String():
-			ru.lastSeen = now
+			e.State = Live
 		case Cleaning.String():
-			ru.state = Cleaning
+			e.State = Cleaning
 		}
-
-		token, ok := r.Ports.Hold(f[0], f[1], port)
-		if !ok {
-			// Somebody has the port now, so the run cannot come back on it.
-			r.log().Warn("a run's port is taken; expiring it", "account", f[0], "client", f[1], "port", port)
-			ru.state = Cleaning
-		}
-		ru.token = token
-		r.runs[key{f[0], f[1]}] = ru
+		fn(e)
 	})
-	if err != nil {
-		return fmt.Errorf("ephemeral: reading %s: %w", r.path(), err)
-	}
-	if len(r.runs) > 0 {
-		r.log().Info("restored ephemeral runs", "count", len(r.runs))
-	}
-	r.save()
-	return nil
 }
