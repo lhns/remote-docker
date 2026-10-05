@@ -1131,6 +1131,24 @@ ITS OWN machine's file through a bind mount, that both see a container the other
 started, and that a collection on one leaves the other's volumes alone and its
 mounts working.
 
+`test/ephemeral.sh` runs an ephemeral account (ADR 0050) beside a machine
+account, once per daemon mode, with a 20s grace and a limit of four. Four
+client processes share one key and each sees its own directory at ONE checkout
+path (a mount namespace each). It asserts four client ids and four ports, none
+in `clientports`; one share with four `rd-<client>-` volumes; each container
+and each concurrent embedded `compose up` (its own `<dir>-<client>` project)
+reading its own run's file; a clean end and a `kill -9` each leaving nothing
+carrying that client id after the grace while the others keep reading; an
+outage shorter than the grace keeping the port and a running mount; an agent
+restart cleaning a killed run and reattaching a live one on its old port and
+volume; a fifth run refused within 20s naming the limit; and the machine
+account's port and volumes unchanged throughout. `kubernetes.yml` adds the
+autoscaled shape: an unprivileged client Deployment under the `restricted` Pod
+Security Standard, one key from one Secret, scaled 1, 4, 1, with `docker info`
+and a bind mount of the same path reading each pod's own name, and only the
+surviving pod's run and volume left after the grace. See the not-tested entry
+on when these first ran.
+
 `.github/workflows/machine.yml` is the only suite that runs a WINDOWS machine
 end to end. A Linux job exports the workspace image as a rootfs; a
 windows-latest job imports it with the real client and proves the thing the
@@ -1299,10 +1317,16 @@ its pure planning function was.
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
   the section skips and says so.
-- **Ephemeral cleanup against a real daemon.** `ephemeral.Cleaner` is unit
-  tested against a fake: the order, the label rules and every keep. No suite
-  has removed a real run's containers, networks, unions or volumes, and
-  `test/ephemeral.sh` does not exist yet.
+- **Ephemeral clients, until their suites have run green.** `test/ephemeral.sh`
+  and `kubernetes.yml`'s client Deployment were merged on 2026-10-05 before
+  either had run, because the hosted runners were down. Until a green run on
+  main, everything said about them under "Proven end to end" is what they
+  assert, not what has been seen; delete this entry once it has been. Re-check
+  with `gh run list -w integration -b main` and the `ephemeral runs of one key`
+  jobs. Beyond them: a run's union mount (`write != through`) is released by
+  cleanup in unit tests only, and the reattach from the grace period after a
+  dropped connection (rather than an agent restart) needs the agent to notice
+  the drop, which takes ~60s and is longer than any outage either suite makes.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

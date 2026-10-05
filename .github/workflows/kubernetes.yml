@@ -305,6 +305,10 @@ jobs:
 
           # The client's own key, enrolled as the account it will log in as.
           REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state" "$RUNNER_TEMP/remote-docker" remote enroll >/dev/null
+          # One key for every pod of the client Deployment below, whose account
+          # is ephemeral (ADR 0050). A short grace, so scaling down is checked
+          # in seconds rather than the default two minutes.
+          REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/pods-state" "$RUNNER_TEMP/remote-docker" remote enroll >/dev/null
 
           helm install ws charts/remote-docker-workspace \
             --namespace rd \
@@ -317,6 +321,10 @@ jobs:
             --set persistence.graph.size=8Gi \
             --set persistence.state.size=1Gi \
             --set-file authorizedKeys.ci="$RUNNER_TEMP/state/id_ed25519.pub" \
+            --set-file authorizedKeys.pods="$RUNNER_TEMP/pods-state/id_ed25519.pub" \
+            --set 'ephemeral.accounts={pods}' \
+            --set ephemeral.grace=20s \
+            --set ephemeral.cleanupContainers=true \
             --wait --timeout 10m
 
       - name: the workspace is up
@@ -368,6 +376,194 @@ jobs:
                   -v "$RUNNER_TEMP/project:/w" alpine:3 cat /w/marker)
           test "$out" = "from the runner"
 
+      # Ephemeral clients (ADR 0050) the way autoscaled CI runners use them:
+      # pods of one Deployment with random names, one key from one Secret, the
+      # same checkout path in each, and no privileges. The namespace enforces
+      # the `restricted` Pod Security Standard, so a client that needed more
+      # would not be admitted at all.
+      - name: build a client image
+        run: |
+          set -eux
+          ctx="$RUNNER_TEMP/client-image"
+          mkdir -p "$ctx"
+          cp "$RUNNER_TEMP/remote-docker" "$ctx/"
+          cat >"$ctx/Dockerfile" <<'DOCKERFILE'
+          FROM alpine:3
+          RUN apk add --no-cache curl
+          COPY remote-docker /usr/local/bin/remote-docker
+          RUN ln -s remote-docker /usr/local/bin/docker
+          USER 1000:1000
+          DOCKERFILE
+          docker build -t rd-client:kind "$ctx"
+          kind load docker-image rd-client:kind --name rd
+
+      - name: a client Deployment of one ephemeral key
+        run: |
+          set -eux
+          kubectl create namespace clients
+          kubectl label namespace clients pod-security.kubernetes.io/enforce=restricted
+          kubectl create secret generic -n clients pods-key \
+            --from-file=id_ed25519="$RUNNER_TEMP/pods-state/id_ed25519" \
+            --from-file=id_ed25519.pub="$RUNNER_TEMP/pods-state/id_ed25519.pub"
+
+          # Every pod writes its own name to /work/marker, so a container that
+          # reads it says which pod's export served it.
+          kubectl apply -f - <<'YAML'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ci-client
+            namespace: clients
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: ci-client
+            template:
+              metadata:
+                labels:
+                  app: ci-client
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  fsGroup: 1000
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: client
+                    image: rd-client:kind
+                    imagePullPolicy: Never
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: [ALL]
+                    env:
+                      - name: REMOTE_DOCKER_HOST
+                        value: ws-remote-docker-workspace.rd.svc.cluster.local
+                      - name: REMOTE_DOCKER_PORT
+                        value: "2222"
+                      - name: REMOTE_DOCKER_USER
+                        value: pods
+                      - name: REMOTE_DOCKER_STATE_DIR
+                        value: /state
+                      - name: REMOTE_DOCKER_ENDPOINT
+                        value: /state/docker.sock
+                      - name: POD_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.name
+                    command: ["sh", "-c"]
+                    args:
+                      - |
+                        set -e
+                        cp /key/id_ed25519 /key/id_ed25519.pub /state/
+                        chmod 600 /state/id_ed25519
+                        echo "$POD_NAME" >/work/marker
+                        cd /work
+                        exec remote-docker remote start --foreground
+                    readinessProbe:
+                      exec:
+                        command: ["sh", "-c", "test -S /state/docker.sock"]
+                      periodSeconds: 2
+                    volumeMounts:
+                      - {name: key, mountPath: /key, readOnly: true}
+                      - {name: state, mountPath: /state}
+                      - {name: work, mountPath: /work}
+                volumes:
+                  - name: key
+                    secret:
+                      secretName: pods-key
+                      defaultMode: 0440
+                  - {name: state, emptyDir: {}}
+                  - {name: work, emptyDir: {}}
+          YAML
+          kubectl rollout status -n clients deployment/ci-client --timeout=180s
+
+      # 1 -> 4 -> 1. In each pod: `docker info`, and a bind mount of /work, the
+      # same path in every pod, reading that pod's own name. After scaling down,
+      # everything the three removed pods made goes once their grace is up.
+      - name: scale the client Deployment 1, 4, 1
+        run: |
+          set -u
+          ws() { kubectl exec -n rd "$POD" -- "$@"; }
+          pods() {
+            kubectl get pods -n clients -l app=ci-client \
+              --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'
+          }
+          client_of() {
+            kubectl exec -n clients "$1" -- curl -s --max-time 30 --unix-socket /state/docker.sock \
+              http://session/_remote-docker/client | sed -n 's/.*"client":"\([0-9a-f]*\)".*/\1/p'
+          }
+          fail() { echo "FAIL  $*"; exit 1; }
+
+          check_pods() {
+            local pod out
+            for pod in $(pods); do
+              out=$(timeout 240 kubectl exec -n clients "$pod" -- docker info 2>&1) ||
+                fail "$pod: docker info failed: $(echo "$out" | tail -5)"
+              out=$(timeout 240 kubectl exec -n clients "$pod" -- \
+                      docker run --rm -v /work:/w alpine:3 cat /w/marker 2>&1)
+              [ "$(echo "$out" | tail -1)" = "$pod" ] || fail "$pod: its container read [$out]"
+              echo "PASS  $pod: docker info, and a bind mount of /work reads its own name"
+            done
+          }
+
+          # Rolled out counts ready pods; terminating ones are waited out too.
+          scale() {
+            kubectl scale -n clients deployment/ci-client --replicas="$1"
+            kubectl rollout status -n clients deployment/ci-client --timeout=180s
+            for _ in $(seq 1 90); do
+              [ "$(kubectl get pods -n clients -l app=ci-client --no-headers | grep -c .)" -eq "$1" ] && return 0
+              sleep 2
+            done
+            fail "the Deployment never settled at $1 pods: $(kubectl get pods -n clients 2>&1)"
+          }
+
+          check_pods
+          scale 4
+          check_pods
+
+          declare -A client
+          for pod in $(pods); do client[$pod]=$(client_of "$pod"); done
+          echo "clients: ${client[*]}"
+          [ "$(printf '%s\n' "${client[@]}" | grep -c '^[0-9a-f]\{8\}$')" -eq 4 ] ||
+            fail "four pods do not have four client ids: [${client[*]}]"
+          [ "$(printf '%s\n' "${client[@]}" | sort -u | grep -c .)" -eq 4 ] ||
+            fail "two pods share a client id: [${client[*]}]"
+          runs=$(ws remote-dockerd ephemeral ls 2>&1)
+          echo "$runs"
+          [ "$(echo "$runs" | grep -c '^pods ')" -eq 4 ] || fail "the workspace does not list four runs"
+          echo "PASS  four pods of one key are four runs"
+
+          scale 1
+          left=$(pods)
+          kept=${client[$left]:-}
+          [ -n "$kept" ] || fail "the remaining pod [$left] was not one of the four"
+
+          # One grace (20s) and a sweep, then the cleanup itself.
+          gone=false
+          for _ in $(seq 1 120); do
+            runs=$(ws remote-dockerd ephemeral ls 2>&1)
+            vols=$(ws docker exec rd-dind-pods docker volume ls -q \
+                     --filter label=com.github.lhns.remote-docker.owner=pods 2>&1)
+            others=$(echo "$vols" | grep -v "^rd-$kept-")
+            if [ "$(echo "$runs" | grep -c '^pods ')" -eq 1 ] &&
+               [ "$(echo "$runs" | awk -v c="$kept" '$1 == "pods" && $2 == c' | grep -c .)" -eq 1 ] &&
+               [ -n "$vols" ] && [ -z "$others" ]; then
+              gone=true
+              break
+            fi
+            sleep 1
+          done
+          echo "runs:"; echo "$runs"
+          echo "volumes:"; echo "$vols"
+          [ "$gone" = true ] || fail "the removed pods' runs or volumes are still there"
+          echo "PASS  after scaling to one, only $left's run ($kept) and its volume remain"
+
+          check_pods
+
       - name: helm upgrade keeps it running
         run: |
           set -eux
@@ -386,6 +582,14 @@ jobs:
       - name: what went wrong
         if: failure()
         run: |
+          echo "== client pods =="
+          kubectl get pods -n clients -o wide 2>&1 || true
+          for p in $(kubectl get pods -n clients -o name 2>/dev/null); do
+            echo "-- $p"
+            kubectl logs -n clients "$p" --tail=30 2>&1 || true
+          done
+          kubectl exec -n rd "$POD" -- remote-dockerd ephemeral ls 2>&1 || true
+
           echo "== client =="
           cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -60 || echo "(none)"
 

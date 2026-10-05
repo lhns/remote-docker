@@ -127,6 +127,7 @@ jobs:
 
   # One job per suite. The names are what the checks are known by. vm is the
   # only suite needing an NFS client and fuse-overlayfs on the runner itself.
+  # `args` is the suite's own argument, empty for every suite that takes none.
   suite:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -161,6 +162,14 @@ jobs:
           - suite: volume-ownership
             name: who owns a named volume's mountpoint
             timeout: 20
+          - suite: ephemeral
+            args: shared
+            name: ephemeral runs of one key, shared daemon
+            timeout: 40
+          - suite: ephemeral
+            args: per-account
+            name: ephemeral runs of one key, a daemon per account
+            timeout: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -174,7 +183,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y nfs-common fuse-overlayfs
 
       - name: run the suite
-        run: bash test/${{ matrix.suite }}.sh
+        run: bash test/${{ matrix.suite }}.sh ${{ matrix.args }}
 
       # Outside the suite's work directory, which it removes on exit.
       - name: keep the transcripts and the report
