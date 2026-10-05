@@ -50,7 +50,16 @@ type Ports struct {
 
 	mu       sync.Mutex
 	loaded   bool
-	assigned map[assignment]int
+	assigned map[assignment]entry
+	next     uint64
+}
+
+// entry is one assignment. A run's (ADR 0050) is ephemeral: held in memory,
+// never written to clientports, and freed by the token it was given.
+type entry struct {
+	port      int
+	ephemeral bool
+	token     uint64
 }
 
 // assignment names one machine of one account.
@@ -88,12 +97,12 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	}
 
 	key := assignment{account: account, client: client}
-	port, known, err := p.lookup(key)
+	e, known, err := p.entry(key)
 	if err != nil {
 		return 0, err
 	}
 	if known {
-		return port, nil
+		return e.port, nil
 	}
 
 	// What this machine's volumes already expect. Only reached when the record
@@ -110,26 +119,88 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 		}
 	}
 
-	return p.decide(key, base, want)
+	e, err = p.decide(key, base, want, false)
+	return e.port, err
+}
+
+// ForRun returns an ephemeral run's port, allocating one from the top of the
+// range if it has none, and the token that frees it. A run never takes the
+// account's derived port, which belongs to its machines.
+func (p *Ports) ForRun(account, client string) (int, uint64, error) {
+	key := assignment{account: account, client: client}
+	if e, known, err := p.entry(key); err != nil || known {
+		return e.port, e.token, err
+	}
+	// After an agent restart a run's volumes still name its port (ADR 0032).
+	want := 0
+	if p.Preferred != nil {
+		var err error
+		if want, err = p.Preferred(account, client); err != nil {
+			return 0, 0, fmt.Errorf("accounts: cannot tell which port %s's run needs: %w", account, err)
+		}
+	}
+	e, err := p.decide(key, 0, want, true)
+	return e.port, e.token, err
+}
+
+// Hold gives a run back the port it had before an agent restart, unless
+// somebody else has it or a run may not take it.
+func (p *Ports) Hold(account, client string, port int) (uint64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.load(); err != nil {
+		return 0, false
+	}
+	key := assignment{account: account, client: client}
+	if e, ok := p.assigned[key]; ok {
+		if e.ephemeral && e.port == port {
+			return e.token, true
+		}
+		return 0, false
+	}
+	for _, e := range p.assigned {
+		if e.port == port {
+			return 0, false
+		}
+	}
+	if !p.free(port, p.memoReserved()) {
+		return 0, false
+	}
+	return p.assign(key, port, true).token, true
+}
+
+// Free gives a run's port up, once nothing on the workspace names it any more
+// (ADR 0032). Only the token it was given with frees it, so a late call for a
+// run since given a port again frees nothing (ADR 0028).
+func (p *Ports) Free(account, client string, token uint64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := assignment{account: account, client: client}
+	if e, ok := p.assigned[key]; ok && e.ephemeral && token != 0 && e.token == token {
+		delete(p.assigned, key)
+		return true
+	}
+	return false
 }
 
 // Lookup returns the port already recorded for this client, allocating
 // nothing: an ephemeral run is given one only when it binds (ADR 0050).
 func (p *Ports) Lookup(account, client string) (port int, known bool, err error) {
-	return p.lookup(assignment{account: account, client: client})
+	e, known, err := p.entry(assignment{account: account, client: client})
+	return e.port, known, err
 }
 
-// lookup answers for a machine the record already knows, which is every
+// entry answers for a client the record already knows, which is every
 // ordinary connect.
-func (p *Ports) lookup(key assignment) (port int, known bool, err error) {
+func (p *Ports) entry(key assignment) (entry, bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if err := p.load(); err != nil {
-		return 0, false, err
+		return entry{}, false, err
 	}
-	port, known = p.assigned[key]
-	return port, known, nil
+	e, known := p.assigned[key]
+	return e, known, nil
 }
 
 // decide chooses this machine's port and records it, in one hold.
@@ -139,26 +210,28 @@ func (p *Ports) lookup(key assignment) (port int, known bool, err error) {
 // the window is given a different port with nothing said, and its volumes then
 // cannot mount. It needs a lost record AND both machines re-deriving the same
 // base, and Ports has no logger to say so with.
-func (p *Ports) decide(key assignment, base, want int) (int, error) {
+//
+// An ephemeral decision skips base and is not saved.
+func (p *Ports) decide(key assignment, base, want int, ephemeral bool) (entry, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if err := p.load(); err != nil {
-		return 0, err
+		return entry{}, err
 	}
 
 	// Another session of this machine may have decided while we were asking
 	// Preferred. Its answer is the one on record, and one machine must have one
 	// port: a second would leave the volumes built for the first unmountable.
-	if port, ok := p.assigned[key]; ok {
-		return port, nil
+	if e, ok := p.assigned[key]; ok {
+		return e, nil
 	}
 
 	// One walk of the record, since this machine is not in it: everything
 	// assigned belongs to somebody else.
 	taken := make(map[int]bool, len(p.assigned))
-	for _, v := range p.assigned {
-		taken[v] = true
+	for _, e := range p.assigned {
+		taken[e.port] = true
 	}
 
 	// Reserved is a full account listing per call
@@ -172,22 +245,32 @@ func (p *Ports) decide(key assignment, base, want int) (int, error) {
 		port = want
 	}
 
-	if port == 0 {
+	if port == 0 && !ephemeral && !taken[base] {
 		port = base
-		if taken[base] {
-			if port = p.allocate(taken, reserved); port == 0 {
-				return 0, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", key.account)
-			}
+	}
+	if port == 0 {
+		if port = p.allocate(taken, reserved); port == 0 {
+			return entry{}, fmt.Errorf("accounts: no free reverse-tunnel port left for %s", key.account)
 		}
 	}
 
-	p.assigned[key] = port
+	e := p.assign(key, port, ephemeral)
 
 	// A record that cannot be written is not fatal: the session works, and the
 	// cost is that this machine may be given a different port next time, which
 	// costs it its volumes rather than its connection.
-	_ = p.save()
-	return port, nil
+	if !ephemeral {
+		_ = p.save()
+	}
+	return e, nil
+}
+
+// assign records a port. The caller holds the lock.
+func (p *Ports) assign(key assignment, port int, ephemeral bool) entry {
+	p.next++
+	e := entry{port: port, ephemeral: ephemeral, token: p.next}
+	p.assigned[key] = e
+	return e
 }
 
 // memoReserved wraps Reserved so one decision asks about a uid at most once.
@@ -256,8 +339,8 @@ func (p *Ports) Owns(account string, uid, port int) bool {
 	// The record first, and it decides. The derived port belongs to this
 	// account only while nobody else has been given it: once it is assigned,
 	// answering from the formula would say two accounts own one port.
-	for k, v := range p.assigned {
-		if v == port {
+	for k, e := range p.assigned {
+		if e.port == port {
 			return k.account == account
 		}
 	}
@@ -273,7 +356,7 @@ func (p *Ports) load() error {
 	if p.loaded {
 		return nil
 	}
-	p.assigned = map[assignment]int{}
+	p.assigned = map[assignment]entry{}
 
 	err := ReadRecord(p.path(), func(line string) {
 		// account:client:port
@@ -285,7 +368,7 @@ func (p *Ports) load() error {
 		if err != nil || port < 1 || port > workspace.MaxPort {
 			return
 		}
-		p.assigned[assignment{account: parts[0], client: parts[1]}] = port
+		p.assigned[assignment{account: parts[0], client: parts[1]}] = entry{port: port}
 	})
 	if err != nil {
 		return fmt.Errorf("accounts: reading clientports: %w", err)
@@ -304,8 +387,10 @@ func (p *Ports) save() error {
 	}
 
 	lines := make([]string, 0, len(p.assigned))
-	for k, v := range p.assigned {
-		lines = append(lines, fmt.Sprintf("%s:%s:%d", k.account, k.client, v))
+	for k, e := range p.assigned {
+		if !e.ephemeral {
+			lines = append(lines, fmt.Sprintf("%s:%s:%d", k.account, k.client, e.port))
+		}
 	}
 	sort.Strings(lines)
 	return WriteRecord(p.path(), lines, 0o600)

@@ -70,6 +70,10 @@ fake dependency check, and a controllable clock's worth of sleeps.
   otherwise look like a lie to anyone who checked with `ss` or `netstat`.
 - `status` connects deliberately: reporting what the workspace says is its
   entire job.
+- For an ephemeral account (ADR 0050) the client is the run, which spans these
+  connections, and the idle release does not apply: a release would start the
+  run's grace period on the workspace, so the connection is held while the
+  process lives.
 - The reconnect path is now load-bearing rather than an error case, which
   makes it worth exercising: an integration assertion starts a container,
   waits out an idle period, and checks its I/O still works.

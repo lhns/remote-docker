@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
+	"github.com/lhns/remote-docker/agent/internal/ephemeral"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core-agent/tunnelserver"
@@ -61,6 +62,10 @@ type Config struct {
 	// Ephemeral names the accounts whose every client run is a client of its
 	// own, from WORKSPACE_EPHEMERAL_ACCOUNTS (ADR 0050).
 	Ephemeral map[string]bool
+
+	// Runs holds those accounts' runs: their grace period, their limit and
+	// their ports. Nil is a registry with the defaults and no record.
+	Runs *ephemeral.Registry
 
 	Log *slog.Logger
 }
@@ -130,6 +135,9 @@ func New(cfg Config) (*Server, error) {
 	// ask whether it has one.
 	if cfg.Ports == nil {
 		cfg.Ports = &accounts.Ports{Mapping: cfg.Mapping}
+	}
+	if cfg.Runs == nil {
+		cfg.Runs = &ephemeral.Registry{Ports: cfg.Ports, Log: cfg.Log}
 	}
 
 	s := &Server{cfg: cfg, forward: NewForwardPolicy(cfg.Mapping)}

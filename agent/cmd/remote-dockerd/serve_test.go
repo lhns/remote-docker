@@ -55,3 +55,24 @@ func TestEphemeralAccounts(t *testing.T) {
 		t.Errorf("err = %v, want one naming %s", err, envEphemeral)
 	}
 }
+
+// The run limit and grace period default when unset, and an unusable value
+// refuses the start naming its variable.
+func TestEphemeralLimits(t *testing.T) {
+	if n, d, err := ephemeralLimits("", ""); err != nil || n != 8 || d != 2*time.Minute {
+		t.Errorf("unset gave %d, %v, %v; want 8 and 2m", n, d, err)
+	}
+	if n, d, err := ephemeralLimits("3", "90s"); err != nil || n != 3 || d != 90*time.Second {
+		t.Errorf("3 and 90s gave %d, %v, %v", n, d, err)
+	}
+	for _, c := range []struct{ max, grace, name string }{
+		{"0", "", envEphemeralMax},
+		{"many", "", envEphemeralMax},
+		{"", "2", envEphemeralGrace},
+		{"", "-1m", envEphemeralGrace},
+	} {
+		if _, _, err := ephemeralLimits(c.max, c.grace); err == nil || !strings.Contains(err.Error(), c.name) {
+			t.Errorf("%q, %q: err = %v, want one naming %s", c.max, c.grace, err, c.name)
+		}
+	}
+}

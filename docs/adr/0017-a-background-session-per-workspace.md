@@ -111,6 +111,10 @@ with that. A session exits when it has been idle for `REMOTE_DOCKER_DAEMON_IDLE`
   survive the terminal that started it. `DETACHED_PROCESS` plus
   `CREATE_NEW_PROCESS_GROUP` on Windows, `Setsid` on Unix. Without it, starting
   a session and then pressing Ctrl-C on the next command takes it down.
+- **The background session is the run** of an ephemeral account (ADR 0050):
+  its one run id spans every connection it opens, and a one-off command joins
+  it through the endpoint, so the workspace holds one port and one set of
+  volumes for the life of this process rather than per connection.
 - ADR 0015 stands and matters more, not less. A session that lives for days
   should not hold an SSH connection, a keepalive and an events stream for all of
   them.
