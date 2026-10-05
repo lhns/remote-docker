@@ -135,7 +135,7 @@ func TestCreateRefusesToReplaceAMachineWorkspace(t *testing.T) {
 		"wsl": {Host: "127.0.0.1", Port: 2222, User: "alice", Machine: m},
 	}})
 
-	requireFixLine(t, run(t, "remote", "create", "wsl", "--host", "dev.example"), "remote set wsl")
+	requireFixLine(t, run(t, "remote", "create", "wsl", "--host", "dev.example"), "remote rm wsl")
 	file, _ := config.Load("")
 	if got := file.Workspaces["wsl"].Machine; !reflect.DeepEqual(got, m) {
 		t.Errorf("machine is now %+v", got)

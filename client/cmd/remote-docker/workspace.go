@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -25,12 +26,8 @@ func newWorkspaceCreateCommand() *cobra.Command {
 		Use:     "create <name>",
 		Aliases: []string{"add"},
 		Short:   "Create a workspace and its docker context",
-		Long: `Adds a workspace to this machine's configuration and creates a docker
-context for it.
-
-Given a name that already exists, it replaces every setting of that workspace.
-"remote set" changes only the settings you name, and is the only way to change
-a workspace made by "remote machine create".`,
+		Long: `Adds a workspace and its docker context. For a name that exists, every
+setting is replaced; "remote set" changes only the ones you name.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -43,11 +40,10 @@ a workspace made by "remote machine create".`,
 				return err
 			}
 			old, existed := file.Workspaces[name]
+			// The entry is the only record of the machine (ADR 0026).
 			if m := old.Machine; m != nil {
-				// Replacing the entry drops the only record of the machine, and
-				// `rm` would then leave it running.
-				return fmt.Errorf("workspace %q runs on the %s machine %q, which create would lose track of\n  fix: `%s` changes its settings",
-					name, m.Backend, m.Name, ourCommand("set "+name+" ..."))
+				return fmt.Errorf("workspace %q is the %s machine %q, which replacing it would forget\n  fix: `%s` changes its settings; `%s` first replaces it",
+					name, m.Backend, m.Name, ourCommand("set "+name), ourCommand("rm "+name))
 			}
 
 			var ws config.Workspace
@@ -55,11 +51,12 @@ a workspace made by "remote machine create".`,
 			if err := file.Set(name, ws); err != nil {
 				return err
 			}
-			if err := checkWorkspace(file, name); err != nil {
-				return err
-			}
 			if makeDefault {
 				file.Default = name
+			}
+			cfg, err := resolveChecked(file, name)
+			if err != nil {
+				return err
 			}
 			if err := config.Save(file, ""); err != nil {
 				return err
@@ -69,10 +66,6 @@ a workspace made by "remote machine create".`,
 			verb := "added"
 			if existed {
 				verb = "updated"
-			}
-			cfg, err := config.Resolve(config.Overrides{Workspace: name}, "")
-			if err != nil {
-				return err
 			}
 			_, _ = fmt.Fprintf(out, "%s workspace %q: %s\n", verb, name, where(cfg))
 
@@ -99,16 +92,9 @@ func newWorkspaceSetCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set <name>",
 		Short: "Change some of a workspace's settings",
-		Long: `Changes the settings named on the command line and keeps every other one.
-
-Changing --host without --port goes back to the default port: 2222 for a bare
-host, or the scheme's own for an ssh://, ws:// or wss:// address.
-
-A workspace made by "remote machine create" keeps its machine. Its address is
-found each time it connects, so --host is refused for it.
-
-A running session keeps its old settings until it is restarted, and a new
---endpoint is refused while it runs.`,
+		Long: `Changes the settings you name and keeps the rest. A new --host without
+--port goes back to the default port. A running session keeps the old settings
+until "remote restart".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -123,38 +109,28 @@ A running session keeps its old settings until it is restarted, and a new
 			if !ok {
 				return noWorkspaceNamed(name)
 			}
-			if m := ws.Machine; m != nil && flags.given("host") {
-				return fmt.Errorf("workspace %q runs on the %s machine %q, whose address is found when it connects\n  fix: leave out --host",
-					name, m.Backend, m.Name)
+			if err := flags.refuseForMachine(name, ws.Machine); err != nil {
+				return err
 			}
 
-			// Read before the change: a running session is on the old endpoint.
-			before, err := resolve(args)
+			// An entry that does not resolve has no session, and set is how it
+			// gets repaired.
+			before, err := file.Resolve(config.Overrides{Workspace: name})
+			running := err == nil && proxy.Reachable(endpointOf(before))
+
+			flags.apply(&ws)
+			file.Workspaces[name] = ws
+			after, err := resolveChecked(file, name)
 			if err != nil {
 				return err
 			}
-			running := proxy.Reachable(endpointOf(before))
-
-			flags.apply(&ws)
-			if err := file.Set(name, ws); err != nil {
-				return err
-			}
-			if err := checkWorkspace(file, name); err != nil {
-				return err
-			}
-			next := before
-			next.Endpoint = ws.Endpoint
-			moved := flags.given("endpoint") && endpointOf(next) != endpointOf(before)
+			moved := endpointOf(after) != endpointOf(before)
 			if moved && running {
 				// `restart` would look for it at the new endpoint.
 				return fmt.Errorf("%s serves at %s, and moving the endpoint would leave it running there\n  fix: `%s` first",
 					sessionOf(before), dockerHostOf(before), ourCommand("stop "+name))
 			}
 			if err := config.Save(file, ""); err != nil {
-				return err
-			}
-			after, err := config.Resolve(config.Overrides{Workspace: name}, "")
-			if err != nil {
 				return err
 			}
 
@@ -181,6 +157,7 @@ type workspaceFlags struct {
 	port                                             int
 	insecure                                         bool
 
+	// Ours alone, so anyGiven ignores the inherited --workspace.
 	set *pflag.FlagSet
 }
 
@@ -200,8 +177,6 @@ func (f *workspaceFlags) register(cmd *cobra.Command, hostUsage string) {
 	cmd.Flags().AddFlagSet(f.set)
 }
 
-// given reports whether a flag of ours was on the command line. The *Flag is
-// shared with the command's set, which is the one that parses.
 func (f *workspaceFlags) given(name string) bool { return f.set.Lookup(name).Changed }
 
 func (f *workspaceFlags) anyGiven() bool {
@@ -214,8 +189,11 @@ func (f *workspaceFlags) anyGiven() bool {
 func (f *workspaceFlags) apply(ws *config.Workspace) {
 	given := f.given
 	if given("host") && f.host != ws.Host {
-		ws.Host = f.host
-		ws.Port = defaultPort(f.host)
+		ws.Host, ws.Port = f.host, 0
+		// Only a bare host: Transport refuses a port beside a URL that disagrees.
+		if !strings.Contains(f.host, "://") {
+			ws.Port = config.DefaultSSHPort
+		}
 	}
 	if given("port") {
 		ws.Port = f.port
@@ -240,23 +218,42 @@ func (f *workspaceFlags) apply(ws *config.Workspace) {
 	}
 }
 
-// defaultPort is the port a new host starts with. Only a bare host gets one:
-// Transport refuses a port beside a URL that disagrees with it.
-func defaultPort(host string) int {
-	if strings.Contains(host, "://") {
-		return 0
+// refuseForMachine refuses what a machine decides itself: its address is found
+// at every connect, and its port and account are built into it.
+func (f *workspaceFlags) refuseForMachine(name string, m *config.Machine) error {
+	if m == nil {
+		return nil
 	}
-	return config.DefaultSSHPort
+	if f.given("host") {
+		return fmt.Errorf("workspace %q is the %s machine %q, whose address is found when it connects\n  fix: leave out --host",
+			name, m.Backend, m.Name)
+	}
+	if !f.given("port") && !f.given("user") {
+		return nil
+	}
+	rebuild := "machine rebuild " + name
+	if f.given("port") {
+		rebuild += " --port " + strconv.Itoa(f.port)
+	}
+	if f.given("user") {
+		rebuild += " --user " + f.user
+	}
+	return fmt.Errorf("workspace %q is the %s machine %q, which was built for its port and user\n  fix: `%s`, which discards its containers",
+		name, m.Backend, m.Name, ourCommand(rebuild))
 }
 
-// checkWorkspace refuses an entry that would otherwise fail only on the first
-// docker command.
-func checkWorkspace(file config.File, name string) error {
-	if _, err := workspace.ParseMode(file.Workspaces[name].Consistency); err != nil {
-		return err
+// resolveChecked resolves the named workspace in file, refusing what would
+// otherwise fail only on the first docker command.
+func resolveChecked(file config.File, name string) (config.Config, error) {
+	cfg, err := file.Resolve(config.Overrides{Workspace: name})
+	if err != nil {
+		return cfg, err
 	}
-	_, err := file.Transport(name)
-	return err
+	if _, err := workspace.ParseMode(cfg.Consistency); err != nil {
+		return cfg, err
+	}
+	_, err = cfg.Transport()
+	return cfg, err
 }
 
 func newWorkspaceRemoveCommand() *cobra.Command {
@@ -555,7 +552,7 @@ func newWorkspaceInspectCommand() *cobra.Command {
 
 			transport, err := cfg.Transport()
 			if err != nil {
-				rowf(out, "workspace", "%s@%s (%v)", cfg.User, cfg.Host, err)
+				rowf(out, "workspace", "%s@%s (%s)", cfg.User, cfg.Host, firstLine(err.Error()))
 			} else {
 				rowf(out, "workspace", "%s@%s", cfg.User, transport)
 			}

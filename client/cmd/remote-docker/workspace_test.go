@@ -29,11 +29,11 @@ func TestSetChangesOnlyWhatItIsGiven(t *testing.T) {
 	}
 	withConfig(t, &config.File{Default: "wsl", Workspaces: map[string]config.Workspace{"wsl": ws}})
 
-	if err := run(t, "remote", "set", "wsl", "--user", "bob", "--watch", "off"); err != nil {
+	if err := run(t, "remote", "set", "wsl", "--watch", "coarse", "--consistency", "read=direct"); err != nil {
 		t.Fatal(err)
 	}
 	want := ws
-	want.User, want.Watch = "bob", "off"
+	want.Watch, want.Consistency = "coarse", "read=direct"
 	if got := savedWorkspace(t, "wsl"); !reflect.DeepEqual(got, want) {
 		t.Errorf("saved %+v\nwant  %+v", got, want)
 	}
@@ -78,6 +78,74 @@ func TestSetSaysARunningSessionNeedsARestart(t *testing.T) {
 
 	// restart would look for the session at the new endpoint and miss it.
 	requireFixLine(t, run(t, "remote", "set", "dev", "--endpoint", "elsewhere"), "remote stop dev")
+}
+
+// REMOTE_DOCKER_ENDPOINT wins over the saved endpoint, so changing the saved
+// one moves nothing.
+func TestSetEndpointUnderTheEnvironmentIsNotAMove(t *testing.T) {
+	endpoint := fakeSession(t, true, &events{})
+	oneWorkspace(t, "", false)
+	t.Setenv(config.EnvEndpoint, endpoint)
+
+	if err := run(t, "remote", "set", "dev", "--endpoint", "elsewhere"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An unusable user used to be saved, and every later command failed on it.
+func TestAnUnusableUserIsNotSaved(t *testing.T) {
+	before := config.File{Default: "dev", Workspaces: map[string]config.Workspace{"dev": {Host: "dev.example"}}}
+	for _, args := range [][]string{
+		{"remote", "set", "dev", "--user", "!!!"},
+		{"remote", "create", "dev", "--host", "dev.example", "--user", "!!!"},
+	} {
+		t.Run(args[1], func(t *testing.T) {
+			withConfig(t, &before)
+			if err := run(t, args...); err == nil {
+				t.Error("no error")
+			}
+			if got := savedWorkspace(t, "dev"); !reflect.DeepEqual(got, before.Workspaces["dev"]) {
+				t.Errorf("saved %+v", got)
+			}
+		})
+	}
+}
+
+// set is how such an entry gets repaired, so it must not need it to resolve.
+func TestSetRepairsAnUnusableUser(t *testing.T) {
+	withConfig(t, &config.File{Default: "dev", Workspaces: map[string]config.Workspace{"dev": {Host: "dev.example", User: "!!!"}}})
+	if err := run(t, "remote", "set", "dev", "--user", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if got := savedWorkspace(t, "dev").User; got != "alice" {
+		t.Errorf("user %q", got)
+	}
+}
+
+// A machine is built for its port and account, so changing either here left a
+// workspace that could not connect.
+func TestSetRefusesWhatAMachineWasBuiltWith(t *testing.T) {
+	for _, flag := range [][]string{{"--port", "2300"}, {"--user", "bob"}} {
+		t.Run(flag[0], func(t *testing.T) {
+			withConfig(t, &config.File{Workspaces: map[string]config.Workspace{"wsl": {
+				Host: "127.0.0.1", Port: 2222, User: "alice",
+				Machine: &config.Machine{Backend: "wsl", Name: "rd-wsl"},
+			}}})
+			requireFixLine(t, run(t, append([]string{"remote", "set", "wsl"}, flag...)...), "remote machine rebuild wsl")
+		})
+	}
+}
+
+// The transport's fix line ends an error; inside an inspect row it splits it.
+func TestInspectKeepsATransportErrorOnItsRow(t *testing.T) {
+	withConfig(t, &config.File{Default: "dev", Workspaces: map[string]config.Workspace{"dev": {Host: "https://ws.example/"}}})
+	out, err := runOut(t, "remote", "inspect", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "fix:") {
+		t.Errorf("inspect showed:\n%s", out)
+	}
 }
 
 // A machine row's backend suffix made WORKSPACE longer than a fixed width and

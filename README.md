@@ -348,24 +348,16 @@ remote-docker remote set dev --host wss://dev.example/tunnel
 remote-docker remote set dev --user bob --watch off
 ```
 
-It takes the same flags as `create`, except `--default` and `--no-context`.
+It takes the same flags as `create`. A new `--host` without `--port` goes back
+to the default port. A running session keeps its old settings until
+`remote restart`.
 
-- A new `--host` without `--port` starts from the default port again: 2222 for
-  a plain host name, and whatever the address says for `ssh://`, `ws://` or
-  `wss://`.
-- An address that cannot work is refused before anything is saved. A web
-  address is the usual one: `https://` is written `wss://` here, and `http://`
-  is `ws://`.
-- A session that is already running keeps its old settings and says so. Run
-  `remote-docker remote restart dev` to pick up the new ones. A new
-  `--endpoint` is refused while the session runs: stop it first.
-- On a [workspace on this machine](#a-workspace-on-this-machine-windows),
-  `--host` is refused, since its address is found every time it connects.
+On a [workspace on this machine](#a-workspace-on-this-machine-windows), the
+address, port and user belong to the machine: change the port or user with
+`remote machine rebuild`.
 
-`remote create` with a name that already exists replaces every setting, so a
-flag you leave out goes back to its default. It refuses to do that to a
-workspace on this machine, because the machine would be forgotten and
-`remote rm` would then leave it running. Use `remote set` for those.
+`remote create` on an existing name replaces every setting, and refuses to for
+a workspace on this machine.
 
 ## File watching
 

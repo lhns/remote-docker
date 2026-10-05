@@ -12,22 +12,16 @@ software.
 
 ### New
 
-- **`remote set` changes a workspace's settings without retyping the rest.**
-  `remote set dev --user bob` changes the account and keeps the address, the
-  port and everything else. See
-  [Changing a remote](README.md#changing-a-remote).
+- **`remote set` changes some of a workspace's settings.** `remote set dev
+  --user bob` keeps everything else.
 
 ### Fixes
 
-- **`remote create` no longer forgets a machine.** Running it again on a
-  workspace made by `machine create` replaced it with a plain one, and
-  `remote rm` then left the machine running. It now refuses and points at
-  `remote set`.
-- **An address that cannot work is refused when you save it.** `remote create`
-  took `--host https://...` and the error only came on the first docker
-  command. It now says at once, and suggests `wss://` for `https://` and
-  `ws://` for `http://`.
-
+- **`remote create` no longer turns a machine workspace into a plain one.**
+  Doing so left `remote rm` unable to remove the machine.
+- **`remote create` refuses an address or user that cannot work.** Before, it
+  saved them and the next command failed. An `https://` address now suggests
+  `wss://`.
 - **Hyper-V machines work.** `machine create --backend hyperv` failed every
   time, and a machine booted without its configuration. The machine's private
   host key no longer stays in the VM's settings after first boot, and
