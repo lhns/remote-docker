@@ -95,8 +95,15 @@ func (c Config) Transport() (Transport, error) {
 		return Transport{Kind: scheme, Host: u.Hostname(), Port: port, URL: u.String()}, nil
 	}
 
-	return Transport{}, fmt.Errorf(
+	err := fmt.Errorf(
 		"config: host %q names %q, which is not a way to reach a workspace (ssh, ws or wss)", c.Host, scheme)
+	switch scheme {
+	case "https":
+		err = fmt.Errorf("%w\n  fix: use wss://%s", err, rest)
+	case "http":
+		err = fmt.Errorf("%w\n  fix: use ws://%s", err, rest)
+	}
+	return Transport{}, err
 }
 
 // splitScheme separates "scheme://rest"; a bare colon is a port, not a scheme.

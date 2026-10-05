@@ -247,21 +247,25 @@ const (
 // The file is optional and a missing one is not an error: `enroll` has to work
 // before anything is configured, since that is how a key gets issued.
 func Resolve(o Overrides, path string) (Config, error) {
-	cfg := Config{User: DefaultUser()}
-
 	file, err := Load(path)
 	if err != nil {
 		return Config{}, err
 	}
+	return file.Resolve(o)
+}
+
+// Resolve is the package's Resolve against f rather than the saved file.
+func (f File) Resolve(o Overrides) (Config, error) {
+	cfg := Config{User: DefaultUser()}
 
 	want := cmp.Or(o.Workspace, os.Getenv(EnvWorkspace))
-	name, ws, err := file.selected(want)
+	name, ws, err := f.selected(want)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.Name = name
 
-	applyWorkspace(&cfg, file.Workspace)
+	applyWorkspace(&cfg, f.Workspace)
 	applyWorkspace(&cfg, ws)
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)

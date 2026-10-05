@@ -246,6 +246,7 @@ that is ours lives under `remote`:
 | `remote-docker remote gc` | remove share volumes nothing is using |
 | `remote-docker remote version` | |
 | `remote-docker remote create <name> --host …` | add a workspace and its docker context |
+| `remote-docker remote set <name> --user …` | [change](#changing-a-remote) some of its settings, keeping the rest |
 | `remote-docker remote rm <name>` | stop its session and remove both again |
 | `remote-docker remote ls` | list them |
 | `remote-docker remote use <name>` | make it the default here, and docker's current context |
@@ -269,7 +270,8 @@ overrides both. A missing context is created.
 There is no `context` command: a docker context is written when a workspace is
 created and removed with it
 ([ADR 0018](docs/adr/0018-one-way-to-do-each-thing.md)). Re-run
-`remote create` to rewrite one that has drifted.
+`remote create`, or `remote machine create` for a machine, to rewrite one
+that has drifted.
 
 ## Settings
 
@@ -281,13 +283,13 @@ default.**
 |---|---|---|---|
 | `REMOTE_DOCKER_HOST` | `host` | `--host` | none; required. A host, or `ssh://`, `ws://`, `wss://` with one |
 | `REMOTE_DOCKER_PORT` | `port` | `--port` | `2222`, or the scheme's (443 for `wss`, 80 for `ws`). Optional |
-| `REMOTE_DOCKER_CA_FILE` | `caFile` | `remote create --ca-file` | system roots |
-| `REMOTE_DOCKER_INSECURE` | `insecure` | `remote create --insecure` | off |
+| `REMOTE_DOCKER_CA_FILE` | `caFile` | `remote create`/`set --ca-file` | system roots |
+| `REMOTE_DOCKER_INSECURE` | `insecure` | `remote create`/`set --insecure` | off |
 | `REMOTE_DOCKER_USER` | `user` | `--user` | your local username, lowercased as the workspace does |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
-| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
-| `REMOTE_DOCKER_WATCH` | `watch` | `remote create --watch` | `off` |
+| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create`/`set --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
+| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off` |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.gradle`, `.terraform` |
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
@@ -336,6 +338,26 @@ gets its own endpoint, so sessions run side by side:
 remote-docker remote start --workspace dev
 docker --context dev ps
 ```
+
+### Changing a remote
+
+`remote set` changes the settings you name and leaves the others alone:
+
+```bash
+remote-docker remote set dev --host wss://dev.example/tunnel
+remote-docker remote set dev --user bob --watch off
+```
+
+It takes the same flags as `create`. A new `--host` without `--port` goes back
+to the default port. A running session keeps its old settings until
+`remote restart`.
+
+On a [workspace on this machine](#a-workspace-on-this-machine-windows), the
+address, port and user belong to the machine: change the port or user with
+`remote machine rebuild`.
+
+`remote create` on an existing name replaces every setting, and refuses to for
+a workspace on this machine.
 
 ## File watching
 

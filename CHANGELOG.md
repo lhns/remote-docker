@@ -10,8 +10,18 @@ software.
 
 ## Unreleased
 
+### New
+
+- **`remote set` changes some of a workspace's settings.** `remote set dev
+  --user bob` keeps everything else.
+
 ### Fixes
 
+- **`remote create` no longer turns a machine workspace into a plain one.**
+  Doing so left `remote rm` unable to remove the machine.
+- **`remote create` refuses an address or user that cannot work.** Before, it
+  saved them and the next command failed. An `https://` address now suggests
+  `wss://`.
 - **Hyper-V machines work.** `machine create --backend hyperv` failed every
   time, and a machine booted without its configuration. The machine's private
   host key no longer stays in the VM's settings after first boot, and
