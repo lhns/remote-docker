@@ -250,7 +250,7 @@ func TestReportAgent(t *testing.T) {
 			m:       wsl,
 			backend: &fakeBackend{addr: "127.0.0.1"},
 			port:    down,
-			want:    []string{"not answering on " + at(down), "  fix: ", machine.WSLAgentLog, "machine rebuild dev"},
+			want:    []string{"not answering on " + at(down), "  fix: ", machine.WSLAgentLog, "machine stop dev`, then `", "machine start dev`, restarts it", "machine rebuild dev"},
 		},
 		{
 			// The log path is WSL's.
@@ -258,7 +258,7 @@ func TestReportAgent(t *testing.T) {
 			m:       hyperv,
 			backend: &fakeBackend{addr: "127.0.0.1"},
 			port:    down,
-			want:    []string{"not answering on " + at(down), "machine rebuild dev"},
+			want:    []string{"not answering on " + at(down), "machine stop dev`, then `", "machine start dev`, restarts it", "machine rebuild dev"},
 			reject:  []string{machine.WSLAgentLog},
 		},
 		{

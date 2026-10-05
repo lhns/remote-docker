@@ -30,10 +30,22 @@ software.
   dials the agent at the machine's own address, and when nothing answers it
   prints `not answering on <address>:<port>` and exits 1. A stopped machine is
   still reported as stopped and is not started.
+- **`remote machine status` offers a restart before a rebuild.** For an agent
+  not answering it offered only `machine rebuild`, which discards the
+  machine's images and containers. Nothing inside a WSL machine restarts an
+  agent that died; `machine stop` then `machine start` does, keeping
+  everything. Checked on 2026-10-05 by killing the agent, which status reported
+  as not answering, and stopping and starting the machine, after which it
+  answered in under two seconds with its images intact. The next docker
+  command after `machine stop` brings it back as well.
+- **`remote ls` lines its columns up.** A machine's `(wsl)` suffix overflowed
+  the WORKSPACE column and pushed that row's ENDPOINT right. Columns are now as
+  wide as their widest entry.
 - **`remote machine create` suggests a command that reaches the new machine.**
   It suggested a bare `run`, which reaches the default workspace, and `create`
-  does not make the new machine the default. When docker would reach another
-  workspace, the hint now starts with `remote use <name>`.
+  makes the new machine the default only when there is no default yet. When
+  docker would reach another workspace, the hint now starts with
+  `remote use <name>`.
 - **A rebuilt machine can be used straight away.** After
   `remote machine rebuild`, or `remote rm` and `remote machine create`, every
   docker command failed with `host key ... has CHANGED` until the entry was
