@@ -18,6 +18,15 @@ software.
   takes a comma-separated list, and the workspace also reads
   `WORKSPACE_ENROLLED_KEYS_DIR` (`<state>/enrolled_keys.d`), the one directory
   it will write keys into. An account's keys in all of them are merged.
+- **Autoscaled CI runners can share one key.** Before, every runner using the
+  same key counted as one machine, so the second was refused and two jobs could
+  share a volume. List the account in `WORKSPACE_EPHEMERAL_ACCOUNTS`, or in the
+  chart's `ephemeral.accounts`, and each runner gets its own tunnel and volumes.
+  The workspace removes them two minutes after the runner goes away, and allows
+  8 runners at once by default. Images and the build cache stay shared. The
+  built-in `docker compose` gives each runner its own project name; a separate
+  `docker compose` needs `COMPOSE_PROJECT_NAME` set per job. See "CI with
+  autoscaled runners" in the README. Not yet tested against a real workspace.
 
 ### Fixes
 

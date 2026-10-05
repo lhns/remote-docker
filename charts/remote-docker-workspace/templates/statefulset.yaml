@@ -33,6 +33,9 @@ spec:
         {{- if not .Values.existingSecret }}
         checksum/keys: {{ toYaml .Values.authorizedKeys | sha256sum }}
         {{- end }}
+        {{- if .Values.ephemeral.accounts }}
+        checksum/ephemeral: {{ toYaml .Values.ephemeral | sha256sum }}
+        {{- end }}
         {{- with .Values.commonAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -79,6 +82,9 @@ spec:
                   driver this workspace inherits to it. */}}
             - name: WORKSPACE_DIND_IMAGE
               value: {{ default (include "remote-docker-workspace.image" .) .Values.dindImage | quote }}
+            {{- end }}
+            {{- with include "remote-docker-workspace.ephemeralEnv" . | trim }}
+            {{- . | nindent 12 }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}

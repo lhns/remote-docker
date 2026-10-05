@@ -229,6 +229,51 @@ docker compose up -d
 This is a limitation, not a design
 ([ADR 0029](docs/adr/0029-one-account-many-machines.md)).
 
+## CI with autoscaled runners
+
+Runners that come and go, such as a pod per job, cannot each be enrolled, and
+under one shared key they would all be one machine: the second is refused its
+tunnel, and two jobs in the same checkout path share a volume. An **ephemeral**
+account fixes that ([ADR 0050](docs/adr/0050-ephemeral-clients.md)). Every
+client process of it is a client of its own, with its own tunnel port, exports
+and volumes, and the workspace removes them a short grace period after the
+process goes away. The daemon, images and build cache stay shared, so a warm
+cache serves every job.
+
+1. **Enrol one key for the account**, `ci` here, as for any account. Every
+   runner presents the same private key, placed at `id_ed25519` in the client's
+   state directory (`REMOTE_DOCKER_STATE_DIR` moves it).
+2. **Make the account ephemeral** on the workspace:
+
+   | variable | chart value | default | |
+   |---|---|---|---|
+   | `WORKSPACE_EPHEMERAL_ACCOUNTS` | `ephemeral.accounts` | empty | accounts whose clients are ephemeral, comma-separated |
+   | `WORKSPACE_EPHEMERAL_MAX_CLIENTS` | `ephemeral.maxClients` | `8` | runners at once, counting those in their grace period; the next is refused |
+   | `WORKSPACE_EPHEMERAL_GRACE` | `ephemeral.grace` | `2m` | how long a runner's port and volumes outlive its last connection, for a reconnect |
+   | `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS` | `ephemeral.cleanupContainers` | `false` | also remove the runner's containers and compose networks |
+
+   With the chart:
+
+   ```yaml
+   authorizedKeys:
+     ci: |
+       ssh-ed25519 AAAA... ci@runners
+   ephemeral:
+     accounts: [ci]
+   ```
+
+3. **Point each runner at the workspace** as usual, with `--user ci`.
+
+The embedded `docker compose` names a project `<directory>-<client id>` (or
+after the file's `name:`), so the same compose file on two runners is two
+projects. `-p` or `COMPOSE_PROJECT_NAME` still win. **A standalone
+`docker compose`** reads its own environment and has never heard of the client
+id, so it names the project after the directory alone; give it a
+`COMPOSE_PROJECT_NAME` per job, such as the CI job id.
+
+Without `cleanupContainers`, a runner whose containers are still there keeps its
+volumes, and its slot against `maxClients`, until somebody removes them.
+
 ## Commands
 
 **This binary is the Docker CLI.** `remote-docker run`, `ps`, `compose up` are

@@ -275,9 +275,15 @@ func daemonLogPath(cfg config.Config) string {
 
 // control makes a request to the session's own endpoints.
 func control(endpoint, method, path string, out any) error {
+	return controlWithin(10*time.Second, endpoint, method, path, out)
+}
+
+// controlWithin is control with a timeout of the caller's, for an endpoint
+// that may have to connect first.
+func controlWithin(timeout time.Duration, endpoint, method, path string, out any) error {
 	client := &http.Client{
 		Transport: &http.Transport{DialContext: proxy.DialEndpoint(endpoint)},
-		Timeout:   10 * time.Second,
+		Timeout:   timeout,
 	}
 	// The host is ignored: the transport dials the endpoint.
 	req, err := http.NewRequest(method, "http://remote-docker"+proxy.ControlPrefix+path, nil)

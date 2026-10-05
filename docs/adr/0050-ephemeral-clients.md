@@ -1,8 +1,7 @@
 # 0050 — Ephemeral clients
 
-- Status: Accepted in part. The identity, the registry with its grace period
-  and limit, the per-run port and cleanup are implemented; the compose default
-  follows, and this record gains a section for it.
+- Status: Accepted. Implemented, and unit tested only: `test/ephemeral.sh` is
+  still to come.
 - Date: 2026-10-05
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
@@ -157,6 +156,26 @@ holds the run's volumes) and `dockercli.RunObjects`:
   client, state, port, and the time since a connection of the run last started
   or ended. A run past its grace shows `grace` until the next sweep.
 
+## Decision: the embedded compose names a run's projects after it
+
+Runs of one account share a daemon, so one compose file from two runs is one
+project (ADR 0029). In an ephemeral run the embedded `docker compose` sets `-p`
+to `<name>-<client id>`, where `<name>` is what compose would have chosen: the
+file's `name:`, else its directory's.
+
+- **Only when nothing chose a name**: `-p`, `COMPOSE_PROJECT_NAME` and a `.env`
+  setting it all win. Compose's own pre-run reads `.env` into the environment,
+  so the check runs after it.
+- **The client id is asked of the background session**, at
+  `/_remote-docker/client`, which connects if it must: it is derived on the
+  workspace. Any failure leaves compose's own name, and compose then reports
+  the connection itself.
+- **A machine is unchanged**: its session reports no client id.
+- **The suffix is what cleanup's step 2 matches.** A project named any other way
+  keeps its networks after the run.
+- **A standalone `docker compose` is documented, not handled**: it reads its own
+  environment and cannot learn the client id.
+
 ## Costs
 
 - **A cache volume under an adopted union is kept for ever.** After an agent
@@ -198,5 +217,8 @@ the held connection in `client/internal/session/hold_test.go`. Cleanup: its
 order and every keep rule against a fake daemon in
 `agent/internal/ephemeral/cleanup_test.go`, the first sweep after a restart and
 live runs left alone in `registry_test.go`, the network match in
-`agent/internal/dockercli/runs_test.go`. No real daemon has run any of it;
-`test/ephemeral.sh` is still to come.
+`agent/internal/dockercli/runs_test.go`. The compose default in
+`client/cmd/remote-docker/compose_test.go` and the endpoint in
+`TestClientNamesTheRunOrSaysWhyNot`; the chart's values in `kubernetes.yml`'s
+render step. No real daemon has run any of it; `test/ephemeral.sh` is still to
+come.

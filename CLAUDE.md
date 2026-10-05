@@ -1092,7 +1092,7 @@ the user's machine and the only one of these that fails silently.
 `.github/workflows/kubernetes.yml` installs the chart on a kind cluster behind
 ingress-nginx on every pull request and takes a session through it: a file
 written on the runner, read inside a container in the cluster through a bind
-mount. It also runs `helm lint` and seven renders through `kubeconform`, which is
+mount. It also runs `helm lint` and eight renders through `kubeconform`, which is
 eight seconds and always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 

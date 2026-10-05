@@ -58,11 +58,16 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 | `persistence.graph.existingClaim` | `""` | mount a claim you own instead of generating one |
 | `persistence.state.existingClaim` | `""` | the same, for the state volume |
 | `persistence.state.size` | `1Gi` | host keys and the uid map |
+| `ephemeral.accounts` | `[]` | accounts whose every client process is a client of its own; see CI runners below |
+| `ephemeral.maxClients` | `8` | clients at once per such account, counting those in their grace period |
+| `ephemeral.grace` | `2m` | how long a client's port and volumes outlive its last connection |
+| `ephemeral.cleanupContainers` | `false` | also remove an expired client's containers and compose networks |
+| `env` | `{}` | extra agent environment; an entry here wins over the variable a value above renders |
 | `ingress.enabled` | `true` | |
 | `ingress.host` | `""` | **required** when the ingress is enabled |
 | `service.type` | `ClusterIP` | SSH is not published; the ingress is the way in |
 
-`values.yaml` carries the reasoning for each; the three worth knowing before you
+`values.yaml` carries the reasoning for each; the ones worth knowing before you
 install are below.
 
 ## The storage driver
@@ -75,6 +80,26 @@ local or block volumes set `dockerdArgs: ""`, which is overlay2 and faster.
 Whatever you choose, the per-account daemons inherit it, so the image they run
 has to carry it. That is why `dindImage` defaults to this chart's own image:
 stock `docker:dind` has no `fuse-overlayfs` and dies in a restart loop.
+
+## CI runners
+
+Autoscaled runners share one key. List the account under `ephemeral.accounts`
+and each runner gets its own tunnel port and volumes, removed `grace` after it
+goes away:
+
+```yaml
+authorizedKeys:
+  ci: |
+    ssh-ed25519 AAAA... ci@runners
+ephemeral:
+  accounts: [ci]
+```
+
+Nothing is rendered while the list is empty. The chart refuses to render a
+`grace` that is not a duration, a `maxClients` below 1, and an account with no
+entry in `authorizedKeys`, unless `existingSecret` is set, since that Secret is
+not read at render time. The main README's "CI with autoscaled runners" has the
+rest, including what a standalone `docker compose` needs.
 
 ## Both volumes are ReadWriteOnce, for different reasons
 
