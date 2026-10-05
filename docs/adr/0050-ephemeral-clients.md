@@ -1,7 +1,7 @@
 # 0050 — Ephemeral clients
 
-- Status: Accepted. Implemented, and unit tested only: `test/ephemeral.sh` is
-  still to come.
+- Status: Accepted. Implemented. The end-to-end suites below were merged
+  before their first CI run (2026-10-05).
 - Date: 2026-10-05
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
@@ -220,5 +220,28 @@ live runs left alone in `registry_test.go`, the network match in
 `agent/internal/dockercli/runs_test.go`. The compose default in
 `client/cmd/remote-docker/compose_test.go` and the endpoint in
 `TestClientNamesTheRunOrSaysWhyNot`; the chart's values in `kubernetes.yml`'s
-render step. No real daemon has run any of it; `test/ephemeral.sh` is still to
-come.
+render step.
+
+End to end, against a real daemon in both modes (`integration.yml`, the two
+`ephemeral runs of one key` jobs): `test/ephemeral.sh`, four runs of one key at
+one checkout path (a mount namespace each), with a grace of 20s and a limit of
+4:
+
+| section | asserts |
+|---|---|
+| 1 | four client ids, four ports in `ephemeral ls`, none in `clientports`; one share as four `rd-<client>-` volumes; each run's container and concurrent embedded `compose up` reading its own file |
+| 2, 3 | a clean end and a `kill -9` each leave nothing with that client id after the grace; the other runs keep reading |
+| 4 | an outage shorter than the grace keeps the port and a running mount |
+| 5 | an agent restart cleans a killed run and reattaches a live one on its old port and volume |
+| 6 | a fifth run refused in under 20s, naming the limit, holding no slot |
+| 7 | a machine account's `clientports` line and volumes unchanged throughout |
+
+`kubernetes.yml`: an unprivileged client Deployment (`restricted` Pod Security
+Standard, one Secret key) scaled 1, 4, 1, `docker info` and a bind mount of the
+same path in every pod, and only the surviving pod's run and volume after the
+grace.
+
+Not covered end to end: cleanup releasing a run's union mount, and reattaching
+from the grace period after a dropped connection the agent noticed (section 4's
+outage is shorter than the ~60s that takes; section 5 reattaches after a
+restart).
