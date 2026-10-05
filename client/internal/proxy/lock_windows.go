@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-func lockDir() string {
+func lockDir(string) string {
 	if dir, err := os.UserCacheDir(); err == nil {
 		return filepath.Join(dir, "remote-docker")
 	}
