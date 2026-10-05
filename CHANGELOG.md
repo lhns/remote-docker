@@ -12,71 +12,36 @@ software.
 
 ### Fixes
 
-- **The Hyper-V backend works, on the one machine it has run on.** Its first
-  run, by hand on 2026-10-05 (Windows 11 25H2, Flatcar 4757.2.1), found three
-  bugs that each stopped every machine: `machine create` always failed with
-  `cannot tell what is there: exit status 1:`, the machine never received its
-  configuration and booted with no way in, and the first command after a boot
-  failed with `has no address yet`. The configuration now goes to the guest
-  over Hyper-V's KVP exchange, the way Flatcar reads it, and is removed from
-  there once the machine has applied it, since it holds the machine's private
-  host key. A booting machine is waited for, `remote rm` completes on a
-  machine whose VM was deleted by hand, and the runbook's download link, which
-  had stopped working, is corrected. No CI can run Hyper-V, so it still warns
-  when used.
-- **`remote machine rebuild` rebuilds a Hyper-V machine as a Hyper-V machine.**
-  Without `--backend` it tried to build a WSL machine of the same name from the
-  Flatcar disk, which WSL happened to refuse. `machine create` without
-  `--backend` on an existing Hyper-V machine did the same. Both now use the
-  backend the machine was built with, and naming a different one is refused
-  rather than building a second machine and losing track of the first.
-- **`--context` works.** `docker --context dev ps` used whatever context was
-  current, and a context that did not exist gave no error. Only
-  `DOCKER_CONTEXT` worked. The same was true of `--config`, `-H`, `-D`,
-  `--log-level` and the TLS flags, which now all take effect.
-- **Two containers starting together on one cached directory no longer race.**
-  With `write=back` or `write=ephemeral`, a second request for the same share
-  arriving just as the first finished could stop the union just mounted and
-  start another, under a container that may already have been given the first.
-  Found by a unit test; nobody has reported it.
-- **`remote machine create` without `--rootfs` can be run again.** The second
-  run refused with "built from different settings" while `machine status`
-  said the settings were current, and a `machine rebuild` did not cure it. The
-  path the published image was downloaded to was counted as a setting.
-- **`remote machine status` checks the agent.** A running machine whose agent
-  was gone still printed `state running` and `settings current`. Status now
-  dials the agent at the machine's own address, and when nothing answers it
-  prints `not answering on <address>:<port>` and exits 1. A stopped machine is
-  still reported as stopped and is not started.
-- **`remote machine status` offers a restart before a rebuild.** For an agent
-  not answering it offered only `machine rebuild`, which discards the
-  machine's images and containers. Nothing inside a WSL machine restarts an
-  agent that died; `machine stop` then `machine start` does, keeping
-  everything. Checked on 2026-10-05 by killing the agent, which status reported
-  as not answering, and stopping and starting the machine, after which it
-  answered in under two seconds with its images intact. The next docker
-  command after `machine stop` brings it back as well.
-- **`remote ls` lines its columns up.** A machine's `(wsl)` suffix overflowed
-  the WORKSPACE column and pushed that row's ENDPOINT right. Columns are now as
-  wide as their widest entry.
-- **`remote machine create` suggests a command that reaches the new machine.**
-  It suggested a bare `run`, which reaches the default workspace, and `create`
-  makes the new machine the default only when there is no default yet. When
-  docker would reach another workspace, the hint now starts with
-  `remote use <name>`.
-- **A rebuilt machine can be used straight away.** After
-  `remote machine rebuild`, or `remote rm` and `remote machine create`, every
-  docker command failed with `host key ... has CHANGED` until the entry was
-  removed from `known_hosts` by hand. A machine's host key is now made when it
-  is built and accepted at whatever address the machine has
-  ([ADR 0026](docs/adr/0026-a-machine-is-a-workspace-we-provision.md)). A
-  machine built by an earlier version keeps the old check until it is rebuilt.
+- **Hyper-V machines work.** `machine create --backend hyperv` failed every
+  time, and a machine booted without its configuration. The machine's private
+  host key no longer stays in the VM's settings after first boot. Hyper-V is
+  still not covered by CI, so it still warns when used.
+- **`machine rebuild` and `machine create` keep a machine's backend.** Without
+  `--backend` they treated a Hyper-V machine as a WSL one. Naming a different
+  backend is now refused.
+- **A rebuilt machine works straight away.** Commands no longer fail with
+  `host key ... has CHANGED` after `machine rebuild`, or after `remote rm` and
+  `machine create`.
+- **`machine create` without `--rootfs` can be run again** instead of
+  reporting "built from different settings".
+- **`machine status` checks the agent**, reports `not answering` and exits 1
+  when it is down, and suggests `machine stop` then `machine start`, which
+  keeps the machine's images, before `machine rebuild`.
+- **`machine create` suggests a command that reaches the new machine.**
+- **`remote rm` works on a Hyper-V machine whose VM was already deleted.**
+- **`--context` works**, as do `--config`, `-H`, `-D`, `--log-level` and the
+  TLS flags. Before, only `DOCKER_CONTEXT` was honoured.
+- **`remote ls` lines up its columns.**
+- **Two containers starting at once on one `write=back` or `write=ephemeral`
+  directory no longer race.**
 
 ### Upgrading
 
-- A machine created without `--rootfs` by 0.8.1 or earlier is still refused by
-  `machine create`, naming `machine rebuild`. The machine itself works; one
-  rebuild clears the refusal, and discards the images and containers inside it.
+- A machine created without `--rootfs` by 0.8.1 or earlier still needs one
+  `machine rebuild` before `machine create` accepts it again. The rebuild
+  discards the images and containers inside it.
+- A machine built by 0.8.1 or earlier keeps the old host key check until it is
+  rebuilt.
 
 ## 0.8.1 — 2026-09-30
 
