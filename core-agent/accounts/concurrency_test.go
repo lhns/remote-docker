@@ -241,6 +241,8 @@ func (g *gatedProvisioner) Ensure(name string, _ int, _ string) (string, string,
 	return unix, "/home/" + unix, nil
 }
 
+func (*gatedProvisioner) Remove(string, int) error { return nil }
+
 // prompt fails the test if fn has not returned within 100ms.
 func prompt(t *testing.T, what string, fn func()) {
 	t.Helper()

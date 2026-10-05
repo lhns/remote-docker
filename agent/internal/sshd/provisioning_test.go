@@ -33,6 +33,8 @@ func (g *gatedProvisioner) Ensure(name string, _ int, _ string) (string, string,
 	return name, "/home/" + name, nil
 }
 
+func (*gatedProvisioner) Remove(string, int) error { return nil }
+
 // provisioning starts a sync creating account, and returns once its useradd
 // is under way. It finishes after hold, so a test that fails still ends.
 func (w *tokenWorkspace) provisioning(t *testing.T, account string, hold time.Duration) {
