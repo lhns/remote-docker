@@ -13,6 +13,7 @@ WORK=$(mktemp -d)
 SSH_PORT=${SSH_PORT:-2299}
 ACCOUNT=vmtest
 TOKEN_ACCOUNT=vmtoken
+SKEL_ASIDE=/etc/skel.rd-vmtest
 AGENT_PID=
 CLIENT_PID=
 
@@ -28,6 +29,9 @@ cleanup() {
     hostdocker volume rm -f "rd-dind-$ACCOUNT-lib" >/dev/null 2>&1
     sudo userdel -r "rd-$ACCOUNT" >/dev/null 2>&1
     sudo userdel -r "rd-$TOKEN_ACCOUNT" >/dev/null 2>&1
+    if [ -d "$SKEL_ASIDE" ]; then
+        sudo rm -rf /etc/skel && sudo mv "$SKEL_ASIDE" /etc/skel
+    fi
     sudo rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -119,6 +123,14 @@ if command -v useradd >/dev/null; then
 else
     bad "no useradd, so the agent cannot provision accounts"
 fi
+
+# GitHub's runner image installs Rust into /etc/skel (actions/runner-images,
+# install-rust.sh), and the agent's `useradd --create-home` copies all of it,
+# holding the accounts lock a redeem waits on: 801M and 170s for one account
+# (measured 2026-10-05, PR 268; re-check with `time sudo useradd -m probe`).
+# Emptied here, restored by cleanup.
+info "/etc/skel holds $(sudo du -sh /etc/skel 2>/dev/null | cut -f1); this suite provisions from an empty one"
+sudo mv /etc/skel "$SKEL_ASIDE" && sudo mkdir -m 755 /etc/skel
 
 # Only shared mode mounts NFS (and a union) on the machine itself; reported
 # here so a skip in section 5 or 5b has its cause on screen.

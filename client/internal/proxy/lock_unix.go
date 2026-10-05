@@ -9,7 +9,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func lockDir() string { return filepath.Dir(DefaultEndpoint()) }
+// lockDir is the socket's own directory, which Listen has to be able to write
+// anyway. Not the default endpoint's: that is under $HOME, which a container
+// running as a uid with no passwd entry has as an unwritable /.
+func lockDir(endpoint string) string { return filepath.Dir(endpoint) }
 
 // acquireLock takes an exclusive, non-blocking flock, which the kernel
 // releases when the holder dies, so it cannot go stale.

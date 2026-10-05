@@ -27,7 +27,7 @@ type Lock struct {
 // configured with one endpoint must contend for one lock.
 func LockPath(endpoint string) string {
 	endpoint = cmp.Or(endpoint, DefaultEndpoint())
-	return filepath.Join(lockDir(), sanitizeLockName(endpoint)+".lock")
+	return filepath.Join(lockDir(endpoint), sanitizeLockName(endpoint)+".lock")
 }
 
 // sanitizeLockName turns an endpoint into a single filename component.
