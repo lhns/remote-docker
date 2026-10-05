@@ -141,10 +141,9 @@ Changing versions replaces the filesystem rather than upgrading it, so
 `remote machine rebuild` is the repair path. It discards the images and
 containers inside the machine, never your files, which live here.
 
-A Hyper-V backend exists (`--backend hyperv`, from a Flatcar disk image). It
-**has been run by hand once**, on one Windows 11 machine on 2026-10-05, and
-no CI can run it; see `docs/testing-machines.md` if you have Hyper-V and are
-willing to report what happens.
+A Hyper-V backend exists (`--backend hyperv`, from a Flatcar disk image). It is
+tested end to end by hand on Windows 11; no CI can run it, so
+`docs/testing-machines.md` is how to check it on yours.
 
 ## What works
 
@@ -1093,8 +1092,8 @@ Beyond that:
 - **Windows**: one client is exercised end to end on every pull request
   (`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
   non-root mkdir and the conformance probe), on one runner image and one WSL
-  kernel. The rest of the Windows client is unit tested only, and **Hyper-V has
-  run by hand once**, on one machine, and never in CI.
+  kernel. The rest of the Windows client is unit tested only, and **Hyper-V is
+  tested by hand**, never in CI.
 - **Swarm itself** needs a real cluster; only the elevation mechanism is tested.
   The systemd unit is not exercised either.
 - **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount

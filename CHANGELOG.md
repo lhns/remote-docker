@@ -14,8 +14,8 @@ software.
 
 - **Hyper-V machines work.** `machine create --backend hyperv` failed every
   time, and a machine booted without its configuration. The machine's private
-  host key no longer stays in the VM's settings after first boot. Hyper-V is
-  still not covered by CI, so it still warns when used.
+  host key no longer stays in the VM's settings after first boot, and
+  `machine create` no longer warns that the backend is unproven.
 - **`machine rebuild` and `machine create` keep a machine's backend.** Without
   `--backend` they treated a Hyper-V machine as a WSL one. Naming a different
   backend is now refused.

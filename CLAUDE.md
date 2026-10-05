@@ -1162,7 +1162,7 @@ its pure planning function was.
   setup is unproven. Its decisions are unit tested as far as a string can be:
   the PowerShell it builds, the Ignition document and its KVP chunks, the
   state and address parsing, the key fingerprint. The Windows test job only
-  checks that each script parses. Say "run by hand once", never "tested". This
+  checks that each script parses. Say "tested by hand", never "tested in CI". This
   is still the strongest entry on this list: WSL at least runs on a runner.
 - **Windows and WSL beyond one runner image.** `machine.yml` takes a session
   end to end on windows-latest against a WSL workspace, which is one Windows

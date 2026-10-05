@@ -1,8 +1,8 @@
 # Testing a machine backend by hand
 
 The WSL backend runs in CI (`.github/workflows/machine.yml`), on one Windows
-version and one runner image; Hyper-V has no automated coverage and has been
-run by hand once. This is the procedure for somebody with the platform; what
+version and one runner image; Hyper-V has no automated coverage and is tested by
+hand. This is the procedure for somebody with the platform; what
 was decided is [ADR 0026](adr/0026-a-machine-is-a-workspace-we-provision.md).
 Report what happened either way: one run on one machine is all that is known.
 

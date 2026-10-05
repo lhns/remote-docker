@@ -80,7 +80,7 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   - A record without `hostKey` falls back to known_hosts: a machine built
     before this, and `rm --keep-machine` then `create`, which builds nothing.
 
-## The Hyper-V backend was merged unverified, and has been run by hand once
+## The Hyper-V backend was merged unverified, then tested by hand
 
 - **Merged unrun, on purpose.** The plan was that a backend merges once
   somebody has run `docs/testing-machines.md` against it and reported. WSL
@@ -107,10 +107,9 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   second run the same day found the Ignition items present from `New-VM`
   until the agent answered (93s) and gone when `create` returned, a rebuilt
   machine booting configured, and `rm` completing on a VM deleted by hand.
-- **It still warns on every `machine create`**, because one computer is not
-  coverage. Four places say so and must stay in step: that warning,
-  `--backend`'s help, CLAUDE.md's NOT-tested list and the README. All four say
-  "run by hand once", never "tested".
+- **No warning.** `machine create` used to warn that the backend was
+  unproven; the hand test retired it. It still has no CI coverage, which
+  CLAUDE.md's NOT-tested list records.
 
 ## A Hyper-V machine's Ignition goes over KVP
 
