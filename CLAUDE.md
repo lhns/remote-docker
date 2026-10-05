@@ -722,7 +722,9 @@ premise of the project, and it applies to building it too. So:
   presents the background session's run, so `gc` is that client. A run's port
   is allocated by its reverse forward (port 0), never by workspace-info, or every
   `status` keeps a port for ever; the port is also what keeps a run to one
-  hosting connection. Until the run is named nothing per client is served,
+  hosting connection. Its client never releases the connection for idleness
+  (`connGate.keep`), or the run's grace would expire it under a live process.
+  Until the run is named nothing per client is served,
   because `Ports.For` answers an empty client with the account's base port. A
   new agent's refusal of the run always carries a reason: an empty one reads as
   an older agent and the client silently becomes a machine.

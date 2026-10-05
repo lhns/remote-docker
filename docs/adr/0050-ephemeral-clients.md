@@ -134,9 +134,10 @@ is never stored: with the key it takes a run over.
 - **Not yet fit to enable.** Until cleanup lands nothing is removed: an expired
   run's volumes outlive it, and its port is freed while they still name it, so
   a later run of the account may be given it. Hence no changelog entry yet.
-- **A run idle past the client's idle release plus its grace expires while its
-  process lives** (ADR 0015 releases the connection after a minute). The next
-  command starts it again under the same client id, on a port allocated afresh.
+- **An ephemeral client never releases its connection for idleness** (ADR
+  0015), since that would start its run's grace under a live process. The run
+  ends with the process, at the latest the background session's idle exit
+  (ADR 0017, 30 minutes), and then its grace. Machines are released as before.
 - **A one-off command with no session running is a run of its own**, so `gc`
   then collects nothing of an earlier run's. It allocates no port.
 - **One more round trip per connection, for every account**, since the client
@@ -160,5 +161,6 @@ runs on Linux only), `TestEphemeralAccounts`, `client/internal/session/run_test.
 and `TestRunOfAsksTheBackgroundSession`. The registry: its state machine,
 limit and restart record in `agent/internal/ephemeral/registry_test.go`, the
 ports in `core-agent/accounts/ports_run_test.go`, the limit and the record over
-SSH in `agent/internal/sshd/run_registry_test.go`, and `TestEphemeralLimits`.
+SSH in `agent/internal/sshd/run_registry_test.go`, `TestEphemeralLimits`, and
+the held connection in `client/internal/session/hold_test.go`.
 `test/ephemeral.sh` arrives with cleanup.

@@ -264,7 +264,10 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		busy:  s.hasLiveDependents,
 		alive: func(live *liveConn) bool { return live.ssh.Alive() },
 		idle:  opts.IdleTimeout,
-		log:   opts.Log,
+		// An ephemeral run is held while the process lives: a release would
+		// start its grace period on the workspace (ADR 0050).
+		keep: func(live *liveConn) bool { return live.info.Client != "" },
+		log:  opts.Log,
 	}
 
 	s.started = time.Now()
