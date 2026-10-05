@@ -11,4 +11,4 @@
 // cache.
 module github.com/lhns/remote-docker/dircache
 
-go 1.26.3
+go 1.26.8
