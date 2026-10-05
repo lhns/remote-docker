@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"context"
 	"fmt"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -11,21 +12,20 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// handleRun answers workspace.RunRequest (ADR 0050). For an ephemeral account
-// it makes the connection's client the run's, once; any other account's is
-// acknowledged and changes nothing. A refusal's payload is the reason, which
-// the client prints.
+// handleRun answers workspace.RunRequest (ADR 0050): an ephemeral account's
+// connection takes the run's client, once; any other account's is acknowledged
+// and unchanged. A refusal's payload is the reason, which the client prints.
 func (s *Server) handleRun(ctx gssh.Context, _ *gssh.Server, req *ssh.Request) (bool, []byte) {
 	account, ok := accountFor(ctx)
 	if !ok {
-		return false, nil
+		return false, []byte("this connection has no account")
 	}
 	if !account.ephemeral {
 		return true, nil
 	}
 
 	refuse := func(why string) (bool, []byte) {
-		s.log().Warn("refused a run: "+why, "account", account.Name(), "from", ctx.RemoteAddr())
+		s.log().Warn("refused a run", "why", why, "account", account.Name(), "from", ctx.RemoteAddr())
 		return false, []byte(why)
 	}
 	if account.client != "" {
@@ -37,7 +37,7 @@ func (s *Server) handleRun(ctx gssh.Context, _ *gssh.Server, req *ssh.Request) (
 	}
 	account.client = workspace.EphemeralClientID(account.key, run)
 
-	if !s.claimRun(ctx, account) {
+	if !s.claimRun(ctx, runKey{account.Name(), account.client}) {
 		return refuse(fmt.Sprintf("run %s of account %s already has a live connection\n"+
 			"  fix: close it, or wait about a minute for the workspace to notice it is gone",
 			account.client, account.Name()))
@@ -47,43 +47,29 @@ func (s *Server) handleRun(ctx gssh.Context, _ *gssh.Server, req *ssh.Request) (
 	return true, nil
 }
 
-// claimRun records this connection as the run's one live connection, until the
-// connection ends.
-func (s *Server) claimRun(ctx gssh.Context, account sessionAccount) bool {
-	key := runKey{account.Name(), account.client}
-
+// claimRun makes this connection the run's one live connection, until it ends.
+func (s *Server) claimRun(ctx context.Context, key runKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.runs[key] {
+	if _, taken := s.runs[key]; taken {
 		return false
 	}
 	if s.runs == nil {
-		s.runs = map[runKey]bool{}
+		s.runs = map[runKey]struct{}{}
 	}
-	s.runs[key] = true
+	s.runs[key] = struct{}{}
 
-	go func() {
-		<-ctx.Done()
+	context.AfterFunc(ctx, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.runs, key)
-	}()
+	})
 	return true
 }
 
-// clientRefusal is why a request that needs the connection's client cannot
-// have it, or "" when it can: an ephemeral account's connection that has not
-// named its run.
-func clientRefusal(account sessionAccount) string {
-	if account.client != "" {
-		return ""
-	}
-	return fmt.Sprintf("account %s gives each client run its own identity, and this connection named no run\n"+
-		"  fix: upgrade remote-docker on this machine", account.Name())
-}
-
 // needsClient reports whether a session command depends on which client asks:
-// its port, its volumes or its unions.
+// its port, its volumes or its unions. An ephemeral connection that has not
+// named its run has no client to give it.
 func needsClient(command string) bool {
 	switch command {
 	case workspace.InfoCommand, notify.Command, cache.Command:

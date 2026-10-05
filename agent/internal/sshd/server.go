@@ -58,9 +58,8 @@ type Config struct {
 	// alone instead of exporting it. Empty is the old behaviour.
 	DaemonPaths []string
 
-	// Ephemeral names the accounts whose clients are ephemeral, from
-	// WORKSPACE_EPHEMERAL_ACCOUNTS (ADR 0050): each client run is a client of
-	// its own. Every other account is unaffected.
+	// Ephemeral names the accounts whose every client run is a client of its
+	// own, from WORKSPACE_EPHEMERAL_ACCOUNTS (ADR 0050).
 	Ephemeral map[string]bool
 
 	Log *slog.Logger
@@ -83,9 +82,8 @@ type Server struct {
 	mu     sync.Mutex
 	closed bool
 
-	// runs are the ephemeral runs with a live connection, by account and
-	// derived client id: one connection per run (ADR 0050).
-	runs map[runKey]bool
+	// runs holds each ephemeral run with a live connection (ADR 0050).
+	runs map[runKey]struct{}
 }
 
 type runKey struct{ account, client string }
@@ -105,8 +103,8 @@ type sessionAccount struct {
 	// of somebody's machines share an account and a daemon; only this tells
 	// their exports and volumes apart.
 	//
-	// For an ephemeral account it names the RUN instead, and is empty until
-	// the run request arrives (ADR 0050); key is what it is derived from.
+	// For an ephemeral account it names the RUN, derived from key, and is
+	// empty until the run request arrives (ADR 0050).
 	client    string
 	ephemeral bool
 	key       []byte

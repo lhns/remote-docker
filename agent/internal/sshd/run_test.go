@@ -121,9 +121,8 @@ func TestRequestsNeedingAClientWaitForTheRun(t *testing.T) {
 		}
 	}
 
-	why := clientRefusal(account)
-	if !strings.Contains(why, "named no run") || !strings.Contains(why, "\n  fix: ") {
-		t.Errorf("the refusal is %q, want a diagnosis and a fix line", why)
+	if account.Client() != "" {
+		t.Fatalf("client = %q before the run was named", account.Client())
 	}
 
 	port, err := workspace.DefaultMapping().PortForUID(account.UID())
@@ -136,10 +135,6 @@ func TestRequestsNeedingAClientWaitForTheRun(t *testing.T) {
 
 	if ok, why := sendRun(s, ctx, runA); !ok {
 		t.Fatalf("run refused: %s", why)
-	}
-	account, _ = accountFor(ctx)
-	if why := clientRefusal(account); why != "" {
-		t.Errorf("after the run, still refused: %s", why)
 	}
 	if _, ok := (reversePolicy{s}).Allow(ctx, "127.0.0.1", uint32(port)); !ok {
 		t.Error("the reverse forward was refused after the run was named")
@@ -162,9 +157,6 @@ func TestAMachineAccountIgnoresTheRun(t *testing.T) {
 	if account.Client() != workspace.ClientID(key.Marshal()) {
 		t.Errorf("client = %q, want the digest of bob's key", account.Client())
 	}
-	if why := clientRefusal(account); why != "" {
-		t.Errorf("bob was refused: %s", why)
-	}
 }
 
 // A run is one process, so a second live connection naming it is refused; once
@@ -176,13 +168,19 @@ func TestOneLiveConnectionPerRun(t *testing.T) {
 		t.Fatalf("run refused: %s", why)
 	}
 
-	second, _ := connect(t, s, "alice", key)
+	second, closeSecond := connect(t, s, "alice", key)
 	ok, why := sendRun(s, second, runA)
 	if ok {
 		t.Fatal("a second live connection for one run was accepted")
 	}
 	if !strings.Contains(why, "already has a live connection") || !strings.Contains(why, "\n  fix: ") {
 		t.Errorf("the refusal says %q", why)
+	}
+	// The refused connection ending must not release the first's claim.
+	closeSecond()
+	time.Sleep(50 * time.Millisecond)
+	if ok, _ := sendRun(s, connectOnly(t, s, key), runA); ok {
+		t.Fatal("a refused connection ending released the live one's run")
 	}
 
 	if ok, why := sendRun(s, connectOnly(t, s, key), runB); !ok {

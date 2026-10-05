@@ -95,11 +95,9 @@ type Info struct {
 	// is the old behaviour.
 	Now int64
 
-	// Client is the id the agent derived for this connection when the account's
-	// clients are ephemeral (ADR 0050), and the client uses it wherever it would
-	// use ClientID. Empty for any other account, and from an agent that predates
-	// the key; both read as "derive ClientID from the key", the old behaviour.
-	// Emitted only when set, so an account not opted in gets today's reply.
+	// Client is the id the agent derived for an ephemeral run (ADR 0050), used
+	// in place of ClientID. Empty, and not emitted, for any other account; an
+	// agent that predates the key reads the same.
 	Client string
 
 	// Extra carries keys the client did not recognise. Preserving them keeps

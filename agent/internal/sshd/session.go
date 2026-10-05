@@ -44,12 +44,11 @@ func (s *Server) handleSession(session gssh.Session) {
 
 	command := strings.Join(session.Command(), " ")
 
-	if needsClient(command) {
-		if why := clientRefusal(account); why != "" {
-			_, _ = fmt.Fprintln(session.Stderr(), command+": "+why)
-			_ = session.Exit(1)
-			return
-		}
+	if account.client == "" && needsClient(command) {
+		_, _ = fmt.Fprintf(session.Stderr(), "%s: account %s gives each client run its own identity, and this connection named no run\n"+
+			"  fix: upgrade remote-docker on this machine\n", command, account.Name())
+		_ = session.Exit(1)
+		return
 	}
 
 	switch command {

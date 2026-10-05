@@ -19,79 +19,72 @@ ADR 0029 both ways of enrolling them fail:
 ## Decision: identity is per client run
 
 - **Opt-in per account**: `WORKSPACE_EPHEMERAL_ACCOUNTS`, comma-separated,
-  folded like a key file's name; a name that folds to nothing refuses the start,
-  naming the variable. Read once at agent start.
-- **A run is one client process**: the background session of ADR 0017, which
-  spans many SSH connections because idle ones are released (ADR 0015). Keyed on
-  the connection instead, every idle reconnect would change the port and the
-  volume names, which breaks ADR 0032.
-- **The client mints a run id** in `session.Open`: 128 random bits, hex, held in
-  memory for the life of the process and sent nowhere but the run request.
-- **The run request** `workspace.RunRequest` (`remote-docker-run`) is an SSH
-  global request whose payload is the run id, sent right after the handshake and
-  before `workspace-info`, any forward or any channel.
-- **The derived id** is `workspace.EphemeralClientID(key wire bytes, run id)`:
-  SHA-256 over `remote-docker-run\0`, the key's length and bytes, and the run id,
-  cut to 8 hex characters. Same shape as `ClientID`, so volume names, labels and
-  the union's directory checks are unchanged; the prefix keeps it from ever
-  being a machine's id.
-- **The agent tells the client which id it derived**, as `WORKSPACE_CLIENT` in
-  `workspace-info`, emitted only for an ephemeral account. The client uses it
-  wherever it used `ClientID`: volume names, `ClientLabel`, the collector, the
-  local-port rule.
+  folded like a key file's name. A name that folds to nothing refuses the start.
+- **A run is one client process**, which spans many SSH connections because idle
+  ones are released (ADR 0015). Keyed on the connection, every idle reconnect
+  would rename the port and the volumes under running containers (ADR 0032).
+- **The run id**: 128 random bits, hex, minted in `session.Open` and sent
+  nowhere but the run request.
+- **The run request** `workspace.RunRequest` (`remote-docker-run`): an SSH
+  global request, payload the run id, sent after the handshake and before
+  anything else.
+- **The derived id** `workspace.EphemeralClientID(key wire bytes, run id)`:
+  SHA-256 over `remote-docker-run\0`, the key's length and bytes, and the run
+  id, cut to 8 hex. `ClientID`'s shape, so volume names and labels are
+  unchanged.
+- **workspace-info reports it** as `WORKSPACE_CLIENT`, only for an ephemeral
+  account, and the client uses it wherever it used `ClientID`.
 
 ### What the agent enforces
 
 | on a connection of | the run request | before it | a second one |
 |---|---|---|---|
-| an account not listed | acknowledged, ignored | everything as today | acknowledged, ignored |
-| an ephemeral account | sets the client, once | `workspace-info`, `workspace-notify`, `workspace-cache` and the reverse forward are refused; a shell, the docker socket and local forwards need no client and are served | refused: `this connection already named its run` |
+| an account not listed | acknowledged, ignored | everything as before | acknowledged, ignored |
+| an ephemeral account | sets the client | `workspace-info`, `workspace-notify`, `workspace-cache` and the reverse forward refused; a shell, the docker socket and local forwards served | refused |
 
-- **One live connection per run.** The agent keeps `(account, client)` for every
-  live run and refuses a second connection naming it, with a `fix:` line. The
-  entry goes when the connection's context ends, which is when the workspace
-  notices (`armDeadPeerDetection`, `wslisten`).
-- **Takeover needs both halves**: the derived id needs the authenticated key and
-  the run id, and the run id is a bearer secret held by one process.
+- **One live connection per run.** A second connection naming a live run is
+  refused with a `fix:` line. The claim ends with the connection's context,
+  which is when the workspace notices (`armDeadPeerDetection`, `wslisten`).
+- **Before the run is named the connection has no client**, and that must stay
+  a refusal: `Ports.For` answers an empty client with the account's base port,
+  so an info served then would silently hand a run another client's export
+  port.
+- **Takeover needs both halves**: the authenticated key and the run id.
 
 ### Compatibility
 
 | client | agent | result |
 |---|---|---|
-| new | older | the request is unknown and refused with no payload; the client carries on as a machine |
-| new | new, account not listed | acknowledged; `workspace-info` carries no client key, so the client derives `ClientID` as before |
-| older | new, ephemeral account | `workspace-info` is refused: `account <name> gives each client run its own identity, and this connection named no run` / `fix: upgrade remote-docker on this machine` |
+| new | older | refused with no payload; the client carries on as a machine |
+| new | new, account not listed | acknowledged; no `WORKSPACE_CLIENT`, so `ClientID` as before |
+| older | new, ephemeral account | `workspace-info` refused: `... this connection named no run` / `fix: upgrade remote-docker on this machine` |
 
-A refusal from a new agent always carries its reason as the payload, which is
-how the client tells it from an older agent's empty one.
+A new agent's refusal always carries its reason as the payload. An empty one is
+read as an older agent, so a reasonless refusal would silently make the client
+a machine.
 
 ## Costs
 
 - **Not yet fit to enable.** Until the registry, `Ports.Free` and cleanup land,
   each run is allocated a port that `clientports` keeps for ever, and its
   volumes outlive it. Hence no README row and no changelog entry yet.
+- **Every process is a run, a query session included.** `remote status`
+  allocates a port per call, and `remote gc` collects only its own run's
+  volumes, which is none.
+- **One more round trip per connection, for every account**, since the client
+  cannot know an account is ephemeral before asking.
 - **Exports are not isolated between runs of one account.** `AllowDial` gates
   SSH channels only, so a `--network host` or `docker.sock`-bound (ADR 0049)
-  container of the account reaches every run's export in the daemon's netns.
-  Accepted, as between ADR 0029's machines.
-- **A run whose previous connection the workspace has not yet noticed ending is
-  refused** until it does, up to the ~60s of dead-peer detection. The same wait
-  ADR 0028's port reservation already imposes on a reconnecting machine.
-- **32 bits of id per run.** Two live runs of one account colliding would be
-  refused as one run; at the handful of runs an account holds this is
-  negligible, and a collision fails loudly.
+  container of the account reaches every run's export. Accepted, as between
+  ADR 0029's machines.
+- **A reconnect before the workspace notices the previous connection ended is
+  refused**, for up to the ~60s of dead-peer detection: the wait ADR 0028's
+  port reservation already imposes on a machine.
+- **32 bits of id per run.** A collision between two live runs of one account
+  is refused as one run: loud, and negligible at a handful of runs.
 
 ## Verification
 
-- `core/workspace/client_test.go`: fixed vectors for `EphemeralClientID`,
-  different per run and per key, never a `ClientID`; run id shape.
-- `core/workspace/info_test.go` `TestInfoClient`: the key is absent unless set,
-  round-trips, and a malformed one is refused.
-- `agent/internal/sshd/run_test.go`: a run named once per connection; requests
-  needing a client refused before it; an account not listed unaffected; a
-  second live connection for one run refused, and accepted once the first ends.
-- `agent/cmd/remote-dockerd/serve_test.go` `TestEphemeralAccounts`.
-- `client/internal/session/run_test.go`: one run id per process across
-  reconnects; an older agent's bare refusal leaves a machine; a reasoned
-  refusal is printed; the derived id names volumes and the collector's filter.
-- Not yet end to end: `test/ephemeral.sh` arrives with cleanup.
+Unit tests only: `core/workspace` (`client_test.go`, `TestInfoClient`),
+`agent/internal/sshd/run_test.go`, `TestEphemeralAccounts`, and
+`client/internal/session/run_test.go`. `test/ephemeral.sh` arrives with cleanup.

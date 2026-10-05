@@ -714,15 +714,13 @@ premise of the project, and it applies to building it too. So:
   nothing renumbers; `accounts.Ports` allocates the rest and `Allow` asks it
   rather than recomputing `PortForUID`, because recomputing would refuse a port
   the agent had just handed out.
-- **For an ephemeral account the client is the RUN, never the SSH connection,
-  and the run id never leaves the client except in the run request** (ADR
-  0050). A run is one client process and spans every reconnect an idle release
-  makes, so keying on the connection would rename its port and volumes under
-  running containers. The agent derives `EphemeralClientID` from the key and
-  the run id and reports it in workspace-info; until the run is named, nothing
-  per client is served. An account not in `WORKSPACE_EPHEMERAL_ACCOUNTS` gets
-  today's workspace-info byte for byte: `WORKSPACE_CLIENT` is emitted only for
-  an ephemeral one.
+- **For an ephemeral account the client is the RUN, one client process, never
+  the SSH connection** (ADR 0050): keyed on the connection, an idle reconnect
+  renames the port and volumes under running containers. Until the run is
+  named nothing per client is served, because `Ports.For` answers an empty
+  client with the account's base port. A new agent's refusal of the run always
+  carries a reason: an empty one reads as an older agent and the client
+  silently becomes a machine.
 
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,

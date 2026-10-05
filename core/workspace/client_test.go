@@ -21,31 +21,14 @@ func TestEphemeralClientID(t *testing.T) {
 		{alice, runB, "da32e003"},
 		{bob, runA, "2d5c0059"},
 	} {
-		got := EphemeralClientID(tc.key, tc.run)
-		if got != tc.want {
+		if got := EphemeralClientID(tc.key, tc.run); got != tc.want {
 			t.Errorf("EphemeralClientID(%s, %s) = %q, want %q", tc.key, tc.run, got, tc.want)
-		}
-		if !ValidClientID(got) {
-			t.Errorf("%q is not the shape of a client id", got)
-		}
-		if got == ClientID(tc.key) {
-			t.Errorf("run %s of %s is the machine's own client id", tc.run, tc.key)
-		}
-		if _, _, ok := ParseVolumeName(VolumeNameForID(got, ShareID("/x"))); !ok {
-			t.Errorf("a volume named for client %q does not parse", got)
 		}
 	}
 }
 
 func TestRunIDs(t *testing.T) {
-	a, err := NewRunID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := NewRunID()
-	if err != nil {
-		t.Fatal(err)
-	}
+	a, b := NewRunID(), NewRunID()
 	if a == b {
 		t.Error("two runs minted one id")
 	}

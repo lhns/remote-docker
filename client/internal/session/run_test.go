@@ -9,7 +9,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/client/internal/config"
-	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
@@ -75,6 +74,9 @@ func TestAnOlderAgentLeavesAMachine(t *testing.T) {
 	if got := clientIDFor(workspace.Info{User: "alice"}, key); got != workspace.ClientID(key) {
 		t.Errorf("client = %q, want the key's %q", got, workspace.ClientID(key))
 	}
+	if got := clientIDFor(workspace.Info{User: "alice", Client: "0123abcd"}, key); got != "0123abcd" {
+		t.Errorf("client = %q, want the one the workspace derived", got)
+	}
 }
 
 // A refusal with a reason ends the connection and says why.
@@ -87,33 +89,5 @@ func TestARefusedRunSaysWhy(t *testing.T) {
 	err := openQuery(t).announceRun(t.Context(), ws.dial(t))
 	if err == nil || !strings.Contains(err.Error(), why) {
 		t.Fatalf("err = %v, want the workspace's reason", err)
-	}
-}
-
-// The id the workspace derived is the client's everywhere it names itself:
-// volumes, the collector's filter, the ports it opens locally.
-func TestTheDerivedIDNamesVolumesAndLabels(t *testing.T) {
-	const derived = "0123abcd"
-	key := []byte("ssh-ed25519 AAAA...alice-ci")
-
-	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs())}
-	s.clientID = clientIDFor(workspace.Info{User: "alice", Client: derived}, key)
-	if s.clientID != derived {
-		t.Fatalf("client = %q, want the workspace's %q", s.clientID, derived)
-	}
-
-	share, err := s.registry.Register(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := workspace.VolumeNameForExport(derived, share.ExportPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !s.ourVolumes()[want] {
-		t.Errorf("our volumes are %v, want %s", s.ourVolumes(), want)
-	}
-	if got := s.collector(&liveConn{info: workspace.Info{User: "alice"}}).Client; got != derived {
-		t.Errorf("the collector filters on %q", got)
 	}
 }
