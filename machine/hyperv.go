@@ -18,6 +18,7 @@ package machine
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -265,8 +266,11 @@ func urlEncode(s string) string {
 // are never fewer than the UTF-16 characters Hyper-V counts.
 const ignitionKVPChunk = 1000
 
+// ignitionKVPPrefix starts the name of every KVP item carrying the document.
+const ignitionKVPPrefix = "ignition.config."
+
 // kvpItem is one key-value pair handed to the guest through Hyper-V's KVP
-// exchange.
+// exchange, named as kvpScript reads it.
 type kvpItem struct{ Name, Data string }
 
 // ignitionKVP splits the Ignition document into the KVP items Flatcar reads it
@@ -283,26 +287,23 @@ func ignitionKVP(config string) []kvpItem {
 		for n < len(config) && !utf8.RuneStart(config[n]) {
 			n--
 		}
-		items = append(items, kvpItem{Name: fmt.Sprintf("ignition.config.%d", len(items)), Data: config[:n]})
+		items = append(items, kvpItem{Name: fmt.Sprintf("%s%d", ignitionKVPPrefix, len(items)), Data: config[:n]})
 		config = config[n:]
 	}
 	return items
 }
 
-// kvpInput is what psAddKVP reads on its stdin: one item per line, the name and
-// the data separated by a tab.
+// kvpInput is what psAddKVP reads on its stdin: the items as one JSON array.
 //
 // Stdin rather than the command line, because the data holds the machine's
 // private host key and a command line is readable by every process on this
-// computer. Neither separator can occur in the data: the Ignition document is
-// JSON from json.Marshal, which escapes both inside strings and emits neither
-// between tokens.
-func kvpInput(items []kvpItem) string {
-	var b strings.Builder
-	for _, item := range items {
-		b.WriteString(item.Name + "\t" + item.Data + "\n")
+// computer.
+func kvpInput(items []kvpItem) (string, error) {
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return "", fmt.Errorf("encoding the machine's configuration: %w", err)
 	}
-	return b.String()
+	return string(raw), nil
 }
 
 // The PowerShell each operation runs. Each takes the VM name ALREADY PREFIXED:
@@ -383,33 +384,26 @@ func psNewVM(vm, vhd, dir string, spec Spec) string {
 	return strings.Join(cmd, "; ")
 }
 
-// psAddKVP hands the items kvpInput wrote on stdin to the machine, through the
-// WMI call `kvpctl add-ign` makes. Before the machine first starts, because
-// Ignition reads them once, at first boot.
+// kvpScript adds and removes a machine's KVP items, through the WMI calls
+// `kvpctl add-ign` makes.
 //
-// Hyper-V has no cmdlet for this: it is
-// Msvm_VirtualSystemManagementService.AddKvpItems with a
-// Msvm_KvpExchangeDataItem whose Source 0 means "from the host". The call may
-// finish as a job (4096), and only the job says whether it worked. The error
-// names the item and the code, never the data, which holds the host key.
-func psAddKVP(vm string) string {
-	const ns = `root\virtualization\v2`
-	return strings.Join([]string{
-		"$vm = " + psVM(vm),
-		"if (-not $vm) { throw " + psQuote("no machine named "+vm) + " }",
-		"$cs = Get-WmiObject -Namespace " + psQuote(ns) + " -Class Msvm_ComputerSystem -Filter \"Name='$($vm.Id)'\"",
-		"$svc = Get-WmiObject -Namespace " + psQuote(ns) + " -Class Msvm_VirtualSystemManagementService",
-		"$in = New-Object IO.StreamReader([Console]::OpenStandardInput(), (New-Object Text.UTF8Encoding $false))",
-		"while ($null -ne ($line = $in.ReadLine())) { " +
-			"$name, $data = $line -split \"`t\", 2; " +
-			"$item = ([wmiclass]" + psQuote(ns+":Msvm_KvpExchangeDataItem") + ").CreateInstance(); " +
-			"$item.Name = $name; $item.Data = $data; $item.Source = 0; " +
-			"$r = $svc.AddKvpItems($cs, @($item.PSBase.GetText(1))); $code = $r.ReturnValue; " +
-			"if ($code -eq 4096) { $job = [wmi]$r.Job; " +
-			"while ($job.JobState -lt 7) { Start-Sleep -Milliseconds 200; $job = [wmi]$r.Job }; " +
-			"$code = $job.ErrorCode }; " +
-			"if ($code -ne 0) { throw \"Hyper-V refused the KVP item $name with code $code\" } }",
-	}, "; ")
+//go:embed hyperv_kvp.ps1
+var kvpScript string
+
+// psKVP runs kvpScript as a script block, so it runs inside psScript like every
+// other script here, against the machine psVM finds.
+func psKVP(vm, args string) string {
+	return "& {\n" + kvpScript + "\n} -VM (" + psVM(vm) + ") " + args
+}
+
+// psAddKVP hands the machine the items kvpInput wrote on stdin. Before its
+// first start, because Ignition reads them once, at first boot.
+func psAddKVP(vm string) string { return psKVP(vm, "-Add") }
+
+// psRemoveKVP removes the Ignition items, which hold the machine's private host
+// key, once it has applied them (hyperVBackend.Retract).
+func psRemoveKVP(vm string) string {
+	return psKVP(vm, "-Remove "+psQuote(ignitionKVPPrefix))
 }
 
 // psSetNotes records what a machine was built from and with.
@@ -421,16 +415,15 @@ func psSetNotes(vm string, notes hyperVNotes) string {
 //
 // The disk is deleted explicitly: Remove-VM leaves it, which would silently
 // keep gigabytes per machine somebody thought they had removed, so a disk that
-// cannot be deleted is an error. Stop first with -TurnOff, because a machine
-// being destroyed has nothing to flush and a clean shutdown can wait
-// indefinitely on a guest that is not listening; on one already off it only
-// warns.
+// cannot be deleted is an error. A VM somebody already removed by hand is
+// skipped, not an error, or `rm` could never finish and the disk would stay.
+// Stop first with -TurnOff, because a machine being destroyed has nothing to
+// flush and a clean shutdown can wait indefinitely on a guest that is not
+// listening; on one already off it only warns.
 func psRemoveVM(vm, dir string) string {
-	return fmt.Sprintf(
-		"Stop-VM -Name %s -TurnOff -Force; "+
-			"Remove-VM -Name %s -Force; "+
-			"if (Test-Path -LiteralPath %s) { Remove-Item -LiteralPath %s -Recurse -Force }",
-		psQuote(vm), psQuote(vm), psQuote(dir), psQuote(dir))
+	return "$vm = " + psVM(vm) + "; " +
+		"if ($vm) { Stop-VM -VM $vm -TurnOff -Force; Remove-VM -VM $vm -Force }; " +
+		fmt.Sprintf("if (Test-Path -LiteralPath %[1]s) { Remove-Item -LiteralPath %[1]s -Recurse -Force }", psQuote(dir))
 }
 
 // psQuote wraps a string as a PowerShell single-quoted literal.

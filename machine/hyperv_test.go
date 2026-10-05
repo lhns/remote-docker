@@ -355,7 +355,7 @@ func TestPSCommands(t *testing.T) {
 	if !strings.Contains(remove, `Remove-Item -LiteralPath 'C:\m' -Recurse -Force }`) {
 		t.Errorf("destroy leaves the disk behind:\n%s", remove)
 	}
-	if !strings.Contains(remove, "Remove-VM -Name 'rd-dev' -Force") {
+	if !strings.Contains(remove, "Remove-VM -VM $vm -Force") {
 		t.Errorf("destroy does not remove the machine:\n%s", remove)
 	}
 
@@ -380,7 +380,7 @@ func TestPSCommands(t *testing.T) {
 	// Nothing is silenced. psScript makes every error fail the script, and an
 	// error silenced by -ErrorAction still made powershell.exe exit 1, with
 	// nothing printed to say why.
-	for _, script := range []string{get, psAddress("rd-dev"), psStart("rd-dev"), create, remove, psAddKVP("rd-dev")} {
+	for _, script := range []string{get, psAddress("rd-dev"), psStart("rd-dev"), create, remove, psAddKVP("rd-dev"), psRemoveKVP("rd-dev")} {
 		if strings.Contains(script, "ErrorAction") {
 			t.Errorf("an error is silenced:\n%s", script)
 		}
@@ -464,9 +464,8 @@ func TestIgnitionKVP(t *testing.T) {
 	}
 }
 
-// What psAddKVP reads, one item per line with a tab after the name, is only
-// unambiguous if the document holds neither. The unit and the host key inside
-// it both have newlines.
+// What psAddKVP reads on stdin has to carry the document back exactly, newlines
+// and all: the unit and the host key inside it both have them.
 func TestKVPInputCarriesTheDocumentIntact(t *testing.T) {
 	// As long as a real ed25519 key in OpenSSH's format, about 400 bytes.
 	spec := Spec{Name: "dev", Account: "dev", Port: 2222, Image: "example.com/ws:1",
@@ -475,47 +474,94 @@ func TestKVPInputCarriesTheDocumentIntact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.ContainsAny(config, "\t\n\r") {
-		t.Fatalf("the document holds a separator kvpInput relies on it not holding:\n%s", config)
-	}
 	if len(config) <= ignitionKVPChunk {
 		t.Fatalf("the document is %d bytes, so this test does not split it", len(config))
 	}
 
+	input, err := kvpInput(ignitionKVP(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []struct{ Name, Data string }
+	if err := json.Unmarshal([]byte(input), &items); err != nil {
+		t.Fatalf("the input is not a JSON array of items: %v", err)
+	}
 	var joined strings.Builder
-	for i, line := range strings.Split(strings.TrimSuffix(kvpInput(ignitionKVP(config)), "\n"), "\n") {
-		name, data, ok := strings.Cut(line, "\t")
-		if !ok || name != fmt.Sprintf("ignition.config.%d", i) {
-			t.Fatalf("line %d is %q", i, line)
+	for i, item := range items {
+		if item.Name != fmt.Sprintf("ignition.config.%d", i) {
+			t.Errorf("item %d is named %q", i, item.Name)
 		}
-		joined.WriteString(data)
+		joined.WriteString(item.Data)
 	}
 	if joined.String() != config {
-		t.Error("the lines do not carry the document back")
+		t.Error("the items do not carry the document back")
 	}
 }
 
-func TestPSAddKVP(t *testing.T) {
-	script := psAddKVP("rd-dev")
+func TestPSKVP(t *testing.T) {
+	add := psAddKVP("rd-dev")
+	remove := psRemoveKVP("rd-dev")
+	for _, script := range []string{add, remove} {
+		// The embedded script, run as a script block against the machine psVM
+		// finds, so psScript's error handling covers it.
+		if !strings.HasPrefix(script, "& {\n") || !strings.Contains(script, "\n} -VM ("+psVM("rd-dev")+") ") {
+			t.Errorf("the KVP script is not invoked as a block against the machine:\n%s", script)
+		}
+		for _, want := range []string{
+			"param(",
+			"Msvm_VirtualSystemManagementService",
+			"Msvm_KvpExchangeDataItem",
+			// Source 0 is the host's pool, the one Ignition reads in the guest.
+			"$item.Source = 0",
+			// The call can finish as a job, and only the job says whether it
+			// worked.
+			"$code -eq 4096",
+			"$job.ErrorCode",
+		} {
+			if !strings.Contains(script, want) {
+				t.Errorf("the KVP script is missing %q", want)
+			}
+		}
+	}
+
+	if !strings.HasSuffix(add, ") -Add") {
+		t.Errorf("add does not ask for -Add:\n%s", add)
+	}
 	for _, want := range []string{
-		"$_.Name -eq 'rd-dev'",
-		"Msvm_VirtualSystemManagementService",
-		"Msvm_KvpExchangeDataItem",
-		// Source 0 is the host's pool, the one Ignition reads in the guest.
-		"$item.Source = 0",
 		"AddKvpItems",
 		// From stdin, never the command line: the data holds the host key.
 		"[Console]::OpenStandardInput()",
-		// The call can finish as a job, and only the job says whether it worked.
-		"$code -eq 4096",
-		"$job.ErrorCode",
+		"ConvertFrom-Json",
 	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("psAddKVP is missing %q:\n%s", want, script)
+		if !strings.Contains(add, want) {
+			t.Errorf("add is missing %q", want)
 		}
 	}
-	// The refusal names the item and the code, never the data.
-	if !strings.Contains(script, `throw "Hyper-V refused the KVP item $name with code $code"`) {
-		t.Errorf("the refusal is not the one that leaves the data out:\n%s", script)
+
+	// Remove names the items by the prefix ignitionKVP gives them, and no data
+	// reaches this command line either.
+	if !strings.HasSuffix(remove, ") -Remove 'ignition.config.'") {
+		t.Errorf("remove does not name the Ignition items:\n%s", remove)
+	}
+	if !strings.Contains(remove, "RemoveKvpItems") || !strings.Contains(remove, "HostExchangeItems") {
+		t.Error("remove does not remove the items it lists")
+	}
+
+	// A refusal names the method, the item and the code, never the data.
+	if !strings.Contains(kvpScript, `throw "Hyper-V refused $Method on the KVP item $Name with code $code"`) {
+		t.Error("the refusal is not the one that leaves the data out")
+	}
+}
+
+// A VM somebody removed by hand must not stop `rm`: stopping and removing it are
+// skipped, and the disk, which is what costs the space, is still deleted.
+func TestPSRemoveVMWithTheVMGone(t *testing.T) {
+	remove := psRemoveVM("rd-dev", `C:\m`)
+
+	if !strings.HasPrefix(remove, "$vm = "+psVM("rd-dev")+"; if ($vm) { Stop-VM -VM $vm -TurnOff -Force; Remove-VM -VM $vm -Force }; ") {
+		t.Errorf("stopping and removing the VM is not conditional on finding it:\n%s", remove)
+	}
+	if !strings.HasSuffix(remove, `}; if (Test-Path -LiteralPath 'C:\m') { Remove-Item -LiteralPath 'C:\m' -Recurse -Force }`) {
+		t.Errorf("the disk is not deleted whether or not the VM was there:\n%s", remove)
 	}
 }

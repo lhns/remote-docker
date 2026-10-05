@@ -191,7 +191,9 @@ remote-docker run --rm -v "${PWD}:/w" alpine:3 cat /w/marker
 Expected: `create` returns once the agent answers, about a minute and a half
 the first time (93 seconds on 2026-10-05, most of it the machine pulling the
 workspace image); `docker run` prints `hello`. The warning `create` prints
-about the backend is expected.
+about the backend is expected; one saying the private host key is still in
+the KVP items is not. Once `create` has returned, the snippet under "Ignition
+did not apply" below lists no `ignition.config.*` item.
 
 Then the rest of the WSL procedure applies with `--backend hyperv` added:
 create again (`already matches; nothing to do`), `machine rebuild dev -f`
@@ -218,14 +220,16 @@ address about 30 seconds after `Start-VM` and the client waits for it, so
 2. **Ignition did not apply.** The console (`vmconnect.exe localhost rd-dev`)
    shows `localhost login:`, port 22 answers and the agent's port does not.
    The configuration is handed to the guest as KVP items before its first
-   boot, never as a file. Check they are there, without printing them, since
-   they hold the machine's private host key:
+   boot, never as a file, and `create` removes them only once the agent
+   answers. Check they are there, without printing them, since they hold the
+   machine's private host key:
 
    ```powershell
    $vm = Get-VM rd-dev
    $cs = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "Name='$($vm.Id)'"
-   $kvp = $cs.GetRelated('Msvm_KvpExchangeComponent')
-   $set = $kvp.GetRelated('Msvm_KvpExchangeComponentSettingData')
+   $set = $cs.GetRelated('Msvm_VirtualSystemSettingData') |
+     Where-Object VirtualSystemType -eq 'Microsoft:Hyper-V:System:Realized' |
+     ForEach-Object { $_.GetRelated('Msvm_KvpExchangeComponentSettingData') }
    foreach ($x in $set.HostExchangeItems) {
      $p = ([xml]$x).INSTANCE.PROPERTY
      $n = ($p | Where-Object Name -eq 'Name').VALUE
@@ -234,9 +238,9 @@ address about 30 seconds after `Start-VM` and the client waits for it, so
    }
    ```
 
-   Expected: `ignition.config.0`, `ignition.config.1`, ..., none over 1000.
-   Ignition runs only at first boot, so a machine that booted without them
-   needs `machine rebuild`, not a restart.
+   Expected while it is failing: `ignition.config.0`, `ignition.config.1`,
+   ..., none over 1000. Ignition runs only at first boot, so a machine that
+   booted without them needs `machine rebuild`, not a restart.
 3. **The workspace container is not running.** Its unit is
    `remote-dockerd.service`, but there is no way in to look at it: Ignition
    gives no account a password, and Flatcar's own sshd on port 22 has no key
@@ -256,8 +260,8 @@ docker context ls                        # no dev
 ```
 
 `rm` removes the disk too. `Remove-VM` alone leaves it, silently keeping
-gigabytes per machine, so the directory being gone is the thing to check. The
-KVP items go with the VM.
+gigabytes per machine, so the directory being gone is the thing to check. A
+VM already removed by hand (`Remove-VM`) does not stop it.
 
 ## What to capture when something fails
 

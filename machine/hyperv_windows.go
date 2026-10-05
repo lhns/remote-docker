@@ -137,8 +137,11 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	if _, err := b.ps(ctx, psNewVM(machineName(spec.Name), vhd, dir, spec)); err != nil {
 		return fmt.Errorf("creating the machine: %w", err)
 	}
-	// On stdin and nowhere on disk: it holds the private host key.
-	if _, err := b.psWithInput(ctx, psAddKVP(machineName(spec.Name)), kvpInput(ignitionKVP(config))); err != nil {
+	input, err := kvpInput(ignitionKVP(config))
+	if err != nil {
+		return err
+	}
+	if _, err := b.psWithInput(ctx, psAddKVP(machineName(spec.Name)), input); err != nil {
 		return fmt.Errorf("handing the machine its configuration: %w", err)
 	}
 
@@ -151,6 +154,13 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 		return err
 	}
 	return b.Start(ctx, spec.Name)
+}
+
+// Retract removes the Ignition document's KVP items, private host key
+// included. Removing items already gone succeeds.
+func (b hyperVBackend) Retract(ctx context.Context, name string) error {
+	_, err := b.ps(ctx, psRemoveKVP(machineName(name)))
+	return err
 }
 
 // Enrol reports whether this key already reaches the machine. It cannot write

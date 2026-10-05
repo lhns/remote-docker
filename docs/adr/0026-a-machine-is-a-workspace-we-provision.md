@@ -70,9 +70,9 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 - **Rejected:** reading the agent's generated key out of the machine. WSL could;
   Hyper-V cannot, as there is no way into a Linux guest but the SSH it opens.
 - **Costs:**
-  - The private key passes through the client. For Hyper-V it also stays in
-    the VM's KVP items for the VM's life, readable by any Hyper-V
-    administrator on this computer (see the KVP section below).
+  - The private key passes through the client. For Hyper-V it also sits in
+    the VM's KVP items, readable by any Hyper-V administrator on this
+    computer, until the machine has applied it (see the KVP section below).
   - A record without `hostKey` falls back to known_hosts: a machine built
     before this, and `rm --keep-machine` then `create`, which builds nothing.
 
@@ -125,14 +125,23 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   1023. Chunks are 1000 bytes (`ignitionKVPChunk`), cut on rune boundaries.
   A machine's document is about 1.4 KB, so two items.
 - **The data never touches a command line or a file.** It holds the private
-  host key, so the script reads it on stdin and an error names the item and
-  its code, never its value. Nothing is written beside the disk any more.
+  host key, so the script (`machine/hyperv_kvp.ps1`) reads it on stdin as a
+  JSON array, and an error names the item and its code, never its value.
+- **Removed once applied.** Hyper-V keeps host items for the VM's life: both
+  were still in its `HostExchangeItems` after first boot (2026-10-05). So
+  `machine create` removes every `ignition.config.*` item
+  (`RemoveKvpItems`, `machine.Retracter`) once the agent answers, which only
+  an applied Ignition document can make happen. It does so on every run:
+  removing an item that is not there succeeds (measured 2026-10-05), so a
+  later `create` retries a removal that failed.
 - **Costs:**
-  - The items stay on the VM for its life: both were still in its
-    `HostExchangeItems` after first boot (2026-10-05). So the private host
-    key is readable through WMI by anybody who may administer Hyper-V on this
-    computer, without access to the disk under `%LOCALAPPDATA%`. A rebuild or
-    `rm` destroys the VM and the items with it.
+  - From creation until the agent first answers, about 90 seconds, the
+    private host key is readable through WMI by anybody who may administer
+    Hyper-V on this computer, without access to the disk under
+    `%LOCALAPPDATA%`.
+  - If the removal fails, `create` warns and succeeds, and the key stays in
+    the KVP items until a later `create` removes it or `rebuild` or `rm`
+    destroys the VM.
   - Hyper-V has no cmdlet for this, so it is WMI, and the call may finish as a
     job (4096) whose state has to be polled for the real answer.
 

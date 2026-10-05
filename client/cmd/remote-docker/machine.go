@@ -346,6 +346,15 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		return err
 	}
 
+	// On every create, so running it again retries a removal that failed. A
+	// warning, because the machine itself works.
+	if r, ok := backend.(machine.Retracter); ok {
+		if err := r.Retract(ctx, name); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the machine's private host key is still in its Hyper-V KVP items: %v\n"+
+				"  fix: `%s` again, with the options it was built with, removes them\n", err, ourCommand("machine create "+name))
+		}
+	}
+
 	// Every time, so a rotated key reaches an existing machine.
 	if err := backend.Enrol(ctx, name, spec.Account, key); err != nil {
 		return fmt.Errorf("enrolling this machine's key: %w", err)

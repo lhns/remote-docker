@@ -253,6 +253,15 @@ type Backend interface {
 	Destroy(ctx context.Context, name string) error
 }
 
+// Retracter is a Backend whose machines keep the configuration they were
+// created with somewhere outside them, private host key included, until it is
+// taken back: a Hyper-V machine's KVP items (ADR 0026).
+type Retracter interface {
+	// Retract takes it back. Called once the agent answers, which means the
+	// machine has applied it, and harmless when there is nothing left.
+	Retract(ctx context.Context, name string) error
+}
+
 // namePrefix keeps our machines out of the user's own namespace: a WSL
 // distribution list and a Hyper-V VM list are both places the user has their
 // own things. The unix account prefix (ADR 0025) for the same reason, and the
