@@ -8,6 +8,7 @@ package sshd
 import (
 	"net"
 	"sync"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -23,7 +24,16 @@ type liveConn struct {
 	conn    net.Conn
 	account string
 	key     ssh.PublicKey // nil until authenticated
+
+	// held defers closing a revoked connection until the request that
+	// revoked it has replied; revoked records that it must then close.
+	held    int
+	revoked bool
 }
+
+// heldGrace is how long a revoked connection outlives its reply, so the reply
+// is read before the close.
+const heldGrace = time.Second
 
 // track registers a connection until it ends. From ConnCallback.
 func (c *conns) track(ctx gssh.Context, conn net.Conn) {
@@ -66,6 +76,10 @@ func (s *Server) sweep() {
 	s.conns.mu.Lock()
 	for _, lc := range s.conns.live {
 		if lc.key != nil && !s.stillAuthorized(lc.account, lc.key) {
+			if lc.held > 0 {
+				lc.revoked = true
+				continue
+			}
 			revoked = append(revoked, *lc)
 		}
 	}
@@ -76,4 +90,39 @@ func (s *Server) sweep() {
 			"account", lc.account, "key", ssh.FingerprintSHA256(lc.key), "from", lc.conn.RemoteAddr())
 		_ = lc.conn.Close()
 	}
+}
+
+// hold keeps the connection open through a sweep until the returned release,
+// which closes it then if a sweep revoked it meanwhile.
+func (c *conns) hold(ctx gssh.Context) (release func()) {
+	c.mu.Lock()
+	lc := c.live[ctx]
+	if lc != nil {
+		lc.held++
+	}
+	c.mu.Unlock()
+	return func() {
+		if lc == nil {
+			return
+		}
+		c.mu.Lock()
+		lc.held--
+		closing := lc.held == 0 && lc.revoked
+		c.mu.Unlock()
+		if closing {
+			time.AfterFunc(heldGrace, func() { _ = lc.conn.Close() })
+		}
+	}
+}
+
+// connected reports whether an account has a live connection.
+func (c *conns) connected(account string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, lc := range c.live {
+		if lc.key != nil && lc.account == account {
+			return true
+		}
+	}
+	return false
 }

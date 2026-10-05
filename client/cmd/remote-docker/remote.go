@@ -52,6 +52,11 @@ workspace the current docker context names.`,
 		newStopCommand(),
 		newRestartCommand(),
 
+		// Accounts on a workspace (ADR 0053).
+		newTokenCommand(),
+		newUserCommand(),
+		newKeyCommand(),
+
 		// The rest.
 		newMachineCommand(),
 		newEnrollCommand(),

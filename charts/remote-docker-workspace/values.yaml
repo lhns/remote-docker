@@ -36,6 +36,13 @@ authorizedKeys: {}
 # than this chart's ingress fronts the workspace.
 publicURL: ""
 
+# Accounts that manage every account from their own machine (ADR 0053,
+# WORKSPACE_ADMINS): tokens for anybody, `remote user rm`, and other accounts'
+# keys. Every other account manages only its own tokens and keys. A name here
+# need not be enrolled yet; the first admin enrols with a token from
+# `remote-dockerd token create --account <name>`.
+admins: []
+
 # Use a Secret you manage instead -- sealed-secrets, an external secrets
 # operator, or one you created by hand. Its keys are filenames and must be
 # account names. Set this and `authorizedKeys` is ignored.

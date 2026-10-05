@@ -28,7 +28,9 @@ type tokenWorkspace struct {
 	limiter *tokens.Limiter
 }
 
-func startTokenWorkspace(t *testing.T, enrolledDir string) *tokenWorkspace {
+// startTokenWorkspace serves a workspace with a token store; opts change its
+// Config before it starts.
+func startTokenWorkspace(t *testing.T, enrolledDir string, opts ...func(*Config)) *tokenWorkspace {
 	t.Helper()
 	root := t.TempDir()
 	w := &tokenWorkspace{
@@ -47,14 +49,18 @@ func startTokenWorkspace(t *testing.T, enrolledDir string) *tokenWorkspace {
 	}
 	w.store = accounts.New([]string{w.keysDir}, w.enrolled, t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
 
-	s, err := New(Config{
+	cfg := Config{
 		Accounts: w.store,
 		Mapping:  workspace.DefaultMapping(),
 		Daemons:  daemons.Shared(""),
 		HostKeys: []ssh.Signer{newSigner(t)},
 		Tokens:   w.tokens,
 		Limiter:  w.limiter,
-	})
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	s, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

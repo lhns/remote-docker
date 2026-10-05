@@ -120,3 +120,7 @@ belongs.
 - **`--help` is docker's now.** The program's own description has to fit in
   docker's Long, which is a smaller space than a dedicated root gave it, and
   discovering `remote` depends on it being visible in that list.
+
+**Account management lives under `remote` too (2026-10-05).** `remote token`,
+`remote user` and `remote key` (ADR 0053) are subcommands of `remote`, with
+`--account` rather than a root `--user`, which docker already has.

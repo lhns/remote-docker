@@ -239,8 +239,9 @@ a shell and the run request all refuse it through `accountFor`. *Covered by*
 
 **E — an unbound token taking somebody's name (10, 12).** Only a name the uidmap
 and every keys directory have never held, and not a reserved one. The uidmap
-never forgets, so a removed account's name stays its own. Only the operator
-mints tokens for now.
+never forgets, so a removed account's name stays its own, and an admin's name
+is never taken either. Only the operator and admins mint a token that creates
+an account (Flow 1c).
 
 **T — the write (11, 12).** Only the enrolled directory is written, under its lock,
 and the key written is the one the connection authenticated with. The
@@ -255,6 +256,77 @@ be one bucket behind an ingress anyway.
 token id, the key's fingerprint and the source address, never the secret. A
 login refused for a dead id is an sshd warning, naming the id only when it has
 an id's shape, since a pasted token would carry its secret there.
+
+---
+
+## Flow 1c: managing accounts under remote
+
+An enrolled key asks the workspace to mint a token, list or remove accounts,
+or change keys (ADR 0053). The admins are the accounts the operator names in
+`WORKSPACE_ADMINS`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Op as Operator
+    participant Agent as remote-dockerd (root)
+    participant Client as remote-docker (alice)
+    participant Keys as enrolled_keys.d
+    participant D as rd-dind-bob
+
+    Op->>Agent: WORKSPACE_ADMINS=alice, at start
+    Client->>Agent: SSH connect as alice, her enrolled key
+    Client->>Agent: workspace-enrol {op: user.rm, account: bob}
+    Agent->>Agent: authorize(alice, bob): admin? self? last admin? operator keys?
+    Agent->>D: running containers? (refused without -f)
+    Agent->>Keys: delete bob.pub, under its lock
+    Agent->>Agent: sweep: close bob's connections
+    Agent->>D: docker rm -f rd-dind-bob (rd-dind-bob-lib kept)
+    Agent-->>Client: reply, notices
+```
+
+**Who can do what.**
+
+| | the operator | an admin | any account |
+|---|---|---|---|
+| mint a token for an account | any, `remote-dockerd token create` | any | its own |
+| mint a token that creates an account | yes | yes | no |
+| list and remove tokens | all | all | those bound to it |
+| list accounts | | yes | no |
+| remove an account | edit the files | anybody but itself, the last admin with a key, or one an operator directory enrols | no |
+| add or remove keys | the files | anybody's, not an operator's key | its own; the connected or last key needs `-f` |
+
+**E — a non-admin creating an account (3, 4).** An account is a privileged
+dind, close to root on the host, so only an admin or the operator mints a token
+that creates one. An account's own tokens only add keys to it, which is access
+it already has. The caller is the account the connection authenticated as,
+never a field in the request. *Covered by* `TestAuthorize` and
+`TestANonAdminMintsOnlyForThemselves`.
+
+**E — the admin list growing itself.** `WORKSPACE_ADMINS` is read from the
+environment at start and nothing the agent serves writes it. An admin removed
+while still named there keeps the name's rights for whoever is enrolled under
+it next, and the reply says so with the fix. An admin name nobody holds is
+never given to an unbound token.
+
+**D — locking everybody out.** The last admin who holds a key cannot be removed,
+by `user rm` or `key rm`, with no `-f`: the only recovery would be the
+operator's. An admin cannot remove its own account. *Covered by*
+`TestTheLastAdminKeepsTheirLastKey` and `per-user-dind.sh` section 16.
+
+**T — writing what the operator owns.** An account or key that an operator
+directory enrols is refused by name: removing only the enrolled copy would say
+it was removed while leaving it working (ADR 0052).
+
+**D — losing somebody's work.** `user rm` refuses while the account's daemon
+runs containers, or cannot say, unless `-f`, and never deletes
+`rd-dind-<account>-lib`, the home directory or the uid. Tokens bound to the
+account are revoked, or a token the account minted for itself beforehand would
+bring it back.
+
+**R.** Every change is a `component=audit` line naming the operation, who asked,
+the account, the token id or key fingerprint, and the source address. Never a
+secret.
 
 ---
 

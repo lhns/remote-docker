@@ -5,6 +5,7 @@
 package tunnelclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -299,6 +300,12 @@ func (c *Client) DialRemote(addr string) (net.Conn, error) {
 // case and losing that message is how the shell clients produced unhelpful
 // failures.
 func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
+	return c.RunInput(ctx, cmd, nil)
+}
+
+// RunInput is Run with stdin. A remote exit status is an *ssh.ExitError in
+// the error's chain.
+func (c *Client) RunInput(ctx context.Context, cmd string, stdin []byte) ([]byte, error) {
 	sess, err := c.ssh.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("tunnel: opening session: %w", err)
@@ -307,6 +314,9 @@ func (c *Client) Run(ctx context.Context, cmd string) ([]byte, error) {
 
 	var stderr strings.Builder
 	sess.Stderr = &stderr
+	if stdin != nil {
+		sess.Stdin = bytes.NewReader(stdin)
+	}
 
 	type result struct {
 		out []byte

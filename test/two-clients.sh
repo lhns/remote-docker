@@ -2,8 +2,9 @@
 # ONE account, TWO client machines, at the same time (ADR 0029).
 #
 # Both machines share the daemon, and so containers and images; they must NOT
-# share files. Two clients are two state directories with a key each, both in
-# `alice`'s one key file: different keys, different client ids.
+# share files. Two clients are two state directories with a key each: the pc's
+# in `alice`'s key file, the phone's enrolled by a token the pc made (ADR 0053).
+# Different keys, different client ids.
 #
 # per-user-dind.sh is two ACCOUNTS; this is two machines of one.
 #
@@ -35,28 +36,39 @@ echo
 echo "== 2. two machines, one account =="
 mkdir -p "$WORK/keys" "$WORK/wsstate"
 for machine in "$PC" "$PHONE"; do
-    # genkey rather than enrol: both keys go into ONE account's file below.
     if ! genkey "$WORK/state-$machine"; then
         bad "no key generated for $machine"
         exit 1
     fi
 done
-
-cat "$WORK/state-$PC/id_ed25519.pub" "$WORK/state-$PHONE/id_ed25519.pub" \
-    >"$WORK/keys/$ACCOUNT.pub"
-
-if [ "$(grep -c . "$WORK/keys/$ACCOUNT.pub")" -eq 2 ]; then
-    ok "two keys enrolled as one account"
-else
-    bad "the key file does not hold two keys"
-    exit 1
-fi
+cp "$WORK/state-$PC/id_ed25519.pub" "$WORK/keys/$ACCOUNT.pub"
 
 echo
 echo "== 3. start the workspace =="
 # The shared daemon: a daemon per account would add a second variable to every
 # failure below.
 workspace_up false "$ACCOUNT"
+
+echo
+echo "== 3b. the phone enrols itself, with a token the pc makes =="
+# $ACCOUNT is no admin, and a token for one's own account needs none.
+outputs . env REMOTE_DOCKER_STATE_DIR="$WORK/state-$PC" REMOTE_DOCKER_HOST=127.0.0.1 \
+    REMOTE_DOCKER_PORT="$SSH_PORT" REMOTE_DOCKER_USER="$ACCOUNT" \
+    timeout 60 "$WORK/remote-docker" remote token create --note "$PHONE"
+invite=$(awk '/--token/ {print $NF}' <<<"$LAST_OUTPUT")
+mkdir -p "$WORK/home-$PHONE"
+if [ -z "$invite" ]; then
+    bad "the pc's token create printed no invite: [$LAST_OUTPUT]"
+    exit 1
+elif outputs "joined the account $ACCOUNT" env -u REMOTE_DOCKER_HOST -u REMOTE_DOCKER_PORT -u REMOTE_DOCKER_USER \
+    HOME="$WORK/home-$PHONE" REMOTE_DOCKER_STATE_DIR="$WORK/state-$PHONE" \
+    timeout 60 "$WORK/remote-docker" remote create ws --token "$invite" --no-context; then
+    ok "the phone's key joined $ACCOUNT by a token the pc created"
+else
+    bad "the phone could not redeem the pc's token: [$LAST_OUTPUT]"
+    dump_workspace_log 20
+    exit 1
+fi
 
 echo
 echo "== 4. a session on each machine, at the same time =="

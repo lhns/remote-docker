@@ -37,53 +37,16 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 
-	transport, err := s.opts.Config.Transport()
+	client, hold, err := dial(ctx, s.opts.Config, key.Signer, hostKey)
 	if err != nil {
 		return nil, err
 	}
-
-	// The one place a local machine is held and located (ADR 0026), on every
-	// connect: its address changes at boot.
-	host := transport.Host
-	var hold io.Closer
-	if m := s.opts.Config.Machine; m != nil {
-		// Held first: a WSL machine with no session in it shuts down under a
-		// working connection.
-		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
-			return nil, err
+	// Released on any failure until live takes it over.
+	defer func() {
+		if hold != nil {
+			_ = hold.Close()
 		}
-		// Released on any failure until live takes it over.
-		defer func() {
-			if hold != nil {
-				_ = hold.Close()
-			}
-		}()
-
-		host, err = machine.Locate(ctx, m.Backend, m.Name, transport.Port)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	dial, err := dialerFor(transport, s.opts.Config)
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := tunnelclient.Dial(ctx, tunnelclient.Config{
-		Host:    host,
-		Port:    transport.Port,
-		User:    s.opts.Config.User,
-		Signer:  key.Signer,
-		HostKey: hostKey,
-		Dial:    dial,
-	})
-	if err != nil {
-		if hint := enrolmentHint(err, s.opts.Config.User, key.Signer); hint != "" {
-			return nil, fmt.Errorf("%w%s", err, hint)
-		}
-		return nil, err
-	}
+	}()
 
 	if err := s.announceRun(ctx, client); err != nil {
 		_ = client.Close()
@@ -163,6 +126,54 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		s.log().Info("connected to " + s.opts.Config.User + "@" + s.opts.Config.Host)
 	}
 	return live, nil
+}
+
+// dial reaches the workspace as cfg's account. A machine workspace is held
+// and located first, every time (ADR 0026); hold keeps it running and is nil
+// for any other, and the caller closes it after the client.
+func dial(ctx context.Context, cfg config.Config, signer ssh.Signer, hostKey ssh.HostKeyCallback) (_ *tunnelclient.Client, hold io.Closer, err error) {
+	transport, err := cfg.Transport()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	host := transport.Host
+	if m := cfg.Machine; m != nil {
+		// Held first: a WSL machine with no session in it shuts down under a
+		// working connection.
+		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
+			return nil, nil, err
+		}
+		defer func() {
+			if err != nil {
+				_ = hold.Close()
+			}
+		}()
+		// Its address changes at boot.
+		if host, err = machine.Locate(ctx, m.Backend, m.Name, transport.Port); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	dialer, err := dialerFor(transport, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := tunnelclient.Dial(ctx, tunnelclient.Config{
+		Host:    host,
+		Port:    transport.Port,
+		User:    cfg.User,
+		Signer:  signer,
+		HostKey: hostKey,
+		Dial:    dialer,
+	})
+	if err != nil {
+		if hint := enrolmentHint(err, cfg.User, signer); hint != "" {
+			return nil, nil, fmt.Errorf("%w%s", err, hint)
+		}
+		return nil, nil, err
+	}
+	return client, hold, nil
 }
 
 // announceRun names this process's run to the workspace (ADR 0050), before

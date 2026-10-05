@@ -20,6 +20,16 @@ software.
   expires after a day. It also tells your machine which host key to expect, so
   the first connection is checked too. On Kubernetes the chart's `publicURL`
   is the address a token sends people to; by default it is the ingress.
+- **Accounts can be managed from your own machine.** `remote token create`
+  prints a line that enrols another machine into your account, so a second
+  laptop needs nobody's help. `remote key ls`, `key add` and `key rm` list and
+  change your keys. The accounts named in `WORKSPACE_ADMINS` (the chart's
+  `admins`) can also create tokens for anybody, list everyone with
+  `remote user ls`, and remove an account with `remote user rm bob`. Removing
+  an account cuts its access and stops its daemon, but keeps its images,
+  volumes and files, so a new token brings it back as it was. It is refused
+  while its containers run unless you add `-f`. An admin cannot remove
+  themselves or the last admin.
 - **`remote set` changes some of a workspace's settings.** `remote set dev
   --user bob` keeps everything else.
 - **A workspace reads keys from several directories.** `WORKSPACE_KEYS_DIR`

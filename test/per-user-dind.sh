@@ -73,7 +73,9 @@ echo "reached the inner daemon" >"$WORK/dindconf/marker"
 # WORKSPACE_DIND_IMAGE is the workspace's OWN image, as the Helm chart sets it.
 # The fallback, stock docker:dind, lacks fuse-overlayfs, so this suite would
 # test an image no deployment should run.
+# WORKSPACE_ADMINS is for section 16: carol is named before she is enrolled.
 workspace_up true "$A $B" \
+    -e "WORKSPACE_ADMINS=$A,carol" \
     -v "$WORK/dindconf:/etc/rd-test:ro" \
     -e "WORKSPACE_DIND_MOUNTS=/etc/rd-test:/etc/rd-test:ro" \
     -e "WORKSPACE_DIND_IMAGE=$IMAGE"
@@ -599,6 +601,139 @@ elif outputs "^$ida\$" da run --rm -e DOCKER_HOST=unix:///var/run/docker.sock \
     ok "a docker.sock bind reached $A's own daemon, not $B's or the parent's"
 else
     bad "the container reached [$LAST_OUTPUT], want $A's [$ida], not $B's [$idb] or the parent's [$idp]"
+fi
+
+echo
+echo "== 16. accounts are managed under remote (ADR 0053) =="
+# WORKSPACE_ADMINS names $A and carol; carol is enrolled further down, $B is
+# never an admin. Each command is a one-shot connection of its own.
+remote_as() {
+    local account=$1
+    shift
+    env REMOTE_DOCKER_STATE_DIR="$WORK/state-$account" REMOTE_DOCKER_HOST=127.0.0.1 \
+        REMOTE_DOCKER_PORT="$SSH_PORT" REMOTE_DOCKER_USER="$account" \
+        timeout 120 "$WORK/remote-docker" remote "$@"
+}
+# device runs `remote` as a machine of its own, configured by nothing else.
+device() {
+    local statedir=$1
+    shift
+    mkdir -p "$statedir-home"
+    env -u REMOTE_DOCKER_HOST -u REMOTE_DOCKER_PORT -u REMOTE_DOCKER_USER -u REMOTE_DOCKER_ENDPOINT \
+        HOME="$statedir-home" REMOTE_DOCKER_STATE_DIR="$statedir" \
+        timeout 120 "$WORK/remote-docker" remote "$@"
+}
+invite_of() { awk '/--token/ {print $NF}' <<<"$1"; }
+# shellcheck disable=SC2016  # awk's fields, not the shell's
+uid_of() { hostdocker exec "$CONTAINER" awk -F: -v a="$1" '$1 == a {print $2}' /etc/workspace/uidmap; }
+
+if outputs "only an admin can create a token for another account \(you are $B\)" remote_as "$B" token create --account "$A"; then
+    ok "$B is refused a token for $A"
+else
+    bad "$B was not refused a token for $A: [$LAST_OUTPUT]"
+fi
+if outputs 'only an admin can create a token for a new account' remote_as "$B" token create --unbound; then
+    ok "$B is refused an unbound token"
+else
+    bad "$B was not refused an unbound token: [$LAST_OUTPUT]"
+fi
+outputs . remote_as "$B" token create --note second
+invite=$(invite_of "$LAST_OUTPUT")
+if [ -z "$invite" ]; then
+    bad "$B's own token create printed no invite: [$LAST_OUTPUT]"
+elif outputs "joined the account $B" device "$WORK/state-$B-2" create ws --token "$invite" --no-context; then
+    ok "$B's own token enrols a second machine into $B"
+else
+    bad "$B's own token did not redeem: [$LAST_OUTPUT]"
+fi
+
+# Everything $B has is now the workspace's to remove: the operator file goes,
+# and the second machine's key stays in the enrolled directory.
+rm -f "$WORK/keys/$B.pub"
+if wait_output "^$B +[0-9]+ +1 enrolled +(connected|enrolled)" 90 remote_as "$A" user ls; then
+    ok "$B is enrolled by the enrolled directory alone"
+else
+    bad "$B's keys never settled in the enrolled directory: [$LAST_OUTPUT]"
+fi
+
+uid_before=$(uid_of "$B")
+wait_dind "$B" 30 || info "$B's daemon is not answering before the removal"
+hostdocker exec "$CONTAINER" docker exec "rd-dind-$B" docker run -d --name bob-busy alpine:3 sleep 600 >/dev/null 2>&1
+if outputs "$B's daemon is running 1 container" remote_as "$A" user rm "$B"; then
+    ok "removing $B while a container runs needs -f"
+else
+    bad "removing $B with a container running was not refused: [$LAST_OUTPUT]"
+fi
+if outputs "^removed $B, keeping" remote_as "$A" user rm "$B" -f; then
+    ok "$A removed $B with -f"
+else
+    bad "$A could not remove $B: [$LAST_OUTPUT]"
+fi
+if hostdocker exec "$CONTAINER" docker inspect "rd-dind-$B" >/dev/null 2>&1; then
+    bad "rd-dind-$B is still there after $B was removed"
+else
+    ok "rd-dind-$B is gone"
+fi
+if hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$B-lib" >/dev/null 2>&1; then
+    ok "rd-dind-$B-lib is kept"
+else
+    bad "rd-dind-$B-lib went with the account"
+fi
+if outputs '^AUTH-OK' ssh_account "$WORK/state-$B-2/id_ed25519" "$B" 20 'echo AUTH-OK'; then
+    bad "a removed account still authenticates"
+else
+    ok "a removed account no longer authenticates"
+fi
+
+outputs . remote_as "$A" token create --account "$B"
+invite=$(invite_of "$LAST_OUTPUT")
+if [ -z "$invite" ]; then
+    bad "$A's token for $B printed no invite: [$LAST_OUTPUT]"
+elif outputs "joined the account $B" device "$WORK/state-$B" create ws --token "$invite" --no-context; then
+    if [ -n "$uid_before" ] && [ "$(uid_of "$B")" = "$uid_before" ]; then
+        ok "$B redeems again and keeps uid $uid_before"
+    else
+        bad "$B came back as uid [$(uid_of "$B")], was [$uid_before]"
+    fi
+    # The shell starts a fresh daemon over the kept storage.
+    if outputs '^IMAGE-OK' ssh_account "$WORK/state-$B/id_ed25519" "$B" 240 \
+        'docker image inspect alpine:3 --format IMAGE-OK'; then
+        ok "$B's images are still there"
+    else
+        bad "$B's images did not survive the removal: [$LAST_OUTPUT]"
+    fi
+else
+    bad "$B could not redeem again: [$LAST_OUTPUT]"
+fi
+
+if outputs 'an admin cannot remove their own account' remote_as "$A" user rm "$A" -f; then
+    ok "$A cannot remove $A"
+else
+    bad "$A was not refused removing $A: [$LAST_OUTPUT]"
+fi
+
+outputs . remote_as "$A" token create --account carol
+invite=$(invite_of "$LAST_OUTPUT")
+if ! outputs "created the account carol" device "$WORK/state-carol" create ws --token "$invite" --no-context; then
+    bad "carol could not enrol: [$LAST_OUTPUT]"
+elif outputs 'fix: remove carol from WORKSPACE_ADMINS' remote_as "$A" user rm carol; then
+    ok "removing carol says she is still in WORKSPACE_ADMINS"
+else
+    bad "removing carol did not mention WORKSPACE_ADMINS: [$LAST_OUTPUT]"
+fi
+
+# $A's key moves to the enrolled directory, where $A is the last admin with one.
+remote_as "$A" key add "$WORK/state-$A/id_ed25519.pub" >/dev/null 2>&1
+rm -f "$WORK/keys/$A.pub"
+if ! wait_output "^$A +[0-9]+ +1 enrolled +yes" 90 remote_as "$A" user ls; then
+    bad "$A's key never settled in the enrolled directory: [$LAST_OUTPUT]"
+else
+    fp=$(remote_as "$A" key ls 2>&1 | awk '/this machine/ {print $1}')
+    if outputs "$A is the last admin with a key" remote_as "$A" key rm "$fp" -f; then
+        ok "the last admin cannot remove their last key, even with -f"
+    else
+        bad "the last admin's last key was not protected: [$LAST_OUTPUT]"
+    fi
 fi
 
 echo

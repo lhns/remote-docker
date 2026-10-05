@@ -74,6 +74,29 @@ jobs:
                  --set authorizedKeys.ci="ssh-ed25519 AAAAtest ci@runner" \
                  --set 'ephemeral.accounts={ci}' --set ephemeral.cleanupContainers=true
           render --set ingress.enabled=false --set publicURL=wss://ws.example.com/
+          render --set ingress.host=ws.example.com --set 'admins={alice,bob}'
+
+      # Admins (ADR 0053): the list joined into one variable, nothing for an
+      # empty one, and an env entry winning.
+      - name: admins render as WORKSPACE_ADMINS
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+              --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+          }
+          two=$(render --set 'admins={alice,bob}')
+          if [ "$(grep -A1 'name: WORKSPACE_ADMINS' <<<"$two" | grep -c 'value: "alice,bob"')" -ne 1 ]; then
+            echo "admins did not render as WORKSPACE_ADMINS=alice,bob:"; echo "$two"; exit 1
+          fi
+          none=$(render)
+          if grep -q WORKSPACE_ADMINS <<<"$none"; then
+            echo "an empty list set WORKSPACE_ADMINS"; exit 1
+          fi
+          over=$(render --set 'admins={alice}' --set env.WORKSPACE_ADMINS=bob)
+          if [ "$(grep -c 'name: WORKSPACE_ADMINS' <<<"$over")" -ne 1 ]; then
+            echo "admins was rendered beside an env entry:"; echo "$over"; exit 1
+          fi
 
       # Ephemeral accounts (ADR 0050): every variable rendered, nothing for an
       # empty list, an env entry winning, and each bad value refused by name.

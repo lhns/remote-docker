@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -48,6 +49,10 @@ type fakeTargets struct {
 
 	// err makes Ensure fail, which is a daemon that will not start.
 	err error
+
+	// running is what Running answers; reset records Reset.
+	running map[string]int
+	reset   []string
 }
 
 func (f *fakeTargets) Ensure(_ context.Context, account string) (daemons.Target, error) {
@@ -79,6 +84,19 @@ func (f *fakeTargets) Warm(account string) {
 }
 
 func (f *fakeTargets) Mode() string { return "fake" }
+
+func (f *fakeTargets) Running(_ context.Context, account string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.running[account]
+}
+
+func (f *fakeTargets) Reset(_ context.Context, account string, purge bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reset = append(f.reset, fmt.Sprintf("%s purge=%t", account, purge))
+	return nil
+}
 
 func twoAccounts() *fakeTargets {
 	return &fakeTargets{byAccount: map[string]daemons.Target{

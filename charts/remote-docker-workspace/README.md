@@ -40,6 +40,17 @@ docker run --rm -v ${PWD}:/w alpine:3 ls /w      # /w is this machine's director
 Keys can also be enrolled by file, with `--set-file
 authorizedKeys.alice=$HOME/.ssh/id_ed25519.pub`.
 
+To manage accounts without `kubectl exec`, name admins, then mint the first
+admin's token as above:
+
+```bash
+helm upgrade ws <chart> --reuse-values --set 'admins={alice}'
+```
+
+alice then runs `docker remote token create --account bob`, `remote user ls`
+and `remote user rm bob` from her own machine. Any account can run
+`remote token create` to enrol another machine of its own.
+
 ## Verify the chart and image (cosign keyless)
 
 ```bash
@@ -61,6 +72,7 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 | `authorizedKeys` | `{}` | one entry per account; **the entry name is the account a client logs in as** (unix user `rd-<name>`) |
 | `existingSecret` | `""` | use a Secret you manage instead |
 | `publicURL` | `""` | the address an enrolment token's invite names; empty is `wss://<ingress.host>/`, or `ws://` without TLS |
+| `admins` | `[]` | accounts that manage every account under `remote` (`WORKSPACE_ADMINS`, ADR 0053); they need not be enrolled yet |
 | `perUserDind` | `true` | a dockerd per account (ADR 0019), or one shared (ADR 0012) |
 | `dockerdArgs` | `--storage-driver=fuse-overlayfs` | see below |
 | `dindImage` | `""` | the image an account's daemon runs; empty means this chart's |

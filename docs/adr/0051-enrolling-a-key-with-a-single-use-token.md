@@ -1,7 +1,7 @@
 # 0051 — Enrolling a key with a single-use token
 
-- Status: Accepted. Tokens are minted by the operator (`remote-dockerd token`);
-  minting by an admin or by an account for itself is ADR 0053, to come.
+- Status: Accepted. The operator mints tokens with `remote-dockerd token`; an
+  admin, or an account for itself, with `remote token create` (ADR 0053).
 - Date: 2026-10-05
 
 ## What forced it
@@ -74,7 +74,7 @@ redeemable. A failed `Check` spends one attempt from the limiter.
 |---|---|---|
 | bound to alice | none or alice | alice: the key is added, the account created if it does not exist |
 | bound to alice | bob | refused |
-| unbound | bob | bob is created, unless the uidmap or any keys directory has bob, or bob is reserved |
+| unbound | bob | bob is created, unless the uidmap or any keys directory has bob, or bob is reserved or an admin's name (ADR 0053) |
 | unbound | none | the client sends its local user name |
 
 The uidmap never forgets a name, so an unbound token never reuses one.
@@ -100,8 +100,8 @@ until the reply names an account, and then saves that account as the user.
   6s), global because behind an ingress every connection has one address. The
   bucket can be drained by anybody, which delays honest redemptions too.
 - **A token that creates an account grants a privileged dind**, which is close
-  to root on the host (ADR 0019). Only the operator mints them for now; the
-  threat model's Flow 1b holds the rest.
+  to root on the host (ADR 0019). Only the operator and admins mint them (ADR
+  0053); the threat model's Flow 1b holds the rest.
 - **`remote-dockerd token create` runs inside the workspace**, as root, and
   generates the host key if the agent has never served. It needs
   `WORKSPACE_PUBLIC_URL` or `--url`, because what a device reaches behind a

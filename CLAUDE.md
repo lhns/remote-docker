@@ -46,7 +46,8 @@ core/go.mod              THE SHARED MODULE (ADR 0021). No third-party
                          version it negotiates cannot sit in two packages
   enrol/                 ENROLLING A KEY WITH A TOKEN (ADR 0051): the +token:
                          login, the banner, workspace-redeem and its frames,
-                         the token and invite codecs
+                         the token and invite codecs; and workspace-enrol,
+                         account management, and its frames (ADR 0053)
 
 dircache/go.mod          THE CACHE ENGINE, and nothing it caches WITH. Fill a
                          local copy of a tree in a bounded order, invalidate
@@ -822,6 +823,19 @@ premise of the project, and it applies to building it too. So:
   predates tokens, and stock ssh must not see it. The client checks the
   invite's host key fingerprint BEFORE `known_hosts`, which records whatever it
   accepts.
+- **Who may manage which account is one pure function** (ADR 0053).
+  `authorize` in `sshd/enrolpolicy.go` decides every `workspace-enrol`
+  operation from facts the operation gathered, and `TestAuthorize` is its whole
+  table; never add a permission check beside it. The caller is the account the
+  connection authenticated as, never a field in the request, and an admin is a
+  name in `WORKSPACE_ADMINS`, which nothing the agent serves writes. Three
+  refusals have no `-f`: removing yourself, the last admin who holds a key, and
+  an account or key an operator directory enrols. `user rm` revokes, withdraws
+  the account's tokens and removes its daemon container, and keeps `-lib`, the
+  home, the unix user, the uid and the ports, so a bound token brings it back
+  as it was. A request that revokes its own connection (`key rm -f` of the
+  connected key) still gets its reply: `serveEnrol` holds the connection
+  through the sweep.
 - **A key file is parsed line by line.** Several keys per file is the format,
   and reading it as one stream stopped at the first line it could not parse, so
   a typo or a BOM on the top line silently dropped every key under it. A bad
@@ -1141,7 +1155,13 @@ at once, that a shell's `DOCKER_HOST` is its own daemon, that neither account
 is in the `docker` group, that NO account's shell can reach the NFS export at
 all, that an account's daemon binds no Docker API on 2375 or 2376 and a
 container in its namespace reaches none, and that restarting the agent adopts
-the running daemons with their containers intact.
+the running daemons with their containers intact. Section 16 is account
+management (ADR 0053): a non-admin refused tokens for others and unbound ones
+while its own token enrols a machine, `user rm` refused while a container runs
+and with `-f` removing `rd-dind-<account>` and keeping `-lib`, the account
+redeeming again with its uid and images, an admin unable to remove itself or
+the last admin's key, and removing an admin still in `WORKSPACE_ADMINS`
+saying so.
 
 `test/nfs-resilience.sh` asks what a mount DOES when the thing behind it goes
 away, on both layers and both ways a connection can end: a session released, a
@@ -1154,7 +1174,8 @@ because every one of them reopens the connection it was meant to catch broken.
 
 `test/two-clients.sh` runs ONE account from TWO client
 machines at the same time (ADR 0029): two state directories with a key each,
-both enrolled in one key file. It proves neither is refused its reverse tunnel,
+the second enrolled by a token the first created, which needs no admin
+(ADR 0053). It proves neither is refused its reverse tunnel,
 that the workspace recorded a different port for each, that each container reads
 ITS OWN machine's file through a bind mount, that both see a container the other
 started, and that a collection on one leaves the other's volumes alone and its

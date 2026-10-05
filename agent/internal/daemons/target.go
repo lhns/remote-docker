@@ -52,6 +52,13 @@ type Targets interface {
 	// first round trip rather than behind its first docker command.
 	Warm(account string)
 
+	// Running counts the containers an account's own daemon runs, -1 for
+	// cannot tell; Reset removes that daemon, and its storage when purge is
+	// set. `remote user rm` asks both (ADR 0053). The shared daemon has no
+	// daemon per account, so it answers 0 and removes nothing.
+	Running(ctx context.Context, account string) int
+	Reset(ctx context.Context, account string, purge bool) error
+
 	// Mode names the arrangement for workspace-info, so a client and an
 	// operator can both see which one they are on.
 	Mode() string
@@ -113,6 +120,10 @@ func (s shared) Lookup(_ context.Context, _ string) (Target, bool) {
 // Nothing to warm: it is already running, and it is the daemon the agent
 // itself uses.
 func (shared) Warm(string) {}
+
+func (shared) Running(context.Context, string) int { return 0 }
+
+func (shared) Reset(context.Context, string, bool) error { return nil }
 
 func (shared) Mode() string { return workspace.ModeShared }
 
