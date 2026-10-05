@@ -12,6 +12,12 @@ software.
 
 ### Fixes
 
+- **`remote machine rebuild` rebuilds a Hyper-V machine as a Hyper-V machine.**
+  Without `--backend` it tried to build a WSL machine of the same name from the
+  Flatcar disk, which WSL happened to refuse. `machine create` without
+  `--backend` on an existing Hyper-V machine did the same. Both now use the
+  backend the machine was built with, and naming a different one is refused
+  rather than building a second machine and losing track of the first.
 - **`--context` works.** `docker --context dev ps` used whatever context was
   current, and a context that did not exist gave no error. Only
   `DOCKER_CONTEXT` worked. The same was true of `--config`, `-H`, `-D`,

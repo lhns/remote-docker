@@ -335,3 +335,68 @@ func TestCreateHintReachesTheNewMachine(t *testing.T) {
 		t.Errorf("hint for a workspace docker does not reach = %q, want `remote use dev` then the run", hint)
 	}
 }
+
+// A machine is acted on through the backend that built it. `machine rebuild`
+// of a hyperv machine once ran `wsl --import` with its Flatcar disk, because
+// --backend defaulted to wsl and nothing read the record.
+func TestMachineCommandsUseTheRecordedBackend(t *testing.T) {
+	saved := overrides
+	t.Cleanup(func() { overrides = saved })
+	overrides = config.Overrides{}
+
+	hyperv := map[string]config.Workspace{
+		"hvtest": {Host: "127.0.0.1", Port: 22, User: "alice", Machine: &config.Machine{Backend: "hyperv", Name: "hvtest"}},
+	}
+	for _, tc := range []struct {
+		name    string
+		records map[string]config.Workspace
+		args    []string
+		want    string // the backend asked for, when nothing is refused
+		refusal []string
+	}{
+		{name: "rebuild without --backend", records: hyperv,
+			args: []string{"rebuild", "hvtest", "-f"}, want: "hyperv"},
+		{name: "create without --backend", records: hyperv,
+			args: []string{"create", "hvtest"}, want: "hyperv"},
+		{name: "create with no record", records: map[string]config.Workspace{},
+			args: []string{"create", "hvtest"}, want: "wsl"},
+		{name: "create naming the same backend", records: hyperv,
+			args: []string{"create", "hvtest", "--backend", "hyperv"}, want: "hyperv"},
+		// Two hypervisors: the old machine would be left running with
+		// nothing naming it.
+		{name: "rebuild onto another backend", records: hyperv,
+			args:    []string{"rebuild", "hvtest", "-f", "--backend", "wsl"},
+			refusal: []string{`"hvtest" is a hyperv machine`, "wsl", "  fix: ", "remote rm hvtest"}},
+		{name: "create onto another backend", records: hyperv,
+			args:    []string{"create", "hvtest", "--backend", "wsl"},
+			refusal: []string{`"hvtest" is a hyperv machine`, "machine create hvtest --backend wsl"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withConfig(t, &config.File{Workspaces: tc.records})
+			asked := ""
+			stop := errors.New("asked")
+			savedFind := findBackend
+			findBackend = func(name string) (machine.Backend, error) { asked = name; return nil, stop }
+			t.Cleanup(func() { findBackend = savedFind })
+
+			err := run(t, append([]string{"remote", "machine"}, tc.args...)...)
+			if tc.refusal == nil {
+				if !errors.Is(err, stop) {
+					t.Fatalf("err = %v, want the backend to be asked for", err)
+				}
+				if asked != tc.want {
+					t.Errorf("asked for the %q backend, want %q", asked, tc.want)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, stop) {
+				t.Fatalf("err = %v, want a refusal before any backend is asked (asked %q)", err, asked)
+			}
+			for _, w := range tc.refusal {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("the refusal does not contain %q:\n%v", w, err)
+				}
+			}
+		})
+	}
+}
