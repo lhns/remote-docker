@@ -37,31 +37,34 @@ func (f *fakeProvisioner) Ensure(name string, uid int, _ string) (string, string
 	return unix, "/home/" + unix, nil
 }
 
+// testStore has one operator directory, keysDir, and an enrolled one.
 type testStore struct {
 	*Store
-	keysDir  string
-	stateDir string
-	prov     *fakeProvisioner
+	keysDir     string
+	enrolledDir string
+	stateDir    string
+	prov        *fakeProvisioner
 }
 
 func newStore(t *testing.T) *testStore {
 	t.Helper()
 	root := t.TempDir()
 	keys := filepath.Join(root, "keys")
+	enrolled := filepath.Join(root, "enrolled")
 	state := filepath.Join(root, "state")
-	if err := os.MkdirAll(keys, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(state, 0o755); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{keys, enrolled, state} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	prov := &fakeProvisioner{}
 	return &testStore{
-		Store:    New(keys, state, workspace.DefaultMapping(), prov, nil),
-		keysDir:  keys,
-		stateDir: state,
-		prov:     prov,
+		Store:       New([]string{keys}, enrolled, state, workspace.DefaultMapping(), prov, nil),
+		keysDir:     keys,
+		enrolledDir: enrolled,
+		stateDir:    state,
+		prov:        prov,
 	}
 }
 
@@ -167,7 +170,7 @@ func TestSyncKeepsUIDsAcrossRestarts(t *testing.T) {
 	}
 
 	// A fresh store over the same state, as a restarted container would be.
-	restarted := New(s.keysDir, s.stateDir, workspace.DefaultMapping(), &fakeProvisioner{}, nil)
+	restarted := New([]string{s.keysDir}, s.enrolledDir, s.stateDir, workspace.DefaultMapping(), &fakeProvisioner{}, nil)
 	if err := restarted.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +323,7 @@ func TestWatchPicksUpChangesByPolling(t *testing.T) {
 func TestWatchSurvivesAnUnwatchableDirectory(t *testing.T) {
 	s := newStore(t)
 	s.writeKey(t, "alice.pub")
-	s.KeysDir = filepath.Join(t.TempDir(), "does-not-exist")
+	s.KeysDirs = []string{filepath.Join(t.TempDir(), "does-not-exist")}
 
 	if err := s.Watch(t.Context(), 50*time.Millisecond); err == nil {
 		t.Error("Watch over a missing directory should report the initial sync failure")

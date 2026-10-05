@@ -234,7 +234,7 @@ func TestAuthenticationWarmsTheAccountsDaemon(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(keysDir, "alice.pub"), ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := accounts.New(keysDir, t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
+	store := accounts.New([]string{keysDir}, "", t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
 	if err := store.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestAuthenticationFoldsTheLoginName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(keysDir, "Alice.pub"), ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := accounts.New(keysDir, t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
+	store := accounts.New([]string{keysDir}, "", t.TempDir(), workspace.DefaultMapping(), fakeProvisioner{}, nil)
 	if err := store.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestAuthenticationFoldsTheLoginName(t *testing.T) {
 // panicking on the first session. New is the only constructor, and a nil
 // dereference at the first connection is a poor way to learn that.
 func TestNewDefaultsToTheSharedDaemon(t *testing.T) {
-	store := accounts.New(t.TempDir(), t.TempDir(),
+	store := accounts.New([]string{t.TempDir()}, "", t.TempDir(),
 		workspace.Mapping{UIDBase: workspace.DefaultUIDBase, PortBase: workspace.DefaultPortBase},
 		nil, nil)
 

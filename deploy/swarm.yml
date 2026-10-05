@@ -35,7 +35,8 @@ services:
       # Host keys and the uid map, shared across slots. Lose these and clients
       # report REMOTE HOST IDENTIFICATION HAS CHANGED and tunnel ports move.
       - ${WORKSPACE_DATA:-/var/lib/remote-docker}/state:/etc/workspace
-      # Drop one <name>.pub per user in here.
+      # Drop one <name>.pub per user in here. The keys the agent enrols itself
+      # go to state/enrolled_keys.d instead (ADR 0052).
       - ${WORKSPACE_DATA:-/var/lib/remote-docker}/authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     ports:

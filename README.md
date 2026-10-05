@@ -697,9 +697,10 @@ untested; only the elevation mechanism is.
 | variable | default | |
 |---|---|---|
 | `WORKSPACE_STATE_DIR` | `/etc/workspace` | host keys, uid map, workspace id |
-| `WORKSPACE_KEYS_DIR` | `<state>/authorized_keys.d` | one `<account>.pub` per user |
+| `WORKSPACE_KEYS_DIR` | `<state>/authorized_keys.d` | the operator's keys, one `<account>.pub` per user; a comma-separated list for several directories. The agent only reads them |
+| `WORKSPACE_ENROLLED_KEYS_DIR` | `<state>/enrolled_keys.d` | the one directory the agent writes keys into; must not overlap a keys directory |
 | `WORKSPACE_HOSTKEY_DIR` | `<state>/host_keys` | |
-| `WORKSPACE_KEY_POLL_INTERVAL` | `60` | seconds; the keys directory is polled as well as watched |
+| `WORKSPACE_KEY_POLL_INTERVAL` | `60` | seconds; every keys directory is polled as well as watched |
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
 | `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
@@ -839,7 +840,18 @@ the unix user behind it is `rd-<account>`
 ([ADR 0025](docs/adr/0025-the-agent-as-a-guest.md)). Emptying or removing the
 file revokes access but keeps the account and its home directory.
 
-The keys directory is re-read on change and polled every 60 seconds, because
+`WORKSPACE_KEYS_DIR` may name several directories, separated by commas, and the
+agent only ever reads them. It writes keys it enrols itself into one other
+directory, `WORKSPACE_ENROLLED_KEYS_DIR`, which defaults to
+`<state>/enrolled_keys.d` and must not be, contain or sit inside a keys
+directory: the agent refuses to start otherwise. An account's files in all of
+them are merged, so `alice.pub` in two directories is one account holding the
+keys of both, and it is revoked only once no directory enrols it
+([ADR 0052](docs/adr/0052-operator-keys-directories-and-one-enrolled-keys-directory.md)).
+Edit by hand only in a keys directory: the agent's writes take a lock that a
+hand edit in the enrolled directory does not.
+
+Every directory is re-read on change and polled every 60 seconds, because
 inotify never fires for a change made on another host when that directory is
 on shared storage.
 

@@ -40,7 +40,8 @@ services:
       # Host keys and the uid map: lose these and clients report REMOTE HOST
       # IDENTIFICATION HAS CHANGED and tunnel ports move.
       - ./state:/etc/workspace
-      # Drop one <name>.pub per user in here.
+      # Drop one <name>.pub per user in here. The keys the agent enrols itself
+      # go to state/enrolled_keys.d instead (ADR 0052).
       - ./authorized_keys.d:/etc/workspace/authorized_keys.d:ro
 
     healthcheck:
