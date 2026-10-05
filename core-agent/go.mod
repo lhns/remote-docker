@@ -10,7 +10,7 @@
 // enforced by the compiler rather than by whoever reviews the next import.
 module github.com/lhns/remote-docker/core-agent
 
-go 1.26.3
+go 1.26.8
 
 require (
 	github.com/coder/websocket v1.8.15

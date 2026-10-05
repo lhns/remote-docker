@@ -10,6 +10,6 @@
 // `go build ./...` has to work there.
 module github.com/lhns/remote-docker/test/probes
 
-go 1.26.3
+go 1.26.8
 
 require golang.org/x/sys v0.48.0

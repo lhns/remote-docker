@@ -16,7 +16,7 @@
 // which must print nothing.
 module github.com/lhns/remote-docker/machine
 
-go 1.26.3
+go 1.26.8
 
 require github.com/google/go-containerregistry v0.22.1
 

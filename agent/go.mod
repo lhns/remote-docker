@@ -6,7 +6,7 @@
 // pinned toolchain and breaking a binary that imports no buildx.
 module github.com/lhns/remote-docker/agent
 
-go 1.26.3
+go 1.26.8
 
 require (
 	github.com/creack/pty v1.1.24
