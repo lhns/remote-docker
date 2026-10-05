@@ -712,9 +712,10 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_UID_BASE` | `10000` | first uid handed to an account |
 | `WORKSPACE_PORT_BASE` | `30000` | first reverse-tunnel port; an account's first port is `PORT_BASE + (uid - UID_BASE)` |
 | `WORKSPACE_ACCOUNT_PREFIX` | `rd-` | prefix of the unix user behind an account (`rd-alice`) |
-| `WORKSPACE_EPHEMERAL_ACCOUNTS` | empty | accounts, comma-separated, whose every client process gets its own port and volumes (ADR 0050). Unfinished: nothing a run leaves is removed yet |
+| `WORKSPACE_EPHEMERAL_ACCOUNTS` | empty | accounts, comma-separated, whose every client process gets its own port and volumes, removed after its grace (ADR 0050) |
 | `WORKSPACE_EPHEMERAL_MAX_CLIENTS` | `8` | runs per ephemeral account, connected or in grace; the next is refused |
 | `WORKSPACE_EPHEMERAL_GRACE` | `2m` | how long a run keeps its port after its last connection, for a reconnect |
+| `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS` | `false` | also remove an expired run's containers and its compose networks; without it a run whose containers remain keeps its slot until they are removed |
 | `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
 | `WORKSPACE_HOST_SOCKET` | `/var/run/host-docker.sock` | the node's Docker socket, for Swarm elevation |
@@ -780,6 +781,7 @@ Operator commands, on the workspace:
 | `remote-dockerd healthcheck` | is this workspace serving? `deploy/` and the chart use it |
 | `remote-dockerd daemons ls` | which accounts have a daemon |
 | `remote-dockerd daemons reset <account> [--purge] [-f]` | rebuild one; `--purge` discards its images; `-f` while it runs containers |
+| `remote-dockerd ephemeral ls` | the runs of ephemeral accounts holding a port, with state and age |
 
 ### The storage driver, worth getting right once
 

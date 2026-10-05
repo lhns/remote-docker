@@ -142,7 +142,7 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
     unions/              the union mounts behind delegated shares (ADR 0044):
                          the Docker glue around core-agent/union
     ephemeral/           an ephemeral account's runs: their grace period,
-                         their limit and their ports (ADR 0050)
+                         their limit, their ports and their cleanup (ADR 0050)
 
 image/                   the workspace container (Dockerfile only)
 installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
@@ -728,6 +728,13 @@ premise of the project, and it applies to building it too. So:
   because `Ports.For` answers an empty client with the account's base port. A
   new agent's refusal of the run always carries a reason: an empty one reads as
   an older agent and the client silently becomes a machine.
+- **The agent removes only what carries an expired run's client id, and
+  cannot-tell means keep** (ADR 0050). Volumes need the `rd-` prefix, the
+  managed label, the account and the client, and are kept while a container
+  names them or `MountedCaches` lists them; containers and compose networks go
+  only with `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS`. Anything kept, or any
+  listing that fails, keeps the run and its port for the next sweep: a port
+  freed while a volume names it mounts the next run's export.
 
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,
@@ -1292,6 +1299,10 @@ its pure planning function was.
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
   the section skips and says so.
+- **Ephemeral cleanup against a real daemon.** `ephemeral.Cleaner` is unit
+  tested against a fake: the order, the label rules and every keep. No suite
+  has removed a real run's containers, networks, unions or volumes, and
+  `test/ephemeral.sh` does not exist yet.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

@@ -90,6 +90,19 @@ func TestServeRefusesAnEnrolledDirectoryInsideTheOperators(t *testing.T) {
 	}
 }
 
+// Removing a run's containers is off unless asked, and a value that is not a
+// boolean refuses the start naming its variable.
+func TestEphemeralCleanupContainers(t *testing.T) {
+	for raw, want := range map[string]bool{"": false, "false": false, "true": true, "1": true} {
+		if got, err := envBool(envEphemeralContainers, raw); err != nil || got != want {
+			t.Errorf("%q gave %v, %v; want %v", raw, got, err, want)
+		}
+	}
+	if _, err := envBool(envEphemeralContainers, "yes"); err == nil || !strings.Contains(err.Error(), envEphemeralContainers) {
+		t.Errorf("err = %v, want one naming %s", err, envEphemeralContainers)
+	}
+}
+
 // The run limit and grace period default when unset, and an unusable value
 // refuses the start naming its variable.
 func TestEphemeralLimits(t *testing.T) {

@@ -31,7 +31,7 @@ func newRootCommand() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newServeCommand(), newElevateCommand(), newDaemonsCommand(),
-		newHealthcheckCommand(), newUnionCommand(), newVersionCommand())
+		newEphemeralCommand(), newHealthcheckCommand(), newUnionCommand(), newVersionCommand())
 	return root
 }
 

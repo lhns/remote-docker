@@ -264,3 +264,76 @@ func TestARestoredRunCountsAgainstTheLimit(t *testing.T) {
 		t.Error("the limit forgot the runs restored from the record")
 	}
 }
+
+// Run sweeps as soon as it starts, so what expired while the agent was down
+// is cleaned at once, and a run the agent saw live gets its grace first.
+func TestTheFirstSweepCleansWhatExpiredWhileDown(t *testing.T) {
+	dir := t.TempDir()
+	r, _, c := newRegistry(t)
+	r.Dir = dir
+	hostRun(t, r, "0123abcd") // live when the agent stops
+	_, release := hostRun(t, r, "4567cdef")
+	release()
+	c.advance(2 * time.Minute)
+
+	restarted, ports, _ := newRegistry(t)
+	restarted.Dir, restarted.now = dir, c.now
+	var cleaned []string
+	restarted.Cleanup = func(_ context.Context, _, client string) error {
+		cleaned = append(cleaned, client)
+		return nil
+	}
+	if err := restarted.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	restarted.Run(ctx)
+
+	if len(cleaned) != 1 || cleaned[0] != "4567cdef" || !ports.wasFreed("4567cdef") {
+		t.Errorf("cleaned %v, freed %v; want only the expired run, at start", cleaned, ports.wasFreed("4567cdef"))
+	}
+	if s, ok := restarted.state("0123abcd"); !ok || s != Grace {
+		t.Errorf("the run that was live is %v (known %v), want grace", s, ok)
+	}
+}
+
+// Cleanup is never asked about a live run or one still within its grace.
+func TestCleanupLeavesLiveAndGraceRunsAlone(t *testing.T) {
+	r, _, c := newRegistry(t)
+	r.Cleanup = func(_ context.Context, _, client string) error {
+		t.Errorf("cleanup was asked about %s", client)
+		return nil
+	}
+	_, live := hostRun(t, r, "0123abcd")
+	defer live()
+	_, release := hostRun(t, r, "4567cdef")
+	release()
+	c.advance(59 * time.Second)
+	r.Sweep(t.Context())
+}
+
+// ls reads what the serving agent recorded, and a run that is gone is not in it.
+func TestListReadsTheRecord(t *testing.T) {
+	dir := t.TempDir()
+	r, _, c := newRegistry(t)
+	r.Dir = dir
+	_, release := hostRun(t, r, "0123abcd")
+	release()
+	c.advance(time.Minute)
+	r.Sweep(t.Context())
+	port, _ := hostRun(t, r, "4567cdef")
+
+	runs, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("List = %+v, want one run", runs)
+	}
+	got := runs[0]
+	if got.Account != "alice" || got.Client != "4567cdef" || got.Port != port ||
+		got.State != Live || !got.LastSeen.Equal(c.now()) {
+		t.Errorf("List = %+v, want alice's live 4567cdef on %d, seen %v", got, port, c.now())
+	}
+}

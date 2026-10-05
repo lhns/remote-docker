@@ -612,6 +612,14 @@ flowchart TB
     end
 ```
 
+**Runs of one ephemeral account reach each other's exports (ADR 0050).** Each
+run is a client with its own port, but they are one account: one daemon, one
+namespace. `AllowDial` refuses only a port another ACCOUNT holds, and a
+`--network host` container of the account reaches every run's export in that
+namespace. Accepted, as between one account's machines (ADR 0029): the runs
+share a key, so whoever holds it is all of them. What the agent removes when a
+run expires carries that run's client id and nothing else.
+
 **D — the workspace as a network relay (4).** Non-loopback destinations are
 refused, so the workspace cannot be used to reach the network it sits on
 through the tunnel. Containers an account runs are not bound by that, and reach

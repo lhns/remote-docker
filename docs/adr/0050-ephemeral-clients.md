@@ -1,8 +1,8 @@
 # 0050 — Ephemeral clients
 
 - Status: Accepted in part. The identity, the registry with its grace period
-  and limit, and the per-run port are implemented; cleanup and the compose
-  default follow, and this record gains a section for each.
+  and limit, the per-run port and cleanup are implemented; the compose default
+  follows, and this record gains a section for it.
 - Date: 2026-10-05
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
@@ -128,12 +128,44 @@ is never stored: with the key it takes a run over.
   then, one in grace keeps its deadline, and the sweep cleans the rest. Each is
   given its port back (`Ports.Hold`) unless somebody else now has it, which
   expires it.
+- The first sweep runs at start, so what expired while the agent was down is
+  cleaned then rather than a quarter of a grace later.
+
+## Decision: cleanup removes only what carries the run's client id
+
+`ephemeral.Cleaner.Clean` is the registry's `Cleanup`, run for every cleaning
+run on each sweep. Through `daemons.Targets.Ensure` (a stopped daemon still
+holds the run's volumes) and `dockercli.RunObjects`:
+
+| step | what | only when |
+|---|---|---|
+| 1 | containers labelled with the account (`OwnerLabel`) and the client (`ClientLabel`), `rm -f -v` | `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS=true` |
+| 2 | networks whose `com.docker.compose.project` ends in `-<client>` | the same; the daemon refuses one with anything attached |
+| 3 | `unions.Manager.Release` for the client | always; a union a container is bound to stays (ADR 0044) |
+| 4 | volumes with the `rd-` prefix, `ManagedLabel=share`, the account and the client | neither a container names it nor `MountedCaches` lists it |
+| 5 | the port, `Ports.Free` | steps 1 to 4 kept nothing |
+
+- **Cannot tell means keep.** A listing that fails, a daemon that cannot be
+  reached, or an object the daemon refuses to remove keeps the run in cleaning,
+  with its port, and the next sweep tries again.
+- **A run whose containers remain keeps its slot.** With the variable off, a
+  container of the run names its volumes, so they are kept and the run counts
+  against the limit until somebody removes the container.
+- **Logs**: one line per state change and per refusal (the limit, a run being
+  cleaned), and one per object removed or kept, with why.
+- **`remote-dockerd ephemeral ls`** reads `<state>/ephemeral-runs`: account,
+  client, state, port, and the time since a connection of the run last started
+  or ended. A run past its grace shows `grace` until the next sweep.
 
 ## Costs
 
-- **Not yet fit to enable.** Until cleanup lands nothing is removed: an expired
-  run's volumes outlive it, and its port is freed while they still name it, so
-  a later run of the account may be given it. Hence no changelog entry yet.
+- **A cache volume under an adopted union is kept for ever.** After an agent
+  restart a union still serving is not in `unions.Manager`'s record, so
+  `Release` does not unmount it and `MountedCaches` still lists its volume.
+  Only reachable where dockerd outlives the agent (ADR 0025); the run then
+  holds its slot and port until the union is unmounted by hand.
+- **Starting a stopped daemon to clean.** `Ensure` boots an account's daemon
+  that nobody is using, once, after a workspace restart left runs to clean.
 - **An ephemeral client never releases its connection for idleness** (ADR
   0015), since that would start its run's grace under a live process. The run
   ends with the process, at the latest the background session's idle exit
@@ -145,7 +177,7 @@ is never stored: with the key it takes a run over.
 - **Exports are not isolated between runs of one account.** `AllowDial` gates
   SSH channels only, so a `--network host` or `docker.sock`-bound (ADR 0049)
   container of the account reaches every run's export. Accepted, as between
-  ADR 0029's machines.
+  ADR 0029's machines; the threat model's flow 5 records it.
 - **A reconnect before the workspace notices the previous connection ended is
   refused its forward**, for up to the ~60s of dead-peer detection: the wait
   ADR 0028's port reservation already imposes on a machine.
@@ -162,5 +194,9 @@ and `TestRunOfAsksTheBackgroundSession`. The registry: its state machine,
 limit and restart record in `agent/internal/ephemeral/registry_test.go`, the
 ports in `core-agent/accounts/ports_run_test.go`, the limit and the record over
 SSH in `agent/internal/sshd/run_registry_test.go`, `TestEphemeralLimits`, and
-the held connection in `client/internal/session/hold_test.go`.
-`test/ephemeral.sh` arrives with cleanup.
+the held connection in `client/internal/session/hold_test.go`. Cleanup: its
+order and every keep rule against a fake daemon in
+`agent/internal/ephemeral/cleanup_test.go`, the first sweep after a restart and
+live runs left alone in `registry_test.go`, the network match in
+`agent/internal/dockercli/runs_test.go`. No real daemon has run any of it;
+`test/ephemeral.sh` is still to come.

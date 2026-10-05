@@ -101,6 +101,10 @@ const (
 	// envEphemeralGrace is how long a run outlives its last connection.
 	envEphemeralMax   = "WORKSPACE_EPHEMERAL_MAX_CLIENTS"
 	envEphemeralGrace = "WORKSPACE_EPHEMERAL_GRACE"
+
+	// envEphemeralContainers also removes an expired run's containers and
+	// its compose networks.
+	envEphemeralContainers = "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS"
 )
 
 func newServeCommand() *cobra.Command {
@@ -172,10 +176,14 @@ func serve(addr, wsAddr string) error {
 	if err != nil {
 		return err
 	}
+	cleanContainers, err := envBool(envEphemeralContainers, os.Getenv(envEphemeralContainers))
+	if err != nil {
+		return err
+	}
 	if len(ephemeralSet) > 0 {
 		log.Info("these accounts' clients are ephemeral", "var", envEphemeral,
 			"accounts", strings.Join(slices.Sorted(maps.Keys(ephemeralSet)), ","),
-			"max-clients", maxRuns, "grace", grace)
+			"max-clients", maxRuns, "grace", grace, "cleanup-containers", cleanContainers)
 	}
 
 	var wg sync.WaitGroup
@@ -406,15 +414,23 @@ func serve(addr, wsAddr string) error {
 		Log:     logger("unions"),
 	}
 
+	cleaner := &ephemeral.Cleaner{
+		Targets:    targets,
+		Docker:     dockercli.RunObjects{},
+		Unions:     unionManager,
+		Containers: cleanContainers,
+		Log:        logger("ephemeral"),
+	}
 	// Restored before serving, so a run reattaching finds its port. Kept for
 	// every account, since a run recorded under an earlier setting still has
 	// to expire.
 	runs := &ephemeral.Registry{
-		Ports: ports,
-		Max:   maxRuns,
-		Grace: grace,
-		Dir:   stateDir,
-		Log:   logger("ephemeral"),
+		Ports:   ports,
+		Max:     maxRuns,
+		Grace:   grace,
+		Cleanup: cleaner.Clean,
+		Dir:     stateDir,
+		Log:     logger("ephemeral"),
 	}
 	if err := runs.Restore(); err != nil {
 		log.Warn("could not restore the ephemeral runs", "err", err)
@@ -638,6 +654,19 @@ func ephemeralLimits(maxRaw, graceRaw string) (int, time.Duration, error) {
 		grace = d
 	}
 	return maxRuns, grace, nil
+}
+
+// envBool reads a true/false variable: unset is false, and anything
+// strconv.ParseBool does not take refuses the start, naming the variable.
+func envBool(name, raw string) (bool, error) {
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s: %q is not true or false", name, raw)
+	}
+	return v, nil
 }
 
 func envInt(name string, fallback int) int {
