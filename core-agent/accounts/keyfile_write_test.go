@@ -167,6 +167,9 @@ func TestCreateAccountRefusesATakenName(t *testing.T) {
 
 func TestAStaleLockIsBrokenOnce(t *testing.T) {
 	s := newStore(t)
+	// Long enough that no holder in the queue behind the break outlasts it,
+	// which a loaded Windows machine's fsync can come close to.
+	shortLocks(t, lockStale, 3*time.Second)
 	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
 	if err := os.Mkdir(lock, 0o700); err != nil {
 		t.Fatal(err)
@@ -207,9 +210,7 @@ func TestAStaleLockIsBrokenOnce(t *testing.T) {
 
 func TestALiveLockIsNotBroken(t *testing.T) {
 	s := newStore(t)
-	wait := lockWait
-	lockWait = 100 * time.Millisecond
-	t.Cleanup(func() { lockWait = wait })
+	shortLocks(t, lockStale, 100*time.Millisecond)
 
 	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
 	if err := os.Mkdir(lock, 0o700); err != nil {
@@ -227,9 +228,7 @@ func TestALiveLockIsNotBroken(t *testing.T) {
 // holder. A new mtime is how a waiter sees the lock change hands.
 func TestAMovingQueueIsWaitedOut(t *testing.T) {
 	s := newStore(t)
-	wait := lockWait
-	lockWait = 100 * time.Millisecond
-	t.Cleanup(func() { lockWait = wait })
+	shortLocks(t, lockStale, 100*time.Millisecond)
 
 	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
 	if err := os.Mkdir(lock, 0o700); err != nil {
@@ -314,5 +313,100 @@ func TestNoEnrolledDirectoryRefusesEveryWrite(t *testing.T) {
 	}
 	if err := s.CreateAccount("alice", newKey(t), ""); err == nil {
 		t.Error("CreateAccount wrote with no enrolled directory")
+	}
+}
+
+// A write for an account whose useradd failed must say so and leave nothing
+// behind: a nil error means the key is in force.
+func TestAWriteForAnAccountThatCannotBeCreatedFails(t *testing.T) {
+	s := newStore(t)
+	s.prov.err = errors.New("useradd: no")
+
+	if err := s.CreateAccount("bob", newKey(t), ""); !errors.Is(err, ErrNotProvisioned) {
+		t.Errorf("CreateAccount: err = %v, want ErrNotProvisioned", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.enrolledDir, "bob.pub")); !os.IsNotExist(err) {
+		t.Errorf("bob.pub was left behind: %v", err)
+	}
+
+	if _, err := s.AppendKey("carol", newKey(t), ""); !errors.Is(err, ErrNotProvisioned) {
+		t.Errorf("AppendKey: err = %v, want ErrNotProvisioned", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.enrolledDir, "carol.pub")); !os.IsNotExist(err) {
+		t.Errorf("carol.pub was left behind: %v", err)
+	}
+}
+
+// shortLocks shortens the lock timings for one test.
+func shortLocks(t *testing.T, stale, wait time.Duration) {
+	t.Helper()
+	oldStale, oldWait := lockStale, lockWait
+	lockStale, lockWait = stale, wait
+	t.Cleanup(func() { lockStale, lockWait = oldStale, oldWait })
+}
+
+// A lock's mtime is the filesystem's clock and time.Since is this host's, so
+// on shared storage a host whose clock is ahead sees a live lock as old. It
+// must still wait for the holder rather than break it.
+func TestALiveLockThatLooksOldIsNotBroken(t *testing.T) {
+	s := newStore(t)
+	shortLocks(t, 50*time.Millisecond, time.Second)
+
+	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	skewed := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lock, skewed, skewed); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.AppendKey("alice", newKey(t), "")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("AppendKey returned while the lock was held: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatalf("the holder's lock was taken away: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("AppendKey after the holder let go: %v", err)
+	}
+}
+
+// A stale lock that cannot be broken is given up on after lockWait like any
+// other, never spun on.
+func TestAStaleLockThatCannotBeBrokenTimesOut(t *testing.T) {
+	s := newStore(t)
+	shortLocks(t, 50*time.Millisecond, 200*time.Millisecond)
+
+	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
+	old, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	for path, at := range map[string]time.Time{lock: old, lock + ".break": future} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.AppendKey("alice", newKey(t), "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("AppendKey took a lock that was never released")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("AppendKey is still trying to break a lock it cannot break")
 	}
 }

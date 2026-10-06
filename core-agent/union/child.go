@@ -222,22 +222,35 @@ func (p *prober) finish(merged string, pr *probe, err error) {
 // exactly as Spec.Root gives it. A union mounted at Root/<id> by an agent from
 // before mountpoints were per machine is reported to every client, since
 // keeping a cache nobody needs is the safe mistake.
-func MountedShares(root, client string) []string {
-	out := mountedUnder(path.Join(root, Root))
+//
+// An error is a directory that could not be read, which a caller deciding
+// what may be deleted must treat as every cache mounted.
+func MountedShares(root, client string) ([]string, error) {
+	out, err := mountedUnder(path.Join(root, Root))
+	if err != nil {
+		return nil, err
+	}
 	if validClient(client) {
-		out = append(out, mountedUnder(path.Join(root, Root, client))...)
+		more, err := mountedUnder(path.Join(root, Root, client))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, more...)
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // mountedUnder names the directories under dir whose merged is a mount. A dir
 // that is not there is no unions, the ordinary case on a workspace that has
 // never served one.
-func mountedUnder(dir string) []string {
+func mountedUnder(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("union: listing %s: %w", dir, err)
 	}
 	var out []string
 	for _, e := range entries {
@@ -245,7 +258,7 @@ func mountedUnder(dir string) []string {
 			out = append(out, e.Name())
 		}
 	}
-	return out
+	return out, nil
 }
 
 // Reexec is the agent run again as the child that does the work: self is the

@@ -30,6 +30,11 @@ var (
 	// ErrProvisioning is a write that succeeded for an account the workspace
 	// is still creating: the key authenticates once that finishes.
 	ErrProvisioning = errors.New("the account is still being created on the workspace")
+
+	// ErrNotProvisioned is a key that cannot authenticate because the
+	// workspace could not create its account; one the call added is taken out
+	// again. The agent's log has the reason.
+	ErrNotProvisioned = errors.New("the workspace could not create the account")
 )
 
 // OperatorKeyError refuses a change only the operator's directory could make.
@@ -44,40 +49,53 @@ func (e *OperatorKeyError) Error() string {
 
 // Lock timing. Variables so a test can shorten them.
 var (
-	// lockStale is how old a lock must be before another writer breaks it. A
-	// writer holds one for milliseconds, so this is a crashed writer's.
-	lockStale = 30 * time.Second
-
-	// lockWait is how long a writer waits on one holder. A queue of writers
-	// that keeps moving is waited out however long it is.
+	// lockWait is how long a writer waits on one holder before it gives up, or
+	// breaks the lock if it is stale. A queue of writers that keeps moving is
+	// waited out however long it is.
 	lockWait = 10 * time.Second
+
+	// lockStale is how old a lock's mtime must be for it to be a crashed
+	// writer's: a live writer holds one for milliseconds.
+	lockStale = 30 * time.Second
 )
 
 // AppendKey adds a key to the account's enrolled file, creating it if need be.
 // A key already in that file is not added twice, and added says so.
 func (s *Store) AppendKey(account string, key ssh.PublicKey, comment string) (added bool, err error) {
-	err = s.edit(account, func(name, path string) error {
+	name, err := workspace.AccountName(account)
+	if err != nil {
+		return false, err
+	}
+	fp := ssh.FingerprintSHA256(key)
+	err = s.edit(name, func(path string) error {
 		lines, err := readLines(path)
 		if err != nil {
 			return err
 		}
-		fp := ssh.FingerprintSHA256(key)
-		for _, line := range lines {
-			if k, _, isKey, _ := parseKeyLine([]byte(line)); isKey && ssh.FingerprintSHA256(k) == fp {
-				return nil
-			}
+		if _, found := withoutKey(lines, fp); found {
+			return nil
 		}
 		added = true
 		return writeKeyFile(path, append(lines, keyLineFor(key, comment)))
 	})
-	return added, err
+	if err != nil {
+		return false, err
+	}
+	if !added {
+		return false, s.awaitProvisioning(name)
+	}
+	return true, s.awaitOrWithdraw(name, fp)
 }
 
 // CreateAccount enrols a key under a name nobody has: not in the uidmap and
 // with no file in any directory. Of two concurrent creations of one name,
 // exactly one succeeds and the other gets ErrAccountExists.
 func (s *Store) CreateAccount(account string, key ssh.PublicKey, comment string) error {
-	return s.edit(account, func(name, path string) error {
+	name, err := workspace.AccountName(account)
+	if err != nil {
+		return err
+	}
+	err = s.edit(name, func(path string) error {
 		known, err := s.Known(name)
 		if err != nil {
 			return err
@@ -115,6 +133,10 @@ func (s *Store) CreateAccount(account string, key ssh.PublicKey, comment string)
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	return s.awaitOrWithdraw(name, ssh.FingerprintSHA256(key))
 }
 
 // RemoveKey takes a key, by fingerprint, out of the account's enrolled file,
@@ -126,42 +148,23 @@ func (s *Store) RemoveKey(account, fingerprint string) (removed bool, err error)
 	if err != nil {
 		return false, err
 	}
-	for _, dir := range s.KeysDirs {
-		path, ok, err := s.fileFor(dir, name)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			continue
-		}
+	files, err := s.operatorFiles(name)
+	if err != nil {
+		return false, err
+	}
+	for _, path := range files {
 		lines, err := readLines(path)
 		if err != nil {
 			continue // unreadable is not a key to protect
 		}
-		for _, line := range lines {
-			if k, _, isKey, _ := parseKeyLine([]byte(line)); isKey && ssh.FingerprintSHA256(k) == fingerprint {
-				return false, &OperatorKeyError{What: "key " + fingerprint, File: path}
-			}
+		if _, found := withoutKey(lines, fingerprint); found {
+			return false, &OperatorKeyError{What: "key " + fingerprint, File: path}
 		}
 	}
 
-	err = s.edit(name, func(_, path string) error {
-		lines, err := readLines(path)
-		if err != nil {
-			return err
-		}
-		var kept []string
-		for _, line := range lines {
-			if k, _, isKey, _ := parseKeyLine([]byte(line)); isKey && ssh.FingerprintSHA256(k) == fingerprint {
-				removed = true
-				continue
-			}
-			kept = append(kept, line)
-		}
-		if !removed {
-			return nil
-		}
-		return writeKeyFile(path, kept)
+	err = s.edit(name, func(path string) error {
+		removed, err = removeKeyLine(path, fingerprint)
+		return err
 	})
 	return removed, err
 }
@@ -174,16 +177,14 @@ func (s *Store) RemoveAccountFile(account string) error {
 	if err != nil {
 		return err
 	}
-	for _, dir := range s.KeysDirs {
-		path, ok, err := s.fileFor(dir, name)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return &OperatorKeyError{What: "a key file for " + name, File: path}
-		}
+	files, err := s.operatorFiles(name)
+	if err != nil {
+		return err
 	}
-	return s.edit(name, func(_, path string) error {
+	if len(files) > 0 {
+		return &OperatorKeyError{What: "a key file for " + name, File: files[0]}
+	}
+	return s.edit(name, func(path string) error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -230,17 +231,28 @@ func (s *Store) fileFor(dir, name string) (string, bool, error) {
 	return "", false, nil
 }
 
-// edit runs change on the account's enrolled file under its lock, then
-// re-reads the accounts so the change is in force when edit returns. An
-// account new to this process is in force once provisioned, which edit waits
-// for up to ProvisionWait and then returns ErrProvisioning, the write made.
-func (s *Store) edit(account string, change func(name, path string) error) error {
+// operatorFiles is every operator directory's file for the account.
+func (s *Store) operatorFiles(name string) ([]string, error) {
+	var out []string
+	for _, dir := range s.KeysDirs {
+		path, ok, err := s.fileFor(dir, name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, path)
+		}
+	}
+	return out, nil
+}
+
+// edit runs change on the enrolled file of the account name, which is already
+// folded, under its lock, then re-reads the accounts so the change is in force
+// when edit returns, except for an account still to be provisioned: see
+// awaitOrWithdraw.
+func (s *Store) edit(name string, change func(path string) error) error {
 	if s.EnrolledDir == "" {
 		return errNoEnrolledDir
-	}
-	name, err := workspace.AccountName(account)
-	if err != nil {
-		return err
 	}
 	path := filepath.Join(s.EnrolledDir, name+".pub")
 
@@ -248,7 +260,7 @@ func (s *Store) edit(account string, change func(name, path string) error) error
 	if err != nil {
 		return err
 	}
-	err = change(name, path)
+	err = change(path)
 	unlock()
 	if err != nil {
 		return err
@@ -256,13 +268,39 @@ func (s *Store) edit(account string, change func(name, path string) error) error
 	if _, err := s.sync(); err != nil {
 		return fmt.Errorf("%s was written, but the accounts were not re-read: %w", path, err)
 	}
-	return s.awaitProvisioning(name)
+	return nil
+}
+
+// awaitOrWithdraw waits for the account a key was just added to. Still being
+// created after ProvisionWait is ErrProvisioning, the key kept; never created
+// is ErrNotProvisioned, the key taken out again, since the caller is about to
+// say the key did not enrol.
+func (s *Store) awaitOrWithdraw(name, fingerprint string) error {
+	err := s.awaitProvisioning(name)
+	if !errors.Is(err, ErrNotProvisioned) {
+		return err
+	}
+	undo := s.edit(name, func(path string) error {
+		_, err := removeKeyLine(path, fingerprint)
+		return err
+	})
+	if undo != nil {
+		return fmt.Errorf("%w, and its key could not be taken out again: %w", err, undo)
+	}
+	return err
 }
 
 // lockFile takes a lock that holds across hosts: mkdir is atomic on NFS and
 // CephFS as well as locally.
+//
+// A lock is broken only once this writer has watched the same holder for
+// lockWait AND its mtime is older than lockStale. The mtime is the
+// filesystem's clock and time.Since is this host's, so on shared storage a
+// clock running ahead makes every live lock look old; the watch is what still
+// keeps two writers out.
 func lockFile(path string) (unlock func(), err error) {
-	var holder, deadline time.Time // the lock's mtime names its holder
+	var holder, since time.Time // the lock's mtime names its holder
+	broke := false
 	for {
 		err := os.Mkdir(path, 0o700)
 		if err == nil {
@@ -273,29 +311,36 @@ func lockFile(path string) (unlock func(), err error) {
 		if !os.IsExist(err) && (runtime.GOOS != "windows" || !os.IsPermission(err)) {
 			return nil, err
 		}
-		if stale(path) {
-			breakLock(path)
-			continue
-		}
-		if info, err := os.Stat(path); err == nil && !info.ModTime().Equal(holder) {
-			holder, deadline = info.ModTime(), time.Now().Add(lockWait)
-		}
-		if !deadline.IsZero() && time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s is held by another writer", path)
+		// A failed stat is a lock released in between. Every retry sleeps: on
+		// Windows a stat holds the directory open, and a removed directory
+		// someone holds open stays in the way of the next mkdir.
+		if info, err := os.Stat(path); err == nil {
+			if !info.ModTime().Equal(holder) {
+				holder, since, broke = info.ModTime(), time.Now(), false
+			}
+			if time.Since(since) > lockWait {
+				if broke || time.Since(holder) <= lockStale {
+					return nil, fmt.Errorf("%s is held by another writer", path)
+				}
+				breakLock(path, holder)
+				broke, since = true, time.Now()
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// breakLock moves a crashed writer's lock aside.
+// breakLock moves a crashed writer's lock aside, if it is still the holder the
+// caller watched.
 //
-// Under a second lock, and only once staleness is checked again under it: a
-// writer that saw the lock stale may otherwise move it after another writer
-// has broken it and taken it afresh, and both would then write.
-func breakLock(path string) {
+// Under a second lock, and only once the holder is checked again under it:
+// two writers may both have watched it, and the second must not move the lock
+// the first broke and somebody has taken afresh.
+func breakLock(path string, holder time.Time) {
 	breaker := path + ".break"
 	if err := os.Mkdir(breaker, 0o700); err != nil {
-		// A breaker that crashed in the microseconds it holds this.
+		// A breaker that crashed in the microseconds it holds this. One that
+		// only looks old is still kept to the holder by the check below.
 		if os.IsExist(err) && stale(breaker) {
 			_ = os.Remove(breaker)
 		}
@@ -304,7 +349,7 @@ func breakLock(path string) {
 	}
 	defer func() { _ = os.Remove(breaker) }()
 
-	if !stale(path) {
+	if info, err := os.Stat(path); err != nil || !info.ModTime().Equal(holder) {
 		return
 	}
 	aside := fmt.Sprintf("%s.stale-%d-%d", path, os.Getpid(), time.Now().UnixNano())
@@ -349,6 +394,31 @@ func writeKeyFile(path string, lines []string) error {
 		return err
 	}
 	return nil
+}
+
+// withoutKey is lines less every line holding the key, and whether there was one.
+func withoutKey(lines []string, fingerprint string) (kept []string, found bool) {
+	for _, line := range lines {
+		if k, _, isKey, _ := parseKeyLine([]byte(line)); isKey && ssh.FingerprintSHA256(k) == fingerprint {
+			found = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return kept, found
+}
+
+// removeKeyLine takes a key out of a key file.
+func removeKeyLine(path, fingerprint string) (bool, error) {
+	lines, err := readLines(path)
+	if err != nil {
+		return false, err
+	}
+	kept, found := withoutKey(lines, fingerprint)
+	if !found {
+		return false, nil
+	}
+	return true, writeKeyFile(path, kept)
 }
 
 // keyLineFor is a key's line, its comment on one line whatever it was given:

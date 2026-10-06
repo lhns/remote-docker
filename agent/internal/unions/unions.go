@@ -552,8 +552,9 @@ func (m *Manager) heldByContainers(ctx context.Context, account, client string) 
 // truthful "none mounted" costs somebody the contents of a cache their
 // container is still reading. The share ids come from the mounts and the
 // client digest from the key that authenticated, so only this machine's
-// volumes are named.
-func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
+// volumes are named. An error means the mounts could not be read, and every
+// cache must be kept.
+func (m *Manager) MountedCaches(account, client string, d Daemon) ([]string, error) {
 	names := map[string]bool{}
 
 	m.mu.Lock()
@@ -565,7 +566,11 @@ func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 	m.mu.Unlock()
 
 	if client != "" {
-		for _, id := range union.MountedShares(netns.Root(d.PID), client) {
+		ids, err := union.MountedShares(netns.Root(d.PID), client)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
 			names[workspace.VolumeNameForCache(client, id)] = true
 		}
 	}
@@ -575,7 +580,7 @@ func (m *Manager) MountedCaches(account, client string, d Daemon) []string {
 		out = append(out, name)
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // remove ends supervision and forgets the share. The caller holds the lock;

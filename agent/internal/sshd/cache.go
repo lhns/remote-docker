@@ -167,7 +167,11 @@ func (s *Server) applyCache(session gssh.Session, account sessionAccount, req ca
 		if target, ok := s.cfg.Daemons.Lookup(ctx, name); ok {
 			d = unions.Daemon{Host: target.Host, PID: target.PID}
 		}
-		return cache.Reply{Caches: s.cfg.Unions.MountedCaches(name, account.Client(), d)}, nil
+		caches, err := s.cfg.Unions.MountedCaches(name, account.Client(), d)
+		if err != nil {
+			return refused(err), nil
+		}
+		return cache.Reply{Caches: caches}, nil
 
 	case cache.OpPull:
 		pulled, err := s.cfg.Unions.Pull(name, account.Client(), req.Export, req.Paths)

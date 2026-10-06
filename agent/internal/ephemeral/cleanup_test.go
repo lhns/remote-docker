@@ -89,13 +89,16 @@ func (f *fakeDaemon) RemoveVolume(_ context.Context, _, name string) error {
 type fakeUnions struct {
 	d       *fakeDaemon
 	mounted []string
+	err     error
 }
 
 func (u *fakeUnions) Release(context.Context, string, string) {
 	u.d.calls = append(u.d.calls, "release unions")
 }
 
-func (u *fakeUnions) MountedCaches(string, string, unions.Daemon) []string { return u.mounted }
+func (u *fakeUnions) MountedCaches(string, string, unions.Daemon) ([]string, error) {
+	return u.mounted, u.err
+}
 
 type targets struct {
 	daemons.Targets
@@ -208,6 +211,13 @@ func TestCleanupKeepsEverythingWhenItCannotTell(t *testing.T) {
 	c.Targets = targets{err: errors.New("the daemon would not start")}
 	if err := c.Clean(t.Context(), "alice", runID); err == nil || len(d.calls) != 0 {
 		t.Errorf("err = %v, calls %v; want an error and nothing done", err, d.calls)
+	}
+
+	d = &fakeDaemon{volumes: []dockercli.Volume{volume("rd-"+runID+"-a", "alice", runID, true)}}
+	c = newCleaner(d)
+	c.Unions.(*fakeUnions).err = errors.New("cannot list the unions")
+	if err := c.Clean(t.Context(), "alice", runID); err == nil || len(removed(d)) != 0 {
+		t.Errorf("err = %v, removed %v; want an error and no volume removed", err, removed(d))
 	}
 }
 

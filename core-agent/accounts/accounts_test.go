@@ -371,8 +371,12 @@ func TestUIDAllocationFollowsSortedNames(t *testing.T) {
 
 	for attempt := range 20 {
 		s := newStore(t)
-		for _, n := range names {
-			s.writeKey(t, n+".pub")
+		for i, n := range names {
+			dir := s.keysDir
+			if i%2 == 1 {
+				dir = s.enrolledDir // wherever the files are
+			}
+			writeIn(t, dir, n+".pub", newKey(t))
 		}
 		if err := s.Sync(); err != nil {
 			t.Fatalf("Sync: %v", err)

@@ -200,10 +200,9 @@ func (s *Store) List() []*Account {
 	return out
 }
 
-// uidmapPath is where allocated uids are persisted, in the same
-// "name:uid" format the shell implementation used, so an existing deployment's
-// uids must survive the change, because a uid determines both the account's
-// reverse-tunnel port and the ownership of everything it has written.
+// uidmapPath is where allocated uids are persisted, in the "name:uid" format
+// the shell implementation used: a uid decides the account's reverse-tunnel
+// port and the ownership of everything it has written, so it must survive.
 func (s *Store) uidmapPath() string { return filepath.Join(s.StateDir, "uidmap") }
 
 // dirs is every keys directory: the operator's first, the enrolled one last.
@@ -230,7 +229,24 @@ func (s *Store) Sync() error {
 
 // sync is Sync without the wait: an account new to this process is published
 // by its provisioning goroutine once Ensure has finished.
+//
+// Subscribers run after syncMu is released, so one may call anything here.
 func (s *Store) sync() ([]chan struct{}, error) {
+	started, err := s.swap()
+	if err != nil {
+		return nil, err
+	}
+	s.subMu.Lock()
+	subs := slices.Clone(s.subs)
+	s.subMu.Unlock()
+	for _, fn := range subs {
+		fn()
+	}
+	return started, nil
+}
+
+// swap reads the directories and swaps the accounts they enrol in, under syncMu.
+func (s *Store) swap() ([]chan struct{}, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 
@@ -291,22 +307,13 @@ func (s *Store) sync() ([]chan struct{}, error) {
 		}
 	}
 
-	started, err := s.reconcile(found, unusable, uids)
-	if err != nil {
-		return nil, err
-	}
-	s.subMu.Lock()
-	subs := slices.Clone(s.subs)
-	s.subMu.Unlock()
-	for _, fn := range subs {
-		fn()
-	}
-	return started, nil
+	return s.reconcile(found, unusable, uids)
 }
 
-// Subscribe runs fn after every sync that swaps the accounts in, outside the
-// lock Lookup reads through. Sync waits for it, so a revocation has been acted
-// on by the time Sync returns; fn must not call Sync.
+// Subscribe runs fn after every sync that swaps the accounts in, outside every
+// lock of the store. Sync waits for it, so a revocation has been acted on by
+// the time Sync returns. Two syncs may run fn at once, and fn must not sync,
+// which would run it again.
 func (s *Store) Subscribe(fn func()) {
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
@@ -378,23 +385,12 @@ func (s *Store) keyFiles(dir string) ([]namedFile, error) {
 }
 
 // reconcile provisions new accounts and revokes ones no directory enrols any
-// more.
-//
-// Sync has already applied the two-read rule; unusable is only recorded for
-// the next sync and used to name the reason for a revocation.
-//
-// It returns the provisioning it started. That runs in the background,
-// holding neither s.mu, which Lookup reads through, nor syncMu: useradd is
-// seconds long, and with a large /etc/skel minutes. See the syncMu and
-// accounts fields.
+// more. unusable is recorded for the next sync's two-read rule and names the
+// reason for a revocation. It returns the provisioning it started, which runs
+// in the background holding neither mu nor syncMu: see provision.
 func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, uids map[string]int) ([]chan struct{}, error) {
-	// 1. Decide the uids. No lock and no exec.
-	//
-	// Sorted, because this loop ASSIGNS uids to accounts that do not have one
-	// yet, and ranging a map would assign them in Go's randomised order: Sync
-	// orders the key files deterministically and handing the result over as a
-	// map threw that away, so the uid a new account got, and therefore its
-	// reverse-tunnel port, depended on the run.
+	// 1. Decide the uids, in sorted order: ranging the map would hand a new
+	// account a uid, and so a reverse-tunnel port, that depends on the run.
 	names := slices.Sorted(maps.Keys(found))
 	changed := false
 	for _, name := range names {
@@ -451,19 +447,10 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, 
 		next[name] = found[name]
 	}
 
-	// Revoke, do not delete. Removing the account and its home would silently
-	// lose whatever the user left there, and a key file is removed far more
-	// often than a person leaves for good.
-	//
-	// An account is enrolled exactly while some file holds a key for it, so
-	// emptying the files revokes: that is the interface. But a file being
-	// saved is empty for a moment, and one read cannot tell that moment from an
-	// emptying meant on purpose. So a file that is THERE and holds nothing has
-	// to say so twice, which Sync decides per directory. A file that is GONE
-	// revokes at once: there is no write window to be caught in.
-	//
-	// A COPY with no keys, never Keys=nil on an account already published: see
-	// the accounts field.
+	// Revoke, do not delete: removing the home would lose whatever the user
+	// left there, and a key file is removed far more often than a person
+	// leaves. Sync has already applied the two-read rule. A COPY with no keys,
+	// never Keys=nil on an account already published: see the accounts field.
 	for name, account := range next {
 		if _, still := found[name]; still {
 			continue
@@ -532,24 +519,30 @@ func (s *Store) provision(accounts []*Account) []chan struct{} {
 }
 
 // awaitProvisioning waits for the account's provisioning, if it is under way,
-// for at most ProvisionWait.
+// for at most ProvisionWait, and reports ErrNotProvisioned for an account
+// Ensure has not succeeded for: a closed channel means only that it finished.
 func (s *Store) awaitProvisioning(name string) error {
 	s.syncMu.Lock()
 	done := s.provisioning[name]
 	s.syncMu.Unlock()
-	if done == nil {
-		return nil
+	if done != nil {
+		wait := s.ProvisionWait
+		if wait <= 0 {
+			wait = 30 * time.Second
+		}
+		select {
+		case <-done:
+		case <-time.After(wait):
+			return ErrProvisioning
+		}
 	}
-	wait := s.ProvisionWait
-	if wait <= 0 {
-		wait = 30 * time.Second
+	s.syncMu.Lock()
+	_, ok := s.provisioned[name]
+	s.syncMu.Unlock()
+	if !ok {
+		return ErrNotProvisioned
 	}
-	select {
-	case <-done:
-		return nil
-	case <-time.After(wait):
-		return ErrProvisioning
-	}
+	return nil
 }
 
 // nextUID allocates one above the highest uid in the record, and at least the
