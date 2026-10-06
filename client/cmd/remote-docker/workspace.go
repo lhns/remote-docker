@@ -311,20 +311,33 @@ func (f *workspaceFlags) refuseForMachine(name string, m *config.Machine) error 
 var saveConfig = config.Save
 
 // recreate is the `create` that makes the entry a redeemed invite would have
-// made, without the token that is already spent.
+// made, without the token that is already spent: every setting given, and the
+// account enrolled.
 func recreate(name string, f workspaceFlags, account string) string {
-	cmd := "create " + name + " --host " + f.host
-	if f.given("port") {
-		cmd += " --port " + strconv.Itoa(f.port)
+	var b strings.Builder
+	b.WriteString("create " + name + " --host " + quoteArg(f.host))
+	f.set.Visit(func(fl *pflag.Flag) {
+		switch {
+		case fl.Name == "host" || fl.Name == "user":
+		case fl.Value.Type() == "bool":
+			if fl.Value.String() == "true" {
+				b.WriteString(" --" + fl.Name)
+			}
+		default:
+			b.WriteString(" --" + fl.Name + " " + quoteArg(fl.Value.String()))
+		}
+	})
+	b.WriteString(" --user " + account)
+	return b.String()
+}
+
+// quoteArg quotes a value with a space in it the way sh and PowerShell both
+// read as one argument, such as a Windows path.
+func quoteArg(s string) string {
+	if s == "" || strings.ContainsAny(s, " \t") {
+		return `"` + s + `"`
 	}
-	cmd += " --user " + account
-	if f.given("ca-file") {
-		cmd += " --ca-file " + f.caFile
-	}
-	if f.given("insecure") && f.insecure {
-		cmd += " --insecure"
-	}
-	return cmd
+	return s
 }
 
 // redeem enrols this machine's key with an invite, as the account --user

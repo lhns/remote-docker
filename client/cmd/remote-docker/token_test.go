@@ -70,26 +70,17 @@ func TestAFailedRedemptionSavesNothing(t *testing.T) {
 // The account saved is the one the workspace enrolled the key into, and a
 // refusal in the reply saves nothing.
 func TestARedemptionSavesTheAccountItJoined(t *testing.T) {
-	invite := func(m *manageServer) string {
-		id, secret, err := enrol.NewToken()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return enrol.Invite{URL: "ssh://" + m.addr, HostKey: ssh.FingerprintSHA256(m.hostKey),
-			Account: "alice", Token: id + "." + secret}.String()
-	}
-
 	withConfig(t, nil)
 	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
 	refusal, _ := json.Marshal(enrol.RedeemReply{Error: enrol.Refused})
 	refused := startManageServer(t, string(refusal), 0)
-	if err := run(t, "remote", "create", "ws", "--no-context", "--token", invite(refused)); err == nil || err.Error() != enrol.Refused.Error() {
+	if err := run(t, "remote", "create", "ws", "--no-context", "--token", redeemInvite(t, refused)); err == nil || err.Error() != enrol.Refused.Error() {
 		t.Fatalf("a refused redeem: %v", err)
 	}
 	requireNoWorkspace(t, "ws")
 
 	m := startManageServer(t, `{"account":"alice","created":true}`, 0)
-	out, err := runOut(t, "remote", "create", "ws", "--no-context", "--token", invite(m))
+	out, err := runOut(t, "remote", "create", "ws", "--no-context", "--token", redeemInvite(t, m))
 	if err != nil {
 		t.Fatalf("create --token: %v\n%s", err, out)
 	}
@@ -154,15 +145,30 @@ func TestAnUnwritableConfigRefusesBeforeRedeeming(t *testing.T) {
 	}
 }
 
+// Every setting given survives, the account is the one enrolled, and a value
+// with a space stays one argument.
 func TestRecreateKeepsTheFlagsGiven(t *testing.T) {
-	var f workspaceFlags
-	f.register(&cobra.Command{}, "")
-	if err := f.set.Parse([]string{"--host", "wss://ws.example/", "--ca-file", "ca.pem", "--insecure", "--port", "443"}); err != nil {
-		t.Fatal(err)
-	}
-	want := "create ws --host wss://ws.example/ --port 443 --user bob --ca-file ca.pem --insecure"
-	if got := recreate("ws", f, "bob"); got != want {
-		t.Errorf("got %q, want %q", got, want)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{{
+		args: []string{"--host", "wss://ws.example/", "--ca-file", "ca.pem", "--insecure", "--port", "443"},
+		want: "create ws --host wss://ws.example/ --ca-file ca.pem --insecure --port 443 --user bob",
+	}, {
+		args: []string{"--host", "ssh://ws.example:2222", "--user", "alice",
+			"--consistency", "read=cached,write=back", "--watch", "partial",
+			"--endpoint", `C:\Users\alice\My State\docker.sock`},
+		want: `create ws --host ssh://ws.example:2222 --consistency read=cached,write=back ` +
+			`--endpoint "C:\Users\alice\My State\docker.sock" --watch partial --user bob`,
+	}} {
+		var f workspaceFlags
+		f.register(&cobra.Command{}, "")
+		if err := f.set.Parse(c.args); err != nil {
+			t.Fatal(err)
+		}
+		if got := recreate("ws", f, "bob"); got != c.want {
+			t.Errorf("%q:\n got %q\nwant %q", c.args, got, c.want)
+		}
 	}
 }
 

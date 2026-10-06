@@ -89,7 +89,8 @@ var Refused = &Error{
 	Fix:  "ask for a new one",
 }
 
-// MaxMessage bounds a request or a reply.
+// MaxMessage bounds a request, which a redeem reads from a login holding
+// nothing but a token id.
 const MaxMessage = 64 << 10
 
 // ReadJSON decodes one bounded message.
