@@ -213,14 +213,6 @@ var (
 func escapeHelp(s string) string  { return helpEscaper.Replace(s) }
 func escapeLabel(s string) string { return labelEscaper.Replace(s) }
 
-// Listen opens the scrape listener, or none for an empty addr.
-func Listen(addr string) (net.Listener, error) {
-	if addr == "" {
-		return nil, nil
-	}
-	return net.Listen("tcp", addr)
-}
-
 // Serve answers GET /metrics on ln in the background until stop. Plain HTTP,
 // and nothing else on this listener.
 func (r *Registry) Serve(ln net.Listener, onErr func(error)) (stop func()) {

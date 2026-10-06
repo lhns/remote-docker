@@ -128,15 +128,3 @@ func (s *Server) Connections() map[string]int {
 	}
 	return out
 }
-
-// connected reports whether an account has a live connection.
-func (c *conns) connected(account string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, lc := range c.live {
-		if lc.key != nil && lc.account == account {
-			return true
-		}
-	}
-	return false
-}

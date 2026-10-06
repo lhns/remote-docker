@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,7 +89,7 @@ func TestHandler(t *testing.T) {
 func TestServe(t *testing.T) {
 	var r Registry
 	r.Counter("rd_x_total", "x").Inc()
-	ln, err := Listen("127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,12 +113,5 @@ func TestServe(t *testing.T) {
 	_ = other.Body.Close()
 	if other.StatusCode != http.StatusNotFound {
 		t.Errorf("GET / = %d, want 404", other.StatusCode)
-	}
-}
-
-func TestListenEmptyOpensNothing(t *testing.T) {
-	ln, err := Listen("")
-	if ln != nil || err != nil {
-		t.Errorf("Listen(\"\") = %v, %v; want no listener", ln, err)
 	}
 }

@@ -18,7 +18,10 @@ const envMetricsAddr = "WORKSPACE_METRICS_ADDR"
 
 // listenMetrics opens the metrics listener, or none for an empty addr.
 func listenMetrics(addr string) (net.Listener, error) {
-	ln, err := metrics.Listen(addr)
+	if addr == "" {
+		return nil, nil
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", envMetricsAddr, err)
 	}
