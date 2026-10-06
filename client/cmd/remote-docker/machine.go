@@ -566,7 +566,11 @@ func newMachineStatusCommand() *cobra.Command {
 		Long: `Exits 1 when the machine is not running or its agent does not answer.
 
 A stopped machine is reported as stopped and left stopped: the agent is only
-dialled on a running one.`,
+dialled on a running one.
+
+An agent that does not answer is restarted by stopping and starting the
+machine, which keeps its images and containers; ` + "`rebuild`" + ` replaces it and
+discards them. A WSL machine's agent logs to ` + machine.WSLAgentLog + ` inside it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withMachine(cmd, args, func(ctx context.Context, b machine.Backend, _ string, ws config.Workspace) error {
@@ -622,18 +626,10 @@ func reportAgent(ctx context.Context, out io.Writer, b machine.Backend, m *confi
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		rowf(out, "agent", "not answering on %s", addr)
-		// Restarting first: booting the machine again reruns whatever starts
-		// the agent (WSL's `[boot] command`, Hyper-V's unit), and nothing else
-		// restarts a WSL agent that died. Two commands rather than `&&`, which
-		// Windows PowerShell 5.1 does not parse.
-		fix := fmt.Sprintf("`%s`, then `%s`, restarts it and keeps its images and containers; "+
-			"`%s` replaces it, discarding them",
-			ourCommand("machine stop "+m.Name), ourCommand("machine start "+m.Name),
-			ourCommand("machine rebuild "+m.Name))
-		if m.Backend == "wsl" {
-			fix = fmt.Sprintf("its log is %s inside the machine; %s", machine.WSLAgentLog, fix)
-		}
-		_, _ = fmt.Fprintf(out, "  fix: %s\n", fix)
+		// Booting the machine again reruns whatever starts the agent (WSL's
+		// `[boot] command`, Hyper-V's unit) and keeps its images. "then" rather
+		// than `&&`, which Windows PowerShell 5.1 does not parse.
+		_, _ = fmt.Fprintf(out, "  fix: `%s`, then `start` it again\n", ourCommand("machine stop "+m.Name))
 		return false
 	}
 	_ = conn.Close()

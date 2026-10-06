@@ -61,24 +61,27 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 	s.rtt.Store(int64(time.Since(started)))
-	s.clientID = clientIDFor(info, key.Signer.PublicKey().Marshal())
-
 	s.registry.SetAttrs(attrsFor(info))
 
-	live := &liveConn{ssh: client, info: info, machine: hold}
+	live := &liveConn{
+		ssh:      client,
+		info:     info,
+		clientID: clientIDFor(info, key.Signer.PublicKey().Marshal()),
+		machine:  hold,
+	}
 	hold = nil
 	if info.Now != 0 {
 		live.clockSkew = time.Duration(info.Now - time.Now().UnixNano())
 	}
 	live.api = &proxy.APIClient{Dialer: &proxy.SSHDialer{Client: client}}
-	live.guard = &rewrite.Guard{Exported: s.exportsVolume}
+	live.guard = &rewrite.Guard{Exported: func(volume string) bool { return s.exportsVolume(live.clientID, volume) }}
 	live.rewriter = &rewrite.Rewriter{
 		Shares:   shareRegistrar{registry: s.registry, shares: s.shares, changed: s.syncWatch},
 		Volumes:  live.api,
 		NFSPort:  info.NFSPort,
 		NConnect: s.nconnect(),
 		Owner:    info.User,
-		Client:   s.clientID,
+		Client:   live.clientID,
 		Guard:    live.guard,
 
 		Mode:      s.opts.Mode,
@@ -338,7 +341,7 @@ func (s *Session) startPorts(ctx context.Context, live *liveConn) {
 		},
 
 		LocalPorts: func(c ports.Container, p ports.Published) []int {
-			return localPortsFor(c, p, s.clientID)
+			return localPortsFor(c, p, live.clientID)
 		},
 	}
 	live.wg.Go(func() { s.watchPorts(ctx, live) })

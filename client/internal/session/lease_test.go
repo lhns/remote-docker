@@ -110,7 +110,7 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 		}
 	}
 
-	ours := s.ourVolumes()
+	ours := s.ourVolumes("")
 	if len(ours) != 2 {
 		t.Fatalf("named %d volumes, want one per share: %v", len(ours), ours)
 	}
@@ -133,16 +133,16 @@ func TestTheGuardCoversAShareCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	volume, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath)
+	volume, err := workspace.VolumeNameForExport("", share.ExportPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !s.exportsVolume(workspace.CacheVolumeName(volume)) {
+	if !s.exportsVolume("", workspace.CacheVolumeName(volume)) {
 		t.Errorf("the cache over an exported share, %s, is not covered", workspace.CacheVolumeName(volume))
 	}
 	theirs := workspace.VolumeNameForID("", workspace.ShareID("/somebody/elses/project"))
-	if s.exportsVolume(workspace.CacheVolumeName(theirs)) {
+	if s.exportsVolume("", workspace.CacheVolumeName(theirs)) {
 		t.Error("claimed the cache over a share this session does not export")
 	}
 }

@@ -3,6 +3,7 @@ package sshd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -251,6 +252,38 @@ func TestAnUnboundTokenNeverReusesAName(t *testing.T) {
 
 	id, secret := w.mint(t, "")
 	wantCode(t, w.redeem(t, id, newSigner(t), enrol.RedeemRequest{Secret: secret, Account: "carol"}), enrol.CodeName)
+}
+
+// failingProvisioner fails Ensure while fail is set: a useradd that errors.
+type failingProvisioner struct{ fail atomic.Bool }
+
+func (f *failingProvisioner) Ensure(name string, _ int, _ string) (string, string, error) {
+	if f.fail.Load() {
+		return "", "", errors.New("useradd: no")
+	}
+	return name, "/home/" + name, nil
+}
+
+func (*failingProvisioner) Remove(string, int) error { return nil }
+
+// A name whose account could not be created was never an account, so the
+// same token, asked again once the workspace is fixed, creates it.
+func TestAFailedCreationLeavesTheNameAndTheToken(t *testing.T) {
+	w := startTokenWorkspace(t, "")
+	prov := &failingProvisioner{}
+	prov.fail.Store(true)
+	w.store.Provisioner = prov
+
+	id, secret := w.mint(t, "")
+	wantCode(t, w.redeem(t, id, newSigner(t), enrol.RedeemRequest{Secret: secret, Account: "erin"}), enrol.CodeFailed)
+
+	prov.fail.Store(false)
+	key := newSigner(t)
+	reply := w.redeem(t, id, key, enrol.RedeemRequest{Secret: secret, Account: "erin"})
+	if reply.Error != nil || reply.Account != "erin" || !reply.Created {
+		t.Fatalf("reply %+v, error %+v; want erin created", reply, reply.Error)
+	}
+	w.dial(t, "erin", key)
 }
 
 func TestAWrongSecretIsRefusedAndCounted(t *testing.T) {

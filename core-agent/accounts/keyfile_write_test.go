@@ -337,6 +337,78 @@ func TestAWriteForAnAccountThatCannotBeCreatedFails(t *testing.T) {
 	}
 }
 
+// A name whose account was never created reserves nothing: once the cause is
+// fixed, asking again gets the name, and a uid the failed attempt did not.
+func TestAFailedCreationReleasesTheName(t *testing.T) {
+	s := newStore(t)
+	s.prov.err = errors.New("useradd: no")
+	if err := s.CreateAccount("bob", newKey(t), ""); !errors.Is(err, ErrNotProvisioned) {
+		t.Fatalf("CreateAccount: err = %v, want ErrNotProvisioned", err)
+	}
+	failed := s.Mapping.UIDBase // the first uid handed out
+
+	s.prov.err = nil
+	if err := s.CreateAccount("bob", newKey(t), ""); err != nil {
+		t.Fatalf("asking again for a name nobody got: %v", err)
+	}
+	if a, ok := s.Lookup("bob"); !ok || a.UID <= failed {
+		t.Errorf("bob = %+v, want a uid above the failed attempt's %d", a, failed)
+	}
+}
+
+// A file an operator adds while the creation is failing is somebody enrolling
+// that name, and keeps it.
+func TestAFailedCreationKeepsANameAnOperatorEnrols(t *testing.T) {
+	s := newStore(t)
+	s.prov.err = errors.New("useradd: no")
+	s.prov.onEnsure = func(string) {
+		s.prov.onEnsure = nil
+		writeIn(t, s.keysDir, "bob.pub", newKey(t))
+	}
+	if err := s.CreateAccount("bob", newKey(t), ""); !errors.Is(err, ErrNotProvisioned) {
+		t.Fatalf("CreateAccount: err = %v, want ErrNotProvisioned", err)
+	}
+	if uids, err := s.loadUIDs(); err != nil || uids["bob"] == 0 {
+		t.Errorf("uidmap %v (%v), want bob kept", uids, err)
+	}
+}
+
+// Only a name nothing holds is released: not one a file enrols, not one this
+// process provisioned, and never from a write that is not a creation.
+func TestReleaseKeepsANameSomethingHolds(t *testing.T) {
+	s := newStore(t)
+
+	// Provisioned, then revoked.
+	writeIn(t, s.keysDir, "alice.pub", newKey(t))
+	s.sync(t)
+	if err := os.Remove(filepath.Join(s.keysDir, "alice.pub")); err != nil {
+		t.Fatal(err)
+	}
+	s.sync(t)
+	s.releaseName("alice")
+
+	// Enrolled by an operator file, and never created.
+	s.prov.err = errors.New("useradd: no")
+	writeIn(t, s.keysDir, "carol.pub", newKey(t))
+	s.sync(t)
+	s.releaseName("carol")
+
+	// A key added for an account that does not exist yet, as a bound token does.
+	if _, err := s.AppendKey("dave", newKey(t), ""); !errors.Is(err, ErrNotProvisioned) {
+		t.Fatalf("AppendKey: err = %v, want ErrNotProvisioned", err)
+	}
+
+	uids, err := s.loadUIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alice", "carol", "dave"} {
+		if _, ok := uids[name]; !ok {
+			t.Errorf("%s was released: uidmap %v", name, uids)
+		}
+	}
+}
+
 // shortLocks shortens the lock timings for one test.
 func shortLocks(t *testing.T, stale, wait time.Duration) {
 	t.Helper()

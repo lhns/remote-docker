@@ -111,10 +111,6 @@ type Session struct {
 	registry *nfsserve.Registry
 	nfs      *nfsserve.Server
 
-	// clientID names this machine, or this run of an ephemeral account, set on
-	// every connect.
-	clientID string
-
 	// runID is minted once, so every reconnect is the same run (ADR 0050). It
 	// leaves this process only in the run request and on the local control
 	// endpoint, for a one-off query to join.
@@ -156,6 +152,11 @@ type liveConn struct {
 	guard     *rewrite.Guard
 	nfsTunnel net.Listener
 	ports     *ports.Manager
+
+	// clientID names this machine, or this run of an ephemeral account. Here
+	// rather than on Session, which the idle sweep reads while a reconnect
+	// would write it.
+	clientID string
 
 	// clockSkew is the workspace's clock minus this machine's, used to decide
 	// which side wrote last in a write-back conflict (ADR 0044).

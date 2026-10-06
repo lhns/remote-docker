@@ -52,13 +52,13 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 	if err != nil {
 		return false, err
 	}
-	ours := s.ourVolumes()
+	ours := s.ourVolumes(live.clientID)
 	for _, c := range containers {
 		// Scoped to this machine too, or another machine's containers would
 		// block this one's idle release (ADR 0029). No client label predates
 		// machine names and counts.
 		if c.Labels[workspace.OwnerLabel] == live.info.User {
-			if client := c.Labels[workspace.ClientLabel]; client == "" || client == s.clientID {
+			if client := c.Labels[workspace.ClientLabel]; client == "" || client == live.clientID {
 				return true, nil
 			}
 		}
@@ -73,11 +73,11 @@ func (s *Session) hasLiveDependents(ctx context.Context, live *liveConn) (bool, 
 
 // ourVolumes names the volumes backing this session's shares, derived from
 // the registry (ADR 0007).
-func (s *Session) ourVolumes() map[string]bool {
+func (s *Session) ourVolumes(clientID string) map[string]bool {
 	shares := s.registry.Shares()
 	out := make(map[string]bool, len(shares))
 	for _, share := range shares {
-		if name, err := workspace.VolumeNameForExport(s.clientID, share.ExportPath); err == nil {
+		if name, err := workspace.VolumeNameForExport(clientID, share.ExportPath); err == nil {
 			out[name] = true
 		}
 	}
@@ -145,7 +145,7 @@ func (s *Session) pruneShareRecord(ctx context.Context, live *liveConn) {
 	keep := make(map[string]bool, len(volumes))
 	for _, v := range volumes {
 		client, share, ok := workspace.ParseVolumeName(v.Name)
-		if !ok || (client != "" && client != s.clientID) {
+		if !ok || (client != "" && client != live.clientID) {
 			continue
 		}
 		keep[workspace.ExportPathForID(share)] = true
@@ -157,7 +157,7 @@ func (s *Session) collector(live *liveConn) *rewrite.Collector {
 	return &rewrite.Collector{
 		Volumes: live.api,
 		Owner:   live.info.User,
-		Client:  s.clientID,
+		Client:  live.clientID,
 		Guard:   live.guard,
 		Caches:  s.mountedCaches,
 		Log:     s.opts.Log,
@@ -187,8 +187,8 @@ func (s *Session) mountedCaches(ctx context.Context) (map[string]bool, error) {
 // exportsVolume reports whether a volume backs a share this session exports,
 // or is the cache over one. The daemon calls it in use only once a container
 // names it, and it must survive collection before that.
-func (s *Session) exportsVolume(volume string) bool {
-	for name := range s.ourVolumes() {
+func (s *Session) exportsVolume(clientID, volume string) bool {
+	for name := range s.ourVolumes(clientID) {
 		if volume == name || volume == workspace.CacheVolumeName(name) {
 			return true
 		}

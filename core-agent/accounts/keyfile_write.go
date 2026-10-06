@@ -84,7 +84,7 @@ func (s *Store) AppendKey(account string, key ssh.PublicKey, comment string) (ad
 	if !added {
 		return false, s.awaitProvisioning(name)
 	}
-	return true, s.awaitOrWithdraw(name, fp)
+	return true, s.awaitOrWithdraw(name, fp, false)
 }
 
 // CreateAccount enrols a key under a name nobody has: not in the uidmap and
@@ -136,7 +136,9 @@ func (s *Store) CreateAccount(account string, key ssh.PublicKey, comment string)
 	if err != nil {
 		return err
 	}
-	return s.awaitOrWithdraw(name, ssh.FingerprintSHA256(key))
+	// Known found the name free, so a name this creation could not create is
+	// released again.
+	return s.awaitOrWithdraw(name, ssh.FingerprintSHA256(key), true)
 }
 
 // RemoveKey takes a key, by fingerprint, out of the account's enrolled file,
@@ -192,8 +194,8 @@ func (s *Store) RemoveAccountFile(account string) error {
 	})
 }
 
-// Known reports whether a name is taken: the uidmap has it, which is forever,
-// or some directory has a file for it.
+// Known reports whether a name is taken: the uidmap has it, which is forever
+// once its account has existed, or some directory has a file for it.
 func (s *Store) Known(account string) (bool, error) {
 	name, err := workspace.AccountName(account)
 	if err != nil {
@@ -274,15 +276,21 @@ func (s *Store) edit(name string, change func(path string) error) error {
 // awaitOrWithdraw waits for the account a key was just added to. Still being
 // created after ProvisionWait is ErrProvisioning, the key kept; never created
 // is ErrNotProvisioned, the key taken out again, since the caller is about to
-// say the key did not enrol.
-func (s *Store) awaitOrWithdraw(name, fingerprint string) error {
+// say the key did not enrol. release also releases the name, under the same
+// file lock, if nothing else holds it: see releaseName.
+func (s *Store) awaitOrWithdraw(name, fingerprint string, release bool) error {
 	err := s.awaitProvisioning(name)
 	if !errors.Is(err, ErrNotProvisioned) {
 		return err
 	}
 	undo := s.edit(name, func(path string) error {
-		_, err := removeKeyLine(path, fingerprint)
-		return err
+		if _, err := removeKeyLine(path, fingerprint); err != nil {
+			return err
+		}
+		if release {
+			s.releaseName(name)
+		}
+		return nil
 	})
 	if undo != nil {
 		return fmt.Errorf("%w, and its key could not be taken out again: %w", err, undo)

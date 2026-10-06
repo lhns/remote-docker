@@ -239,9 +239,9 @@ a shell and the run request all refuse it through `accountFor`. *Covered by*
 
 **E — an unbound token taking somebody's name (10, 12).** Only a name the uidmap
 and every keys directory have never held, and not a reserved one. The uidmap
-never forgets, so a removed account's name stays its own, and an admin's name
-is never taken either. Only the operator and admins mint a token that creates
-an account (Flow 1c).
+never forgets an account that existed, so a removed account's name stays its
+own, and an admin's name is never taken either. Only the operator and admins
+mint a token that creates an account (Flow 1c).
 
 **T — the write (11, 12).** Only the enrolled directory is written, under its lock,
 and the key written is the one the connection authenticated with. The
