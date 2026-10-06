@@ -56,8 +56,9 @@ CHECKOUT="$WORK/checkout"
 
 cleanup() {
     # The runs were started through sudo, so their pids are root's to signal.
-    # Each is matched by the binary's path, which is this suite's alone.
-    sudo pkill -f "$WORK/remote-docker" 2>/dev/null
+    # Each is matched by the binary's path, which is this suite's alone. The
+    # bracket keeps the pattern from matching the sudo that carries it.
+    sudo pkill -f "$WORK/[r]emote-docker" 2>/dev/null
     cleanup_suite "${MACHINE_PID:-}"
 }
 trap cleanup EXIT
@@ -428,7 +429,7 @@ else
     hostdocker logs "$CONTAINER" 2>&1 | grep -i ephemeral | tail -10 | sed 's/^/        /'
 fi
 if [ "$(($(date +%s) - start))" -lt $((GRACE - 2)) ]; then
-    bad "run 1 went before its grace was up"
+    bad "run 1 went after $(($(date +%s) - start))s, before its grace (${GRACE}s) was up"
 fi
 info "run 1's port was $port1"
 

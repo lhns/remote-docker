@@ -109,6 +109,11 @@ stop_pid() {
     wait "$1" 2>/dev/null
 }
 
+# invite_of prints the invite out of `token create`'s output.
+#
+#   invite_of <output>
+invite_of() { awk '/--token/ {print $NF}' <<<"$1"; }
+
 # genkey is separate from enrol because test/two-clients.sh stages two
 # machines' keys in ONE account's file itself.
 genkey() {

@@ -3,7 +3,8 @@
 - Status: Accepted. Consolidates ADR 0011 (shared contract), ADR 0030 (tunnel in
   `core`) and ADR 0031 (the glue rule): stages of one decision, no longer
   separate records.
-- Date: 2026-08-07, last decided 2026-09-08, consolidated 2026-08-19
+- Date: 2026-08-07, last decided 2026-09-08, consolidated 2026-08-19, amended
+  2026-10-05 (`core/enrol`, `core-agent/tokens`)
 - Current answer: **two axes**. Modules split by SIDE; packages inside `core`
   split by FEATURE. Eight modules, of which one is test-only.
 
@@ -349,7 +350,9 @@ needing a new one:
 
 - **`core/enrol` is one protocol package, whole**: the `+token:` login, the
   banner and its version, `workspace-redeem`, the frames, the error codes and
-  the invite codec, because both binaries must agree on all of them.
+  the invite codec, because both binaries must agree on all of them; and
+  `workspace-enrol`, account management's request and reply (ADR 0053), which
+  shares the error codes.
 - **`core-agent/tokens` is the store**: minting, the single-use rename, expiry
   and the failure limiter. Workspace side and Docker-free, so `core-agent`;
   stdlib and `core/enrol` only.

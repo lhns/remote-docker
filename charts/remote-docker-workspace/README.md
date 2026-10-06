@@ -79,7 +79,7 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 | `persistence.graph.size` | `50Gi` | images and containers. Applies only when the claim is created; see Growing a volume |
 | `persistence.graph.existingClaim` | `""` | mount a claim you own instead of generating one |
 | `persistence.state.existingClaim` | `""` | the same, for the state volume |
-| `persistence.state.size` | `1Gi` | host keys and the uid map |
+| `persistence.state.size` | `1Gi` | host keys, the uid map, keys enrolled with a token, and tokens |
 | `ephemeral.accounts` | `[]` | accounts whose every client process is a client of its own; see CI runners below |
 | `ephemeral.maxClients` | `8` | clients at once per such account, counting those in their grace period |
 | `ephemeral.grace` | `2m` | how long a client's port and volumes outlive its last connection |

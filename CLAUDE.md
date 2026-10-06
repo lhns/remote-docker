@@ -775,7 +775,8 @@ premise of the project, and it applies to building it too. So:
   syncs from handing one uid to two accounts, and it is never held across a
   `useradd` either: `Known`, the redeem and every key write take it, and one
   `useradd` took 170s (PR 268). A new account is provisioned in the
-  background, once per process, and published when that finishes.
+  background, one at a time and once per process, and published when that
+  finishes.
 - **Never range a map to assign something durable.** Account uids are handed
   out in `accounts.reconcile`, which used to range the `found` map -- so which
   account got which uid, and therefore which reverse-tunnel port, differed
@@ -1141,7 +1142,7 @@ ingress-nginx on every pull request and takes a session through it: a file
 written on the runner, read inside a container in the cluster through a bind
 mount, and an enrolment token redeemed through the ingress, whose key lands in
 `enrolled_keys.d` with the `authorizedKeys` Secret unchanged. It also runs
-`helm lint` and nine renders through `kubeconform`, which is eight seconds and
+`helm lint` and ten renders through `kubeconform`, which is eight seconds and
 always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 
@@ -1204,8 +1205,8 @@ account's port and volumes unchanged throughout. `kubernetes.yml` adds the
 autoscaled shape: an unprivileged client Deployment under the `restricted` Pod
 Security Standard, one key from one Secret, scaled 1, 4, 1, with `docker info`
 and a bind mount of the same path reading each pod's own name, and only the
-surviving pod's run and volume left after the grace. See the not-tested entry
-on when these first ran.
+surviving pod's run and volume left after the grace. Both first ran green on
+main on 2026-10-06.
 
 `.github/workflows/machine.yml` is the only suite that runs a WINDOWS machine
 end to end. A Linux job exports the workspace image as a rootfs; a

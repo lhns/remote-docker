@@ -3,14 +3,16 @@
 - Status: Accepted; amends [ADR 0003](0003-client-serves-workspace-mounts.md),
   [ADR 0007](0007-virtual-nfs-export-namespace.md) and
   [ADR 0019](0019-a-dockerd-per-account.md)
-- Date: 2026-08-11, amended 2026-08-13 and 2026-08-18
+- Date: 2026-08-11, amended 2026-08-13, 2026-08-18 and 2026-10-05
 - Current answer: the account is the identity and the machine is the client,
   keyed on the digest of the enrolled key. The daemon, containers and images are
   shared; the export, its reverse-tunnel port and the volumes naming it are per
   machine. A volume outliving its port is repaired from the workspace's own
   record ([ADR 0032](0032-the-workspace-is-the-record.md)), not from this
   record's `replaceIfStale` alone. Compose project names still collide between
-  machines, and the accepted remedy is `COMPOSE_PROJECT_NAME` per machine.
+  machines, and the accepted remedy is `COMPOSE_PROJECT_NAME` per machine. An
+  account in `WORKSPACE_EPHEMERAL_ACCOUNTS` is a client per run instead
+  ([ADR 0050](0050-ephemeral-clients.md)).
 
 ## Context
 

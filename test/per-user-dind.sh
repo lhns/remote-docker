@@ -623,7 +623,6 @@ device() {
         HOME="$statedir-home" REMOTE_DOCKER_STATE_DIR="$statedir" \
         timeout 120 "$WORK/remote-docker" remote "$@"
 }
-invite_of() { awk '/--token/ {print $NF}' <<<"$1"; }
 # shellcheck disable=SC2016  # awk's fields, not the shell's
 uid_of() { hostdocker exec "$CONTAINER" awk -F: -v a="$1" '$1 == a {print $2}' /etc/workspace/uidmap; }
 
@@ -680,7 +679,7 @@ else
     bad "rd-dind-$B-lib went with the account"
 fi
 if outputs '^AUTH-OK' ssh_account "$WORK/state-$B-2/id_ed25519" "$B" 20 'echo AUTH-OK'; then
-    bad "a removed account still authenticates"
+    bad "a removed account still authenticates: [$LAST_OUTPUT]"
 else
     ok "a removed account no longer authenticates"
 fi
@@ -738,7 +737,7 @@ fi
 
 echo
 echo "== 17. user rm --purge keeps only the uid (ADR 0053) =="
-# $B is back since section 16, on the second redemption's key.
+# $B is back since section 16, enrolled again by a token.
 # shellcheck disable=SC2016  # awk's fields, not the shell's
 home_of() { hostdocker exec "$CONTAINER" awk -F: -v u="rd-$1" '$1 == u {print $6}' /etc/passwd; }
 # shellcheck disable=SC2016

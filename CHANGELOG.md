@@ -19,7 +19,10 @@ software.
   your key. Nobody has to copy a key file anywhere. A token works once and
   expires after a day. It also tells your machine which host key to expect, so
   the first connection is checked too. On Kubernetes the chart's `publicURL`
-  is the address a token sends people to; by default it is the ingress.
+  is the address a token sends people to; by default it is the ingress. When
+  the token creates a new account and setting that account up on the
+  workspace takes longer than 30 seconds, `remote create` says so: wait a
+  minute or two before the first docker command.
 - **Accounts can be managed from your own machine.** `remote token create`
   prints a line that enrols another machine into your account, so a second
   laptop needs nobody's help. `remote key ls`, `key add` and `key rm` list and
@@ -50,7 +53,7 @@ software.
   8 runners at once by default. Images and the build cache stay shared. The
   built-in `docker compose` gives each runner its own project name; a separate
   `docker compose` needs `COMPOSE_PROJECT_NAME` set per job. See "CI with
-  autoscaled runners" in the README. Not yet tested against a real workspace.
+  autoscaled runners" in the README.
 
 ### Fixes
 
@@ -84,10 +87,6 @@ software.
 - **`remote ls` lines up its columns.**
 - **Two containers starting at once on one `write=back` or `write=ephemeral`
   directory no longer race.**
-- **Redeeming a token and managing keys no longer wait for another account
-  to be created.** Creating an account copies `/etc/skel`, which has taken
-  minutes. A redeem that creates an account waits for it up to 30s, then says
-  the account is still being created rather than hanging.
 
 ### Upgrading
 

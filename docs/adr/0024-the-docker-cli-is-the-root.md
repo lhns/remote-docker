@@ -2,7 +2,7 @@
 
 - Status: Accepted; supersedes the retired shim decision (ADR 0022, deleted:
   nothing it decided is still true, and git has it)
-- Date: 2026-08-11
+- Date: 2026-08-11, amended 2026-10-05 (account management)
 
 ## Context
 

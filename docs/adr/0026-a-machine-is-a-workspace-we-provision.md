@@ -82,12 +82,10 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 
 ## The Hyper-V backend was merged unverified, then tested by hand
 
-- **Merged unrun, on purpose.** The plan was that a backend merges once
-  somebody has run `docs/testing-machines.md` against it and reported. WSL
-  cleared that. Hyper-V could not: no CI offers it, so the bar would have held
-  the code in a branch indefinitely. It cost nothing until somebody typed
-  `--backend hyperv`: no other path reaches it, and the WSL backend imports
-  none of it.
+- **Merged unrun, on purpose.** No CI offers Hyper-V, so waiting for a run of
+  `docs/testing-machines.md` would have held it in a branch indefinitely. It
+  cost nothing until somebody typed `--backend hyperv`: no other path reaches
+  it, and the WSL backend imports none of it.
 - **The first run, 2026-10-05:** Windows 11 Pro 25H2 build 26200.9457, Hyper-V
   vmms 10.0.26100.8875, Flatcar stable 4757.2.1 (kernel 6.12.111) from
   `flatcar_production_hyperv_vhdx_image.vhdx.zip`, a Gen 2 VM with secure boot
@@ -107,9 +105,8 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   second run the same day found the Ignition items present from `New-VM`
   until the agent answered (93s) and gone when `create` returned, a rebuilt
   machine booting configured, and `rm` completing on a VM deleted by hand.
-- **No warning.** `machine create` used to warn that the backend was
-  unproven; the hand test retired it. It still has no CI coverage, which
-  CLAUDE.md's NOT-tested list records.
+- **No warning.** The hand run retired `machine create`'s "unproven" warning.
+  It still has no CI coverage.
 
 ## A Hyper-V machine's Ignition goes over KVP
 

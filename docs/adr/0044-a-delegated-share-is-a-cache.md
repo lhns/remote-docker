@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-09-23
+- Date: 2026-09-01, last amended 2026-10-05
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a

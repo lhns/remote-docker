@@ -1,7 +1,7 @@
 # 0015. Connections established on demand
 
 - Status: Accepted
-- Date: 2026-08-07
+- Date: 2026-08-07, amended 2026-10-05 (ephemeral clients)
 
 ## Context
 

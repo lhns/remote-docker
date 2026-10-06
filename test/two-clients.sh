@@ -55,7 +55,7 @@ echo "== 3b. the phone enrols itself, with a token the pc makes =="
 outputs . env REMOTE_DOCKER_STATE_DIR="$WORK/state-$PC" REMOTE_DOCKER_HOST=127.0.0.1 \
     REMOTE_DOCKER_PORT="$SSH_PORT" REMOTE_DOCKER_USER="$ACCOUNT" \
     timeout 60 "$WORK/remote-docker" remote token create --note "$PHONE"
-invite=$(awk '/--token/ {print $NF}' <<<"$LAST_OUTPUT")
+invite=$(invite_of "$LAST_OUTPUT")
 mkdir -p "$WORK/home-$PHONE"
 if [ -z "$invite" ]; then
     bad "the pc's token create printed no invite: [$LAST_OUTPUT]"

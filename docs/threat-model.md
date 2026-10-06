@@ -324,9 +324,8 @@ runs containers, or cannot say, unless `-f`, and never deletes
 first two, the unix user and the port records, by design and only when an
 admin asks: the volume only with both its labels, the home only if it is the
 one the account recorded, owned by its uid, with nothing mounted inside. The
-uid is never deleted. Tokens bound to the
-account are revoked, or a token the account minted for itself beforehand would
-bring it back.
+uid is never deleted. Tokens bound to the account are revoked, or a token the
+account minted for itself beforehand would bring it back.
 
 **R.** Every change is a `component=audit` line naming the operation, who asked,
 the account, the token id or key fingerprint, and the source address. Never a

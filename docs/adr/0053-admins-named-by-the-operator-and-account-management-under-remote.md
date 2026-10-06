@@ -62,31 +62,31 @@ Kept: `rd-dind-<account>-lib`, the home directory, the unix user, the uid and
 the port records. A new bound token for the name brings the account back as it
 was; an unbound one never takes the name (the uidmap keeps it).
 
-### `user rm --purge`
-
-The same checks and steps, `-f` included, then:
-
-1. `Daemons.Reset(purge=true)`: `rd-dind-<account>-lib` goes, and only if it
-   carries both the managed and the account label;
-2. `Store.Purge`: the home directory, only if it is the `Home` the store
-   recorded for that account, a real directory owned by its uid and with
-   nothing mounted inside; never a path a daemon reported. Then
-   `Provisioner.Remove`, `userdel` by uid, of a user `Ensure` would adopt;
-3. `Ports.Forget`: the account's `clientports` lines.
-
-The uidmap entry is KEPT, so the name and the uid are never reused, and a
-later bound token gets the same uid on a clean slate: an empty daemon, a new
-home. On the shared daemon steps 2 and 3 run and the reply says the daemon's
-containers, images and volumes were not touched. A step that fails is a
-notice in the reply; the keys are already revoked.
-
 - Removing an admin still named in `WORKSPACE_ADMINS` succeeds and says so,
   `fix: remove bob from WORKSPACE_ADMINS`: the name keeps the rights for
   whoever is enrolled under it next.
-- On the shared daemon (ADR 0012) `Running` is 0 and `Reset` does nothing, and
-  the reply says the containers were not touched.
-- `daemons.Targets` gained `Running` and `Reset` for this; `Shared` implements
-  them, so no use site asks which mode it is in (ADR 0019).
+- `daemons.Targets` gained `Running` and `Reset` for this, and `Shared`
+  implements them, so no use site asks which mode it is in (ADR 0019). On the
+  shared daemon (ADR 0012) `Running` is 0, `Reset` does nothing, and the reply
+  says the daemon's containers, images and volumes were not touched.
+- A step after step 2 that fails is a notice in the reply; the keys are
+  already revoked.
+
+### `user rm --purge`
+
+The same checks and steps, `-f` included, with step 4 as
+`Daemons.Reset(purge=true)`: `rd-dind-<account>-lib` goes too, only if it
+carries both the managed and the account label. Then:
+
+1. `Store.Purge`: the home directory, only if it is the `Home` the store
+   recorded for that account, a real directory owned by its uid and with
+   nothing mounted inside; never a path a daemon reported. Then
+   `Provisioner.Remove`, `userdel` by uid, of a user `Ensure` would adopt;
+2. `Ports.Forget`: the account's `clientports` lines.
+
+The uidmap entry is KEPT, so the name and the uid are never reused, and a
+later bound token gets the same uid on a clean slate: an empty daemon, a new
+home. On the shared daemon both steps still run.
 
 ### The invite from a client
 
@@ -123,9 +123,7 @@ to upgrade it`.
   from the operator or an admin is the only way in.
 - **Removal is revocation, not deletion.** Disk is freed only by `--purge`,
   which cannot be undone, or by an operator's `remote-dockerd daemons reset
-  --purge`.
-- **A purged name is spent.** Its uid stays in the uidmap for ever, so only a
-  bound token can bring it back, and an unbound one never takes it.
+  --purge`. Either way only a bound token brings the name back.
 - **The containers check asks the daemon**, and a daemon that cannot answer
   counts as running. `-f` is then the only way through.
 - **A hand edit in the enrolled directory is still not an admin operation**: it

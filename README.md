@@ -211,8 +211,8 @@ are is in [`docs/threat-model.md`](docs/threat-model.md).
 
 A laptop and a desktop enrolled in one account with a key each share the
 daemon, images and containers. The second enrols itself: run
-`remote token create` on the first, and the line it prints on the second. Files are not shared, and neither are published
-ports: each machine opens the number its own containers asked for, and sees the
+`remote token create` on the first, and the line it prints on the second.
+Files are not shared, and neither are published ports: each machine opens the number its own containers asked for, and sees the
 other machine's containers at whatever port the workspace published them on.
 
 **Compose projects collide.** Compose names a project after the directory it
@@ -298,7 +298,7 @@ that is ours lives under `remote`:
 | `remote-docker remote version` | |
 | `remote-docker remote create <name> --token …` | enrol this machine's key with an [enrolment token](#enrolment), then add the workspace |
 | `remote-docker remote create <name> --host …` | add a workspace and its docker context |
-| `remote-docker remote set <name> --user …` | [change](#changing-a-remote) some of its settings, keeping the rest |
+| `remote-docker remote set <name> --user …` | [change](#changing-a-workspace) some of its settings, keeping the rest |
 | `remote-docker remote rm <name>` | stop its session and remove both again |
 | `remote-docker remote ls` | list them |
 | `remote-docker remote use <name>` | make it the default here, and docker's current context |
@@ -395,7 +395,7 @@ remote-docker remote start --workspace dev
 docker --context dev ps
 ```
 
-### Changing a remote
+### Changing a workspace
 
 `remote set` changes the settings you name and leaves the others alone:
 
@@ -637,9 +637,13 @@ kubectl label namespace remote-docker pod-security.kubernetes.io/enforce=privile
 
 One privileged pod with its image store and host keys on volumes, reached
 through an ordinary Ingress (the tunnel is an HTTP upgrade). Enrol a device
-with `kubectl exec -n remote-docker ws-remote-docker-workspace-0 --
-remote-dockerd token create --account alice`, whose invite names `wss://ws.example.com/`, or with
-`authorizedKeys` as above.
+with a token, whose invite names `wss://ws.example.com/`, or with
+`authorizedKeys` as above:
+
+```bash
+kubectl exec -n remote-docker ws-remote-docker-workspace-0 -- \
+  remote-dockerd token create --account alice
+```
 
 [`charts/remote-docker-workspace/README.md`](charts/remote-docker-workspace/README.md)
 has the values, which storage driver your volumes need, and why both volumes are
@@ -674,10 +678,11 @@ cp /path/to/alice.pub authorized_keys.d/alice.pub   # filename = account (unix u
 docker compose up -d --build
 ```
 
-`state/` holds the host keys and the uid map and **must persist**. Losing it
-gives every client a changed-host-key warning and reassigns every account's
-uid, which changes its tunnel port and orphans the ownership of everything it
-has written.
+`state/` holds the host keys, the uid map, the keys enrolled with a token and
+the unredeemed tokens, and **must persist**. Losing it gives every client a
+changed-host-key warning, revokes every key enrolled with a token, and
+reassigns every account's uid, which changes its tunnel port and orphans the
+ownership of everything it has written.
 
 The container is privileged: dind runs its own daemon, bridge and iptables, and
 mounts NFS.
