@@ -6,7 +6,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -622,7 +624,24 @@ func generateHostKey(path string) ([]byte, error) {
 	}
 	encoded := pem.EncodeToMemory(block)
 
-	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+	// `token create` may race a first `serve` here. Linking a complete file
+	// into place fails if a key is already there, and then that key wins, so
+	// an invite never pins a key the agent is not serving.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if err != nil {
+		return nil, fmt.Errorf("writing host key: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	_, err = tmp.Write(encoded)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("writing host key: %w", err)
+	}
+	if err := os.Link(tmp.Name(), path); errors.Is(err, fs.ErrExist) {
+		return os.ReadFile(path)
+	} else if err != nil {
 		return nil, fmt.Errorf("writing host key: %w", err)
 	}
 	return encoded, nil
