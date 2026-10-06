@@ -2,7 +2,8 @@
 
 - Status: Accepted. The operator mints tokens with `remote-dockerd token`; an
   admin, or an account for itself, with `remote token create` (ADR 0053).
-- Date: 2026-10-05, amended 2026-10-06 (a redeem replies `pending`)
+- Date: 2026-10-05, amended 2026-10-06 (a redeem replies `pending`; a name
+  whose account was never created is released)
 
 ## What forced it
 
@@ -79,7 +80,9 @@ redeemable. A failed `Check` spends one attempt from the limiter.
 | unbound | bob | bob is created, unless the uidmap or any keys directory has bob, or bob is reserved or an admin's name (ADR 0053) |
 | unbound | none | the client sends its local user name |
 
-The uidmap never forgets a name, so an unbound token never reuses one.
+The uidmap never forgets a name, so an unbound token never reuses one, except
+a name whose creation failed and that nothing else holds: it is released, and
+its uid stays spent (the uidmap's `-released` entry).
 
 ### What the client says
 

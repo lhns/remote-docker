@@ -84,7 +84,11 @@ software.
   reporting "built from different settings".
 - **`machine status` checks the agent**, reports `not answering` and exits 1
   when it is down, and suggests `machine stop` then `machine start`, which
-  keeps the machine's images, before `machine rebuild`.
+  keeps the machine's images.
+- **A token whose account could not be created no longer uses up the name.**
+  When the workspace failed to set up a new account, asking again for the
+  same name said it already existed. Now the same token can be used again
+  once the workspace is fixed.
 - **`machine create` suggests a command that reaches the new machine.**
 - **`remote rm` works on a Hyper-V machine whose VM was already deleted.**
 - **`--context` works**, as do `--config`, `-H`, `-D`, `--log-level` and the

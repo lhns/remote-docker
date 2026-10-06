@@ -23,11 +23,17 @@ type fakeProvisioner struct {
 	removed map[string]int
 	err     error
 
+	// onEnsure, when set, runs at the start of every Ensure.
+	onEnsure func(name string)
+
 	// homes, when set, is where Ensure creates a real home directory.
 	homes string
 }
 
 func (f *fakeProvisioner) Ensure(name string, uid int, _ string) (string, string, error) {
+	if f.onEnsure != nil {
+		f.onEnsure(name)
+	}
 	if f.err != nil {
 		return "", "", f.err
 	}

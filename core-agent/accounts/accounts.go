@@ -545,6 +545,49 @@ func (s *Store) awaitProvisioning(name string) error {
 	return nil
 }
 
+// releasedUIDs is the uidmap entry holding the highest uid a released name
+// had, so nextUID never hands that number out again. AccountName never
+// yields a leading dash, so no account can be called this.
+const releasedUIDs = "-released"
+
+// releaseName drops the uidmap entry of a name whose account was never
+// created, so the name can be asked for again (ADR 0051). The uid stays spent.
+//
+// Only for a name CreateAccount found free, under its enrolled-file lock. A
+// name anything still holds is kept: a file in any directory, or this process
+// having provisioned, published or started provisioning it.
+func (s *Store) releaseName(name string) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	_, provisioned := s.provisioned[name]
+	_, published := s.Lookup(name)
+	if provisioned || published || s.provisioning[name] != nil {
+		return
+	}
+	for _, dir := range s.dirs() {
+		if _, ok, err := s.fileFor(dir, name); err != nil || ok {
+			return // cannot tell means keep
+		}
+	}
+	uids, err := s.loadUIDs()
+	if err != nil {
+		s.log().Warn("could not release the name of an account that was never created", "account", name, "err", err)
+		return
+	}
+	uid, ok := uids[name]
+	if !ok {
+		return
+	}
+	delete(uids, name)
+	uids[releasedUIDs] = max(uids[releasedUIDs], uid)
+	if err := s.saveUIDs(uids); err != nil {
+		s.log().Warn("could not release the name of an account that was never created", "account", name, "err", err)
+		return
+	}
+	s.log().Info("released the name of an account that was never created", "account", name, "uid", uid)
+}
+
 // nextUID allocates one above the highest uid in the record, and at least the
 // base. Never the lowest free one, so no uid is handed out twice.
 func nextUID(uids map[string]int, base int) int {

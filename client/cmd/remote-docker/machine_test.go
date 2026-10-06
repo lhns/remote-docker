@@ -250,16 +250,16 @@ func TestReportAgent(t *testing.T) {
 			m:       wsl,
 			backend: &fakeBackend{addr: "127.0.0.1"},
 			port:    down,
-			want:    []string{"not answering on " + at(down), "  fix: ", machine.WSLAgentLog, "machine stop dev`, then `", "machine start dev`, restarts it", "machine rebuild dev"},
+			want:    []string{"not answering on " + at(down), "  fix: `", "machine stop dev`, then `start` it again"},
+			reject:  []string{"rebuild", machine.WSLAgentLog},
 		},
 		{
-			// The log path is WSL's.
 			name:    "refused, hyperv",
 			m:       hyperv,
 			backend: &fakeBackend{addr: "127.0.0.1"},
 			port:    down,
-			want:    []string{"not answering on " + at(down), "machine stop dev`, then `", "machine start dev`, restarts it", "machine rebuild dev"},
-			reject:  []string{machine.WSLAgentLog},
+			want:    []string{"not answering on " + at(down), "  fix: `", "machine stop dev`, then `start` it again"},
+			reject:  []string{"rebuild", machine.WSLAgentLog},
 		},
 		{
 			name:    "no address",
@@ -293,10 +293,14 @@ func TestReportAgent(t *testing.T) {
 					t.Errorf("output contains %q:\n%s", r, text)
 				}
 			}
-			// One row, and at most one fix line under it.
+			// One row, and at most one fix line under it, which fits 80
+			// columns even under the test binary's longer program name.
 			lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 			if len(lines) > 2 || (len(lines) == 2 && !strings.HasPrefix(lines[1], "  fix: ")) {
 				t.Errorf("want one row and at most one fix line, got:\n%s", text)
+			}
+			if len(lines) == 2 && len(lines[1]) > 80 {
+				t.Errorf("the fix line is %d characters, which wraps:\n%s", len(lines[1]), lines[1])
 			}
 		})
 	}
