@@ -63,7 +63,7 @@ software.
   `WORKSPACE_METRICS_ADDR=:9090`, or `metrics.enabled` in the chart, and the
   workspace serves `/metrics` on that port: connections per account, the CI
   runners' state and cleanup, token redemptions, and how many account daemons
-  it runs. It is off by default, and it uses its own port, never the SSH one.
+  it has started. It is off by default, and it uses its own port, never the SSH one.
   The chart adds the usual `prometheus.io/scrape` annotations. See "Metrics"
   in the README.
 
