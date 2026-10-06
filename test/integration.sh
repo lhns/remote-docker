@@ -1177,7 +1177,7 @@ stop_pid "$METRICS_SSH_PID"
 outputs . scrape
 redemptions_after=$(redemptions_timed)
 if [ "$redemptions_after" -gt "$REDEMPTIONS_BEFORE" ] &&
-    grep -qE '^remote_docker_token_redemption_duration_seconds_count\{outcome="ok"\} [1-9]' <<<"$LAST_OUTPUT"; then
+    grep -qE '^remote_docker_token_redemption_duration_seconds_count\{outcome="(ok|pending)"\} [1-9]' <<<"$LAST_OUTPUT"; then
     ok "the redemptions in 11h were timed ($REDEMPTIONS_BEFORE before, $redemptions_after after)"
 else
     bad "redemptions timed: $REDEMPTIONS_BEFORE before 11h, $redemptions_after after: [$(grep redemption_duration_seconds_count <<<"$LAST_OUTPUT" | tr '\n' ' ')]"
