@@ -115,8 +115,9 @@ type Session struct {
 	// every connect.
 	clientID string
 
-	// runID is minted once, so every reconnect is the same run (ADR 0050), and
-	// is sent nowhere but the run request.
+	// runID is minted once, so every reconnect is the same run (ADR 0050). It
+	// leaves this process only in the run request and on the local control
+	// endpoint, for a one-off query to join.
 	runID string
 
 	// shares and cache are nil on a query session, which restores and caches

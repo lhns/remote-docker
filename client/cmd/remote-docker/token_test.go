@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/session"
@@ -59,6 +62,43 @@ func TestAFailedRedemptionSavesNothing(t *testing.T) {
 		t.Fatal("a redemption against nothing succeeded")
 	}
 	requireNoWorkspace(t, "ws")
+}
+
+// The account saved is the one the workspace enrolled the key into, and a
+// refusal in the reply saves nothing.
+func TestARedemptionSavesTheAccountItJoined(t *testing.T) {
+	invite := func(m *manageServer) string {
+		id, secret, err := enrol.NewToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return enrol.Invite{URL: "ssh://" + m.addr, HostKey: ssh.FingerprintSHA256(m.hostKey),
+			Account: "alice", Token: id + "." + secret}.String()
+	}
+
+	withConfig(t, nil)
+	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
+	refusal, _ := json.Marshal(enrol.RedeemReply{Error: enrol.Refused})
+	refused := startManageServer(t, string(refusal), 0)
+	if err := run(t, "remote", "create", "ws", "--no-context", "--token", invite(refused)); err == nil || err.Error() != enrol.Refused.Error() {
+		t.Fatalf("a refused redeem: %v", err)
+	}
+	requireNoWorkspace(t, "ws")
+
+	m := startManageServer(t, `{"account":"alice","created":true}`, 0)
+	out, err := runOut(t, "remote", "create", "ws", "--no-context", "--token", invite(m))
+	if err != nil {
+		t.Fatalf("create --token: %v\n%s", err, out)
+	}
+	if got := <-m.got; got["account"] != nil {
+		t.Errorf("a bound token's redeem named an account: %v", got)
+	}
+	if ws := savedWorkspace(t, "ws"); ws.User != "alice" || ws.Host != "ssh://"+m.addr {
+		t.Errorf("saved %+v", ws)
+	}
+	if !strings.Contains(out, "this machine's key created the account alice") {
+		t.Errorf("printed:\n%s", out)
+	}
 }
 
 func TestARedemptionRefusalSaysWhatToDo(t *testing.T) {

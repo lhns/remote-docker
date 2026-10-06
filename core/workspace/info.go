@@ -214,7 +214,7 @@ func ParseInfo(r io.Reader) (Info, error) {
 			info.Docker = value
 		case keyClient:
 			// It names volumes, so a malformed one is refused here.
-			if !ValidClientID(value) {
+			if !validClientID(value) {
 				err = fmt.Errorf("%q is not a client id", value)
 			}
 			info.Client = value

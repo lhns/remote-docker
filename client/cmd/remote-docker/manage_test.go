@@ -15,8 +15,9 @@ import (
 	"github.com/lhns/remote-docker/core/enrol"
 )
 
-// `remote token|user|key` against a workspace that answers one canned reply,
-// or that predates account management and has a shell answer 127. Raw JSON on
+// `remote token|user|key`, and `create --token`'s redeem, against a workspace
+// that answers one canned reply, or that predates account management and has a
+// shell answer 127. Raw JSON on
 // purpose: these tests compile against a client that has none of it.
 
 type manageServer struct {
@@ -76,7 +77,7 @@ func (m *manageServer) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 			for req := range chReqs {
 				var payload struct{ Command string }
 				_ = ssh.Unmarshal(req.Payload, &payload)
-				ok := req.Type == "exec" && payload.Command == enrol.EnrolCommand
+				ok := req.Type == "exec" && (payload.Command == enrol.EnrolCommand || payload.Command == enrol.RedeemCommand)
 				_ = req.Reply(ok, nil)
 				if !ok {
 					continue

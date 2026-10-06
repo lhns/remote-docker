@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync/atomic"
 
 	"golang.org/x/crypto/ssh"
 
@@ -51,7 +50,8 @@ func Redeem(ctx context.Context, cfg config.Config, invite enrol.Invite, account
 		return enrol.RedeemReply{}, err
 	}
 
-	var banner atomic.Bool
+	// Both callbacks run inside Dial, on this goroutine.
+	var banner bool
 	var pinErr error
 	client, err := tunnelclient.Dial(ctx, tunnelclient.Config{
 		Host:    transport.Host,
@@ -60,14 +60,14 @@ func Redeem(ctx context.Context, cfg config.Config, invite enrol.Invite, account
 		Signer:  key.Signer,
 		HostKey: pinnedHostKey(invite.HostKey, known.Callback(), &pinErr),
 		Dial:    dial,
-		Banner:  func(msg string) { banner.Store(banner.Load() || enrol.IsBanner(msg)) },
+		Banner:  func(msg string) { banner = banner || enrol.IsBanner(msg) },
 	})
 	if err != nil {
 		if pinErr != nil {
 			return enrol.RedeemReply{}, pinErr
 		}
 		if strings.Contains(err.Error(), "unable to authenticate") {
-			if banner.Load() {
+			if banner {
 				return enrol.RedeemReply{}, enrol.Refused
 			}
 			return enrol.RedeemReply{}, ErrPredatesTokens
@@ -76,27 +76,32 @@ func Redeem(ctx context.Context, cfg config.Config, invite enrol.Invite, account
 	}
 	defer func() { _ = client.Close() }()
 
-	stream, err := client.OpenStream(enrol.RedeemCommand)
-	if err != nil {
-		return enrol.RedeemReply{}, err
-	}
-	defer func() { _ = stream.Close() }()
-	if err := json.NewEncoder(stream).Encode(enrol.RedeemRequest{
-		Secret: secret, Account: account, Comment: config.KeyComment(),
-	}); err != nil {
-		return enrol.RedeemReply{}, err
-	}
-	if cw, ok := stream.(interface{ CloseWrite() error }); ok {
-		_ = cw.CloseWrite()
-	}
 	var reply enrol.RedeemReply
-	if err := enrol.ReadJSON(stream, &reply); err != nil {
-		return enrol.RedeemReply{}, fmt.Errorf("reading the workspace's answer: %w", err)
+	req := enrol.RedeemRequest{Secret: secret, Account: account, Comment: config.KeyComment()}
+	if err := exchange(ctx, client, enrol.RedeemCommand, req, &reply); err != nil {
+		return enrol.RedeemReply{}, err
 	}
 	if reply.Error != nil {
 		return reply, reply.Error
 	}
 	return reply, nil
+}
+
+// exchange runs cmd with req as its JSON input and decodes its JSON output
+// into reply, which is the shape of both enrol commands.
+func exchange(ctx context.Context, client *tunnelclient.Client, cmd string, req, reply any) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	out, err := client.RunInput(ctx, cmd, body)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(out, reply); err != nil {
+		return fmt.Errorf("reading the workspace's answer: %w", err)
+	}
+	return nil
 }
 
 // pinnedHostKey accepts only the host key an invite names, and then asks

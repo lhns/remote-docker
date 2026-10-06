@@ -60,9 +60,9 @@ func ValidRunID(s string) bool {
 	return len(s) == 2*runIDBytes && isLowerHex(s)
 }
 
-// ValidClientID reports whether s has the shape ClientID and
+// validClientID reports whether s has the shape ClientID and
 // EphemeralClientID produce.
-func ValidClientID(s string) bool {
+func validClientID(s string) bool {
 	return len(s) == clientIDLen && isLowerHex(s)
 }
 
