@@ -87,7 +87,7 @@ The uidmap never forgets a name, so an unbound token never reuses one.
 | refused at login with the banner, or by the redeem | `the workspace refused the token: it is unknown, used or expired` / `fix: ask for a new one` |
 | refused at login without the banner | `the workspace at <url> predates enrolment tokens` / `fix: ask its operator to upgrade it, or to enrol this key by file` |
 | the host key is not the pinned one | names both fingerprints |
-| the reply says `pending` | `the account <name> is still being created on the workspace, which refuses this key until it is` / `fix: wait a minute or two before the first docker command` |
+| the reply says `pending` | the client saves the workspace, prints `creating account <name> on the workspace...` and logs in as the account every 3s for up to 4 minutes (`session.WaitForAccount`); a refused login is retried, any other error ends it. On timeout: `the workspace has not finished creating account <name>` / `fix: ask its operator to check the agent log, then run docker remote status` |
 
 Never which of unknown, used or expired: that would be an oracle.
 

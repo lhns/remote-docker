@@ -4,15 +4,18 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/core/enrol"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // `remote token|user|key`, and `create --token`'s redeem, against a workspace
@@ -26,6 +29,10 @@ type manageServer struct {
 	reply   string // the JSON reply
 	status  uint32 // the exit status; 127 is an agent that predates it
 	got     chan map[string]any
+
+	// Refuses the first refuse logins that are not a token's; negative is all.
+	refuse int32
+	logins atomic.Int32
 }
 
 func startManageServer(t *testing.T, reply string, status uint32) *manageServer {
@@ -40,7 +47,14 @@ func startManageServer(t *testing.T, reply string, status uint32) *manageServer 
 	}
 	m := &manageServer{hostKey: signer.PublicKey(), reply: reply, status: status, got: make(chan map[string]any, 1)}
 	cfg := &ssh.ServerConfig{
-		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) { return &ssh.Permissions{}, nil },
+		PublicKeyCallback: func(c ssh.ConnMetadata, _ ssh.PublicKey) (*ssh.Permissions, error) {
+			if !strings.HasPrefix(c.User(), enrol.LoginPrefix) {
+				if n := m.logins.Add(1); m.refuse < 0 || n <= m.refuse {
+					return nil, errors.New("no such account")
+				}
+			}
+			return &ssh.Permissions{}, nil
+		},
 	}
 	cfg.AddHostKey(signer)
 
@@ -77,10 +91,17 @@ func (m *manageServer) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 			for req := range chReqs {
 				var payload struct{ Command string }
 				_ = ssh.Unmarshal(req.Payload, &payload)
-				ok := req.Type == "exec" && (payload.Command == enrol.EnrolCommand || payload.Command == enrol.RedeemCommand)
+				ok := req.Type == "exec" && (payload.Command == enrol.EnrolCommand || payload.Command == enrol.RedeemCommand ||
+					payload.Command == workspace.InfoCommand)
 				_ = req.Reply(ok, nil)
 				if !ok {
 					continue
+				}
+				if payload.Command == workspace.InfoCommand {
+					_, _ = ch.Write([]byte("WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=20001\n"))
+					_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+					_ = ch.Close()
+					return
 				}
 				if m.status == 127 {
 					_, _ = ch.Stderr().Write([]byte("bash: line 1: workspace-enrol: command not found\n"))

@@ -21,8 +21,8 @@ software.
   the first connection is checked too. On Kubernetes the chart's `publicURL`
   is the address a token sends people to; by default it is the ingress. When
   the token creates a new account and setting that account up on the
-  workspace takes longer than 30 seconds, `remote create` says so: wait a
-  minute or two before the first docker command.
+  workspace takes longer than 30 seconds, `remote create` waits until the
+  account exists, and says so if it never does.
 - **Accounts can be managed from your own machine.** `remote token create`
   prints a line that enrols another machine into your account, so a second
   laptop needs nobody's help. `remote key ls`, `key add` and `key rm` list and
