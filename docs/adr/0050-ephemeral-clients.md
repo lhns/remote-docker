@@ -248,14 +248,11 @@ one checkout path (a mount namespace each), with a grace of 20s and a limit of
 | 4 | an outage shorter than the grace keeps the port and a running mount |
 | 5 | an agent restart cleans a killed run and reattaches a live one on its old port and volume |
 | 6 | a fifth run refused in under 20s, naming the limit, holding no slot |
+| 6b | a clean end and a `kill -9` of a run with a running `write=ephemeral` container: cleanup unmounts that run's union and removes its cache volume; another run's union keeps serving |
 | 7 | a machine account's `clientports` line and volumes unchanged throughout |
+| 8 | on a workspace with a 180s grace, a black hole on the agent's port puts the run in `grace` once the agent notices (~60s), keeping its port; after it, the run reattaches on the same port and a container started before the block reads its mount again |
 
 `kubernetes.yml`: an unprivileged client Deployment (`restricted` Pod Security
 Standard, one Secret key) scaled 1, 4, 1, `docker info` and a bind mount of the
 same path in every pod, and only the surviving pod's run and volume after the
 grace.
-
-Not covered end to end: cleanup releasing a run's union mount, and reattaching
-from the grace period after a dropped connection the agent noticed (section 4's
-outage is shorter than the ~60s that takes; section 5 reattaches after a
-restart).

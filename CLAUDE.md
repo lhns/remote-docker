@@ -1210,13 +1210,19 @@ reading its own run's file; a clean end and a `kill -9` each leaving nothing
 carrying that client id after the grace while the others keep reading; an
 outage shorter than the grace keeping the port and a running mount; an agent
 restart cleaning a killed run and reattaching a live one on its old port and
-volume; a fifth run refused within 20s naming the limit; and the machine
-account's port and volumes unchanged throughout. `kubernetes.yml` adds the
-autoscaled shape: an unprivileged client Deployment under the `restricted` Pod
-Security Standard, one key from one Secret, scaled 1, 4, 1, with `docker info`
-and a bind mount of the same path reading each pod's own name, and only the
-surviving pod's run and volume left after the grace. Both first ran green on
-main on 2026-10-06.
+volume; a fifth run refused within 20s naming the limit; cleanup of a run
+ended cleanly and of one killed with `-9` each unmounting that run's
+`write=ephemeral` union and removing its cache volume while another run's
+union keeps serving; and the machine account's port and volumes unchanged
+throughout. Its last section runs a workspace with a 180s grace and
+black-holes the agent's port until the agent declares the peer dead (~60s),
+then asserts the run reattaches from its grace on the same port, with a
+container started before the block reading its mount again. `kubernetes.yml`
+adds the autoscaled shape: an unprivileged client Deployment under the
+`restricted` Pod Security Standard, one key from one Secret, scaled 1, 4, 1,
+with `docker info` and a bind mount of the same path reading each pod's own
+name, and only the surviving pod's run and volume left after the grace. Both
+first ran green on main on 2026-10-06.
 
 `.github/workflows/machine.yml` is the only suite that runs a WINDOWS machine
 end to end. A Linux job exports the workspace image as a rootfs; a
@@ -1386,11 +1392,6 @@ its pure planning function was.
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
   the section skips and says so.
-- **Two parts of ephemeral clients.** A run's union mount (`write != through`)
-  is released by cleanup in unit tests only, and the reattach from the grace
-  period after a dropped connection (rather than an agent restart) needs the
-  agent to notice the drop, which takes ~60s and is longer than any outage
-  either suite makes.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

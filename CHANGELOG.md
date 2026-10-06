@@ -69,6 +69,10 @@ software.
 
 ### Fixes
 
+- **An ephemeral run's `write=back` or `write=ephemeral` cache is cleaned up
+  promptly.** Before, releasing the run's cache could wait minutes for the
+  run's file share, which had already gone away. The cache volume and the
+  run's port stayed until that wait ended.
 - **`remote create --token` no longer spends a token it cannot save.** It now
   checks that the config file can be written before using the token. If saving
   fails anyway, it says the key is enrolled and prints the `create` command
