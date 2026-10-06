@@ -264,6 +264,9 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 			}
 		}
 	}
+	if s.cfg.Daemons.Mode() != workspace.ModeShared {
+		s.cfg.Runs.Drop(target)
+	}
 	if err := s.cfg.Daemons.Reset(ctx, target, purge); err != nil {
 		audit.Warn("could not remove a removed account's daemon", "account", target, "purge", purge, "err", err)
 		fix := "`remote-dockerd daemons reset " + target + " -f` inside the workspace"

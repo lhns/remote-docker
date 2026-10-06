@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,19 +88,22 @@ func TestAPurgeRemovesOnlyTheLabelledVolume(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		labelled, volume string
+		cannotList       bool
 		wantRemoved      bool
-		wantErr          bool
+		wantErr          string // "" for none
 	}{
-		{"labelled", "rd-dind-bob-lib", "rd-dind-bob-lib", true, false},
-		{"unlabelled", "", "rd-dind-bob-lib", false, true},
-		{"already gone", "", "", false, false},
+		{"labelled", "rd-dind-bob-lib", "rd-dind-bob-lib", false, true, ""},
+		{"unlabelled", "", "rd-dind-bob-lib", false, false, "does not carry the labels"},
+		{"already gone", "", "", false, false, ""},
+		// Not "does not carry the labels": nobody looked.
+		{"cannot list", "", "", true, false, "cannot connect"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var ran []string
-			m := manager(fakeDocker{ran: &ran, labelled: tc.labelled, volume: tc.volume})
+			m := manager(fakeDocker{ran: &ran, labelled: tc.labelled, volume: tc.volume, cannotList: tc.cannotList})
 			err := m.Reset(t.Context(), "bob", true)
-			if (err != nil) != tc.wantErr {
-				t.Errorf("Reset: %v, want an error %v", err, tc.wantErr)
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Errorf("Reset: %v, want an error saying %q", err, tc.wantErr)
 			}
 			removed := slices.Contains(ran, "volume rm rd-dind-bob-lib")
 			if removed != tc.wantRemoved {

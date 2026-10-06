@@ -871,13 +871,17 @@ func (m *Manager) removeStorage(ctx context.Context, account string) error {
 	if err != nil {
 		return fmt.Errorf("daemons: listing %s's storage: %w", account, err)
 	}
-	if !ours {
-		if exists, err := listed(); err != nil || exists {
-			return fmt.Errorf("daemons: %s does not carry the labels of %s's storage, so it was not removed", name, account)
-		}
-		return nil
+	if ours {
+		return m.parent().Run(ctx, "daemons: removing "+account+"'s storage", "volume", "rm", name)
 	}
-	return m.parent().Run(ctx, "daemons: removing "+account+"'s storage", "volume", "rm", name)
+	exists, err := listed()
+	if err != nil {
+		return fmt.Errorf("daemons: listing %s's storage: %w", account, err)
+	}
+	if exists {
+		return fmt.Errorf("daemons: %s does not carry the labels of %s's storage, so it was not removed", name, account)
+	}
+	return nil
 }
 
 // Accounts lists the accounts that currently have a daemon, running or not.
