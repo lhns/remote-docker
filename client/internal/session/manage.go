@@ -2,9 +2,7 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 
 	"golang.org/x/crypto/ssh"
@@ -48,21 +46,14 @@ func Manage(ctx context.Context, cfg config.Config, req enrol.Request) (enrol.Re
 	}
 	defer func() { _ = client.Close() }()
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return enrol.Reply{}, nil, err
-	}
-	out, err := client.RunInput(ctx, enrol.EnrolCommand, body)
+	var reply enrol.Reply
+	err = exchange(ctx, client, enrol.EnrolCommand, req, &reply)
 	var exit *ssh.ExitError
 	if errors.As(err, &exit) && exit.ExitStatus() == 127 {
 		return enrol.Reply{}, nil, ErrPredatesManagement
 	}
 	if err != nil {
 		return enrol.Reply{}, nil, err
-	}
-	var reply enrol.Reply
-	if err := json.Unmarshal(out, &reply); err != nil {
-		return enrol.Reply{}, nil, fmt.Errorf("reading the workspace's answer: %w", err)
 	}
 	if reply.Error != nil {
 		return reply, offered, reply.Error

@@ -29,7 +29,13 @@ func TestATokenRoundTrips(t *testing.T) {
 func TestMalformedTokensAreRefused(t *testing.T) {
 	good := newTestToken(t)
 	id, secret, _ := strings.Cut(good, ".")
+	// The same 16 bytes with the last character's unused low bits set: it
+	// decodes, and is not the secret the workspace hashed.
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	last := strings.IndexByte(alphabet, secret[len(secret)-1])
+	nonCanonical := secret[:len(secret)-1] + string(alphabet[last|1])
 	for _, s := range []string{
+		id + "." + nonCanonical,
 		"", "-", id, id + ".", "." + secret,
 		strings.ToUpper(id) + "." + secret,
 		"../../etc." + secret,

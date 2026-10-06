@@ -119,8 +119,9 @@ workspace's address, which --host overrides, and its host key.`,
 
 			if enrolled == nil {
 				_, _ = fmt.Fprintf(out,
-					"\nIf this machine is not enrolled there yet, ask for an enrolment token and run\n`%s`, or hand this to whoever runs it:\n\n    %s\n",
-					ourCommand("create "+name+" --token <invite>"), enrolledKey())
+					"\nIf this machine is not enrolled there yet, hand this to whoever runs it:\n\n    %s\n\n"+
+						"With an enrolment token instead, nobody has to save it: `%s`\n",
+					enrolledKey(), ourCommand("create "+name+" --token <invite>"))
 			}
 			return nil
 		},

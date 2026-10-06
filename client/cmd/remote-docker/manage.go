@@ -79,7 +79,7 @@ func newTokenCreateCommand() *cobra.Command {
 				return err
 			}
 			t := reply.Token
-			if t == nil || hostKey == nil {
+			if t == nil {
 				return errors.New("the workspace answered with no token")
 			}
 			// The address this machine reaches the workspace at.

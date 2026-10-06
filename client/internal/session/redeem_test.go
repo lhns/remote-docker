@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -25,6 +27,7 @@ type tokenWorkspace struct {
 
 	accept bool // accept the token login
 	banner bool // send the enrolment banner
+	silent bool // read the request and never answer
 	got    chan enrol.RedeemRequest
 	login  chan string
 	reply  enrol.RedeemReply
@@ -102,6 +105,9 @@ func (w *tokenWorkspace) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 				var got enrol.RedeemRequest
 				_ = enrol.ReadJSON(ch, &got)
 				w.got <- got
+				if w.silent {
+					return
+				}
 				_ = json.NewEncoder(ch).Encode(w.reply)
 				_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 				_ = ch.Close()
@@ -219,6 +225,29 @@ func TestARefusalInTheReplyIsReturned(t *testing.T) {
 	var got *enrol.Error
 	if !errors.As(err, &got) || *got != *want {
 		t.Fatalf("Redeem = %v", err)
+	}
+}
+
+// A workspace that takes the request and never answers must not hold the
+// redeem past its context.
+func TestRedeemHonoursItsContextWhileWaitingForTheAnswer(t *testing.T) {
+	withState(t)
+	w := startTokenWorkspace(t, &tokenWorkspace{accept: true, banner: true, silent: true})
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Redeem(ctx, w.config(t), w.invite(t, "alice"), "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Redeem = %v, want the context's deadline", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Redeem is still waiting for an answer its context gave up on")
 	}
 }
 

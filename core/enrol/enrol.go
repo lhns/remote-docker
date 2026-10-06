@@ -102,10 +102,14 @@ func ReadJSON(r io.Reader, v any) error {
 const (
 	idBytes     = 5  // 8 base32 characters
 	secretBytes = 16 // 22 base64url characters
-	IDLength    = 8
 )
 
-var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+var (
+	idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+	// Strict, so a secret has one spelling: 22 characters carry 4 bits more
+	// than 16 bytes, and a mistyped last character would otherwise decode.
+	secretEncoding = base64.RawURLEncoding.Strict()
+)
 
 // NewToken returns a fresh id and secret.
 func NewToken() (id, secret string, err error) {
@@ -113,17 +117,17 @@ func NewToken() (id, secret string, err error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", "", err
 	}
-	return idEncoding.EncodeToString(b[:idBytes]), base64.RawURLEncoding.EncodeToString(b[idBytes:]), nil
+	return idEncoding.EncodeToString(b[:idBytes]), secretEncoding.EncodeToString(b[idBytes:]), nil
 }
 
 // ValidID reports whether id has a token id's shape, which also makes it safe
 // as a file name.
 func ValidID(id string) bool {
-	if len(id) != IDLength {
+	if len(id) != idEncoding.EncodedLen(idBytes) {
 		return false
 	}
-	b, err := idEncoding.DecodeString(id)
-	return err == nil && len(b) == idBytes
+	_, err := idEncoding.DecodeString(id)
+	return err == nil
 }
 
 // ParseToken splits a token into its id and secret.
@@ -132,7 +136,7 @@ func ParseToken(token string) (id, secret string, err error) {
 	if !ok || !ValidID(id) {
 		return "", "", errors.New("not a token")
 	}
-	if b, err := base64.RawURLEncoding.DecodeString(secret); err != nil || len(b) != secretBytes {
+	if b, err := secretEncoding.DecodeString(secret); err != nil || len(b) != secretBytes {
 		return "", "", errors.New("not a token")
 	}
 	return id, secret, nil
