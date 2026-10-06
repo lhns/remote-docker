@@ -74,6 +74,9 @@ software.
 
 ### Fixes
 
+- **A file you deleted no longer comes back from a `write=back` cache.** If
+  you deleted a file while no session was running, the next session could, in
+  rare timing, copy the cached copy back into your directory.
 - **An ephemeral run's `write=back` or `write=ephemeral` cache is cleaned up
   promptly.** Before, releasing the run's cache could wait minutes for the
   run's file share, which had already gone away. The cache volume and the
