@@ -129,3 +129,27 @@ func TestARedeemReportsAnAccountStillBeingCreated(t *testing.T) {
 	}
 	w.dial(t, "dave", key)
 }
+
+// A key added to an account the workspace is creating again is enrolled, and
+// the reply says so rather than reporting a failed write.
+func TestAKeyAddReportsAnAccountStillBeingCreated(t *testing.T) {
+	w := startManageWorkspace(t, "alice")
+	alice := newSigner(t)
+	w.enrol(t, "alice", alice)
+	w.enrolKey(t, "bob", newSigner(t))
+	ca := w.dial(t, "alice", alice)
+	wantOK(t, manageOn(t, ca, enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Purge: true, Force: true}))
+
+	// bob is known but no longer provisioned, so a key creates him again.
+	prov := &gatedProvisioner{gated: "bob", entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(prov.release)
+	w.store.Provisioner = prov
+	w.store.ProvisionWait = 200 * time.Millisecond
+
+	key := newSigner(t)
+	r := manageOn(t, ca, enrol.Request{Op: enrol.OpKeyAdd, Account: "bob", Key: string(ssh.MarshalAuthorizedKey(key.PublicKey()))})
+	wantOK(t, r)
+	if len(r.Notices) != 1 || !strings.Contains(r.Notices[0].Msg, "still being created") {
+		t.Errorf("notices %+v, want one saying bob is still being created", r.Notices)
+	}
+}

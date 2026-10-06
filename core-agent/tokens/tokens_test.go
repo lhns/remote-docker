@@ -246,6 +246,30 @@ func TestRevoke(t *testing.T) {
 	}
 }
 
+// A token mid-redemption is still listed and revocable, and a revoked claim
+// cannot be completed, so the redemption fails.
+func TestRevokeTakesAClaimedToken(t *testing.T) {
+	s, _ := newStore(t)
+	id, secret := mint(t, s, "alice")
+	claim, err := s.Consume(id, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.List()
+	if err != nil || len(list) != 1 || list[0].ID != id || list[0].Account != "alice" {
+		t.Fatalf("List = %+v, %v; want the claimed token", list, err)
+	}
+	if err := s.Revoke(id); err != nil {
+		t.Fatalf("Revoke of a claimed token: %v", err)
+	}
+	if err := claim.Done(); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Done after Revoke = %v, want ErrNotExist", err)
+	}
+	if err := claim.Restore(); err == nil || s.Live(id) {
+		t.Error("a revoked claim was put back")
+	}
+}
+
 func TestTheLimiterSpendsFailuresAndRefills(t *testing.T) {
 	c := newClock()
 	l := &Limiter{Burst: 3, Every: 6 * time.Second, Now: c.now}

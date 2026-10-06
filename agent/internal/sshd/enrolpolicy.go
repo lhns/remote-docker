@@ -24,7 +24,8 @@ type check struct {
 	OtherAdmins          int
 
 	// OperatorDir is an operator directory that enrols the target, for
-	// user.rm: this workspace does not write there.
+	// user.rm, or holds the key, for key.rm: this workspace does not write
+	// there.
 	OperatorDir string
 
 	// Connected is key.rm of the key this connection authenticated with.
@@ -69,6 +70,11 @@ func authorize(c check) *enrol.Error {
 				Fix: "remove them there, or from the chart's authorizedKeys"}
 		}
 	case enrol.OpKeyRemove:
+		if c.OperatorDir != "" {
+			return &enrol.Error{Code: enrol.CodeDenied,
+				Msg: fmt.Sprintf("that key is in %s, which this workspace does not write", c.OperatorDir),
+				Fix: "remove it there, or from the chart's authorizedKeys"}
+		}
 	default:
 		return nil
 	}

@@ -126,7 +126,8 @@ func (s *Store) create(t Token) error {
 	return os.Link(tmp.Name(), s.path(t.ID))
 }
 
-// List is every token not yet redeemed, expired ones included, oldest first.
+// List is every token not yet redeemed, expired ones and ones mid-redemption
+// included, oldest first.
 func (s *Store) List() ([]Token, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if os.IsNotExist(err) {
@@ -136,15 +137,17 @@ func (s *Store) List() ([]Token, error) {
 		return nil, err
 	}
 	var out []Token
+	seen := map[string]bool{}
 	for _, e := range entries {
-		id, ok := strings.CutSuffix(e.Name(), suffix)
-		if !ok || !enrol.ValidID(id) {
+		id, ok := tokenID(e.Name())
+		if !ok || seen[id] {
 			continue
 		}
-		t, err := read(s.path(id))
+		t, err := read(filepath.Join(s.Dir, e.Name()))
 		if err != nil {
 			continue // redeemed or revoked since the listing
 		}
+		seen[id] = true
 		t.ID = id
 		out = append(out, t)
 	}
@@ -152,16 +155,46 @@ func (s *Store) List() ([]Token, error) {
 	return out, nil
 }
 
-// Revoke deletes a token. An id that names nothing is an error.
+// tokenID is the id a token's file or a claim of it names.
+func tokenID(name string) (string, bool) {
+	id, ok := strings.CutSuffix(name, suffix)
+	if rest, claimed := strings.CutPrefix(name, claimPrefix); claimed {
+		id, _, ok = strings.Cut(rest, "-")
+	}
+	return id, ok && enrol.ValidID(id)
+}
+
+// Revoke deletes a token, and any claim of it, so a redemption under way
+// fails at Done. An id that names nothing is an error.
 func (s *Store) Revoke(id string) error {
 	if !enrol.ValidID(id) {
 		return fmt.Errorf("%q is not a token id", id)
 	}
+	found := false
 	err := os.Remove(s.path(id))
-	if os.IsNotExist(err) {
+	if err == nil {
+		found = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), claimPrefix+id+"-") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.Dir, e.Name())); err == nil {
+			found = true
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if !found {
 		return fmt.Errorf("no token %s", id)
 	}
-	return err
+	return nil
 }
 
 // Live reports whether id names a token that has not expired. It reads and
@@ -238,7 +271,8 @@ func (s *Store) Consume(id, secret string) (*Claim, error) {
 // workspace's side rather than the redeemer's.
 func (c *Claim) Restore() error { return os.Rename(c.at, c.from) }
 
-// Done deletes a claimed token: it has been redeemed.
+// Done deletes a claimed token: it has been redeemed. It fails with
+// os.ErrNotExist once Revoke has withdrawn the claim.
 func (c *Claim) Done() error { return os.Remove(c.at) }
 
 // Sweep deletes expired tokens, and claims an agent died holding. It returns

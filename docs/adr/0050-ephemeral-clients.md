@@ -2,7 +2,8 @@
 
 - Status: Accepted. Implemented. The end-to-end suites below first ran green on
   main on 2026-10-06 (commit a87a300).
-- Date: 2026-10-05
+- Date: 2026-10-05, amended 2026-10-06 (networks through the run's
+  containers; `user rm`)
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
 ## What forced it
@@ -139,11 +140,23 @@ holds the run's volumes) and `dockercli.RunObjects`:
 | step | what | only when |
 |---|---|---|
 | 1 | containers labelled with the account (`OwnerLabel`) and the client (`ClientLabel`), `rm -f -v` | `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS=true` |
-| 2 | networks whose `com.docker.compose.project` ends in `-<client>` | the same; the daemon refuses one with anything attached |
+| 2 | networks whose `com.docker.compose.project` is the project of a step-1 container AND ends in `-<client>` | the same; the daemon refuses one with anything attached |
 | 3 | `unions.Manager.Release` for the client | always; a union a container is bound to stays (ADR 0044) |
 | 4 | volumes with the `rd-` prefix, `ManagedLabel=share`, the account and the client | neither a container names it nor `MountedCaches` lists it |
 | 5 | the port, `Ports.Free` | steps 1 to 4 kept nothing |
 
+- **A network is the run's only through its containers.** A network carries
+  no owner label, since compose creates it through `/networks/create`, which
+  the proxy passes through. On a shared daemon (ADR 0012) another account can
+  name a project with the same suffix, so the projects come from the run's
+  own labelled containers, read before step 1 removes them. A network whose
+  containers are already gone is left behind, which costs a name and nothing
+  else.
+- **`user rm` drops the account's runs** in per-account mode (ADR 0019):
+  their records and ports go at once and nothing is cleaned, because cleaning
+  calls `Ensure` and would start the removed account's daemon again, and the
+  run's objects went with that daemon. On the shared daemon the runs stay and
+  are cleaned as usual.
 - **Cannot tell means keep.** A listing that fails, a daemon that cannot be
   reached, or an object the daemon refuses to remove keeps the run in cleaning,
   with its port, and the next sweep tries again.
@@ -171,8 +184,9 @@ file's `name:`, else its directory's.
   workspace. Any failure leaves compose's own name, and compose then reports
   the connection itself.
 - **A machine is unchanged**: its session reports no client id.
-- **The suffix is what cleanup's step 2 matches.** A project named any other way
-  keeps its networks after the run.
+- **The suffix is what cleanup's step 2 matches**, together with a container
+  of the run in the project. A project named any other way keeps its networks
+  after the run.
 - **A standalone `docker compose` is documented, not handled**: it reads its own
   environment and cannot learn the client id.
 

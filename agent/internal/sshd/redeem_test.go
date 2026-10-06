@@ -170,6 +170,32 @@ func TestABoundTokenEnrolsTheKeyThatLoggedIn(t *testing.T) {
 	}
 }
 
+// A token withdrawn while its redemption is writing the key (user rm) enrols
+// nothing: the redemption cannot complete its claim, and takes the key out.
+func TestATokenWithdrawnMidRedemptionEnrolsNothing(t *testing.T) {
+	w := startTokenWorkspace(t, "")
+	if err := w.store.CreateAccount("alice", newSigner(t).PublicKey(), "alice@desk"); err != nil {
+		t.Fatal(err)
+	}
+	id, secret := w.mint(t, "alice")
+
+	var armed atomic.Bool
+	armed.Store(true)
+	w.store.Subscribe(func() { // runs inside the redemption's key write
+		if armed.CompareAndSwap(true, false) {
+			if err := w.tokens.Revoke(id); err != nil {
+				t.Errorf("withdrawing the claimed token: %v", err)
+			}
+		}
+	})
+	key := newSigner(t)
+	c := w.redeemer(t, id, key)
+	wantCode(t, redeemOn(t, c, enrol.RedeemRequest{Secret: secret}), enrol.CodeRefused)
+	if a, _ := w.store.Lookup("alice"); a.Authorized(key.PublicKey()) {
+		t.Error("a withdrawn token's key is enrolled")
+	}
+}
+
 func TestABoundTokenAddsAKeyToAnAccountThatExists(t *testing.T) {
 	w := startTokenWorkspace(t, "")
 	first, second := newSigner(t), newSigner(t)

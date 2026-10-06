@@ -154,24 +154,27 @@ func (s *Server) tokenList(caller sessionAccount, target string, all bool) enrol
 }
 
 func (s *Server) tokenRemove(caller sessionAccount, id string, audit *slog.Logger) enrol.Reply {
-	if s.cfg.Tokens == nil {
-		return failed(noToken(id))
+	var list []tokens.Token
+	if s.cfg.Tokens != nil {
+		var err error
+		if list, err = s.cfg.Tokens.List(); err != nil {
+			return failed(&enrol.Error{Code: enrol.CodeFailed, Msg: "the workspace could not read its tokens; its log says why"})
+		}
 	}
-	list, err := s.cfg.Tokens.List()
-	if err != nil {
-		return failed(&enrol.Error{Code: enrol.CodeFailed, Msg: "the workspace could not read its tokens; its log says why"})
-	}
+	// Permission first, and a token the caller may not remove is one they
+	// cannot list: "no token" either way, or the reply says it exists.
 	i := slices.IndexFunc(list, func(t tokens.Token) bool { return t.ID == id })
-	if i < 0 {
-		return failed(noToken(id))
+	account := ""
+	if i >= 0 {
+		account = list[i].Account
 	}
-	if e := authorize(s.checkFor(enrol.OpTokenRemove, caller, list[i].Account)); e != nil {
-		return failed(e)
+	if authorize(s.checkFor(enrol.OpTokenRemove, caller, account)) != nil || i < 0 {
+		return failed(noToken(id))
 	}
 	if err := s.cfg.Tokens.Revoke(id); err != nil {
 		return failed(noToken(id))
 	}
-	audit.Info("removed a token", "token", id, "account", list[i].Account)
+	audit.Info("removed a token", "token", id, "account", account)
 	return enrol.Reply{}
 }
 
@@ -249,12 +252,9 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 	if s.cfg.Accounts.CheckWritable() != nil {
 		return failed(CannotStore(s.cfg.Accounts.EnrolledDir))
 	}
-	if err := s.cfg.Accounts.RemoveAccountFile(target); err != nil {
-		return failed(writeError(err, audit))
-	}
-
-	var reply enrol.Reply
-	// A token bound to the account would bring it back.
+	// A token bound to the account would bring it back. Withdrawn first, claims
+	// included: a redemption that completes before this has its key removed
+	// with the file below, and one that completes after fails.
 	if s.cfg.Tokens != nil {
 		if list, err := s.cfg.Tokens.List(); err == nil {
 			for _, t := range list {
@@ -264,6 +264,11 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 			}
 		}
 	}
+	if err := s.cfg.Accounts.RemoveAccountFile(target); err != nil {
+		return failed(writeError(err, audit))
+	}
+
+	var reply enrol.Reply
 	if s.cfg.Daemons.Mode() != workspace.ModeShared {
 		s.cfg.Runs.Drop(target)
 	}
@@ -340,14 +345,21 @@ func (s *Server) keyAdd(caller sessionAccount, target, line string, audit *slog.
 		return failed(CannotStore(s.cfg.Accounts.EnrolledDir))
 	}
 	added, err := s.cfg.Accounts.AppendKey(target, key, comment)
-	if err != nil {
-		return failed(writeError(err, audit))
-	}
 	var reply enrol.Reply
-	if !added {
+	switch {
+	case errors.Is(err, accounts.ErrProvisioning):
+		reply.Notices = []*enrol.Error{{Msg: fmt.Sprintf("the key is added, and %s is still being created on the workspace; it works once that finishes", target)}}
+	case errors.Is(err, accounts.ErrNotProvisioned):
+		audit.Warn("the account could not be created", "account", target, "err", err)
+		return failed(&enrol.Error{Code: enrol.CodeFailed,
+			Msg: fmt.Sprintf("the workspace could not create %s, so the key was not added; its log says why", target)})
+	case err != nil:
+		return failed(writeError(err, audit))
+	case !added:
 		reply.Notices = []*enrol.Error{{Msg: "that key was already enrolled for " + target}}
 	}
-	audit.Info("added a key", "account", target, "key", ssh.FingerprintSHA256(key), "dir", s.cfg.Accounts.EnrolledDir)
+	audit.Info("added a key", "account", target, "key", ssh.FingerprintSHA256(key), "dir", s.cfg.Accounts.EnrolledDir,
+		"pending", errors.Is(err, accounts.ErrProvisioning))
 	return reply
 }
 
@@ -361,6 +373,11 @@ func (s *Server) keyRemove(caller sessionAccount, target, fp string, force bool,
 	if !ok || !slices.ContainsFunc(a.Keys, func(k ssh.PublicKey) bool { return ssh.FingerprintSHA256(k) == fp }) {
 		return failed(&enrol.Error{Code: enrol.CodeUnknown, Msg: fmt.Sprintf("%s has no key %s", target, fp),
 			Fix: "`remote key ls` lists them"})
+	}
+	for _, src := range a.Sources {
+		if src.Dir != s.cfg.Accounts.EnrolledDir && slices.ContainsFunc(src.Keys, func(k ssh.PublicKey) bool { return ssh.FingerprintSHA256(k) == fp }) {
+			c.OperatorDir = src.Dir
+		}
 	}
 	c.KeysLeft = c.TargetKeys - 1
 	c.Connected = target == caller.name && fp == caller.fingerprint

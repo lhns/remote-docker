@@ -133,7 +133,7 @@ func TestANonAdminMintsOnlyForThemselves(t *testing.T) {
 	if r := manageOn(t, ca, enrol.Request{Op: enrol.OpTokenList}); len(r.Tokens) != 2 {
 		t.Errorf("an admin lists %+v, want both", r.Tokens)
 	}
-	wantRefused(t, manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: carols}), enrol.CodeDenied, "another account's token")
+	wantRefused(t, manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: carols}), enrol.CodeUnknown, "no token "+carols)
 	if !w.tokens.Live(carols) {
 		t.Error("a refused removal removed the token")
 	}
@@ -160,6 +160,32 @@ func TestTokenRemove(t *testing.T) {
 		t.Error("the token is still live")
 	}
 	wantRefused(t, manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: r.Token.ID}), enrol.CodeUnknown, "no token")
+}
+
+// A token the caller may not remove is one they cannot see, so the reply is
+// the same whether it exists or not.
+func TestTokenRemoveIsNoOracle(t *testing.T) {
+	w := startManageWorkspace(t, "alice")
+	bob := newSigner(t)
+	w.enrol(t, "bob", bob)
+	cb := w.dial(t, "bob", bob)
+	carols, _ := w.mint(t, "carol")
+	gone, _ := w.mint(t, "carol")
+	if err := w.tokens.Revoke(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	exists := manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: carols})
+	missing := manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: gone})
+	if exists.Error == nil || missing.Error == nil {
+		t.Fatalf("refusals %+v, %+v", exists.Error, missing.Error)
+	}
+	if exists.Error.Code != missing.Error.Code || strings.ReplaceAll(exists.Error.Msg, carols, gone) != missing.Error.Msg {
+		t.Errorf("carol's token: %+v; a removed one: %+v; want the same reply", exists.Error, missing.Error)
+	}
+	if !w.tokens.Live(carols) {
+		t.Error("a refused removal removed the token")
+	}
 }
 
 func TestUserListShowsEveryAccount(t *testing.T) {
@@ -223,6 +249,25 @@ func TestUserRemoveRefusesRunningContainersUnlessForced(t *testing.T) {
 	}
 	if _, _, err := w.login("bob", bob); err == nil {
 		t.Error("a removed account still authenticates")
+	}
+}
+
+// A token of the account mid-redemption is withdrawn too, so the redemption
+// cannot complete and bring the account back.
+func TestUserRemoveWithdrawsAClaimedToken(t *testing.T) {
+	w := startManageWorkspace(t, "alice")
+	alice := newSigner(t)
+	w.enrol(t, "alice", alice)
+	w.enrolKey(t, "bob", newSigner(t))
+	id, secret := w.mint(t, "bob")
+	claim, err := w.tokens.Consume(id, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantOK(t, manageOn(t, w.dial(t, "alice", alice), enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Force: true}))
+	if err := claim.Done(); err == nil {
+		t.Error("a redemption of bob's token completed after bob was removed")
 	}
 }
 

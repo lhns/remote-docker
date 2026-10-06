@@ -48,8 +48,9 @@ start_agent() {
         WORKSPACE_HOSTKEY_DIR="$WORK/wsstate/host_keys" \
         "$WORK/remote-dockerd" serve --addr ":$SSH_PORT" \
         >"$WORK/agent-$per_user_dind.log" 2>&1
+    # Anchored: the sudo wrapper's command line contains the same words.
     for _ in $(seq 1 30); do
-        AGENT_PID=$(pgrep -f "$WORK/remote-dockerd serve" | head -1)
+        AGENT_PID=$(pgrep -f "^$WORK/remote-dockerd serve" | head -1)
         [ -n "$AGENT_PID" ] && return 0
         sleep 1
     done
@@ -78,7 +79,7 @@ stop_agent() {
     [ -z "$AGENT_PID" ] && return 0
     sudo kill "$AGENT_PID" 2>/dev/null
     for _ in $(seq 1 30); do
-        pgrep -f "$WORK/remote-dockerd serve" >/dev/null || break
+        pgrep -f "^$WORK/remote-dockerd serve" >/dev/null || break
         sleep 1
     done
     AGENT_PID=

@@ -32,7 +32,10 @@ software.
   an account cuts its access and stops its daemon, but keeps its images,
   volumes and files, so a new token brings it back as it was. It is refused
   while its containers run unless you add `-f`. An admin cannot remove
-  themselves or the last admin.
+  themselves or the last admin. Adding a key to an account the workspace could
+  not create fails and says so; a key added while the account is still being
+  created works once it is. Removing a key never waits for an account to be
+  created.
 - **`remote user rm bob --purge` deletes everything bob had.** On top of what
   `user rm` does, it deletes bob's images, containers and volumes, home
   directory and unix user, and forgets bob's ports. It cannot be undone. The
@@ -44,7 +47,9 @@ software.
 - **A workspace reads keys from several directories.** `WORKSPACE_KEYS_DIR`
   takes a comma-separated list, and the workspace also reads
   `WORKSPACE_ENROLLED_KEYS_DIR` (`<state>/enrolled_keys.d`), the one directory
-  it will write keys into. An account's keys in all of them are merged.
+  it will write keys into. An account's keys in all of them are merged. If the
+  workspace stops in the middle of writing an account's keys, the next change
+  to them waits up to 10 seconds.
 - **Autoscaled CI runners can share one key.** Before, every runner using the
   same key counted as one machine, so the second was refused and two jobs could
   share a volume. List the account in `WORKSPACE_EPHEMERAL_ACCOUNTS`, or in the
@@ -87,6 +92,9 @@ software.
 - **`remote ls` lines up its columns.**
 - **Two containers starting at once on one `write=back` or `write=ephemeral`
   directory no longer race.**
+- **A cache is kept when the workspace cannot tell whether it is in use.** A
+  `write=back` or `write=ephemeral` directory's cache could be deleted under a
+  running container when the workspace failed to list its mounted caches.
 
 ### Upgrading
 

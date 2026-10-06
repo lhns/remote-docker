@@ -19,9 +19,9 @@ const cleanupTimeout = 5 * time.Minute
 
 // Docker is what cleanup asks of a daemon; dockercli.RunObjects.
 type Docker interface {
-	Containers(ctx context.Context, host, account, client string) ([]string, error)
+	Containers(ctx context.Context, host, account, client string) ([]dockercli.Container, error)
 	RemoveContainers(ctx context.Context, host string, ids []string) error
-	Networks(ctx context.Context, host, client string) ([]string, error)
+	Networks(ctx context.Context, host, client string, projects map[string]bool) ([]string, error)
 	RemoveNetwork(ctx context.Context, host, name string) error
 	Volumes(ctx context.Context, host, client string) ([]dockercli.Volume, error)
 	VolumesInUse(ctx context.Context, host string) (map[string]bool, error)
@@ -69,9 +69,19 @@ func (c *Cleaner) Clean(ctx context.Context, account, client string) error {
 
 	kept := 0
 	if c.Containers {
-		ids, err := c.Docker.Containers(ctx, host, account, client)
+		cs, err := c.Docker.Containers(ctx, host, account, client)
 		if err != nil {
 			return err
+		}
+		// Read before the containers go: they are what ties a network to
+		// this account.
+		var ids []string
+		projects := map[string]bool{}
+		for _, ct := range cs {
+			ids = append(ids, ct.ID)
+			if ct.Project != "" {
+				projects[ct.Project] = true
+			}
 		}
 		if len(ids) > 0 {
 			if err := c.Docker.RemoveContainers(ctx, host, ids); err != nil {
@@ -80,7 +90,7 @@ func (c *Cleaner) Clean(ctx context.Context, account, client string) error {
 			log.Info("removed a run's containers", "count", len(ids))
 		}
 
-		nets, err := c.Docker.Networks(ctx, host, client)
+		nets, err := c.Docker.Networks(ctx, host, client, projects)
 		if err != nil {
 			return err
 		}

@@ -30,18 +30,20 @@ type fakeDaemon struct {
 	calls []string
 }
 
-func (f *fakeDaemon) Containers(_ context.Context, _, _, client string) ([]string, error) {
+// Containers answers every container whose id starts with client, each in
+// the compose project proj-<client>.
+func (f *fakeDaemon) Containers(_ context.Context, _, _, client string) ([]dockercli.Container, error) {
 	if f.failList != nil {
 		return nil, f.failList
 	}
-	var ids []string
+	var cs []dockercli.Container
 	for id := range f.containers {
 		if strings.HasPrefix(id, client) {
-			ids = append(ids, id)
+			cs = append(cs, dockercli.Container{ID: id, Project: "proj-" + client})
 		}
 	}
-	slices.Sort(ids)
-	return ids, nil
+	slices.SortFunc(cs, func(a, b dockercli.Container) int { return strings.Compare(a.ID, b.ID) })
+	return cs, nil
 }
 
 func (f *fakeDaemon) RemoveContainers(_ context.Context, _ string, ids []string) error {
@@ -52,8 +54,15 @@ func (f *fakeDaemon) RemoveContainers(_ context.Context, _ string, ids []string)
 	return nil
 }
 
-func (f *fakeDaemon) Networks(context.Context, string, string) ([]string, error) {
-	return f.networks, nil
+// Networks answers the networks named <project>_default for one of projects.
+func (f *fakeDaemon) Networks(_ context.Context, _, _ string, projects map[string]bool) ([]string, error) {
+	var out []string
+	for _, n := range f.networks {
+		if projects[strings.TrimSuffix(n, "_default")] {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeDaemon) RemoveNetwork(_ context.Context, _, name string) error {
@@ -222,10 +231,28 @@ func TestCleanupKeepsEverythingWhenItCannotTell(t *testing.T) {
 }
 
 func TestCleanupKeepsANetworkTheDaemonRefuses(t *testing.T) {
-	d := &fakeDaemon{networks: []string{"proj-" + runID + "_default"}, failNet: errors.New("has active endpoints")}
+	d := &fakeDaemon{
+		containers: map[string][]string{runID + "-c1": nil},
+		networks:   []string{"proj-" + runID + "_default"},
+		failNet:    errors.New("has active endpoints"),
+	}
 	c := newCleaner(d)
 	c.Containers = true
 	if err := c.Clean(t.Context(), "alice", runID); err == nil {
 		t.Error("a network the daemon kept was not reported")
+	}
+}
+
+// A network is the run's only through a container of the run: with none left,
+// a network named for the run is not looked for.
+func TestCleanupTakesNetworksFromTheRunsContainers(t *testing.T) {
+	d := &fakeDaemon{networks: []string{"proj-" + runID + "_default"}}
+	c := newCleaner(d)
+	c.Containers = true
+	if err := c.Clean(t.Context(), "alice", runID); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"release unions"}; !slices.Equal(d.calls, want) {
+		t.Errorf("calls %v, want %v", d.calls, want)
 	}
 }
