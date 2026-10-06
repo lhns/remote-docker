@@ -260,7 +260,8 @@ func (r *Registry) Sweep(ctx context.Context) {
 				continue
 			}
 		}
-		if d.port != 0 && !r.Ports.Free(d.k.account, d.k.client, d.token) {
+		// Token 0 is a restored run whose port somebody else holds.
+		if d.token != 0 && !r.Ports.Free(d.k.account, d.k.client, d.token) {
 			r.log().Warn("a run's port was not its own to free", "account", d.k.account, "client", d.k.client, "port", d.port)
 		}
 

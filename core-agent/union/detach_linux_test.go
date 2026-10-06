@@ -36,18 +36,18 @@ func TestDetachTriesEveryTargetLazily(t *testing.T) {
 	}
 }
 
-func TestDetachReportsARealFailureAndCarriesOn(t *testing.T) {
+func TestDetachReportsEveryRealFailureAndCarriesOn(t *testing.T) {
 	var tried []string
 	unmount := func(target string, _ int) error {
 		tried = append(tried, target)
 		if target == "merged" {
 			return unix.EPERM
 		}
-		return nil
+		return unix.EBUSY
 	}
 	err := detach([]string{"merged", "lower"}, unmount)
-	if !errors.Is(err, unix.EPERM) {
-		t.Errorf("err = %v, want EPERM", err)
+	if !errors.Is(err, unix.EPERM) || !errors.Is(err, unix.EBUSY) {
+		t.Errorf("err = %v, want both the union's EPERM and the lower's EBUSY", err)
 	}
 	if len(tried) != 2 {
 		t.Errorf("tried %v, want the lower too after the union failed", tried)

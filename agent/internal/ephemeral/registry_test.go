@@ -1,8 +1,10 @@
 package ephemeral
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,8 @@ type fakePorts struct {
 	held  map[string]uint64 // client -> token
 	ports map[string]int
 	freed []string
+
+	refuseHold bool // somebody else has every port a restored run had
 }
 
 func newFakePorts() *fakePorts {
@@ -38,6 +42,9 @@ func (f *fakePorts) ForRun(_, client string) (int, uint64, error) {
 func (f *fakePorts) Hold(_, client string, port int) (uint64, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuseHold {
+		return 0, false
+	}
 	f.token++
 	f.held[client], f.ports[client] = f.token, port
 	return f.token, true
@@ -46,7 +53,7 @@ func (f *fakePorts) Hold(_, client string, port int) (uint64, bool) {
 func (f *fakePorts) Free(_, client string, token uint64) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.held[client] != token {
+	if t, ok := f.held[client]; !ok || t != token {
 		return false
 	}
 	delete(f.held, client)
@@ -244,6 +251,33 @@ func TestTheRecordSurvivesARestart(t *testing.T) {
 	again, _ := hostRun(t, restarted, "0123abcd")
 	if again != livePort {
 		t.Errorf("the live run reattached on %d, want %d", again, livePort)
+	}
+}
+
+// A restored run whose port somebody else holds is cleaned and forgotten, and
+// the port, which was never its own again, is left alone without a warning.
+func TestARestoredRunWhosePortIsTakenIsCleanedQuietly(t *testing.T) {
+	dir := t.TempDir()
+	r, _, _ := newRegistry(t)
+	r.Dir = dir
+	hostRun(t, r, "0123abcd")
+
+	restarted, ports, _ := newRegistry(t)
+	ports.refuseHold = true
+	var log bytes.Buffer
+	restarted.Dir, restarted.Log = dir, slog.New(slog.NewTextHandler(&log, nil))
+	cleaned := false
+	restarted.Cleanup = func(context.Context, string, string) error { cleaned = true; return nil }
+	if err := restarted.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	restarted.Sweep(t.Context())
+
+	if _, ok := restarted.state("0123abcd"); ok || !cleaned {
+		t.Errorf("the run is still known (%v) or was not cleaned (%v)", ok, !cleaned)
+	}
+	if strings.Contains(log.String(), "not its own") {
+		t.Errorf("a run that held no port was warned about freeing one:\n%s", log.String())
 	}
 }
 
