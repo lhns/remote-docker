@@ -59,6 +59,13 @@ software.
   built-in `docker compose` gives each runner its own project name; a separate
   `docker compose` needs `COMPOSE_PROJECT_NAME` set per job. See "CI with
   autoscaled runners" in the README.
+- **The workspace can report metrics to Prometheus.** Set
+  `WORKSPACE_METRICS_ADDR=:9090`, or `metrics.enabled` in the chart, and the
+  workspace serves `/metrics` on that port: connections per account, the CI
+  runners' state and cleanup, token redemptions, and how many account daemons
+  it runs. It is off by default, and it uses its own port, never the SSH one.
+  The chart adds the usual `prometheus.io/scrape` annotations. See "Metrics"
+  in the README.
 
 ### Fixes
 

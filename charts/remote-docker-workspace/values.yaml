@@ -93,6 +93,15 @@ ephemeral:
   # whose containers remain keeps its slot until somebody removes them.
   cleanupContainers: false
 
+# Prometheus metrics (ADR 0054): GET /metrics in plain HTTP on a port of its
+# own (WORKSPACE_METRICS_ADDR), never the SSH or WebSocket one. Enabled, the pod
+# carries the prometheus.io/scrape, /port and /path annotations. No
+# ServiceMonitor, which would need the operator's CRD. An `env` entry for the
+# same variable wins.
+metrics:
+  enabled: false
+  port: 9090
+
 # Extra environment for the agent, e.g. TZ or WORKSPACE_UID_BASE.
 env: {}
 

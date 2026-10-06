@@ -8,6 +8,7 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
+	"github.com/lhns/remote-docker/agent/internal/metrics"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -47,8 +48,25 @@ type Cleaner struct {
 	// (WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS).
 	Containers bool
 
+	// Removed counts what cleanup removed, by kind; Kept what it kept, by kind
+	// and reason. Nil counts nothing.
+	Removed *metrics.Counter
+	Kept    *metrics.Counter
+
 	Log *slog.Logger
 }
+
+// The kinds of object cleanup removes, and why it keeps one, as the Removed
+// and Kept counters label them.
+const (
+	KindContainer = "container"
+	KindNetwork   = "network"
+	KindVolume    = "volume"
+
+	KeptInUse   = "in_use"
+	KeptMounted = "mounted"
+	KeptError   = "error"
+)
 
 // Clean is Registry.Cleanup: containers and networks, unions, volumes, in that
 // order. The registry frees the port after it.
@@ -85,8 +103,10 @@ func (c *Cleaner) Clean(ctx context.Context, account, client string) error {
 		}
 		if len(ids) > 0 {
 			if err := c.Docker.RemoveContainers(ctx, host, ids); err != nil {
+				c.Kept.Add(float64(len(ids)), KindContainer, KeptError)
 				return err
 			}
+			c.Removed.Add(float64(len(ids)), KindContainer)
 			log.Info("removed a run's containers", "count", len(ids))
 		}
 
@@ -97,9 +117,11 @@ func (c *Cleaner) Clean(ctx context.Context, account, client string) error {
 		for _, n := range nets {
 			if err := c.Docker.RemoveNetwork(ctx, host, n); err != nil {
 				kept++
+				c.Kept.Inc(KindNetwork, KeptError)
 				log.Warn("keeping a run's network", "network", n, "why", err)
 				continue
 			}
+			c.Removed.Inc(KindNetwork)
 			log.Info("removed a run's network", "network", n)
 		}
 	}
@@ -127,23 +149,25 @@ func (c *Cleaner) Clean(ctx context.Context, account, client string) error {
 		if !runOwns(v, account, client) {
 			continue
 		}
-		why := ""
+		why, reason := "", ""
 		switch {
 		case inUse[v.Name]:
-			why = "a container names it"
+			why, reason = "a container names it", KeptInUse
 		case mounted[v.Name]:
-			why = "a union is mounted on it"
+			why, reason = "a union is mounted on it", KeptMounted
 		}
 		if why == "" {
 			if err := c.Docker.RemoveVolume(ctx, host, v.Name); err != nil {
-				why = err.Error()
+				why, reason = err.Error(), KeptError
 			}
 		}
 		if why != "" {
 			kept++
+			c.Kept.Inc(KindVolume, reason)
 			log.Info("keeping a run's volume", "volume", v.Name, "why", why)
 			continue
 		}
+		c.Removed.Inc(KindVolume)
 		log.Info("removed a run's volume", "volume", v.Name)
 	}
 

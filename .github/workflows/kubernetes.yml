@@ -75,6 +75,28 @@ jobs:
                  --set 'ephemeral.accounts={ci}' --set ephemeral.cleanupContainers=true
           render --set ingress.enabled=false --set publicURL=wss://ws.example.com/
           render --set ingress.host=ws.example.com --set 'admins={alice,bob}'
+          render --set ingress.host=ws.example.com --set metrics.enabled=true --set metrics.port=9100
+
+      # Metrics (ADR 0054): the variable, the port and the scrape annotations
+      # when enabled, and none of them by default.
+      - name: metrics render
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+              --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+          }
+          on=$(render --set metrics.enabled=true --set metrics.port=9100)
+          for want in 'value: ":9100"' 'name: metrics' 'containerPort: 9100' \
+                      'prometheus.io/scrape: "true"' 'prometheus.io/port: "9100"' 'prometheus.io/path: /metrics'; do
+            if ! grep -qF -- "$want" <<<"$on"; then
+              echo "metrics.enabled rendered no $want:"; echo "$on"; exit 1
+            fi
+          done
+          off=$(render)
+          if grep -qE 'WORKSPACE_METRICS_ADDR|prometheus.io|name: metrics' <<<"$off"; then
+            echo "metrics are off by default, yet something rendered:"; echo "$off"; exit 1
+          fi
 
       # Admins (ADR 0053): the list joined into one variable, nothing for an
       # empty one, and an env entry winning.

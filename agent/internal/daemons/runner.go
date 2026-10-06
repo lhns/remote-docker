@@ -900,3 +900,11 @@ func (m *Manager) Accounts(ctx context.Context) ([]string, error) {
 	sort.Strings(accounts)
 	return accounts, nil
 }
+
+// Started counts the daemons this agent has started or adopted and not reset.
+// Nothing is asked of a daemon, so one that has died since is still counted.
+func (m *Manager) Started() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.byName)
+}

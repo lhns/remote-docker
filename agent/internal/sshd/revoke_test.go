@@ -21,6 +21,7 @@ import (
 
 type revokeWorkspace struct {
 	addr     string
+	server   *Server
 	store    *accounts.Store
 	keysDir  string
 	enrolled string
@@ -52,7 +53,7 @@ func startRevokeWorkspace(t *testing.T) *revokeWorkspace {
 	}
 	go func() { _ = s.ServeListener(l) }()
 	t.Cleanup(func() { _ = s.Close(); _ = l.Close() })
-	w.addr = l.Addr().String()
+	w.addr, w.server = l.Addr().String(), s
 	return w
 }
 

@@ -108,7 +108,8 @@ func (s *Server) serveRedeem(session gssh.Session, r redeemer) {
 // redeem enrols the connection's key with the token's secret. A failure on
 // the workspace's side puts the token back; a failure on the redeemer's
 // spends an attempt from the global limiter.
-func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) enrol.RedeemReply {
+func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) (reply enrol.RedeemReply) {
+	defer func() { s.cfg.Metrics.Redemptions.Inc(redeemOutcome(reply)) }()
 	audit := s.log().With(logx.ComponentKey, "audit", "op", "token.redeem",
 		"token", r.id, "key", ssh.FingerprintSHA256(r.key), "from", from)
 	refuse := func(e *enrol.Error, why string, args ...any) enrol.RedeemReply {
@@ -117,6 +118,7 @@ func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) enro
 	}
 
 	if !s.limiter.Allow() {
+		s.cfg.Metrics.LimiterRejections.Inc()
 		return refuse(&enrol.Error{Code: enrol.CodeBusy,
 			Msg: "the workspace is refusing tokens for now: too many failed attempts",
 			Fix: "try again in a minute"}, "too many failed redemptions")
@@ -167,6 +169,20 @@ func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) enro
 	}
 	audit.Info("redeemed a token", "account", name, "created", created, "bound", tok.Account != "", "pending", pending)
 	return enrol.RedeemReply{Account: name, Created: created, Pending: pending}
+}
+
+// redeemOutcome labels a reply for the Redemptions counter: failed when the
+// workspace could not do its part, refused when the redeemer was turned away.
+func redeemOutcome(reply enrol.RedeemReply) string {
+	switch {
+	case reply.Error == nil && reply.Pending:
+		return RedeemPending
+	case reply.Error == nil:
+		return RedeemOK
+	case reply.Error.Code == enrol.CodeFailed || reply.Error.Code == enrol.CodeStorage:
+		return RedeemFailed
+	}
+	return RedeemRefused
 }
 
 // redeemName is the account a token enrols into, and whether it must be new.

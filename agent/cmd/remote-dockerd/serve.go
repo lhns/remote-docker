@@ -199,6 +199,17 @@ func serve(addr, wsAddr string) error {
 			"max-clients", maxRuns, "grace", grace, "cleanup-containers", cleanContainers)
 	}
 
+	// Bound now so a bad address stops the start; served once everything it
+	// reads exists.
+	metricsLn, err := listenMetrics(os.Getenv(envMetricsAddr))
+	if err != nil {
+		return err
+	}
+	if metricsLn != nil {
+		defer metricsLn.Close()
+	}
+	agentMetrics := newAgentMetrics()
+
 	var wg sync.WaitGroup
 
 	// dockerd first: an account can be provisioned without it, but the
@@ -291,6 +302,7 @@ func serve(addr, wsAddr string) error {
 	}
 
 	targets := daemons.Shared("")
+	var manager *daemons.Manager
 	if perUserDind {
 		// The id identifies THIS workspace across redeploys, which a container
 		// id cannot. Without it the daemons are still labelled as ours, just
@@ -324,7 +336,7 @@ func serve(addr, wsAddr string) error {
 			log.Info("per-account daemons run an image", "image", image)
 		}
 
-		manager := &daemons.Manager{
+		manager = &daemons.Manager{
 			ReadyTimeout: readySeconds(log),
 			Options: daemons.Options{
 				Workspace:     id,
@@ -432,6 +444,8 @@ func serve(addr, wsAddr string) error {
 		Docker:     dockercli.RunObjects{},
 		Unions:     unionManager,
 		Containers: cleanContainers,
+		Removed:    agentMetrics.removed,
+		Kept:       agentMetrics.kept,
 		Log:        logger("ephemeral"),
 	}
 	// Restored before serving, so a run reattaching finds its port. Kept for
@@ -444,6 +458,8 @@ func serve(addr, wsAddr string) error {
 		Cleanup: cleaner.Clean,
 		Dir:     stateDir,
 		Log:     logger("ephemeral"),
+		Refused: agentMetrics.runsRefused,
+		Sweeps:  agentMetrics.sweeps,
 	}
 	if err := runs.Restore(); err != nil {
 		log.Warn("could not restore the ephemeral runs", "err", err)
@@ -468,10 +484,24 @@ func serve(addr, wsAddr string) error {
 		Runs:        runs,
 		Tokens:      tokenStore,
 		Admins:      admins,
-		Log:         logger("sshd"),
+		Metrics: sshd.Metrics{
+			Redemptions:       agentMetrics.redemptions,
+			LimiterRejections: agentMetrics.limiter,
+			RunsRefused:       agentMetrics.runsRefused,
+		},
+		Log: logger("sshd"),
 	})
 	if err != nil {
 		return err
+	}
+
+	if metricsLn != nil {
+		agentMetrics.gauges(runs, ephemeralSet, server, manager)
+		stopMetrics := agentMetrics.reg.Serve(metricsLn, func(err error) {
+			log.Warn("the metrics listener stopped", "err", err)
+		})
+		defer stopMetrics()
+		log.Info("metrics on http://" + metricsLn.Addr().String() + "/metrics")
 	}
 
 	serveErr := make(chan error, 1)

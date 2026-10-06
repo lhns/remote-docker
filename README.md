@@ -782,10 +782,33 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_EPHEMERAL_MAX_CLIENTS` | `8` | runs per ephemeral account, connected or in grace; the next is refused |
 | `WORKSPACE_EPHEMERAL_GRACE` | `2m` | how long a run keeps its port after its last connection, for a reconnect |
 | `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS` | `false` | also remove an expired run's containers and its compose networks; without it a run whose containers remain keeps its slot until they are removed |
+| `WORKSPACE_METRICS_ADDR` | empty | address such as `:9090` to serve Prometheus metrics on, in plain HTTP at `/metrics`; empty serves none. See [Metrics](#metrics) |
 | `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
 | `WORKSPACE_HOST_SOCKET` | `/var/run/host-docker.sock` | the node's Docker socket, for Swarm elevation |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
+
+### Metrics
+
+Set `WORKSPACE_METRICS_ADDR` (`metrics.enabled` in the chart) and the agent
+serves `GET /metrics` in the Prometheus text format on that address. It is a
+listener of its own, never the SSH or WebSocket port, and it has no
+authentication: keep it inside the network your Prometheus scrapes from.
+Labels are account names and fixed words, never keys, client ids or token ids
+([ADR 0054](docs/adr/0054-metrics-on-an-opt-in-plain-http-listener.md)).
+
+| metric | type | labels |
+|---|---|---|
+| `remote_docker_ssh_connections` | gauge | `account`: connections logged in as it |
+| `remote_docker_ephemeral_runs` | gauge | `account`, `state` (`live`, `grace`, `cleaning`) |
+| `remote_docker_ephemeral_run_ports` | gauge | ports held by ephemeral runs |
+| `remote_docker_ephemeral_runs_refused_total` | counter | `reason`: `limit`, `cleaning`, `duplicate` (a connection naming a second run), `malformed` |
+| `remote_docker_ephemeral_sweeps_total` | counter | sweeps for expired runs |
+| `remote_docker_ephemeral_objects_removed_total` | counter | `kind`: `container`, `network`, `volume` |
+| `remote_docker_ephemeral_objects_kept_total` | counter | `kind`, `reason`: `in_use`, `mounted`, `error` |
+| `remote_docker_token_redemptions_total` | counter | `outcome`: `ok`, `pending` (the account is still being created), `refused`, `failed` (the workspace's side) |
+| `remote_docker_token_limiter_rejections_total` | counter | redemptions turned away after too many failures |
+| `remote_docker_account_daemons` | gauge | per-account daemons the agent has started or adopted; not probed, so one that died is still counted. Absent with a shared daemon |
 
 ### How long a cold daemon has to start
 

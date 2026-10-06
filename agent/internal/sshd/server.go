@@ -18,6 +18,7 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/ephemeral"
+	"github.com/lhns/remote-docker/agent/internal/metrics"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core-agent/tokens"
@@ -82,8 +83,38 @@ type Config struct {
 	// unbound token.
 	Admins map[string]bool
 
+	Metrics Metrics
+
 	Log *slog.Logger
 }
+
+// Metrics are the counters the server increments (ADR 0054). A nil one counts
+// nothing.
+type Metrics struct {
+	// Redemptions counts token redemptions by outcome: RedeemOK,
+	// RedeemPending, RedeemRefused or RedeemFailed.
+	Redemptions *metrics.Counter
+
+	// LimiterRejections counts redemptions the global limiter turned away.
+	LimiterRejections *metrics.Counter
+
+	// RunsRefused counts refused run requests by reason. The registry counts
+	// its own refusals into the same counter; this server counts
+	// RefusedDuplicate and RefusedMalformed.
+	RunsRefused *metrics.Counter
+}
+
+// Outcomes of a redemption, and reasons a run request is refused here, as the
+// counters label them.
+const (
+	RedeemOK      = "ok"
+	RedeemPending = "pending"
+	RedeemRefused = "refused"
+	RedeemFailed  = "failed"
+
+	RefusedDuplicate = "duplicate"
+	RefusedMalformed = "malformed"
+)
 
 // Server serves SSH for the workspace.
 type Server struct {
