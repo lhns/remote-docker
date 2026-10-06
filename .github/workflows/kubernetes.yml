@@ -120,6 +120,27 @@ jobs:
             echo "admins was rendered beside an env entry:"; echo "$over"; exit 1
           fi
 
+      # An env entry wins over EVERY variable the chart sets, rendered once: a
+      # duplicate name is last-wins in a pod and can be refused by server-side
+      # apply.
+      - name: env overrides each variable the chart sets
+        run: |
+          set -eu
+          out=$(helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+            --set ingress.host=ws.example.com --show-only templates/statefulset.yaml \
+            --set-string env.DOCKER_TLS_CERTDIR=/certs \
+            --set-string env.WORKSPACE_PER_USER_DIND=false \
+            --set-string env.WORKSPACE_DOCKERD_ARGS=--storage-driver=vfs \
+            --set-string env.WORKSPACE_DIND_IMAGE=example/dind:1)
+          for pair in 'DOCKER_TLS_CERTDIR=/certs' 'WORKSPACE_PER_USER_DIND=false' \
+                      'WORKSPACE_DOCKERD_ARGS=--storage-driver=vfs' 'WORKSPACE_DIND_IMAGE=example/dind:1'; do
+            name=${pair%%=*}; want=${pair#*=}
+            if [ "$(grep -c "name: $name\$" <<<"$out")" -ne 1 ] \
+               || [ "$(grep -A1 "name: $name\$" <<<"$out" | grep -c "value: \"$want\"")" -ne 1 ]; then
+              echo "$name was not rendered once with the env value:"; echo "$out"; exit 1
+            fi
+          done
+
       # Ephemeral accounts (ADR 0050): every variable rendered, nothing for an
       # empty list, an env entry winning, and each bad value refused by name.
       - name: ephemeral accounts render, and bad values are refused
