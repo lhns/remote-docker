@@ -631,6 +631,25 @@ func Save(file File, path string) error {
 	return WriteAtomic(path, data, 0)
 }
 
+// CheckWritable reports whether Save could write the config at path, by
+// writing and removing a temporary file beside it.
+func CheckWritable(path string) error {
+	if path == "" {
+		path = DefaultPath()
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("config: creating %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".remote-docker-*")
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	_ = tmp.Close()
+	_ = os.Remove(tmp.Name())
+	return nil
+}
+
 // WriteAtomic replaces a file with new contents, or leaves it as it was. A
 // mode of 0 keeps the temporary file's.
 func WriteAtomic(path string, data []byte, mode os.FileMode) error {

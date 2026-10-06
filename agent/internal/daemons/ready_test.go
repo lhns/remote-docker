@@ -82,6 +82,20 @@ func TestResetForgetsTheRecordedFailure(t *testing.T) {
 	}
 }
 
+func TestStartedCountsUntilReset(t *testing.T) {
+	m := manager(fakeDocker{})
+	m.byName = map[string]*Daemon{"alice": {Account: "alice"}, "bob": {Account: "bob"}}
+	if n := m.Started(); n != 2 {
+		t.Fatalf("Started = %d, want 2", n)
+	}
+	if err := m.Reset(t.Context(), "alice", false); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if n := m.Started(); n != 1 {
+		t.Errorf("after a reset, Started = %d, want 1", n)
+	}
+}
+
 // A purge removes the graph volume only when it carries the labels this
 // package gives it, and says so when it does not.
 func TestAPurgeRemovesOnlyTheLabelledVolume(t *testing.T) {

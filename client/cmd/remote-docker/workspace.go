@@ -48,6 +48,11 @@ workspace's address, which --host overrides, and its host key.`,
 				if !flags.given("host") {
 					_ = flags.set.Set("host", invite.URL)
 				}
+				// A token is spent by the redeem, so find out first that the
+				// save afterwards can work.
+				if err := config.CheckWritable(""); err != nil {
+					return fmt.Errorf("%w\n  fix: make %s writable, then run the command again; the token is not spent", err, config.DefaultPath())
+				}
 			}
 			if flags.host == "" {
 				return fmt.Errorf("--host is required\n  fix: `%s`", ourCommand("create "+name+" --host <host>"))
@@ -91,7 +96,11 @@ workspace's address, which --host overrides, and its host key.`,
 					return err
 				}
 			}
-			if err := config.Save(file, ""); err != nil {
+			if err := saveConfig(file, ""); err != nil {
+				if enrolled != nil {
+					return fmt.Errorf("this machine's key is enrolled as account %s, but workspace %q was not saved: %w\n  fix: `%s`",
+						enrolled.Account, name, err, ourCommand(recreate(name, flags, enrolled.Account)))
+				}
 				return err
 			}
 
@@ -296,6 +305,26 @@ func (f *workspaceFlags) refuseForMachine(name string, m *config.Machine) error 
 	}
 	return fmt.Errorf("workspace %q is the %s machine %q, which was built for its port and user\n  fix: `%s`, which discards its containers",
 		name, m.Backend, m.Name, ourCommand(rebuild))
+}
+
+// saveConfig is config.Save, which a test replaces.
+var saveConfig = config.Save
+
+// recreate is the `create` that makes the entry a redeemed invite would have
+// made, without the token that is already spent.
+func recreate(name string, f workspaceFlags, account string) string {
+	cmd := "create " + name + " --host " + f.host
+	if f.given("port") {
+		cmd += " --port " + strconv.Itoa(f.port)
+	}
+	cmd += " --user " + account
+	if f.given("ca-file") {
+		cmd += " --ca-file " + f.caFile
+	}
+	if f.given("insecure") && f.insecure {
+		cmd += " --insecure"
+	}
+	return cmd
 }
 
 // redeem enrols this machine's key with an invite, as the account --user

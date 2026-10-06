@@ -59,6 +59,13 @@ software.
   built-in `docker compose` gives each runner its own project name; a separate
   `docker compose` needs `COMPOSE_PROJECT_NAME` set per job. See "CI with
   autoscaled runners" in the README.
+- **The workspace can report metrics to Prometheus.** Set
+  `WORKSPACE_METRICS_ADDR=:9090`, or `metrics.enabled` in the chart, and the
+  workspace serves `/metrics` on that port: connections per account, the CI
+  runners' state and cleanup, token redemptions, and how many account daemons
+  it has started. It is off by default, and it uses its own port, never the SSH one.
+  The chart adds the usual `prometheus.io/scrape` annotations. See "Metrics"
+  in the README.
 
 ### Fixes
 
@@ -66,6 +73,10 @@ software.
   promptly.** Before, releasing the run's cache could wait minutes for the
   run's file share, which had already gone away. The cache volume and the
   run's port stayed until that wait ended.
+- **`remote create --token` no longer spends a token it cannot save.** It now
+  checks that the config file can be written before using the token. If saving
+  fails anyway, it says the key is enrolled and prints the `create` command
+  that adds the workspace without a token.
 - **Revoking a user's key now ends their open sessions.** Deleting or
   emptying their key file used to stop only new connections, and anything
   already connected kept working.

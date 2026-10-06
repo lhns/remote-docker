@@ -113,6 +113,7 @@ What the binary is, what it answers to, and where it can run.
 | [0051](0051-enrolling-a-key-with-a-single-use-token.md) | Enrolling a key with a single-use token |
 | [0052](0052-operator-keys-directories-and-one-enrolled-keys-directory.md) | Operator keys directories, and one enrolled keys directory |
 | [0053](0053-admins-named-by-the-operator-and-account-management-under-remote.md) | Admins named by the operator, and account management under remote |
+| [0054](0054-metrics-on-an-opt-in-plain-http-listener.md) | Metrics on an opt-in plain HTTP listener, in the text format, with no client library |
 
 ## Retired numbers
 

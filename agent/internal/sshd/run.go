@@ -30,10 +30,12 @@ func (s *Server) handleRun(ctx gssh.Context, _ *gssh.Server, req *ssh.Request) (
 		return false, []byte(why)
 	}
 	if account.client != "" {
+		s.cfg.Metrics.RunsRefused.Inc(RefusedDuplicate)
 		return refuse("this connection already named its run")
 	}
 	run := string(req.Payload)
 	if !workspace.ValidRunID(run) {
+		s.cfg.Metrics.RunsRefused.Inc(RefusedMalformed)
 		return refuse("the run id is malformed")
 	}
 	client := workspace.EphemeralClientID(account.key, run)

@@ -38,7 +38,7 @@ type runWorkspace struct {
 
 // startRunWorkspace enrols alice and bob with a key each, alice's clients
 // ephemeral, on the shared daemon so a forward binds in this namespace.
-func startRunWorkspace(t *testing.T) *runWorkspace {
+func startRunWorkspace(t *testing.T, opts ...func(*Config)) *runWorkspace {
 	t.Helper()
 	w := &runWorkspace{alice: newSigner(t), bob: newSigner(t)}
 
@@ -54,14 +54,18 @@ func startRunWorkspace(t *testing.T) *runWorkspace {
 	}
 	w.ports = &accounts.Ports{Dir: t.TempDir(), Mapping: workspace.DefaultMapping()}
 
-	s, err := New(Config{
+	cfg := Config{
 		Accounts:  store,
 		Mapping:   workspace.DefaultMapping(),
 		Daemons:   daemons.Shared(""),
 		Ports:     w.ports,
 		Ephemeral: map[string]bool{"alice": true},
 		HostKeys:  []ssh.Signer{newSigner(t)},
-	})
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	s, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
