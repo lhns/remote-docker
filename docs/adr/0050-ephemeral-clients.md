@@ -152,11 +152,13 @@ holds the run's volumes) and `dockercli.RunObjects`:
   own labelled containers, read before step 1 removes them. A network whose
   containers are already gone is left behind, which costs a name and nothing
   else.
-- **`user rm` drops the account's runs** in per-account mode (ADR 0019):
-  their records and ports go at once and nothing is cleaned, because cleaning
-  calls `Ensure` and would start the removed account's daemon again, and the
-  run's objects went with that daemon. On the shared daemon the runs stay and
-  are cleaned as usual.
+- **A removed account's runs wait for it** in per-account mode (ADR 0019).
+  A sweep skips the runs of an account that is not enrolled, because cleaning
+  calls `Ensure` and would start its daemon again, and after a plain `user rm`
+  their volumes are still in `-lib`, naming their ports. They are swept once a
+  token brings the account back. A successful `user rm --purge` deletes
+  `-lib`, so it drops the runs and frees their ports. On the shared daemon the
+  runs are cleaned as usual.
 - **Cannot tell means keep.** A listing that fails, a daemon that cannot be
   reached, or an object the daemon refuses to remove keeps the run in cleaning,
   with its port, and the next sweep tries again.

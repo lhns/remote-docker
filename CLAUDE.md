@@ -746,9 +746,11 @@ premise of the project, and it applies to building it too. So:
   shared daemon another account can name a project with the same suffix.
   Anything kept, or any listing that fails, keeps the run and its port for the
   next sweep: a port freed while a volume names it mounts the next run's
-  export. In per-account mode `user rm` drops the account's runs and frees
-  their ports WITHOUT cleaning them: cleaning calls `Ensure`, which would start
-  the removed account's daemon again, and the runs' objects went with it.
+  export. In per-account mode a sweep never touches the runs of an account
+  that is not enrolled: cleaning calls `Ensure`, which would start the removed
+  account's daemon again, and after a plain `user rm` the runs' volumes still
+  sit in `-lib`. They wait, with their ports, until a token brings the account
+  back; only a successful `--purge` drops them and frees their ports.
 
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,
