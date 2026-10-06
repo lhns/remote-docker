@@ -226,6 +226,33 @@ merged_of() {
     awk -v p="/run/rd-union/$client/" 'index($2, p) == 1 && $2 ~ /\/merged$/ {print $3, $2}' <<<"$table"
 }
 
+# union_released asserts that <client>'s run took its union with it: nothing
+# mounted under its directory, and (from wait_run_gone) no volume, cache
+# included, and no record.
+union_released() {
+    local n=$1 client=$2 how=$3 start mounts
+    start=$(date +%s)
+    if wait_run_gone "$client"; then
+        ok "run $n ($how): its record, containers and volumes, cache included, are gone $(($(date +%s) - start))s later"
+    else
+        bad "run $n ($how) left: $LAST_OUTPUT"
+        hostdocker logs -t "$CONTAINER" 2>&1 | grep -iE "\[ephemeral\]|union" | tail -12 | sed 's/^/        /'
+        # A cleanup still running shows as a process waiting on something.
+        hostdocker exec "$CONTAINER" ps -o pid,stat,args 2>&1 |
+            awk '/union|unmount|fuse-overlayfs|docker volume/' | sed 's/^/        /'
+    fi
+    if mounts=$(merged_of "$client"); then
+        if [ -z "$mounts" ]; then
+            ok "run $n ($how): its union is unmounted"
+        else
+            bad "run $n ($how): its union is still mounted: [$mounts]"
+            union_diagnostics
+        fi
+    else
+        bad "run $n ($how): $mounts"
+    fi
+}
+
 # ----------------------------------------------------------------------------
 # The machine account, which nothing here may change (section 7).
 
@@ -682,33 +709,6 @@ for n in 5 6; do
         bad "run $n: no cache volume among [$LAST_OUTPUT]"
     fi
 done
-
-# union_released asserts that <client>'s run took its union with it: nothing
-# mounted under its directory, and (from wait_run_gone) no volume, cache
-# included, and no record.
-union_released() {
-    local n=$1 client=$2 how=$3 start mounts
-    start=$(date +%s)
-    if wait_run_gone "$client"; then
-        ok "run $n ($how): its record, containers and volumes, cache included, are gone $(($(date +%s) - start))s later"
-    else
-        bad "run $n ($how) left: $LAST_OUTPUT"
-        hostdocker logs -t "$CONTAINER" 2>&1 | grep -iE "\[ephemeral\]|union" | tail -12 | sed 's/^/        /'
-        # A cleanup still running shows as a process waiting on something.
-        hostdocker exec "$CONTAINER" ps -o pid,stat,args 2>&1 |
-            awk '/union|unmount|fuse-overlayfs|docker volume/' | sed 's/^/        /'
-    fi
-    if mounts=$(merged_of "$client"); then
-        if [ -z "$mounts" ]; then
-            ok "run $n ($how): its union is unmounted"
-        else
-            bad "run $n ($how): its union is still mounted: [$mounts]"
-            union_diagnostics
-        fi
-    else
-        bad "run $n ($how): $mounts"
-    fi
-}
 
 if outputs '"stopping"' curl -s --max-time 30 -X POST --unix-socket "$(run_sock 5)" \
     http://session/_remote-docker/shutdown; then

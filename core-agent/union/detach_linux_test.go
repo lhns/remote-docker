@@ -12,7 +12,7 @@ import (
 // Release must not ask whether a target is mounted before detaching it: that
 // question is a stat, and on a lower whose NFS server has gone it waits out the
 // soft mount's retries. So detach tries every target lazily and reads EINVAL
-// as "not a mount".
+// (not a mount) and ENOENT (no such path) as nothing to do.
 func TestDetachTriesEveryTargetLazily(t *testing.T) {
 	var tried []string
 	unmount := func(target string, flags int) error {
@@ -20,13 +20,16 @@ func TestDetachTriesEveryTargetLazily(t *testing.T) {
 			t.Errorf("%s unmounted with flags %#x, want MNT_DETACH", target, flags)
 		}
 		tried = append(tried, target)
-		if target == "merged" {
-			return unix.EINVAL // already gone
+		switch target {
+		case "merged":
+			return unix.EINVAL // not a mount
+		case "lower":
+			return unix.ENOENT // no such path
 		}
 		return nil
 	}
 	if err := detach([]string{"merged", "lower"}, unmount); err != nil {
-		t.Fatalf("a target that is not a mount failed the release: %v", err)
+		t.Fatalf("a target with nothing mounted failed the release: %v", err)
 	}
 	if len(tried) != 2 || tried[0] != "merged" || tried[1] != "lower" {
 		t.Errorf("tried %v, want merged then lower", tried)
