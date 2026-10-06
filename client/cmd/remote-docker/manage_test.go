@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -34,6 +35,10 @@ type manageServer struct {
 	// Refuses the first refuse logins that are not a token's; negative is all.
 	refuse int32
 	logins atomic.Int32
+
+	// info answers workspace-info; empty is a valid answer for alice.
+	// Set before the first connection: serve reads it unlocked.
+	info string
 }
 
 func startManageServer(t *testing.T, reply string, status uint32) *manageServer {
@@ -99,7 +104,7 @@ func (m *manageServer) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 					continue
 				}
 				if payload.Command == workspace.InfoCommand {
-					_, _ = ch.Write([]byte("WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=20001\n"))
+					_, _ = ch.Write([]byte(cmp.Or(m.info, "WORKSPACE_USER=alice\nWORKSPACE_NFS_PORT=20001\n")))
 					_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 					_ = ch.Close()
 					return

@@ -66,6 +66,22 @@ func TestAPendingRedeemThatNeverFinishesSaysSoAndKeepsTheConfig(t *testing.T) {
 	}
 }
 
+// The token is spent and the config saved by then, so a failure other than
+// the account not being ready points at status, never at the token again.
+func TestAPendingRedeemWhoseLoginFailsSaysItIsSaved(t *testing.T) {
+	shortenAccountWait(t, 10*time.Millisecond, 30*time.Second)
+	m := startManageServer(t, `{"account":"alice","created":true,"pending":true}`, 0)
+	m.info = "WORKSPACE_NFS_PORT=20001\n" // no user: a workspace-info that cannot be read
+	err := run(t, "remote", "create", "ws", "--no-context", "--token", pendingInvite(t, m))
+	if err == nil || !strings.HasPrefix(err.Error(), `workspace "ws" is saved and the token spent, but the first login as alice failed: `) {
+		t.Fatalf("create --token: %v", err)
+	}
+	requireFixLine(t, err, "remote status")
+	if ws := savedWorkspace(t, "ws"); ws.User != "alice" {
+		t.Errorf("saved %+v", ws)
+	}
+}
+
 func TestAPendingRedeemStopsWaitingWhenCancelled(t *testing.T) {
 	shortenAccountWait(t, 10*time.Millisecond, time.Minute)
 	m := startManageServer(t, `{"account":"alice","created":true,"pending":true}`, 0)

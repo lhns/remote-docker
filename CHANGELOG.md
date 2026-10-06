@@ -81,7 +81,21 @@ software.
 - **`remote create --token` no longer spends a token it cannot save.** It now
   checks that the config file can be written before using the token. If saving
   fails anyway, it says the key is enrolled and prints the `create` command
-  that adds the workspace without a token.
+  that adds the workspace without a token, with every setting you gave it.
+- **`remote create --token` says the workspace is saved when its first login
+  fails.** When the new account took a while to set up and the first login
+  then failed for another reason, it printed only that error, and running the
+  command again was refused because the token was spent. It now says the
+  workspace is saved and suggests `remote status`.
+- **A machine that fails to start no longer crashes the client.** Any command
+  for a WSL or Hyper-V machine that could not be started or had no address
+  crashed instead of saying why.
+- **`remote key add` reads a key file saved by Windows PowerShell.** Windows
+  PowerShell 5.1 saves `remote enroll > key.pub` as UTF-16, which `key add`
+  reported as holding no key.
+- **`remote token create` refuses a machine workspace.** Other devices cannot
+  reach a machine on your computer, and the token it printed pointed them at
+  their own computer instead.
 - **Revoking a user's key now ends their open sessions.** Deleting or
   emptying their key file used to stop only new connections, and anything
   already connected kept working.

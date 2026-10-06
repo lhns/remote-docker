@@ -968,6 +968,9 @@ the enrolled directory below. A token is single use and lives 24 hours by
 default (`--expires`, at most 7 days). `--account` adds the key to that
 account, creating it if need be; `--unbound` creates a new account under the
 name the device gives with `--user`, never one that exists or ever existed.
+An invite does not carry `--ca-file` or `--insecure`: for a `wss://`
+workspace whose certificate the device does not already trust, pass them to
+`remote create` beside `--token`.
 `token ls` and `token rm <id>` list and withdraw tokens. A workspace whose
 enrolled directory is not writable refuses to mint one
 ([ADR 0051](docs/adr/0051-enrolling-a-key-with-a-single-use-token.md)).
