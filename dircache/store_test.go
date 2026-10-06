@@ -2,6 +2,8 @@ package dircache
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 )
 
@@ -18,6 +20,7 @@ type fakeStore struct {
 	changes    []Change
 	changesErr error
 	asked      map[string]int // Changes calls, per share
+	onChanges  func()         // runs after Changes has answered
 
 	// files is what Pull hands back, by share-relative path.
 	files map[string]File
@@ -37,6 +40,10 @@ func (f *fakeStore) Drop(_ context.Context, _ string, paths []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dropped = append(f.dropped, paths...)
+	// Gone from the cache, so no longer a change in it.
+	f.changes = slices.DeleteFunc(f.changes, func(c Change) bool {
+		return slices.Contains(paths, c.Path) || slices.Contains(paths, strings.TrimPrefix(c.Path, "/"))
+	})
 	return nil
 }
 
@@ -47,7 +54,10 @@ func (f *fakeStore) Changes(_ context.Context, share string) ([]Change, error) {
 		f.asked = map[string]int{}
 	}
 	f.asked[share]++
-	return f.changes, f.changesErr
+	if f.onChanges != nil {
+		defer f.onChanges()
+	}
+	return slices.Clone(f.changes), f.changesErr
 }
 
 func (f *fakeStore) Pull(_ context.Context, _ string, paths []string, into func(File) error) error {

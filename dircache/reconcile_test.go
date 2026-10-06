@@ -139,3 +139,28 @@ func TestWriteBackRefusesARecordedFileDeletedHere(t *testing.T) {
 		t.Errorf("the consumer's new file did not come back: %v", err)
 	}
 }
+
+// The record a round decides against is read before the changes are asked
+// for. Read after, a reconcile landing in between has already taken a deleted
+// file out of the record, while the changes still list it, so it reads as the
+// consumer's new file and comes back.
+func TestWriteBackReadsTheRecordBeforeTheChanges(t *testing.T) {
+	const share = "/m/1111111111111111"
+	root := t.TempDir()
+	store := &fakeStore{
+		changes: []Change{{Path: "/stale.go", Size: 1, ModTime: 1}},
+		files:   map[string]File{"/stale.go": {Path: "/stale.go", Body: strings.NewReader("x")}},
+	}
+	c := cacheWith(t, store)
+	c.Policy = PolicyOff
+	c.Record = &fakeRecord{}
+	c.Attach(share, root, ShareOptions{})
+	c.editRecord(share, []string{"/stale.go"}, true)
+	store.onChanges = func() { c.unrecord(share, []string{"/stale.go"}) }
+
+	c.writeBackShare(t.Context(), share)
+
+	if _, err := os.Stat(filepath.Join(root, "stale.go")); err == nil {
+		t.Error("a file taken out of the record mid-round was brought back")
+	}
+}

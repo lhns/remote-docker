@@ -81,6 +81,10 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	ctx, cancel := context.WithTimeout(ctx, writeBackTimeout)
 	defer cancel()
 
+	// Before the changes: a reconcile landing after them would take a deleted
+	// file out of the record while the changes still list it, and it would
+	// come back as the consumer's.
+	recorded := c.shares.recordedSet(share)
 	changes, err := store.Changes(ctx, share)
 	if errors.Is(err, ErrShareGone) {
 		// Released, because nothing is bound to it any more (ADR 0044). The
@@ -98,7 +102,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 		return
 	}
 
-	actions := decide(c.shares.baselines(share), c.shares.recordedSet(share), changes, localAtRoot(root), c.skew(), state.Cached)
+	actions := decide(c.shares.baselines(share), recorded, changes, localAtRoot(root), c.skew(), state.Cached)
 	if len(actions) == 0 {
 		return
 	}
