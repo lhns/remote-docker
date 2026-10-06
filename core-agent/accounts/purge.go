@@ -10,8 +10,20 @@ import (
 // Purge removes what a removed account leaves on the workspace: its home
 // directory, then its unix user. Its uid stays in the uidmap, so the name and
 // the uid are never given to anybody else (ADR 0053).
+//
+// It also forgets that this process provisioned the account, so a re-enrolled
+// one is provisioned again rather than published with a user that is gone.
+// provMu keeps a re-enrolment's Ensure from running until Remove has.
 func (s *Store) Purge(name string) error {
+	s.provMu.Lock()
+	defer s.provMu.Unlock()
+
+	s.syncMu.Lock()
 	a, ok := s.Lookup(name)
+	if ok && len(a.Keys) == 0 {
+		delete(s.provisioned, name)
+	}
+	s.syncMu.Unlock()
 	if !ok {
 		return fmt.Errorf("accounts: no account %s", name)
 	}

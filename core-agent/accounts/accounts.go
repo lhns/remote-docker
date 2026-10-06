@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -117,10 +118,26 @@ type Store struct {
 	Provisioner Provisioner
 	Log         *slog.Logger
 
-	// syncMu serialises Sync end to end. mu is not held across the uid
-	// allocation, so without this two syncs would each load their own uid map,
-	// each call nextUID, and hand one uid to two accounts.
+	// ProvisionWait bounds how long a key write waits for its own account's
+	// provisioning before returning ErrProvisioning. Zero means 30s.
+	ProvisionWait time.Duration
+
+	// syncMu serialises a sync's decision: reading the directories, handing
+	// out uids, persisting the uidmap and swapping the result in. Without it two
+	// syncs would each load their own uid map, each call nextUID, and hand one
+	// uid to two accounts. It is NEVER held across a useradd: Known, the redeem
+	// and every key write take it, and one useradd has taken 170s (PR 268).
 	syncMu sync.Mutex
+
+	// Under syncMu. provisioned is every account Ensure has succeeded for in
+	// this process, which is what may be published; provisioning is the ones
+	// being created now, each closed once its account is published or failed.
+	provisioned  map[string]provisioned
+	provisioning map[string]chan struct{}
+
+	// provMu runs one Ensure at a time, as a single sync always did:
+	// concurrent useradds contend for the lock on /etc/passwd.
+	provMu sync.Mutex
 
 	mu sync.RWMutex
 
@@ -142,18 +159,23 @@ type Store struct {
 // keyFile is one account's file in one directory.
 type keyFile struct{ dir, account string }
 
+// provisioned is what Ensure settled on for an account.
+type provisioned struct{ unix, home string }
+
 // New returns an empty store.
 func New(keysDirs []string, enrolledDir, stateDir string, mapping workspace.Mapping, p Provisioner, log *slog.Logger) *Store {
 	return &Store{
-		KeysDirs:    keysDirs,
-		EnrolledDir: enrolledDir,
-		StateDir:    stateDir,
-		Shell:       "/bin/bash",
-		Mapping:     mapping,
-		Provisioner: p,
-		Log:         log,
-		accounts:    map[string]*Account{},
-		unusable:    map[keyFile]bool{},
+		KeysDirs:     keysDirs,
+		EnrolledDir:  enrolledDir,
+		StateDir:     stateDir,
+		Shell:        "/bin/bash",
+		Mapping:      mapping,
+		Provisioner:  p,
+		Log:          log,
+		accounts:     map[string]*Account{},
+		unusable:     map[keyFile]bool{},
+		provisioned:  map[string]provisioned{},
+		provisioning: map[string]chan struct{}{},
 	}
 }
 
@@ -192,17 +214,29 @@ func (s *Store) dirs() []string {
 	return append(slices.Clone(s.KeysDirs), s.EnrolledDir)
 }
 
-// Sync reads every keys directory and brings accounts into line with them.
+// Sync reads every keys directory and brings accounts into line with them,
+// and returns once every account it started provisioning is published or has
+// failed.
 //
 // Each directory is read by the same rules and the results are merged by
 // account, Keys being the union deduplicated by fingerprint (ADR 0052).
 func (s *Store) Sync() error {
+	started, err := s.sync()
+	for _, done := range started {
+		<-done
+	}
+	return err
+}
+
+// sync is Sync without the wait: an account new to this process is published
+// by its provisioning goroutine once Ensure has finished.
+func (s *Store) sync() ([]chan struct{}, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 
 	uids, err := s.loadUIDs()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Read without mu: only a sync writes these, and syncMu is held.
@@ -214,7 +248,7 @@ func (s *Store) Sync() error {
 	for _, dir := range s.dirs() {
 		files, err := s.keyFiles(dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, f := range files {
 			keys, comments, skipped, err := parseKeys(filepath.Join(dir, f.file))
@@ -257,8 +291,9 @@ func (s *Store) Sync() error {
 		}
 	}
 
-	if err := s.reconcile(found, unusable, uids); err != nil {
-		return err
+	started, err := s.reconcile(found, unusable, uids)
+	if err != nil {
+		return nil, err
 	}
 	s.subMu.Lock()
 	subs := slices.Clone(s.subs)
@@ -266,7 +301,7 @@ func (s *Store) Sync() error {
 	for _, fn := range subs {
 		fn()
 	}
-	return nil
+	return started, nil
 }
 
 // Subscribe runs fn after every sync that swaps the accounts in, outside the
@@ -348,10 +383,11 @@ func (s *Store) keyFiles(dir string) ([]namedFile, error) {
 // Sync has already applied the two-read rule; unusable is only recorded for
 // the next sync and used to name the reason for a revocation.
 //
-// Four phases, and only the last holds s.mu, because provisioning shells out
-// to useradd per account and Lookup reads through that lock. See the syncMu
-// and accounts fields.
-func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, uids map[string]int) error {
+// It returns the provisioning it started. That runs in the background,
+// holding neither s.mu, which Lookup reads through, nor syncMu: useradd is
+// seconds long, and with a large /etc/skel minutes. See the syncMu and
+// accounts fields.
+func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, uids map[string]int) ([]chan struct{}, error) {
 	// 1. Decide the uids. No lock and no exec.
 	//
 	// Sorted, because this loop ASSIGNS uids to accounts that do not have one
@@ -378,46 +414,40 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, 
 	// nothing: nextUID is highest+1 and never reuses one.
 	if changed {
 		if err := s.saveUIDs(uids); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	// 2. Provision, still with no lock held and in the same order.
-	failed := map[string]bool{}
+	// 2. Start provisioning, in the same order, every account this process has
+	// not provisioned and is not provisioning already. Once per account per
+	// process: an account that has been provisioned stays so, and a failed
+	// Ensure is tried again by the next sync.
+	var todo []*Account
 	for _, name := range names {
-		account := found[name]
-		unix, home, err := s.Provisioner.Ensure(name, account.UID, s.Shell)
-		if err != nil {
-			s.log().Error("could not provision an account", "account", name, "err", err)
-			failed[name] = true
-			continue
+		_, done := s.provisioned[name]
+		if !done && s.provisioning[name] == nil {
+			todo = append(todo, found[name])
 		}
-		account.Unix = unix
-		account.Home = home
 	}
+	started := s.provision(todo)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 3. Build the next map, seeded from the current one so an account whose
-	// Ensure failed this round is carried forward and keeps authenticating: a
-	// transient useradd failure must not present as a key that stopped working.
-	// With the files' keys, though, or a key replaced in one would keep working.
+	// 3. Build the next map from the current one and every account provisioned,
+	// with the files' keys. One still being provisioned is published by the
+	// sync its provisioning runs when it finishes.
 	next := make(map[string]*Account, len(s.accounts)+len(found))
 	maps.Copy(next, s.accounts)
 	for _, name := range names {
-		if failed[name] {
-			if known, ok := s.accounts[name]; ok {
-				carried := *known
-				carried.Keys = found[name].Keys
-				carried.Sources = found[name].Sources
-				next[name] = &carried
-			}
+		p, ok := s.provisioned[name]
+		if !ok {
 			continue
 		}
 		if _, existed := s.accounts[name]; !existed {
 			s.log().Info("account ready", "account", name, "uid", found[name].UID)
 		}
+		found[name].Unix, found[name].Home = p.unix, p.home
 		next[name] = found[name]
 	}
 
@@ -460,7 +490,66 @@ func (s *Store) reconcile(found map[string]*Account, unusable map[keyFile]bool, 
 	// changes with the map it was computed against.
 	s.accounts = next
 	s.unusable = unusable
-	return nil
+	return started, nil
+}
+
+// provision creates accounts in the background, in order and one Ensure at a
+// time, and publishes each by syncing again once it is ready. Called under
+// syncMu; each returned channel closes once its account is published or its
+// Ensure has failed.
+func (s *Store) provision(accounts []*Account) []chan struct{} {
+	if len(accounts) == 0 {
+		return nil
+	}
+	started := make([]chan struct{}, len(accounts))
+	for i, a := range accounts {
+		started[i] = make(chan struct{})
+		s.provisioning[a.Name] = started[i]
+	}
+	go func() {
+		for i, a := range accounts {
+			s.provMu.Lock()
+			unix, home, err := s.Provisioner.Ensure(a.Name, a.UID, s.Shell)
+			s.provMu.Unlock()
+
+			if err != nil {
+				s.log().Error("could not provision an account", "account", a.Name, "err", err)
+			} else {
+				s.syncMu.Lock()
+				s.provisioned[a.Name] = provisioned{unix, home}
+				s.syncMu.Unlock()
+				s.syncLogged()
+			}
+
+			// Only now, so whoever waited finds the account published.
+			s.syncMu.Lock()
+			delete(s.provisioning, a.Name)
+			s.syncMu.Unlock()
+			close(started[i])
+		}
+	}()
+	return started
+}
+
+// awaitProvisioning waits for the account's provisioning, if it is under way,
+// for at most ProvisionWait.
+func (s *Store) awaitProvisioning(name string) error {
+	s.syncMu.Lock()
+	done := s.provisioning[name]
+	s.syncMu.Unlock()
+	if done == nil {
+		return nil
+	}
+	wait := s.ProvisionWait
+	if wait <= 0 {
+		wait = 30 * time.Second
+	}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(wait):
+		return ErrProvisioning
+	}
 }
 
 // nextUID allocates one above the highest uid in the record, and at least the

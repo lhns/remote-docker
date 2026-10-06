@@ -26,6 +26,10 @@ var (
 
 	// ErrAccountExists refuses CreateAccount a name already taken.
 	ErrAccountExists = errors.New("the account already exists")
+
+	// ErrProvisioning is a write that succeeded for an account the workspace
+	// is still creating: the key authenticates once that finishes.
+	ErrProvisioning = errors.New("the account is still being created on the workspace")
 )
 
 // OperatorKeyError refuses a change only the operator's directory could make.
@@ -194,7 +198,7 @@ func (s *Store) Known(account string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s.syncMu.Lock() // a sync may be replacing the uidmap
+	s.syncMu.Lock() // a sync may be replacing the uidmap; never held across a useradd
 	uids, err := s.loadUIDs()
 	s.syncMu.Unlock()
 	if err != nil {
@@ -227,7 +231,9 @@ func (s *Store) fileFor(dir, name string) (string, bool, error) {
 }
 
 // edit runs change on the account's enrolled file under its lock, then
-// re-reads the accounts so the change is in force when edit returns.
+// re-reads the accounts so the change is in force when edit returns. An
+// account new to this process is in force once provisioned, which edit waits
+// for up to ProvisionWait and then returns ErrProvisioning, the write made.
 func (s *Store) edit(account string, change func(name, path string) error) error {
 	if s.EnrolledDir == "" {
 		return errNoEnrolledDir
@@ -247,10 +253,10 @@ func (s *Store) edit(account string, change func(name, path string) error) error
 	if err != nil {
 		return err
 	}
-	if err := s.Sync(); err != nil {
+	if _, err := s.sync(); err != nil {
 		return fmt.Errorf("%s was written, but the accounts were not re-read: %w", path, err)
 	}
-	return nil
+	return s.awaitProvisioning(name)
 }
 
 // lockFile takes a lock that holds across hosts: mkdir is atomic on NFS and

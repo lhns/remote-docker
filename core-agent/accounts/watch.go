@@ -91,9 +91,10 @@ func (s *Store) Watch(ctx context.Context, poll time.Duration) error {
 }
 
 // syncLogged reports a failed sync and carries on. A broken keys directory
-// should not stop the agent serving the accounts it already has.
+// should not stop the agent serving the accounts it already has. It does not
+// wait for provisioning, which publishes each account itself.
 func (s *Store) syncLogged() {
-	if err := s.Sync(); err != nil {
+	if _, err := s.sync(); err != nil {
 		s.log().Error("syncing accounts", "err", err)
 	}
 }

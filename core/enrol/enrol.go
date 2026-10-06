@@ -52,6 +52,9 @@ type RedeemRequest struct {
 type RedeemReply struct {
 	Account string `json:"account,omitempty"`
 	Created bool   `json:"created,omitempty"`
+	// Pending is a key enrolled for an account the workspace is still
+	// creating: it authenticates once that finishes.
+	Pending bool   `json:"pending,omitempty"`
 	Error   *Error `json:"error,omitempty"`
 }
 

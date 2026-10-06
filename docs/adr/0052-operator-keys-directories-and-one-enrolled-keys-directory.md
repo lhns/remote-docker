@@ -60,7 +60,12 @@ Writing into any of these either fails or fights the thing that owns it.
      the caller's choosing.
   4. Write through a temporary, fsync and rename. A file left with no key is
      deleted, which revokes at once rather than after two reads.
-  5. Unlock, then `Sync` before returning, so the change is in force.
+  5. Unlock, then sync before returning, so the change is in force. The sync
+     lock, which `Known` and every write take, is never held across a
+     `useradd` (one took 170s, PR 268): an account new to the agent is created
+     in the background, one at a time, and published when that finishes. A
+     write waits for its own account's creation up to 30s, then returns
+     `ErrProvisioning` with the key written.
   - `CreateAccount` refuses a name `Known` has (the uidmap, or a file in any
     directory) and links rather than renames, so of concurrent creations one
     wins even against a file written without the lock.
