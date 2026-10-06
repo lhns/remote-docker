@@ -1098,6 +1098,16 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
+Keys and enrolment, in `integration.sh` 11f to 11i: a key in the enrolled
+directory and one in the operator's authenticating the same account (ADR
+0052); deleting a key file ending an open session, and emptying one ending it
+only on the second read; a bound token creating its account with the key in
+`enrolled_keys.d` and not the operator's directory, the same token refused
+once used, and an unbound one refusing a taken name and creating a new one
+(ADR 0051); and `/metrics` answering in the 0.0.4 format with `build_info`,
+the process metrics, a connection counted per account and the redemptions
+timed (ADR 0054).
+
 The shared daemon surviving an unclean restart, in `integration.sh` 20, which
 is LAST in that suite because it kills the workspace container: the exec-root
 is a tmpfs AND a mount of its own, pid 1 is planted in its `containerd.pid`,
@@ -1152,8 +1162,8 @@ ingress-nginx on every pull request and takes a session through it: a file
 written on the runner, read inside a container in the cluster through a bind
 mount, and an enrolment token redeemed through the ingress, whose key lands in
 `enrolled_keys.d` with the `authorizedKeys` Secret unchanged. It also runs
-`helm lint` and ten renders through `kubeconform`, which is eight seconds and
-always worth it. What is NOT covered: any ingress controller
+`helm lint` and a render of every configuration through `kubeconform`, which
+is eight seconds and always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 
 `test/vm.sh` runs the agent ON THE RUNNER with no container
@@ -1392,6 +1402,10 @@ its pure planning function was.
   container the agent is pid 1 and takes every dind with it. That suite needs
   `fuse-overlayfs` on the runner, which `integration.yml` installs; without it
   the section skips and says so.
+- **`remote set`, and listing or removing tokens.** Unit tested only: `remote
+  set` against a config file, and `token ls` and `token rm` on both ends
+  (`agent/internal/sshd/manage_test.go` over a real SSH connection,
+  `agent/cmd/remote-dockerd/token_test.go`). No suite runs any of them.
 - **`coarse` watch mode.** The directory-level poke for deletions is unit
   tested; no integration test asserts that a real watcher notices a deletion
   through it.

@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-05
+- Date: 2026-09-01, last amended 2026-10-06
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
@@ -163,6 +163,13 @@ share by path, so the mode keeps "working" against the bare directory; only
 the lower is missing, so a fallthrough read returns nothing and the container's
 writes land where nothing looks. The suites assert that a container's share
 reports fuse-overlayfs, the one thing a bare directory cannot fake.
+
+Releasing never asks (2026-10-06). The lower is a soft NFS mount whose server
+is usually what has just gone, and a stat of it waits out `timeo=600`
+retries, minutes, while `umount2(MNT_DETACH)` does not revalidate the root it
+detaches. So `Release` detaches the merged path and the lower unconditionally
+and reads EINVAL or ENOENT as not mounted. The stat held an ephemeral run's
+cleanup, and its cache volume, for over two minutes (`test/ephemeral.sh` 6b).
 
 ### A deletion nobody observed
 

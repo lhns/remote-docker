@@ -57,11 +57,11 @@ and `remote user rm bob` from her own machine. Any account can run
 ## Verify the chart and image (cosign keyless)
 
 ```bash
-cosign verify ghcr.io/lhns/remote-docker-workspace:0.2.1 \
+cosign verify ghcr.io/lhns/remote-docker-workspace:<x.y.z> \
   --certificate-identity-regexp '^https://github.com/lhns/remote-docker/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
-cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
+cosign verify ghcr.io/lhns/charts/remote-docker-workspace:<x.y.z> \
   --certificate-identity-regexp '^https://github.com/lhns/remote-docker/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
@@ -140,7 +140,8 @@ one replica.
 
 Losing the state volume is not losing a cache: the SSH host keys change, so
 every client that has connected before reports REMOTE HOST IDENTIFICATION HAS
-CHANGED, and each account's uid moves, which moves its reverse-tunnel port,
+CHANGED, every key enrolled with a token is revoked, and each account's uid
+moves, which moves its reverse-tunnel port,
 which strands the volumes named after the old one.
 
 ## One replica, and what follows
@@ -158,7 +159,7 @@ size is mutable wherever the StorageClass sets `allowVolumeExpansion`, and with
 a CSI driver that supports it the filesystem grows while the pod keeps running:
 
 ```bash
-kubectl -n <ns> patch pvc graph-<release>-0   -p '{"spec":{"resources":{"requests":{"storage":"100Gi"}}}}'
+kubectl -n <ns> patch pvc graph-ws-remote-docker-workspace-0 -p '{"spec":{"resources":{"requests":{"storage":"100Gi"}}}}'
 ```
 
 If `.status.capacity.storage` reaches the new size, it was online. If it parks
@@ -188,9 +189,10 @@ supplying one and generating the other is fine.
 `volumeClaimTemplate` is as immutable as changing one, so the StatefulSet has to
 be recreated. Delete it with `--cascade=orphan` to keep the pod and the claims,
 let Helm rebuild it, and expect the pod to be replaced once as it converges.
-Claims made by the old template are named `graph-<release>-0` and
-`state-<release>-0`; naming those in `existingClaim` adopts them where they are,
-with no data movement.
+Claims made by the old template are named `graph-<statefulset>-0` and
+`state-<statefulset>-0`, the StatefulSet being `ws-remote-docker-workspace` for
+a release named `ws`; naming those in `existingClaim` adopts them where they
+are, with no data movement.
 
 ## Uninstall
 

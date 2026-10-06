@@ -237,7 +237,7 @@ fi
 if sudo test -s "$WORK/wsstate/enrolled_keys.d/$TOKEN_ACCOUNT.pub"; then
     ok "its key is in <state>/enrolled_keys.d"
 else
-    bad "no key file in <state>/enrolled_keys.d"
+    bad "no key file in <state>/enrolled_keys.d: [$(sudo ls -la "$WORK/wsstate/enrolled_keys.d" 2>&1 | tr '\n' ' ')]"
 fi
 if outputs '^$' sudo ls "$WORK/wsstate/tokens"; then
     ok "and the redeemed token is gone"

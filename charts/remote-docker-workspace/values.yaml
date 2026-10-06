@@ -134,12 +134,14 @@ persistence:
     accessModes:
       - ReadWriteOnce
 
-  # Host keys, the uid map and the per-machine port record.
+  # Host keys, the uid map, the per-machine port record, the keys enrolled
+  # with a token and the unredeemed tokens.
   #
   # Losing this is not losing a cache. The SSH host keys change, so every
   # client that has connected before gets REMOTE HOST IDENTIFICATION HAS
-  # CHANGED; and every account's uid moves, which moves its reverse-tunnel
-  # port, which strands the volumes named after the old one.
+  # CHANGED; every key enrolled with a token is revoked; and every account's
+  # uid moves, which moves its reverse-tunnel port, which strands the volumes
+  # named after the old one.
   #
   # RWO because the agent is the only writer. ReadWriteMany is safe here if
   # your storage prefers it -- it makes rescheduling onto another node quicker,
