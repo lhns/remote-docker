@@ -112,13 +112,10 @@ func (p *Ports) For(account string, uid int, client string) (int, error) {
 	// A question that could not be put is refused rather than answered with the
 	// derived port, which another machine may hold and which this machine's
 	// volumes were not built for (ADR 0032).
-	want := 0
-	if p.Preferred != nil {
-		if want, err = p.Preferred(account, client); err != nil {
-			return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
-		}
+	want, err := p.preferred(account, client)
+	if err != nil {
+		return 0, err
 	}
-
 	e, err = p.decide(key, base, want, false)
 	return e.port, err
 }
@@ -132,15 +129,24 @@ func (p *Ports) ForRun(account, client string) (int, uint64, error) {
 		return e.port, e.token, err
 	}
 	// After an agent restart a run's volumes still name its port (ADR 0032).
-	want := 0
-	if p.Preferred != nil {
-		var err error
-		if want, err = p.Preferred(account, client); err != nil {
-			return 0, 0, fmt.Errorf("accounts: cannot tell which port %s's run needs: %w", account, err)
-		}
+	want, err := p.preferred(account, client)
+	if err != nil {
+		return 0, 0, err
 	}
 	e, err := p.decide(key, 0, want, true)
 	return e.port, e.token, err
+}
+
+// preferred asks Preferred, if set, with no lock held.
+func (p *Ports) preferred(account, client string) (int, error) {
+	if p.Preferred == nil {
+		return 0, nil
+	}
+	want, err := p.Preferred(account, client)
+	if err != nil {
+		return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
+	}
+	return want, nil
 }
 
 // Hold gives a run back the port it had before an agent restart, unless

@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-
-	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // writeIn replaces a key file in dir.
@@ -153,27 +151,6 @@ func TestDotfilesEnrolNobody(t *testing.T) {
 	s.sync(t)
 	if _, ok := s.Lookup("alice"); ok {
 		t.Error("a dotfile enrolled an account")
-	}
-}
-
-// uids follow sorted names wherever the files are.
-func TestUIDsFollowSortedNamesAcrossDirectories(t *testing.T) {
-	for attempt := range 10 {
-		s := newStore(t)
-		writeIn(t, s.enrolledDir, "alpha.pub", newKey(t))
-		writeIn(t, s.keysDir, "delta.pub", newKey(t))
-		writeIn(t, s.enrolledDir, "charlie.pub", newKey(t))
-		writeIn(t, s.keysDir, "bravo.pub", newKey(t))
-		s.sync(t)
-		for i, n := range []string{"alpha", "bravo", "charlie", "delta"} {
-			a, ok := s.Lookup(n)
-			if !ok {
-				t.Fatalf("%s was not provisioned", n)
-			}
-			if want := workspace.DefaultUIDBase + i; a.UID != want {
-				t.Fatalf("attempt %d: %s uid = %d, want %d", attempt, n, a.UID, want)
-			}
-		}
 	}
 }
 

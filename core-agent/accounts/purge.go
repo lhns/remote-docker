@@ -32,7 +32,7 @@ func (s *Store) Purge(name string) error {
 	}
 	var errs []error
 	if a.Home != "" {
-		if err := removeHome(a, a.Home); err != nil {
+		if err := removeHome(a); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -42,13 +42,13 @@ func (s *Store) Purge(name string) error {
 	return errors.Join(errs...)
 }
 
-// removeHome deletes path only if it is the home the store recorded for a: an
-// absolute directory, not the root, not a link, owned by a's uid, and with
-// nothing mounted inside it. A path from anywhere else is refused.
-func removeHome(a *Account, path string) error {
-	if a.Home == "" || path != a.Home || !filepath.IsAbs(path) ||
-		filepath.Clean(path) != path || filepath.Dir(path) == path {
-		return fmt.Errorf("accounts: %q is not %s's home, so it was not removed", path, a.Name)
+// removeHome deletes a's home only if it is an absolute, clean path, not the
+// root, not a link, a directory owned by a's uid, and with nothing mounted
+// inside it.
+func removeHome(a *Account) error {
+	path := a.Home
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Dir(path) == path {
+		return fmt.Errorf("accounts: %s's home %q is not a clean absolute path below the root, so it was not removed", a.Name, path)
 	}
 	fi, err := os.Lstat(path)
 	if os.IsNotExist(err) {

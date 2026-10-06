@@ -63,38 +63,28 @@ func TestPurgeRemovesTheHomeAndTheUserAndKeepsTheUID(t *testing.T) {
 	}
 }
 
-func TestRemoveHomeRefusesAnyPathButTheRecordedHome(t *testing.T) {
+func TestRemoveHomeRefusesAnUnsafePath(t *testing.T) {
 	root := t.TempDir()
-	home := filepath.Join(root, "rd-bob")
 	other := filepath.Join(root, "elsewhere")
-	for _, dir := range []string{home, other} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	bob := &Account{Name: "bob", UID: os.Getuid(), Home: home}
 
-	for _, tc := range []struct {
-		name string
-		a    *Account
-		path string
-	}{
-		{"a path outside the home", bob, other},
-		{"the home's parent", bob, root},
-		{"no home recorded", &Account{Name: "bob", UID: bob.UID}, other},
-		{"a relative home", &Account{Name: "bob", UID: bob.UID, Home: "rd-bob"}, "rd-bob"},
-		{"the root", &Account{Name: "bob", UID: bob.UID, Home: string(filepath.Separator)}, string(filepath.Separator)},
+	for name, home := range map[string]string{
+		"no home":       "",
+		"a relative":    "elsewhere",
+		"an unclean":    filepath.Join(root, "rd-bob") + string(filepath.Separator) + ".." + string(filepath.Separator) + "elsewhere",
+		"the root":      string(filepath.Separator),
+		"a volume root": filepath.VolumeName(root) + string(filepath.Separator),
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := removeHome(tc.a, tc.path); err == nil {
-				t.Errorf("removeHome(%q) was not refused", tc.path)
+		t.Run(name, func(t *testing.T) {
+			if err := removeHome(&Account{Name: "bob", UID: os.Getuid(), Home: home}); err == nil {
+				t.Errorf("removeHome(%q) was not refused", home)
 			}
 		})
 	}
-	for _, dir := range []string{home, other, root} {
-		if _, err := os.Stat(dir); err != nil {
-			t.Errorf("%s: %v", dir, err)
-		}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("%s: %v", other, err)
 	}
 }
 
@@ -108,7 +98,7 @@ func TestRemoveHomeRefusesALink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("cannot create a symlink here: %v", err)
 	}
-	if err := removeHome(&Account{Name: "bob", UID: os.Getuid(), Home: link}, link); err == nil {
+	if err := removeHome(&Account{Name: "bob", UID: os.Getuid(), Home: link}); err == nil {
 		t.Error("a home that is a link was removed")
 	}
 	if _, err := os.Stat(target); err != nil {
@@ -121,7 +111,7 @@ func TestRemoveHomeRefusesAnotherUIDsDirectory(t *testing.T) {
 		t.Skip("ownership is read on Linux only")
 	}
 	home := t.TempDir()
-	if err := removeHome(&Account{Name: "bob", UID: os.Getuid() + 1, Home: home}, home); err == nil {
+	if err := removeHome(&Account{Name: "bob", UID: os.Getuid() + 1, Home: home}); err == nil {
 		t.Error("a home owned by another uid was removed")
 	}
 	if _, err := os.Stat(home); err != nil {

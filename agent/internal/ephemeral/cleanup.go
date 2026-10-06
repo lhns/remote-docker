@@ -31,7 +31,7 @@ type Docker interface {
 // Unions is what cleanup asks of the union mounts; *unions.Manager.
 type Unions interface {
 	Release(ctx context.Context, account, client string)
-	MountedCaches(account, client string, d unions.Daemon) []string
+	MountedCaches(account, client string, d unions.Daemon) ([]string, error)
 }
 
 // Cleaner removes what an expired run left on the workspace, and only what
@@ -104,8 +104,12 @@ func (c *Cleaner) Clean(ctx context.Context, account, client string) error {
 	if err != nil {
 		return err
 	}
+	caches, err := c.Unions.MountedCaches(account, client, unions.Daemon{Host: host, PID: target.PID})
+	if err != nil {
+		return err
+	}
 	mounted := map[string]bool{}
-	for _, name := range c.Unions.MountedCaches(account, client, unions.Daemon{Host: host, PID: target.PID}) {
+	for _, name := range caches {
 		mounted[name] = true
 	}
 

@@ -14,29 +14,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// blockingProvisioner parks inside Ensure until it is released, which is what
-// a cold useradd looks like from here. One account only, so Ensure is called
-// once.
-type blockingProvisioner struct {
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (b *blockingProvisioner) Ensure(name string, _ int, _ string) (string, string, error) {
-	close(b.entered)
-	<-b.release
-	unix := DefaultPrefix + name
-	return unix, "/home/" + unix, nil
-}
-
-func (*blockingProvisioner) Remove(string, int) error { return nil }
-
 // A sync that is provisioning must not block authentication.
 func TestLookupDoesNotWaitForProvisioning(t *testing.T) {
 	s := newStore(t)
 	s.writeKey(t, "alice.pub")
 
-	prov := &blockingProvisioner{entered: make(chan struct{}), release: make(chan struct{})}
+	prov := newGatedProvisioner("alice")
 	s.Provisioner = prov
 
 	synced := make(chan error, 1)
@@ -243,7 +226,9 @@ func (g *gatedProvisioner) Ensure(name string, _ int, _ string) (string, string,
 
 func (*gatedProvisioner) Remove(string, int) error { return nil }
 
-// prompt fails the test if fn has not returned within 100ms.
+// prompt fails the test if fn has not returned within a second: the gated
+// provisioning takes two, and a key write on a loaded Windows runner more
+// than 100ms.
 func prompt(t *testing.T, what string, fn func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -253,7 +238,7 @@ func prompt(t *testing.T, what string, fn func()) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Errorf("%s waited for another account's provisioning", what)
 		<-done
 	}

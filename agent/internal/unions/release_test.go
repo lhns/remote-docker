@@ -103,15 +103,24 @@ func TestMountedCachesIncludesWhatThisProcessDidNotStart(t *testing.T) {
 	m := held(t, fakeVolumes{})
 	m.shares[key("alice", thisClient, firstExport)].cache = "rd-aabbccdd-aaaa-cache"
 
-	got := m.MountedCaches("alice", thisClient, Daemon{})
+	mounted := func(account, client string) []string {
+		t.Helper()
+		got, err := m.MountedCaches(account, client, Daemon{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	got := mounted("alice", thisClient)
 	if len(got) != 1 || got[0] != "rd-aabbccdd-aaaa-cache" {
 		t.Errorf("MountedCaches = %v, want this process's own record", got)
 	}
 
-	if len(m.MountedCaches("bob", thisClient, Daemon{})) != 0 {
+	if len(mounted("bob", thisClient)) != 0 {
 		t.Error("another account's shares were reported")
 	}
-	if len(m.MountedCaches("alice", "11223344", Daemon{})) != 0 {
+	if len(mounted("alice", "11223344")) != 0 {
 		t.Error("another machine's shares were reported")
 	}
 }
