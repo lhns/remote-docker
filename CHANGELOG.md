@@ -12,79 +12,55 @@ software.
 
 ### New
 
-- **A device can enrol itself with a one-time token.** Whoever runs the
-  workspace runs `remote-dockerd token create --account alice` inside it, and
-  hands over the line it prints. Running that line on your machine,
-  `docker remote create <name> --token rdt1.…`, adds the workspace and enrols
-  your key. Nobody has to copy a key file anywhere. A token works once and
-  expires after a day. It also tells your machine which host key to expect, so
-  the first connection is checked too. On Kubernetes the chart's `publicURL`
-  is the address a token sends people to; by default it is the ingress. When
-  the token creates a new account and setting that account up on the
-  workspace takes longer than 30 seconds, `remote create` waits until the
-  account exists, and says so if it never does.
-- **Accounts can be managed from your own machine.** `remote token create`
-  prints a line that enrols another machine into your account, so a second
-  laptop needs nobody's help. `remote key ls`, `key add` and `key rm` list and
-  change your keys. The accounts named in `WORKSPACE_ADMINS` (the chart's
-  `admins`) can also create tokens for anybody, list everyone with
-  `remote user ls`, and remove an account with `remote user rm bob`. Removing
-  an account cuts its access and stops its daemon, but keeps its images,
-  volumes and files, so a new token brings it back as it was. It is refused
-  while its containers run unless you add `-f`. An admin cannot remove
-  themselves or the last admin. Adding a key to an account the workspace could
-  not create fails and says so; a key added while the account is still being
-  created works once it is. Removing a key never waits for an account to be
-  created.
-- **`remote user rm bob --purge` deletes everything bob had.** On top of what
-  `user rm` does, it deletes bob's images, containers and volumes, home
-  directory and unix user, and forgets bob's ports. It cannot be undone. The
-  name is still never given to anybody else: a new token for bob brings bob
-  back with the same uid and nothing else. With a shared daemon, the
-  containers on it are left alone.
-- **`remote set` changes some of a workspace's settings.** `remote set dev
-  --user bob` keeps everything else.
-- **A workspace reads keys from several directories.** `WORKSPACE_KEYS_DIR`
-  takes a comma-separated list, and the workspace also reads
-  `WORKSPACE_ENROLLED_KEYS_DIR` (`<state>/enrolled_keys.d`), the one directory
-  it will write keys into. An account's keys in all of them are merged. If the
-  workspace stops in the middle of writing an account's keys, the next change
-  to them waits up to 10 seconds.
-- **Autoscaled CI runners can share one key.** Before, every runner using the
-  same key counted as one machine, so the second was refused and two jobs could
-  share a volume. List the account in `WORKSPACE_EPHEMERAL_ACCOUNTS`, or in the
-  chart's `ephemeral.accounts`, and each runner gets its own tunnel and volumes.
-  The workspace removes them two minutes after the runner goes away, and allows
-  8 runners at once by default. Images and the build cache stay shared. The
-  built-in `docker compose` gives each runner its own project name; a separate
-  `docker compose` needs `COMPOSE_PROJECT_NAME` set per job. See "CI with
-  autoscaled runners" in the README.
-- **The workspace can report metrics to Prometheus.** Set
-  `WORKSPACE_METRICS_ADDR=:9090`, or `metrics.enabled` in the chart, and the
-  workspace serves `/metrics` on that port: connections per account, the CI
-  runners' state and cleanup, token redemptions, and how many account daemons
-  it has started. It also reports how long redeeming a token, starting an
-  account's daemon, creating an account and cleaning up after CI runners take,
-  which version is running, and the usual process figures (memory, CPU, open
-  files) under the names existing dashboards expect. It is off by default, and
-  it uses its own port, never the SSH one. The port has no password, so only
-  your Prometheus should be able to reach it: the README says how. The chart
-  adds the usual `prometheus.io/scrape` annotations. See "Metrics" in the
-  README.
+- **Join a workspace with a one-time token.** Whoever runs the workspace runs
+  `remote-dockerd token create --account alice` and hands you the line it
+  prints. Running it, `docker remote create <name> --token rdt1.…`, adds the
+  workspace and enrols your key, with no key file to copy anywhere. A token
+  works once, expires after a day, and tells your machine which host key to
+  expect, so even the first connection is checked. On Kubernetes, tokens point
+  at the chart's `publicURL`, by default the ingress.
+- **Manage accounts from your own machine.**
+  - `remote token create` enrols another of your machines.
+  - `remote key ls|add|rm` lists and changes your keys.
+  - Accounts named in `WORKSPACE_ADMINS` (the chart's `admins`) can also create
+    tokens for anybody, list everyone with `remote user ls`, and remove an
+    account with `remote user rm bob`.
+  - Removing an account cuts its access and stops its daemon, but keeps its
+    images, volumes and files, so a new token brings it back as it was.
+    `--purge` deletes all of it, and cannot be undone.
+  - A removed name is never given to anybody else.
+- **`remote set` changes a workspace's settings**, for example
+  `remote set dev --user bob`, keeping everything else.
+- **Keys can come from several directories.** `WORKSPACE_KEYS_DIR` takes a
+  comma-separated list, which the workspace only reads. Keys enrolled with a
+  token go into `WORKSPACE_ENROLLED_KEYS_DIR` (by default
+  `<state>/enrolled_keys.d`). An account's keys from all of them are merged.
+- **Autoscaled CI runners can share one key.** Before, the second runner using
+  a key was refused, or two jobs shared a volume.
+  - List the account in `WORKSPACE_EPHEMERAL_ACCOUNTS` (the chart's
+    `ephemeral.accounts`), and each runner gets its own tunnel and volumes.
+  - They are removed two minutes after the runner goes away, and up to 8
+    runners can run at once by default.
+  - Images and the build cache stay shared.
+  - The built-in `docker compose` gives each runner its own project; a separate
+    `docker compose` needs `COMPOSE_PROJECT_NAME` set per job.
+  - See "CI with autoscaled runners" in the README.
+- **Prometheus metrics.** Set `WORKSPACE_METRICS_ADDR=:9090`, or
+  `metrics.enabled` in the chart, to serve `/metrics` on its own port. It
+  covers:
+  - connections;
+  - CI runners and their cleanup;
+  - token use and account daemons, with timings;
+  - the running version and the usual process figures.
+
+  It is off by default. The port has no password, so keep it reachable only by
+  your Prometheus: see "Metrics" in the README.
 
 ### Fixes
 
 - **A file you deleted no longer comes back from a `write=back` cache.** If
   you deleted a file while no session was running, the next session could, in
   rare timing, copy the cached copy back into your directory.
-- **An ephemeral run's `write=back` or `write=ephemeral` cache is cleaned up
-  promptly.** Before, releasing the run's cache could wait minutes for the
-  run's file share, which had already gone away. The cache volume and the
-  run's port stayed until that wait ended.
-- **`remote create --token` no longer spends a token it cannot save.** It now
-  checks that the config file can be written before using the token. If saving
-  fails anyway, it says the key is enrolled and prints the `create` command
-  that adds the workspace without a token, with every setting you gave it.
 - **Revoking a user's key now ends their open sessions.** Deleting or
   emptying their key file used to stop only new connections, and anything
   already connected kept working.
@@ -108,10 +84,6 @@ software.
 - **`machine status` checks the agent**, reports `not answering` and exits 1
   when it is down, and suggests `machine stop` then `machine start`, which
   keeps the machine's images.
-- **A token whose account could not be created no longer uses up the name.**
-  When the workspace failed to set up a new account, asking again for the
-  same name said it already existed. Now the same token can be used again
-  once the workspace is fixed.
 - **`machine create` suggests a command that reaches the new machine.**
 - **`remote rm` works on a Hyper-V machine whose VM was already deleted.**
 - **`--context` works**, as do `--config`, `-H`, `-D`, `--log-level` and the
