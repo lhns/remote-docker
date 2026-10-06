@@ -87,6 +87,8 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:0.2.1 \
 | `ephemeral.maxClients` | `8` | clients at once per such account, counting those in their grace period |
 | `ephemeral.grace` | `2m` | how long a client's port and volumes outlive its last connection |
 | `ephemeral.cleanupContainers` | `false` | also remove an expired client's containers and compose networks |
+| `metrics.enabled` | `false` | serve Prometheus metrics (`WORKSPACE_METRICS_ADDR`, ADR 0054) and add the `prometheus.io/scrape`, `/port` and `/path` pod annotations. No ServiceMonitor |
+| `metrics.port` | `9090` | the metrics port, named `metrics` on the container |
 | `env` | `{}` | extra agent environment; an entry here wins over the variable a value above renders |
 | `ingress.enabled` | `true` | |
 | `ingress.host` | `""` | **required** when the ingress is enabled |

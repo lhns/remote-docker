@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lhns/remote-docker/agent/internal/metrics"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core/logx"
 )
@@ -81,6 +82,11 @@ type Registry struct {
 
 	Log *slog.Logger
 
+	// Refused counts refused runs by reason (RefusedLimit, RefusedCleaning),
+	// and Sweeps counts sweeps. Nil counts nothing.
+	Refused *metrics.Counter
+	Sweeps  *metrics.Counter
+
 	// now is the clock; nil is time.Now.
 	now func() time.Time
 
@@ -92,6 +98,12 @@ type Registry struct {
 }
 
 type key struct{ account, client string }
+
+// Reasons a run is refused, as the Refused counter labels them.
+const (
+	RefusedLimit    = "limit"
+	RefusedCleaning = "cleaning"
+)
 
 type run struct {
 	state    State
@@ -117,6 +129,7 @@ func (r *Registry) Attach(account, client string) (release func(), err error) {
 	switch {
 	case ru == nil:
 		if n := r.count(account); n >= r.max() {
+			r.Refused.Inc(RefusedLimit)
 			r.log().Warn("refused a run: the account is at its limit", "account", account, "client", client, "runs", n)
 			return nil, fmt.Errorf("ephemeral: account %s has %d clients\n"+
 				"  fix: raise WORKSPACE_EPHEMERAL_MAX_CLIENTS or wait", account, n)
@@ -127,6 +140,7 @@ func (r *Registry) Attach(account, client string) (release func(), err error) {
 		}
 		r.runs[k] = ru
 	case ru.state == Cleaning:
+		r.Refused.Inc(RefusedCleaning)
 		r.log().Warn("refused a run being cleaned up", "account", account, "client", client)
 		return nil, fmt.Errorf("ephemeral: run %s of account %s has expired and is being cleaned up\n"+
 			"  fix: retry in a moment", client, account)
@@ -211,6 +225,7 @@ func (r *Registry) Port(account, client string) (int, error) {
 func (r *Registry) Sweep(ctx context.Context) {
 	r.sweeping.Lock()
 	defer r.sweeping.Unlock()
+	r.Sweeps.Inc()
 
 	type due struct {
 		k     key
@@ -289,6 +304,26 @@ func (r *Registry) Run(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// Group is an account's runs in one state.
+type Group struct {
+	Account string
+	State   State
+}
+
+// Census counts the runs by account and state, and the ports they hold.
+func (r *Registry) Census() (runs map[Group]int, ports int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	runs = map[Group]int{}
+	for k, ru := range r.runs {
+		runs[Group{k.account, ru.state}]++
+		if ru.port != 0 {
+			ports++
+		}
+	}
+	return runs, ports
 }
 
 // count is an account's runs, in any state. The caller holds mu.

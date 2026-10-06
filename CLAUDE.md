@@ -149,6 +149,8 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          the Docker glue around core-agent/union
     ephemeral/           an ephemeral account's runs: their grace period,
                          their limit, their ports and their cleanup (ADR 0050)
+    metrics/             Prometheus text format with the stdlib, on an opt-in
+                         listener of its own (ADR 0054)
 
 image/                   the workspace container (Dockerfile only)
 installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.

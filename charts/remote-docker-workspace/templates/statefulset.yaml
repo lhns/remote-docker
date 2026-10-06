@@ -36,6 +36,11 @@ spec:
         {{- if .Values.ephemeral.accounts }}
         checksum/ephemeral: {{ toYaml .Values.ephemeral | sha256sum }}
         {{- end }}
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
         {{- with .Values.commonAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -68,6 +73,10 @@ spec:
               containerPort: 2222
             - name: ws
               containerPort: 2280
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
           env:
             - name: DOCKER_TLS_CERTDIR
               value: ""
@@ -89,6 +98,10 @@ spec:
             {{- if and .Values.admins (not (hasKey .Values.env "WORKSPACE_ADMINS")) }}
             - name: WORKSPACE_ADMINS
               value: {{ join "," .Values.admins | quote }}
+            {{- end }}
+            {{- if and .Values.metrics.enabled (not (hasKey .Values.env "WORKSPACE_METRICS_ADDR")) }}
+            - name: WORKSPACE_METRICS_ADDR
+              value: {{ printf ":%v" .Values.metrics.port | quote }}
             {{- end }}
             {{- with and (not (hasKey .Values.env "WORKSPACE_PUBLIC_URL")) (include "remote-docker-workspace.publicURL" .) }}
             - name: WORKSPACE_PUBLIC_URL

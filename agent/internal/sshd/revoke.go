@@ -115,6 +115,20 @@ func (c *conns) hold(ctx gssh.Context) (release func()) {
 	}
 }
 
+// Connections counts the live connections that logged in as an account, by
+// account. A token login has none and is not counted.
+func (s *Server) Connections() map[string]int {
+	s.conns.mu.Lock()
+	defer s.conns.mu.Unlock()
+	out := map[string]int{}
+	for _, lc := range s.conns.live {
+		if lc.key != nil {
+			out[lc.account]++
+		}
+	}
+	return out
+}
+
 // connected reports whether an account has a live connection.
 func (c *conns) connected(account string) bool {
 	c.mu.Lock()
