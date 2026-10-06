@@ -2,13 +2,17 @@ package sshd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
+	"github.com/lhns/remote-docker/agent/internal/ephemeral"
 	"github.com/lhns/remote-docker/core-agent/accounts"
 	"github.com/lhns/remote-docker/core/enrol"
 	"github.com/lhns/remote-docker/core/workspace"
@@ -22,12 +26,14 @@ type manageWorkspace struct {
 	*tokenWorkspace
 	targets *fakeTargets
 	ports   *accounts.Ports
+	runs    *ephemeral.Registry
 }
 
 func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 	t.Helper()
 	targets := &fakeTargets{byAccount: map[string]daemons.Target{}, running: map[string]int{}}
 	ports := &accounts.Ports{Dir: t.TempDir(), Mapping: workspace.DefaultMapping()}
+	runs := &ephemeral.Registry{Ports: ports}
 	set := map[string]bool{}
 	for _, a := range admins {
 		set[a] = true
@@ -36,8 +42,9 @@ func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 		c.Admins = set
 		c.Daemons = targets
 		c.Ports = ports
+		c.Runs = runs
 	})
-	return &manageWorkspace{tokenWorkspace: w, targets: targets, ports: ports}
+	return &manageWorkspace{tokenWorkspace: w, targets: targets, ports: ports, runs: runs}
 }
 
 // enrolKey writes key into the enrolled directory, as a token would.
@@ -248,6 +255,44 @@ func TestUserRemovePurgeTakesTheStorageAndThePortsAndKeepsTheUID(t *testing.T) {
 	}
 	if known, err := w.store.Known("bob"); err != nil || !known {
 		t.Errorf("the name bob is free again (%v); the uidmap must keep it", err)
+	}
+}
+
+// Cleaning an expired run starts its account's daemon, so a removed account's
+// runs go with its daemon rather than bringing it back one grace period later.
+func TestUserRemoveDropsTheAccountsRuns(t *testing.T) {
+	w := startManageWorkspace(t, "alice")
+	var mu sync.Mutex
+	var cleaned []string
+	w.runs.Grace = time.Nanosecond
+	w.runs.Cleanup = func(_ context.Context, account, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		cleaned = append(cleaned, account)
+		return nil
+	}
+	alice, bob := newSigner(t), newSigner(t)
+	w.enrol(t, "alice", alice)
+	w.enrolKey(t, "bob", bob)
+	release, err := w.runs.Attach("bob", "aabbccdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.runs.Port("bob", "aabbccdd"); err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	wantOK(t, manageOn(t, w.dial(t, "alice", alice), enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Force: true}))
+	w.runs.Sweep(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(cleaned) != 0 {
+		t.Errorf("cleaned a run of %v after removing bob, which starts bob's daemon again", cleaned)
+	}
+	if _, known, _ := w.ports.Lookup("bob", "aabbccdd"); known {
+		t.Error("bob's run still holds its port")
 	}
 }
 

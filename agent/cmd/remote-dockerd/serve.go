@@ -146,7 +146,7 @@ func serve(addr, wsAddr string) error {
 	perUserDind := envOr(envPerUserDind, "true") == "true"
 
 	stateDir := envOr(envStateDir, defaultStateDir)
-	keysDirs := dirList(os.Getenv(envKeysDir), filepath.Join(stateDir, "authorized_keys.d"))
+	keysDirs := commaList(os.Getenv(envKeysDir), []string{filepath.Join(stateDir, "authorized_keys.d")})
 	enrolledDir := enrolledDirFor(stateDir)
 	hostKeyDir := hostKeyDirFor(stateDir)
 
@@ -643,10 +643,7 @@ func readySeconds(log *slog.Logger) time.Duration {
 // from refuses the start rather than being dropped.
 func accountSet(env, raw string) (map[string]bool, error) {
 	out := map[string]bool{}
-	for _, field := range strings.Split(raw, ",") {
-		if field = strings.TrimSpace(field); field == "" {
-			continue
-		}
+	for _, field := range commaList(raw, nil) {
 		name, err := workspace.AccountName(field)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", env, err)
@@ -656,8 +653,9 @@ func accountSet(env, raw string) (map[string]bool, error) {
 	return out, nil
 }
 
-// dirList reads a comma-separated list of directories, or fallback for none.
-func dirList(raw, fallback string) []string {
+// commaList is the non-empty fields of a comma-separated list, or fallback for
+// none.
+func commaList(raw string, fallback []string) []string {
 	var out []string
 	for field := range strings.SplitSeq(raw, ",") {
 		if field = strings.TrimSpace(field); field != "" {
@@ -665,7 +663,7 @@ func dirList(raw, fallback string) []string {
 		}
 	}
 	if len(out) == 0 {
-		return []string{fallback}
+		return fallback
 	}
 	return out
 }

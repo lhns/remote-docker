@@ -58,11 +58,11 @@ func TestAccountSet(t *testing.T) {
 	}
 }
 
-func TestDirList(t *testing.T) {
-	if got := dirList(" /a/keys, /b/keys ,,", "/fallback"); !reflect.DeepEqual(got, []string{"/a/keys", "/b/keys"}) {
+func TestCommaList(t *testing.T) {
+	if got := commaList(" /a/keys, /b/keys ,,", []string{"/fallback"}); !reflect.DeepEqual(got, []string{"/a/keys", "/b/keys"}) {
 		t.Errorf("got %v", got)
 	}
-	if got := dirList(" , ", "/fallback"); !reflect.DeepEqual(got, []string{"/fallback"}) {
+	if got := commaList(" , ", []string{"/fallback"}); !reflect.DeepEqual(got, []string{"/fallback"}) {
 		t.Errorf("an empty list gave %v, want the fallback", got)
 	}
 }

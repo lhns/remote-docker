@@ -230,7 +230,9 @@ func (r *Registry) Sweep(ctx context.Context) {
 			expired = append(expired, due{k, ru, ru.port, ru.token})
 		}
 	}
-	r.save()
+	if len(expired) > 0 {
+		r.save()
+	}
 	r.mu.Unlock()
 
 	for _, d := range expired {
@@ -240,7 +242,7 @@ func (r *Registry) Sweep(ctx context.Context) {
 				continue
 			}
 		}
-		if !r.Ports.Free(d.k.account, d.k.client, d.token) {
+		if d.port != 0 && !r.Ports.Free(d.k.account, d.k.client, d.token) {
 			r.log().Warn("a run's port was not its own to free", "account", d.k.account, "client", d.k.client, "port", d.port)
 		}
 
@@ -252,6 +254,25 @@ func (r *Registry) Sweep(ctx context.Context) {
 		r.mu.Unlock()
 		r.log().Info("a run is gone", "account", d.k.account, "client", d.k.client, "port", d.port)
 	}
+}
+
+// Drop forgets an account's runs and frees their ports, cleaning nothing: its
+// daemon, and with it everything the runs left, is being removed, and
+// cleaning a run would start that daemon again. A sweep already cleaning one
+// finishes, and finds the run gone.
+func (r *Registry) Drop(account string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k, ru := range r.runs {
+		if k.account != account {
+			continue
+		}
+		if ru.port != 0 {
+			r.Ports.Free(k.account, k.client, ru.token)
+		}
+		delete(r.runs, k)
+	}
+	r.save()
 }
 
 // Run sweeps at once, which cleans what the record says has expired, and then

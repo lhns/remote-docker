@@ -28,8 +28,10 @@ type fakeDocker struct {
 
 	// labelled is what the parent answers `volume ls` filtered by the
 	// managed labels with; volume is what an unfiltered `volume ls` lists.
-	labelled string
-	volume   string
+	// cannotList makes the unfiltered `volume ls` fail.
+	labelled   string
+	volume     string
+	cannotList bool
 }
 
 func (f *fakeDocker) Line(_ context.Context, args ...string) (string, error) {
@@ -45,6 +47,9 @@ func (f *fakeDocker) Line(_ context.Context, args ...string) (string, error) {
 	case f.host == "" && strings.HasPrefix(joined, "volume ls") && strings.Contains(joined, "label="):
 		return f.labelled, nil
 	case f.host == "" && strings.HasPrefix(joined, "volume ls"):
+		if f.cannotList {
+			return "", errors.New("cannot connect to the docker daemon")
+		}
 		return f.volume, nil
 	case f.host != "" && strings.HasPrefix(joined, "ps"):
 		if f.unreachable {
