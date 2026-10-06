@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -104,6 +105,14 @@ type Registry struct {
 
 	// sweeping keeps two sweeps from cleaning one run.
 	sweeping sync.Mutex
+
+	// The record is written outside mu, so a slow disk blocks nobody but the
+	// next write. gen numbers snapshots under mu; written is the last one on
+	// disk, under writing, and an older snapshot arriving late is dropped.
+	gen      uint64
+	writing  sync.Mutex
+	written  uint64
+	writeRec func(path string, lines []string, mode os.FileMode) error // nil is accounts.WriteRecord
 }
 
 type key struct{ account, client string }
@@ -130,6 +139,8 @@ type run struct {
 // and returns what to call when that connection ends. A new run beyond Max is
 // refused, and so is one being cleaned up.
 func (r *Registry) Attach(account, client string) (release func(), err error) {
+	var snap *snapshot
+	defer func() { r.write(snap) }()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -159,7 +170,7 @@ func (r *Registry) Attach(account, client string) (release func(), err error) {
 	ru.state = Live
 	ru.conns++
 	ru.lastSeen = r.clock()
-	r.save()
+	snap = r.snapshot()
 
 	var once sync.Once
 	return func() { once.Do(func() { r.detach(k, ru) }) }, nil
@@ -168,6 +179,8 @@ func (r *Registry) Attach(account, client string) (release func(), err error) {
 // detach counts a connection ending. The last one starts the grace period, or
 // ends a run that never bound a port, since nothing can name it.
 func (r *Registry) detach(k key, ru *run) {
+	var snap *snapshot
+	defer func() { r.write(snap) }()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.runs[k] != ru {
@@ -184,11 +197,13 @@ func (r *Registry) detach(k key, ru *run) {
 		ru.state = Grace
 		r.log().Info("a run lost its last connection", "account", k.account, "client", k.client, "grace", r.grace())
 	}
-	r.save()
+	snap = r.snapshot()
 }
 
 // Port returns an attached run's port, allocating it on first use.
 func (r *Registry) Port(account, client string) (int, error) {
+	var snap *snapshot
+	defer func() { r.write(snap) }()
 	k := key{account, client}
 	r.mu.Lock()
 	ru := r.runs[k]
@@ -224,7 +239,7 @@ func (r *Registry) Port(account, client string) (int, error) {
 		return 0, err
 	case ru.port == 0:
 		ru.port, ru.token = port, token
-		r.save()
+		snap = r.snapshot()
 	}
 	return ru.port, nil
 }
@@ -258,10 +273,12 @@ func (r *Registry) Sweep(ctx context.Context) {
 			expired = append(expired, due{k, ru, ru.port, ru.token})
 		}
 	}
+	var snap *snapshot
 	if len(expired) > 0 {
-		r.save()
+		snap = r.snapshot()
 	}
 	r.mu.Unlock()
+	r.write(snap)
 
 	for _, d := range expired {
 		if r.Cleanup != nil {
@@ -279,8 +296,9 @@ func (r *Registry) Sweep(ctx context.Context) {
 		if r.runs[d.k] == d.ru {
 			delete(r.runs, d.k)
 		}
-		r.save()
+		snap = r.snapshot()
 		r.mu.Unlock()
+		r.write(snap)
 		r.log().Info("a run is gone", "account", d.k.account, "client", d.k.client, "port", d.port)
 	}
 }
@@ -290,6 +308,8 @@ func (r *Registry) Sweep(ctx context.Context) {
 // and cleaning a run would start that daemon again. A sweep already cleaning
 // one finishes, and finds the run gone.
 func (r *Registry) Drop(account string) {
+	var snap *snapshot
+	defer func() { r.write(snap) }()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for k, ru := range r.runs {
@@ -301,7 +321,7 @@ func (r *Registry) Drop(account string) {
 		}
 		delete(r.runs, k)
 	}
-	r.save()
+	snap = r.snapshot()
 }
 
 // Run sweeps at once, which cleans what the record says has expired, and then
@@ -381,11 +401,17 @@ func (r *Registry) path() string { return recordPath(r.Dir) }
 
 func recordPath(dir string) string { return filepath.Join(dir, "ephemeral-runs") }
 
-// save writes the record. The caller holds mu. Only runs with a port are
-// written, because only they leave anything to come back to.
-func (r *Registry) save() {
+type snapshot struct {
+	gen   uint64
+	lines []string
+}
+
+// snapshot captures the record for write. The caller holds mu. Only runs with
+// a port are recorded, because only they leave anything to come back to. Nil
+// when there is no Dir.
+func (r *Registry) snapshot() *snapshot {
 	if r.Dir == "" {
-		return
+		return nil
 	}
 	var lines []string
 	for k, ru := range r.runs {
@@ -395,7 +421,27 @@ func (r *Registry) save() {
 		}
 	}
 	sort.Strings(lines)
-	if err := accounts.WriteRecord(r.path(), lines, 0o600); err != nil {
+	r.gen++
+	return &snapshot{r.gen, lines}
+}
+
+// write puts a snapshot on disk, without mu, and returns once it has landed
+// or a newer one already has.
+func (r *Registry) write(s *snapshot) {
+	if s == nil {
+		return
+	}
+	r.writing.Lock()
+	defer r.writing.Unlock()
+	if s.gen <= r.written {
+		return
+	}
+	r.written = s.gen
+	w := r.writeRec
+	if w == nil {
+		w = accounts.WriteRecord
+	}
+	if err := w(r.path(), s.lines, 0o600); err != nil {
 		r.log().Warn("could not record the ephemeral runs", "err", err)
 	}
 }
@@ -408,6 +454,8 @@ func (r *Registry) Restore() error {
 	if r.Dir == "" {
 		return nil
 	}
+	var snap *snapshot
+	defer func() { r.write(snap) }()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.runs == nil {
@@ -436,7 +484,7 @@ func (r *Registry) Restore() error {
 	if len(r.runs) > 0 {
 		r.log().Info("restored ephemeral runs", "count", len(r.runs))
 	}
-	r.save()
+	snap = r.snapshot()
 	return nil
 }
 
