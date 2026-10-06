@@ -114,6 +114,11 @@ software.
 - **`--context` works**, as do `--config`, `-H`, `-D`, `--log-level` and the
   TLS flags. Before, only `DOCKER_CONTEXT` was honoured.
 - **`remote ls` lines up its columns.**
+- **A client with no usable home directory can serve a session.** With
+  `REMOTE_DOCKER_ENDPOINT` set, a client running as a user with no home, such
+  as a container started under an arbitrary user id, failed with
+  `mkdir /.local: permission denied`. It now needs only the endpoint's own
+  directory. Linux and macOS.
 - **Two containers starting at once on one `write=back` or `write=ephemeral`
   directory no longer race.**
 - **A cache is kept when the workspace cannot tell whether it is in use.** A

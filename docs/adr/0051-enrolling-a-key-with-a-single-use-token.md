@@ -3,7 +3,8 @@
 - Status: Accepted. The operator mints tokens with `remote-dockerd token`; an
   admin, or an account for itself, with `remote token create` (ADR 0053).
 - Date: 2026-10-05, amended 2026-10-06 (a redeem replies `pending`; a name
-  whose account was never created is released)
+  whose account was never created is released; the config is checked before
+  the token is spent)
 
 ## What forced it
 
@@ -96,7 +97,10 @@ its uid stays spent (the uidmap's `-released` entry).
 Never which of unknown, used or expired: that would be an oracle.
 
 `remote create --token` saves nothing, neither the config nor a docker context,
-until the reply names an account, and then saves that account as the user.
+until the reply names an account, and then saves that account as the user. It
+checks the config file can be written BEFORE the redeem, since the redeem
+spends the token; a save that fails anyway says the key is enrolled and prints
+the `remote create` line that adds the workspace without a token.
 
 ## What it costs
 

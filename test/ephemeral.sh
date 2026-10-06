@@ -654,7 +654,7 @@ said=$(grep -m1 -E "has [0-9]+ clients" <<<"$fifth")
 if [ "$rc" -eq 124 ]; then
     bad "a fifth run was still waiting when the suite gave up after ${took}s"
 elif [ "$rc" -eq 0 ]; then
-    bad "a fifth run was served past the limit"
+    bad "a fifth run was served past the limit: [$(tail -3 <<<"$fifth")]"
 elif [ -z "$said" ]; then
     bad "a fifth run failed ($rc) without naming the limit: [$(tail -5 <<<"$fifth")]"
 elif [ "$took" -gt 20 ]; then

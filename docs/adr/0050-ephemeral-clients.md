@@ -3,7 +3,7 @@
 - Status: Accepted. Implemented. The end-to-end suites below first ran green on
   main on 2026-10-06 (commit a87a300).
 - Date: 2026-10-05, amended 2026-10-06 (networks through the run's
-  containers; `user rm`)
+  containers; `user rm`; suite sections 6b and 8)
 - Amends [ADR 0029](0029-one-account-many-machines.md) for the accounts it names.
 
 ## What forced it

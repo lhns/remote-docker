@@ -33,7 +33,7 @@ STRIDE letters are used where they apply and left out where they do not.
 | a process running as the user | an npm postinstall, an editor extension, anything the user runs | the local endpoint, which is total authority over the workspace. The control is that it is owner-only and never TCP |
 | another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation |
 | whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, and every container's contents |
-| somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates |
+| somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates, and a live token's id lets a connection do one thing, redeem it (flow 1b) |
 | the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
 | an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3 |
 | a pod in the same cluster | the pod network | the workspace's ports. The export is loopback inside a namespace of its own, so it is not among them |
@@ -930,7 +930,7 @@ flowchart LR
     subgraph pod["one privileged pod"]
         agent["remote-dockerd"]
         keys[["Secret: authorized_keys.d<br/>public keys, read-only"]]
-        statevol[("PVC: host keys, uid map")]
+        statevol[("PVC: host keys, uid map,<br/>enrolled keys, tokens")]
         graphvol[("PVC: /var/lib/docker")]
         agent --- keys
         agent --- statevol
@@ -949,9 +949,11 @@ and nothing else, mounted read-only. Losing it costs an attacker nothing and
 costs the operator their enrolment list.
 
 **I — losing the state volume is not losing a cache (6).** It holds the SSH host
-keys and the uid map. Restore the pod without it and every client that has
-connected before refuses the new host key, and each account's uid moves, which
-moves its tunnel port, which strands the volumes named after the old one.
+keys, the uid map, the keys enrolled with a token and the unredeemed tokens.
+Restore the pod without it and every client that has connected before refuses
+the new host key, every key enrolled with a token is revoked, and each
+account's uid moves, which moves its tunnel port, which strands the volumes
+named after the old one.
 
 **E — privileged is root on the node (4).** dockerd sets up its own bridge and
 iptables rules and mounts NFS in its own namespace, so there is no unprivileged
@@ -1148,7 +1150,13 @@ Stated here rather than buried, because each is a deliberate trade.
   port, everything in flow 3 is exposed.
 - **A public ingress means the SSH handshake is the whole gate.** No rate limit
   and no allow-list ship with the chart. An enrolled public key is the only way
-  through, and a cluster that can restrict the ingress by source address should.
+  through, apart from a live enrolment token, which can only redeem (flow 1b),
+  and a cluster that can restrict the ingress by source address should.
+- **The metrics listener is unauthenticated** (ADR 0054). It is off unless
+  `WORKSPACE_METRICS_ADDR` or the chart's `metrics.enabled` turns it on, and
+  then it tells anything that reaches it which accounts exist and what they are
+  doing. The chart binds every interface of the pod; a NetworkPolicy admitting
+  only the scraper, or an address on one interface, is the operator's to add.
 - **`insecure` gives up knowing which proxy answered.** It is per workspace and
   it does not weaken the SSH session inside, but a proxy you cannot identify is
   a proxy that can stop working for you and start working for somebody else.

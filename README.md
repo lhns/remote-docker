@@ -724,6 +724,11 @@ sets none, so it falls back to stock `docker:dind`, which cannot serve
 
 `/etc/workspace` must persist, like `state/` above.
 
+To enrol with a token instead of a file, mint it as root with the address
+devices reach: `sudo remote-dockerd token create --account alice --url
+ssh://vm.example:2222`. Run from a shell it does not read
+`/etc/remote-docker/env`, so `WORKSPACE_PUBLIC_URL` set there is not seen.
+
 On a machine that does other work: enrolled keys become **real users on that
 machine** (`rd-<account>`), and a per-account daemon runs privileged, so an
 account that breaks out of one reaches the VM itself
@@ -883,6 +888,8 @@ Operator commands, on the workspace:
 | `remote-dockerd daemons ls` | which accounts have a daemon |
 | `remote-dockerd daemons reset <account> [--purge] [-f]` | rebuild one; `--purge` discards its images; `-f` while it runs containers |
 | `remote-dockerd ephemeral ls` | the runs of ephemeral accounts holding a port, with state and age |
+| `remote-dockerd token create --account <name> \| --unbound` | mint an [enrolment token](#enrolment) and print the line a device runs |
+| `remote-dockerd token ls` / `rm <id>` | every token not yet redeemed, and withdrawing one |
 
 ### The storage driver, worth getting right once
 
@@ -943,7 +950,7 @@ from that directory) it says so and starts the daemon anyway.
 
 ```bash
 docker exec <workspace> remote-dockerd token create --account alice
-kubectl exec <release>-0 -- remote-dockerd token create --account alice
+kubectl exec ws-remote-docker-workspace-0 -- remote-dockerd token create --account alice
 ```
 
 It prints one line to run on the device:
@@ -1351,6 +1358,7 @@ core/                  what both ends must agree on
   workspace/           the contract: paths, uid→port, volume names
   tunnel/              one bidirectional copy, one answer to half-closing
   notify/  cache/      the change channel and the cache channel, each entire
+  enrol/               enrolment tokens and account management, entire
   logx/                one log handler, so both look the same
 
 dircache/              filling a local copy of a tree, and carrying writes
@@ -1368,6 +1376,7 @@ core-client/           this machine, minus Docker
 core-agent/            the workspace, minus Docker
   tunnelserver/        answering the tunnel
   accounts/            one unix account per enrolled key
+  tokens/              single-use enrolment tokens
   replay/              replaying changes as real syscalls
   union/               the cache over the live export
   netns/  wslisten/    another process's netns; SSH over a WebSocket
@@ -1378,7 +1387,8 @@ client/                the client binary (docker/cli, buildx)
 
 agent/                 the agent binary (five direct third-party requires)
   cmd/remote-dockerd/  the workspace binary
-  internal/            per-account daemons, dockerd supervision, elevate
+  internal/            per-account daemons, dockerd supervision, elevate,
+                       ephemeral runs, metrics
 
 image/  deploy/        the workspace container and its deployments
 charts/                the Helm chart

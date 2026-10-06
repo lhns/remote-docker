@@ -1116,7 +1116,7 @@ else
         bad "the enrolled directory does not hold the key: $LAST_OUTPUT"
     fi
     if [ -e "$WORK/keys/itest4.pub" ]; then
-        bad "the redeem wrote into the operator's directory"
+        bad "the redeem wrote into the operator's directory: [$(tr '\n' ' ' <"$WORK/keys/itest4.pub")]"
     fi
     if outputs "unknown, used or expired" redeemer b create tok --token "$invite" --no-context; then
         ok "a used token is refused"
