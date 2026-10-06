@@ -99,6 +99,26 @@ func TestComposeKeepsAnExplicitProjectName(t *testing.T) {
 	}
 }
 
+// Asking for the client connects the session. `compose version` does not ask
+// because it replaces compose's PersistentPreRunE, and with it ours (compose
+// v5.5.1, cmd/compose/version.go). `config` asks because it prints the name.
+func TestComposeVersionDoesNotAskForTheClient(t *testing.T) {
+	t.Setenv("COMPOSE_PROJECT_NAME", "")
+	asked := 0
+	var err error
+	out := captureStdout(t, func() {
+		root := composeTree(t, func() string { asked++; return "c1" })
+		root.SetArgs([]string{"compose", "version"})
+		err = root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("compose version: %v\n%s", err, out)
+	}
+	if asked != 0 {
+		t.Errorf("compose version asked for the client %d times", asked)
+	}
+}
+
 // A machine has no run id, and an invocation that is not ours is not asked.
 func TestComposeLeavesAMachinesProjectName(t *testing.T) {
 	t.Setenv("COMPOSE_PROJECT_NAME", "")

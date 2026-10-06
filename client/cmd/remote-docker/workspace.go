@@ -125,7 +125,12 @@ workspace's address, which --host overrides, and its host key.`,
 							return fmt.Errorf("the workspace has not finished creating account %s\n  fix: ask its operator to check the agent log, then run `%s`",
 								enrolled.Account, ourCommand("status"))
 						}
-						return err
+						if cmd.Context().Err() != nil {
+							return err
+						}
+						// Running create --token again would only be refused.
+						return fmt.Errorf("workspace %q is saved and the token spent, but the first login as %s failed: %s\n  fix: `%s`",
+							name, enrolled.Account, firstLine(err.Error()), ourCommand("status"))
 					}
 					_, _ = fmt.Fprintf(out, "account %s is ready\n", enrolled.Account)
 				}
