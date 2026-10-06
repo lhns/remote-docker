@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/lhns/remote-docker/client/internal/config"
@@ -113,4 +116,71 @@ func TestARedemptionRefusalSaysWhatToDo(t *testing.T) {
 		t.Fatalf("a refused token: %v", err)
 	}
 	requireFixLine(t, err, "ask for a new one")
+}
+
+func redeemInvite(t *testing.T, m *manageServer) string {
+	t.Helper()
+	id, secret, err := enrol.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enrol.Invite{URL: "ssh://" + m.addr, HostKey: ssh.FingerprintSHA256(m.hostKey),
+		Account: "alice", Token: id + "." + secret}.String()
+}
+
+// A config that cannot be written refuses before the token is spent.
+func TestAnUnwritableConfigRefusesBeforeRedeeming(t *testing.T) {
+	withConfig(t, nil)
+	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
+	// A home below a regular file: no directory can be made there.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(blocker, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	m := startManageServer(t, `{"account":"alice","created":true}`, 0)
+	err := run(t, "remote", "create", "ws", "--no-context", "--token", redeemInvite(t, m))
+	if err == nil {
+		t.Fatal("create --token succeeded with nowhere to save")
+	}
+	requireFixLine(t, err, "writable")
+	select {
+	case got := <-m.got:
+		t.Errorf("the workspace saw a redeem: %v", got)
+	default:
+	}
+}
+
+func TestRecreateKeepsTheFlagsGiven(t *testing.T) {
+	var f workspaceFlags
+	f.register(&cobra.Command{}, "")
+	if err := f.set.Parse([]string{"--host", "wss://ws.example/", "--ca-file", "ca.pem", "--insecure", "--port", "443"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "create ws --host wss://ws.example/ --port 443 --user bob --ca-file ca.pem --insecure"
+	if got := recreate("ws", f, "bob"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A save that fails after the redeem says how to make the entry without the
+// spent token.
+func TestAFailedSaveAfterRedeemPrintsTheCreateToRun(t *testing.T) {
+	withConfig(t, nil)
+	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
+	saveConfig = func(config.File, string) error { return errors.New("config: disk full") }
+	t.Cleanup(func() { saveConfig = config.Save })
+
+	m := startManageServer(t, `{"account":"alice","created":true}`, 0)
+	err := run(t, "remote", "create", "ws", "--no-context", "--token", redeemInvite(t, m))
+	if err == nil {
+		t.Fatal("create succeeded with a failing save")
+	}
+	if !strings.Contains(err.Error(), "enrolled as account alice, but workspace \"ws\" was not saved") {
+		t.Errorf("message: %v", err)
+	}
+	requireFixLine(t, err, "create ws --host ssh://"+m.addr+" --user alice")
 }

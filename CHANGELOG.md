@@ -62,6 +62,10 @@ software.
 
 ### Fixes
 
+- **`remote create --token` no longer spends a token it cannot save.** It now
+  checks that the config file can be written before using the token. If saving
+  fails anyway, it says the key is enrolled and prints the `create` command
+  that adds the workspace without a token.
 - **Revoking a user's key now ends their open sessions.** Deleting or
   emptying their key file used to stop only new connections, and anything
   already connected kept working.

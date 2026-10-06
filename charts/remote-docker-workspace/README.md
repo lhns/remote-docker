@@ -9,13 +9,13 @@ tunnel, so nothing is copied or synced.
 
 ```bash
 helm install ws oci://ghcr.io/lhns/charts/remote-docker-workspace \
-  --version 0.8.1 \
   --namespace remote-docker --create-namespace \
   --set ingress.host=ws.example.com
 ```
 
 The chart's version is the release's, set when it is published; `Chart.yaml`'s
-is a placeholder. Use the latest release from the project's Releases page.
+is a placeholder. Without `--version`, helm installs the newest release;
+add `--version <x.y.z>` to pin one (the Releases page lists them).
 
 The pod is privileged, because dockerd sets up its own bridge and iptables rules
 and mounts NFS in its own namespace. On a cluster with Pod Security admission,
