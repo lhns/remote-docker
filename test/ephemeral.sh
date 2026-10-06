@@ -17,6 +17,9 @@
 # asked of it directly (`wsdocker`, `remote-dockerd ephemeral ls`), so a run that
 # has ended is never reconnected by the question.
 #
+# Sections 1 to 7 share one workspace with a 20s grace. Section 8 replaces it
+# with one whose grace outlasts the agent's ~60s dead-peer detection.
+#
 # Requires: docker, sudo, util-linux (unshare, setpriv), curl, and a kernel with
 # NFS client support.
 set -uo pipefail
@@ -203,6 +206,24 @@ reads_own_file() {
     seen=$(drun "$n" run --rm -v "$CHECKOUT:/w" alpine:3 cat /w/marker 2>&1 | tail -1)
     LAST_OUTPUT=$seen
     [ "$seen" = "run $n" ]
+}
+
+# merged_of prints <client>'s union mounts as the namespace of $EPH's daemon
+# sees them, one `<fstype> <mountpoint>` line per merged view
+# (/run/rd-union/<client>/<share>/merged). A mount, not a directory: a union
+# that never mounted leaves the directory there (ADR 0044). Fails, saying so,
+# when the mounts cannot be read, so an unreadable table is never "unmounted".
+merged_of() {
+    local client=$1 table
+    if [ "$PER_USER_DIND" = true ]; then
+        table=$(hostdocker exec "$CONTAINER" docker exec "rd-dind-$EPH" cat /proc/mounts 2>&1)
+    else
+        table=$(hostdocker exec "$CONTAINER" cat /proc/mounts 2>&1)
+    fi || {
+        echo "cannot read the daemon's mounts: $table"
+        return 1
+    }
+    awk -v p="/run/rd-union/$client/" 'index($2, p) == 1 && $2 ~ /\/merged$/ {print $3, $2}' <<<"$table"
 }
 
 # ----------------------------------------------------------------------------
@@ -624,6 +645,96 @@ else
 fi
 
 echo
+echo "== 6b. cleanup releases a run's union, and only that run's =="
+# write=ephemeral is a union (ADR 0044), bound into the container by PATH, so
+# the run's connection ending keeps it while the container runs. Cleanup removes
+# the container (CLEANUP_CONTAINERS), releases the union, and only then may
+# remove the cache volume (ADR 0050, steps 1, 3 and 4). Runs 5 and 6 have not
+# shared $CHECKOUT yet, so the mode is theirs to choose.
+for n in 5 6; do
+    CLIENT[$n]=$(client_of "$n")
+    if out=$(drun "$n" run -d --name "eph-union-$n" -v "$CHECKOUT:/w:write=ephemeral" alpine:3 sleep 600 2>&1); then
+        ok "run $n: a container starts against a write=ephemeral union"
+    else
+        bad "run $n: a container would not start against a union: [$(tail -3 <<<"$out")]"
+        union_diagnostics
+        continue
+    fi
+    if outputs ' /w fuse' drun "$n" exec "eph-union-$n" sh -c 'grep " /w " /proc/mounts'; then
+        ok "run $n: the container's /w is a fuse mount"
+    else
+        bad "run $n: /w is not a fuse mount: [$LAST_OUTPUT]"
+    fi
+    if outputs "^run $n\$" drun "$n" exec "eph-union-$n" cat /w/marker; then
+        ok "run $n: the container reads run $n's file through the union"
+    else
+        bad "run $n: the union served [$LAST_OUTPUT]"
+    fi
+    if outputs ' /run/rd-union/' merged_of "${CLIENT[$n]}"; then
+        ok "run $n: the workspace has its union mounted: [$LAST_OUTPUT]"
+    else
+        bad "run $n: no union of client ${CLIENT[$n]} is mounted in the daemon's namespace: [$LAST_OUTPUT]"
+    fi
+    if outputs "^rd-${CLIENT[$n]}-[^[:space:]]+-cache$" \
+        wsdocker "$EPH" volume ls -q --filter "label=$CLIENT_LABEL=${CLIENT[$n]}"; then
+        ok "run $n: its cache volume exists"
+    else
+        bad "run $n: no cache volume among [$LAST_OUTPUT]"
+    fi
+done
+
+# union_released asserts that <client>'s run took its union with it: nothing
+# mounted under its directory, and (from wait_run_gone) no volume, cache
+# included, and no record.
+union_released() {
+    local n=$1 client=$2 how=$3 start mounts
+    start=$(date +%s)
+    if wait_run_gone "$client"; then
+        ok "run $n ($how): its record, containers and volumes, cache included, are gone $(($(date +%s) - start))s later"
+    else
+        bad "run $n ($how) left: $LAST_OUTPUT"
+        hostdocker logs "$CONTAINER" 2>&1 | grep -iE "ephemeral|union|run's" | tail -10 | sed 's/^/        /'
+    fi
+    if mounts=$(merged_of "$client"); then
+        if [ -z "$mounts" ]; then
+            ok "run $n ($how): its union is unmounted"
+        else
+            bad "run $n ($how): its union is still mounted: [$mounts]"
+            union_diagnostics
+        fi
+    else
+        bad "run $n ($how): $mounts"
+    fi
+}
+
+if outputs '"stopping"' curl -s --max-time 30 -X POST --unix-socket "$(run_sock 5)" \
+    http://session/_remote-docker/shutdown; then
+    ok "run 5 was asked to stop with its union container running"
+else
+    bad "run 5 did not take the shutdown: [$LAST_OUTPUT]"
+fi
+union_released 5 "${CLIENT[5]}" "a clean end"
+
+if outputs ' /run/rd-union/' merged_of "${CLIENT[6]}"; then
+    ok "run 6's union is still mounted after run 5's cleanup"
+else
+    bad "run 6's union went with run 5's: [$LAST_OUTPUT]"
+fi
+if outputs '^run 6$' drun 6 exec eph-union-6 cat /w/marker; then
+    ok "run 6's container still reads through its union"
+else
+    bad "run 6's container cannot read through its union: [$LAST_OUTPUT]"
+fi
+
+pid6=$(pid_of 6)
+if [ -n "$pid6" ] && kill -9 "$pid6" 2>/dev/null; then
+    ok "run 6's client (pid $pid6) was killed with its union container running"
+else
+    bad "could not kill run 6's client: pid [$pid6]"
+fi
+union_released 6 "${CLIENT[6]}" "kill -9"
+
+echo
 echo "== 7. the machine account, after all of it =="
 machine_unchanged "at the end"
 if outputs "^the machine's file$" dmachine run --rm -v "$WORK/machine-project:/w" alpine:3 cat /w/marker; then
@@ -637,11 +748,133 @@ else
     ok "$MACHINE is not an ephemeral run"
 fi
 
+echo
+echo "== 8. a drop the agent noticed: the run reattaches from its grace =="
+# Section 4's outage ends before the agent declares the peer dead (~60s:
+# sshd.peerTimeout, keepalives and TCP_USER_TIMEOUT), and section 5 reattaches
+# after a restart. This is the case between them: a black hole long enough for
+# the agent to end the connection and start the run's grace, and a reconnect
+# within it. That needs a grace well above 60s, so this phase gets a workspace
+# of its own; the sections above keep their 20s. Its state directory starts
+# empty, so no run recorded above is restored into it and counted to the limit.
+LONG_GRACE=180
+stop_pid "$MACHINE_PID"
+MACHINE_PID=""
+sudo pkill -f "$WORK/[r]emote-docker" 2>/dev/null
+hostdocker rm -f "$CONTAINER" >/dev/null 2>&1
+sudo rm -rf "$WORK/wsstate" && mkdir -p "$WORK/wsstate"
+workspace_up "$PER_USER_DIND" "$EPH" \
+    -e "WORKSPACE_EPHEMERAL_ACCOUNTS=$EPH" \
+    -e "WORKSPACE_EPHEMERAL_GRACE=${LONG_GRACE}s" \
+    -e "WORKSPACE_EPHEMERAL_MAX_CLIENTS=$MAX_CLIENTS" \
+    -e "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS=true" \
+    "${mode_args[@]}"
+if [ "$PER_USER_DIND" = true ] && ! load_image_into_workspace "$IMAGE"; then
+    bad "could not load $IMAGE into the new workspace's daemon"
+fi
+
+SUDO_PID[9]=$(start_run 9)
+if wait_run 9 "${SUDO_PID[9]}"; then
+    ok "run 9 has a working docker endpoint against a ${LONG_GRACE}s grace"
+else
+    bad "run 9 never came up"
+    sed "s/^/        run 9: /" "$WORK/run-9.log" | tail -20
+    dump_workspace_log 40
+    exit 1
+fi
+CLIENT[9]=$(client_of 9)
+drun 9 pull -q alpine:3 >/dev/null 2>&1 || info "could not pre-pull alpine:3 for run 9"
+if drun 9 run -d --name eph-watch -v "$CHECKOUT:/w" alpine:3 sh -c "$WATCH_SH" >/dev/null 2>&1 &&
+    wait_output "OK run 9" 30 drun 9 logs eph-watch; then
+    ok "a watcher of run 9 reads its mount"
+else
+    bad "the watcher of run 9 could not read its mount: [$LAST_OUTPUT]"
+fi
+port9=$(run_field "${CLIENT[9]}" 3)
+if [[ "$port9" =~ ^[0-9]+$ ]] && outputs '^live$' run_field "${CLIENT[9]}" 2; then
+    ok "run ${CLIENT[9]} is live on port $port9"
+else
+    bad "run 9 is not live with a port: [$(runs)]"
+fi
+
+# Observed from the workspace only while blocked: any command through run 9's
+# endpoint would redial, and repair what it came to observe (nfs-resilience.sh).
+if blocked=$(hostdocker exec "$CONTAINER" iptables -A INPUT -p tcp --dport 2222 -j DROP 2>&1); then
+    start=$(date +%s)
+    info "black-holing the agent's port until the agent ends run 9's connection"
+    noticed=""
+    while [ $(($(date +%s) - start)) -lt 150 ]; do
+        if [ "$(run_field "${CLIENT[9]}" 2)" = grace ]; then
+            noticed=$(($(date +%s) - start))
+            break
+        fi
+        sleep 2
+    done
+    held=$(run_field "${CLIENT[9]}" 3)
+    hostdocker exec "$CONTAINER" iptables -D INPUT -p tcp --dport 2222 -j DROP 2>/dev/null
+    blocked_for=$(($(date +%s) - start))
+    mark=$(date +%s)
+
+    if [ -n "$noticed" ]; then
+        ok "the agent noticed the dead peer and started run 9's grace ${noticed}s into the block"
+    else
+        bad "run 9 never entered its grace in ${blocked_for}s of black hole: [$(runs)]"
+        hostdocker logs "$CONTAINER" 2>&1 | grep -iE "ephemeral|run|connection" | tail -10 | sed 's/^/        /'
+    fi
+    if [ "$held" = "$port9" ]; then
+        ok "run 9 kept port $port9 through its grace"
+    else
+        bad "run 9's port in its grace is [$held], was $port9"
+    fi
+    if [ "$blocked_for" -ge "$LONG_GRACE" ]; then
+        bad "the block lasted ${blocked_for}s, past the ${LONG_GRACE}s grace, so nothing below is a reattach"
+    fi
+
+    # The client redials on its next command, as after section 5's restart.
+    reattached=false
+    for _ in $(seq 1 30); do
+        if reads_own_file 9; then
+            reattached=true
+            break
+        fi
+        sleep 2
+    done
+    if [ "$reattached" = true ]; then
+        ok "run 9 reattached $(($(date +%s) - mark))s after the block, and a new container reads its file"
+    else
+        bad "run 9 never read its file after the block: [$LAST_OUTPUT]"
+        sed 's/^/        run 9: /' "$WORK/run-9.log" | tail -15
+        dump_workspace_log 40
+    fi
+    if outputs '^live$' run_field "${CLIENT[9]}" 2 && outputs "^$port9\$" run_field "${CLIENT[9]}" 3; then
+        ok "run 9 is live again on the same port, $port9"
+    else
+        bad "run 9 after the reattach: [$(runs)], was port $port9"
+    fi
+
+    # Its mount came back with the reverse forward on the same port. Given its
+    # own time: a hard NFS mount retries on its own clock.
+    seen=""
+    for _ in $(seq 1 120); do
+        seen=$(drun 9 logs eph-watch 2>&1 | awk -v t="$mark" '$1 >= t && $2 == "OK"' | tail -1)
+        [ -n "$seen" ] && break
+        sleep 1
+    done
+    if [ "$seen" != "${seen%OK run 9}" ]; then
+        ok "the container started before the block reads its mount again: [$seen]"
+    else
+        bad "the container started before the block stopped reading: [$(drun 9 logs eph-watch 2>&1 | tail -3)]"
+    fi
+else
+    bad "could not block the agent's port: [$blocked]"
+fi
+drun 9 rm -f eph-watch >/dev/null 2>&1
+
 if [ "$FAIL" -ne 0 ]; then
     echo
     echo "== the workspace's ephemeral log =="
     hostdocker logs "$CONTAINER" 2>&1 | grep -i ephemeral | tail -40 | sed 's/^/        /'
-    for n in 1 2 3 4 5 6 7; do
+    for n in 1 2 3 4 5 6 7 9; do
         echo "== run $n =="
         tail -15 "$WORK/run-$n.log" 2>/dev/null | sed 's/^/        /'
     done
