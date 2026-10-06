@@ -78,13 +78,22 @@ spec:
               containerPort: {{ .Values.metrics.port }}
             {{- end }}
           env:
+            {{- /* Each variable the chart sets is skipped when `env` names it,
+                  so the user's entry is the only one rendered: a duplicate
+                  name can be refused by server-side apply. */}}
+            {{- if not (hasKey .Values.env "DOCKER_TLS_CERTDIR") }}
             - name: DOCKER_TLS_CERTDIR
               value: ""
+            {{- end }}
+            {{- if not (hasKey .Values.env "WORKSPACE_PER_USER_DIND") }}
             - name: WORKSPACE_PER_USER_DIND
               value: {{ .Values.perUserDind | quote }}
+            {{- end }}
+            {{- if not (hasKey .Values.env "WORKSPACE_DOCKERD_ARGS") }}
             - name: WORKSPACE_DOCKERD_ARGS
               value: {{ .Values.dockerdArgs | quote }}
-            {{- if .Values.perUserDind }}
+            {{- end }}
+            {{- if and .Values.perUserDind (not (hasKey .Values.env "WORKSPACE_DIND_IMAGE")) }}
             {{- /* The image an account's own daemon runs. Elsewhere the agent
                   finds it by inspecting the container it is in; in a pod
                   nothing can, and the stock docker:dind lacks the storage
