@@ -2,7 +2,7 @@
 
 - Status: Accepted. The operator mints tokens with `remote-dockerd token`; an
   admin, or an account for itself, with `remote token create` (ADR 0053).
-- Date: 2026-10-05
+- Date: 2026-10-05, amended 2026-10-06 (a redeem replies `pending`)
 
 ## What forced it
 

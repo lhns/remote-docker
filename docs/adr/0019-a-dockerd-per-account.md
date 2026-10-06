@@ -4,7 +4,8 @@
   [ADR 0012](0012-shared-dockerd-across-users.md). Consolidates ADR 0020 (one
   daemon target) and ADR 0019's supervision rules, formerly ADR 0036: both
   existed only to make this work.
-- Date: 2026-08-08, extended 2026-08-10 and 2026-08-15, consolidated 2026-08-19
+- Date: 2026-08-08, extended 2026-08-10 and 2026-08-15, consolidated 2026-08-19,
+  amended 2026-10-05 (removing an account)
 - Promotes a fallback measured in
   [ADR 0016](0016-replaying-change-events-as-real-syscalls.md) to load-bearing
 - Current answer: **one dind per enrolled account**, started by the agent when
@@ -253,6 +254,6 @@ position. The code does not differ; the blast radius does.)*
 **Removing an account removes its daemon, through the resolver (2026-10-05).**
 `Targets` gained `Running` and `Reset`, which `remote user rm` asks (ADR 0053):
 refused while the daemon runs containers unless `-f`, then the container is
-removed and `rd-dind-<account>-lib` kept, so the account comes back as it was.
-`Shared` answers 0 and removes nothing, so the use site never asks which mode
-it is in.
+removed and `rd-dind-<account>-lib` kept, so the account comes back as it was;
+`--purge` removes `-lib` too, only with both labels. `Shared` answers 0 and
+removes nothing, so the use site never asks which mode it is in.

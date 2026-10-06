@@ -1,7 +1,7 @@
 # 0010. A Go SSH server agent, not sshd and sudo
 
 - Status: Accepted
-- Date: 2026-08-07
+- Date: 2026-08-07, amended 2026-10-05 (enrolment tokens)
 
 ## Context
 

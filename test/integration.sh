@@ -1072,7 +1072,6 @@ echo "== 11h. a device enrols its own key with a token =="
 token_line() {
     hostdocker exec "$CONTAINER" remote-dockerd token create --url "ssh://127.0.0.1:$SSH_PORT" "$@" 2>&1
 }
-invite_of() { awk '/--token/ {print $NF}' <<<"$1"; }
 redeemer() {
     local who=$1
     shift

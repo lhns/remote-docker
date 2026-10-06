@@ -206,9 +206,9 @@ file's `name:`, else its directory's.
 
 ## Verification
 
-Unit tests only: `core/workspace` (`client_test.go`, `TestInfoClient`),
+Unit: `core/workspace` (`client_test.go`, `TestInfoClient`),
 `agent/internal/sshd/run_test.go` (a real SSH conversation; its session half
-runs on Linux only), `TestEphemeralAccounts`, `client/internal/session/run_test.go`
+runs on Linux only), `TestAccountSet`, `client/internal/session/run_test.go`
 and `TestRunOfAsksTheBackgroundSession`. The registry: its state machine,
 limit and restart record in `agent/internal/ephemeral/registry_test.go`, the
 ports in `core-agent/accounts/ports_run_test.go`, the limit and the record over

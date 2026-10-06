@@ -657,7 +657,7 @@ jobs:
           kubectl exec -n rd "$POD" -- remote-dockerd ephemeral ls 2>&1 || true
 
           echo "== client =="
-          cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -60 || echo "(none)"
+          cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -60
 
           echo "== workspace =="
           kubectl describe pod -n rd "$POD" | tail -30 || true

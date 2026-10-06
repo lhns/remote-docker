@@ -1,7 +1,7 @@
 # 0034 — SSH inside a WebSocket
 
 - Status: Accepted; extends [ADR 0021](0021-the-module-layout.md)
-- Date: 2026-08-14
+- Date: 2026-08-14, amended 2026-10-05 (enrolment)
 
 > SSH is the session. A WebSocket is one way to carry it, and the agent never
 > terminates TLS.

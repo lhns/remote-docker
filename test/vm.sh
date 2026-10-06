@@ -217,7 +217,7 @@ echo "== 3b. a token, with the directories it defaults to =="
 # are under the state directory (ADR 0051, ADR 0052).
 line=$(sudo env WORKSPACE_STATE_DIR="$WORK/wsstate" WORKSPACE_HOSTKEY_DIR="$WORK/wsstate/host_keys" \
     "$WORK/remote-dockerd" token create --account "$TOKEN_ACCOUNT" --url "ssh://127.0.0.1:$SSH_PORT" 2>&1)
-invite=$(awk '/--token/ {print $NF}' <<<"$line")
+invite=$(invite_of "$line")
 if [ -n "$invite" ] && outputs '\.json$' sudo ls "$WORK/wsstate/tokens"; then
     ok "the token is in <state>/tokens"
 else

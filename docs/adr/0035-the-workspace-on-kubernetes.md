@@ -2,7 +2,7 @@
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md) and
   [ADR 0034](0034-ssh-inside-a-websocket.md)
-- Date: 2026-08-14
+- Date: 2026-08-14, amended 2026-10-05 (ephemeral values, enrolment)
 
 > The ingress is the way in, so the deployment needs no load balancer and no
 > node port. Everything else follows from one pod owning its storage.

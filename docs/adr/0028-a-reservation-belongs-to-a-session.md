@@ -1,8 +1,8 @@
 # 0028 — A port reservation belongs to a session, not to an account
 
 - Status: Accepted; corrects [ADR 0010](0010-go-ssh-server-agent.md)
-- Date: 2026-08-11
-- Amended 2026-10-05: revoking a key closes every connection it authenticated (`agent/internal/sshd/revoke.go`), so its reservations are released by the same path as any connection that ends.
+- Date: 2026-08-11, amended 2026-10-05 (revocation closes connections,
+  ephemeral runs)
 
 ## Context
 
@@ -101,6 +101,10 @@ stop arising.
 
 An ephemeral run's port assignment (ADR 0050) carries a token of the same kind,
 so a late `Ports.Free` for a run since given a port again frees nothing.
+
+Revoking a key closes every connection it authenticated
+(`agent/internal/sshd/revoke.go`), so its reservations are released by the
+same path as any connection that ends.
 
 ## Verification
 

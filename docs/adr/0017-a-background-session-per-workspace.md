@@ -2,7 +2,7 @@
 
 - Status: Accepted; `up` is superseded by `start --foreground` in
   [ADR 0018](0018-one-way-to-do-each-thing.md)
-- Date: 2026-08-08
+- Date: 2026-08-08, amended 2026-10-05 (ephemeral clients)
 
 ## Context
 
