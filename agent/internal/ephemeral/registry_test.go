@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -406,5 +407,62 @@ func TestListReadsTheRecord(t *testing.T) {
 	if got.Account != "alice" || got.Client != "4567cdef" || got.Port != port ||
 		got.State != Live || !got.LastSeen.Equal(c.now()) {
 		t.Errorf("List = %+v, want alice's live 4567cdef on %d, seen %v", got, port, c.now())
+	}
+}
+
+func TestCensusDoesNotWaitForTheRecordToBeWritten(t *testing.T) {
+	r, _, _ := newRegistry(t)
+	r.Dir = t.TempDir()
+	hostRun(t, r, "c1")
+
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	r.writeRec = func(string, []string, os.FileMode) error {
+		once.Do(func() { close(started) })
+		<-release
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rel, err := r.Attach("alice", "c2")
+		if err == nil {
+			rel()
+		}
+	}()
+	<-started
+
+	census := make(chan struct{})
+	go func() { r.Census(); close(census) }()
+	select {
+	case <-census:
+	case <-time.After(5 * time.Second):
+		t.Error("Census waited behind a record write")
+	}
+	close(release)
+	<-done
+}
+
+func TestAnOlderRecordNeverOverwritesANewerOne(t *testing.T) {
+	r, _, _ := newRegistry(t)
+	r.Dir = t.TempDir()
+	var disk []string
+	r.writeRec = func(_ string, lines []string, _ os.FileMode) error {
+		disk = lines
+		return nil
+	}
+	hostRun(t, r, "c1")
+	r.mu.Lock()
+	older := r.snapshot()
+	r.mu.Unlock()
+	hostRun(t, r, "c2")
+	r.mu.Lock()
+	newer := r.snapshot()
+	r.mu.Unlock()
+
+	r.write(newer)
+	r.write(older) // lands late
+	if len(disk) != 2 {
+		t.Fatalf("an older record replaced a newer one: %q", disk)
 	}
 }
