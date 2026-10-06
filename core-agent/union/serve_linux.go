@@ -193,10 +193,9 @@ func Release(spec Spec) error {
 	return detach([]string{spec.Merged(), spec.Lower()}, unix.Unmount)
 }
 
-// detach unmounts each target lazily, and reads EINVAL (not a mount) and
-// ENOENT (no such path) as nothing to do. It never stats first: the lower's
-// NFS server is usually what has just gone, and a stat waits out the soft
-// mount's retries, for minutes, where umount2 does not.
+// detach unmounts each target lazily, reading EINVAL (not a mount) and ENOENT
+// as nothing to do. Never stat first: a dead NFS lower blocks a stat for
+// minutes (ADR 0044).
 func detach(targets []string, unmount func(string, int) error) error {
 	var errs []error
 	for _, target := range targets {
