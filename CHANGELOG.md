@@ -62,6 +62,10 @@ software.
 
 ### Fixes
 
+- **An ephemeral run's `write=back` or `write=ephemeral` cache is cleaned up
+  promptly.** Before, releasing the run's cache could wait minutes for the
+  run's file share, which had already gone away. The cache volume and the
+  run's port stayed until that wait ended.
 - **Revoking a user's key now ends their open sessions.** Deleting or
   emptying their key file used to stop only new connections, and anything
   already connected kept working.
