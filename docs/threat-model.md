@@ -31,13 +31,15 @@ STRIDE letters are used where they apply and left out where they do not.
 | adversary | how they arrive | what they get |
 |---|---|---|
 | a process running as the user | an npm postinstall, an editor extension, anything the user runs | the local endpoint, which is total authority over the workspace. The control is that it is owner-only and never TCP |
-| another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation |
-| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, and every container's contents |
+| another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation. With metrics on, the names of the accounts connected and of the ephemeral ones, and their activity (flow 10) |
+| an admin | an account the operator names in `WORKSPACE_ADMINS` | tokens that create accounts, removing accounts an operator directory does not enrol, and adding a key to any account, operator-enrolled included, which is logging in as it (flow 1c) |
+| another holder of an ephemeral account's key | a second CI job sharing the key | every run of that account: its daemon, and every run's export (flow 1d) |
+| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, every container's contents, and with `write=back`, new files outside a share through a symlink in it ([open finding](#open-findings)) |
 | somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates, and a live token's id lets a connection do one thing, redeem it (flow 1b) |
 | the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
 | an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3 |
-| a pod in the same cluster | the pod network | the workspace's ports. The export is loopback inside a namespace of its own, so it is not among them |
-| whoever holds a copy of the config directory | a synced folder, a backup, a stolen laptop | the private key at 0600, and a share record that is refused wholesale when another machine or account wrote it |
+| a pod in the same cluster | the pod network | the workspace's ports, and the metrics port when it is on (flow 10). The export is loopback inside a namespace of its own, so it is not among them |
+| whoever holds a copy of the config directory | a synced folder, a backup, a stolen laptop | the private key at 0600, a share record that is refused wholesale when another machine or account wrote it, and a machine's host key, the public half only |
 
 **Not modelled**, said once so the rest reads as deliberate: defects in
 `x/crypto/ssh`, `coder/websocket`, `go-nfs` (a fork, see [The software you
@@ -69,7 +71,9 @@ flowchart LR
 
     subgraph ws["WORKSPACE (privileged, semi-trusted)"]
         agent["remote-dockerd<br/>runs as root"]
+        metrics(["metrics, opt-in<br/>plain HTTP, no auth"])
         accounts[("one unix account<br/>per enrolled key")]
+        agent --- metrics
         subgraph dind["per-account daemon (privileged)"]
             dockerd["dockerd"]
             vols[("rd-dind-ACCOUNT-lib")]
@@ -157,11 +161,41 @@ there is no interactive user on the far side of an automated tunnel
 host key rule anywhere in the transport: `core-client/tunnelclient` refuses a
 nil callback by name rather than accepting anybody (ADR 0021).
 
-**T — forging enrolment (1).** Writing `authorized_keys.d` is the operator's
-privilege and is outside the boundary: whoever can put a file there could
-already run containers on the node. The directory is mounted read-only into
-the workspace, and is polled as well as watched because inotify does not fire
-for changes made on another host of a shared filesystem.
+**S — impersonating a machine workspace (2–4).** A machine's address is handed
+out at boot and shared by every WSL distribution, so pinning by address
+(known_hosts) refused every rebuilt machine. The client now generates the
+machine's host key when it builds it, writes the private half into the machine
+(WSL through stdin, Hyper-V in the Ignition document) and records only the
+public half in the config. `session.hostKeyRule`
+(`client/internal/session/conn.go`) accepts that key at any address and nothing
+else, and never consults known_hosts, so a machine has no first use to trust
+(ADR 0026). A machine built before this keeps known_hosts.
+
+**T — forging enrolment (1).** Writing an operator keys directory
+(`WORKSPACE_KEYS_DIR`, a list) is the operator's privilege and is outside the
+boundary: whoever can put a file there could already run containers on the
+node. The agent only reads those, and writes one other,
+`WORKSPACE_ENROLLED_KEYS_DIR`, through a token (flow 1b) or account management
+(flow 1c), never anything else (ADR 0052). `accounts.CheckDirs`
+(`core-agent/accounts/dirs.go`) refuses the start when the enrolled directory
+is, contains or sits inside an operator one, through symlinks, since the agent
+would then write into the operator's files or read its own as the operator's.
+*Covered by* `TestCheckDirs`. Every directory is polled as well as watched,
+because inotify does not fire for changes made on another host of a shared
+filesystem.
+
+**E — a revoked key keeping its connections (5–8).** A key is checked only at
+the handshake, so revoking one used to leave every connection it had, and its
+reverse-tunnel port with it. `Store.Subscribe` runs the sweep in
+`agent/internal/sshd/revoke.go` after every sync, and it closes each connection
+whose account no longer enrols its key; closing releases the ports. A
+connection is recorded only once its key has SIGNED (`loggedIn`, from
+`VerifiedPublicKeyCallback`), and asked again under the registry's lock, so a
+sync landing mid-handshake cannot sweep before there is anything to close. A
+token login is never recorded and never swept: it has no account. *Covered by*
+`TestRevokingAKeyFileClosesItsConnections`,
+`TestASweepIgnoresAConnectionStillAuthenticating` and
+`TestAnOfferedKeyIsNotALogin`.
 
 **E — uid collisions (3).** The uid decides the port, so two accounts sharing
 a uid would share a tunnel. `accounts.Sync` sorts the key files so allocation
@@ -212,11 +246,14 @@ login, and a secret checked on a connection that can open nothing else
 **What a token grants.** A token bound to an account adds a key to it. An
 unbound one, or one bound to a name that does not exist yet, creates an
 account, and an account is a privileged dind, which is close to root on the
-host (ADR 0019). So a token is as valuable as an enrolled key, for a day.
+host (ADR 0019). So a token is as valuable as an enrolled key for as long as
+it lives: a day by default, a week at most (`DefaultTTL`, `MaxTTL` in
+`core-agent/tokens/tokens.go`).
 
 **S — guessing a token (8, 11).** The id is 40 bits and public; the secret is
 128 bits from `crypto/rand`, and only its sha256 is on disk, compared in
-constant time. A connection gets one redeem, `MaxAuthTries` bounds logins, and
+constant time. A connection gets one redeem, x/crypto's default `MaxAuthTries`
+bounds logins (the agent sets none), and
 a GLOBAL bucket (10 failures, then one per 6s) bounds the rest, global because
 behind an ingress every connection arrives from one address. *Covered by*
 `core-agent/tokens` and `agent/internal/sshd/redeem_test.go`.
@@ -232,21 +269,60 @@ the host key's fingerprint and the client refuses any other key BEFORE
 changed since is still refused. *Covered by*
 `client/internal/session/redeem_test.go`.
 
+The pin is only as good as the key it names being the one the agent serves.
+`remote-dockerd token create` reads the host key the same way `serve` does, and
+on a fresh state volume both may find none and generate one. `generateHostKey`
+(`agent/cmd/remote-dockerd/serve.go`) links a complete file into place, which
+fails if a key is already there, and the loser reads the winner's: before
+this, an invite could pin a key nobody served, and the redeemer was refused as
+if the workspace were an impostor. *Covered by*
+`TestGenerateHostKeyKeepsAKeyWrittenMeanwhile`.
+
 **E — a redeemer doing anything else (9, 10).** The connection has a `redeemer`
 and no `sessionAccount`, so the forwards, `workspace-info`, the docker socket,
 a shell and the run request all refuse it through `accountFor`. *Covered by*
 `TestATokenLoginCanOnlyRedeem`.
 
 **E — an unbound token taking somebody's name (10, 12).** Only a name the uidmap
-and every keys directory have never held, and not a reserved one. The uidmap
-never forgets an account that existed, so a removed account's name stays its
-own, and an admin's name is never taken either. Only the operator and admins
-mint a token that creates an account (Flow 1c).
+and every keys directory have never held, and not a reserved one
+(`redeemName`, `Store.Known`). The uidmap never forgets an account that
+existed, so a removed account's name stays its own, and an admin's name is
+never taken either. The one name it gives back is one whose account was never
+created: a `useradd` that failed takes the key out again and releases the name
+unless a file in any directory, or this process's provisioning, still holds it
+(`releaseName` in `core-agent/accounts/accounts.go`). Its uid stays spent
+through the uidmap's `-released` entry, so no later account inherits files
+owned by it. *Covered by* `TestAFailedCreationReleasesTheName` and
+`TestReleaseKeepsANameSomethingHolds`. Only the operator and admins mint a token
+that creates an account (Flow 1c).
 
 **T — the write (11, 12).** Only the enrolled directory is written, under its lock,
 and the key written is the one the connection authenticated with. The
 operator's directories are never written. The token is renamed out of the store
 before the write, so of two redemptions one wins on NFS and CephFS too.
+
+**D — spending a token for nothing (11, 12).** `redeem`
+(`agent/internal/sshd/redeem.go`) asks, in order: the limiter, whether the
+enrolled directory is writable (`CheckWritable`), the secret, the name rules;
+only then is the token claimed. A failure on the workspace's side after the
+claim puts it back; a claim withdrawn meanwhile (`user rm`) takes the key out
+again. The client checks that its own config can be saved before it redeems
+(`config.CheckWritable` in `client/cmd/remote-docker/workspace.go`), and a save
+that fails after the redeem says the key is enrolled and prints the `create`
+that needs no token. *Covered by*
+`TestAWorkspaceThatCannotStoreKeysSpendsNothing`,
+`TestAnUnwritableConfigRefusesBeforeRedeeming` and
+`TestAFailedSaveAfterRedeemPrintsTheCreateToRun`.
+
+**A pending account (12).** A key for an account whose `useradd` outlasts
+`ProvisionWait` (30s) is kept and the reply says `pending`: the token is spent,
+and the key authenticates once the account is published. The client then polls
+an ordinary login, through the host key the redeem just recorded, for up to
+four minutes, retrying only `unable to authenticate`
+(`client/internal/session/awaitaccount.go`). Nothing about the connection
+changes: the redeemer still enrolled only its own key, and the login it waits
+for is an ordinary one. *Covered by*
+`TestAPendingRedeemWaitsUntilTheAccountLogsIn`.
 
 **D.** Anybody can drain the failure bucket, which delays honest redemptions
 until it refills. Accepted: it costs a retry, and a per-address bucket would
@@ -323,10 +399,31 @@ it was removed while leaving it working (ADR 0052).
 **D — losing somebody's work.** `user rm` refuses while the account's daemon
 runs containers, or cannot say, unless `-f`, and never deletes
 `rd-dind-<account>-lib`, the home directory or the uid. `--purge` deletes the
-first two, the unix user and the port records, by design and only when an
-admin asks: the volume only with both its labels, the home only if it is the
-one the account recorded, owned by its uid, with nothing mounted inside. The
-uid is never deleted.
+first two and the unix user, by design and only when an admin asks: the volume
+only with both its labels (`removeStorage` in
+`agent/internal/daemons/runner.go`), the home only if it is the one the
+account recorded, owned by its uid, with nothing mounted inside
+(`removeHome` in `core-agent/accounts/purge.go`). The port records and the
+account's ephemeral runs go only once the storage is gone, which is a purge
+whose daemon reset succeeded with a daemon per account (`userRemove` in
+`agent/internal/sshd/manage.go`). On a shared daemon the purge touches no
+container, image or volume, says so, and keeps the ports, because the volumes
+naming them are still there. The uid is never deleted. *Covered by*
+`TestUserRemovePurgeTakesTheStorageAndThePortsAndKeepsTheUID` and
+`TestUserRemovePurgeKeepsThePortsWhileTheVolumesStay`.
+
+**T — a removed account's runs keep their ports (9).** A plain `user rm` keeps
+`-lib`, and the ephemeral runs' volumes in it still name their ports. A port
+freed while a volume names it is handed to the next client, and that volume
+then mounts whatever export holds the number. So in per-account mode the sweep
+leaves an unenrolled account's runs alone (`Registry.Enrolled`,
+`agent/internal/ephemeral/registry.go`), neither cleaning them, which would
+start the removed account's daemon again, nor freeing their ports, and `Drop`
+runs only after a purge removed the storage. A token that brings the account
+back resumes the sweep. The cost is ports out of the shared range held for an
+account nobody may be coming back for, until a purge. *Covered by*
+`TestARemovedAccountsRunsWaitForIt` and
+`TestUserRemoveKeepsTheAccountsRunsUntilAPurge`.
 
 **E — a removed account coming back (6, 7).** A token the account minted for
 itself beforehand would re-enrol it, so its tokens are revoked before its keys
@@ -340,9 +437,120 @@ completed first has its key deleted in step 7. *Covered by*
 may not remove answers `no token <id>`, as for one that does not exist.
 *Covered by* `TestTokenRemoveIsNoOracle`.
 
+**I — the account list is admin-only here, and not on the metrics port.**
+`user ls` is refused to a non-admin, but with metrics on every account's shell
+reads from it the name of every account connected at that moment (flow 10).
+
+**D — an account minting tokens without end.** *Open finding.* Any account may
+mint tokens for itself, and `Store.Mint` (`core-agent/tokens/tokens.go`)
+bounds only their lifetime: nothing counts them. Each is a file in the state
+volume beside the host keys and the uidmap, swept within an hour of expiring
+(`sweepTokens` in `agent/cmd/remote-dockerd/serve.go`), so
+an enrolled account can fill that volume for up to a week per token. It gains
+no access by it.
+
 **R.** Every change is a `component=audit` line naming the operation, who asked,
 the account, the token id or key fingerprint, and the source address. Never a
 secret.
+
+---
+
+## Flow 1d: an ephemeral run
+
+An account the operator lists in `WORKSPACE_EPHEMERAL_ACCOUNTS` is one key
+shared by many short-lived clients, such as CI jobs or autoscaled pods
+(ADR 0050). Each client process is a RUN, with its own client id, port and
+volumes, and the agent removes what a run left once it is gone.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as remote-docker (run)
+    participant A as remote-dockerd (root)
+    participant R as ephemeral.Registry
+    participant D as the account's daemon
+
+    C->>A: SSH connect as ci, the shared key
+    A-->>C: accepted, ephemeral, no client yet
+    C->>A: remote-docker-run <run id: 128 random bits>
+    A->>A: well formed? first on this connection?
+    A->>A: client = sha256(prefix, key, run id)[:8 hex]
+    A->>R: Attach: new and at MAX_CLIENTS? being cleaned?
+    C->>A: tcpip-forward 127.0.0.1:0
+    A->>R: Port: allocate, or this run's own
+    Note over C,R: last connection ends: grace, then cleaning
+    R->>D: remove what carries this account AND this client
+    R->>R: free the port, only if nothing was kept
+```
+
+**S — what a run id can claim (3–6).** The run id is chosen by the client and
+checked for shape only (`workspace.ValidRunID`); it is never stored, and never
+names a run by itself. The client id is
+`workspace.EphemeralClientID(key, run id)` (`core/workspace/client.go`), over
+the key the handshake just authenticated, with a prefix that keeps it apart
+from a machine's `ClientID`. So a run id reaches one thing: a run of the same
+key, which is how a one-off command joins its background session's run. It
+cannot name another account's run, another key's run or a machine, and a
+connection names one run, once (`handleRun` in `agent/internal/sshd/run.go`).
+Taking a run over needs both halves, the key and that process's run id, which
+this machine hands out only through its owner-only endpoint, and which the
+workspace receives and never stores. *Covered by*
+`TestEphemeralClientID`, `TestRunIDs` and `TestARunIsNamedOncePerConnection`.
+
+**E — before the run is named (2, 7).** The connection has no client, and that
+is a refusal rather than a default: `Ports.For` answers an empty client with
+the account's base port, so serving `workspace-info` or the reverse forward then
+would hand a run another client's export port. `reversePolicy.Allow`
+(`agent/internal/sshd/forward_tcpip.go`) refuses a connection that named no run,
+and `runPort` refuses any port but the run's own. One run has one port and a
+port one holder, so a second hosting connection is refused at the bind.
+*Covered by* `TestRequestsNeedingAClientWaitForTheRun`,
+`TestInfoAllocatesNoPortForARun` and `TestASecondHostingConnectionIsRefused`.
+
+**D — runs as a resource (6, 8).** Every run holds a port from the range all
+accounts share, and its objects on the daemon until cleanup. Whoever holds the
+key can start runs, so `WORKSPACE_EPHEMERAL_MAX_CLIENTS` (default 8) bounds
+them per account, counting runs in grace and in cleaning too, since an expired
+run still holds its port (`Registry.Attach`). A run past it is refused at the
+run request with the reason. The bound is per account only: across accounts,
+the operator bounds it by how many ephemeral accounts it lists. A run that never
+bound a port ends with its last connection and holds nothing. *Covered by*
+`TestTheLimitCountsGraceRuns` and `TestAPortlessRunEndsWithItsConnection`.
+
+**T — cleanup removes only the run's own (9, 10).** `ephemeral.Cleaner.Clean`
+(`agent/internal/ephemeral/cleanup.go`) removes a volume only with the `rd-`
+prefix, the managed label, the account AND the client (`runOwns`), and keeps it
+while a container names it or a union is mounted on it. Containers go only with
+`WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS`, selected by the same two labels; a
+network carries no owner, so it goes only as the project of one of the run's own
+containers, read before they are removed, because on a shared daemon another
+account can name a project with the same suffix. Cannot tell means keep: a
+listing that fails, a daemon that cannot be reached, or anything kept leaves the
+run in cleaning with its port, and the next sweep tries again. The port is freed
+by the token minted with it, and only after cleanup kept nothing, because a
+volume naming a freed port mounts the next holder's export (ADR 0032). *Covered
+by* `TestCleanupRemovesOnlyTheRunsUnheldVolumes`,
+`TestCleanupKeepsEverythingWhenItCannotTell`,
+`TestCleanupTakesNetworksFromTheRunsContainers` and
+`TestThePortOutlivesAFailedCleanup`.
+
+On a shared daemon (ADR 0012) another account can create a container or
+volume carrying this run's labels. Cleanup then removes that account's own
+object, which it chose to mislabel; it cannot be made to remove anything of
+this account's that is not the run's.
+
+**I — runs of one account reach each other's exports.** They share a key, a
+daemon and, with a daemon per account, a namespace. `AllowDial` refuses a port
+another ACCOUNT holds and compares nothing finer, so a run's own `direct-tcpip`
+channel, a `--network host` container or a `docker.sock`-bound one (ADR 0049)
+reaches every run's export. Accepted, as between one account's machines
+(ADR 0029): whoever holds the key is every run already. See
+[Accepted risks](#accepted-risks).
+
+**R.** One log line per state change and per refusal, and one per object
+cleanup removed or kept, with why. `remote-dockerd ephemeral ls` reads the run
+record (`<state>/ephemeral-runs`, 0600), which names clients and ports and
+never a run id.
 
 ---
 
@@ -779,13 +987,10 @@ flowchart TB
     end
 ```
 
-**Runs of one ephemeral account reach each other's exports (ADR 0050).** Each
-run is a client with its own port, but they are one account: one daemon, one
-namespace. `AllowDial` refuses only a port another ACCOUNT holds, and a
-`--network host` container of the account reaches every run's export in that
-namespace. Accepted, as between one account's machines (ADR 0029): the runs
-share a key, so whoever holds it is all of them. What the agent removes when a
-run expires carries that run's client id and nothing else.
+**One account's machines and runs reach each other's exports.** `AllowDial`
+compares accounts, not clients, so a second machine of an account (ADR 0029),
+or another run of an ephemeral one (flow 1d), can dial the export it shares a
+namespace with. Accepted: it is the same account.
 
 **D — the workspace as a network relay (4).** Non-loopback destinations are
 refused, so the workspace cannot be used to reach the network it sits on
@@ -932,10 +1137,14 @@ flowchart LR
         keys[["Secret: authorized_keys.d<br/>public keys, read-only"]]
         statevol[("PVC: host keys, uid map,<br/>enrolled keys, tokens")]
         graphvol[("PVC: /var/lib/docker")]
+        mport(["metrics :9090, opt-in<br/>not in the Service"])
         agent --- keys
         agent --- statevol
         agent --- graphvol
+        agent --- mport
     end
+
+    scraper["Prometheus, by pod IP"] -.-> mport
 ```
 
 **S/D — the way in is usually public (1, 2).** An ingress on 443 is normally
@@ -971,6 +1180,14 @@ There is still no Role and no ClusterRole.
 containers reach whatever the pod network reaches, which on most clusters is
 every other service in it. A policy restricting egress is the operator's to
 add, and worth adding on a shared cluster.
+
+**I — the metrics port (8, 9).** `metrics.enabled` renders
+`WORKSPACE_METRICS_ADDR=:<port>`, every interface of the pod, and the
+`prometheus.io` annotations; the Service carries only SSH and WebSocket, so
+nothing publishes it, but every pod that can route to the pod IP reaches it
+(`charts/remote-docker-workspace/templates/statefulset.yaml`). A NetworkPolicy
+admitting only the scraper closes that, and only that: the accounts are inside
+the pod (flow 10).
 
 ---
 
@@ -1049,13 +1266,49 @@ container wrote there is visible to nobody but the workspace. *Covered by*
 `integration.sh` 15e for nothing arriving, including after the container is
 gone.
 
-**I — write-back moves a container's output onto the user's own disk.** The one
-direction here that writes outside the workspace, so it is gated twice: nothing
-is written back while the cache is incomplete, because a file the fill never
-sent cannot be told from one the container created; and every extracted path is
-checked against the share root on the RESULT of the join, for the same reason as
-above. A conflict is reported by path whichever way it resolves rather than
-silently taking a side.
+**T — write-back moves a container's output onto the user's own disk.** The one
+direction here that writes outside the workspace, and the store it reads from is
+the workspace, so `dircache` treats every path it names as untrusted. Three
+rules, in `dircache/decide.go` and `dircache/writeback.go`:
+
+- **Nothing is written back from an incomplete cache.** A file the fill never
+  sent looks exactly like one the container created, and the cost of that
+  confusion is content appearing in somebody's source tree that they never
+  wrote. `decide` returns nothing while the fill is not complete. *Covered by*
+  `TestDecideRefusesAnIncompleteCache`.
+- **A file deleted here is not resurrected.** The client records every path a
+  batch sent, and `decide` refuses a recorded path this machine no longer has,
+  since it is in the cache because a batch put it there, not because a
+  container wrote it. The record is read BEFORE the round asks for the changes
+  (`writeBackShare`): read after, a reconcile landing in between took the
+  deleted file out of the record while the changes still listed it, and it came
+  back as the container's. *Covered by*
+  `TestWriteBackRefusesARecordedFileDeletedHere`, which caught that as an
+  intermittent CI failure.
+- **A path must stay under the share root** after the join (`writeUnder`). That
+  check is on the joined STRING; the open finding below is what that misses.
+
+A conflict is reported by path whichever way it resolves rather than silently
+taking a side.
+
+**T — write-back follows a symlink on this machine.** *Open finding.*
+`writeUnder` compares the joined path as a string, then `os.MkdirAll` and
+`os.OpenFile` resolve it, following any symlink (or Windows junction) inside
+the share. A change reported at `/out/x`, where `out` is a symlink here
+pointing outside the share, is written outside it: measured on 2026-10-06 with
+a throwaway test against a junction, the file was created in the link's target.
+`decide` writes back only a path this machine does not have, as `os.Stat`
+sees it through the link, and the fill never sends a link or anything under
+one (`dircache/walk.go` takes regular files only). So what it reaches is
+creating files that do not exist yet wherever a link in a shared tree points,
+a dangling link's target included, with a container's content. A deletion goes
+through the same unresolved join (`os.Remove`, measured the same way), but only
+for a path a batch sent. Who arrives this way: a container in a `write=back`
+share that removes a link and puts a directory in its place in the union, and
+the workspace's operator, who can report any change at all. Through NFS the
+same link is never resolved here (flow 3); the agent's side reads the layer
+through `os.OpenRoot` (`agent/internal/unions/changes.go`). Nothing in ADR 0044
+accepts it.
 
 **I — `mounted` names cache volumes.** It answers with the asking machine's own
 names: the ids come from the mounts and the digest from the key. An account's
@@ -1081,6 +1334,60 @@ downgraded to `write=through`, since a downgrade moves where somebody's writes
 land. *Covered by* `client/internal/session/handshake_test.go` and
 `test/old-workspace.sh`, which runs this client against the published `0.5.1`
 workspace image.
+
+---
+
+## Flow 10: a metrics scrape
+
+Off unless `WORKSPACE_METRICS_ADDR` or the chart's `metrics.enabled` turns it
+on (ADR 0054). Then it is the first listener here that authenticates nobody.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as anything that reaches the port
+    participant L as metrics listener (plain HTTP)
+    participant G as registry, sshd, daemons
+
+    S->>L: GET /metrics, no credentials
+    L->>G: read the gauges now: runs, connections, daemons
+    G-->>L: account names, counts, states
+    L-->>S: text format 0.0.4
+```
+
+**I — what a scrape tells (1, 4).** Every account with a live SSH connection,
+and how many (`remote_docker_ssh_connections{account}`), every ephemeral
+account's runs by state, refusals, cleanup, redemption outcomes and limiter
+rejections, how long daemons and accounts took to start, the agent's version
+and Go version (`remote_docker_build_info`), and the process's memory, CPU and
+open files. Never a key, a client id, a token id or an address: the label values
+are account names and fixed words (`agent/cmd/remote-dockerd/metrics.go`).
+
+**S/T — no label value comes from an unauthenticated peer (2, 3).**
+`Server.Connections` (`agent/internal/sshd/revoke.go`) counts only connections
+whose key has signed, under the account name the store resolved, so a login
+that fails, or a key that is only offered, never becomes a series. A run is
+counted only after an authenticated account named it, and a token redemption
+is labelled by outcome, not by id. Label values are escaped on the way out
+(`agent/internal/metrics/metrics.go`). So nobody without a key can put text
+into the exposition or grow it, and an account grows it by at most its own
+name. *Covered by* `TestConnectionsCountsLoggedInAccounts` and `TestExposition`.
+
+**I — reachable from inside the workspace.** *Open finding.* `listenMetrics`
+binds `WORKSPACE_METRICS_ADDR` with a plain `net.Listen` in the agent's own
+network namespace, and the chart sets `:<port>`. That namespace is where every
+account's shell runs (flow 5), so with metrics on any account reads the name
+of every account connected at that moment and of every ephemeral one, which
+flow 1c refuses to a non-admin through `user ls`. On a shared daemon a `--network host` container
+reaches it the same way. ADR 0054 accepts that anything which reaches the port
+reads it, and offers a NetworkPolicy or a single address as the remedy; neither
+keeps out a shell inside the pod, and `127.0.0.1` is the address every shell
+has.
+
+**D — the listener (1).** `ReadHeaderTimeout` is 10s; there is no connection
+cap and no write timeout. A scrape reads the gauges under the same locks
+sessions use, which are held for a map walk. Accepted with the listener: it is
+opt-in, and keeping it off the internet is the deployment's job.
 
 ---
 
@@ -1136,6 +1443,18 @@ itself cannot be signed retrospectively without republishing it.
 
 ---
 
+## Open findings
+
+Threats with no check in the code and no record accepting them. Each is
+described in its flow; this is the index. None is fixed by the change that
+wrote it down.
+
+| finding | flow | where |
+|---|---|---|
+| write-back follows a symlink in the share on this machine, so a container in a `write=back` share, or the workspace, can create files outside the share | 9 | `dircache/writeback.go:167-172` checks the joined string, then `MkdirAll` and `OpenFile` resolve it; `os.Remove` at `:126` the same |
+| the metrics listener is reachable from every account's shell, which reads the connected accounts' names and activity that `user ls` refuses a non-admin | 10 | `agent/cmd/remote-dockerd/metrics.go:24`, and the chart's `:<port>` at `charts/remote-docker-workspace/templates/statefulset.yaml:111-113` |
+| an account can mint tokens for itself without a count, each a file on the shared state volume | 1c | `core-agent/tokens/tokens.go:70` bounds only the lifetime |
+
 ## Accepted risks
 
 Stated here rather than buried, because each is a deliberate trade.
@@ -1154,9 +1473,19 @@ Stated here rather than buried, because each is a deliberate trade.
   and a cluster that can restrict the ingress by source address should.
 - **The metrics listener is unauthenticated** (ADR 0054). It is off unless
   `WORKSPACE_METRICS_ADDR` or the chart's `metrics.enabled` turns it on, and
-  then it tells anything that reaches it which accounts exist and what they are
-  doing. The chart binds every interface of the pod; a NetworkPolicy admitting
-  only the scraper, or an address on one interface, is the operator's to add.
+  then it tells anything that reaches it which accounts are connected, what
+  their runs are doing, and the agent's version. The chart binds every interface
+  of the pod; a NetworkPolicy admitting only the scraper, or an address on one
+  interface, is the operator's to add. Neither keeps out an account's own shell,
+  which is listed under [Open findings](#open-findings).
+- **An admin can become any account.** `key add` and a bound token both put
+  the admin's key on it, an operator-enrolled account included, since the
+  enrolled directory's keys merge with the operator's (ADR 0052, ADR 0053);
+  only REMOVING what an operator directory enrols is refused. Only the operator
+  names admins, and nothing the agent serves writes that list.
+- **Runs of one ephemeral account, and machines of one account, reach each
+  other's exports** (ADR 0050, ADR 0029). They share a key or an account, so
+  whoever holds it is all of them already; flow 1d has the mechanism.
 - **`insecure` gives up knowing which proxy answered.** It is per workspace and
   it does not weaken the SSH session inside, but a proxy you cannot identify is
   a proxy that can stop working for you and start working for somebody else.
