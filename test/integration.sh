@@ -91,8 +91,10 @@ echo "== 4. start the workspace =="
 # The WebSocket port is published for section 19's reverse proxy.
 # WORKSPACE_DIND_MOUNTS declares paths the workspace daemon resolves, which 9d
 # binds (ADR 0041). With the shared daemon the source side is what it sees.
+# Metrics on loopback only, the way ADR 0054 advises; section 11i scrapes them.
 workspace_up false "$ACCOUNT" -p "$WS_PORT:2280" \
-    -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro
+    -e WORKSPACE_DIND_MOUNTS=/etc/workspace:/etc/workspace:ro,/etc/hostname:/etc/hostname:ro \
+    -e WORKSPACE_METRICS_ADDR=127.0.0.1:9090
 
 echo
 echo "== 5. status =="
@@ -1066,6 +1068,17 @@ fi
 
 echo
 echo "== 11h. a device enrols its own key with a token =="
+# scrape reads /metrics from inside the workspace, where the listener is bound.
+# busybox wget -S prints the response headers to stderr, which outputs keeps.
+scrape() { hostdocker exec "$CONTAINER" wget -S -q -O - http://127.0.0.1:9090/metrics; }
+# redemptions_timed sums the redemption histogram's _count over every outcome,
+# in the last scrape.
+redemptions_timed() {
+    awk '/^remote_docker_token_redemption_duration_seconds_count/ {n += $NF} END {print n + 0}' <<<"$LAST_OUTPUT"
+}
+outputs . scrape
+REDEMPTIONS_BEFORE=$(redemptions_timed)
+
 # ADR 0051: the operator mints a token inside the workspace, and a client with
 # a key nobody has seen redeems it. Each redeemer is a machine of its own: its
 # own state directory, key and config, and none of the suite's settings.
@@ -1129,6 +1142,45 @@ else
         bad "an unbound token did not create itest5: $LAST_OUTPUT"
         dump_workspace_log 20
     fi
+fi
+
+echo
+echo "== 11i. metrics =="
+# ADR 0054. Scraped with a session pinned open: the idle release would otherwise
+# leave no connection to count.
+ssh_account "$REMOTE_DOCKER_STATE_DIR/id_ed25519" "$ACCOUNT" 90 'echo LIVE; sleep 60' >"$WORK/metrics-ssh.log" 2>&1 &
+METRICS_SSH_PID=$!
+wait_output '^LIVE' 30 cat "$WORK/metrics-ssh.log" || info "the pinning ssh session never said LIVE: $(head -3 "$WORK/metrics-ssh.log")"
+
+if outputs 'Content-Type: text/plain; version=0\.0\.4; charset=utf-8' scrape; then
+    ok "the metrics listener answers in the 0.0.4 text format"
+else
+    bad "no 0.0.4 Content-Type from /metrics (exit $LAST_STATUS): $(head -12 <<<"$LAST_OUTPUT")"
+fi
+if grep -qE '^remote_docker_build_info\{version="[^"]+",goversion="go[^"]+"\} 1$' <<<"$LAST_OUTPUT"; then
+    ok "build_info names the version and the Go"
+else
+    bad "no build_info line: [$(grep build_info <<<"$LAST_OUTPUT")]"
+fi
+if grep -qE '^process_resident_memory_bytes [1-9]' <<<"$LAST_OUTPUT" && grep -qE '^go_goroutines [1-9]' <<<"$LAST_OUTPUT"; then
+    ok "process and Go runtime metrics are read"
+else
+    bad "process metrics missing: [$(grep -E '^(process|go)_' <<<"$LAST_OUTPUT" | tr '\n' ' ')]"
+fi
+if wait_output "^remote_docker_ssh_connections\\{account=\"$ACCOUNT\"\\} [1-9]" 15 scrape; then
+    ok "an open session counts as a connection for $ACCOUNT"
+else
+    bad "no connection counted for $ACCOUNT: [$(grep ssh_connections <<<"$LAST_OUTPUT" | tr '\n' ' ')]"
+fi
+stop_pid "$METRICS_SSH_PID"
+
+outputs . scrape
+redemptions_after=$(redemptions_timed)
+if [ "$redemptions_after" -gt "$REDEMPTIONS_BEFORE" ] &&
+    grep -qE '^remote_docker_token_redemption_duration_seconds_count\{outcome="ok"\} [1-9]' <<<"$LAST_OUTPUT"; then
+    ok "the redemptions in 11h were timed ($REDEMPTIONS_BEFORE before, $redemptions_after after)"
+else
+    bad "redemptions timed: $REDEMPTIONS_BEFORE before 11h, $redemptions_after after: [$(grep redemption_duration_seconds_count <<<"$LAST_OUTPUT" | tr '\n' ' ')]"
 fi
 
 echo

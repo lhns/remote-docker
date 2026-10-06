@@ -792,10 +792,15 @@ untested; only the elevation mechanism is.
 
 Set `WORKSPACE_METRICS_ADDR` (`metrics.enabled` in the chart) and the agent
 serves `GET /metrics` in the Prometheus text format on that address. It is a
-listener of its own, never the SSH or WebSocket port, and it has no
-authentication: keep it inside the network your Prometheus scrapes from.
-Labels are account names and fixed words, never keys, client ids or token ids
+listener of its own, never the SSH or WebSocket port. Labels are account names
+and fixed words, never keys, client ids or token ids
 ([ADR 0054](docs/adr/0054-metrics-on-an-opt-in-plain-http-listener.md)).
+
+**It has no authentication.** Anything that reaches the port can read which
+accounts exist and what they are doing. `:9090`, which the chart uses, listens
+on every interface: restrict it with a NetworkPolicy that admits only your
+Prometheus, or bind `WORKSPACE_METRICS_ADDR` to one address, such as
+`127.0.0.1:9090` or a private interface.
 
 | metric | type | labels |
 |---|---|---|
@@ -809,6 +814,13 @@ Labels are account names and fixed words, never keys, client ids or token ids
 | `remote_docker_token_redemptions_total` | counter | `outcome`: `ok`, `pending` (the account is still being created), `refused`, `failed` (the workspace's side) |
 | `remote_docker_token_limiter_rejections_total` | counter | redemptions turned away after too many failures |
 | `remote_docker_account_daemons` | gauge | per-account daemons the agent has started or adopted; not probed, so one that died is still counted. Absent with a shared daemon |
+| `remote_docker_token_redemption_duration_seconds` | histogram | `outcome`, as for redemptions; includes waiting for a new account to be created |
+| `remote_docker_daemon_start_duration_seconds` | histogram | a per-account daemon starting or restarting until it answers; failed starts are not observed, and with a shared daemon it stays empty |
+| `remote_docker_account_provision_duration_seconds` | histogram | `outcome`: `ok`, `failed`; creating an account's unix user |
+| `remote_docker_ephemeral_sweep_duration_seconds` | histogram | one sweep for expired runs, cleanup included |
+| `remote_docker_build_info` | gauge | `version`, `goversion`; always 1 |
+| `go_goroutines`, `go_memstats_heap_alloc_bytes` | gauge | the Go runtime |
+| `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_open_fds`, `process_start_time_seconds` | counter, gauges | the agent process, under the standard names; Linux only |
 
 ### How long a cold daemon has to start
 

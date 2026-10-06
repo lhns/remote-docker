@@ -14,6 +14,7 @@ import (
 func withMetrics(m *Metrics) func(*Config) {
 	var reg metrics.Registry
 	m.Redemptions = reg.Counter("redemptions_total", "", "outcome")
+	m.RedemptionSeconds = reg.Histogram("redemption_seconds", "", []float64{1}, "outcome")
 	m.LimiterRejections = reg.Counter("limiter_rejections_total", "")
 	m.RunsRefused = reg.Counter("runs_refused_total", "", "reason")
 	return func(cfg *Config) { cfg.Metrics = *m }
@@ -48,6 +49,9 @@ func TestRedemptionsAreCountedByOutcome(t *testing.T) {
 	} {
 		if v := m.Redemptions.Value(outcome); v != want {
 			t.Errorf("redemptions{%s} = %v, want %v", outcome, v, want)
+		}
+		if n := m.RedemptionSeconds.Count(outcome); float64(n) != want {
+			t.Errorf("redemption durations{%s} = %d, want %v", outcome, n, want)
 		}
 	}
 	if v := m.LimiterRejections.Value(); v != 1 {

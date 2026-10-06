@@ -97,7 +97,9 @@ ephemeral:
 # own (WORKSPACE_METRICS_ADDR), never the SSH or WebSocket one. Enabled, the pod
 # carries the prometheus.io/scrape, /port and /path annotations. No
 # ServiceMonitor, which would need the operator's CRD. Change the port here,
-# not with an `env` entry: the annotations follow `port`.
+# not with an `env` entry: the annotations follow `port`. The port has no
+# authentication and listens on every interface: admit only the scraper with a
+# NetworkPolicy.
 metrics:
   enabled: false
   port: 9090

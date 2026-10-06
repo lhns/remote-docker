@@ -122,6 +122,11 @@ type Store struct {
 	// provisioning before returning ErrProvisioning. Zero means 30s.
 	ProvisionWait time.Duration
 
+	// ProvisionObserved, if set, is told how long each background Ensure took
+	// and its error. Set before the first Sync; the agent turns it into a
+	// metric (ADR 0054).
+	ProvisionObserved func(took time.Duration, err error)
+
 	// syncMu serialises a sync's decision: reading the directories, handing
 	// out uids, persisting the uidmap and swapping the result in. Without it two
 	// syncs would each load their own uid map, each call nextUID, and hand one
@@ -496,8 +501,13 @@ func (s *Store) provision(accounts []*Account) []chan struct{} {
 	go func() {
 		for i, a := range accounts {
 			s.provMu.Lock()
+			began := time.Now()
 			unix, home, err := s.Provisioner.Ensure(a.Name, a.UID, s.Shell)
+			took := time.Since(began)
 			s.provMu.Unlock()
+			if s.ProvisionObserved != nil {
+				s.ProvisionObserved(took, err)
+			}
 
 			if err != nil {
 				s.log().Error("could not provision an account", "account", a.Name, "err", err)

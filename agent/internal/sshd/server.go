@@ -95,6 +95,9 @@ type Metrics struct {
 	// RedeemPending, RedeemRefused or RedeemFailed.
 	Redemptions *metrics.Counter
 
+	// RedemptionSeconds times each redemption, labelled as Redemptions.
+	RedemptionSeconds *metrics.Histogram
+
 	// LimiterRejections counts redemptions the global limiter turned away.
 	LimiterRejections *metrics.Counter
 

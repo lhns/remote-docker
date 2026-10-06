@@ -82,10 +82,12 @@ type Registry struct {
 
 	Log *slog.Logger
 
-	// Refused counts refused runs by reason (RefusedLimit, RefusedCleaning),
-	// and Sweeps counts sweeps. Nil counts nothing.
-	Refused *metrics.Counter
-	Sweeps  *metrics.Counter
+	// Refused counts refused runs by reason (RefusedLimit, RefusedCleaning).
+	// Sweeps counts sweeps and SweepSeconds times them, cleanup included.
+	// Nil counts nothing.
+	Refused      *metrics.Counter
+	Sweeps       *metrics.Counter
+	SweepSeconds *metrics.Histogram
 
 	// now is the clock; nil is time.Now.
 	now func() time.Time
@@ -226,6 +228,7 @@ func (r *Registry) Sweep(ctx context.Context) {
 	r.sweeping.Lock()
 	defer r.sweeping.Unlock()
 	r.Sweeps.Inc()
+	defer r.SweepSeconds.Since(time.Now())
 
 	type due struct {
 		k     key
