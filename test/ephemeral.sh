@@ -693,7 +693,10 @@ union_released() {
         ok "run $n ($how): its record, containers and volumes, cache included, are gone $(($(date +%s) - start))s later"
     else
         bad "run $n ($how) left: $LAST_OUTPUT"
-        hostdocker logs "$CONTAINER" 2>&1 | grep -iE "ephemeral|union|run's" | tail -10 | sed 's/^/        /'
+        hostdocker logs -t "$CONTAINER" 2>&1 | grep -iE "\[ephemeral\]|union" | tail -12 | sed 's/^/        /'
+        # A cleanup still running shows as a process waiting on something.
+        hostdocker exec "$CONTAINER" ps -o pid,stat,args 2>&1 |
+            awk '/union|unmount|fuse-overlayfs|docker volume/' | sed 's/^/        /'
     fi
     if mounts=$(merged_of "$client"); then
         if [ -z "$mounts" ]; then

@@ -3,6 +3,7 @@
 package union
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -189,12 +190,21 @@ func Release(spec Spec) error {
 		return err
 	}
 
+	return detach([]string{spec.Merged(), spec.Lower()}, unix.Unmount)
+}
+
+// detach unmounts each target lazily, and EINVAL (not a mount) is nothing to
+// do. It never asks first: mountedAt stats the target, and the lower is an NFS
+// mount whose server is usually what has just gone, so a stat waits out the
+// soft mount's retries (minutes, timeo=600) while umount2 does not revalidate
+// the root it detaches. That stat is what held an ephemeral run's cleanup,
+// and with it the run's cache volume, for over two minutes (test/ephemeral.sh
+// section 6b).
+func detach(targets []string, unmount func(string, int) error) error {
 	var failed error
-	for _, target := range []string{spec.Merged(), spec.Lower()} {
-		if !mountedAt(target) {
-			continue
-		}
-		if err := unix.Unmount(target, unix.MNT_DETACH); err != nil {
+	for _, target := range targets {
+		err := unmount(target, unix.MNT_DETACH)
+		if err != nil && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOENT) {
 			failed = fmt.Errorf("union: unmounting %s: %w", target, err)
 		}
 	}
