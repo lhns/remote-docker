@@ -131,20 +131,26 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 	return live, nil
 }
 
+// machine.Hold and machine.Locate, which a test replaces.
+var machineHold, machineLocate = machine.Hold, machine.Locate
+
 // dial reaches the workspace as cfg's account. A machine workspace is held
 // and located first, every time (ADR 0026); hold keeps it running and is nil
 // for any other, and the caller closes it after the client.
-func dial(ctx context.Context, cfg config.Config, signer ssh.Signer, hostKey ssh.HostKeyCallback) (_ *tunnelclient.Client, hold io.Closer, err error) {
+func dial(ctx context.Context, cfg config.Config, signer ssh.Signer, hostKey ssh.HostKeyCallback) (_ *tunnelclient.Client, _ io.Closer, err error) {
 	transport, err := cfg.Transport()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	host := transport.Host
+	// Not the named result, which `return nil, nil, err` clears before the
+	// deferred Close reads it.
+	var hold io.Closer
 	if m := cfg.Machine; m != nil {
 		// Held first: a WSL machine with no session in it shuts down under a
 		// working connection.
-		if hold, err = machine.Hold(ctx, m.Backend, m.Name); err != nil {
+		if hold, err = machineHold(ctx, m.Backend, m.Name); err != nil {
 			return nil, nil, err
 		}
 		defer func() {
@@ -153,7 +159,7 @@ func dial(ctx context.Context, cfg config.Config, signer ssh.Signer, hostKey ssh
 			}
 		}()
 		// Its address changes at boot.
-		if host, err = machine.Locate(ctx, m.Backend, m.Name, transport.Port); err != nil {
+		if host, err = machineLocate(ctx, m.Backend, m.Name, transport.Port); err != nil {
 			return nil, nil, err
 		}
 	}

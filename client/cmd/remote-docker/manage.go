@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf16"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
@@ -71,6 +73,12 @@ func newTokenCreateCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if account != "" && unbound {
 				return errors.New("--account and --unbound cannot both be given\n  fix: leave out one of them")
+			}
+			// Refused before the workspace mints anything: the invite would
+			// carry the placeholder address a machine's entry holds.
+			if cfg, err := resolve(nil); err == nil && cfg.Machine != nil {
+				return fmt.Errorf("workspace %q is a %s machine on this computer, which no other device can reach\n  fix: create the token on a workspace other devices reach",
+					cfg.Name, cfg.Machine.Backend)
 			}
 			reply, cfg, hostKey, err := manage(cmd, enrol.Request{
 				Op: enrol.OpTokenCreate, Account: account, Unbound: unbound, Expires: expires, Note: note,
@@ -331,7 +339,7 @@ func readPublicKey(stdin io.Reader, path string) (string, ssh.PublicKey, error) 
 	if err != nil {
 		return "", nil, err
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner := bufio.NewScanner(strings.NewReader(decodeText(data)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line)); err == nil {
@@ -339,6 +347,28 @@ func readPublicKey(stdin io.Reader, path string) (string, ssh.PublicKey, error) 
 		}
 	}
 	return "", nil, fmt.Errorf("%s holds no public key\n  fix: pass a .pub file, such as the one `%s` prints", path, ourCommand("enroll"))
+}
+
+// decodeText drops a byte order mark, decoding UTF-16 behind one: Windows
+// PowerShell 5.1 writes `remote enroll > key.pub` as UTF-16LE (checked
+// 2026-10-06: `powershell -NoProfile -Command "'x' > t.txt; Format-Hex t.txt"`).
+func decodeText(b []byte) string {
+	var order binary.ByteOrder
+	switch {
+	case bytes.HasPrefix(b, []byte{0xEF, 0xBB, 0xBF}):
+		return string(b[3:])
+	case bytes.HasPrefix(b, []byte{0xFF, 0xFE}):
+		order = binary.LittleEndian
+	case bytes.HasPrefix(b, []byte{0xFE, 0xFF}):
+		order = binary.BigEndian
+	default:
+		return string(b)
+	}
+	units := make([]uint16, 0, len(b)/2)
+	for i := 2; i+1 < len(b); i += 2 {
+		units = append(units, order.Uint16(b[i:]))
+	}
+	return string(utf16.Decode(units))
 }
 
 func newKeyRemoveCommand() *cobra.Command {

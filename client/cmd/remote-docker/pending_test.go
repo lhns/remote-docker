@@ -8,10 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/lhns/remote-docker/client/internal/session"
-	"github.com/lhns/remote-docker/core/enrol"
 )
 
 // A pending redeem (ADR 0051) waits for an account whose logins are refused
@@ -19,14 +16,9 @@ import (
 
 func pendingInvite(t *testing.T, m *manageServer) string {
 	t.Helper()
-	id, secret, err := enrol.NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
 	withConfig(t, nil)
 	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
-	return enrol.Invite{URL: "ssh://" + m.addr, HostKey: ssh.FingerprintSHA256(m.hostKey),
-		Account: "alice", Token: id + "." + secret}.String()
+	return redeemInvite(t, m)
 }
 
 func shortenAccountWait(t *testing.T, poll, limit time.Duration) {

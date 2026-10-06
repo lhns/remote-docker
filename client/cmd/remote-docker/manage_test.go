@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -157,6 +158,25 @@ func TestTokenCreatePrintsAnInviteForThisWorkspace(t *testing.T) {
 	}
 }
 
+// A machine's entry holds a placeholder address, so its invite would send the
+// device to its own loopback; refused before the workspace mints a token.
+func TestTokenCreateRefusesAMachine(t *testing.T) {
+	withConfig(t, &config.File{
+		Default: "dev",
+		Workspaces: map[string]config.Workspace{"dev": {
+			Host: machinePlaceholderHost, Port: 2222, User: "bob",
+			Machine: &config.Machine{Backend: "wsl", Name: "dev"},
+		}},
+	})
+	t.Setenv("REMOTE_DOCKER_STATE_DIR", t.TempDir())
+
+	err := run(t, "remote", "token", "create")
+	if err == nil || !strings.Contains(err.Error(), "no other device can reach") {
+		t.Fatalf("got %v", err)
+	}
+	requireFixLine(t, err, "other devices reach")
+}
+
 func TestAnOldAgentPredatesAccountManagement(t *testing.T) {
 	withManageServer(t, startManageServer(t, "", 127))
 	for _, args := range [][]string{{"token", "ls"}, {"user", "ls"}, {"key", "ls"}} {
@@ -229,6 +249,38 @@ func TestUserListShowsKeysPerSource(t *testing.T) {
 	for i, w := range want {
 		if i >= len(lines) || strings.Join(strings.Fields(lines[i]), " ") != strings.Join(w, " ") {
 			t.Fatalf("printed %q", out)
+		}
+	}
+}
+
+// Windows PowerShell 5.1 writes `remote enroll > key.pub` as UTF-16 with a
+// byte order mark, and some editors put a UTF-8 one before the first line.
+func TestKeyAddReadsAFileWithAByteOrderMark(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " alice@laptop"
+
+	utf16le := []byte{0xFF, 0xFE}
+	for _, r := range line + "\r\n" {
+		utf16le = append(utf16le, byte(r), 0)
+	}
+	for name, data := range map[string][]byte{
+		"utf-8":    append([]byte{0xEF, 0xBB, 0xBF}, line+"\r\n"...),
+		"utf-16le": utf16le,
+	} {
+		got, key, err := readPublicKey(bytes.NewReader(data), "-")
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if got != line || ssh.FingerprintSHA256(key) != ssh.FingerprintSHA256(signer.PublicKey()) {
+			t.Errorf("%s: read %q", name, got)
 		}
 	}
 }
