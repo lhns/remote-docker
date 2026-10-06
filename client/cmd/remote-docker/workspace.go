@@ -109,8 +109,16 @@ workspace's address, which --host overrides, and its host key.`,
 				}
 				_, _ = fmt.Fprintf(out, "this machine's key %s %s\n", how, enrolled.Account)
 				if enrolled.Pending {
-					_, _ = fmt.Fprintf(out, "the account %s is still being created on the workspace, which refuses this key until it is\n"+
-						"  fix: wait a minute or two before the first docker command\n", enrolled.Account)
+					// The key is written, the token spent and the config saved.
+					_, _ = fmt.Fprintf(out, "creating account %s on the workspace...\n", enrolled.Account)
+					if err := session.WaitForAccount(cmd.Context(), cfg); err != nil {
+						if errors.Is(err, session.ErrAccountNotReady) {
+							return fmt.Errorf("the workspace has not finished creating account %s\n  fix: ask its operator to check the agent log, then run `%s`",
+								enrolled.Account, ourCommand("status"))
+						}
+						return err
+					}
+					_, _ = fmt.Fprintf(out, "account %s is ready\n", enrolled.Account)
 				}
 			}
 			if !noContext {
