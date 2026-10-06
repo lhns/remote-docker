@@ -144,7 +144,7 @@ func (p *Ports) preferred(account, client string) (int, error) {
 	}
 	want, err := p.Preferred(account, client)
 	if err != nil {
-		return 0, fmt.Errorf("accounts: cannot tell which port %s's machine needs: %w", account, err)
+		return 0, fmt.Errorf("accounts: cannot tell which port %s needs: %w", account, err)
 	}
 	return want, nil
 }

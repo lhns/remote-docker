@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // A subscriber is how a revocation reaches live connections, so it must see the
@@ -45,5 +46,24 @@ func TestSubscribeRunsAfterTheSwap(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("the subscriber ran after a failed sync: %d calls", calls)
+	}
+}
+
+// A subscriber may ask the store anything. Run under syncMu, one calling Known
+// deadlocked the sync that ran it.
+func TestASubscriberMayCallKnown(t *testing.T) {
+	s := newStore(t)
+	s.writeKey(t, "alice.pub")
+	s.Subscribe(func() { _, _ = s.Known("bob") })
+
+	done := make(chan error, 1)
+	go func() { done <- s.Sync() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Sync did not return: its subscriber is waiting for the lock Sync holds")
 	}
 }

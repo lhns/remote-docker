@@ -167,7 +167,9 @@ func TestCreateAccountRefusesATakenName(t *testing.T) {
 
 func TestAStaleLockIsBrokenOnce(t *testing.T) {
 	s := newStore(t)
-	shortLocks(t, lockStale, time.Second)
+	// Long enough that no holder in the queue behind the break outlasts it,
+	// which a loaded Windows machine's fsync can come close to.
+	shortLocks(t, lockStale, 3*time.Second)
 	lock := filepath.Join(s.enrolledDir, ".alice.pub.lock")
 	if err := os.Mkdir(lock, 0o700); err != nil {
 		t.Fatal(err)
