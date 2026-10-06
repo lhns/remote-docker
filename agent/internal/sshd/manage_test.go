@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,7 @@ func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 		c.Ports = ports
 		c.Runs = runs
 	})
+	runs.Enrolled = Enrolled(w.store) // as serve wires it with a daemon per account
 	return &manageWorkspace{tokenWorkspace: w, targets: targets, ports: ports, runs: runs}
 }
 
@@ -303,41 +305,86 @@ func TestUserRemovePurgeTakesTheStorageAndThePortsAndKeepsTheUID(t *testing.T) {
 	}
 }
 
-// Cleaning an expired run starts its account's daemon, so a removed account's
-// runs go with its daemon rather than bringing it back one grace period later.
-func TestUserRemoveDropsTheAccountsRuns(t *testing.T) {
-	w := startManageWorkspace(t, "alice")
-	var mu sync.Mutex
-	var cleaned []string
-	w.runs.Grace = time.Nanosecond
-	w.runs.Cleanup = func(_ context.Context, account, _ string) error {
-		mu.Lock()
-		defer mu.Unlock()
-		cleaned = append(cleaned, account)
-		return nil
-	}
-	alice, bob := newSigner(t), newSigner(t)
-	w.enrol(t, "alice", alice)
-	w.enrolKey(t, "bob", bob)
-	release, err := w.runs.Attach("bob", "aabbccdd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.runs.Port("bob", "aabbccdd"); err != nil {
-		t.Fatal(err)
-	}
-	release()
+// Cleaning an expired run starts its account's daemon, and the run's volumes
+// name its port until a purge removes that daemon's storage. So a removed
+// account's runs keep their ports, uncleaned, unless a purge succeeded.
+func TestUserRemoveKeepsTheAccountsRunsUntilAPurge(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		purge    bool
+		resetErr error
+		mode     string
+		dropped  bool
+	}{
+		{"without a purge", false, nil, "", false},
+		{"with a purge", true, nil, "", true},
+		{"with a purge that failed", true, errors.New("docker: no such volume"), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := startManageWorkspace(t, "alice")
+			w.targets.resetErr, w.targets.mode = tc.resetErr, tc.mode
+			var mu sync.Mutex
+			var cleaned []string
+			w.runs.Grace = time.Nanosecond
+			w.runs.Cleanup = func(_ context.Context, account, _ string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				cleaned = append(cleaned, account)
+				return nil
+			}
+			alice, bob := newSigner(t), newSigner(t)
+			w.enrol(t, "alice", alice)
+			w.enrolKey(t, "bob", bob)
+			release, err := w.runs.Attach("bob", "aabbccdd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.runs.Port("bob", "aabbccdd"); err != nil {
+				t.Fatal(err)
+			}
+			release()
 
-	wantOK(t, manageOn(t, w.dial(t, "alice", alice), enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Force: true}))
-	w.runs.Sweep(t.Context())
+			manageOn(t, w.dial(t, "alice", alice), enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Force: true, Purge: tc.purge})
+			w.runs.Sweep(t.Context())
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(cleaned) != 0 {
-		t.Errorf("cleaned a run of %v after removing bob, which starts bob's daemon again", cleaned)
+			mu.Lock()
+			defer mu.Unlock()
+			if len(cleaned) != 0 {
+				t.Errorf("cleaned a run of %v after removing bob, which starts bob's daemon again", cleaned)
+			}
+			if _, held, _ := w.ports.Lookup("bob", "aabbccdd"); held == tc.dropped {
+				t.Errorf("bob's run holds its port: %t, want %t", held, !tc.dropped)
+			}
+		})
 	}
-	if _, known, _ := w.ports.Lookup("bob", "aabbccdd"); known {
-		t.Error("bob's run still holds its port")
+}
+
+// A purge forgets the account's ports only once the volumes naming them are
+// gone, which a failed reset or a shared daemon leaves in place.
+func TestUserRemovePurgeKeepsThePortsWhileTheVolumesStay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		resetErr error
+		mode     string
+	}{
+		{"a failed reset", errors.New("docker: no such volume"), ""},
+		{"a shared daemon", nil, workspace.ModeShared},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := startManageWorkspace(t, "alice")
+			w.targets.resetErr, w.targets.mode = tc.resetErr, tc.mode
+			alice, bob := newSigner(t), newSigner(t)
+			w.enrol(t, "alice", alice)
+			w.enrolKey(t, "bob", bob)
+			b, _ := w.store.Lookup("bob")
+			if _, err := w.ports.For("bob", b.UID, "aabbccdd"); err != nil {
+				t.Fatal(err)
+			}
+			manageOn(t, w.dial(t, "alice", alice), enrol.Request{Op: enrol.OpUserRemove, Account: "bob", Force: true, Purge: true})
+			if _, known, _ := w.ports.Lookup("bob", "aabbccdd"); !known {
+				t.Error("bob's machine left clientports while volumes may still name its port")
+			}
+		})
 	}
 }
 

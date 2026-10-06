@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -53,6 +54,10 @@ type fakeTargets struct {
 	// running is what Running answers; reset records Reset.
 	running map[string]int
 	reset   []string
+
+	// resetErr makes Reset fail; mode is what Mode answers, "fake" if empty.
+	resetErr error
+	mode     string
 }
 
 func (f *fakeTargets) Ensure(_ context.Context, account string) (daemons.Target, error) {
@@ -83,7 +88,7 @@ func (f *fakeTargets) Warm(account string) {
 	f.warmed = append(f.warmed, account)
 }
 
-func (f *fakeTargets) Mode() string { return "fake" }
+func (f *fakeTargets) Mode() string { return cmp.Or(f.mode, "fake") }
 
 func (f *fakeTargets) Running(_ context.Context, account string) int {
 	f.mu.Lock()
@@ -95,7 +100,7 @@ func (f *fakeTargets) Reset(_ context.Context, account string, purge bool) error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reset = append(f.reset, fmt.Sprintf("%s purge=%t", account, purge))
-	return nil
+	return f.resetErr
 }
 
 func twoAccounts() *fakeTargets {
