@@ -47,7 +47,7 @@ func hostKeyDirFor(stateDir string) string {
 // prints, and the device enrols its own key. Run inside the workspace:
 //
 //	docker exec <workspace> remote-dockerd token create --account alice
-//	kubectl exec deploy/<release> -- remote-dockerd token create --account alice
+//	kubectl exec <release>-remote-docker-workspace-0 -- remote-dockerd token create --account alice
 func newTokenCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "token",

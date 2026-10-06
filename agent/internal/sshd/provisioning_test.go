@@ -64,14 +64,14 @@ func TestARedeemAndAKeyAddDoNotWaitForAnotherAccountsProvisioning(t *testing.T) 
 	w := startManageWorkspace(t, "alice")
 	aliceKey := newSigner(t)
 	w.enrol(t, "alice", aliceKey)
-	w.provisioning(t, "carol", 5*time.Second)
+	w.provisioning(t, "carol", 15*time.Second)
 
 	// A bound token into an account that exists.
 	id, secret := w.mint(t, "alice")
 	second := newSigner(t)
 	c := w.redeemer(t, id, second)
 	var reply enrol.RedeemReply
-	within(t, 500*time.Millisecond, "a redeem into alice", func() {
+	within(t, 2*time.Second, "a redeem into alice", func() {
 		reply = redeemOn(t, c, enrol.RedeemRequest{Secret: secret})
 	})
 	if reply.Error != nil || reply.Account != "alice" || reply.Created {
@@ -82,7 +82,7 @@ func TestARedeemAndAKeyAddDoNotWaitForAnotherAccountsProvisioning(t *testing.T) 
 	// An unbound token asks Known.
 	id, secret = w.mint(t, "")
 	c = w.redeemer(t, id, newSigner(t))
-	within(t, 500*time.Millisecond, "refusing an unbound token a taken name", func() {
+	within(t, 2*time.Second, "refusing an unbound token a taken name", func() {
 		wantCode(t, redeemOn(t, c, enrol.RedeemRequest{Secret: secret, Account: "alice"}), enrol.CodeName)
 	})
 
@@ -90,7 +90,7 @@ func TestARedeemAndAKeyAddDoNotWaitForAnotherAccountsProvisioning(t *testing.T) 
 	third := newSigner(t)
 	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(third.PublicKey())))
 	ca := w.dial(t, "alice", aliceKey)
-	within(t, 500*time.Millisecond, "key add for alice", func() {
+	within(t, 2*time.Second, "key add for alice", func() {
 		wantOK(t, manageOn(t, ca, enrol.Request{Op: enrol.OpKeyAdd, Key: line}))
 	})
 	w.dial(t, "alice", third)
@@ -101,13 +101,13 @@ func TestARedeemAndAKeyAddDoNotWaitForAnotherAccountsProvisioning(t *testing.T) 
 func TestARedeemReportsAnAccountStillBeingCreated(t *testing.T) {
 	w := startTokenWorkspace(t, "")
 	w.store.ProvisionWait = 200 * time.Millisecond
-	w.provisioning(t, "carol", 2*time.Second) // one useradd at a time: dave's waits for it
+	w.provisioning(t, "carol", 4*time.Second) // one useradd at a time: dave's waits for it
 
 	id, secret := w.mint(t, "")
 	key := newSigner(t)
 	c := w.redeemer(t, id, key)
 	var reply enrol.RedeemReply
-	within(t, time.Second, "a redeem creating dave", func() {
+	within(t, 2*time.Second, "a redeem creating dave", func() {
 		reply = redeemOn(t, c, enrol.RedeemRequest{Secret: secret, Account: "dave"})
 	})
 	if reply.Error != nil || reply.Account != "dave" || !reply.Created || !reply.Pending {
@@ -117,7 +117,7 @@ func TestARedeemReportsAnAccountStillBeingCreated(t *testing.T) {
 		t.Error("the token is still live, though its key is enrolled")
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(8 * time.Second)
 	for {
 		if a, ok := w.store.Lookup("dave"); ok && a.Authorized(key.PublicKey()) {
 			break

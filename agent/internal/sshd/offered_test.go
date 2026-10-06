@@ -58,7 +58,7 @@ func TestAnOfferedKeyIsNotALogin(t *testing.T) {
 	probed := false
 	signer := probeSigner{Signer: key, probe: func() {
 		probed = true
-		if s.conns.connected("alice") {
+		if s.Connections()["alice"] > 0 {
 			t.Error("an offered key that has not signed is connected as alice")
 		}
 		if n := warmed(); n != 0 {
@@ -75,7 +75,7 @@ func TestAnOfferedKeyIsNotALogin(t *testing.T) {
 	if !probed {
 		t.Fatal("the client never signed")
 	}
-	if !s.conns.connected("alice") || warmed() != 1 {
-		t.Errorf("after signing: connected %t, warmed %d; want true, 1", s.conns.connected("alice"), warmed())
+	if n := s.Connections()["alice"]; n != 1 || warmed() != 1 {
+		t.Errorf("after signing: %d connection(s) as alice, warmed %d; want 1, 1", n, warmed())
 	}
 }

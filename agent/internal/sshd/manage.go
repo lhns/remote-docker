@@ -196,6 +196,7 @@ func noAccount(name string) *enrol.Error {
 func (s *Server) users() []enrol.User {
 	var out []enrol.User
 	seen := map[string]bool{}
+	connected := s.Connections()
 	for _, a := range s.cfg.Accounts.List() {
 		seen[a.Name] = true
 		u := enrol.User{Name: a.Name, UID: a.UID, Admin: s.cfg.Admins[a.Name], State: enrol.StateEnrolled}
@@ -205,7 +206,7 @@ func (s *Server) users() []enrol.User {
 		switch {
 		case len(a.Keys) == 0:
 			u.State = enrol.StateRevoked
-		case s.conns.connected(a.Name):
+		case connected[a.Name] > 0:
 			u.State = enrol.StateConnected
 		}
 		out = append(out, u)
