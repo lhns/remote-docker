@@ -243,7 +243,7 @@ func assertAskedOnlyFor(t *testing.T, targets *fakeTargets, account string) {
 	}
 }
 
-// Authentication warms the account's own daemon, so the boot hides behind the
+// A login warms the account's own daemon, so the boot hides behind the
 // round trips that follow rather than behind the user's first docker command.
 // A key that is refused warms nothing, or anybody could boot anybody's daemon.
 func TestAuthenticationWarmsTheAccountsDaemon(t *testing.T) {
@@ -268,7 +268,7 @@ func TestAuthenticationWarmsTheAccountsDaemon(t *testing.T) {
 	}
 
 	ctx := newFakeContext("alice")
-	if !s.authenticate(ctx, key) {
+	if !s.authenticate(ctx, key) || s.loggedIn(ctx, key) != nil {
 		t.Fatal("alice's own key was refused")
 	}
 	if len(targets.warmed) != 1 || targets.warmed[0] != "alice" {
@@ -302,7 +302,7 @@ func TestAuthenticationFoldsTheLoginName(t *testing.T) {
 	s := &Server{cfg: Config{Accounts: store, Daemons: targets}}
 
 	ctx := newFakeContext("Alice")
-	if !s.authenticate(ctx, key) {
+	if !s.authenticate(ctx, key) || s.loggedIn(ctx, key) != nil {
 		t.Fatal("the login name Alice was refused the account Alice.pub enrolled")
 	}
 	if account, ok := accountFor(ctx); !ok || account.Name() != "alice" {

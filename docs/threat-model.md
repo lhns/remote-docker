@@ -271,6 +271,7 @@ sequenceDiagram
     actor Op as Operator
     participant Agent as remote-dockerd (root)
     participant Client as remote-docker (alice)
+    participant Tokens as tokens/ (state volume)
     participant Keys as enrolled_keys.d
     participant D as rd-dind-bob
 
@@ -279,6 +280,7 @@ sequenceDiagram
     Client->>Agent: workspace-enrol {op: user.rm, account: bob}
     Agent->>Agent: authorize(alice, bob): admin? self? last admin? operator keys?
     Agent->>D: running containers? (refused without -f)
+    Agent->>Tokens: revoke bob's tokens, claimed ones too
     Agent->>Keys: delete bob.pub, under its lock
     Agent->>Agent: sweep: close bob's connections
     Agent->>D: docker rm -f rd-dind-bob (rd-dind-bob-lib kept)
@@ -324,8 +326,19 @@ runs containers, or cannot say, unless `-f`, and never deletes
 first two, the unix user and the port records, by design and only when an
 admin asks: the volume only with both its labels, the home only if it is the
 one the account recorded, owned by its uid, with nothing mounted inside. The
-uid is never deleted. Tokens bound to the account are revoked, or a token the
-account minted for itself beforehand would bring it back.
+uid is never deleted.
+
+**E — a removed account coming back (6, 7).** A token the account minted for
+itself beforehand would re-enrol it, so its tokens are revoked before its keys
+are deleted, including one a redemption has already claimed: that redemption
+fails when it completes its claim and takes its key out again. One that
+completed first has its key deleted in step 7. *Covered by*
+`TestUserRemoveWithdrawsAClaimedToken` and
+`TestATokenWithdrawnMidRedemptionEnrolsNothing`.
+
+**S — learning another account's token ids.** `token rm` of a token the caller
+may not remove answers `no token <id>`, as for one that does not exist.
+*Covered by* `TestTokenRemoveIsNoOracle`.
 
 **R.** Every change is a `component=audit` line naming the operation, who asked,
 the account, the token id or key fingerprint, and the source address. Never a

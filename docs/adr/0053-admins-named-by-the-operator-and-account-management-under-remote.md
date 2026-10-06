@@ -1,7 +1,8 @@
 # 0053 — Admins named by the operator, and account management under remote
 
 - Status: Accepted
-- Date: 2026-10-05, amended 2026-10-06 (`user rm --purge`)
+- Date: 2026-10-05, amended 2026-10-06 (`user rm --purge`; token withdrawal
+  before the keys; `key rm` of an operator key in `authorize`)
 
 ## What forced it
 
@@ -37,7 +38,9 @@ workspace as root. Most of that belongs to the people using it.
 
 A refusal is one line and a fix: `only an admin can create a token for another
 account (you are bob)` / `fix: ask an admin, or the operator: \`remote-dockerd
-token create --account carol\``.
+token create --account carol\``. The exception is `token rm` of a token the
+caller may not remove: that is `no token <id>`, as for one that does not exist,
+since saying "another account's" would confirm the id.
 
 ### What even an admin cannot do
 
@@ -53,10 +56,14 @@ token create --account carol\``.
 ### `user rm`
 
 1. authorize, then ask `Daemons.Running` (`-f` skips it);
-2. `RemoveAccountFile`, which syncs, and the sweep closes the account's
+2. revoke every token bound to the account, which would otherwise bring it
+   back, including one a redemption has claimed: that redemption then fails
+   at `Claim.Done` and takes its key out again. Before step 3, so a
+   redemption that completes first has its key removed with the file;
+3. `RemoveAccountFile`, which syncs, and the sweep closes the account's
    connections (ADR 0028);
-3. revoke every token bound to the account, which would otherwise bring it back;
-4. `Daemons.Reset(purge=false)`: the daemon container goes.
+4. in per-account mode, drop the account's ephemeral runs (ADR 0050);
+5. `Daemons.Reset(purge=false)`: the daemon container goes.
 
 Kept: `rd-dind-<account>-lib`, the home directory, the unix user, the uid and
 the port records. A new bound token for the name brings the account back as it
@@ -69,12 +76,12 @@ was; an unbound one never takes the name (the uidmap keeps it).
   implements them, so no use site asks which mode it is in (ADR 0019). On the
   shared daemon (ADR 0012) `Running` is 0, `Reset` does nothing, and the reply
   says the daemon's containers, images and volumes were not touched.
-- A step after step 2 that fails is a notice in the reply; the keys are
+- A step after step 3 that fails is a notice in the reply; the keys are
   already revoked.
 
 ### `user rm --purge`
 
-The same checks and steps, `-f` included, with step 4 as
+The same checks and steps, `-f` included, with step 5 as
 `Daemons.Reset(purge=true)`: `rd-dind-<account>-lib` goes too, only if it
 carries both the managed and the account label. Then:
 

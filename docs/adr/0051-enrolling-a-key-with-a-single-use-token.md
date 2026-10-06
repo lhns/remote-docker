@@ -62,7 +62,8 @@ host key on first use, with nothing to check it against.
 7. the key now authenticates the account; otherwise undo the write and
    `Restore` the token. An account still being created after 30s is not
    undone: the reply says `pending` and the key works once it exists
-8. `Done` deletes it
+8. `Done` deletes it. A claim `Revoke` took meanwhile (`user rm`, ADR 0053)
+   fails here, and the write is undone
 9. an audit line, `component=audit op=token.redeem token key account from`
 10. the reply
 

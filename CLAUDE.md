@@ -739,9 +739,14 @@ premise of the project, and it applies to building it too. So:
   cannot-tell means keep** (ADR 0050). Volumes need the `rd-` prefix, the
   managed label, the account and the client, and are kept while a container
   names them or `MountedCaches` lists them; containers and compose networks go
-  only with `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS`. Anything kept, or any
-  listing that fails, keeps the run and its port for the next sweep: a port
-  freed while a volume names it mounts the next run's export.
+  only with `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS`, and a network only
+  through a container of the run, since networks carry no owner and on a
+  shared daemon another account can name a project with the same suffix.
+  Anything kept, or any listing that fails, keeps the run and its port for the
+  next sweep: a port freed while a volume names it mounts the next run's
+  export. In per-account mode `user rm` drops the account's runs and frees
+  their ports WITHOUT cleaning them: cleaning calls `Ensure`, which would start
+  the removed account's daemon again, and the runs' objects went with it.
 
 - **A port reservation belongs to a session, not to an account.** One listener
   can hold a port, so `Bind` refuses anybody who is not already nobody,
@@ -813,7 +818,10 @@ premise of the project, and it applies to building it too. So:
   ports (ADR 0028). The two-read rule still decides WHEN an emptied file
   revokes. A connection records who it is under the registry's lock and asks
   again there, or a sync landing mid-handshake would sweep before there was
-  anything to close.
+  anything to close. It records that only once a key has SIGNED
+  (`VerifiedPublicKeyCallback`): the public key handler also answers keys a
+  client merely offers, so recording there showed a peer that never logged in
+  as connected, and warmed its daemon.
 - **A token login has no account, and may only redeem, once** (ADR 0051).
   `+token:<id>` is checked BEFORE the login is folded, and accepts any key for
   a live id, read-only. The connection carries a `redeemer` and never a

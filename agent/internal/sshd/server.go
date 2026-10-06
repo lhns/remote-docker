@@ -4,6 +4,7 @@
 package sshd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -178,6 +179,16 @@ func New(cfg Config) (*Server, error) {
 		PublicKeyHandler: s.authenticate,
 		BannerHandler:    banner,
 
+		// authenticate also answers a key the client only offers; this runs
+		// once a key has signed, so only the key that logged in is recorded.
+		ServerConfigCallback: func(ctx gssh.Context) *ssh.ServerConfig {
+			return &ssh.ServerConfig{
+				VerifiedPublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey, perms *ssh.Permissions, _ string) (*ssh.Permissions, error) {
+					return perms, s.loggedIn(ctx, key)
+				},
+			}
+		},
+
 		// A client that vanishes without saying so must still end its
 		// connection here, because that is what releases its reverse-tunnel
 		// port. See armDeadPeerDetection.
@@ -226,6 +237,8 @@ func New(cfg Config) (*Server, error) {
 
 // authenticate accepts a key only for the account it is enrolled against. The
 // login name is folded as the key file's name was, so Alice reaches alice.
+// It also answers a key the client only offers, so it records nothing beyond
+// this connection's context: loggedIn does that once the key has signed.
 func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	// Before folding, which would turn the prefix into part of a name.
 	if id, ok := strings.CutPrefix(ctx.User(), enrol.LoginPrefix); ok {
@@ -261,9 +274,25 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	}
 	ctx.SetValue(contextKey{}, session)
 	ctx.SetValue(redeemerKey{}, nil)
-	if !s.authenticated(ctx, account.Name, key) {
-		s.log().Warn("refused a connection: the key was revoked during the handshake", "account", name, "from", ctx.RemoteAddr())
-		return false
+	return true
+}
+
+// loggedIn runs once key has signed, which x/crypto does only after
+// authenticate accepted that same key last. An error refuses the login.
+func (s *Server) loggedIn(ctx gssh.Context, key ssh.PublicKey) error {
+	if r, ok := redeemerFor(ctx); ok {
+		if !bytes.Equal(r.key.Marshal(), key.Marshal()) {
+			return errors.New("sshd: a token login signed with a key it did not offer")
+		}
+		return nil
+	}
+	account, ok := accountFor(ctx)
+	if !ok || account.fingerprint != ssh.FingerprintSHA256(key) {
+		return errors.New("sshd: a login signed with a key it did not offer")
+	}
+	if !s.authenticated(ctx, account.name, key) {
+		s.log().Warn("refused a connection: the key was revoked during the handshake", "account", account.name, "from", ctx.RemoteAddr())
+		return errors.New("sshd: the key was revoked during the handshake")
 	}
 
 	// Start this account's daemon now, in the background, so its boot hides
@@ -271,8 +300,8 @@ func (s *Server) authenticate(ctx gssh.Context, key gssh.PublicKey) bool {
 	// forward. A cold dind takes seconds; without this the client's first
 	// docker command pays for all of them, looking like a hang rather than a
 	// start.
-	s.cfg.Daemons.Warm(account.Name)
-	return true
+	s.cfg.Daemons.Warm(account.name)
+	return nil
 }
 
 // accountFor returns the authenticated account for a connection.

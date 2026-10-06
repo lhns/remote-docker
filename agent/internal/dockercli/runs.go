@@ -22,16 +22,29 @@ type Volume struct {
 // 0050). Every method takes the daemon as a -H value, empty for the shared one.
 type RunObjects struct{}
 
+// Container is a run's container and the compose project it belongs to, empty
+// for none.
+type Container struct {
+	ID, Project string
+}
+
 // Containers is every container, running or not, labelled with this account
 // and client.
-func (RunObjects) Containers(ctx context.Context, host, account, client string) ([]string, error) {
-	out, err := CLI{Host: host}.Line(ctx, "ps", "--all", "--quiet", "--no-trunc",
+func (RunObjects) Containers(ctx context.Context, host, account, client string) ([]Container, error) {
+	out, err := CLI{Host: host}.Line(ctx, "ps", "--all", "--no-trunc",
 		"--filter", "label="+workspace.OwnerLabel+"="+account,
-		"--filter", "label="+workspace.ClientLabel+"="+client)
+		"--filter", "label="+workspace.ClientLabel+"="+client,
+		"--format", `{{.ID}}|{{.Label "`+composeProject+`"}}`)
 	if err != nil {
 		return nil, fmt.Errorf("dockercli: listing containers: %w", err)
 	}
-	return strings.Fields(out), nil
+	var cs []Container
+	for _, line := range strings.Split(out, "\n") {
+		if id, project, _ := strings.Cut(strings.TrimSpace(line), "|"); id != "" {
+			cs = append(cs, Container{ID: id, Project: project})
+		}
+	}
+	return cs, nil
 }
 
 // RemoveContainers removes containers, stopping them first, with their
@@ -41,25 +54,30 @@ func (RunObjects) RemoveContainers(ctx context.Context, host string, ids []strin
 		append([]string{"rm", "--force", "--volumes"}, ids...)...)
 }
 
-// Networks is every network compose made for a project whose name ends in
-// -<client>.
-func (RunObjects) Networks(ctx context.Context, host, client string) ([]string, error) {
+// Networks is every network compose made for one of projects whose name ends
+// in -<client>. A network carries no owner, so projects must come from the
+// run's own containers: on a shared daemon another account can name a project
+// with the same suffix.
+func (RunObjects) Networks(ctx context.Context, host, client string, projects map[string]bool) ([]string, error) {
+	if len(projects) == 0 {
+		return nil, nil
+	}
 	out, err := CLI{Host: host}.Line(ctx, "network", "ls",
 		"--filter", "label="+composeProject,
 		"--format", `{{.Name}}|{{.Label "`+composeProject+`"}}`)
 	if err != nil {
 		return nil, fmt.Errorf("dockercli: listing networks: %w", err)
 	}
-	return projectNetworks(out, client), nil
+	return projectNetworks(out, client, projects), nil
 }
 
-// projectNetworks picks, from name|project lines, the networks of a project
-// named for this client.
-func projectNetworks(out, client string) []string {
+// projectNetworks picks, from name|project lines, the networks of one of
+// projects that is named for this client.
+func projectNetworks(out, client string, projects map[string]bool) []string {
 	var names []string
 	for _, line := range strings.Split(out, "\n") {
 		name, project, ok := strings.Cut(strings.TrimSpace(line), "|")
-		if ok && strings.HasSuffix(project, "-"+client) {
+		if ok && projects[project] && strings.HasSuffix(project, "-"+client) {
 			names = append(names, name)
 		}
 	}

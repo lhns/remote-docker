@@ -2,7 +2,8 @@
 
 - Status: Accepted. The writer's callers are redeeming an enrolment token (ADR
   0051) and account management (ADR 0053).
-- Date: 2026-10-05, amended 2026-10-06 (provisioning out of the sync lock)
+- Date: 2026-10-05, amended 2026-10-06 (provisioning out of the sync lock; the
+  stale-lock break, a failed account creation, subscribers)
 
 ## What forced it
 
@@ -47,12 +48,14 @@ Writing into any of these either fails or fights the thing that owns it.
   filtered: a Kubernetes Secret changes by swapping its `..data` link.
 - **The writer** (`accounts/keyfile_write.go`): `AppendKey`, `CreateAccount`,
   `RemoveKey`, `RemoveAccountFile`.
-  1. Lock: `os.Mkdir` of `.<account>.pub.lock`, atomic on NFS and CephFS. A lock
-     older than 30s is a crashed writer's and is renamed aside, under a second
-     lock (`.lock.break`) and only after its age is checked again there: two
-     writers that both saw it stale would otherwise each move a lock the other
-     had just taken. A waiter gives up after 10s on one holder, told apart by
-     the lock's mtime, and waits out a queue that keeps moving however long.
+  1. Lock: `os.Mkdir` of `.<account>.pub.lock`, atomic on NFS and CephFS. A
+     holder is told apart by the lock's mtime. A waiter that has watched ONE
+     holder for `lockWait` (10s) breaks the lock if its mtime is older than
+     30s, and otherwise gives up; a queue that keeps moving is waited out
+     however long. The break renames the lock aside under a second lock
+     (`.lock.break`), and only if the lock is still that holder: two writers
+     that both saw it stale would otherwise each move a lock the other had
+     just taken.
   2. Read the file, keeping every line that is not the one changed.
   3. Append idempotently by fingerprint, or remove the matching lines. A
      comment is folded onto one line, since a newline in it would be a line of
@@ -63,8 +66,11 @@ Writing into any of these either fails or fights the thing that owns it.
      lock, which `Known` and every write take, is never held across a
      `useradd` (one took 170s, PR 268): an account new to the agent is created
      in the background, one at a time, and published when that finishes. A
-     write waits for its own account's creation up to 30s, then returns
-     `ErrProvisioning` with the key written.
+     write that adds a key waits for its own account's creation up to 30s,
+     then returns `ErrProvisioning` with the key written; one whose account
+     could not be created returns `ErrNotProvisioned` with the key taken out
+     again. A removal waits for nothing. `Store.Subscribe`'s callbacks run
+     after the sync lock is released, so one may call back into the store.
   - `CreateAccount` refuses a name `Known` has (the uidmap, or a file in any
     directory) and links rather than renames, so of concurrent creations one
     wins even against a file written without the lock.
@@ -76,9 +82,11 @@ Writing into any of these either fails or fights the thing that owns it.
 
 - **A hand edit in the enrolled directory bypasses the lock.** Hand edits
   belong in an operator directory.
-- **The stale-lock break still trusts clocks.** Its age is the lock's mtime
-  against this host's clock, so hosts more than 30s apart on shared storage
-  can break a live lock.
+- **A crashed writer's lock costs up to 10s**, once: the next writer watches
+  it for `lockWait` before breaking it. The watch, not the mtime, is what
+  keeps a live lock: hosts whose clocks differ by more than 30s on shared
+  storage see every lock as old, and a live holder still finishes within the
+  watch.
 - **A deployment whose keys directory contains the state directory's
   `enrolled_keys.d`**, such as `WORKSPACE_KEYS_DIR=<state>`, no longer starts
   until `WORKSPACE_ENROLLED_KEYS_DIR` is moved.

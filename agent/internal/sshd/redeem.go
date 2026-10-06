@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync/atomic"
 
@@ -156,7 +157,12 @@ func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) enro
 			Msg: "the workspace could not enrol the key; its log says why"},
 			"enrolling the key", "account", name, "err", err)
 	}
-	if err := claim.Done(); err != nil {
+	// The claim is the commit: one withdrawn meanwhile (user rm) takes the key
+	// out again.
+	if err := claim.Done(); errors.Is(err, os.ErrNotExist) {
+		undo()
+		return refuse(enrol.Refused, "the token was withdrawn during the redemption", "account", name)
+	} else if err != nil {
 		audit.Warn("the redeemed token could not be deleted", "err", err)
 	}
 	audit.Info("redeemed a token", "account", name, "created", created, "bound", tok.Account != "", "pending", pending)
