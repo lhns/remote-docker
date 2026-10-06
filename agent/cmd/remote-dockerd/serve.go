@@ -464,6 +464,9 @@ func serve(addr, wsAddr string) error {
 		Sweeps:       agentMetrics.sweeps,
 		SweepSeconds: agentMetrics.sweepSeconds,
 	}
+	if perUserDind {
+		runs.Enrolled = sshd.Enrolled(store)
+	}
 	if err := runs.Restore(); err != nil {
 		log.Warn("could not restore the ephemeral runs", "err", err)
 	}

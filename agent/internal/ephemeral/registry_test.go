@@ -332,6 +332,43 @@ func TestTheFirstSweepCleansWhatExpiredWhileDown(t *testing.T) {
 	}
 }
 
+// A removed account's runs are kept, uncleaned and on their ports, across a
+// restart too, and are swept as usual once the account is back.
+func TestARemovedAccountsRunsWaitForIt(t *testing.T) {
+	dir := t.TempDir()
+	r, _, c := newRegistry(t)
+	r.Dir = dir
+	_, release := hostRun(t, r, "0123abcd")
+	release()
+
+	restarted, ports, _ := newRegistry(t)
+	restarted.Dir, restarted.now = dir, c.now
+	enrolled := false
+	restarted.Enrolled = func(account string) bool { return account != "alice" || enrolled }
+	var cleaned []string
+	restarted.Cleanup = func(_ context.Context, _, client string) error {
+		cleaned = append(cleaned, client)
+		return nil
+	}
+	if err := restarted.Restore(); err != nil {
+		t.Fatal(err)
+	}
+
+	c.advance(time.Hour)
+	restarted.Sweep(t.Context())
+	if _, ok := restarted.state("0123abcd"); !ok || len(cleaned) != 0 || ports.wasFreed("0123abcd") {
+		t.Fatalf("a removed account's run: known %v, cleaned %v, port freed %v; want kept, uncleaned and held",
+			ok, cleaned, ports.wasFreed("0123abcd"))
+	}
+
+	enrolled = true
+	restarted.Sweep(t.Context())
+	if _, ok := restarted.state("0123abcd"); ok || len(cleaned) != 1 || !ports.wasFreed("0123abcd") {
+		t.Errorf("once the account is back: known %v, cleaned %v, port freed %v; want swept",
+			ok, cleaned, ports.wasFreed("0123abcd"))
+	}
+}
+
 // Cleanup is never asked about a live run or one still within its grace.
 func TestCleanupLeavesLiveAndGraceRunsAlone(t *testing.T) {
 	r, _, c := newRegistry(t)

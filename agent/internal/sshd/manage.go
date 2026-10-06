@@ -268,11 +268,14 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 		return failed(writeError(err, audit))
 	}
 
+	// The runs' volumes and the ports they name live in the daemon's storage,
+	// so they go only once a purge has removed it. Until then the sweep keeps
+	// the runs (ephemeral.Registry.Enrolled).
 	var reply enrol.Reply
-	if s.cfg.Daemons.Mode() != workspace.ModeShared {
-		s.cfg.Runs.Drop(target)
-	}
-	if err := s.cfg.Daemons.Reset(ctx, target, purge); err != nil {
+	storageGone := false
+	if err := s.cfg.Daemons.Reset(ctx, target, purge); err == nil {
+		storageGone = purge && s.cfg.Daemons.Mode() != workspace.ModeShared
+	} else {
 		audit.Warn("could not remove a removed account's daemon", "account", target, "purge", purge, "err", err)
 		fix := "`remote-dockerd daemons reset " + target + " -f` inside the workspace"
 		if purge {
@@ -287,6 +290,9 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 			reply.Notices = append(reply.Notices, &enrol.Error{
 				Msg: fmt.Sprintf("%s's keys are removed, but not all of their files: %v", target, err)})
 		}
+	}
+	if storageGone {
+		s.cfg.Runs.Drop(target)
 		if err := s.cfg.Ports.Forget(target); err != nil {
 			audit.Warn("could not forget a removed account's ports", "account", target, "err", err)
 			reply.Notices = append(reply.Notices, &enrol.Error{
@@ -304,6 +310,15 @@ func (s *Server) userRemove(ctx context.Context, caller sessionAccount, target s
 	}
 	audit.Info("removed an account", "account", target, "force", force, "purge", purge)
 	return reply
+}
+
+// Enrolled is ephemeral.Registry.Enrolled with a daemon per account: an
+// account `user rm` removed is not, until a token brings it back.
+func Enrolled(store *accounts.Store) func(account string) bool {
+	return func(account string) bool {
+		a, ok := store.Lookup(account)
+		return ok && len(a.Keys) > 0
+	}
 }
 
 func (s *Server) keyList(caller sessionAccount, target string) enrol.Reply {

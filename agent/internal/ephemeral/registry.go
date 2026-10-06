@@ -76,6 +76,13 @@ type Registry struct {
 	// something still names it (ADR 0032). Nil has nothing to remove.
 	Cleanup func(ctx context.Context, account, client string) error
 
+	// Enrolled reports whether an account still exists. A sweep leaves the
+	// runs of one that does not alone, neither cleaning them nor freeing their
+	// ports: with a daemon per account, cleaning would start the removed
+	// account's daemon again, and the runs' volumes stay in that daemon's
+	// storage until a purge drops them. Nil is every account.
+	Enrolled func(account string) bool
+
 	// Dir holds the record of runs, so an agent restart can reattach them.
 	// Empty keeps none.
 	Dir string
@@ -240,6 +247,9 @@ func (r *Registry) Sweep(ctx context.Context) {
 	r.mu.Lock()
 	now := r.clock()
 	for k, ru := range r.runs {
+		if r.Enrolled != nil && !r.Enrolled(k.account) {
+			continue
+		}
 		if ru.state == Grace && now.Sub(ru.lastSeen) >= r.grace() {
 			ru.state = Cleaning
 			r.log().Info("a run expired", "account", k.account, "client", k.client, "port", ru.port)
@@ -276,9 +286,9 @@ func (r *Registry) Sweep(ctx context.Context) {
 }
 
 // Drop forgets an account's runs and frees their ports, cleaning nothing: its
-// daemon, and with it everything the runs left, is being removed, and
-// cleaning a run would start that daemon again. A sweep already cleaning one
-// finishes, and finds the run gone.
+// daemon's storage, and with it everything the runs left, has been purged,
+// and cleaning a run would start that daemon again. A sweep already cleaning
+// one finishes, and finds the run gone.
 func (r *Registry) Drop(account string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -392,7 +402,8 @@ func (r *Registry) save() {
 
 // Restore reads the record left by the previous agent, before serving. Every
 // run has lost its connections: a live one starts its grace now, one already
-// in grace keeps its deadline, and the next sweep cleans what has expired.
+// in grace keeps its deadline, and the next sweep cleans what has expired,
+// unless its account is gone (see Enrolled).
 func (r *Registry) Restore() error {
 	if r.Dir == "" {
 		return nil
