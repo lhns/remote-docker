@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -109,7 +110,12 @@ func (s *Server) serveRedeem(session gssh.Session, r redeemer) {
 // the workspace's side puts the token back; a failure on the redeemer's
 // spends an attempt from the global limiter.
 func (s *Server) redeem(r redeemer, req enrol.RedeemRequest, from net.Addr) (reply enrol.RedeemReply) {
-	defer func() { s.cfg.Metrics.Redemptions.Inc(redeemOutcome(reply)) }()
+	start := time.Now()
+	defer func() {
+		outcome := redeemOutcome(reply)
+		s.cfg.Metrics.Redemptions.Inc(outcome)
+		s.cfg.Metrics.RedemptionSeconds.Since(start, outcome)
+	}()
 	audit := s.log().With(logx.ComponentKey, "audit", "op", "token.redeem",
 		"token", r.id, "key", ssh.FingerprintSHA256(r.key), "from", from)
 	refuse := func(e *enrol.Error, why string, args ...any) enrol.RedeemReply {

@@ -1,13 +1,15 @@
 // Package metrics writes the Prometheus text exposition format, version
-// 0.0.4, with the standard library (ADR 0054). Counters are incremented where
-// their events happen; gauges are read at scrape time from the structures
-// that already hold the answer, so there is no second copy of any state.
+// 0.0.4, with the standard library (ADR 0054). Counters and histograms are
+// updated where their events happen; gauges are read at scrape time from the
+// structures that already hold the answer, so there is no second copy of any
+// state.
 package metrics
 
 import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -46,10 +48,8 @@ func (c *Counter) Add(n float64, values ...string) {
 	if c == nil {
 		return
 	}
-	if len(values) != len(c.labels) {
-		panic(fmt.Sprintf("metrics: %d label values for %d labels", len(values), len(c.labels)))
-	}
-	k := strings.Join(values, "\xff")
+	checkLabels(values, c.labels)
+	k := seriesKey(values)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.vals[k]
@@ -67,7 +67,7 @@ func (c *Counter) Value(values ...string) float64 {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if s := c.vals[strings.Join(values, "\xff")]; s != nil {
+	if s := c.vals[seriesKey(values)]; s != nil {
 		return s.Value
 	}
 	return 0
@@ -83,10 +83,18 @@ func (c *Counter) samples() []Sample {
 	return out
 }
 
+func seriesKey(values []string) string { return strings.Join(values, "\xff") }
+
+func checkLabels(values, labels []string) {
+	if len(values) != len(labels) {
+		panic(fmt.Sprintf("metrics: %d label values for %d labels", len(values), len(labels)))
+	}
+}
+
+// family is one metric: its header and what writes its samples.
 type family struct {
 	name, help, kind string
-	labels           []string
-	collect          func() []Sample
+	write            func(b *strings.Builder, name string)
 }
 
 // Registry is the set of metrics one scrape returns, in name order.
@@ -98,13 +106,19 @@ type Registry struct {
 // Counter registers a counter. Its name ends in _total, by convention.
 func (r *Registry) Counter(name, help string, labels ...string) *Counter {
 	c := &Counter{labels: labels, vals: map[string]*Sample{}}
-	r.add(family{name, help, "counter", labels, c.samples})
+	r.add(family{name, help, "counter", samplesWriter(labels, c.samples)})
 	return c
 }
 
 // Gauge registers a gauge whose samples collect returns at each scrape.
 func (r *Registry) Gauge(name, help string, labels []string, collect func() []Sample) {
-	r.add(family{name, help, "gauge", labels, collect})
+	r.add(family{name, help, "gauge", samplesWriter(labels, collect)})
+}
+
+// CounterFunc registers a counter whose samples collect returns at each
+// scrape, for a count something else keeps, such as the kernel's CPU time.
+func (r *Registry) CounterFunc(name, help string, labels []string, collect func() []Sample) {
+	r.add(family{name, help, "counter", samplesWriter(labels, collect)})
 }
 
 func (r *Registry) add(f family) {
@@ -129,29 +143,55 @@ func (r *Registry) WriteTo(w io.Writer) (int64, error) {
 	var b strings.Builder
 	for _, f := range families {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", f.name, escapeHelp(f.help), f.name, f.kind)
-		samples := f.collect()
-		slices.SortFunc(samples, func(x, y Sample) int { return slices.Compare(x.Labels, y.Labels) })
-		for _, s := range samples {
-			b.WriteString(f.name)
-			if len(f.labels) > 0 {
-				b.WriteByte('{')
-				for i, l := range f.labels {
-					if i > 0 {
-						b.WriteByte(',')
-					}
-					v := ""
-					if i < len(s.Labels) {
-						v = s.Labels[i]
-					}
-					fmt.Fprintf(&b, "%s=\"%s\"", l, escapeLabel(v))
-				}
-				b.WriteByte('}')
-			}
-			fmt.Fprintf(&b, " %s\n", strconv.FormatFloat(s.Value, 'g', -1, 64))
-		}
+		f.write(&b, f.name)
 	}
 	n, err := io.WriteString(w, b.String())
 	return int64(n), err
+}
+
+// samplesWriter writes one line per sample, sorted by label values.
+func samplesWriter(labels []string, collect func() []Sample) func(*strings.Builder, string) {
+	return func(b *strings.Builder, name string) {
+		samples := collect()
+		slices.SortFunc(samples, func(x, y Sample) int { return slices.Compare(x.Labels, y.Labels) })
+		for _, s := range samples {
+			writeSample(b, name, labels, s.Labels, "", s.Value)
+		}
+	}
+}
+
+// writeSample writes one line. le, when not empty, is a histogram bucket's
+// bound, written as the last label.
+func writeSample(b *strings.Builder, name string, labels, values []string, le string, v float64) {
+	b.WriteString(name)
+	if len(labels) > 0 || le != "" {
+		b.WriteByte('{')
+		for i, l := range labels {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			val := ""
+			if i < len(values) {
+				val = values[i]
+			}
+			fmt.Fprintf(b, "%s=\"%s\"", l, escapeLabel(val))
+		}
+		if le != "" {
+			if len(labels) > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(b, "le=\"%s\"", le)
+		}
+		b.WriteByte('}')
+	}
+	fmt.Fprintf(b, " %s\n", formatFloat(v))
+}
+
+func formatFloat(v float64) string {
+	if math.IsInf(v, 1) {
+		return "+Inf"
+	}
+	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
 // ServeHTTP answers a scrape.

@@ -3,8 +3,11 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -65,14 +68,19 @@ func TestAgentMetricsExposition(t *testing.T) {
 	}
 	want := []string{
 		"remote_docker_account_daemons gauge",
+		"remote_docker_account_provision_duration_seconds histogram",
+		"remote_docker_build_info gauge",
+		"remote_docker_daemon_start_duration_seconds histogram",
 		"remote_docker_ephemeral_objects_kept_total counter",
 		"remote_docker_ephemeral_objects_removed_total counter",
 		"remote_docker_ephemeral_run_ports gauge",
 		"remote_docker_ephemeral_runs gauge",
 		"remote_docker_ephemeral_runs_refused_total counter",
+		"remote_docker_ephemeral_sweep_duration_seconds histogram",
 		"remote_docker_ephemeral_sweeps_total counter",
 		"remote_docker_ssh_connections gauge",
 		"remote_docker_token_limiter_rejections_total counter",
+		"remote_docker_token_redemption_duration_seconds histogram",
 		"remote_docker_token_redemptions_total counter",
 	}
 	if strings.Join(names, "\n") != strings.Join(want, "\n") {
@@ -86,9 +94,24 @@ func TestAgentMetricsExposition(t *testing.T) {
 		`remote_docker_token_redemptions_total{outcome="pending"} 0`,
 		"remote_docker_account_daemons 0",
 		"remote_docker_ephemeral_run_ports 0",
+		`remote_docker_token_redemption_duration_seconds_count{outcome="refused"} 0`,
+		`remote_docker_account_provision_duration_seconds_bucket{outcome="failed",le="+Inf"} 0`,
+		"remote_docker_daemon_start_duration_seconds_count 0",
+		"remote_docker_ephemeral_sweep_duration_seconds_sum 0",
+		`remote_docker_build_info{version="dev",goversion="` + runtime.Version() + `"} 1`,
 	} {
 		if !strings.Contains(b.String(), line+"\n") {
 			t.Errorf("no line %q in:\n%s", line, b.String())
 		}
+	}
+}
+
+func TestProvisioningIsObservedByOutcome(t *testing.T) {
+	m := newAgentMetrics()
+	m.observeProvision(2*time.Second, nil)
+	m.observeProvision(time.Second, errors.New("useradd failed"))
+	m.observeProvision(time.Second, errors.New("useradd failed"))
+	if ok, failed := m.provisionSeconds.Count(provisionOK), m.provisionSeconds.Count(provisionFailed); ok != 1 || failed != 2 {
+		t.Errorf("ok = %d, failed = %d; want 1 and 2", ok, failed)
 	}
 }

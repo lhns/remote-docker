@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -398,5 +400,36 @@ func TestUIDAllocationFollowsSortedNames(t *testing.T) {
 					attempt, n, a.UID, want)
 			}
 		}
+	}
+}
+
+// Each background Ensure is reported once, with its error, which is what the
+// agent's provisioning histogram is built from.
+func TestProvisioningIsObserved(t *testing.T) {
+	s := newStore(t)
+	var mu sync.Mutex
+	var errs []error
+	s.ProvisionObserved = func(took time.Duration, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if took < 0 {
+			t.Errorf("took = %s", took)
+		}
+		errs = append(errs, err)
+	}
+	s.writeKey(t, "alice.pub")
+	if err := s.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	s.prov.err = errors.New("useradd failed")
+	s.writeKey(t, "bob.pub")
+	if err := s.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(errs) != 2 || errs[0] != nil || errs[1] == nil {
+		t.Errorf("observed %v, want one success then one failure", errs)
 	}
 }

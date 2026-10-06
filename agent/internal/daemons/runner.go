@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
+	"github.com/lhns/remote-docker/agent/internal/metrics"
 	"github.com/lhns/remote-docker/core-agent/netns"
 	"github.com/lhns/remote-docker/core/logx"
 )
@@ -78,6 +79,11 @@ type Manager struct {
 	// DefaultReadyTimeout, which is what every caller but serve's env-var
 	// reader passes.
 	ReadyTimeout time.Duration
+
+	// StartSeconds times each start or restart that answered, until it did.
+	// A daemon found running, or one that failed, is not observed: a failure
+	// mostly measures ReadyTimeout. Nil observes nothing.
+	StartSeconds *metrics.Histogram
 
 	// docker builds the client for a daemon: the workspace's own when the host
 	// is empty, an account's when it is not. Nil is the real docker command,
@@ -257,6 +263,7 @@ func (m *Manager) Warm(account string) {
 
 // start creates or restarts one account's daemon and waits for its socket.
 func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
+	began := time.Now()
 	spec, err := Plan(account, m.Options)
 	if err != nil {
 		return nil, err
@@ -300,9 +307,11 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 	// than a list of commands somebody has to be told.
 	m.reconcile(ctx, account, spec)
 
+	launched := true
 	switch state := m.state(ctx, spec.Name); state {
 	case "running":
 		// Somebody else's Ensure won, or it survived our restart.
+		launched = false
 	case "":
 		m.log().Info("starting a daemon", "account", account)
 		if err := m.parent().Run(ctx, "daemons: starting "+spec.Name, spec.Args()...); err != nil {
@@ -317,7 +326,11 @@ func (m *Manager) start(ctx context.Context, account string) (*Daemon, error) {
 		}
 	}
 
-	return m.await(ctx, account, spec.Name)
+	d, err := m.await(ctx, account, spec.Name)
+	if err == nil && launched {
+		m.StartSeconds.Since(began)
+	}
+	return d, err
 }
 
 // await waits for the daemon to ANSWER, not for its socket file to exist.

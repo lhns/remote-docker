@@ -254,6 +254,7 @@ func serve(addr, wsAddr string) error {
 	store := accounts.New(keysDirs, enrolledDir, stateDir, mapping,
 		provisioner, logger("accounts"))
 	store.Shell = envOr(envShell, "/bin/bash")
+	store.ProvisionObserved = agentMetrics.observeProvision
 	if err := store.CheckWritable(); err != nil {
 		log.Warn("this workspace cannot store keys; serving anyway", "err", err)
 	}
@@ -344,7 +345,8 @@ func serve(addr, wsAddr string) error {
 				StorageDriver: storage,
 				Mounts:        extraMounts,
 			},
-			Log: logger("daemons"),
+			Log:          logger("daemons"),
+			StartSeconds: agentMetrics.daemonStartSeconds,
 
 			// The store is the authority on an account's uid: it allocated it,
 			// and it knows the unix user behind the name. Asking the passwd
@@ -452,14 +454,15 @@ func serve(addr, wsAddr string) error {
 	// every account, since a run recorded under an earlier setting still has
 	// to expire.
 	runs := &ephemeral.Registry{
-		Ports:   ports,
-		Max:     maxRuns,
-		Grace:   grace,
-		Cleanup: cleaner.Clean,
-		Dir:     stateDir,
-		Log:     logger("ephemeral"),
-		Refused: agentMetrics.runsRefused,
-		Sweeps:  agentMetrics.sweeps,
+		Ports:        ports,
+		Max:          maxRuns,
+		Grace:        grace,
+		Cleanup:      cleaner.Clean,
+		Dir:          stateDir,
+		Log:          logger("ephemeral"),
+		Refused:      agentMetrics.runsRefused,
+		Sweeps:       agentMetrics.sweeps,
+		SweepSeconds: agentMetrics.sweepSeconds,
 	}
 	if err := runs.Restore(); err != nil {
 		log.Warn("could not restore the ephemeral runs", "err", err)
@@ -486,6 +489,7 @@ func serve(addr, wsAddr string) error {
 		Admins:      admins,
 		Metrics: sshd.Metrics{
 			Redemptions:       agentMetrics.redemptions,
+			RedemptionSeconds: agentMetrics.redemptionSeconds,
 			LimiterRejections: agentMetrics.limiter,
 			RunsRefused:       agentMetrics.runsRefused,
 		},
@@ -497,6 +501,7 @@ func serve(addr, wsAddr string) error {
 
 	if metricsLn != nil {
 		agentMetrics.gauges(runs, ephemeralSet, server, manager)
+		agentMetrics.reg.Process()
 		stopMetrics := agentMetrics.reg.Serve(metricsLn, func(err error) {
 			log.Warn("the metrics listener stopped", "err", err)
 		})

@@ -16,6 +16,7 @@ func TestRegistryCountsRefusalsAndSweeps(t *testing.T) {
 	r, _, c := newRegistry(t)
 	r.Refused = reg.Counter("refused_total", "", "reason")
 	r.Sweeps = reg.Counter("sweeps_total", "")
+	r.SweepSeconds = reg.Histogram("sweep_seconds", "", []float64{1})
 	r.Cleanup = func(context.Context, string, string) error { return errors.New("kept") }
 
 	_, a := hostRun(t, r, "0123abcd")
@@ -39,6 +40,9 @@ func TestRegistryCountsRefusalsAndSweeps(t *testing.T) {
 	}
 	if v := r.Sweeps.Value(); v != 1 {
 		t.Errorf("sweeps = %v, want 1", v)
+	}
+	if n := r.SweepSeconds.Count(); n != 1 {
+		t.Errorf("sweep durations observed = %d, want 1", n)
 	}
 }
 

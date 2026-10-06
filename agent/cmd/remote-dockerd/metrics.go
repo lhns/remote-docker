@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"net"
+	"runtime"
+	"time"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
 	"github.com/lhns/remote-docker/agent/internal/ephemeral"
@@ -30,10 +32,41 @@ type agentMetrics struct {
 
 	runsRefused, sweeps, removed, kept *metrics.Counter
 	redemptions, limiter               *metrics.Counter
+
+	redemptionSeconds, daemonStartSeconds *metrics.Histogram
+	provisionSeconds, sweepSeconds        *metrics.Histogram
 }
+
+// Outcomes of provisioning an account, as its histogram labels them.
+const (
+	provisionOK     = "ok"
+	provisionFailed = "failed"
+)
+
+// Buckets, in seconds. A redemption can wait up to ProvisionWait (30s) for
+// its account; a daemon has DefaultReadyTimeout (180s); one useradd has
+// taken 170s (PR 268); a sweep runs docker commands per expired run.
+var (
+	redemptionBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+	slowBuckets       = []float64{0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 180, 300}
+)
 
 func newAgentMetrics() *agentMetrics {
 	m := &agentMetrics{}
+	m.reg.Gauge("remote_docker_build_info",
+		"The agent's version and the Go it was built with; always 1.", []string{"version", "goversion"},
+		func() []metrics.Sample {
+			return []metrics.Sample{{Labels: []string{version, runtime.Version()}, Value: 1}}
+		})
+	m.redemptionSeconds = m.reg.Histogram("remote_docker_token_redemption_duration_seconds",
+		"How long token redemptions took, by outcome.", redemptionBuckets, "outcome")
+	m.daemonStartSeconds = m.reg.Histogram("remote_docker_daemon_start_duration_seconds",
+		"How long a per-account daemon took to start or restart and answer; failures are not observed.", slowBuckets)
+	m.provisionSeconds = m.reg.Histogram("remote_docker_account_provision_duration_seconds",
+		"How long creating an account's unix user took, by outcome.", slowBuckets, "outcome")
+	m.sweepSeconds = m.reg.Histogram("remote_docker_ephemeral_sweep_duration_seconds",
+		"How long a sweep for expired ephemeral runs took, cleanup included.", slowBuckets)
+
 	m.runsRefused = m.reg.Counter("remote_docker_ephemeral_runs_refused_total",
 		"Ephemeral runs refused, by reason.", "reason")
 	m.sweeps = m.reg.Counter("remote_docker_ephemeral_sweeps_total",
@@ -56,10 +89,24 @@ func newAgentMetrics() *agentMetrics {
 	}
 	for _, o := range []string{sshd.RedeemOK, sshd.RedeemPending, sshd.RedeemRefused, sshd.RedeemFailed} {
 		m.redemptions.Add(0, o)
+		m.redemptionSeconds.Declare(o)
 	}
+	m.provisionSeconds.Declare(provisionOK)
+	m.provisionSeconds.Declare(provisionFailed)
+	m.daemonStartSeconds.Declare()
+	m.sweepSeconds.Declare()
 	m.sweeps.Add(0)
 	m.limiter.Add(0)
 	return m
+}
+
+// observeProvision is accounts.Store.ProvisionObserved.
+func (m *agentMetrics) observeProvision(took time.Duration, err error) {
+	outcome := provisionOK
+	if err != nil {
+		outcome = provisionFailed
+	}
+	m.provisionSeconds.Observe(took.Seconds(), outcome)
 }
 
 // gauges registers what is read at scrape time. manager is nil with a shared
