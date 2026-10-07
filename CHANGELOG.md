@@ -8,15 +8,10 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.10.0 — 2026-10-07
 
 ### New
 
-- **Only admins can create tokens, if you want.** Set `WORKSPACE_USER_TOKENS=false`
-  (`userTokens: false` in the chart) and `remote token create` is refused for
-  everyone but admins, with a line telling the account to ask one. Existing
-  tokens can still be listed and withdrawn, keys are unaffected, and the
-  operator's `remote-dockerd token create` still works.
 - **The chart runs several workspaces.** Set `replicas` and each replica is a
   workspace of its own, on its own node by default (`podAntiAffinity`), so
   autoscaled CI runners are no longer bound to one pod.
@@ -26,17 +21,23 @@ software.
     `ingress.annotations`, which the install notes remind you of.
   - Every pod also has a name of its own,
     `<fullname>-N.<fullname>-headless.<ns>.svc`, with SRV records listing them.
-  - Replicas share only the keys Secret. Tokens, keys enrolled with one,
-    images and runner limits are per replica.
+  - Replicas share only the keys Secret. Tokens, keys enrolled with a token,
+    images and the limit on CI runners are per replica.
   - See "Several replicas" in the chart README.
+- **Only admins can create tokens, if you want.** Set `WORKSPACE_USER_TOKENS=false`
+  (`userTokens: false` in the chart) and `remote token create` is refused for
+  everyone but admins, with a line telling the account to ask one. Existing
+  tokens can still be listed and withdrawn, keys are unaffected, and the
+  operator's `remote-dockerd token create` still works.
 
 ### Fixes
 
 - **Write-back no longer follows a link out of your directory.** With
   `write=back`, a container could make the client create or delete a file
   outside the shared directory through a symlink or a Windows junction in it.
-  Now a link that stays inside the directory still works, and a write under a
-  junction or an absolute symlink is not carried back.
+  Now a link that stays inside the directory still works. A file the container
+  writes under a Windows junction or an absolute symlink is no longer copied
+  back to your machine.
 - **An account can hold at most 10 unused tokens it made.** Admins and the
   workspace operator have no limit.
 
