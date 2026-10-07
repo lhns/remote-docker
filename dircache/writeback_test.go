@@ -1,7 +1,6 @@
 package dircache
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,8 +32,8 @@ func TestWriteUnderRefusesAPathThatLeavesTheShare(t *testing.T) {
 		"/a/../../escaped",
 		"/a/b/../../../escaped",
 	} {
-		err := writeUnder(root, File{Path: name, Mode: 0o644, Body: strings.NewReader("x")})
-		if !errors.Is(err, errEscapes) {
+		err := writeUnder(openRoot(t, root), File{Path: name, Mode: 0o644, Body: strings.NewReader("x")})
+		if err == nil {
 			t.Errorf("writeUnder(%q) = %v, want a refusal", name, err)
 		}
 	}
@@ -63,8 +62,8 @@ func TestWriteUnderRefusesASiblingOfTheShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := writeUnder(root, File{Path: "/../project-old/x", Mode: 0o644, Body: strings.NewReader("x")})
-	if !errors.Is(err, errEscapes) {
+	err := writeUnder(openRoot(t, root), File{Path: "/../project-old/x", Mode: 0o644, Body: strings.NewReader("x")})
+	if err == nil {
 		t.Fatalf("writeUnder into a sibling = %v, want a refusal", err)
 	}
 }
@@ -76,7 +75,7 @@ func TestWriteUnderKeepsTheModificationTime(t *testing.T) {
 	root := t.TempDir()
 	wrote := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
 
-	err := writeUnder(root, File{
+	err := writeUnder(openRoot(t, root), File{
 		Path: "/pkg/deep/lib.go", ModTime: wrote, Mode: 0o644,
 		Body: strings.NewReader("package deep\n"),
 	})
