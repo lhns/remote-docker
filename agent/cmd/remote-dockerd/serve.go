@@ -191,7 +191,7 @@ func serve(addr, wsAddr string) error {
 		log.Info("these accounts are admins", "var", envAdmins,
 			"accounts", strings.Join(slices.Sorted(maps.Keys(admins)), ","))
 	}
-	userTokens, err := envBoolDefault(envUserTokens, os.Getenv(envUserTokens), true)
+	userTokens, err := envBool(envUserTokens, os.Getenv(envUserTokens), true)
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func serve(addr, wsAddr string) error {
 	if err != nil {
 		return err
 	}
-	cleanContainers, err := envBool(envEphemeralContainers, os.Getenv(envEphemeralContainers))
+	cleanContainers, err := envBool(envEphemeralContainers, os.Getenv(envEphemeralContainers), false)
 	if err != nil {
 		return err
 	}
@@ -759,12 +759,9 @@ func ephemeralLimits(maxRaw, graceRaw string) (int, time.Duration, error) {
 	return maxRuns, grace, nil
 }
 
-// envBool reads a true/false variable: unset is false, and anything
+// envBool reads a true/false variable: unset is `unset`, and anything
 // strconv.ParseBool does not take refuses the start, naming the variable.
-func envBool(name, raw string) (bool, error) { return envBoolDefault(name, raw, false) }
-
-// envBoolDefault is envBool with the answer for an unset variable.
-func envBoolDefault(name, raw string, unset bool) (bool, error) {
+func envBool(name, raw string, unset bool) (bool, error) {
 	if raw == "" {
 		return unset, nil
 	}
