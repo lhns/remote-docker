@@ -8,6 +8,19 @@ Enrol a device with a single-use token. Mint one for an account:
 It prints a `docker remote create ... --token ...` line: run that on the
 device, which enrols its own key. The key is stored on the state volume, not
 in the authorizedKeys Secret.
+{{- if gt (int .Values.replicas) 1 }}
+
+There are {{ .Values.replicas }} replicas, each a workspace of its own. A token enrols a
+key only on the replica that minted it; a key in the authorizedKeys Secret is
+enrolled on every one.
+{{- if not .Values.publicURL }}
+Its invite names that pod, which only clients inside the cluster reach:
+
+    ssh://<pod>.{{ include "remote-docker-workspace.headlessName" . }}.{{ .Release.Namespace }}.svc:2222
+
+From outside, set publicURL, or enrol with the Secret.
+{{- end }}
+{{- end }}
 {{- if .Values.admins }}
 
 Admins ({{ join ", " .Values.admins }}) can then mint tokens and remove
@@ -46,6 +59,17 @@ Reach it from a laptop with no Docker installed, once its token is redeemed:
 
 The directory is served from the machine you typed that on, over the same
 connection.
+{{- if and (gt (int .Values.replicas) 1) (not (hasKey .Values.ingress.annotations "nginx.ingress.kubernetes.io/upstream-hash-by")) }}
+
+WARNING: {{ .Values.replicas }} replicas behind the ingress, and nothing pins a client to
+one. ingress-nginx balances the pods itself and ignores the Service's affinity,
+so a reconnecting client lands on any replica and refuses its host key. With
+ingress-nginx, add to ingress.annotations:
+
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+
+Another controller needs its own equivalent.
+{{- end }}
 {{- else }}
 
 The ingress is disabled, so nothing outside the cluster can reach this yet.

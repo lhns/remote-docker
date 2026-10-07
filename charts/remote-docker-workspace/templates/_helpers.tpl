@@ -53,13 +53,69 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The address an enrolment invite names: publicURL, or the ingress's.
+The headless Service, which is the StatefulSet's serviceName and gives each pod
+its own DNS name. Truncated first so the suffix survives a long release name.
+*/}}
+{{- define "remote-docker-workspace.headlessName" -}}
+{{- printf "%s-headless" (include "remote-docker-workspace.fullname" . | trunc 54 | trimSuffix "-") -}}
+{{- end -}}
+
+{{/*
+The address an enrolment invite names: publicURL; with several replicas, the
+pod's own name, since a token is redeemable only where it was minted and
+nothing in front of the pods can name one; else the ingress's. $(POD_NAME) is
+expanded by the kubelet from the variable rendered before it.
 */}}
 {{- define "remote-docker-workspace.publicURL" -}}
 {{- if .Values.publicURL -}}
 {{- .Values.publicURL -}}
+{{- else if gt (int .Values.replicas) 1 -}}
+ssh://$(POD_NAME).{{ include "remote-docker-workspace.headlessName" . }}.{{ .Release.Namespace }}.svc:2222
 {{- else if and .Values.ingress.enabled .Values.ingress.host -}}
 {{- ternary "wss" "ws" .Values.ingress.tls.enabled }}://{{ .Values.ingress.host }}/
+{{- end -}}
+{{- end -}}
+
+{{/*
+Refusals that would otherwise surface as a broken render, or as an upgrade the
+API server forbids with a message naming no remedy.
+*/}}
+{{- define "remote-docker-workspace.checks" -}}
+{{- /* --reuse-values renders with the OLD chart's defaults, so values this
+      chart added are missing rather than defaulted. */ -}}
+{{- if not (and (hasKey .Values "replicas") (hasKey .Values "podAntiAffinity") (hasKey .Values.service "sessionAffinityTimeout")) -}}
+{{- fail "replicas, podAntiAffinity or service.sessionAffinityTimeout is missing, which is what --reuse-values does across a chart that added them\n  fix: upgrade with --reset-then-reuse-values instead" -}}
+{{- end -}}
+{{- if not (has (toString .Values.podAntiAffinity) (list "hard" "soft" "none")) -}}
+{{- fail (printf "podAntiAffinity: %q is not hard, soft or none" (toString .Values.podAntiAffinity)) -}}
+{{- end -}}
+{{- /* serviceName is immutable. An empty lookup (helm template, a first
+      install) passes. */ -}}
+{{- $sts := include "remote-docker-workspace.fullname" . -}}
+{{- with lookup "apps/v1" "StatefulSet" .Release.Namespace $sts -}}
+{{- $have := .spec.serviceName | default "" -}}
+{{- $want := include "remote-docker-workspace.headlessName" $ -}}
+{{- if and $have (ne $have $want) -}}
+{{- fail (printf "StatefulSet %s has serviceName %s, which cannot change to %s in place\n  fix: kubectl delete sts %s -n %s --cascade=orphan, then upgrade again; the pod and its volumes are kept" $sts $have $want $sts $.Release.Namespace) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+podAntiAffinity on the node, matched on the selector labels. Empty for none.
+*/}}
+{{- define "remote-docker-workspace.antiAffinity" -}}
+{{- $term := dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" (include "remote-docker-workspace.selectorLabels" . | fromYaml)) -}}
+{{- if eq .Values.podAntiAffinity "hard" -}}
+podAntiAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    {{- list $term | toYaml | nindent 4 }}
+{{- else if eq .Values.podAntiAffinity "soft" -}}
+podAntiAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        {{- $term | toYaml | nindent 8 }}
 {{- end -}}
 {{- end -}}
 

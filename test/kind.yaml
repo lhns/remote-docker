@@ -1,8 +1,12 @@
-# A kind cluster whose node publishes 80 and 443 to the host, so an ingress
-# controller is reachable from the runner and the client can be pointed at it.
+# A kind cluster whose control-plane node publishes 80 and 443 to the host, so
+# an ingress controller is reachable from the runner and the client can be
+# pointed at it, and two workers for two workspace replicas, which the chart
+# keeps on different nodes.
 #
 # Used by .github/workflows/kubernetes.yml. The label is what ingress-nginx's
-# kind deployment selects on.
+# kind deployment selects on, and its tolerations put it on the control plane;
+# the workspace and the clients land on the workers, since kind taints the
+# control plane once a cluster has any.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -20,3 +24,5 @@ nodes:
       - containerPort: 443
         hostPort: 443
         protocol: TCP
+  - role: worker
+  - role: worker

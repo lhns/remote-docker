@@ -26,9 +26,11 @@ jobs:
   end-to-end:
     name: a session through the ingress
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
-      # StatefulSet of one, so the name is the release plus an ordinal.
+      # The StatefulSet; a pod is its name plus an ordinal.
+      STS: ws-remote-docker-workspace
+      # The first replica, the only one until the workspace is scaled to two.
       POD: ws-remote-docker-workspace-0
     steps:
       - uses: actions/checkout@v7
@@ -76,6 +78,69 @@ jobs:
           render --set ingress.enabled=false --set publicURL=wss://ws.example.com/
           render --set ingress.host=ws.example.com --set 'admins={alice,bob}'
           render --set ingress.host=ws.example.com --set metrics.enabled=true --set metrics.port=9100
+          render --set ingress.host=ws.example.com --set replicas=2
+          render --set ingress.host=ws.example.com --set replicas=3 --set podAntiAffinity=soft
+          render --set ingress.host=ws.example.com --set replicas=2 --set podAntiAffinity=none \
+                 --set publicURL=wss://ws.example.com/
+
+      # Several replicas (ADR 0035): the per-pod address only where nothing
+      # else names one, after the variable it expands, and the Services and the
+      # anti-affinity each way they can be set.
+      - name: several replicas render
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 --namespace rd \
+              --set ingress.host=ws.example.com "$@"
+          }
+          sts() { render --show-only templates/statefulset.yaml "$@"; }
+          fail() { echo "FAIL  $1"; echo "$2"; exit 1; }
+          # The value rendered under WORKSPACE_PUBLIC_URL, or nothing.
+          url() { grep -A1 'name: WORKSPACE_PUBLIC_URL$' <<<"$1" | sed -n 's/^ *value: "\(.*\)"$/\1/p'; }
+
+          two=$(sts --set replicas=2)
+          want='ssh://$(POD_NAME).ws-remote-docker-workspace-headless.rd.svc:2222'
+          [ "$(url "$two")" = "$want" ] || fail "replicas=2 did not name the pod's own address" "$two"
+          pod_line=$(grep -n 'name: POD_NAME$' <<<"$two" | cut -d: -f1)
+          url_line=$(grep -n 'name: WORKSPACE_PUBLIC_URL$' <<<"$two" | cut -d: -f1)
+          [ -n "$pod_line" ] && [ "$pod_line" -lt "$url_line" ] ||
+            fail "POD_NAME is not defined before the variable expanding it" "$two"
+          grep -qx '  replicas: 2' <<<"$two" || fail "replicas=2 rendered another count" "$two"
+          grep -qx '  serviceName: ws-remote-docker-workspace-headless' <<<"$two" ||
+            fail "serviceName is not the headless Service" "$two"
+
+          one=$(sts)
+          [ "$(url "$one")" = "wss://ws.example.com/" ] || fail "one replica stopped naming the ingress" "$one"
+          set2=$(sts --set replicas=2 --set publicURL=wss://elsewhere.example/)
+          [ "$(url "$set2")" = "wss://elsewhere.example/" ] || fail "an explicit publicURL lost to the pod's address" "$set2"
+          env2=$(sts --set replicas=2 --set env.WORKSPACE_PUBLIC_URL=wss://env.example/)
+          [ "$(grep -c 'name: WORKSPACE_PUBLIC_URL$' <<<"$env2")" -eq 1 ] && [ "$(url "$env2")" = "wss://env.example/" ] ||
+            fail "an env entry did not replace the chart's address" "$env2"
+
+          svc=$(render --show-only templates/service.yaml --set service.sessionAffinityTimeout=600)
+          grep -qx '  sessionAffinity: ClientIP' <<<"$svc" && grep -qx '      timeoutSeconds: 600' <<<"$svc" ||
+            fail "the Service does not pin a client to a replica" "$svc"
+          headless=$(render --show-only templates/service-headless.yaml --set service.sshPort=2299)
+          for want in '  clusterIP: None' '  publishNotReadyAddresses: false' \
+                      '    - name: ssh' '      port: 2222' '    - name: ws' '      port: 2280'; do
+            grep -qxF -- "$want" <<<"$headless" || fail "the headless Service has no [$want]" "$headless"
+          done
+
+          hard=$(sts)
+          grep -q 'requiredDuringSchedulingIgnoredDuringExecution' <<<"$hard" &&
+            grep -q 'topologyKey: kubernetes.io/hostname' <<<"$hard" ||
+            fail "the default is not one replica per node" "$hard"
+          soft=$(sts --set podAntiAffinity=soft)
+          grep -q 'preferredDuringSchedulingIgnoredDuringExecution' <<<"$soft" &&
+            ! grep -q 'requiredDuringScheduling' <<<"$soft" || fail "soft rendered something else" "$soft"
+          none=$(sts --set podAntiAffinity=none)
+          ! grep -q 'affinity:' <<<"$none" || fail "none rendered an affinity" "$none"
+          own=$(sts --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=disk' \
+                    --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=Exists')
+          grep -q 'nodeAffinity:' <<<"$own" && ! grep -q 'podAntiAffinity' <<<"$own" ||
+            fail "an explicit affinity was not the whole answer" "$own"
+          if out=$(sts --set podAntiAffinity=sometimes 2>&1); then fail "podAntiAffinity=sometimes rendered" "$out"; fi
+          grep -qF 'is not hard, soft or none' <<<"$out" || fail "refused, but not by name" "$out"
 
       # Metrics (ADR 0054): the variable, the port and the scrape annotations
       # when enabled, and none of them by default.
@@ -364,7 +429,10 @@ jobs:
             --selector=app.kubernetes.io/component=controller --tail=60 || true
           exit 1
 
-      - name: install the chart
+      # The RELEASED 0.9.0 chart, whose StatefulSet has no headless serviceName,
+      # so the step after it upgrades the way an existing install has to. With
+      # this commit's image: the chart is what is under test.
+      - name: install the 0.9.0 chart
         run: |
           set -eux
           kubectl create namespace rd
@@ -377,7 +445,9 @@ jobs:
           # in seconds rather than the default two minutes.
           REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/pods-state" "$RUNNER_TEMP/remote-docker" remote enroll >/dev/null
 
-          helm install ws charts/remote-docker-workspace \
+          curl -sSfL -o "$RUNNER_TEMP/chart-0.9.0.tgz" \
+            https://github.com/lhns/remote-docker/releases/download/v0.9.0/remote-docker-workspace-0.9.0.tgz
+          helm install ws "$RUNNER_TEMP/chart-0.9.0.tgz" \
             --namespace rd \
             --set image.repository=remote-docker-workspace \
             --set image.tag=kind \
@@ -405,10 +475,66 @@ jobs:
         run: |
           docker save remote-docker-workspace:kind | kubectl exec -i -n rd "$POD" -- docker load
 
+      # serviceName is immutable, so the upgrade from 0.9.0 is refused by the
+      # chart, naming the remedy, until the StatefulSet is orphan-deleted; then
+      # the new one adopts the pod and the same claims. A claim or host key
+      # that changed would be every client refusing the workspace.
+      - name: upgrade from 0.9.0, through the orphan-delete
+        run: |
+          set -eu
+          fail() { echo "FAIL  $1"; echo "$2"; exit 1; }
+          claims() {
+            kubectl get pvc -n rd -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.uid}{"\n"}{end}' | sort
+          }
+          hostkey() {
+            kubectl exec -n rd "$POD" -- sha256sum /etc/workspace/host_keys/ssh_host_ed25519_key | cut -d' ' -f1
+          }
+          claims_before=$(claims)
+          key_before=$(hostkey)
+          echo "before: $key_before"; echo "$claims_before"
+          [ "$(grep -c . <<<"$claims_before")" -eq 2 ] || fail "0.9.0 did not make two claims" "$claims_before"
+
+          # --reuse-values renders with 0.9.0's defaults, which lack this chart's.
+          if out=$(helm upgrade ws charts/remote-docker-workspace -n rd --reuse-values 2>&1); then
+            fail "upgraded with --reuse-values; wanted a refusal naming --reset-then-reuse-values" "$out"
+          fi
+          grep -qF -- '--reset-then-reuse-values' <<<"$out" || fail "refused, but not naming the remedy" "$out"
+          echo "PASS  --reuse-values is refused: $out"
+
+          if out=$(helm upgrade ws charts/remote-docker-workspace -n rd --reset-then-reuse-values 2>&1); then
+            fail "upgraded across a serviceName change; wanted a refusal naming the orphan-delete" "$out"
+          fi
+          grep -qF "kubectl delete sts $STS -n rd --cascade=orphan" <<<"$out" ||
+            fail "refused, but not naming the orphan-delete" "$out"
+          echo "PASS  the serviceName change is refused: $out"
+
+          kubectl delete sts "$STS" -n rd --cascade=orphan
+          helm upgrade ws charts/remote-docker-workspace -n rd --reset-then-reuse-values --wait --timeout 10m
+          kubectl rollout status -n rd "sts/$STS" --timeout=10m
+          kubectl exec -n rd "$POD" -- remote-dockerd healthcheck
+
+          claims_after=$(claims)
+          key_after=$(hostkey)
+          echo "after: $key_after"; echo "$claims_after"
+          [ "$claims_after" = "$claims_before" ] || fail "the claims changed across the upgrade" "$claims_after"
+          [ "$key_after" = "$key_before" ] || fail "the host key changed across the upgrade" "$key_after"
+          sub=$(kubectl get pod -n rd "$POD" -o jsonpath='{.spec.subdomain}')
+          [ "$sub" = "$STS-headless" ] || fail "the pod was not replaced under the headless Service" "subdomain: [$sub]"
+          echo "PASS  the same claims and host key, and the pod under $sub"
+
       - name: reach it through the ingress, over ws
         run: |
           set -eux
           echo "127.0.0.1 ws.rd.test" | sudo tee -a /etc/hosts
+
+          # The pod was just replaced, and ingress-nginx answers 503 until it
+          # has the new endpoint. Any other status is the agent answering.
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://ws.rd.test/ || true)
+            [ "$code" != 503 ] && [ "$code" != 000 ] && break
+            sleep 2
+          done
+          echo "the ingress answered $code"
 
           export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state"
           export REMOTE_DOCKER_ENDPOINT="$RUNNER_TEMP/docker.sock"
@@ -442,6 +568,162 @@ jobs:
           out=$(timeout 240 "$RUNNER_TEMP/remote-docker" run --rm \
                   -v "$RUNNER_TEMP/project:/w" alpine:3 cat /w/marker)
           test "$out" = "from the runner"
+
+      # ADR 0051: a second device enrols its own key with a token, through the
+      # ingress. The key lands on the state volume, and the authorizedKeys
+      # Secret is the operator's and stays as it was.
+      - name: redeem an enrolment token through the ingress
+        run: |
+          set -eux
+          secret_before=$(kubectl get secret -n rd ws-remote-docker-workspace-keys -o jsonpath='{.data}')
+
+          # The invite's address is WORKSPACE_PUBLIC_URL, derived from the ingress.
+          line=$(kubectl exec -n rd "$POD" -- remote-dockerd token create --account dana)
+          echo "$line"
+          invite=$(awk '/--token/ {print $NF}' <<<"$line")
+          case "$line" in
+            "docker remote create ws --token rdt1."*) ;;
+            *) echo "token create printed no command to run"; exit 1 ;;
+          esac
+
+          export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state2"
+          # kubectl finds its config under HOME, which is about to move.
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+          export HOME="$RUNNER_TEMP/home2"
+          mkdir -p "$HOME"
+          "$RUNNER_TEMP/remote-docker" remote create k8s2 --token "$invite" --no-context
+
+          key=$(cut -d' ' -f2 "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub")
+          enrolled=$(kubectl exec -n rd "$POD" -- cat /etc/workspace/enrolled_keys.d/dana.pub)
+          echo "$enrolled"
+          grep -qF "$key" <<<"$enrolled"
+          test "$(kubectl get secret -n rd ws-remote-docker-workspace-keys -o jsonpath='{.data}')" = "$secret_before"
+
+          out=$(REMOTE_DOCKER_WORKSPACE=k8s2 "$RUNNER_TEMP/remote-docker" remote status || true)
+          echo "$out"
+          grep -q "tunnel port" <<<"$out"
+
+          if out=$("$RUNNER_TEMP/remote-docker" remote create k8s3 --token "$invite" --no-context 2>&1); then
+            echo "a used token was redeemed again: $out"
+            exit 1
+          fi
+          echo "$out"
+          grep -q "unknown, used or expired" <<<"$out"
+
+      - name: helm upgrade keeps it running
+        run: |
+          set -eux
+          # A new version and appVersion: the upgrade that fails when something
+          # version-bearing reached an immutable field.
+          rm -rf "$RUNNER_TEMP/chart-next"
+          cp -r charts/remote-docker-workspace "$RUNNER_TEMP/chart-next"
+          sed -i 's/^version: .*/version: 9.9.9/; s/^appVersion: .*/appVersion: "9.9.9"/' \
+            "$RUNNER_TEMP/chart-next/Chart.yaml"
+          helm upgrade ws "$RUNNER_TEMP/chart-next" \
+            --namespace rd --reuse-values \
+            --set resources.requests.memory=256Mi \
+            --wait --timeout 10m
+          kubectl exec -n rd "$POD" -- remote-dockerd healthcheck
+
+      # Two replicas, each a workspace of its own (ADR 0035), on two nodes. The
+      # ingress is pinned by client address, which ingress-nginx needs since it
+      # ignores the Service's affinity.
+      - name: scale the workspace to two replicas
+        run: |
+          set -eux
+          helm upgrade ws charts/remote-docker-workspace -n rd --reuse-values \
+            --set replicas=2 \
+            --set-string 'ingress.annotations.nginx\.ingress\.kubernetes\.io/upstream-hash-by=$remote_addr' \
+            --wait --timeout 10m
+          kubectl rollout status -n rd "sts/$STS" --timeout=10m
+          kubectl get pods -n rd -o wide
+          # The second replica's own daemon, like the first's above.
+          docker save remote-docker-workspace:kind | kubectl exec -i -n rd "$STS-1" -- docker load
+
+      - name: two replicas, two nodes, two workspaces
+        run: |
+          set -eu
+          fail() { echo "FAIL  $1"; echo "$2"; exit 1; }
+          headless="$STS-headless.rd.svc.cluster.local"
+
+          n0=$(kubectl get pod -n rd "$STS-0" -o jsonpath='{.spec.nodeName}')
+          n1=$(kubectl get pod -n rd "$STS-1" -o jsonpath='{.spec.nodeName}')
+          [ -n "$n0" ] && [ "$n0" != "$n1" ] || fail "the replicas share a node" "$STS-0 on [$n0], $STS-1 on [$n1]"
+          echo "PASS  $STS-0 on $n0, $STS-1 on $n1"
+
+          claims=$(kubectl get pvc -n rd --no-headers \
+                     -o custom-columns=NAME:.metadata.name,VOLUME:.spec.volumeName,PHASE:.status.phase)
+          for want in "state-$STS-0" "graph-$STS-0" "state-$STS-1" "graph-$STS-1"; do
+            awk -v n="$want" '$1 == n && $3 == "Bound"' <<<"$claims" | grep -q . || fail "no bound claim $want" "$claims"
+          done
+          [ "$(awk '{print $2}' <<<"$claims" | sort -u | grep -c .)" -eq 4 ] || fail "two claims share a volume" "$claims"
+          echo "PASS  each replica has its own two claims"; echo "$claims"
+
+          k0=$(kubectl exec -n rd "$STS-0" -- sha256sum /etc/workspace/host_keys/ssh_host_ed25519_key | cut -d' ' -f1)
+          k1=$(kubectl exec -n rd "$STS-1" -- sha256sum /etc/workspace/host_keys/ssh_host_ed25519_key | cut -d' ' -f1)
+          [ "$k0" != "$k1" ] || fail "the replicas share a host key, so a wrong landing would go unnoticed" "$k0"
+          echo "PASS  each replica has its own host key"
+
+          # The kubelet expanded $(POD_NAME): an invite minted here names this pod.
+          for i in 0 1; do
+            got=$(kubectl exec -n rd "$STS-$i" -- printenv WORKSPACE_PUBLIC_URL)
+            want="ssh://$STS-$i.$STS-headless.rd.svc:2222"
+            [ "$got" = "$want" ] || fail "$STS-$i's invite address is not its own" "[$got], wanted [$want]"
+          done
+          echo "PASS  each replica's invite names its own pod"
+
+          kubectl run dns -n rd --image=alpine:3 --restart=Never --command -- sleep 900
+          kubectl wait -n rd --for=condition=ready pod/dns --timeout=120s
+          kubectl exec -n rd dns -- apk add -q bind-tools
+          ip0=$(kubectl get pod -n rd "$STS-0" -o jsonpath='{.status.podIP}')
+          ip1=$(kubectl get pod -n rd "$STS-1" -o jsonpath='{.status.podIP}')
+          want_all=$(printf '%s\n' "$ip0" "$ip1" | sort)
+          # Endpoints reach DNS a few seconds after a pod turns ready.
+          for _ in $(seq 1 30); do
+            all=$(kubectl exec -n rd dns -- dig +short "$headless" | sort)
+            a0=$(kubectl exec -n rd dns -- dig +short "$STS-0.$headless")
+            a1=$(kubectl exec -n rd dns -- dig +short "$STS-1.$headless")
+            srv=$(kubectl exec -n rd dns -- dig +short srv "_ssh._tcp.$headless" | sort)
+            if [ "$all" = "$want_all" ] && [ "$a0" = "$ip0" ] && [ "$a1" = "$ip1" ] &&
+               [ "$(awk '$3 == 2222' <<<"$srv" | grep -c "^.* $STS-[01]\.$STS-headless\.rd\.svc\.cluster\.local\.$")" -eq 2 ]; then
+              break
+            fi
+            sleep 2
+          done
+          echo "$headless: $all"; echo "$STS-0: $a0  $STS-1: $a1"; echo "_ssh._tcp:"; echo "$srv"
+          [ "$all" = "$want_all" ] || fail "the headless name does not resolve to both pods" "wanted $want_all"
+          [ "$a0" = "$ip0" ] && [ "$a1" = "$ip1" ] || fail "a pod's own name does not resolve to it" "wanted $ip0 and $ip1"
+          [ "$(awk '$3 == 2222' <<<"$srv" | grep -c .)" -eq 2 ] || fail "SRV _ssh._tcp does not list both on 2222" "$srv"
+          echo "PASS  the headless name, each pod's name and SRV _ssh._tcp resolve"
+          kubectl delete pod -n rd dns --wait=false
+
+      # With upstream-hash-by, every connection from this runner reaches one
+      # replica. A fresh client trusts the first host key it sees, so a second
+      # replica answering any later connection would be refused.
+      - name: the ingress pins a client to one replica
+        run: |
+          set -u
+          export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state-pinned"
+          export REMOTE_DOCKER_ENDPOINT="$RUNNER_TEMP/pinned.sock"
+          export REMOTE_DOCKER_WORKSPACE=pinned
+          mkdir -p "$REMOTE_DOCKER_STATE_DIR"
+          cp "$RUNNER_TEMP/state/id_ed25519" "$RUNNER_TEMP/state/id_ed25519.pub" "$REMOTE_DOCKER_STATE_DIR/"
+          "$RUNNER_TEMP/remote-docker" remote create pinned --host ws://ws.rd.test --user ci --no-context || exit 1
+
+          # The first answer may wait on the account being provisioned.
+          for _ in $(seq 1 30); do
+            out=$("$RUNNER_TEMP/remote-docker" remote status 2>&1 || true)
+            case "$out" in *"tunnel port"*) break ;; esac
+            sleep 2
+          done
+          for i in 1 2 3 4 5 6; do
+            out=$("$RUNNER_TEMP/remote-docker" remote status 2>&1 || true)
+            case "$out" in
+              *"tunnel port"*) ;;
+              *) echo "FAIL  connection $i through the ingress did not reach the same replica:"; echo "$out"; exit 1 ;;
+            esac
+          done
+          echo "PASS  six more connections through the ingress, all to the first one's replica"
 
       # Ephemeral clients (ADR 0050) the way autoscaled CI runners use them:
       # pods of one Deployment with random names, one key from one Secret, the
@@ -548,13 +830,17 @@ jobs:
           YAML
           kubectl rollout status -n clients deployment/ci-client --timeout=180s
 
-      # 1 -> 4 -> 1. In each pod: `docker info`, and a bind mount of /work, the
-      # same path in every pod, reading that pod's own name. After scaling down,
-      # everything the three removed pods made goes once their grace is up.
+      # 1 -> 4 -> 1, against the collective Service name in front of two
+      # replicas. In each pod: `docker info`, and a bind mount of /work, the
+      # same path in every pod, reading that pod's own name. Every run is on
+      # exactly one replica, which is the Service's affinity keeping each client
+      # where it started; how they split is kube-proxy's choice and not
+      # asserted. After scaling down, each replica removes what the three
+      # removed pods made on it once their grace is up.
       - name: scale the client Deployment 1, 4, 1
         run: |
           set -u
-          ws() { kubectl exec -n rd "$POD" -- "$@"; }
+          on() { local r=$1; shift; kubectl exec -n rd "$STS-$r" -- "$@"; }
           pods() {
             kubectl get pods -n clients -l app=ci-client \
               --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'
@@ -599,94 +885,89 @@ jobs:
             fail "four pods do not have four client ids: [${client[*]}]"
           [ "$(printf '%s\n' "${client[@]}" | sort -u | grep -c .)" -eq 4 ] ||
             fail "two pods share a client id: [${client[*]}]"
-          runs=$(ws remote-dockerd ephemeral ls 2>&1)
-          echo "$runs"
-          [ "$(echo "$runs" | grep -c '^pods ')" -eq 4 ] || fail "the workspace does not list four runs"
-          echo "PASS  four pods of one key are four runs"
+          # Each client id on exactly one replica, and nothing else listed.
+          listed=""
+          for r in 0 1; do
+            runs=$(on "$r" remote-dockerd ephemeral ls 2>&1)
+            echo "$STS-$r:"; echo "$runs"
+            listed+=$(awk '$1 == "pods" {print $2}' <<<"$runs")$'\n'
+          done
+          for id in "${client[@]}"; do
+            [ "$(grep -cx "$id" <<<"$listed")" -eq 1 ] || fail "run $id is not on exactly one replica"
+          done
+          [ "$(grep -c . <<<"$listed")" -eq 4 ] || fail "the replicas list runs that are not the four pods'"
+          echo "PASS  four pods of one key are four runs, each on one replica"
 
           scale 1
           left=$(pods)
           kept=${client[$left]:-}
           [ -n "$kept" ] || fail "the remaining pod [$left] was not one of the four"
 
-          # One grace (20s) and a sweep, then the cleanup itself.
+          # One grace (20s) and a sweep, then the cleanup itself. The replica
+          # holding the kept run keeps only it and its volumes; the other keeps
+          # nothing of this account's runs. A replica no run reached has no
+          # rd-dind-pods at all, which reads as no volumes.
+          clean() {
+            local r runs n mine vols others ok=0 homes=0
+            for r in 0 1; do
+              runs=$(on "$r" remote-dockerd ephemeral ls 2>&1)
+              n=$(awk '$1 == "pods"' <<<"$runs" | grep -c .)
+              mine=$(awk -v c="$kept" '$1 == "pods" && $2 == c' <<<"$runs" | grep -c .)
+              vols=$(on "$r" docker exec rd-dind-pods docker volume ls -q \
+                       --filter label=com.github.lhns.remote-docker.owner=pods 2>/dev/null || true)
+              # grep -v selecting nothing is the success case, and exits 1.
+              others=$(grep -v "^rd-$kept-" <<<"$vols" || true)
+              state+="$STS-$r runs:"$'\n'"$runs"$'\n'"$STS-$r volumes:"$'\n'"$vols"$'\n'
+              if [ "$mine" -eq 1 ]; then
+                homes=$((homes + 1))
+                [ "$n" -eq 1 ] && [ -n "$vols" ] && [ -z "$others" ] || ok=1
+              else
+                [ "$n" -eq 0 ] && [ -z "$vols" ] || ok=1
+              fi
+            done
+            [ "$homes" -eq 1 ] || ok=1
+            return "$ok"
+          }
           gone=false
           for _ in $(seq 1 120); do
-            runs=$(ws remote-dockerd ephemeral ls 2>&1)
-            vols=$(ws docker exec rd-dind-pods docker volume ls -q \
-                     --filter label=com.github.lhns.remote-docker.owner=pods 2>&1)
-            # grep -v selecting nothing is the success case, and exits 1 under bash -e.
-            others=$(echo "$vols" | grep -v "^rd-$kept-" || true)
-            if [ "$(echo "$runs" | grep -c '^pods ')" -eq 1 ] &&
-               [ "$(echo "$runs" | awk -v c="$kept" '$1 == "pods" && $2 == c' | grep -c .)" -eq 1 ] &&
-               [ -n "$vols" ] && [ -z "$others" ]; then
-              gone=true
-              break
-            fi
+            state=""
+            if clean; then gone=true; break; fi
             sleep 1
           done
-          echo "runs:"; echo "$runs"
-          echo "volumes:"; echo "$vols"
+          echo "$state"
           [ "$gone" = true ] || fail "the removed pods' runs or volumes are still there"
-          echo "PASS  after scaling to one, only $left's run ($kept) and its volume remain"
+          echo "PASS  after scaling to one, only $left's run ($kept) and its volumes remain, on one replica"
 
           check_pods
 
-      # ADR 0051: a second device enrols its own key with a token, through the
-      # ingress. The key lands on the state volume, and the authorizedKeys
-      # Secret is the operator's and stays as it was.
-      - name: redeem an enrolment token through the ingress
+      # The other way to stay on a replica: name it. Also makes sure the second
+      # replica serves an ephemeral run, which the affinity above may not.
+      - name: a client naming one replica
         run: |
-          set -eux
-          secret_before=$(kubectl get secret -n rd ws-remote-docker-workspace-keys -o jsonpath='{.data}')
-
-          # The invite's address is WORKSPACE_PUBLIC_URL, derived from the ingress.
-          line=$(kubectl exec -n rd "$POD" -- remote-dockerd token create --account dana)
-          echo "$line"
-          invite=$(awk '/--token/ {print $NF}' <<<"$line")
-          case "$line" in
-            "docker remote create ws --token rdt1."*) ;;
-            *) echo "token create printed no command to run"; exit 1 ;;
-          esac
-
-          export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state2"
-          # kubectl finds its config under HOME, which is about to move.
-          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
-          export HOME="$RUNNER_TEMP/home2"
-          mkdir -p "$HOME"
-          "$RUNNER_TEMP/remote-docker" remote create k8s2 --token "$invite" --no-context
-
-          key=$(cut -d' ' -f2 "$REMOTE_DOCKER_STATE_DIR/id_ed25519.pub")
-          enrolled=$(kubectl exec -n rd "$POD" -- cat /etc/workspace/enrolled_keys.d/dana.pub)
-          echo "$enrolled"
-          grep -qF "$key" <<<"$enrolled"
-          test "$(kubectl get secret -n rd ws-remote-docker-workspace-keys -o jsonpath='{.data}')" = "$secret_before"
-
-          out=$(REMOTE_DOCKER_WORKSPACE=k8s2 "$RUNNER_TEMP/remote-docker" remote status || true)
-          echo "$out"
-          grep -q "tunnel port" <<<"$out"
-
-          if out=$("$RUNNER_TEMP/remote-docker" remote create k8s3 --token "$invite" --no-context 2>&1); then
-            echo "a used token was redeemed again: $out"
-            exit 1
-          fi
-          echo "$out"
-          grep -q "unknown, used or expired" <<<"$out"
-
-      - name: helm upgrade keeps it running
-        run: |
-          set -eux
-          # A new version and appVersion: the upgrade that fails when something
-          # version-bearing reached an immutable field.
-          rm -rf "$RUNNER_TEMP/chart-next"
-          cp -r charts/remote-docker-workspace "$RUNNER_TEMP/chart-next"
-          sed -i 's/^version: .*/version: 9.9.9/; s/^appVersion: .*/appVersion: "9.9.9"/' \
-            "$RUNNER_TEMP/chart-next/Chart.yaml"
-          helm upgrade ws "$RUNNER_TEMP/chart-next" \
-            --namespace rd --reuse-values \
-            --set resources.requests.memory=256Mi \
-            --wait --timeout 10m
-          kubectl exec -n rd "$POD" -- remote-dockerd healthcheck
+          set -u
+          fail() { echo "FAIL  $*"; exit 1; }
+          host="$STS-1.$STS-headless.rd.svc.cluster.local"
+          kubectl get deploy -n clients ci-client -o json | jq --arg host "$host" '
+            .metadata = {name: "ci-client-pinned", namespace: "clients"}
+            | .spec.replicas = 1
+            | .spec.selector.matchLabels.app = "ci-client-pinned"
+            | .spec.template.metadata.labels.app = "ci-client-pinned"
+            | (.spec.template.spec.containers[0].env[] | select(.name == "REMOTE_DOCKER_HOST")).value = $host
+            | del(.status)' | kubectl apply -f -
+          kubectl rollout status -n clients deployment/ci-client-pinned --timeout=180s
+          pod=$(kubectl get pods -n clients -l app=ci-client-pinned \
+                  --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+          out=$(timeout 240 kubectl exec -n clients "$pod" -- \
+                  docker run --rm -v /work:/w alpine:3 cat /w/marker 2>&1)
+          [ "$(echo "$out" | tail -1)" = "$pod" ] || fail "$pod: its container read [$out]"
+          id=$(kubectl exec -n clients "$pod" -- curl -s --max-time 30 --unix-socket /state/docker.sock \
+                 http://session/_remote-docker/client | sed -n 's/.*"client":"\([0-9a-f]*\)".*/\1/p')
+          runs=$(kubectl exec -n rd "$STS-1" -- remote-dockerd ephemeral ls 2>&1)
+          echo "$STS-1:"; echo "$runs"
+          [ -n "$id" ] && [ "$(awk -v c="$id" '$1 == "pods" && $2 == c' <<<"$runs" | grep -c .)" -eq 1 ] ||
+            fail "run [$id] of a client naming $host is not on $STS-1"
+          echo "PASS  a client naming $STS-1 runs there, and its bind mount reads its own name"
+          kubectl delete deploy -n clients ci-client-pinned --wait=false
 
       - name: what went wrong
         if: failure()
@@ -697,20 +978,25 @@ jobs:
             echo "-- $p"
             kubectl logs -n clients "$p" --tail=30 2>&1 || true
           done
-          kubectl exec -n rd "$POD" -- remote-dockerd ephemeral ls 2>&1 || true
 
           echo "== client =="
           cat "$RUNNER_TEMP/state/logs/"*.log 2>/dev/null | tail -60
 
           echo "== workspace =="
-          kubectl describe pod -n rd "$POD" | tail -30 || true
-          kubectl logs -n rd "$POD" --tail=100 || true
+          kubectl get pods,pvc,svc,endpoints -n rd -o wide 2>&1 || true
+          for pod in $(kubectl get pods -n rd -l app.kubernetes.io/name=remote-docker-workspace \
+                         -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            echo "==== $pod ===="
+            kubectl describe pod -n rd "$pod" | tail -30 || true
+            kubectl logs -n rd "$pod" --tail=100 || true
+            kubectl exec -n rd "$pod" -- remote-dockerd ephemeral ls 2>&1 || true
 
-          # A per-account daemon's reason for not starting is only in its log.
-          echo "== per-account daemons =="
-          kubectl exec -n rd "$POD" -- docker ps -a 2>&1 | tail -5 || true
-          for c in $(kubectl exec -n rd "$POD" -- docker ps -aq --filter name=rd-dind 2>/dev/null); do
-            kubectl exec -n rd "$POD" -- docker logs --tail 30 "$c" 2>&1 | tail -30 || true
+            # A per-account daemon's reason for not starting is only in its log.
+            echo "-- per-account daemons"
+            kubectl exec -n rd "$pod" -- docker ps -a 2>&1 | tail -5 || true
+            for c in $(kubectl exec -n rd "$pod" -- docker ps -aq --filter name=rd-dind 2>/dev/null); do
+              kubectl exec -n rd "$pod" -- docker logs --tail 30 "$c" 2>&1 | tail -30 || true
+            done
           done
 
           echo "== ingress =="

@@ -1164,6 +1164,11 @@ the new host key, every key enrolled with a token is revoked, and each
 account's uid moves, which moves its tunnel port, which strands the volumes
 named after the old one.
 
+**E — tokens and enrolled keys are per replica (5, 6).** With `replicas` above
+1 each replica has its own state volume, so a token, a key enrolled with one,
+and a removal by `remote key rm` or `remote user rm` act on the replica that
+handled them and no other; only the keys Secret is read by every replica.
+
 **E — privileged is root on the node (4).** dockerd sets up its own bridge and
 iptables rules and mounts NFS in its own namespace, so there is no unprivileged
 mode. This is the same bargain as ADR 0013 on Swarm: whoever installs the chart

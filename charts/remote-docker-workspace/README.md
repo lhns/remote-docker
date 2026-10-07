@@ -1,7 +1,8 @@
 # remote-docker-workspace Helm chart
 
-A remote Docker workspace: one privileged pod running dockerd and an SSH agent,
-reached from a laptop through an ordinary Ingress. Directories on the developer's
+A remote Docker workspace: a privileged pod running dockerd and an SSH agent,
+reached from a laptop through an ordinary Ingress. Several replicas are several
+independent workspaces; see [Several replicas](#several-replicas). Directories on the developer's
 own machine are mounted into containers running here, over NFS through the
 tunnel, so nothing is copied or synced.
 
@@ -72,9 +73,11 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:<x.y.z> \
 |---|---|---|
 | `image.repository` | `ghcr.io/lhns/remote-docker-workspace` | |
 | `image.tag` | `""` | the chart's appVersion |
+| `replicas` | `1` | independent workspaces; see Several replicas |
+| `podAntiAffinity` | `hard` | `hard`: one replica per node; `soft`: prefer that; `none`. Ignored when `affinity` is set |
 | `authorizedKeys` | `{}` | one entry per account; **the entry name is the account a client logs in as** (unix user `rd-<name>`) |
 | `existingSecret` | `""` | use a Secret you manage instead |
-| `publicURL` | `""` | the address an enrolment token's invite names; empty is `wss://<ingress.host>/`, or `ws://` without TLS |
+| `publicURL` | `""` | the address an enrolment token's invite names; empty is `wss://<ingress.host>/`, or `ws://` without TLS, and with `replicas` above 1 the pod's own name |
 | `admins` | `[]` | accounts that manage every account under `remote` (`WORKSPACE_ADMINS`, ADR 0053); they need not be enrolled yet |
 | `perUserDind` | `true` | a dockerd per account (ADR 0019), or one shared (ADR 0012) |
 | `dockerdArgs` | `--storage-driver=fuse-overlayfs` | see below |
@@ -93,6 +96,7 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:<x.y.z> \
 | `ingress.enabled` | `true` | |
 | `ingress.host` | `""` | **required** when the ingress is enabled |
 | `service.type` | `ClusterIP` | SSH is not published; the ingress is the way in |
+| `service.sessionAffinityTimeout` | `86400` | how long the Service keeps a client address on one replica after its last connection; 86400 is the most Kubernetes accepts |
 
 `values.yaml` carries the reasoning for each; the ones worth knowing before you
 install are below.
@@ -135,8 +139,8 @@ it. Even on storage that offers ReadWriteMany, leave this alone.
 
 **The state volume happens to be.** The agent is its only writer.
 `ReadWriteMany` is safe there, and makes rescheduling onto another node quicker
-because the volume need not detach first — but it buys nothing while there is
-one replica.
+because the volume need not detach first. Each replica has a claim of its own,
+so it is never shared between replicas either.
 
 Losing the state volume is not losing a cache: the SSH host keys change, so
 every client that has connected before reports REMOTE HOST IDENTIFICATION HAS
@@ -144,13 +148,95 @@ CHANGED, every key enrolled with a token is revoked, and each account's uid
 moves, which moves its reverse-tunnel port,
 which strands the volumes named after the old one.
 
-## One replica, and what follows
+## Several replicas
 
-The workspace is a StatefulSet of one. `helm upgrade` therefore stops the old
-pod before starting the new one — which is what you want, since two pods must
-never hold the same graph — and a node failure needs the volume to detach before
-the pod can reschedule. Neither is a bug to report; both are consequences of one
-writer owning the storage.
+`replicas: 3` runs three workspaces, not one workspace three times. Each replica
+has its own:
+
+- state volume: host key, uids, enrolment tokens and keys enrolled with one;
+- graph volume, and each account's daemon with its images, containers and
+  volumes;
+- ephemeral runs, so `ephemeral.maxClients` counts per replica.
+
+The keys Secret is the only thing they share, so an account enrolled there
+exists on every replica, with nothing else in common. This is for spreading
+load, such as autoscaled CI runners (main README, "CI with autoscaled
+runners"), and not for failover: a replica that goes away takes its work with
+it.
+
+**A client must stay on the replica it started on.** Two ways:
+
+- **The collective name**, `<fullname>.<ns>.svc`, as with one replica. The
+  Service has `sessionAffinity: ClientIP`, so kube-proxy sends each client
+  address to one replica for `service.sessionAffinityTimeout` (default and
+  maximum 86400s) after its last connection. Clients behind one SNAT address
+  share a replica, which is correct and unbalanced. A client idle for longer
+  than the timeout, or one whose replica restarted, can be sent to another
+  replica, which it refuses: each replica has its own host key, so a wrong
+  landing fails loudly rather than reaching somebody else's workspace.
+- **A replica's own name**, `<fullname>-N.<fullname>-headless.<ns>.svc`, from
+  the headless Service the StatefulSet names. It also publishes SRV records,
+  `_ssh._tcp` and `_ws._tcp`, listing every ready replica. The ports there are
+  the agent's own, 2222 and 2280, since a headless name resolves to pod IPs.
+
+**The ingress ignores the Service's affinity.** ingress-nginx balances across
+the pods itself, so with `replicas` above 1 pin each client address there too:
+
+```yaml
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+```
+
+`NOTES.txt` warns when it is missing. Another controller needs its own
+equivalent, and only ingress-nginx is tested.
+
+**Enrolment is per replica.** A token enrols a key on the replica that minted it
+and nowhere else, so with `replicas` above 1 and no `publicURL`, its invite
+names that pod, `ssh://<pod>.<fullname>-headless.<ns>.svc:2222`, which only a
+client inside the cluster reaches. An explicit `publicURL` is used by every
+replica as it stands, which is right only if it reaches the minting one. For
+accounts that should exist everywhere, enrol through the keys Secret.
+
+**Scaling up moves some clients.** A new replica starts empty. Going from one
+replica to several restarts the first pod, since its invite address becomes its
+own name, and that ends the Service's affinity for every client; through the
+ingress, adding a replica re-hashes a share of the clients. A client sent to a
+replica it has not seen refuses its host key. Point it at its replica's own
+name, or remove and recreate its workspace entry to start over wherever it
+lands. Ephemeral CI runners start fresh each time and are not affected.
+
+**One replica per node, by default.** `podAntiAffinity: hard` requires
+replicas on different nodes (`kubernetes.io/hostname`), because the scheduler's
+own spreading allows two or three on one node, and one node's failure or load
+would then take several workspaces. With fewer schedulable nodes than
+replicas, the extra replica stays Pending and says why. `soft` prefers
+spreading and allows doubling up; `none` leaves it to the scheduler; an
+explicit `affinity` replaces all of this.
+
+A StatefulSet stops a pod before starting its replacement, which is what you
+want, since two pods must never hold the same graph, and a node failure needs
+the volume to detach before the pod can reschedule. Both are consequences of
+one writer owning each replica's storage.
+
+### Upgrading from 0.9.0 or earlier
+
+The StatefulSet's `serviceName` is now the headless Service, and Kubernetes
+cannot change it in place, so the chart refuses the upgrade and names the fix:
+
+```bash
+kubectl delete sts ws-remote-docker-workspace -n remote-docker --cascade=orphan
+helm upgrade ws oci://ghcr.io/lhns/charts/remote-docker-workspace \
+  -n remote-docker --reset-then-reuse-values
+```
+
+`--cascade=orphan` leaves the pod and both claims in place; the new StatefulSet
+adopts them by name, `state-<fullname>-0` and `graph-<fullname>-0`, and replaces
+the pod once. The host key, enrolled keys and images are kept, which CI checks
+against the released 0.9.0 chart. Use `--reset-then-reuse-values` (Helm 3.14
+and later) rather than `--reuse-values`: the latter renders with the old
+chart's defaults, which lack `replicas` and the values beside it, and the chart
+refuses it by name.
 
 ## Growing a volume
 

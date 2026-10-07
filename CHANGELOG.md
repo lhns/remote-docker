@@ -10,6 +10,21 @@ software.
 
 ## Unreleased
 
+### New
+
+- **The chart runs several workspaces.** Set `replicas` and each replica is a
+  workspace of its own, on its own node by default (`podAntiAffinity`), so
+  autoscaled CI runners are no longer bound to one pod.
+  - Clients keep using the one Service name; the Service keeps each client
+    address on one replica. Behind ingress-nginx, add
+    `nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"` to
+    `ingress.annotations`, which the install notes remind you of.
+  - Every pod also has a name of its own,
+    `<fullname>-N.<fullname>-headless.<ns>.svc`, with SRV records listing them.
+  - Replicas share only the keys Secret. Tokens, keys enrolled with one,
+    images and runner limits are per replica.
+  - See "Several replicas" in the chart README.
+
 ### Fixes
 
 - **Write-back no longer follows a link out of your directory.** With
@@ -19,6 +34,19 @@ software.
   junction or an absolute symlink is not carried back.
 - **An account can hold at most 10 unused tokens it made.** Admins and the
   workspace operator have no limit.
+
+### Upgrading
+
+- **Upgrading the chart from 0.9.0 or earlier needs one extra command.** The
+  chart refuses the upgrade and names it:
+
+  ```bash
+  kubectl delete sts <release>-remote-docker-workspace -n <ns> --cascade=orphan
+  helm upgrade <release> <chart> -n <ns> --reset-then-reuse-values
+  ```
+
+  The pod, its volumes, the host key and every enrolled key are kept. Use
+  `--reset-then-reuse-values` rather than `--reuse-values` for this upgrade.
 
 ## 0.9.0 — 2026-10-06
 

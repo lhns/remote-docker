@@ -2,10 +2,15 @@
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md) and
   [ADR 0034](0034-ssh-inside-a-websocket.md)
-- Date: 2026-08-14, amended 2026-10-05 (ephemeral values, enrolment)
+- Date: 2026-08-14, amended 2026-10-05 (ephemeral values, enrolment) and
+  2026-10-07 (several replicas)
+- Current answer: a StatefulSet of `replicas` independent workspaces, one per
+  node by default, behind the headless Service it names. Clients stay on a
+  replica through `sessionAffinity: ClientIP` on the collective Service (and an
+  ingress annotation for ingress-nginx); nothing in the client chooses one.
 
 > The ingress is the way in, so the deployment needs no load balancer and no
-> node port. Everything else follows from one pod owning its storage.
+> node port. Everything else follows from each pod owning its storage.
 
 ## What forced it
 
@@ -22,10 +27,44 @@ anything else on 443.
 
 ## The decisions
 
-**A StatefulSet of one, not a Deployment.** Two pods must never hold the same
-graph directory. A rolling Deployment starts the replacement before the old pod
-is gone; a StatefulSet terminates first, and its volume claim templates give
-each volume a name that outlives the pod.
+**A StatefulSet, not a Deployment.** Two pods must never hold the same graph
+directory. A rolling Deployment starts the replacement before the old pod is
+gone; a StatefulSet terminates first, and its volume claim templates give each
+volume a name that outlives the pod.
+
+**Several replicas are several workspaces (2026-10-07).** Asked for so
+autoscaled CI runners (ADR 0050) are not bound to one pod and one node.
+
+- Each replica owns its state and graph volumes: host key, uids, tokens,
+  enrolled keys, accounts' daemons, ephemeral runs. Only the keys Secret is
+  shared. Nothing is replicated, so this spreads load and is not failover.
+- `serviceName` is `<fullname>-headless` (`clusterIP: None`,
+  `publishNotReadyAddresses: false`, ports `ssh` 2222 and `ws` 2280, the
+  agent's own since the name resolves to pod IPs): a stable name per pod and
+  `_ssh._tcp`/`_ws._tcp` SRV records.
+- **Stickiness is the Service's, not the client's.** The collective Service
+  has `sessionAffinity: ClientIP`, timeout 86400s (the API's maximum), so a
+  client that already uses the collective name needs no change. Rejected:
+  DNS or SRV selection in the client (a `dns+srv://` address). It would put
+  replica choice and its persistence in every client for what kube-proxy
+  already does. Costs: clients behind one SNAT address share a replica, and
+  one idle past the timeout or whose replica restarted may be re-pinned.
+- **ingress-nginx ignores Service affinity**, so the chart documents
+  `nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"` and NOTES
+  warns without it. Not refused at render: other controllers have their own.
+- **Host keys stay per replica.** A client trusts the first key it sees for a
+  name, so a wrong landing is refused rather than served by another
+  workspace. A shared key would make that silent.
+- **An invite names its own pod.** A token redeems only where it was minted,
+  so with `replicas` above 1 and no `publicURL`, `WORKSPACE_PUBLIC_URL` is
+  `ssh://$(POD_NAME).<headless>.<ns>.svc:2222`, expanded by the kubelet. It is
+  reachable only inside the cluster; enrolment for everybody goes through the
+  Secret.
+- **`podAntiAffinity: hard` by default**, on `kubernetes.io/hostname`. The
+  scheduler's default spreading allows several replicas on one node, which
+  defeats the point. `soft` and `none` exist; an explicit `affinity` wins.
+- **No byte-identical render at one replica.** The headless Service, the
+  affinity and `POD_NAME` are always there, so there is one code path.
 
 **Two volumes, and only one of the access modes is a rule.** The graph directory
 is ReadWriteOnce because sharing it corrupts it. The state directory is
@@ -70,6 +109,13 @@ than leaving an agent that will not start.
 
 ## Consequences
 
+- **Upgrading from 0.9.0 or earlier needs one manual step (2026-10-07).**
+  `serviceName` is immutable, so the chart `lookup`s the StatefulSet and
+  refuses, naming `kubectl delete sts <name> --cascade=orphan`; the new
+  StatefulSet adopts the pod and the claims `state-<sts>-0` and
+  `graph-<sts>-0`. CI installs the released 0.9.0 chart and checks the claim
+  UIDs and the host key survive. `--reuse-values` renders with the old chart's
+  defaults, so it is refused in favour of `--reset-then-reuse-values`.
 - **`helm upgrade` stops the pod before starting the new one**, and a node
   failure waits for the volume to detach. Both follow from one writer owning the
   storage, and both are worth knowing before an outage rather than during one.
