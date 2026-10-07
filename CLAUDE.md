@@ -408,6 +408,9 @@ premise of the project, and it applies to building it too. So:
   never wrote. Every other write-back case is decided by comparing each side
   against what the fill SENT, so only a file both sides changed needs a clock --
   and that offset is measured through workspace-info rather than assumed.
+  Every write and delete it makes here goes through one `os.Root` for the
+  share: the workspace names the path, and a link in the share must not lead
+  it out (`writeback_link_test.go`).
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.

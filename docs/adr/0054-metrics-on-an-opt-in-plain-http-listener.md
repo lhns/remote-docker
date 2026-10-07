@@ -1,7 +1,7 @@
 # 0054 — Metrics on an opt-in plain HTTP listener, in the text format, with no client library
 
 - Status: Accepted
-- Date: 2026-10-06, amended 2026-10-06 (histograms, build info, process metrics)
+- Date: 2026-10-06, amended 2026-10-06 (histograms, build info, process metrics), 2026-10-07 (readable from every account, accepted)
 - Current answer: the stdlib writer in `agent/internal/metrics` serves
   counters, gauges and fixed-bucket histograms, plus `build_info` and the
   standard `process_*` and `go_*` metrics, on an opt-in unauthenticated
@@ -71,6 +71,13 @@ The metric names are listed in the README under "Metrics".
   pod: restrict it with a NetworkPolicy that admits only the scraper, or set
   `WORKSPACE_METRICS_ADDR` to one address (`127.0.0.1:9090` for a sidecar or
   `kubectl port-forward`, a private interface elsewhere).
+- **Every enrolled account can read it too, and that is accepted** (2026-10-07).
+  The listener is in the agent's network namespace, which is where every
+  account's shell runs, so neither a NetworkPolicy nor `127.0.0.1` keeps a
+  shell out: any account can learn which accounts are connected, which
+  `user ls` refuses a non-admin. It reveals names, counts and the version,
+  never a key, a token or a file, and authenticating the scrape would cost
+  Prometheus' annotation discovery. The threat model's flow 10 has the detail.
 - Histogram buckets are fixed in code; changing one is a release, and a
   dashboard's quantiles are only as fine as the buckets.
 - `remote_docker_account_daemons` counts daemons started or adopted, not

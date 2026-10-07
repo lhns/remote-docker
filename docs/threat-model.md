@@ -34,7 +34,7 @@ STRIDE letters are used where they apply and left out where they do not.
 | another enrolled account | a colleague on the same workspace | their own daemon and their own tunnel port. Flows 4 and 5 are where that separation is, and it is separation rather than isolation. With metrics on, the names of the accounts connected and of the ephemeral ones, and their activity (flow 10) |
 | an admin | an account the operator names in `WORKSPACE_ADMINS` | tokens that create accounts, removing accounts an operator directory does not enrol, and adding a key to any account, operator-enrolled included, which is logging in as it (flow 1c) |
 | another holder of an ephemeral account's key | a second CI job sharing the key | every run of that account: its daemon, and every run's export (flow 1d) |
-| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, every container's contents, and with `write=back`, new files outside a share through a symlink in it ([open finding](#open-findings)) |
+| whoever operates the workspace | root there, legitimately | a registry token from a private pull, every directory exported while a session is live, every container's contents |
 | somebody on the internet | the ingress or a published SSH port, with no key | an HTTP upgrade and an SSH handshake. Past that, nothing: only an enrolled public key authenticates, and a live token's id lets a connection do one thing, redeem it (flow 1b) |
 | the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
 | an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3 |
@@ -441,13 +441,13 @@ may not remove answers `no token <id>`, as for one that does not exist.
 `user ls` is refused to a non-admin, but with metrics on every account's shell
 reads from it the name of every account connected at that moment (flow 10).
 
-**D — an account minting tokens without end.** *Open finding.* Any account may
-mint tokens for itself, and `Store.Mint` (`core-agent/tokens/tokens.go`)
-bounds only their lifetime: nothing counts them. Each is a file in the state
-volume beside the host keys and the uidmap, swept within an hour of expiring
-(`sweepTokens` in `agent/cmd/remote-dockerd/serve.go`), so
-an enrolled account can fill that volume for up to a week per token. It gains
-no access by it.
+**D — an account minting tokens without end.** A non-admin holds at most 10
+unexpired tokens it minted (`maxSelfTokens`, decided in `authorize` from a
+count `tokenCreate` takes under one lock with the mint). Each token is a file on
+the state volume, so the cap bounds what one account can put there. Admins and
+the operator's `remote-dockerd token create` are uncapped. *Covered by*
+`TestAuthorize`, `TestTokenQuotaCapsANonAdminOnly` and
+`TestARedeemedTokenIsNotCounted`.
 
 **R.** Every change is a `component=audit` line naming the operation, who asked,
 the account, the token id or key fingerprint, and the source address. Never a
@@ -1285,30 +1285,25 @@ rules, in `dircache/decide.go` and `dircache/writeback.go`:
   back as the container's. *Covered by*
   `TestWriteBackRefusesARecordedFileDeletedHere`, which caught that as an
   intermittent CI failure.
-- **A path must stay under the share root** after the join (`writeUnder`). That
-  check is on the joined STRING; the open finding below is what that misses.
+- **A path must stay under the share root, links included.** A round opens
+  the share once with `os.OpenRoot`, and every write, delete and the stat
+  `decide` relies on goes through that handle, so `..`, an absolute symlink, a
+  symlink pointing out of the share and, on Windows, any junction are refused.
+  A link that stays inside the share still works. *Covered by*
+  `TestWriteUnderRefusesALinkLeavingTheShare`,
+  `TestWriteBackShareDoesNotDeleteThroughALink` (each also through a junction
+  on Windows) and `TestWriteUnderFollowsALinkInsideTheShare`.
 
 A conflict is reported by path whichever way it resolves rather than silently
 taking a side.
 
-**T — write-back follows a symlink on this machine.** *Open finding.*
-`writeUnder` compares the joined path as a string, then `os.MkdirAll` and
-`os.OpenFile` resolve it, following any symlink (or Windows junction) inside
-the share. A change reported at `/out/x`, where `out` is a symlink here
-pointing outside the share, is written outside it: measured on 2026-10-06 with
-a throwaway test against a junction, the file was created in the link's target.
-`decide` writes back only a path this machine does not have, as `os.Stat`
-sees it through the link, and the fill never sends a link or anything under
-one (`dircache/walk.go` takes regular files only). So what it reaches is
-creating files that do not exist yet wherever a link in a shared tree points,
-a dangling link's target included, with a container's content. A deletion goes
-through the same unresolved join (`os.Remove`, measured the same way), but only
-for a path a batch sent. Who arrives this way: a container in a `write=back`
-share that removes a link and puts a directory in its place in the union, and
-the workspace's operator, who can report any change at all. Through NFS the
-same link is never resolved here (flow 3); the agent's side reads the layer
-through `os.OpenRoot` (`agent/internal/unions/changes.go`). Nothing in ADR 0044
-accepts it.
+**T — write-back through a link on this machine.** Fixed: before, the
+check above was a string comparison, and `os.MkdirAll`, `os.OpenFile` and
+`os.Remove` then followed a symlink or junction inside the share, so a container
+in a `write=back` share, or the workspace's operator, could create or delete a
+file outside it (measured with a junction on 2026-10-06). The cost of the fix:
+a write under a junction, or under an absolute symlink, is not carried back even
+when it points inside the share; it is logged rather than followed.
 
 **I — `mounted` names cache volumes.** It answers with the asking machine's own
 names: the ids come from the mounts and the digest from the key. An account's
@@ -1373,7 +1368,7 @@ is labelled by outcome, not by id. Label values are escaped on the way out
 into the exposition or grow it, and an account grows it by at most its own
 name. *Covered by* `TestConnectionsCountsLoggedInAccounts` and `TestExposition`.
 
-**I — reachable from inside the workspace.** *Open finding.* `listenMetrics`
+**I — reachable from inside the workspace.** *Accepted.* `listenMetrics`
 binds `WORKSPACE_METRICS_ADDR` with a plain `net.Listen` in the agent's own
 network namespace, and the chart sets `:<port>`. That namespace is where every
 account's shell runs (flow 5), so with metrics on any account reads the name
@@ -1382,7 +1377,9 @@ flow 1c refuses to a non-admin through `user ls`. On a shared daemon a `--networ
 reaches it the same way. ADR 0054 accepts that anything which reaches the port
 reads it, and offers a NetworkPolicy or a single address as the remedy; neither
 keeps out a shell inside the pod, and `127.0.0.1` is the address every shell
-has.
+has. Accepted rather than fixed: what it reveals is account names, counts and
+the version, never a key, a token or a file, and an authenticated scrape would
+cost Prometheus' annotation discovery.
 
 **D — the listener (1).** `ReadHeaderTimeout` is 10s; there is no connection
 cap and no write timeout. A scrape reads the gauges under the same locks
@@ -1443,18 +1440,6 @@ itself cannot be signed retrospectively without republishing it.
 
 ---
 
-## Open findings
-
-Threats with no check in the code and no record accepting them. Each is
-described in its flow; this is the index. None is fixed by the change that
-wrote it down.
-
-| finding | flow | where |
-|---|---|---|
-| write-back follows a symlink in the share on this machine, so a container in a `write=back` share, or the workspace, can create files outside the share | 9 | `dircache/writeback.go:167-172` checks the joined string, then `MkdirAll` and `OpenFile` resolve it; `os.Remove` at `:126` the same |
-| the metrics listener is reachable from every account's shell, which reads the connected accounts' names and activity that `user ls` refuses a non-admin | 10 | `agent/cmd/remote-dockerd/metrics.go:24`, and the chart's `:<port>` at `charts/remote-docker-workspace/templates/statefulset.yaml:111-113` |
-| an account can mint tokens for itself without a count, each a file on the shared state volume | 1c | `core-agent/tokens/tokens.go:70` bounds only the lifetime |
-
 ## Accepted risks
 
 Stated here rather than buried, because each is a deliberate trade.
@@ -1477,7 +1462,8 @@ Stated here rather than buried, because each is a deliberate trade.
   their runs are doing, and the agent's version. The chart binds every interface
   of the pod; a NetworkPolicy admitting only the scraper, or an address on one
   interface, is the operator's to add. Neither keeps out an account's own shell,
-  which is listed under [Open findings](#open-findings).
+  so every enrolled account can see which accounts are connected; flow 10 says
+  why that is accepted.
 - **An admin can become any account.** `key add` and a bound token both put
   the admin's key on it, an operator-enrolled account included, since the
   enrolled directory's keys merge with the operator's (ADR 0052, ADR 0053);
@@ -1542,6 +1528,12 @@ Stated here rather than buried, because each is a deliberate trade.
 
 ## What changed because of this document
 
+- **Write-back goes through `os.Root`.** It used to check a joined path as a
+  string and then follow any link in the share, so a container in a
+  `write=back` share could make it create or delete files outside the share
+  on this machine. Flow 9 has the detail.
+- **A non-admin can hold at most 10 unused tokens it minted**, so one account
+  cannot fill the state volume with them. Flow 1c has the detail.
 - **`ForwardPolicy.AllowDial`**: in shared-daemon mode one account could dial
   another's reverse-tunnel port and speak NFS to their client. Flow 5 has the
   detail, ADR 0012 records it as a property of that mode, and both a unit test
