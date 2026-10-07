@@ -95,11 +95,11 @@ func TestServeRefusesAnEnrolledDirectoryInsideTheOperators(t *testing.T) {
 // boolean refuses the start naming its variable.
 func TestEphemeralCleanupContainers(t *testing.T) {
 	for raw, want := range map[string]bool{"": false, "false": false, "true": true, "1": true} {
-		if got, err := envBool(envEphemeralContainers, raw); err != nil || got != want {
+		if got, err := envBool(envEphemeralContainers, raw, false); err != nil || got != want {
 			t.Errorf("%q gave %v, %v; want %v", raw, got, err, want)
 		}
 	}
-	if _, err := envBool(envEphemeralContainers, "yes"); err == nil || !strings.Contains(err.Error(), envEphemeralContainers) {
+	if _, err := envBool(envEphemeralContainers, "yes", false); err == nil || !strings.Contains(err.Error(), envEphemeralContainers) {
 		t.Errorf("err = %v, want one naming %s", err, envEphemeralContainers)
 	}
 }
@@ -129,11 +129,11 @@ func TestEphemeralLimits(t *testing.T) {
 // the start naming its variable.
 func TestUserTokens(t *testing.T) {
 	for raw, want := range map[string]bool{"": true, "true": true, "false": false, "0": false} {
-		if got, err := envBoolDefault(envUserTokens, raw, true); err != nil || got != want {
+		if got, err := envBool(envUserTokens, raw, true); err != nil || got != want {
 			t.Errorf("%q gave %v, %v; want %v", raw, got, err, want)
 		}
 	}
-	if _, err := envBoolDefault(envUserTokens, "nope", true); err == nil || !strings.Contains(err.Error(), envUserTokens) {
+	if _, err := envBool(envUserTokens, "nope", true); err == nil || !strings.Contains(err.Error(), envUserTokens) {
 		t.Errorf("err = %v, want one naming %s", err, envUserTokens)
 	}
 }

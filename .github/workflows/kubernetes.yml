@@ -191,7 +191,8 @@ jobs:
         run: |
           set -eu
           render() {
-            helm template ws charts/remote-docker-workspace --kube-version 1.29.0               --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0 \
+              --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
           }
           off=$(render --set userTokens=false)
           if [ "$(grep -A1 'name: WORKSPACE_USER_TOKENS' <<<"$off" | grep -c 'value: "false"')" -ne 1 ]; then
