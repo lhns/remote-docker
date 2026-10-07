@@ -149,6 +149,68 @@ func TestANonAdminMintsOnlyForThemselves(t *testing.T) {
 	w.dial(t, "bob", phone)
 }
 
+func TestTokenQuotaCapsANonAdminOnly(t *testing.T) {
+	w := startManageWorkspace(t, "alice")
+	alice, bob := newSigner(t), newSigner(t)
+	w.enrol(t, "alice", alice)
+	w.enrol(t, "bob", bob)
+	ca, cb := w.dial(t, "alice", alice), w.dial(t, "bob", bob)
+	create := enrol.Request{Op: enrol.OpTokenCreate}
+
+	// Expired tokens do not count.
+	past := time.Now().Add(-48 * time.Hour)
+	w.tokens.Now = func() time.Time { return past }
+	for i := 0; i < maxSelfTokens; i++ {
+		if _, _, err := w.tokens.Mint("bob", "bob", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.tokens.Now = nil
+
+	var first string
+	for i := 0; i < maxSelfTokens; i++ {
+		r := manageOn(t, cb, create)
+		wantOK(t, r)
+		if i == 0 {
+			first = r.Token.ID
+		}
+	}
+	wantRefused(t, manageOn(t, cb, create), enrol.CodeDenied, "you already have 10 unused tokens")
+
+	// An admin is not capped, and does not count against bob.
+	for i := 0; i < maxSelfTokens+1; i++ {
+		wantOK(t, manageOn(t, ca, create))
+	}
+
+	// Removing one frees a slot.
+	wantOK(t, manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: first}))
+	wantOK(t, manageOn(t, cb, create))
+	wantRefused(t, manageOn(t, cb, create), enrol.CodeDenied, "you already have")
+}
+
+func TestARedeemedTokenIsNotCounted(t *testing.T) {
+	w := startManageWorkspace(t)
+	bob := newSigner(t)
+	w.enrol(t, "bob", bob)
+	cb := w.dial(t, "bob", bob)
+	create := enrol.Request{Op: enrol.OpTokenCreate}
+	for i := 0; i < maxSelfTokens-1; i++ {
+		wantOK(t, manageOn(t, cb, create))
+	}
+	r := manageOn(t, cb, create)
+	wantOK(t, r)
+	wantRefused(t, manageOn(t, cb, create), enrol.CodeDenied, "you already have 10 unused tokens")
+
+	id, secret, err := enrol.ParseToken(r.Token.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply := w.redeem(t, id, newSigner(t), enrol.RedeemRequest{Secret: secret}); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	wantOK(t, manageOn(t, cb, create))
+}
+
 func TestTokenRemove(t *testing.T) {
 	w := startManageWorkspace(t)
 	bob := newSigner(t)
