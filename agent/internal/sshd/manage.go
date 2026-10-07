@@ -13,6 +13,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -114,11 +115,26 @@ func (s *Server) checkFor(op string, caller sessionAccount, target string) check
 }
 
 func (s *Server) tokenCreate(caller sessionAccount, target string, req enrol.Request, audit *slog.Logger) enrol.Reply {
-	if e := authorize(s.checkFor(req.Op, caller, target)); e != nil {
-		return failed(e)
-	}
 	if s.cfg.Tokens == nil || s.cfg.Accounts.CheckWritable() != nil {
+		// authorize still answers first, so a refusal is not hidden by this.
+		if e := authorize(s.checkFor(req.Op, caller, target)); e != nil {
+			return failed(e)
+		}
 		return failed(CannotStore(s.cfg.Accounts.EnrolledDir))
+	}
+	// One lock over the count and the Mint, or two requests both see 9.
+	s.mintMu.Lock()
+	defer s.mintMu.Unlock()
+	c := s.checkFor(req.Op, caller, target)
+	if !c.Admin {
+		n, err := s.liveTokens(caller.name)
+		if err != nil {
+			return failed(&enrol.Error{Code: enrol.CodeFailed, Msg: "the workspace could not read its tokens; its log says why"})
+		}
+		c.LiveTokens = n
+	}
+	if e := authorize(c); e != nil {
+		return failed(e)
 	}
 	token, t, err := s.cfg.Tokens.Mint(target, caller.name, req.Note, req.Expires)
 	if err != nil {
@@ -128,6 +144,26 @@ func (s *Server) tokenCreate(caller sessionAccount, target string, req enrol.Req
 	info := tokenInfo(t)
 	info.Token = token
 	return enrol.Reply{Token: &info}
+}
+
+// liveTokens counts the unexpired tokens creator has minted. A redeemed token
+// is deleted, so it is not counted.
+func (s *Server) liveTokens(creator string) (int, error) {
+	list, err := s.cfg.Tokens.List()
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	if s.cfg.Tokens.Now != nil {
+		now = s.cfg.Tokens.Now()
+	}
+	n := 0
+	for _, t := range list {
+		if t.Creator == creator && now.Before(t.Expires) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // tokenList is the caller's own tokens, or every token for an admin who names

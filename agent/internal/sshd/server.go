@@ -136,6 +136,8 @@ type Server struct {
 	conns   conns // see revoke.go
 	limiter *tokens.Limiter
 
+	mintMu sync.Mutex // see tokenCreate
+
 	mu     sync.Mutex
 	closed bool
 }

@@ -28,6 +28,10 @@ type check struct {
 	// there.
 	OperatorDir string
 
+	// LiveTokens is, for token.create by a non-admin, how many unexpired
+	// tokens they have minted and not yet seen redeemed or removed.
+	LiveTokens int
+
 	// Connected is key.rm of the key this connection authenticated with.
 	Connected bool
 	Force     bool
@@ -45,6 +49,11 @@ var denials = map[string]string{
 	enrol.OpKeyRemove:   "remove another account's key",
 }
 
+// maxSelfTokens caps the live tokens a non-admin may hold at once, so an
+// account cannot fill the state volume with 7-day tokens. Admins and the
+// operator's `remote-dockerd token create` are uncapped.
+const maxSelfTokens = 10
+
 // authorize decides an operation, nil meaning allowed.
 func authorize(c check) *enrol.Error {
 	if c.Op == enrol.OpWhoami {
@@ -55,6 +64,14 @@ func authorize(c check) *enrol.Error {
 		if adminOnly || c.Target != c.Caller {
 			return denied(c)
 		}
+	}
+
+	// A quota rather than a permission, but it is the same caller-facts
+	// decision, so it lives in the one table.
+	if c.Op == enrol.OpTokenCreate && !c.Admin && c.LiveTokens >= maxSelfTokens {
+		return &enrol.Error{Code: enrol.CodeDenied,
+			Msg: fmt.Sprintf("you already have %d unused tokens", c.LiveTokens),
+			Fix: "remove one with `remote token rm <id>`, or wait for one to expire"}
 	}
 
 	switch c.Op {
