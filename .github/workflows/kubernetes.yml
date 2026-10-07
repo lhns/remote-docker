@@ -712,12 +712,12 @@ jobs:
 
           # The first answer may wait on the account being provisioned.
           for _ in $(seq 1 30); do
-            out=$("$RUNNER_TEMP/remote-docker" remote status 2>&1)
+            out=$("$RUNNER_TEMP/remote-docker" remote status 2>&1 || true)
             case "$out" in *"tunnel port"*) break ;; esac
             sleep 2
           done
           for i in 1 2 3 4 5 6; do
-            out=$("$RUNNER_TEMP/remote-docker" remote status 2>&1)
+            out=$("$RUNNER_TEMP/remote-docker" remote status 2>&1 || true)
             case "$out" in
               *"tunnel port"*) ;;
               *) echo "FAIL  connection $i through the ingress did not reach the same replica:"; echo "$out"; exit 1 ;;
