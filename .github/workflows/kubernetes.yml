@@ -940,6 +940,35 @@ jobs:
 
           check_pods
 
+      # The other way to stay on a replica: name it. Also makes sure the second
+      # replica serves an ephemeral run, which the affinity above may not.
+      - name: a client naming one replica
+        run: |
+          set -u
+          fail() { echo "FAIL  $*"; exit 1; }
+          host="$STS-1.$STS-headless.rd.svc.cluster.local"
+          kubectl get deploy -n clients ci-client -o json | jq --arg host "$host" '
+            .metadata = {name: "ci-client-pinned", namespace: "clients"}
+            | .spec.replicas = 1
+            | .spec.selector.matchLabels.app = "ci-client-pinned"
+            | .spec.template.metadata.labels.app = "ci-client-pinned"
+            | (.spec.template.spec.containers[0].env[] | select(.name == "REMOTE_DOCKER_HOST")).value = $host
+            | del(.status)' | kubectl apply -f -
+          kubectl rollout status -n clients deployment/ci-client-pinned --timeout=180s
+          pod=$(kubectl get pods -n clients -l app=ci-client-pinned \
+                  --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+          out=$(timeout 240 kubectl exec -n clients "$pod" -- \
+                  docker run --rm -v /work:/w alpine:3 cat /w/marker 2>&1)
+          [ "$(echo "$out" | tail -1)" = "$pod" ] || fail "$pod: its container read [$out]"
+          id=$(kubectl exec -n clients "$pod" -- curl -s --max-time 30 --unix-socket /state/docker.sock \
+                 http://session/_remote-docker/client | sed -n 's/.*"client":"\([0-9a-f]*\)".*/\1/p')
+          runs=$(kubectl exec -n rd "$STS-1" -- remote-dockerd ephemeral ls 2>&1)
+          echo "$STS-1:"; echo "$runs"
+          [ -n "$id" ] && [ "$(awk -v c="$id" '$1 == "pods" && $2 == c' <<<"$runs" | grep -c .)" -eq 1 ] ||
+            fail "run [$id] of a client naming $host is not on $STS-1"
+          echo "PASS  a client naming $STS-1 runs there, and its bind mount reads its own name"
+          kubectl delete deploy -n clients ci-client-pinned --wait=false
+
       - name: what went wrong
         if: failure()
         run: |

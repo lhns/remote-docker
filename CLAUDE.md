@@ -1180,8 +1180,9 @@ Service. Scaled to two: the pods on different nodes, four claims on four
 volumes, two host keys, each pod's `WORKSPACE_PUBLIC_URL` expanded to its own
 name, the headless name, each pod's name and SRV `_ssh._tcp` resolving, six
 connections through the ingress with `upstream-hash-by` reaching one replica,
-and four ephemeral runners against the collective name each listed on exactly
-one replica and cleaned up there after scaling down.
+four ephemeral runners against the collective name each listed on exactly one
+replica and cleaned up there after scaling down, and a runner naming the second
+replica by its own name running there with a working bind mount.
 
 `test/vm.sh` runs the agent ON THE RUNNER with no container
 around it (ADR 0025), which is the VM deployment: `WORKSPACE_ENABLE_DIND=false`,
