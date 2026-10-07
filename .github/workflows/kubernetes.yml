@@ -527,6 +527,15 @@ jobs:
           set -eux
           echo "127.0.0.1 ws.rd.test" | sudo tee -a /etc/hosts
 
+          # The pod was just replaced, and ingress-nginx answers 503 until it
+          # has the new endpoint. Any other status is the agent answering.
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://ws.rd.test/ || true)
+            [ "$code" != 503 ] && [ "$code" != 000 ] && break
+            sleep 2
+          done
+          echo "the ingress answered $code"
+
           export REMOTE_DOCKER_STATE_DIR="$RUNNER_TEMP/state"
           export REMOTE_DOCKER_ENDPOINT="$RUNNER_TEMP/docker.sock"
 
