@@ -8,6 +8,18 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **Write-back no longer follows a link out of your directory.** With
+  `write=back`, a container could make the client create or delete a file
+  outside the shared directory through a symlink or a Windows junction in it.
+  Now a link that stays inside the directory still works, and a write under a
+  junction or an absolute symlink is not carried back.
+- **An account can hold at most 10 unused tokens it made.** Admins and the
+  workspace operator have no limit.
+
 ## 0.9.0 — 2026-10-06
 
 ### New
