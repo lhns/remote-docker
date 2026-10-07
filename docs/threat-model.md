@@ -339,7 +339,8 @@ an id's shape, since a pasted token would carry its secret there.
 
 An enrolled key asks the workspace to mint a token, list or remove accounts,
 or change keys (ADR 0053). The admins are the accounts the operator names in
-`WORKSPACE_ADMINS`.
+`WORKSPACE_ADMINS`. `WORKSPACE_USER_TOKENS=false` leaves token creation to
+admins and the operator.
 
 ```mermaid
 sequenceDiagram

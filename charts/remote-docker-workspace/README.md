@@ -79,6 +79,7 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:<x.y.z> \
 | `existingSecret` | `""` | use a Secret you manage instead |
 | `publicURL` | `""` | the address an enrolment token's invite names; empty is `wss://<ingress.host>/`, or `ws://` without TLS, and with `replicas` above 1 the pod's own name |
 | `admins` | `[]` | accounts that manage every account under `remote` (`WORKSPACE_ADMINS`, ADR 0053); they need not be enrolled yet |
+| `userTokens` | `true` | `false` lets only admins create tokens under `remote` (`WORKSPACE_USER_TOKENS`, ADR 0053) |
 | `perUserDind` | `true` | a dockerd per account (ADR 0019), or one shared (ADR 0012) |
 | `dockerdArgs` | `--storage-driver=fuse-overlayfs` | see below |
 | `dindImage` | `""` | the image an account's daemon runs; empty means this chart's |

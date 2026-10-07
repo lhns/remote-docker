@@ -118,6 +118,10 @@ spec:
             - name: WORKSPACE_ADMINS
               value: {{ join "," .Values.admins | quote }}
             {{- end }}
+            {{- if and (not .Values.userTokens) (not (hasKey .Values.env "WORKSPACE_USER_TOKENS")) }}
+            - name: WORKSPACE_USER_TOKENS
+              value: "false"
+            {{- end }}
             {{- if and .Values.metrics.enabled (not (hasKey .Values.env "WORKSPACE_METRICS_ADDR")) }}
             - name: WORKSPACE_METRICS_ADDR
               value: {{ printf ":%v" .Values.metrics.port | quote }}

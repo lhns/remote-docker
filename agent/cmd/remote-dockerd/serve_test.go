@@ -124,3 +124,16 @@ func TestEphemeralLimits(t *testing.T) {
 		}
 	}
 }
+
+// Tokens for non-admins default on, and a value that is not a boolean refuses
+// the start naming its variable.
+func TestUserTokens(t *testing.T) {
+	for raw, want := range map[string]bool{"": true, "true": true, "false": false, "0": false} {
+		if got, err := envBoolDefault(envUserTokens, raw, true); err != nil || got != want {
+			t.Errorf("%q gave %v, %v; want %v", raw, got, err, want)
+		}
+	}
+	if _, err := envBoolDefault(envUserTokens, "nope", true); err == nil || !strings.Contains(err.Error(), envUserTokens) {
+		t.Errorf("err = %v, want one naming %s", err, envUserTokens)
+	}
+}

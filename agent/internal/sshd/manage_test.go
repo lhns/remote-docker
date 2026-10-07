@@ -32,6 +32,11 @@ type manageWorkspace struct {
 
 func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 	t.Helper()
+	return startManageWorkspaceWith(t, nil, admins...)
+}
+
+func startManageWorkspaceWith(t *testing.T, tweak func(*Config), admins ...string) *manageWorkspace {
+	t.Helper()
 	targets := &fakeTargets{byAccount: map[string]daemons.Target{}, running: map[string]int{}}
 	ports := &accounts.Ports{Dir: t.TempDir(), Mapping: workspace.DefaultMapping()}
 	runs := &ephemeral.Registry{Ports: ports}
@@ -44,6 +49,9 @@ func startManageWorkspace(t *testing.T, admins ...string) *manageWorkspace {
 		c.Daemons = targets
 		c.Ports = ports
 		c.Runs = runs
+		if tweak != nil {
+			tweak(c)
+		}
 	})
 	runs.Enrolled = Enrolled(w.store) // as serve wires it with a daemon per account
 	return &manageWorkspace{tokenWorkspace: w, targets: targets, ports: ports, runs: runs}
@@ -186,6 +194,24 @@ func TestTokenQuotaCapsANonAdminOnly(t *testing.T) {
 	wantOK(t, manageOn(t, cb, enrol.Request{Op: enrol.OpTokenRemove, ID: first}))
 	wantOK(t, manageOn(t, cb, create))
 	wantRefused(t, manageOn(t, cb, create), enrol.CodeDenied, "you already have")
+}
+
+func TestAdminOnlyTokensRefuseANonAdmin(t *testing.T) {
+	w := startManageWorkspaceWith(t, func(c *Config) { c.AdminOnlyTokens = true }, "alice")
+	alice, bob := newSigner(t), newSigner(t)
+	w.enrol(t, "alice", alice)
+	w.enrol(t, "bob", bob)
+	ca, cb := w.dial(t, "alice", alice), w.dial(t, "bob", bob)
+	create := enrol.Request{Op: enrol.OpTokenCreate}
+
+	r := manageOn(t, cb, create)
+	wantRefused(t, r, enrol.CodeDenied, "this workspace lets only admins create tokens")
+	if !strings.Contains(r.Error.Fix, "remote token create --account bob") {
+		t.Errorf("fix = %q", r.Error.Fix)
+	}
+	wantOK(t, manageOn(t, ca, create))
+	wantOK(t, manageOn(t, ca, enrol.Request{Op: enrol.OpTokenCreate, Account: "bob"}))
+	wantOK(t, manageOn(t, cb, enrol.Request{Op: enrol.OpTokenList}))
 }
 
 func TestARedeemedTokenIsNotCounted(t *testing.T) {

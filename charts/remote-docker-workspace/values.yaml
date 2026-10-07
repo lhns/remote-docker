@@ -72,6 +72,9 @@ publicURL: ""
 # `remote-dockerd token create --account <name>`.
 admins: []
 
+# false lets only admins create tokens through `remote` (WORKSPACE_USER_TOKENS).
+userTokens: true
+
 # Use a Secret you manage instead -- sealed-secrets, an external secrets
 # operator, or one you created by hand. Its keys are filenames and must be
 # account names. Set this and `authorizedKeys` is ignored.

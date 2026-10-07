@@ -32,6 +32,10 @@ type check struct {
 	// tokens they have minted and not yet seen redeemed or removed.
 	LiveTokens int
 
+	// AdminOnlyTokens is WORKSPACE_USER_TOKENS=false: only an admin creates
+	// tokens through `remote`.
+	AdminOnlyTokens bool
+
 	// Connected is key.rm of the key this connection authenticated with.
 	Connected bool
 	Force     bool
@@ -64,6 +68,13 @@ func authorize(c check) *enrol.Error {
 		if adminOnly || c.Target != c.Caller {
 			return denied(c)
 		}
+	}
+
+	// The operator's switch comes before the quota: nothing to count.
+	if c.Op == enrol.OpTokenCreate && !c.Admin && c.AdminOnlyTokens {
+		return &enrol.Error{Code: enrol.CodeDenied,
+			Msg: "this workspace lets only admins create tokens",
+			Fix: "ask an admin: `remote token create --account " + c.Caller + "`"}
 	}
 
 	// A quota rather than a permission, but it is the same caller-facts

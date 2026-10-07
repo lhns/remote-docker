@@ -12,6 +12,11 @@ software.
 
 ### New
 
+- **Only admins can create tokens, if you want.** Set `WORKSPACE_USER_TOKENS=false`
+  (`userTokens: false` in the chart) and `remote token create` is refused for
+  everyone but admins, with a line telling the account to ask one. Existing
+  tokens can still be listed and withdrawn, keys are unaffected, and the
+  operator's `remote-dockerd token create` still works.
 - **The chart runs several workspaces.** Set `replicas` and each replica is a
   workspace of its own, on its own node by default (`podAntiAffinity`), so
   autoscaled CI runners are no longer bound to one pod.

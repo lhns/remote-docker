@@ -185,6 +185,26 @@ jobs:
             echo "admins was rendered beside an env entry:"; echo "$over"; exit 1
           fi
 
+      # userTokens=false renders WORKSPACE_USER_TOKENS once, the default
+      # nothing, and an env entry wins.
+      - name: userTokens false renders WORKSPACE_USER_TOKENS
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0               --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+          }
+          off=$(render --set userTokens=false)
+          if [ "$(grep -A1 'name: WORKSPACE_USER_TOKENS' <<<"$off" | grep -c 'value: "false"')" -ne 1 ]; then
+            echo "userTokens=false did not render WORKSPACE_USER_TOKENS=false once:"; echo "$off"; exit 1
+          fi
+          if grep -q WORKSPACE_USER_TOKENS <<<"$(render)"; then
+            echo "the default set WORKSPACE_USER_TOKENS"; exit 1
+          fi
+          over=$(render --set userTokens=false --set-string env.WORKSPACE_USER_TOKENS=true)
+          if [ "$(grep -c 'name: WORKSPACE_USER_TOKENS' <<<"$over")" -ne 1 ]; then
+            echo "userTokens was rendered beside an env entry:"; echo "$over"; exit 1
+          fi
+
       # An env entry wins over EVERY variable the chart sets, rendered once: a
       # duplicate name is last-wins in a pod and can be refused by server-side
       # apply.

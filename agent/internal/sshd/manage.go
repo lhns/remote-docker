@@ -102,7 +102,7 @@ func failed(e *enrol.Error) enrol.Reply { return enrol.Reply{Error: e} }
 // checkFor gathers what authorize decides op on.
 func (s *Server) checkFor(op string, caller sessionAccount, target string) check {
 	c := check{Op: op, Caller: caller.name, Admin: s.cfg.Admins[caller.name],
-		Target: target, TargetAdmin: s.cfg.Admins[target]}
+		AdminOnlyTokens: s.cfg.AdminOnlyTokens, Target: target, TargetAdmin: s.cfg.Admins[target]}
 	if a, ok := s.cfg.Accounts.Lookup(target); ok {
 		c.TargetKeys = len(a.Keys)
 	}
