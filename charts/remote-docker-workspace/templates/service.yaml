@@ -10,6 +10,14 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.service.type }}
+  {{- /* Each replica is a workspace of its own, so a client must keep
+        reaching the one it started on. kube-proxy pins a client address to a
+        replica; an ingress balances by itself and ignores this (values.yaml,
+        ingress.annotations). */}}
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: {{ .Values.service.sessionAffinityTimeout }}
   selector:
     {{- include "remote-docker-workspace.selectorLabels" . | nindent 4 }}
   ports:

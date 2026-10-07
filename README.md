@@ -280,6 +280,15 @@ id, so it names the project after the directory alone; give it a
 Without `cleanupContainers`, a runner whose containers are still there keeps its
 volumes, and its slot against `maxClients`, until somebody removes them.
 
+**More runners than one workspace carries:** the chart's `replicas` runs
+several workspaces, one per node, behind the same Service name. Runners need
+nothing beyond that name: the Service pins each runner's address to one
+replica, and every replica reads the same keys Secret, so the shared key works
+on all of them. `maxClients` then counts per replica, and images and the build
+cache are per replica too. A runner that wants to choose can name a replica,
+`<fullname>-N.<fullname>-headless.<ns>.svc`, or look them up under SRV
+`_ssh._tcp`. The chart README's "Several replicas" has the caveats.
+
 ## Commands
 
 **This binary is the Docker CLI.** `remote-docker run`, `ps`, `compose up` are
@@ -646,8 +655,9 @@ kubectl exec -n remote-docker ws-remote-docker-workspace-0 -- \
 ```
 
 [`charts/remote-docker-workspace/README.md`](charts/remote-docker-workspace/README.md)
-has the values, which storage driver your volumes need, and why both volumes are
-ReadWriteOnce. CI installs the chart on a kind cluster behind ingress-nginx on
+has the values, which storage driver your volumes need, why both volumes are
+ReadWriteOnce, and what `replicas` above 1 means: several independent
+workspaces, each client pinned to one. CI installs the chart on a kind cluster behind ingress-nginx on
 every pull request ([ADR 0035](docs/adr/0035-the-workspace-on-kubernetes.md)).
 
 ### The image

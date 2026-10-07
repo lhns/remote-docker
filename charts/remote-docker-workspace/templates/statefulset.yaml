@@ -1,11 +1,13 @@
 {{/*
-A StatefulSet of one rather than a Deployment.
+A StatefulSet rather than a Deployment.
 
 Two pods must never hold the same graph directory, and a rolling Deployment
 starts the replacement before the old pod is gone. A StatefulSet terminates
-first, and its volume claim templates give each volume a name that outlives the
-pod it was created for.
+first, and its volume claim templates give each replica volumes of its own,
+named after its ordinal, that outlive the pod they were created for. Each
+replica is a separate workspace (ADR 0035).
 */}}
+{{- include "remote-docker-workspace.checks" . }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -17,8 +19,8 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: 1
-  serviceName: {{ include "remote-docker-workspace.fullname" . }}
+  replicas: {{ .Values.replicas }}
+  serviceName: {{ include "remote-docker-workspace.headlessName" . }}
   selector:
     matchLabels:
       {{- include "remote-docker-workspace.selectorLabels" . | nindent 6 }}
@@ -81,6 +83,14 @@ spec:
             {{- /* Each variable the chart sets is skipped when `env` names it,
                   so the user's entry is the only one rendered: a duplicate
                   name can be refused by server-side apply. */}}
+            {{- /* First: $(POD_NAME) below expands only from a variable
+                  defined earlier in this list. */}}
+            {{- if not (hasKey .Values.env "POD_NAME") }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
             {{- if not (hasKey .Values.env "DOCKER_TLS_CERTDIR") }}
             - name: DOCKER_TLS_CERTDIR
               value: ""
@@ -178,9 +188,14 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- if .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else }}
+      {{- with include "remote-docker-workspace.antiAffinity" . }}
+      affinity:
+        {{- . | nindent 8 }}
+      {{- end }}
       {{- end }}
   {{- /* Omitted when both claims are supplied: an empty
         `volumeClaimTemplates:` is a null, and a null is not a list. */}}

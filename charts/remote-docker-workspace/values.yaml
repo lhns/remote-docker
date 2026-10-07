@@ -13,6 +13,28 @@ image:
   # pullSecrets is a list of references to secrets in the release namespace.
   pullSecrets: []
 
+# How many workspaces to run. Each replica is a workspace of its own: its own
+# state volume (host key, uids, tokens, enrolled keys), graph volume, accounts'
+# daemons and ephemeral runs. Only the keys Secret is shared, so an account
+# enrolled there exists on every replica, and nothing else crosses between them.
+#
+# A client must stay on one replica for its whole life. The Service below pins
+# each client address to a replica (sessionAffinity: ClientIP); the headless
+# Service gives every pod a stable name, <fullname>-N.<fullname>-headless.<ns>.svc,
+# for a client that wants to choose. An ingress does NOT honour the Service's
+# affinity: see ingress.annotations. Chart README, "Several replicas".
+replicas: 1
+
+# Keep replicas off each other's node, matched on kubernetes.io/hostname:
+#
+#   hard   one replica per node; a replica with no free node stays Pending
+#   soft   prefer spreading, but allow two on one node
+#   none   leave it to the scheduler, whose default spreading allows two or
+#          three on one node
+#
+# Ignored when `affinity` is set: that is then the whole answer.
+podAntiAffinity: hard
+
 # Public keys of the machines allowed in, one entry per account. Optional: a
 # device can enrol its own key with a token instead (NOTES.txt). The KEY of
 # each entry is the account name a client logs in as (the unix user behind it
@@ -35,6 +57,12 @@ authorizedKeys: {}
 # token's invite (WORKSPACE_PUBLIC_URL). Empty derives it from the ingress:
 # wss://<ingress.host>/ with TLS, ws:// without. Set it when something other
 # than this chart's ingress fronts the workspace.
+#
+# With replicas > 1, empty is instead each pod's own name,
+# ssh://<pod>.<fullname>-headless.<ns>.svc:2222, because a token is redeemable
+# only on the replica that minted it and neither the ingress nor the Service
+# can name one. That address is reachable only inside the cluster. A value here
+# is used by every replica as it stands.
 publicURL: ""
 
 # Accounts that manage every account from their own machine (ADR 0053,
@@ -144,9 +172,9 @@ persistence:
   # named after the old one.
   #
   # RWO because the agent is the only writer. ReadWriteMany is safe here if
-  # your storage prefers it -- it makes rescheduling onto another node quicker,
-  # since the volume need not detach first -- but it buys nothing while there
-  # is one replica.
+  # your storage prefers it, and makes rescheduling onto another node quicker
+  # since the volume need not detach first. Each replica has a claim of its
+  # own, so it is never shared between them.
   state:
     # As above. These are independent -- supplying one claim and letting the
     # other be generated is fine.
@@ -163,7 +191,14 @@ service:
   sshPort: 2222
   # The WebSocket the ingress fronts.
   wsPort: 2280
+  # How long the Service keeps sending one client address to the same replica
+  # after its last connection. 86400 is the most Kubernetes accepts. A client
+  # idle for longer may land on another replica, whose host key it refuses.
+  sessionAffinityTimeout: 86400
   annotations: {}
+  # The headless Service, <fullname>-headless, has no ports of its own to set:
+  # a headless name resolves to pod IPs, so its ports are the ones the agent
+  # listens on, 2222 and 2280, and its SRV records (_ssh._tcp, _ws._tcp) say so.
 
 # The way in from outside the cluster.
 #
@@ -188,6 +223,14 @@ ingress:
   #   HAProxy   haproxy.org/timeout-server
   #
   # Only ingress-nginx is tested by CI. The others are suggestions.
+  #
+  # With replicas > 1, ingress-nginx balances across the pods itself and
+  # ignores the Service's affinity, so a client reconnecting lands on any
+  # replica. Pin each client address to one:
+  #
+  #   nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+  #
+  # NOTES.txt warns when it is missing.
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"

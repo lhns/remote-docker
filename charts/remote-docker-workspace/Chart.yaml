@@ -1,8 +1,9 @@
 apiVersion: v2
 name: remote-docker-workspace
 description: |
-  A remote Docker workspace: one privileged pod running dockerd and an SSH
-  agent, reached from a laptop over a WebSocket through an ordinary Ingress.
+  A remote Docker workspace: a privileged pod running dockerd and an SSH agent,
+  one per replica, reached from a laptop over a WebSocket through an ordinary
+  Ingress.
   Bind mounts are served from the client machine over NFS through the tunnel,
   so directories on a developer's own computer are mounted into containers
   running here.

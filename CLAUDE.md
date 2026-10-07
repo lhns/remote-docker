@@ -161,8 +161,9 @@ installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
 deploy/                  compose, swarm, and the systemd unit for a VM
                          workspace (ADR 0025)
 charts/                  the Helm chart, for the same agent on Kubernetes
-                         (ADR 0035). One privileged pod, two volumes, an
-                         ingress in front of the WebSocket port
+                         (ADR 0035). One privileged pod and two volumes per
+                         replica, each replica its own workspace, an ingress
+                         in front of the WebSocket port
 test/probes/go.mod       the integration suites' instruments (watchprobe,
                          pokeprobe, udpecho, fsprobe). Its own module because
                          in core/ it was the ONLY reason that module -- the
@@ -1171,6 +1172,17 @@ mount, and an enrolment token redeemed through the ingress, whose key lands in
 is eight seconds and always worth it. What is NOT covered: any ingress controller
 but nginx, and any storage but kind's local-path.
 
+Several replicas (ADR 0035) in the same job, on a kind cluster with two
+workers: the RELEASED 0.9.0 chart is installed first, an upgrade is refused
+naming `--reset-then-reuse-values` and then the orphan-delete, and after it the
+claim UIDs and host key are unchanged and the pod sits under the headless
+Service. Scaled to two: the pods on different nodes, four claims on four
+volumes, two host keys, each pod's `WORKSPACE_PUBLIC_URL` expanded to its own
+name, the headless name, each pod's name and SRV `_ssh._tcp` resolving, six
+connections through the ingress with `upstream-hash-by` reaching one replica,
+and four ephemeral runners against the collective name each listed on exactly
+one replica and cleaned up there after scaling down.
+
 `test/vm.sh` runs the agent ON THE RUNNER with no container
 around it (ADR 0025), which is the VM deployment: `WORKSPACE_ENABLE_DIND=false`,
 a real unix account provisioned on the runner itself, a session, and a bind
@@ -1380,6 +1392,14 @@ its pure planning function was.
   SIGINT while the client is inside `runContainer`. Nothing tests SIGINT during
   a `build` or a `pull`, or before the container starts; nothing tests SIGTERM
   anywhere, and nothing tests any of this on Windows.
+- **Service affinity anywhere but kind's kube-proxy.** Several replicas rely
+  on `sessionAffinity: ClientIP`, and CI runs one implementation of it,
+  kube-proxy in iptables mode. IPVS and Cilium's kube-proxy replacement are
+  documented to honour it and nothing here runs them *(a judgement from their
+  docs, 2026-10-07; re-check kind's mode with `kubectl get cm -n kube-system
+  kube-proxy -o yaml | grep 'mode:'`)*. Nor does anything test a client idle
+  past `service.sessionAffinityTimeout`, or which split four runners get: the
+  suite asserts each run is on one replica, not that both replicas are used.
 - **systemd.** `deploy/remote-dockerd.service` is not exercised by anything.
   `test/vm.sh` starts the agent directly, because what it tests is the agent as
   a guest rather than systemd's ability to run a binary.

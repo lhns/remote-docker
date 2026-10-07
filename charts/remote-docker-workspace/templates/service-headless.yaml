@@ -1,0 +1,27 @@
+{{/*
+The StatefulSet's serviceName: every pod gets a stable name of its own,
+<fullname>-N.<this>.<ns>.svc, and the named ports give the _ssh._tcp and
+_ws._tcp SRV records. A headless name resolves to pod IPs, so the ports are the
+ones the agent listens on and not the Service's. Only ready pods are listed, so
+a replica failing its probes drops out of DNS.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "remote-docker-workspace.headlessName" . }}
+  labels:
+    {{- include "remote-docker-workspace.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "remote-docker-workspace.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: ssh
+      port: 2222
+      targetPort: ssh
+      protocol: TCP
+    - name: ws
+      port: 2280
+      targetPort: ws
+      protocol: TCP
