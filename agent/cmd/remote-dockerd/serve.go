@@ -109,6 +109,10 @@ const (
 	// account under `remote` (ADR 0053). Only the operator edits it.
 	envAdmins = "WORKSPACE_ADMINS"
 
+	// envUserTokens, false, lets only admins create tokens through `remote`.
+	// The operator's `remote-dockerd token create` is unaffected.
+	envUserTokens = "WORKSPACE_USER_TOKENS"
+
 	// envEphemeralContainers also removes an expired run's containers and
 	// its compose networks.
 	envEphemeralContainers = "WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS"
@@ -186,6 +190,13 @@ func serve(addr, wsAddr string) error {
 	if len(admins) > 0 {
 		log.Info("these accounts are admins", "var", envAdmins,
 			"accounts", strings.Join(slices.Sorted(maps.Keys(admins)), ","))
+	}
+	userTokens, err := envBoolDefault(envUserTokens, os.Getenv(envUserTokens), true)
+	if err != nil {
+		return err
+	}
+	if !userTokens {
+		log.Info("only admins create tokens", "var", envUserTokens)
 	}
 	maxRuns, grace, err := ephemeralLimits(os.Getenv(envEphemeralMax), os.Getenv(envEphemeralGrace))
 	if err != nil {
@@ -487,11 +498,12 @@ func serve(addr, wsAddr string) error {
 		Version:  version,
 		Unions:   unionManager,
 
-		DaemonPaths: daemonPaths,
-		Ephemeral:   ephemeralSet,
-		Runs:        runs,
-		Tokens:      tokenStore,
-		Admins:      admins,
+		DaemonPaths:     daemonPaths,
+		Ephemeral:       ephemeralSet,
+		Runs:            runs,
+		Tokens:          tokenStore,
+		Admins:          admins,
+		AdminOnlyTokens: !userTokens,
 		Metrics: sshd.Metrics{
 			Redemptions:       agentMetrics.redemptions,
 			RedemptionSeconds: agentMetrics.redemptionSeconds,
@@ -749,9 +761,12 @@ func ephemeralLimits(maxRaw, graceRaw string) (int, time.Duration, error) {
 
 // envBool reads a true/false variable: unset is false, and anything
 // strconv.ParseBool does not take refuses the start, naming the variable.
-func envBool(name, raw string) (bool, error) {
+func envBool(name, raw string) (bool, error) { return envBoolDefault(name, raw, false) }
+
+// envBoolDefault is envBool with the answer for an unset variable.
+func envBoolDefault(name, raw string, unset bool) (bool, error) {
 	if raw == "" {
-		return false, nil
+		return unset, nil
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {

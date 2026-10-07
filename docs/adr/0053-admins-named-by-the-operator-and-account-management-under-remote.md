@@ -2,7 +2,13 @@
 
 - Status: Accepted
 - Date: 2026-10-05, amended 2026-10-06 (`user rm --purge`; token withdrawal
-  before the keys; `key rm` of an operator key in `authorize`)
+  before the keys; `key rm` of an operator key in `authorize`; 2026-10-07,
+  `WORKSPACE_USER_TOKENS`)
+- Amended 2026-10-07: `WORKSPACE_USER_TOKENS=false` (default true) makes
+  `token.create` admin-only. It is a fact on `check` (`AdminOnlyTokens`),
+  decided in `authorize` before the quota. `token.ls` and `token.rm` of one's
+  own tokens, `key.*` and the operator's `remote-dockerd token create` are
+  unchanged.
 
 ## What forced it
 
@@ -30,7 +36,7 @@ workspace as root. Most of that belongs to the people using it.
 | op | CLI | non-admin | admin |
 |---|---|---|---|
 | `whoami` | | yes | yes |
-| `token.create` | `remote token create [--account X \| --unbound] [--expires] [--note]` | bound to self only | anybody, or unbound |
+| `token.create` | `remote token create [--account X \| --unbound] [--expires] [--note]` | bound to self only, none if `WORKSPACE_USER_TOKENS=false` | anybody, or unbound |
 | `token.ls` / `token.rm` | `remote token ls`, `remote token rm <id>` | tokens bound to self | all |
 | `user.ls` | `remote user ls` | no | yes |
 | `user.rm` | `remote user rm <account> [--purge] [-f]` | no | see below |

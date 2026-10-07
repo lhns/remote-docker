@@ -781,6 +781,7 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_TOKENS_DIR` | `<state>/tokens` | single-use [enrolment tokens](#enrolment), one file each, holding a hash of the secret |
 | `WORKSPACE_PUBLIC_URL` | empty | the address an enrolment invite names, such as `wss://ws.example/`; `token create --url` overrides it |
 | `WORKSPACE_ADMINS` | empty | accounts, comma-separated, that manage every account from their own machine; see [Admins](#admins) |
+| `WORKSPACE_USER_TOKENS` | `true` | `false` lets only admins create tokens under `remote`; see [Admins](#admins) |
 | `WORKSPACE_KEY_POLL_INTERVAL` | `60` | seconds; every keys directory is polled as well as watched |
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
@@ -1014,6 +1015,8 @@ Any account manages its own tokens and keys from its own machine:
 `remote token create` prints a line that enrols another machine into the
 account, and `remote key ls|add|rm` lists and changes its keys. Removing the
 key this machine connects with, or the last one, needs `-f`.
+`WORKSPACE_USER_TOKENS=false` (`userTokens: false` in the chart) takes token
+creation away from non-admins; they can still list and withdraw their own.
 
 The accounts in `WORKSPACE_ADMINS` (comma-separated; `admins` in the chart)
 manage every account:

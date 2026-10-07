@@ -83,6 +83,10 @@ type Config struct {
 	// unbound token.
 	Admins map[string]bool
 
+	// AdminOnlyTokens (WORKSPACE_USER_TOKENS=false) refuses token.create to
+	// a non-admin. Inverted so that a zero Config keeps today's behaviour.
+	AdminOnlyTokens bool
+
 	Metrics Metrics
 
 	Log *slog.Logger
