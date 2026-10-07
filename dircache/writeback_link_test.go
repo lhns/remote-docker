@@ -120,7 +120,8 @@ func TestWriteUnderFollowsALinkInsideTheShare(t *testing.T) {
 			if err := os.Mkdir(real, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			lm.make(t, filepath.Join(share, "link"), real)
+			// Relative: os.Root treats an absolute link target as leaving the root.
+			lm.make(t, filepath.Join(share, "link"), "real")
 
 			err := writeUnder(openRoot(t, share), File{Path: "/link/f.txt", Mode: 0o644, Body: strings.NewReader("x")})
 			if err != nil {
