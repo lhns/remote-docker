@@ -67,7 +67,10 @@ func fakeSession(t *testing.T, safe bool, log *events) string {
 	})
 	mux.HandleFunc(proxy.ControlPrefix+"shutdown", func(w http.ResponseWriter, _ *http.Request) {
 		log.add("shutdown")
+		// Sent before closing, as the real control endpoint does, or Close can
+		// win the race and the caller reads EOF.
 		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
 		go stop()
 	})
 	go func() { _ = srv.Serve(l) }()
