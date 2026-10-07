@@ -102,7 +102,16 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 		return
 	}
 
-	actions := decide(c.shares.baselines(share), recorded, changes, localAtRoot(root), c.skew(), state.Cached)
+	// One handle for the round: every path below resolves inside it, links
+	// included, so a link in the share cannot lead a write or a delete out.
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		c.quiet(ctx, "opening a share to write back", "share", share, "err", err)
+		return
+	}
+	defer func() { _ = r.Close() }()
+
+	actions := decide(c.shares.baselines(share), recorded, changes, localAtRoot(r), c.skew(), state.Cached)
 	if len(actions) == 0 {
 		return
 	}
@@ -114,7 +123,7 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	}
 
 	if paths := writes(actions); len(paths) > 0 {
-		err := store.Pull(ctx, share, paths, func(f File) error { return writeUnder(root, f) })
+		err := store.Pull(ctx, share, paths, func(f File) error { return writeUnder(r, f) })
 		if err != nil {
 			c.quiet(ctx, "writing back what a consumer wrote", "share", share, "err", err)
 			return
@@ -122,9 +131,8 @@ func (c *Cache) writeBackShare(ctx context.Context, share string) {
 	}
 
 	for _, p := range deletes(actions) {
-		target := localPath(root, p)
-		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			c.quiet(ctx, "removing what a consumer deleted", "path", target, "err", err)
+		if err := r.Remove(relPath(p)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.quiet(ctx, "removing what a consumer deleted", "path", localPath(root, p), "err", err)
 		}
 	}
 
@@ -146,9 +154,10 @@ func (c *Cache) skew() time.Duration {
 }
 
 // localAtRoot answers what this machine currently has at a share-relative path.
-func localAtRoot(root string) localAt {
+// A link leaving the share reads as absent.
+func localAtRoot(r *os.Root) localAt {
 	return func(p string) (os.FileInfo, bool) {
-		info, err := os.Stat(localPath(root, p))
+		info, err := r.Stat(relPath(p))
 		if err != nil {
 			return nil, false
 		}
@@ -156,25 +165,21 @@ func localAtRoot(root string) localAt {
 	}
 }
 
-// errEscapes is a file naming somewhere outside the share.
-var errEscapes = errors.New("dircache: a written-back path leaves the share")
+// relPath is a share-relative path in this machine's spelling, for os.Root.
+func relPath(p string) string {
+	return filepath.FromSlash(strings.TrimPrefix(p, "/"))
+}
 
-// writeUnder writes one file into the tree, refusing anything that leaves it.
+// writeUnder writes one file into the share, refusing anything that leaves it.
 //
-// The store named this path, and a store is not this machine's to trust with
-// one. Checked on the RESULT, because filepath.Join cleans and "../.." looks
-// like an ordinary path afterwards.
-func writeUnder(root string, file File) error {
-	target := localPath(root, file.Path)
-	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
-	if !strings.HasPrefix(target, prefix) {
-		return errEscapes
-	}
-
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+// The store names the path and is not this machine's to trust with one; os.Root
+// refuses "..", and a symlink or junction pointing outside the share.
+func writeUnder(r *os.Root, file File) error {
+	rel := relPath(file.Path)
+	if err := r.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode.Perm())
+	f, err := r.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode.Perm())
 	if err != nil {
 		return err
 	}
@@ -188,7 +193,7 @@ func writeUnder(root string, file File) error {
 	// The time the CONSUMER wrote it, which is what a plain mount would have
 	// shown, and what the next round compares against.
 	if !file.ModTime.IsZero() {
-		_ = os.Chtimes(target, time.Time{}, file.ModTime)
+		_ = r.Chtimes(rel, time.Time{}, file.ModTime)
 	}
 	return nil
 }
