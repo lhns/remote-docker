@@ -56,10 +56,38 @@ func TestSessionSettingsAreCanonical(t *testing.T) {
 	}
 }
 
+// A setting is compared only if an environment variable can name it, so every
+// one has a variable or is declared file-only.
+func TestEverySettingHasAVariableOrIsFileOnly(t *testing.T) {
+	fileOnly := map[string]bool{"consistency-paths": true}
+	for name := range (Config{}).SessionSettings() {
+		if _, ok := settingEnv[name]; !ok && !fileOnly[name] {
+			t.Errorf("setting %q has no environment variable in settingEnv; add it, or list it as file-only", name)
+		}
+	}
+	for name := range settingEnv {
+		if _, ok := (Config{}).SessionSettings()[name]; !ok {
+			t.Errorf("settingEnv names %q, which is not a session setting", name)
+		}
+	}
+}
+
+func TestSetInEnvironment(t *testing.T) {
+	t.Setenv(EnvPrefetch, "")
+	if SetInEnvironment("prefetch") {
+		t.Error("an empty variable is no opinion")
+	}
+	t.Setenv(EnvPrefetch, "eager")
+	if !SetInEnvironment("prefetch") || SetInEnvironment("consistency-paths") {
+		t.Error("prefetch is named by its variable, consistency-paths by none")
+	}
+}
+
 func TestDiffSettings(t *testing.T) {
 	running := Config{}.SessionSettings()
 	ours := Config{Prefetch: "eager", Watch: "partial", DaemonIdle: time.Minute}.SessionSettings()
-	got := DiffSettings(running, ours)
+	all := func(string) bool { return true }
+	got := DiffSettings(running, ours, all)
 	want := []SettingChange{
 		{"daemon-idle", "0s", "1m0s"},
 		{"prefetch", "off", "eager"},
@@ -68,10 +96,14 @@ func TestDiffSettings(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	if d := DiffSettings(map[string]string{"prefetch": "off"}, ours); len(d) != 1 || d[0].Name != "prefetch" {
+	if d := DiffSettings(map[string]string{"prefetch": "off"}, ours, all); len(d) != 1 || d[0].Name != "prefetch" {
 		t.Errorf("a setting the session does not report must not be compared: %v", d)
 	}
-	if d := DiffSettings(running, running); len(d) != 0 {
+	only := func(n string) bool { return n == "watch" }
+	if d := DiffSettings(running, ours, only); len(d) != 1 || d[0].Name != "watch" {
+		t.Errorf("only a named setting is compared: %v", d)
+	}
+	if d := DiffSettings(running, running, all); len(d) != 0 {
 		t.Errorf("equal settings differ: %v", d)
 	}
 }

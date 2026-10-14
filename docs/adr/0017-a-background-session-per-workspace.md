@@ -127,8 +127,12 @@ with that. A session exits when it has been idle for `REMOTE_DOCKER_DAEMON_IDLE`
   session and computed again by the command, which goes through the version
   mismatch path: an idle session is restarted with this command's settings and
   one stderr line names what changed, one in use gets a warning and a `fix:`
-  line. A session that reports no settings (older build) is left alone, and a
-  version mismatch takes precedence, since one restart covers both. Connection
+  line. Only a setting whose environment variable is SET in the command's own
+  environment is compared, against its resolved value: an absent variable is
+  no opinion, so a plain `docker ps` in another terminal never reverts a
+  session started with variables. Config-file values are not compared;
+  `remote set` and `remote restart` cover those. A session that reports no
+  settings (older build) is left alone, and a version mismatch takes precedence, since one restart covers both. Connection
   identity (host, port, user, endpoint, CA) is not compared: another workspace
   is another endpoint. `settings_test.go` fails on a `Config` field that is
   neither compared nor excluded with a reason.

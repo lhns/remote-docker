@@ -11,6 +11,7 @@ func TestSettingsMessages(t *testing.T) {
 	changes := config.DiffSettings(
 		config.Config{}.SessionSettings(),
 		config.Config{Prefetch: "eager", Watch: "partial", ShareOwner: "1000"}.SessionSettings(),
+		func(string) bool { return true },
 	)
 	if got, want := describeChanges(changes), "prefetch off -> eager, share-owner unset -> 1000, watch off -> partial"; got != want {
 		t.Errorf("describeChanges = %q, want %q", got, want)

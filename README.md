@@ -328,9 +328,12 @@ shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
 A session reads its settings (`REMOTE_DOCKER_PREFETCH`, `_WATCH`,
 `_CONSISTENCY`, `_SHARE_OWNER`, the cache limits and the timeouts) once, when it
-starts. A command whose settings differ restarts an idle session and says what
-changed; if the session is in use it warns and leaves it alone, and `remote
-restart` applies them once nothing needs it. `remote status` lists the settings
+starts. A command with one of those variables set in its environment, to a
+value the session does not have, restarts an idle session and says what changed;
+if the session is in use it warns and leaves it alone, and `remote restart`
+applies them once nothing needs it. A variable that is not set is no opinion:
+a plain `docker ps` never changes a session. Config-file values are applied by
+`remote restart`. `remote status` lists the settings
 a session runs with when they are not the defaults.
 
 `remote use` sets the default in `~/.remote-docker.json` **and**
@@ -423,7 +426,7 @@ remote-docker remote set dev --user bob --watch off
 
 It takes the same flags as `create`. A new `--host` without `--port` goes back
 to the default port. A running session keeps its old settings until
-`remote restart`, or until the next command restarts it because it is idle.
+`remote restart`.
 
 On a [workspace on this machine](#a-workspace-on-this-machine-windows), the
 address, port and user belong to the machine: change the port or user with

@@ -1565,11 +1565,8 @@ echo "before the watch" >"$REPLAYDIR/reloaded.txt"
 
 if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROJECT/watchprobe"; then
     # Prefetch is off by default (ADR 0045); this client turns the tree on so
-    # 15c and 15e keep covering it. The other suites run the default. Exported,
-    # because a command whose settings differ from the session's restarts it or
-    # warns (ADR 0017), and section 16 unsets the prefetch again.
-    export REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree
-    "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
+    # 15c and 15e keep covering it. The other suites run the default.
+    REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH=tree "$WORK/remote-docker" remote start --foreground >"$WORK/watch-up.log" 2>&1 &
     CLIENT_PID=$!
 
     if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
@@ -2030,7 +2027,6 @@ echo "== 16. a background session, with no terminal held open =="
 stop_pid "$CLIENT_PID"
 CLIENT_PID=""
 sleep 2
-unset REMOTE_DOCKER_PREFETCH
 
 # WHILE NOTHING IS RUNNING: no watcher sees this and a fill only overwrites and
 # adds, so only the record of what the last fill sent removes it (ADR 0044).
@@ -2232,8 +2228,7 @@ fi
 # Standby drops the workspace connection and the watches but keeps serving the
 # endpoint. Asserted through the endpoint, not the log: a run afterwards proves
 # the socket survived AND the request woke the session.
-export REMOTE_DOCKER_DAEMON_STANDBY=5s # exported: the commands below must match the session (ADR 0017)
-if "$WORK/remote-docker" remote start >/dev/null 2>&1; then
+if REMOTE_DOCKER_DAEMON_STANDBY=5s "$WORK/remote-docker" remote start >/dev/null 2>&1; then
     # Longer than the standby and its poll, which runs at a quarter of it.
     sleep 12
 
@@ -2263,26 +2258,38 @@ if "$WORK/remote-docker" remote start >/dev/null 2>&1; then
 else
     bad "could not start a session for the standby test"
 fi
-unset REMOTE_DOCKER_DAEMON_STANDBY
 
-# Settings are read once, when the session starts (ADR 0017). A command whose
-# settings differ restarts an idle session and names what changed, and warns
-# about one in use, which it must leave alone. The environment here has no
-# REMOTE_DOCKER_PREFETCH, so the session starts with prefetch off.
+# Settings are read once, when the session starts (ADR 0017). A command that
+# NAMES a different value in its environment restarts an idle session and says
+# what changed, and warns about one in use, which it leaves alone. A command
+# that names nothing has no opinion and changes nothing.
 session_pid() {
     local st
     st=$("$WORK/remote-docker" remote status 2>&1)
     sed -n 's/^session .*(pid \([0-9]*\),.*/\1/p' <<<"$st"
 }
 
-if "$WORK/remote-docker" remote start >/dev/null 2>&1; then
+if REMOTE_DOCKER_PREFETCH=eager "$WORK/remote-docker" remote start >/dev/null 2>&1; then
     before=$(session_pid)
 
-    # (a) idle -> restarted with this command's settings.
-    out=$(REMOTE_DOCKER_PREFETCH=eager "$WORK/remote-docker" ps 2>&1)
+    # (a) no variable set -> no opinion: neither restarted nor mentioned.
+    out=$("$WORK/remote-docker" ps 2>&1)
     after=$(session_pid)
     case "$out" in
-        *"restarting the session: prefetch off -> eager"*) ok "a command with different settings restarts an idle session, naming the change" ;;
+        *"restarting the session"* | *"the running session has"*) bad "a command naming no settings touched the session: [$out]" ;;
+        *) ok "a command that sets no variable leaves the session's settings alone" ;;
+    esac
+    if [ -n "$before" ] && [ "$before" = "$after" ]; then
+        ok "the session kept its pid (a plain command is no opinion)"
+    else
+        bad "a plain command replaced the session (before [$before], after [$after])"
+    fi
+
+    # (b) idle, a different value named -> restarted with it.
+    out=$(REMOTE_DOCKER_PREFETCH=off "$WORK/remote-docker" ps 2>&1)
+    after=$(session_pid)
+    case "$out" in
+        *"restarting the session: prefetch eager -> off"*) ok "a command naming different settings restarts an idle session, naming the change" ;;
         *) bad "no restart notice for a different prefetch: [$out]" ;;
     esac
     if [ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ]; then
@@ -2291,21 +2298,21 @@ if "$WORK/remote-docker" remote start >/dev/null 2>&1; then
         bad "the idle session kept its pid (before [$before], after [$after])"
     fi
     if outputs '^settings .*prefetch=eager' "$WORK/remote-docker" remote status; then
-        ok "status shows the settings the session runs with"
+        bad "status still shows prefetch=eager: [$LAST_OUTPUT]"
     else
-        bad "status does not show prefetch=eager: [$LAST_OUTPUT]"
+        ok "status no longer lists the old setting"
     fi
 
-    # (b) in use -> warned about, left alone. The container is started under
+    # (c) in use -> warned about, left alone. The container is started under
     # the session's own settings, so it is the session that holds it.
-    if REMOTE_DOCKER_PREFETCH=eager "$WORK/remote-docker" run -d --name itest-settings \
+    if REMOTE_DOCKER_PREFETCH=off "$WORK/remote-docker" run -d --name itest-settings \
         -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
         before=$(session_pid)
-        out=$("$WORK/remote-docker" ps 2>&1)
+        out=$(REMOTE_DOCKER_PREFETCH=eager "$WORK/remote-docker" ps 2>&1)
         after=$(session_pid)
         case "$out" in
-            *"the running session has prefetch=eager; prefetch=off here is ignored"*"fix:"*)
-                ok "a command with different settings warns about a session in use" ;;
+            *"the running session has prefetch=off; prefetch=eager here is ignored"*"fix:"*)
+                ok "a command naming different settings warns about a session in use" ;;
             *) bad "no settings warning while a container depended on the session: [$out]" ;;
         esac
         if [ -n "$before" ] && [ "$before" = "$after" ]; then
@@ -2342,7 +2349,6 @@ if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" remote start >/dev/null 2>
 else
     bad "could not start a session for the idle test"
 fi
-unset REMOTE_DOCKER_WATCH
 
 
 echo

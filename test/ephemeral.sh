@@ -51,11 +51,6 @@ esac
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-# Every session here runs with watching on (start_session sets it), and a
-# command whose settings differ from the running session restarts it or
-# warns, so the commands carry the same value (ADR 0017).
-export REMOTE_DOCKER_WATCH=partial
-
 CLIENT_LABEL=com.github.lhns.remote-docker.client
 OWNER_LABEL=com.github.lhns.remote-docker.owner
 PROJECT_LABEL=com.docker.compose.project

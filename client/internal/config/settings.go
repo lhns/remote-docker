@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -65,12 +66,38 @@ type SettingChange struct {
 	Name, Running, Ours string
 }
 
-// DiffSettings lists the settings in ours that differ from running, by name.
-// A name running does not report is not compared: an older session that
-// predates it cannot say, and is left alone.
-func DiffSettings(running, ours map[string]string) []SettingChange {
+// settingEnv is the environment variable that sets each session setting. A
+// setting with none is read from the config file only, and is never compared.
+var settingEnv = map[string]string{
+	"consistency":    EnvConsistency,
+	"watch":          EnvWatch,
+	"watch-budget":   EnvWatchBudget,
+	"watch-exclude":  EnvWatchExclude,
+	"cache-files":    EnvCacheFiles,
+	"cache-bytes":    EnvCacheBytes,
+	"prefetch":       EnvPrefetch,
+	"share-owner":    EnvShareOwner,
+	"idle-timeout":   EnvIdleTimeout,
+	"daemon-idle":    EnvDaemonIdle,
+	"daemon-standby": EnvDaemonStandby,
+}
+
+// SetInEnvironment reports whether this process's environment names the
+// setting. An absent variable is no opinion, not a request for the default.
+func SetInEnvironment(name string) bool {
+	env, ok := settingEnv[name]
+	return ok && os.Getenv(env) != ""
+}
+
+// DiffSettings lists the settings in ours that differ from running, by name,
+// and for which named(name) is true. A name running does not report is not
+// compared: an older session that predates it cannot say, and is left alone.
+func DiffSettings(running, ours map[string]string, named func(string) bool) []SettingChange {
 	var out []SettingChange
 	for name, want := range ours {
+		if !named(name) {
+			continue
+		}
 		if have, ok := running[name]; ok && have != want {
 			out = append(out, SettingChange{name, have, want})
 		}

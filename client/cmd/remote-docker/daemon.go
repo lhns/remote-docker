@@ -335,7 +335,7 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 	warnTraceGoesNowhere(os.Stderr, st)
 
 	versionDiffer := versionDiffers(st)
-	changes := config.DiffSettings(st.Settings, cfg.SessionSettings())
+	changes := config.DiffSettings(st.Settings, cfg.SessionSettings(), config.SetInEnvironment)
 	if !versionDiffer && len(changes) == 0 {
 		return nil
 	}
