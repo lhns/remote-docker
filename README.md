@@ -488,11 +488,25 @@ docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,wr
 An axis a mount does not name comes from the per-directory rule
 (`consistencyPaths`), then the workspace setting, then the default. The third
 field of `-v` is a list: `ro,read=cached`, never `:read=cached:ro`. `--mount` is
-split on commas by the CLI, so both axes go in one csv-quoted field. Whether
-Compose accepts these words in `consistency:` is **unverified**. Docker's own
+split on commas by the CLI, so both axes go in one csv-quoted field. Docker's own
 values keep their meaning: `consistent` and `default` are
 `read=direct,write=through`, `cached` is `read=cached,write=through`,
 `delegated` is `read=cached,write=back`.
+
+In a compose file only the long volume syntax carries these words, as
+`consistency:`. Compose's short syntax (`./project:/app:read=cached`) silently
+discards any option it does not know, so the mount would get the default mode;
+the client prints a warning naming the volume instead. Setting
+`REMOTE_DOCKER_CONSISTENCY` changes the default for every mount, short syntax
+included.
+
+```yaml
+    volumes:
+      - type: bind
+        source: ./workspace
+        target: /workspace
+        consistency: read=cached,write=back
+```
 
 ```json
 {"consistency": "read=cached", "consistencyPaths": {"/home/me/app/target": "write=ephemeral"}}
@@ -1325,8 +1339,7 @@ Beyond that:
 - **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
   option newer than the [3.10 floor](#running-a-workspace) would pass CI and fail
   every mount on an older workspace. A table guards it, not a test run.
-- **Write-back conflicts** are unit tested only, and whether Compose accepts
-  our `consistency:` words is unverified.
+- **Write-back conflicts** are unit tested only.
 - **The Windows MSI** is installed and uninstalled on a runner when the
   installer changes. No MSI from a real release has been installed by anybody,
   none is signed, and no release zip has been unpacked on a machine that did not

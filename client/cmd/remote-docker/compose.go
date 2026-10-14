@@ -36,6 +36,7 @@ func installCompose(cmd *cobra.Command, dockerCli *command.DockerCli, client fun
 	sub.AddCommand(composecmd.HooksCommand())
 	if client != nil {
 		defaultProjectName(sub, client)
+		warnModes(sub)
 	}
 	cmd.AddCommand(sub)
 }
@@ -74,22 +75,7 @@ func defaultProjectName(sub *cobra.Command, client func() string) {
 // projectBase is the name compose would give the project: the file's `name:`
 // or its directory's. "" when neither resolves, and compose then reports why.
 func projectBase(sub *cobra.Command) string {
-	flags := sub.Flags()
-	files, _ := flags.GetStringArray("file")
-	envFiles, _ := flags.GetStringArray("env-file")
-	dir, _ := flags.GetString("project-directory")
-	if dir == "" {
-		dir, _ = flags.GetString("workdir")
-	}
-
-	opts, err := cli.NewProjectOptions(files,
-		cli.WithWorkingDirectory(dir),
-		cli.WithOsEnv,
-		cli.WithEnvFiles(envFiles...),
-		cli.WithDotEnv,
-		cli.WithConfigFileEnv,
-		cli.WithDefaultConfigPath,
-	)
+	opts, err := projectOptions(sub)
 	if err != nil {
 		return ""
 	}
@@ -103,6 +89,27 @@ func projectBase(sub *cobra.Command) string {
 		return ""
 	}
 	return loader.NormalizeProjectName(filepath.Base(wd))
+}
+
+// projectOptions resolves the project's files, env and directory the way the
+// compose command line named them.
+func projectOptions(sub *cobra.Command) (*cli.ProjectOptions, error) {
+	flags := sub.Flags()
+	files, _ := flags.GetStringArray("file")
+	envFiles, _ := flags.GetStringArray("env-file")
+	dir, _ := flags.GetString("project-directory")
+	if dir == "" {
+		dir, _ = flags.GetString("workdir")
+	}
+
+	return cli.NewProjectOptions(files,
+		cli.WithWorkingDirectory(dir),
+		cli.WithOsEnv,
+		cli.WithEnvFiles(envFiles...),
+		cli.WithDotEnv,
+		cli.WithConfigFileEnv,
+		cli.WithDefaultConfigPath,
+	)
 }
 
 // clientTimeout bounds asking the session for its client, which connects.

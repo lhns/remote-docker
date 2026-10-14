@@ -1,7 +1,7 @@
 # 0042 — Docker's mount consistency, applied to the NFS mount
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-09-04
+- Date: 2026-09-01, last amended 2026-10-14
 - Current answer: a mount has two settings, `read=direct|cached` and
   `write=through|back|ephemeral`, and those two words are the only spelling:
   `-v /a:/b:ro,read=cached`, `--mount '...,"consistency=read=cached,write=back"'`,
@@ -100,6 +100,15 @@ intact; only a NEW `--mount` field fails at the CLI. Re-check:
 fields and the third is an option LIST, so `-v /a:/b:ro,cached`, never
 `/a:/b:read=cached:ro`. The mode is taken OUT of that list before the bind is
 forwarded: once it is a volume the words describe nothing the daemon can act on.
+
+**Compose's short syntax drops the words, amended 2026-10-14.** compose-go's
+short volume parser knows `ro`, `rw`, `nocopy`, `propagation` and `z`/`Z` and
+ignores any other option (`format/volume.go`, v2.15.0), so
+`./src:/app:read=cached` mounts with the default mode and says nothing. The
+long syntax's `consistency:` is a free string that compose passes to
+`mount.Consistency`, which the rewriter already reads. The embedded compose
+therefore warns about a short-syntax volume carrying one of our words and
+names the long form; it does not fail, since the mount still works.
 
 **Precedence, one rule:** the mount outranks a per-path rule, which outranks the
 workspace default.

@@ -13,6 +13,9 @@ software.
 - git in a container no longer refuses a shared directory as "dubious
   ownership" when it runs as root; set `REMOTE_DOCKER_SHARE_OWNER` for an image
   that runs as another user.
+- `docker compose` now warns when a short-syntax volume carries `read=` or
+  `write=` words, which compose silently drops, and names the long
+  `consistency:` form that works.
 - Starting a container whose shared directory cannot mount now says why, and
   what to do, instead of printing the daemon's `connection refused`.
 - A `write=back` or `write=ephemeral` mount on a workspace whose per-account

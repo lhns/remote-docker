@@ -257,7 +257,6 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
@@ -282,6 +281,7 @@ require (
 	github.com/lhns/remote-docker/dircache v0.0.0
 	github.com/lhns/remote-docker/machine v0.0.0
 	github.com/spf13/pflag v1.0.10
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 replace github.com/lhns/remote-docker/dircache => ../dircache
