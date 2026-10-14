@@ -115,6 +115,18 @@ narrowed to exactly this.
 
 ### Three states, defaulting to off
 
+*Amended 2026-10-14: the state is per share.* A mount may say `watch=off`,
+`partial` or `coarse` (ADR 0042), and `REMOTE_DOCKER_WATCH` is the default for a
+mount that does not. `read=cached` and a union need the watcher, so they get at
+least `partial`; asking for `off` there is refused. A share in `off` has no
+watches at all. One watcher serves shares that disagree: each watched root
+carries its own mode and strips deletions by it, nested roots resolve to the
+deepest, and the cache observer still sees every event of a watched root before
+any mode strips one (ADR 0044). The watcher starts with the first share that
+watches, so a session defaulting to `off` costs nothing until then, and the
+notify channel opens only once some share watches, on a connection already up
+as well as at connect.
+
 `REMOTE_DOCKER_WATCH` is `off` (default), `partial` or `coarse`.
 
 - `partial` replays only what can be synthesised faithfully (writes, creates)

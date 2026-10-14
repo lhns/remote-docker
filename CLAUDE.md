@@ -364,10 +364,11 @@ premise of the project, and it applies to building it too. So:
 - **A docker.sock bind is the container's own daemon, never the parent's**
   (ADR 0049). `/var/run/docker.sock` as a bind source is passed through, even
   when this machine has one.
-- **A mount word is `read=X`, `write=Y` or `owner=U[<sep>G]`, nothing else, and
-  it is consumed, never forwarded** (ADR 0042). `owner=` is a word of the SHARE
-  and not of the mode: `workspace.ParseMode` (the session settings) refuses it,
-  `ParseMount` reads it, and `IsModeWord` claims the key so a misspelt value is
+- **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]` or
+  `watch=off|partial|coarse`, nothing else, and it is consumed, never
+  forwarded** (ADR 0042). `owner=` and `watch=` are words of the SHARE and not
+  of the mode: `workspace.ParseMode` (the session settings) refuses them,
+  `ParseMount` reads them, and `IsModeWord` claims the key so a misspelt value is
   refused here instead of reaching the daemon. `-v` cannot carry `1000:2000`
   (docker/cli refuses a fourth colon), so the separator is any one non-digit
   and docs write `owner=1000.2000`. It arrives in a `-v` option list or in
@@ -388,8 +389,20 @@ premise of the project, and it applies to building it too. So:
   running container holds. A share's attributes come from the session's
   (`defaultAttrs`, which carries `AlwaysExecutable` on Windows) with only the
   uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
-  silently on Windows. The share record gained `owner` WITHOUT a version bump:
-  `readBound` drops a record whose version differs.
+  silently on Windows. The share record gained `owner` and `watch` WITHOUT a
+  version bump: `readBound` drops a record whose version differs.
+- **Watching is per share, and the watcher starts with the first share that
+  needs it** (ADR 0016, amended 2026-10-14). `read=cached` and every union
+  resolve to at least `partial`, and an explicit `watch=off` there is refused.
+  A watching share restored from the record starts the watcher itself
+  (`Registry.Restored`): the mount that restored it registered nothing, and a
+  restore that did not tell the watcher serves it unwatched. The notify channel
+  opens once some share watches, once per connection, at connect and from
+  `syncWatch` on a connection already up; opened only at connect, a mount made
+  after it never reaches a container. `fswatch.tree` holds no root for an
+  `off` share and resolves nested roots to the deepest, so which mode strips a
+  deletion does not depend on registration order. A watcher that will not start
+  refuses the mount that needed it and leaves the session open.
 - **A share with `write != through` is a UNION, its lower carries the share's
   READ mode, and the agent is its only writer** (ADR 0042, ADR 0044). The live
   export is the lower layer and a local cache is the upper, so a read the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -70,7 +71,6 @@ func startWatcher(t *testing.T, mode Mode, root string) (*Watcher, *fakeBackend,
 	t.Helper()
 	be := newFakeBackend()
 	w, err := New(Options{
-		Mode:     mode,
 		Budget:   100,
 		Debounce: time.Millisecond,
 		MaxDelay: 5 * time.Millisecond,
@@ -86,9 +86,35 @@ func startWatcher(t *testing.T, mode Mode, root string) (*Watcher, *fakeBackend,
 
 	sink := &fakeSink{}
 	w.SetSink(sink)
-	w.Sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
+	w.Sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root, Mode: mode}})
 	waitFor(t, "the initial walk", func() bool { return w.Stats().Watched > 0 })
 	return w, be, sink
+}
+
+// recordingObserver counts the events it was told of, per export.
+type recordingObserver struct {
+	mu     sync.Mutex
+	events []notify.Event
+}
+
+func (o *recordingObserver) Observe(e notify.Event) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.events = append(o.events, e)
+}
+
+func (o *recordingObserver) Lost(notify.Notice) {}
+
+func (o *recordingObserver) count(export string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := 0
+	for _, e := range o.events {
+		if e.Export == export {
+			n++
+		}
+	}
+	return n
 }
 
 // lostObserver records what the watcher says it missed.
@@ -187,25 +213,110 @@ func TestCoarseModeSendsRemovals(t *testing.T) {
 	})
 }
 
-func TestOffModeWatchesNothing(t *testing.T) {
-	root := mkdirs(t, t.TempDir(), "src")
-	w, err := New(Options{Mode: ModeOff, goos: runtime.GOOS,
-		newBackend: func() (backend, error) { t.Fatal("off mode created a backend"); return nil, nil }})
+// A share whose mode is off is not watched, whatever the watcher is doing for
+// the others.
+func TestAShareInOffModeIsNotWatched(t *testing.T) {
+	watched := mkdirs(t, t.TempDir(), "src")
+	off := mkdirs(t, t.TempDir(), "src")
+
+	be := newFakeBackend()
+	w, err := New(Options{Budget: 100, Debounce: time.Millisecond, MaxDelay: 5 * time.Millisecond, goos: runtime.GOOS,
+		newBackend: func() (backend, error) { return be, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = w.Close() }()
-
 	sink := &fakeSink{}
 	w.SetSink(sink)
-	w.Sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root}})
-	time.Sleep(50 * time.Millisecond)
 
-	if s := w.Stats(); s.Watched != 0 || s.Sent != 0 {
-		t.Errorf("off mode did work: %+v", s)
+	w.Sync([]Share{
+		{ExportPath: "/m/1111111111111111", LocalPath: watched, Mode: ModePartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: off, Mode: ModeOff},
+	})
+	waitFor(t, "the walk", func() bool { return w.Stats().Watched > 0 })
+
+	be.mu.Lock()
+	added := append([]string(nil), be.added...)
+	be.mu.Unlock()
+	for _, dir := range added {
+		if strings.HasPrefix(dir, off) {
+			t.Errorf("an off share was watched: %s", dir)
+		}
 	}
-	if len(sink.events()) != 0 {
-		t.Errorf("off mode sent events: %+v", sink.events())
+	be.events <- fsnotify.Event{Name: filepath.Join(off, "src", "a.go"), Op: fsnotify.Write}
+	be.events <- fsnotify.Event{Name: filepath.Join(watched, "src", "b.go"), Op: fsnotify.Write}
+	waitFor(t, "the watched share's write", func() bool { return len(sink.events()) > 0 })
+	time.Sleep(50 * time.Millisecond)
+	for _, e := range sink.events() {
+		if e.Export != "/m/1111111111111111" {
+			t.Errorf("an event for the off share was sent: %+v", e)
+		}
+	}
+}
+
+// One watcher serves shares that disagree: a deletion is stripped from the
+// partial one and sent for the coarse one, and the observer (a cache) is
+// told of both before any mode strips anything.
+func TestSharesInOneWatcherKeepTheirOwnModes(t *testing.T) {
+	partial := mkdirs(t, t.TempDir(), "src")
+	coarse := mkdirs(t, t.TempDir(), "src")
+
+	be := newFakeBackend()
+	w, err := New(Options{Budget: 100, Debounce: time.Millisecond, MaxDelay: 5 * time.Millisecond, goos: runtime.GOOS,
+		newBackend: func() (backend, error) { return be, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	sink := &fakeSink{}
+	w.SetSink(sink)
+	seen := &recordingObserver{}
+	w.SetObserver(seen)
+
+	w.Sync([]Share{
+		{ExportPath: "/m/1111111111111111", LocalPath: partial, Mode: ModePartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: coarse, Mode: ModeCoarse},
+	})
+	waitFor(t, "the walk", func() bool { return w.Stats().Watched >= 4 })
+
+	be.events <- fsnotify.Event{Name: filepath.Join(partial, "src", "gone.go"), Op: fsnotify.Remove}
+	be.events <- fsnotify.Event{Name: filepath.Join(coarse, "src", "gone.go"), Op: fsnotify.Remove}
+
+	waitFor(t, "the coarse removal", func() bool {
+		for _, e := range sink.events() {
+			if e.Export == "/m/2222222222222222" && e.Op&notify.OpRemove != 0 {
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(50 * time.Millisecond)
+	for _, e := range sink.events() {
+		if e.Export == "/m/1111111111111111" {
+			t.Errorf("the partial share sent %+v", e)
+		}
+	}
+	if got := seen.count("/m/1111111111111111"); got != 1 {
+		t.Errorf("the observer saw %d events for the partial share, want its deletion", got)
+	}
+}
+
+// Nested shares can carry different modes, so an event belongs to the DEEPEST
+// one whatever order they registered in.
+func TestNestedSharesResolveToTheDeepest(t *testing.T) {
+	outer := mkdirs(t, t.TempDir(), "inner")
+	inner := filepath.Join(outer, "inner")
+
+	for _, order := range [][]Share{
+		{{ExportPath: "/m/1111111111111111", LocalPath: outer, Mode: ModePartial}, {ExportPath: "/m/2222222222222222", LocalPath: inner, Mode: ModeCoarse}},
+		{{ExportPath: "/m/2222222222222222", LocalPath: inner, Mode: ModeCoarse}, {ExportPath: "/m/1111111111111111", LocalPath: outer, Mode: ModePartial}},
+	} {
+		tr := newTree(runtime.GOOS, newFakeBackend(), 100, nil, nil)
+		tr.sync(order)
+		root, rel, ok := tr.rootFor(filepath.Join(inner, "x.go"))
+		if !ok || root.export != "/m/2222222222222222" || rel != "/x.go" {
+			t.Errorf("order %v: rootFor = %v %q %v, want the inner share", order, root, rel, ok)
+		}
 	}
 }
 

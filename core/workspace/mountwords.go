@@ -14,6 +14,7 @@ import (
 //
 //	owner=1000        the uid, and gid, every file in the share reports
 //	owner=1000.2000   uid and gid; any one non-digit separates them
+//	watch=partial     whether, and how much of, a local change is replayed
 
 // Owner is the uid and gid a share reports for every file (ADR 0046). Set
 // distinguishes a named owner from the zero value, because root is a
@@ -70,10 +71,48 @@ func (o Owner) String() string {
 	return fmt.Sprintf("%d:%d", o.UID, o.GID)
 }
 
+// Watch is how much of what happens to a share on this machine is replayed
+// inside the workspace (ADR 0016): nothing, what can be replayed faithfully,
+// or also deletions and renames as a poke at the parent directory. Only the
+// canonical words; the aliases the session setting accepts (on, true, 1) are
+// not spellings of a mount's word.
+type Watch string
+
+const (
+	WatchUnset   Watch = ""
+	WatchOff     Watch = "off"
+	WatchPartial Watch = "partial"
+	WatchCoarse  Watch = "coarse"
+)
+
+// watchWords is the tail of a watch refusal.
+const watchWords = "off|partial|coarse"
+
+// ParseWatch reads one watch word.
+func ParseWatch(s string) (Watch, error) {
+	switch w := Watch(strings.TrimSpace(s)); w {
+	case WatchOff, WatchPartial, WatchCoarse:
+		return w, nil
+	default:
+		return WatchUnset, fmt.Errorf("workspace: watch=%q is not a watch mode; want one of %s", s, watchWords)
+	}
+}
+
+// Watching reports whether this answer replays anything.
+func (w Watch) Watching() bool { return w == WatchPartial || w == WatchCoarse }
+
 // ShareWords are the words that belong to a share rather than to one mount of
 // it. Comparable, so two mounts of one directory are checked with ==.
 type ShareWords struct {
 	Owner Owner
+	Watch Watch
+}
+
+func (w Watch) display() string {
+	if w == WatchUnset {
+		return string(WatchOff)
+	}
+	return string(w)
 }
 
 // Difference is one key two sets of share words disagree about, each side in
@@ -88,6 +127,9 @@ func (w ShareWords) Differences(other ShareWords) []Difference {
 	if w.Owner != other.Owner {
 		out = append(out, Difference{"owner", w.Owner.String(), other.Owner.String()})
 	}
+	if w.Watch != other.Watch {
+		out = append(out, Difference{"watch", w.Watch.display(), other.Watch.display()})
+	}
 	return out
 }
 
@@ -101,14 +143,14 @@ type MountWords struct {
 // shareKeySetting maps each key beyond read and write that a mount may carry
 // to the session setting that supplies its default. ParseMode, which reads the
 // session's own settings, refuses these keys and names that setting.
-var shareKeySetting = map[string]string{"owner": "shareOwner"}
+var shareKeySetting = map[string]string{"owner": "shareOwner", "watch": "watch"}
 
 func isShareKey(key string) bool {
 	_, ok := shareKeySetting[key]
 	return ok
 }
 
-// ParseMount reads a comma-separated list of read=, write=, owner= and
+// ParseMount reads a comma-separated list of read=, write=, owner=, watch= and
 // Docker's own consistency words. A key named twice is refused, and so is any
 // other word, naming it.
 func ParseMount(s string) (MountWords, error) {
@@ -136,6 +178,12 @@ func ParseMount(s string) (MountWords, error) {
 				return MountWords{}, err
 			}
 			w.Owner = o
+		case "watch":
+			got, err := ParseWatch(value)
+			if err != nil {
+				return MountWords{}, err
+			}
+			w.Watch = got
 		}
 	}
 	mode, err := ParseMode(strings.Join(modeWords, ","))

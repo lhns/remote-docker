@@ -46,6 +46,9 @@ func refuseOtherWords(share *nfsserve.Share, asked workspace.ShareWords) error {
 	if !asked.Owner.Set {
 		asked.Owner = share.Words.Owner
 	}
+	if asked.Watch == workspace.WatchUnset {
+		asked.Watch = share.Words.Watch
+	}
 	diffs := share.Words.Differences(asked)
 	if len(diffs) == 0 {
 		return nil

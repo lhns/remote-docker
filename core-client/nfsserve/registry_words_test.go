@@ -99,11 +99,22 @@ func TestRestoreCarriesTheWords(t *testing.T) {
 	r.Restore = func(path string) (string, workspace.ShareWords, bool) {
 		return dir, workspace.ShareWords{Owner: workspace.Owner{UID: 1000, GID: 1000, Set: true}}, path == export
 	}
+	var told []*Share
+	r.Restored = func(s *Share) { told = append(told, s) }
+
 	share, _, ok := r.LookupOrRestore(export)
 	if !ok {
 		t.Fatal("not restored")
 	}
 	if uid, _ := ownerOf(t, share); uid != 1000 {
 		t.Errorf("restored share reports uid %d, want the recorded 1000", uid)
+	}
+	if len(told) != 1 || told[0] != share {
+		t.Errorf("Restored was called with %v, want the restored share once", told)
+	}
+
+	// A share that is already there is not a restore.
+	if _, _, ok := r.LookupOrRestore(export); !ok || len(told) != 1 {
+		t.Errorf("a lookup of a registered share called Restored again: %d calls", len(told))
 	}
 }

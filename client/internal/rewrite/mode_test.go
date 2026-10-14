@@ -53,7 +53,7 @@ func refusingCache(err error) func(context.Context) (Cache, error) {
 // with a watcher behind it.
 func cachedRewriter() (*Rewriter, *fakeVolumes) {
 	r, _, v := newRewriter()
-	r.Watching = true
+	r.StartWatcher = func() error { return nil }
 	return r, v
 }
 
@@ -589,7 +589,7 @@ func TestAMountModeThatIsNotOneIsRefused(t *testing.T) {
 // rather than mount the file.
 func TestASingleFileTakesAModeToo(t *testing.T) {
 	r, sharer, volumes := newRewriter()
-	r.Watching = true
+	r.StartWatcher = func() error { return nil }
 	sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
 
 	out, err := r.ContainerCreate(t.Context(),
@@ -617,7 +617,7 @@ func TestASingleFileRefusesAUnion(t *testing.T) {
 		`{"HostConfig":{"Mounts":[{"Type":"bind","Source":"/home/alice/app.conf","Target":"/etc/app.conf","Consistency":"write=back"}]}}`,
 	} {
 		r, sharer, volumes := newRewriter()
-		r.Watching = true
+		r.StartWatcher = func() error { return nil }
 		cache := &fakeCache{}
 		r.OpenCache = servingCache(cache)
 		r.UnionReady = workspace.UnionReady

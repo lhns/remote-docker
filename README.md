@@ -364,7 +364,7 @@ default.**
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
 | `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create`/`set --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
-| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off` |
+| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off`; the default for mounts naming no `watch=`. A mount can name its own (`watch=partial`), and `read=cached` and unions never get less than `partial`. See [File watching](#file-watching) |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.gradle`, `.terraform` |
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
@@ -459,6 +459,21 @@ It is off by default because it costs one watch per shared directory (on macOS
 one file descriptor per file), within a budget. Costs, deletions and the budget
 are in [File watching in detail](#file-watching-in-detail).
 
+The setting is the default; a mount can name its own, so one hot-reloading
+directory costs watches and the rest do not:
+
+```bash
+docker run -v ./web:/app:watch=partial img      # only this directory is watched
+docker run -v ./web:/app:ro,watch=coarse img    # beside ro, comma-joined
+docker run -v ./data:/data:watch=off img        # not watched, whatever the setting says
+```
+
+`read=cached` and any `write=` other than `through` need the watcher to stay
+coherent, so they are watched at least at `partial` even when the setting is
+`off`, and `watch=off` on one is refused. Like every word of a share it is fixed
+for the directory while the session runs: a second mount of the directory
+naming another is refused.
+
 ## Faster access to a shared directory
 
 Reading through the share costs a round trip per file, and the mount
@@ -543,8 +558,9 @@ and scattered reads are slower. Large writes are local.
 (`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union
 ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off).
 
-**`read=cached` and every union need [file watching](#file-watching) on**, and
-refuse to run without it. An edit to an existing file arrives at once; a file
+**`read=cached` and every union need [file watching](#file-watching)**, so they
+turn it on for their directory (`partial`, or the setting if it is higher)
+whatever `REMOTE_DOCKER_WATCH` says, and refuse `watch=off`. An edit to an existing file arrives at once; a file
 you create or delete can take up to a minute to appear in a listing unless
 watching is `coarse`. A union caches only what the watcher covers; anything
 under an excluded directory is read over the mount.

@@ -1593,6 +1593,124 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         bad "a second owner was not refused as expected: [$LAST_OUTPUT]"
     fi
 
+    # watch= is per mount: this client runs with watching off, so every
+    # watched case below turns the watcher on for its own directory.
+    PROBES="$WORK/probes"
+    mkdir -p "$PROBES"
+    if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROBES/watchprobe"; then
+        WORDSWATCH="$WORK/words-watch"
+        mkdir -p "$WORDSWATCH"
+        echo "before the watch" >"$WORDSWATCH/edit.txt"
+
+        if dockert run -d --name itest-watchword -v "$PROBES:/probe:ro" -v "$WORDSWATCH:/data:watch=partial" \
+            alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/watchword-run.log" 2>&1; then
+            wait_ready itest-watchword 30
+            sleep 2
+            echo "edited at $(date +%s)" >"$WORDSWATCH/edit.txt"
+            timeout 90 docker wait itest-watchword >/dev/null 2>&1
+            seen=$(docker logs itest-watchword 2>&1)
+            docker rm -f itest-watchword >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen"; then
+                ok "watch=partial on one mount fires inotify while the session watches nothing"
+            else
+                bad "watch=partial did not reach the container's watcher: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+            fi
+        else
+            bad "the watch=partial probe container would not start: $(cat "$WORK/watchword-run.log")"
+        fi
+
+        # read=cached needs the watcher, so it starts one rather than being
+        # refused for a session that watches nothing.
+        CACHEDDIR="$WORK/words-cached"
+        mkdir -p "$CACHEDDIR"
+        echo "before the watch" >"$CACHEDDIR/edit.txt"
+        if dockert run -d --name itest-watchcached -v "$PROBES:/probe:ro" -v "$CACHEDDIR:/data:read=cached" \
+            alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/watchcached-run.log" 2>&1; then
+            wait_ready itest-watchcached 30
+            sleep 2
+            echo "edited at $(date +%s)" >"$CACHEDDIR/edit.txt"
+            timeout 90 docker wait itest-watchcached >/dev/null 2>&1
+            seen=$(docker logs itest-watchcached 2>&1)
+            docker rm -f itest-watchcached >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen"; then
+                ok "read=cached starts the watcher for its directory with watching off"
+            else
+                bad "read=cached with the session at watch off never saw the edit: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+            fi
+        else
+            bad "read=cached was refused with the session at watch off: $(cat "$WORK/watchcached-run.log")"
+        fi
+
+        # A contradiction is refused with the way out.
+        if outputs 'watch=off.*read=cached' dockert run --rm -v "$CACHEDDIR:/w:read=cached,watch=off" alpine:3 true \
+            && grep -q 'fix: drop watch=off' <<<"$LAST_OUTPUT"; then
+            ok "read=cached,watch=off is refused with a fix"
+        else
+            bad "read=cached,watch=off was not refused as expected: [$LAST_OUTPUT]"
+        fi
+
+        # coarse: a deletion pokes the parent directory, which partial never does.
+        COARSEDIR="$WORK/words-coarse"
+        mkdir -p "$COARSEDIR"
+        echo "doomed" >"$COARSEDIR/doomed.txt"
+        if dockert run -d --name itest-watchcoarse -v "$PROBES:/probe:ro" -v "$COARSEDIR:/data:watch=coarse" \
+            alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/watchcoarse-run.log" 2>&1; then
+            wait_ready itest-watchcoarse 30
+            sleep 2
+            rm -f "$COARSEDIR/doomed.txt"
+            timeout 90 docker wait itest-watchcoarse >/dev/null 2>&1
+            seen=$(docker logs itest-watchcoarse 2>&1)
+            docker rm -f itest-watchcoarse >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*IN_MODIFY" <<<"$seen"; then
+                ok "watch=coarse pokes the directory when a file is deleted here"
+            else
+                bad "watch=coarse showed no event for a deletion: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+            fi
+        else
+            bad "the watch=coarse probe container would not start: $(cat "$WORK/watchcoarse-run.log")"
+        fi
+
+        # The words outlive the client process: the record carries them, so a
+        # container started before a restart is still served as that owner and
+        # still watched, though the new session watches nothing by default.
+        SURVIVEDIR="$WORK/words-survives"
+        mkdir -p "$SURVIVEDIR"
+        echo "before the restart" >"$SURVIVEDIR/edit.txt"
+        if dockert run -d --name itest-survive -v "$PROBES:/probe:ro" -v "$SURVIVEDIR:/data:owner=1000,watch=partial" \
+            alpine:3 /probe/watchprobe -timeout 120s /data >"$WORK/survive-run.log" 2>&1; then
+            wait_ready itest-survive 30
+            stop_pid "$CLIENT_PID"
+            CLIENT_PID=""
+            "$WORK/remote-docker" remote start --foreground >"$WORK/survive-up.log" 2>&1 &
+            CLIENT_PID=$!
+            if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+                bad "the client did not come back after a restart"
+                sed 's/^/        /' "$WORK/survive-up.log"
+            else
+                if outputs '^1000$' dockert exec itest-survive stat -c '%u' /data; then
+                    ok "a restart keeps the owner of a share a container still mounts"
+                else
+                    bad "after a restart the share reports [$LAST_OUTPUT], want 1000"
+                fi
+                sleep 2
+                echo "edited after the restart $(date +%s)" >"$SURVIVEDIR/edit.txt"
+                timeout 150 docker wait itest-survive >/dev/null 2>&1
+                seen=$(docker logs itest-survive 2>&1)
+                if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen"; then
+                    ok "a restart keeps watching a share a container still mounts"
+                else
+                    bad "an edit after a restart never reached the container: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+                    sed 's/^/        /' "$WORK/survive-up.log" | tail -20
+                fi
+            fi
+            docker rm -f itest-survive >/dev/null 2>&1
+        else
+            bad "the restart probe container would not start: $(cat "$WORK/survive-run.log")"
+        fi
+    else
+        bad "could not build the watch probe, so the watch words were not tested"
+    fi
+
     # The reason owner= exists: git compares the owner with its own uid.
     if outputs 'On branch|No commits yet' dockert run --rm --user 1000 --entrypoint sh -v "$WORDSDIR:/w:owner=1000" alpine/git -c 'cd /w && git init -q && git status'; then
         ok "git as uid 1000 accepts an owner=1000 share without safe.directory"

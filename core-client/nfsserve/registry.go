@@ -71,6 +71,13 @@ type Registry struct {
 	// before it is believed.
 	Restore func(exportPath string) (localPath string, words workspace.ShareWords, ok bool)
 
+	// Restored is told of a share Restore just brought back, after the
+	// registry's lock is released. A share restored from a record is unknown
+	// to everything that learned of shares when they were registered, a file
+	// watcher above all: it asks no mount to register and would otherwise
+	// serve a watching share unwatched. Nil is a registry nobody follows.
+	Restored func(*Share)
+
 	// Recorded names the exports Restore can answer for. A root handle carries
 	// only a digest of its export, and this is how one is matched to a record.
 	Recorded func() []string
@@ -164,6 +171,9 @@ func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Shar
 		attrs.UID, attrs.GID = words.Owner.UID, words.Owner.GID
 	}
 	words.Owner = workspace.Owner{UID: attrs.UID, GID: attrs.GID, Set: true}
+	if words.Watch == workspace.WatchUnset {
+		words.Watch = workspace.WatchOff
+	}
 
 	share := &Share{
 		ExportPath: exportPath,
@@ -224,6 +234,9 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	share, err := r.Register(local, words)
 	if err != nil || share.ExportPath != clean {
 		return nil, "", false
+	}
+	if r.Restored != nil {
+		r.Restored(share)
 	}
 	return share, "/", true
 }

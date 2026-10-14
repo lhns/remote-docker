@@ -294,8 +294,9 @@ nothing for a fill driven by reads.
 
 ## Consequences
 
-- **A union requires the watcher**, as `read=cached` does, and more so:
-  without it the cache goes stale rather than lagging.
+- **A union turns the watcher on for its share**, as `read=cached` does, and
+  more so: without it the cache goes stale rather than lagging. A mount naming
+  `watch=off` on a union is refused (ADR 0042, amended 2026-10-14).
 - **It requires `fuse-overlayfs` where the account's daemon runs.** Per
   account that is the dind's image, so it must be the workspace's own
   (`elevate.ImageEnv`, `WORKSPACE_IMAGE`); `daemons.DefaultImage`

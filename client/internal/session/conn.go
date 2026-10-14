@@ -17,6 +17,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
+	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/machine"
@@ -83,10 +84,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:   live.clientID,
 		Guard:    live.guard,
 
+		Watch:      watchWord(s.opts.Watch),
 		Mode:       s.opts.Mode,
 		ShareOwner: workspace.Owner{UID: s.opts.Config.ShareUID, GID: s.opts.Config.ShareGID, Set: true},
 		ModePaths:  s.opts.ModePaths,
-		Watching:   s.watch != nil,
 
 		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },
 		UnionReady: info.Union,
@@ -97,6 +98,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		LocalPortFree: func(port int) error { return localPortFree(live, port) },
 	}
 	if s.opts.Role.hosting() {
+		live.rewriter.StartWatcher = s.startWatcher
 		if err := s.startNFS(live); err != nil {
 			// live.close, not just the ssh client's: it releases the machine.
 			live.close()
@@ -282,8 +284,17 @@ const shareReconcileInterval = 30 * time.Second
 
 // syncWatch points the watcher at whatever the registry exports now.
 func (s *Session) syncWatch() {
-	if s.watch != nil {
-		s.watch.Sync(sharesOf(s.registry))
+	w := s.watcher()
+	if w == nil {
+		return
+	}
+	shares := sharesOf(s.registry)
+	w.Sync(shares)
+	for _, share := range shares {
+		if share.Mode != fswatch.ModeOff {
+			s.notifyWanted()
+			return
+		}
 	}
 }
 

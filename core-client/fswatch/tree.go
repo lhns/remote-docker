@@ -22,6 +22,9 @@ type shareRoot struct {
 	local  string   // the original spelling, for opening
 	parts  []string // normalised components, for matching
 
+	// mode is this share's own; the roots of one tree disagree.
+	mode Mode
+
 	// only is the single base name this root reports, for a share that exports
 	// one file. Empty for a directory, which reports everything below it.
 	only string
@@ -86,7 +89,13 @@ func dirKey(goos, p string) string {
 // The one funnel every event goes through, which is why a single-file share is
 // filtered here: its watch is on the containing directory, so the siblings
 // generate events that belong to nobody.
+//
+// Of nested shares the DEEPEST wins, whatever order they registered in: roots
+// can carry different modes now, and which one strips a deletion must not
+// depend on which directory was mounted first.
 func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
+	var best *shareRoot
+	var bestRel string
 	for _, r := range t.roots {
 		rel, ok := relativeTo(t.goos, r.parts, local)
 		if !ok {
@@ -95,9 +104,14 @@ func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
 		if r.only != "" && rel != "/"+r.only {
 			continue
 		}
-		return r, rel, true
+		if best == nil || len(r.parts) > len(best.parts) {
+			best, bestRel = r, rel
+		}
 	}
-	return nil, "", false
+	if best == nil {
+		return nil, "", false
+	}
+	return best, bestRel, true
 }
 
 // sync reconciles the watched set against the shares that currently exist.
@@ -105,9 +119,13 @@ func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
 // Written as a diff rather than an append even though nothing unregisters a
 // share today, so that it stays correct if something ever does.
 func (t *tree) sync(shares []Share) {
+	// A share whose mode is off is not in the tree at all: no root, no
+	// watches, and an event under it belongs to nobody.
 	want := make(map[string]bool, len(shares))
 	for _, s := range shares {
-		want[s.ExportPath] = true
+		if s.Mode != ModeOff {
+			want[s.ExportPath] = true
+		}
 	}
 
 	for _, r := range t.roots {
@@ -127,7 +145,7 @@ func (t *tree) sync(shares []Share) {
 	t.roots = kept
 
 	for _, s := range shares {
-		if have[s.ExportPath] {
+		if !want[s.ExportPath] || have[s.ExportPath] {
 			continue
 		}
 		local := s.LocalPath
@@ -138,6 +156,7 @@ func (t *tree) sync(shares []Share) {
 			export: s.ExportPath,
 			local:  local,
 			parts:  splitLocal(t.goos, local),
+			mode:   s.Mode,
 			only:   s.File,
 		}
 		t.roots = append(t.roots, r)

@@ -104,9 +104,14 @@ type Rewriter struct {
 	// before anything is created.
 	UnionReady string
 
-	// Watching says whether local changes are replayed. `read=cached` and every
-	// union need it, and are refused without it rather than served stale.
-	Watching bool
+	// Watch is what a mount naming no watch= gets (ADR 0016); unset is off.
+	// `read=cached` and every union are never below partial whatever it says.
+	Watch workspace.Watch
+
+	// StartWatcher makes the file watcher run, and is called when a mount
+	// resolves to watching. Nil is a session that cannot watch, and such a
+	// mount is refused rather than served stale.
+	StartWatcher func() error
 
 	// Guard is shared with the Collector.
 	Guard *Guard

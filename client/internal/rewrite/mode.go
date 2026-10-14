@@ -117,8 +117,6 @@ func dropOurConsistency(mount map[string]json.RawMessage) (bool, error) {
 const (
 	fixSameWords = "\n  fix: give both mounts the same words"
 
-	fixWatchOn = "\n  fix: set watch to partial or coarse for this workspace"
-
 	// FixUpdateWorkspace is for a workspace that cannot serve a union at all.
 	FixUpdateWorkspace = "\n  fix: update the workspace, or use write=through"
 )
@@ -159,27 +157,29 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 	}
 	got := resolved.Mode
 
+	watch, err := r.resolveWatch(source, asked.Watch, got)
+	if err != nil {
+		return workspace.MountWords{}, err
+	}
+	resolved.Watch = watch
+
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
 		if _, err := r.openCache(ctx); err != nil {
 			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
 				source, wants, err)
 		}
-		if !r.Watching {
-			// Without the watcher a cached copy stays stale forever (ADR 0044).
-			return workspace.MountWords{}, fmt.Errorf(
-				"rewrite: %s asks for %s, whose cache is kept honest by the watcher, and watching is off"+fixWatchOn,
-				source, wants)
-		}
-		if err := unionAvailable(r.UnionReady); err != nil {
-			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
-				source, wants, err)
+	}
+	if watch.Watching() {
+		if err := r.startWatcher(source); err != nil {
+			return workspace.MountWords{}, err
 		}
 	}
-	if got.Read == workspace.ReadCached && !r.Watching {
-		return workspace.MountWords{}, fmt.Errorf(
-			"rewrite: %s asks for read=%s, which needs the watcher to stay coherent, and watching is off"+fixWatchOn,
-			source, got.Read)
+	if got.Union() {
+		if err := unionAvailable(r.UnionReady); err != nil {
+			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
+				source, writeAsked(got.Write, spelled), err)
+		}
 	}
 
 	key := workspace.CanonicalKey(source)
@@ -193,6 +193,57 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 	}
 	mounts[key] = resolved
 	return resolved, nil
+}
+
+// resolveWatch settles one mount's watch. The word, else the session's
+// default, and a mount that cannot stay coherent without the watcher gets at
+// least partial: a long attribute cache, or a copy in a union, with nothing
+// to invalidate it is stale for good, and that fails by succeeding (ADR 0042,
+// ADR 0044). Asking for off on such a mount is a contradiction and is refused.
+func (r *Rewriter) resolveWatch(source string, asked workspace.Watch, mode workspace.Mode) (workspace.Watch, error) {
+	cached, union := mode.Read == workspace.ReadCached, mode.Union()
+	needs := cached || union
+
+	if asked == workspace.WatchOff && needs {
+		var why, fix string
+		switch {
+		case cached && union:
+			why, fix = "read=cached and write="+string(mode.Write)+", which need the watcher to stay coherent",
+				"drop watch=off, or use read=direct,write=through"
+		case cached:
+			why, fix = "read=cached, which needs the watcher to stay coherent", "drop watch=off, or use read=direct"
+		default:
+			why, fix = "write="+string(mode.Write)+", whose cache is kept honest by the watcher", "drop watch=off, or use write=through"
+		}
+		return workspace.WatchUnset, fmt.Errorf("rewrite: %s asks for watch=off, and %s\n  fix: %s", source, why, fix)
+	}
+
+	watch := asked
+	if watch == workspace.WatchUnset {
+		watch = r.Watch
+	}
+	if watch == workspace.WatchUnset {
+		watch = workspace.WatchOff
+	}
+	if watch == workspace.WatchOff && needs {
+		watch = workspace.WatchPartial
+	}
+	return watch, nil
+}
+
+// startWatcher makes sure the file watcher is running for a mount that needs
+// it. A session that watches nothing by default starts it here, on the first
+// such mount, and one that cannot start it refuses the mount rather than
+// serving it stale.
+func (r *Rewriter) startWatcher(source string) error {
+	if r.StartWatcher == nil {
+		return fmt.Errorf("rewrite: %s needs the file watcher, which this session does not run\n"+
+			"  fix: use a session that serves mounts (docker remote start)", source)
+	}
+	if err := r.StartWatcher(); err != nil {
+		return fmt.Errorf("rewrite: %s needs the file watcher, and it would not start: %w", source, err)
+	}
+	return nil
 }
 
 // describeDifference names what two mounts of one directory disagree about.

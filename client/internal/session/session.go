@@ -124,7 +124,14 @@ type Session struct {
 	// rtt is the tunnel's last measured round trip in nanoseconds, for prefetch.
 	rtt atomic.Int64
 
-	watch      *fswatch.Watcher
+	// watch is nil until the first share that watches. The session's own
+	// default starts it at Open; otherwise the first mount that resolves to
+	// watching does (Rewriter.StartWatcher), and so does the restore of a
+	// share that watched.
+	watchMu     sync.Mutex
+	watch       *fswatch.Watcher
+	watchClosed bool
+
 	started    time.Time
 	notifyOnce sync.Once
 
@@ -162,8 +169,14 @@ type liveConn struct {
 	// which side wrote last in a write-back conflict (ADR 0044).
 	clockSkew time.Duration
 
-	// notify is nil when the workspace lacks it or watching is off.
-	notify io.Closer
+	// notify is nil when the workspace lacks it or no share watches. It is
+	// opened on demand from a goroutine, so these are guarded: notifyTried
+	// makes it once per connection, shut keeps a late open from outliving
+	// close.
+	notifyMu    sync.Mutex
+	notify      io.Closer
+	notifyTried bool
+	shut        bool
 
 	// cacheChan is opened on first use and only once, so a workspace too old
 	// for it is not asked per container. cacheErr says why there is none.
@@ -212,7 +225,8 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 
 	if opts.Role.hosting() {
 		s.shares = newShareStore(config.SharesPath(opts.Config.Name), opts.Log)
-		s.registry.Restore = s.shares.restore
+		s.registry.Restore = s.restoreShare
+		s.registry.Restored = s.shareRestored
 		s.registry.Recorded = s.shares.exports
 		policy, err := dircache.ParsePolicy(opts.Config.Prefetch)
 		if err != nil {
@@ -233,22 +247,16 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		s.nfs = nfsserve.New(s.registry, opts.Log)
 	}
 
-	if opts.Watch != fswatch.ModeOff && opts.Role.hosting() {
-		watcher, err := fswatch.New(fswatch.Options{
-			Mode:    opts.Watch,
-			Budget:  opts.WatchBudget,
-			Exclude: exclude,
-			Log:     opts.Log,
-		})
-		if err != nil {
-			cancel()
-			return nil, err
+	if opts.Role.hosting() {
+		// A default of off starts no watcher: the first mount to resolve to
+		// watching does, or a share restored as one.
+		if opts.Watch != fswatch.ModeOff {
+			if err := s.startWatcher(); err != nil {
+				cancel()
+				return nil, err
+			}
+			s.syncWatch()
 		}
-		s.watch = watcher
-		// Sees every change before the mode filters any: a deletion the cache
-		// misses leaves it serving a file that is gone (ADR 0044).
-		s.watch.SetObserver(cacheObserver{cache: s.cache})
-		s.syncWatch()
 		s.wg.Go(func() { s.reconcileShares(runCtx, shareReconcileInterval) })
 	}
 
@@ -257,8 +265,8 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		shut: func(live *liveConn) {
 			// The watches stay; what is missed meanwhile is announced on the
 			// next connection.
-			if s.watch != nil {
-				s.watch.SetSink(nil)
+			if w := s.watcher(); w != nil {
+				w.SetSink(nil)
 			}
 			live.close()
 		},
@@ -280,9 +288,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		if err := s.listen(opts.Endpoint); err != nil {
 			cancel()
 			// The watcher holds handles the context does not.
-			if s.watch != nil {
-				_ = s.watch.Close()
-			}
+			s.closeWatcher()
 			return nil, err
 		}
 	} else {
@@ -388,9 +394,9 @@ func (s *Session) Standby() {
 		return
 	}
 
-	if s.watch != nil {
+	if w := s.watcher(); w != nil {
 		// Removes every root but keeps the watcher, so waking is another Sync.
-		s.watch.Sync(nil)
+		w.Sync(nil)
 	}
 	s.gate.sweep(s.ctx)
 	s.log().Info("standing by; the endpoint stays up")

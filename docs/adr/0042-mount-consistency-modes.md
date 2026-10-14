@@ -11,9 +11,14 @@
   the watcher. `through` writes here as it happens; `back` and `ephemeral`
   write into a union ([ADR 0044](0044-a-delegated-share-is-a-cache.md)), and
   only `back` carries it home.
-- A mount may also carry words of its SHARE, beside the two axes: `owner=`
-  (amendment 2026-10-14). They are fixed per directory, and the session
-  settings do not accept them; each has a default of its own.
+- A mount may also carry words of its SHARE, beside the two axes: `owner=` and
+  `watch=off|partial|coarse` (amendment 2026-10-14). They are fixed per
+  directory, and the session settings do not accept them; each has a default of
+  its own (`shareOwner`, `watch`).
+- `read=cached` and every union need the watcher, so a mount that resolves to
+  either gets at least `watch=partial` whatever the session says, and asking for
+  `watch=off` on one is refused. A session with watching off starts the watcher
+  on the first such mount.
 - Docker's own values for the field (`api/types/mount.Consistency`) are
   aliases, and each keeps Docker's meaning:
   `default` and `consistent` (behaves as a bind mount) are `read=direct,write=through`;
@@ -99,14 +104,20 @@ the rule and the workspace.
 intact; only a NEW `--mount` field fails at the CLI. Re-check:
 `client/internal/rewrite/mode_test.go` pins the words arriving.
 
-**Words of the share, amended 2026-10-14.** `owner=` (ADR 0046) is read from
-the same two places as the axes and consumed the same way. It describes the
+**Words of the share, amended 2026-10-14.** `owner=` (ADR 0046) and `watch=`
+(ADR 0016) are read from the same two places as the axes and consumed the same
+way. It describes the
 share and not one mount of it, so it is not part of the mode: `ParseMode`, the
 session-level parser behind `consistency`, `consistencyPaths` and
 `REMOTE_DOCKER_CONSISTENCY`, refuses it and names the setting that supplies its
 default, and `consistencyPaths` cannot carry it. `workspace.ParseMount` reads a
 mount's words, and `IsModeWord` claims the key by name so a misspelt value is
 refused here rather than forwarded.
+- `watch=` takes `off`, `partial` or `coarse` only; the session setting's
+  aliases (`on`, `true`, `1`) stay with the environment variable. Unnamed, it is
+  the session's `watch`, raised to `partial` when the mount needs the watcher.
+  An explicit `off` there is refused (`fix: drop watch=off, or use read=direct`,
+  or `use write=through` for a union).
 - `owner=uid` or `owner=uid<sep>gid`, with ANY one non-digit other than `=`
   and `,` as the separator. `-v` cannot carry `1000:2000` in a list: docker/cli
   splits the volume spec on colons and refuses a fourth ("too many colons")
@@ -143,13 +154,15 @@ workspace default.
 for the rules: a map has no spelling in an environment variable that is not a
 small language of its own.
 
-**Coherence comes from the watcher, and `read=cached` therefore requires it.** A
+**Coherence comes from the watcher, and `read=cached` therefore requires it.**
+(Amended 2026-10-14: requires it for ITS share. A session with watching off no
+longer refuses the mount; the mount turns the watcher on, at `partial`.) A
 change here is replayed into the workspace as a real syscall through the export
 (ADR 0016), and that SETATTR refreshes the kernel's cached attributes for the
 inode: long cache for what has not changed, immediate refresh for what has.
-Selecting a cached read with watching off is refused naming the setting — a long
-attribute cache with nothing to invalidate it is a stale mount, and a stale
-mount fails by succeeding.
+Selecting a cached read with `watch=off` is refused — a long attribute cache
+with nothing to invalidate it is a stale mount, and a stale mount fails by
+succeeding.
 
 **One directory is one share, one volume and one set of words.** Two mounts of
 the same source asking for different things, in one request or across containers
