@@ -308,4 +308,30 @@ dpc rm -f tc-pc-eph >/dev/null 2>&1
 dphone rm -f tc-phone-back >/dev/null 2>&1
 
 echo
+echo "== 10. starting another machine's stopped container names the cause =="
+# The pc's container is stopped and the pc's session is gone, so nothing serves
+# the volume it mounts. The phone starting it gets the daemon's mount refusal,
+# which the proxy replaces with a diagnosis and a remedy.
+if dpc run --name tc-orphan -v "$WORK/project-$PC:/w" alpine:3 true >/dev/null 2>&1; then
+    pc_id=$(dpc inspect -f '{{range .Mounts}}{{.Name}} {{end}}' tc-orphan 2>/dev/null |
+        sed -n 's/.*rd-\([0-9a-f]\{8\}\)-.*/\1/p')
+    stop_pid "$PC_PID"
+    PC_PID=""
+    if [ -z "$pc_id" ]; then
+        bad "could not read the pc's client id off the container's volume"
+    elif outputs "shared by another client \\($pc_id\\)" dphone start tc-orphan &&
+        grep -qE '^  fix: ' <<<"$LAST_OUTPUT"; then
+        ok "the phone is told the volume belongs to another client ($pc_id), with a fix"
+    else
+        bad "the phone's start did not name the cause: [$LAST_OUTPUT]"
+    fi
+    if grep -q "connection refused" <<<"$LAST_OUTPUT"; then
+        bad "the daemon's raw text reached the user: [$LAST_OUTPUT]"
+    fi
+    dphone rm -f tc-orphan >/dev/null 2>&1
+else
+    bad "the pc could not run the container this section needs"
+fi
+
+echo
 summary
