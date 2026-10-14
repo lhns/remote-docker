@@ -2306,6 +2306,76 @@ else
     bad "could not start a session for the standby test"
 fi
 
+# Settings are read once, when the session starts (ADR 0017). A command that
+# NAMES a different value in its environment restarts an idle session and says
+# what changed, and warns about one in use, which it leaves alone. A command
+# that names nothing has no opinion and changes nothing.
+session_pid() {
+    local st
+    st=$("$WORK/remote-docker" remote status 2>&1)
+    sed -n 's/^session .*(pid \([0-9]*\),.*/\1/p' <<<"$st"
+}
+
+if REMOTE_DOCKER_PREFETCH=eager "$WORK/remote-docker" remote start >/dev/null 2>&1; then
+    before=$(session_pid)
+
+    # (a) no variable set -> no opinion: neither restarted nor mentioned.
+    out=$("$WORK/remote-docker" ps 2>&1)
+    after=$(session_pid)
+    case "$out" in
+        *"restarting the session"* | *"the running session has"*) bad "a command naming no settings touched the session: [$out]" ;;
+        *) ok "a command that sets no variable leaves the session's settings alone" ;;
+    esac
+    if [ -n "$before" ] && [ "$before" = "$after" ]; then
+        ok "the session kept its pid (a plain command is no opinion)"
+    else
+        bad "a plain command replaced the session (before [$before], after [$after])"
+    fi
+
+    # (b) idle, a different value named -> restarted with it.
+    out=$(REMOTE_DOCKER_PREFETCH=off "$WORK/remote-docker" ps 2>&1)
+    after=$(session_pid)
+    case "$out" in
+        *"restarting the session: prefetch eager -> off"*) ok "a command naming different settings restarts an idle session, naming the change" ;;
+        *) bad "no restart notice for a different prefetch: [$out]" ;;
+    esac
+    if [ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ]; then
+        ok "the idle session was replaced (pid $before -> $after)"
+    else
+        bad "the idle session kept its pid (before [$before], after [$after])"
+    fi
+    if outputs '^settings .*prefetch=eager' "$WORK/remote-docker" remote status; then
+        bad "status still shows prefetch=eager: [$LAST_OUTPUT]"
+    else
+        ok "status no longer lists the old setting"
+    fi
+
+    # (c) in use -> warned about, left alone. The container is started under
+    # the session's own settings, so it is the session that holds it.
+    if REMOTE_DOCKER_PREFETCH=off "$WORK/remote-docker" run -d --name itest-settings \
+        -v "$PROJECT:/w" alpine:3 sh -c "$PIN_SH" >/dev/null 2>&1; then
+        before=$(session_pid)
+        out=$(REMOTE_DOCKER_PREFETCH=eager "$WORK/remote-docker" ps 2>&1)
+        after=$(session_pid)
+        case "$out" in
+            *"the running session has prefetch=off; prefetch=eager here is ignored"*"fix:"*)
+                ok "a command naming different settings warns about a session in use" ;;
+            *) bad "no settings warning while a container depended on the session: [$out]" ;;
+        esac
+        if [ -n "$before" ] && [ "$before" = "$after" ]; then
+            ok "the session in use kept running"
+        else
+            bad "the session in use was replaced (before [$before], after [$after])"
+        fi
+        "$WORK/remote-docker" rm -f itest-settings >/dev/null 2>&1
+    else
+        bad "could not start the container that pins the session"
+    fi
+    "$WORK/remote-docker" remote stop >/dev/null 2>&1
+else
+    bad "could not start a session for the settings test"
+fi
+
 # It reclaims itself, including a session never used: with no last-use time,
 # one once reported zero idle and never expired.
 if REMOTE_DOCKER_DAEMON_IDLE=8s "$WORK/remote-docker" remote start >/dev/null 2>&1; then

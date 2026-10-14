@@ -326,6 +326,16 @@ as `docker rm` refuses a running container; `-f` goes ahead.
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
+A session reads its settings (`REMOTE_DOCKER_PREFETCH`, `_WATCH`,
+`_CONSISTENCY`, `_SHARE_OWNER`, the cache limits and the timeouts) once, when it
+starts. A command with one of those variables set in its environment, to a
+value the session does not have, restarts an idle session and says what changed;
+if the session is in use it warns and leaves it alone, and `remote restart`
+applies them once nothing needs it. A variable that is not set is no opinion:
+a plain `docker ps` never changes a session. Config-file values are applied by
+`remote restart`. `remote status` lists the settings
+a session runs with when they are not the defaults.
+
 `remote use` sets the default in `~/.remote-docker.json` **and**
 `currentContext` in `~/.docker/config.json`, which compose, buildx,
 Testcontainers and IDE plugins resolve, so it redirects those tools too.
