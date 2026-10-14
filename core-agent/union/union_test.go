@@ -16,6 +16,8 @@ func testSpec() Spec {
 		Port:     30001,
 		CacheDir: "/var/lib/docker/volumes/rd-aabbccdd-00112233445566ff/_data",
 		Read:     workspace.ReadCached,
+		UID:      1000,
+		GID:      2000,
 	}
 }
 
@@ -210,5 +212,28 @@ func TestFromEnvRefusesWhatItCannotUse(t *testing.T) {
 				t.Errorf("FromEnv accepted %s=%q", c.key, c.value)
 			}
 		})
+	}
+}
+
+// A parent that predates the owner hands the child nothing for it, and that
+// means root, as it always did; an owner that is not one is refused.
+func TestFromEnvOwner(t *testing.T) {
+	env := map[string]string{}
+	for _, kv := range envFor(ModeServe, testSpec()) {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	get := func(k string) string { return env[k] }
+
+	if got, _, err := FromEnv(get); err != nil || got.UID != 1000 || got.GID != 2000 {
+		t.Errorf("FromEnv owner = %d:%d, %v; want 1000:2000", got.UID, got.GID, err)
+	}
+	env["RD_UNION_OWNER"] = ""
+	if got, _, err := FromEnv(get); err != nil || got.UID != 0 || got.GID != 0 {
+		t.Errorf("FromEnv without an owner = %d:%d, %v; want root", got.UID, got.GID, err)
+	}
+	env["RD_UNION_OWNER"] = "alice"
+	if _, _, err := FromEnv(get); err == nil {
+		t.Error("an owner that is not one was accepted")
 	}
 }

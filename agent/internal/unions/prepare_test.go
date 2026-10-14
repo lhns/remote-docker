@@ -32,6 +32,7 @@ func manager(t *testing.T) *Manager {
 		Volumes: fakeVolumes{mountpoint: "/var/lib/docker/volumes/rd-cache/_data"},
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		shares:  map[string]*live{},
+		lchown:  func(string, int, int) error { return nil },
 	}
 }
 

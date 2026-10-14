@@ -24,6 +24,10 @@ software.
   naming none, and a session with it `off` starts the watcher on the first mount
   that needs one. `read=cached` and unions are no longer refused when watching is
   off: they turn it on for their directory, at `partial`.
+- `owner=` (and `REMOTE_DOCKER_SHARE_OWNER`) now also owns the root of a
+  `write=back` or `write=ephemeral` mount, which git as that uid refused before.
+  A workspace older than this release cannot do it and refuses a non-root owner
+  on such a mount, naming the fix.
 - A mount can name its own owner: `-v ./project:/app:owner=1000.2000` (or
   `--mount ...,"consistency=owner=1000:2000"`). The separator is any one
   non-digit; `-v` cannot carry a second colon, so use `.` there. One number is

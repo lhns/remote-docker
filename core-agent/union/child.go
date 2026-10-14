@@ -29,6 +29,7 @@ const (
 	envPort   = "RD_UNION_PORT"
 	envCache  = "RD_UNION_CACHE"
 	envRead   = "RD_UNION_READ"
+	envOwner  = "RD_UNION_OWNER"
 )
 
 // What the child is being asked to do.
@@ -51,6 +52,7 @@ func envFor(mode string, spec Spec) []string {
 		envPort + "=" + strconv.Itoa(spec.Port),
 		envCache + "=" + spec.CacheDir,
 		envRead + "=" + string(spec.Read),
+		envOwner + "=" + workspace.Owner{UID: spec.UID, GID: spec.GID, Set: true}.String(),
 	}
 }
 
@@ -69,7 +71,17 @@ func FromEnv(getenv func(string) string) (Spec, string, error) {
 		return Spec{}, "", fmt.Errorf("union: %s: %w", envPort, err)
 	}
 
+	// Empty is a parent that predates the field: root, as it always was.
+	owner := workspace.Owner{Set: true}
+	if v := getenv(envOwner); v != "" {
+		if owner, err = workspace.ParseOwner(v); err != nil {
+			return Spec{}, "", fmt.Errorf("union: %s: %w", envOwner, err)
+		}
+	}
+
 	spec := Spec{
+		UID:      owner.UID,
+		GID:      owner.GID,
 		PID:      pid,
 		Export:   getenv(envExport),
 		Client:   getenv(envClient),

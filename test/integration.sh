@@ -1593,6 +1593,29 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         bad "a second owner was not refused as expected: [$LAST_OUTPUT]"
     fi
 
+    # A union's merged root is the upper the agent creates, so owner= needs the
+    # agent to hand it over; this is also the first mount to need the watcher.
+    UNIONOWN="$WORK/words-union"
+    mkdir -p "$UNIONOWN"
+    echo "x" >"$UNIONOWN/f"
+    if outputs '^1000$' dockert run --rm -v "$UNIONOWN:/w:write=back,owner=1000" alpine:3 stat -c '%u' /w; then
+        ok "owner=1000 on a write=back union reports 1000 at its root"
+    else
+        bad "a union with owner=1000 reports [$LAST_OUTPUT] at its root, want 1000"
+        dump_workspace_log 40
+    fi
+    if outputs '^1000$' dockert run --rm -v "$UNIONOWN:/w:write=back,owner=1000" alpine:3 stat -c '%u' /w/f; then
+        ok "a file under a union with owner=1000 reports 1000"
+    else
+        bad "a file in the owned union reports [$LAST_OUTPUT], want 1000"
+    fi
+    if outputs 'On branch|No commits yet' dockert run --rm --user 1000 --entrypoint sh -v "$UNIONOWN:/w:write=back,owner=1000" alpine/git -c 'cd /w && git init -q && git status'; then
+        ok "git as uid 1000 works on a write=back union with owner=1000"
+    else
+        bad "git status as uid 1000 on an owned union: [$LAST_OUTPUT]"
+        dump_workspace_log 40
+    fi
+
     # watch= is per mount: this client runs with watching off, so every
     # watched case below turns the watcher on for its own directory.
     PROBES="$WORK/probes"
@@ -2133,6 +2156,19 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         fi
     fi
 
+    # prefetch=off on one mount beats the session's tree: the share is a union
+    # that is never filled.
+    NOPREFETCH="$WORK/prefetch-off"
+    mkdir -p "$NOPREFETCH"
+    echo "first" >"$NOPREFETCH/marker"
+    if dockert run -d --name itest-prefetch-off -v "$NOPREFETCH:/w:read=cached,write=back,prefetch=off" alpine:3 sleep 900 >"$WORK/prefetch-off-run.log" 2>&1; then
+        sleep 8
+        nothing_prefetched "read=cached,write=back,prefetch=off" "$NOPREFETCH"
+        dockert rm -f itest-prefetch-off >/dev/null 2>&1
+    else
+        bad "a prefetch=off union would not start: $(cat "$WORK/prefetch-off-run.log")"
+    fi
+
     # Compose's short volume syntax drops our words, so the client warns. The
     # long syntax's consistency: reaches the rewriter only through the Mount
     # API, which compose uses for a bind with an advanced option such as
@@ -2166,6 +2202,50 @@ COMPOSE
         ok "compose's short volume syntax warns that it dropped the mode words"
     else
         bad "no warning for a dropped mode word: [$LAST_OUTPUT]"
+    fi
+    # Its own directory: one directory has one set of words, and long.yaml
+    # below shares CMODES with the session's defaults.
+    CWORDS="$WORK/compose-words"
+    mkdir -p "$CWORDS"
+    echo "first" >"$CWORDS/marker"
+    cat >"$CMODES/words.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    container_name: itest-compose-words
+    command: sleep 900
+    volumes:
+      - type: bind
+        source: $CWORDS
+        target: /w
+        consistency: read=cached,write=back,watch=coarse,prefetch=eager,owner=1000
+        bind:
+          create_host_path: false
+COMPOSE
+    cat >"$CMODES/shortowner.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    volumes:
+      - $CMODES:/w:owner=1000.1000
+COMPOSE
+    if outputs 'compose drops "owner=1000.1000" from .*\(service app\)' \
+        timeout 60 "$WORK/remote-docker" compose -f "$CMODES/shortowner.yaml" config; then
+        ok "compose's short volume syntax warns that it dropped owner="
+    else
+        bad "no warning for a dropped owner word: [$LAST_OUTPUT]"
+    fi
+    if timeout 180 "$WORK/remote-docker" compose -f "$CMODES/words.yaml" up -d >"$WORK/compose-words.log" 2>&1; then
+        if union_is_fuse docker itest-compose-words && outputs '^1000$' docker exec itest-compose-words stat -c '%u' /w/marker; then
+            ok "compose's consistency: carries watch=, prefetch= and owner= into a union"
+        else
+            bad "the compose words did not make an owned union: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        timeout 120 "$WORK/remote-docker" compose -f "$CMODES/words.yaml" down -v >/dev/null 2>&1
+    else
+        bad "compose could not start the words stack"
+        sed 's/^/        /' "$WORK/compose-words.log" | tail -20
     fi
     if timeout 180 "$WORK/remote-docker" compose -f "$CMODES/long.yaml" up -d >"$WORK/compose-modes.log" 2>&1; then
         if union_is_fuse docker itest-compose-long; then

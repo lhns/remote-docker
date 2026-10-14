@@ -82,6 +82,10 @@ type Spec struct {
 	// LOWER. A read the union's upper does not hold falls through to it, so
 	// this is what such a read costs.
 	Read workspace.Read
+
+	// UID and GID own the upper directory, which is the merged root: git
+	// compares the root's owner with the uid it runs as (ADR 0046).
+	UID, GID uint32
 }
 
 // id is the share's identifier, used to name its mountpoints.

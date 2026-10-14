@@ -391,6 +391,17 @@ premise of the project, and it applies to building it too. So:
   uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
   silently on Windows. The share record gained `owner` and `watch` WITHOUT a
   version bump: `readBound` drops a record whose version differs.
+- **A union's root has the share's owner, and an agent that cannot do it is
+  refused, not trusted** (ADR 0046). The merged root is the upper directory the
+  agent creates as root; `owner=` on a `write=back` mount would otherwise
+  change every file but the one git compares. The owner rides `OpPrepare`
+  (`cache.Request.Owner`), the child chowns the upper in `makeLayers`, and
+  `unions.Manager.chownUpper` repeats it once a union answers, because an
+  ADOPTED union was made by an earlier agent. The client reads the capability
+  from `cache.Hello.Owner` and refuses a non-root owner against a workspace
+  without it, before a volume is created: sending the field anyway is ignored
+  silently and the container gets a share it cannot use. Root is never sent, so
+  an old workspace keeps working for root.
 - **Watching is per share, and the watcher starts with the first share that
   needs it** (ADR 0016, amended 2026-10-14). `read=cached` and every union
   resolve to at least `partial`, and an explicit `watch=off` there is refused.
@@ -1137,6 +1148,19 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
+The words a mount carries for its share, in `integration.sh` 14b (2026-10-14):
+`owner=1000` and `owner=1000.2000` on `-v` and `owner=1000:2000` on `--mount`
+reporting those ids, a second owner for a registered directory refused with a
+fix, and the same on a `write=back` union's root with git as uid 1000 working
+there. `watch=partial` and `read=cached` turning the watcher on for their own
+directory with the session at `watch` off, `read=cached,watch=off` refused,
+`watch=coarse` poking the directory when a file is deleted here, and a client
+restart keeping both the owner and the watching of a share a container still
+mounts (the record carries the words). In 15e, `prefetch=off` beating the
+session's `tree`, and a compose `consistency:` carrying `watch=`, `prefetch=`
+and `owner=` into an owned union. What this cannot tell is `eager` from
+`tree` for a share nobody reads: both fill it at once.
+
 Keys and enrolment, in `integration.sh` 11f to 11i: a key in the enrolled
 directory and one in the operator's authenticating the same account (ADR
 0052); deleting a key file ending an open session, and emptying one ending it
@@ -1468,9 +1492,6 @@ its pure planning function was.
   set` against a config file, and `token ls` and `token rm` on both ends
   (`agent/internal/sshd/manage_test.go` over a real SSH connection,
   `agent/cmd/remote-dockerd/token_test.go`). No suite runs any of them.
-- **`coarse` watch mode.** The directory-level poke for deletions is unit
-  tested; no integration test asserts that a real watcher notices a deletion
-  through it.
 - **Watching at scale.** The budget, the exclude list and overflow reporting
   are unit tested against a fake backend. Nothing has run a watcher over a
   10,000-directory tree, and the macOS backend (kqueue, one fd per *file*) has

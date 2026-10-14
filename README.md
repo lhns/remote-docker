@@ -1196,7 +1196,8 @@ docker run -v ./project:/app:ro,owner=1000 img        # gid defaults to the uid
 docker run --mount 'type=bind,src=./project,dst=/app,"consistency=owner=1000:2000"' img
 ```
 
-The separator is any one character that is not a digit, `=` or `,`. Write `.`
+It applies to every kind of mount, a `write=back` union's root included. The
+separator is any one character that is not a digit, `=` or `,`. Write `.`
 in `-v`, whose option list cannot carry a fourth colon; `:` works in `--mount`
 and in a compose file's `consistency:`. One directory has one owner: a second
 mount of it naming another is refused until the containers using it are gone
@@ -1330,8 +1331,7 @@ endpoint goes with it: tools pointed at the endpoint then fail until a
 
 **Deletions are the gap.** `unlink` of a name that is already gone fails
 before the kernel generates anything, so a deletion cannot be replayed
-faithfully. `coarse` approximates it with a directory-level event (unit tested
-only); `partial` says nothing rather than something wrong. A watcher that
+faithfully. `coarse` approximates it with a directory-level event (`integration.sh` 14b); `partial` says nothing rather than something wrong. A watcher that
 rescans notices; one that trusts the event *kind* is misled
 ([ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md)).
 

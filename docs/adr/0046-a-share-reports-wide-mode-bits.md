@@ -47,6 +47,17 @@ plain mount and at the top and inside a union, and `git status` as root.
 
 ## Amendment 2026-10-14: root is the default owner, and the owner is a setting
 
+- **A union's root, same day.** The first amendment's "unions need nothing on
+  the client" was wrong for the root: the merged root is the upper directory the
+  agent creates as root, so git running as another uid refuses a `write=back`
+  share even with the owner set. The client now sends the share's owner with
+  `OpPrepare` (`cache.Request.Owner`, `uid:gid`, omitted for root); the child
+  chowns the upper after its chmod, and the agent chowns it again once the union
+  answers, which covers a union that was ADOPTED after an agent restart or that
+  outlived the session that made it. The greeting announces the capability
+  (`cache.Hello.Owner`): a workspace without it ignores the field, so a non-root
+  owner on a union is refused by name before anything is created
+  (`fix: update the workspace, or use write=through`), and root keeps working.
 - **Per mount, same day:** `owner=` in a mount's words sets the owner of that
   share (ADR 0042), so two images in one project can each be right. The
   setting is the default for a mount naming none. The share's attributes are
@@ -69,8 +80,8 @@ plain mount and at the top and inside a union, and `git status` as root.
   attributes per inode, so an entrypoint that drops from root to a user would
   see whichever uid stat'd first, and go-nfs gives the filesystem no
   credentials.
-- Unions need nothing on the client. Lower files keep the reported owner
-  through copy-up, files a container creates carry its real uid, and git
-  checks the share root.
+- Lower files keep the reported owner through copy-up and files a container
+  creates carry its real uid; the share root is the exception, see the union
+  amendment above.
 - The dropped bullet's cost is real: one more setting to document, for images
   that do not run as root.

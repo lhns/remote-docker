@@ -22,14 +22,18 @@ type fakeCache struct {
 	from     string         // the directory behind it
 	mode     workspace.Mode // the mode it was told the share has
 	words    workspace.ShareWords
+	owner    workspace.Owner // the owner Prepare was told
+	noOwner  bool            // a workspace before the owner field
 	err      error
 }
 
-func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int, mode workspace.Mode) (string, error) {
+func (f *fakeCache) ServesOwner() bool { return !f.noOwner }
+
+func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int, mode workspace.Mode, owner workspace.Owner) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
-	f.prepared, f.cache, f.port, f.read = export, cache, port, mode.Read
+	f.prepared, f.cache, f.port, f.read, f.owner = export, cache, port, mode.Read, owner
 	return "/run/rd-union/testshare/merged", nil
 }
 

@@ -30,15 +30,8 @@ func Serve(spec Spec) error {
 		return err
 	}
 
-	for _, dir := range spec.Dirs() {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("union: creating %s: %w", dir, err)
-		}
-	}
-	// The merged root takes the upper's mode, and this process is root; wide,
-	// so any uid can create at the top of its share (ADR 0046).
-	if err := os.Chmod(spec.Upper(), 0o777); err != nil {
-		return fmt.Errorf("union: opening %s to every uid: %w", spec.Upper(), err)
+	if err := makeLayers(spec); err != nil {
+		return err
 	}
 
 	if err := mountLower(spec); err != nil {
@@ -60,6 +53,32 @@ func Serve(spec Spec) error {
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("union: serving %s: %w", spec.Export, err)
+	}
+	return nil
+}
+
+// makeLayers creates the directories and gives the upper its mode and owner.
+// The merged root takes both from the upper, and this process is root: wide,
+// so any uid can create at the top of its share, and owned by the share's
+// owner, so git running as that uid accepts the root (ADR 0046). Idempotent,
+// and it runs on every serve, so a cache volume that outlives a union keeps
+// the owner its share has now rather than the one it was made with.
+func makeLayers(spec Spec) error {
+	for _, dir := range spec.Dirs() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("union: creating %s: %w", dir, err)
+		}
+	}
+	return openUpper(spec)
+}
+
+// openUpper is the mode and owner of the upper directory alone.
+func openUpper(spec Spec) error {
+	if err := os.Chmod(spec.Upper(), 0o777); err != nil {
+		return fmt.Errorf("union: opening %s to every uid: %w", spec.Upper(), err)
+	}
+	if err := os.Lchown(spec.Upper(), int(spec.UID), int(spec.GID)); err != nil {
+		return fmt.Errorf("union: giving %s to %d:%d: %w", spec.Upper(), spec.UID, spec.GID, err)
 	}
 	return nil
 }

@@ -60,7 +60,12 @@ type VolumeEnsurer interface {
 // Cache is the workspace's end of a share with a union (ADR 0044). Prepare
 // mounts the union and answers with the path the container binds.
 type Cache interface {
-	Prepare(ctx context.Context, export, cache string, port int, mode workspace.Mode) (string, error)
+	Prepare(ctx context.Context, export, cache string, port int, mode workspace.Mode, owner workspace.Owner) (string, error)
+
+	// ServesOwner reports whether the workspace gives a union's root the
+	// owner Prepare names. One that does not leaves it root's, which a
+	// container running as another uid cannot use.
+	ServesOwner() bool
 
 	// Attach registers the share and returns AT ONCE; any prefetch runs in the
 	// background, since a miss falls through to the live export. The share's
@@ -634,7 +639,7 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: reaching the workspace's cache for %s: %w", localPath, err)
 	}
 
-	merged, err := channel.Prepare(ctx, export, cache, r.NFSPort, mode)
+	merged, err := channel.Prepare(ctx, export, cache, r.NFSPort, mode, words.Owner)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
 	}

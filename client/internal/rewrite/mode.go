@@ -171,9 +171,19 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
-		if _, err := r.openCache(ctx); err != nil {
+		channel, err := r.openCache(ctx)
+		if err != nil {
 			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
 				source, wants, err)
+		}
+		// A union's root is created by the agent as root. A workspace that
+		// cannot hand it to another owner would serve a share its container
+		// cannot use, and git there would refuse it as somebody else's, so
+		// the mount is refused before anything is created.
+		if resolved.Owner != (workspace.Owner{Set: true}) && !channel.ServesOwner() {
+			return workspace.MountWords{}, fmt.Errorf(
+				"rewrite: %s asks for %s with owner=%s, and this workspace cannot give a union's root an owner"+FixUpdateWorkspace,
+				source, wants, resolved.Owner)
 		}
 	}
 	if watch.Watching() {
