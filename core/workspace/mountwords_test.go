@@ -159,3 +159,24 @@ func TestShareWordsDifferences(t *testing.T) {
 		t.Errorf("identical words differ: %v", d)
 	}
 }
+
+func TestParsePrefetchAndMount(t *testing.T) {
+	for in, want := range map[string]Prefetch{"off": PrefetchOff, "eager": PrefetchEager, "tree": PrefetchTree} {
+		if got, err := ParsePrefetch(in); err != nil || got != want {
+			t.Errorf("ParsePrefetch(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := ParsePrefetch("lazy"); err == nil || !strings.Contains(err.Error(), "off|eager|tree") {
+		t.Errorf("ParsePrefetch(lazy) = %v", err)
+	}
+	got, err := ParseMount("read=cached,write=back,prefetch=tree")
+	if err != nil || got.Prefetch != PrefetchTree {
+		t.Errorf("ParseMount = %v, %v", got, err)
+	}
+	if _, err := ParseMode("prefetch=tree"); err == nil || !strings.Contains(err.Error(), "prefetch") {
+		t.Errorf("ParseMode(prefetch=) = %v, want a refusal", err)
+	}
+	if !IsModeWord("prefetch=lazy") {
+		t.Error("prefetch= is a mount word")
+	}
+}

@@ -12,7 +12,7 @@
   write into a union ([ADR 0044](0044-a-delegated-share-is-a-cache.md)), and
   only `back` carries it home.
 - A mount may also carry words of its SHARE, beside the two axes: `owner=` and
-  `watch=off|partial|coarse` (amendment 2026-10-14). They are fixed per
+  `watch=off|partial|coarse` and `prefetch=off|eager|tree` (amendment 2026-10-14). They are fixed per
   directory, and the session settings do not accept them; each has a default of
   its own (`shareOwner`, `watch`).
 - `read=cached` and every union need the watcher, so a mount that resolves to
@@ -105,7 +105,7 @@ intact; only a NEW `--mount` field fails at the CLI. Re-check:
 `client/internal/rewrite/mode_test.go` pins the words arriving.
 
 **Words of the share, amended 2026-10-14.** `owner=` (ADR 0046) and `watch=`
-(ADR 0016) are read from the same two places as the axes and consumed the same
+(ADR 0016) and `prefetch=` (ADR 0045) are read from the same two places as the axes and consumed the same
 way. It describes the
 share and not one mount of it, so it is not part of the mode: `ParseMode`, the
 session-level parser behind `consistency`, `consistencyPaths` and
@@ -118,6 +118,11 @@ refused here rather than forwarded.
   the session's `watch`, raised to `partial` when the mount needs the watcher.
   An explicit `off` there is refused (`fix: drop watch=off, or use read=direct`,
   or `use write=through` for a union).
+- `prefetch=` takes `off`, `eager` or `tree`. Unnamed, it is the session's
+  `prefetch`, and off wherever the mode does not prefetch (anything but
+  `read=cached` with a union). Naming `eager` or `tree` there is refused
+  (`fix: drop prefetch=, or use read=cached with write=back or write=ephemeral`);
+  `prefetch=off` is always accepted.
 - `owner=uid` or `owner=uid<sep>gid`, with ANY one non-digit other than `=`
   and `,` as the separator. `-v` cannot carry `1000:2000` in a list: docker/cli
   splits the volume spec on colons and refuses a fourth ("too many colons")

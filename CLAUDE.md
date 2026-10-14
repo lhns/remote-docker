@@ -612,6 +612,11 @@ premise of the project, and it applies to building it too. So:
   row, and a row above the floor fails the test. There is no way to ask the NFS
   client what it parses -- it answers EINVAL and names nothing -- so the check
   is the table, and CI cannot stand in for it: every runner is 6.x.
+- **Prefetch is a word of the share, resolved against the mode** (ADR 0045,
+  amended 2026-10-14): `prefetch=` or the session default, and off wherever the
+  mode is not `read=cached` with a union; naming `eager` or `tree` there is
+  refused. `Cache.Touch` keeps its atomic-count fast path (`shares.trees`);
+  a lock or a map lookup per NFS read is the silent regression.
 - **Prefetch is OFF unless `prefetch: eager|tree` says otherwise, and large
   files are never in it** (ADR 0045). Under `tree`, every NFS READ on a share
   with a cache is a miss, reported by `nfsserve`'s observer to

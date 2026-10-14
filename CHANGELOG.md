@@ -16,6 +16,9 @@ software.
   prints a warning naming `remote restart`. A variable that is not set changes
   nothing. `remote status` shows the settings a session
   runs with.
+- A mount can choose its own prefetch: `prefetch=off|eager|tree` beside
+  `read=cached,write=back`. `REMOTE_DOCKER_PREFETCH` is the default for mounts
+  naming none.
 - A mount can say whether its own directory is watched: `-v ./web:/app:watch=partial`
   (or `coarse`, or `off`). `REMOTE_DOCKER_WATCH` is now the default for mounts
   naming none, and a session with it `off` starts the watcher on the first mount

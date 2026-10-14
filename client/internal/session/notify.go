@@ -233,6 +233,9 @@ func (s *Session) restoreShare(export string) (string, workspace.ShareWords, boo
 	if words.Watch == workspace.WatchUnset {
 		words.Watch = watchWord(s.opts.Watch)
 	}
+	if words.Prefetch == workspace.PrefetchUnset {
+		words.Prefetch = prefetchWord(s.prefetch)
+	}
 	return path, words, true
 }
 

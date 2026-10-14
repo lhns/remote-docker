@@ -28,10 +28,9 @@ func treeCache(t *testing.T, store *fakeStore) (*Cache, string) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	c := &Cache{
-		Store:  func() (Store, bool) { return store, true },
-		Ctx:    ctx,
-		Policy: PolicyTree,
-		Link:   func() Link { return Link{RTT: 160 * time.Millisecond, Bandwidth: 12_500_000} },
+		Store: func() (Store, bool) { return store, true },
+		Ctx:   ctx,
+		Link:  func() Link { return Link{RTT: 160 * time.Millisecond, Bandwidth: 12_500_000} },
 	}
 	return c, root
 }
@@ -55,8 +54,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 func TestAFailedBatchStopsThePrefetchWithItsError(t *testing.T) {
 	store := &fakeStore{applyErr: errors.New("the workspace refused the batch")}
 	c, root := treeCache(t, store)
-	c.Policy = PolicyEager
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyEager})
 
 	eventually(t, "the prefetch to report its failure", func() bool {
 		r := c.Reports()
@@ -69,7 +67,7 @@ func TestAFailedBatchStopsThePrefetchWithItsError(t *testing.T) {
 func TestTouchSendsWhatTheTreeDecides(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	// Reads are arriving, so the walk yields and nothing goes before the
 	// tree has been asked. A share nobody reads fills at once, by design.
 	p := c.prefetchFor("/m/1111111111111111")
@@ -103,8 +101,8 @@ func TestTouchSendsWhatTheTreeDecides(t *testing.T) {
 func TestEphemeralSharesAreNeverAskedForChanges(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: false, Ephemeral: true})
-	c.Attach("/m/other", t.TempDir(), ShareOptions{Prefetch: false})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyOff, Ephemeral: true})
+	c.Attach("/m/other", t.TempDir(), ShareOptions{Policy: PolicyOff})
 
 	c.writeBackRound(t.Context())
 
@@ -123,7 +121,7 @@ func TestEphemeralSharesAreNeverAskedForChanges(t *testing.T) {
 func TestTheWalkYieldsToReads(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	p := c.prefetchFor("/m/1111111111111111")
 	// Reads are arriving from the start, or the walk fills the whole share
 	// before the test looks, which is what a share nobody reads should do.
@@ -195,8 +193,7 @@ func TestUnstoredIsSmallestFirstAndOnce(t *testing.T) {
 func TestPolicyEagerIgnoresReads(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Policy = PolicyEager
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyEager})
 	p := c.prefetchFor("/m/1111111111111111")
 	p.mu.Lock()
 	p.lastRead = time.Now()
@@ -218,7 +215,7 @@ func TestPolicyEagerIgnoresReads(t *testing.T) {
 func TestForgettingAShareDropsItsPrefetch(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	eventually(t, "the prefetch to start", func() bool { return c.prefetchFor("/m/1111111111111111") != nil })
 
 	c.shares.forget("/m/1111111111111111")
@@ -234,7 +231,7 @@ func TestForgettingAShareDropsItsPrefetch(t *testing.T) {
 func TestForgettingAShareStopsItsSender(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	eventually(t, "the whole tree to be sent", func() bool { return store.appliedCount() == 120 })
 
 	p := c.prefetchFor("/m/1111111111111111")

@@ -369,7 +369,7 @@ default.**
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.gradle`, `.terraform` |
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
-| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
+| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads. The default for mounts naming no `prefetch=` |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
 | `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid.gid` every file in a share reports, for an image that runs as another user (gid defaults to the uid). The default for mounts naming no `owner=`; any one non-digit separates the ids. See [A container that is not root](#a-container-that-is-not-root) |
@@ -555,7 +555,10 @@ Both are proven end to end in CI; conflict handling only by unit tests.
 and scattered reads are slower. Large writes are local.
 
 **Prefetch is off by default.** `prefetch: eager` or `prefetch: tree`
-(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union
+(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union; a mount can
+name its own, `-v ./src:/app:read=cached,write=back,prefetch=tree`, and
+`prefetch=off` opts one out. Naming `eager` or `tree` on a mount that is not a
+`read=cached` union is refused
 ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off).
 
 **`read=cached` and every union need [file watching](#file-watching)**, so they

@@ -174,6 +174,9 @@ func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Shar
 	if words.Watch == workspace.WatchUnset {
 		words.Watch = workspace.WatchOff
 	}
+	if words.Prefetch == workspace.PrefetchUnset {
+		words.Prefetch = workspace.PrefetchOff
+	}
 
 	share := &Share{
 		ExportPath: exportPath,

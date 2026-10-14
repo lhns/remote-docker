@@ -15,6 +15,7 @@ import (
 //	owner=1000        the uid, and gid, every file in the share reports
 //	owner=1000.2000   uid and gid; any one non-digit separates them
 //	watch=partial     whether, and how much of, a local change is replayed
+//	prefetch=tree     how a union's cache is filled ahead of reads
 
 // Owner is the uid and gid a share reports for every file (ADR 0046). Set
 // distinguishes a named owner from the zero value, because root is a
@@ -101,11 +102,48 @@ func ParseWatch(s string) (Watch, error) {
 // Watching reports whether this answer replays anything.
 func (w Watch) Watching() bool { return w == WatchPartial || w == WatchCoarse }
 
+// Prefetch is how a union's cache is filled ahead of reads (ADR 0045): not at
+// all, the whole tree up to the budget, or what the reads point at. Only a mount
+// that is read=cached and a union prefetches; anywhere else the only answer is
+// off.
+type Prefetch string
+
+const (
+	PrefetchUnset Prefetch = ""
+	PrefetchOff   Prefetch = "off"
+	PrefetchEager Prefetch = "eager"
+	PrefetchTree  Prefetch = "tree"
+)
+
+// prefetchWords is the tail of a prefetch refusal.
+const prefetchWords = "off|eager|tree"
+
+// ParsePrefetch reads one prefetch word.
+func ParsePrefetch(s string) (Prefetch, error) {
+	switch p := Prefetch(strings.TrimSpace(s)); p {
+	case PrefetchOff, PrefetchEager, PrefetchTree:
+		return p, nil
+	default:
+		return PrefetchUnset, fmt.Errorf("workspace: prefetch=%q is not a prefetch policy; want one of %s", s, prefetchWords)
+	}
+}
+
+// Prefetching reports whether this answer fills anything.
+func (p Prefetch) Prefetching() bool { return p == PrefetchEager || p == PrefetchTree }
+
+func (p Prefetch) display() string {
+	if p == PrefetchUnset {
+		return string(PrefetchOff)
+	}
+	return string(p)
+}
+
 // ShareWords are the words that belong to a share rather than to one mount of
 // it. Comparable, so two mounts of one directory are checked with ==.
 type ShareWords struct {
-	Owner Owner
-	Watch Watch
+	Owner    Owner
+	Watch    Watch
+	Prefetch Prefetch
 }
 
 func (w Watch) display() string {
@@ -130,6 +168,9 @@ func (w ShareWords) Differences(other ShareWords) []Difference {
 	if w.Watch != other.Watch {
 		out = append(out, Difference{"watch", w.Watch.display(), other.Watch.display()})
 	}
+	if w.Prefetch != other.Prefetch {
+		out = append(out, Difference{"prefetch", w.Prefetch.display(), other.Prefetch.display()})
+	}
 	return out
 }
 
@@ -143,14 +184,15 @@ type MountWords struct {
 // shareKeySetting maps each key beyond read and write that a mount may carry
 // to the session setting that supplies its default. ParseMode, which reads the
 // session's own settings, refuses these keys and names that setting.
-var shareKeySetting = map[string]string{"owner": "shareOwner", "watch": "watch"}
+var shareKeySetting = map[string]string{"owner": "shareOwner", "watch": "watch", "prefetch": "prefetch"}
 
 func isShareKey(key string) bool {
 	_, ok := shareKeySetting[key]
 	return ok
 }
 
-// ParseMount reads a comma-separated list of read=, write=, owner=, watch= and
+// ParseMount reads a comma-separated list of read=, write=, owner=, watch=,
+// prefetch= and
 // Docker's own consistency words. A key named twice is refused, and so is any
 // other word, naming it.
 func ParseMount(s string) (MountWords, error) {
@@ -184,6 +226,12 @@ func ParseMount(s string) (MountWords, error) {
 				return MountWords{}, err
 			}
 			w.Watch = got
+		case "prefetch":
+			got, err := ParsePrefetch(value)
+			if err != nil {
+				return MountWords{}, err
+			}
+			w.Prefetch = got
 		}
 	}
 	mode, err := ParseMode(strings.Join(modeWords, ","))

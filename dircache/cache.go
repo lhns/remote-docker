@@ -100,9 +100,6 @@ type Cache struct {
 	// that start them. quiet reads it too, to tell a shutdown from a fault.
 	Ctx context.Context
 
-	// Policy is which prefetch runs. Zero is off.
-	Policy Policy
-
 	// Link supplies the round trip time, asked per attach and per batch. The
 	// bandwidth in what it returns is ignored: this cache measures its own on
 	// the batches it sends (link). Nil is an unmeasured RTT, and the tree then
@@ -121,13 +118,14 @@ type Cache struct {
 }
 
 // ShareOptions is what the caller decided about a share, in this module's
-// terms rather than the caller's: whether to fill its cache ahead of reads,
-// and whether what the consumer writes ever comes back.
+// terms rather than the caller's: how to fill its cache ahead of reads, and
+// whether what the consumer writes ever comes back.
 type ShareOptions struct {
-	// Prefetch fills the cache ahead of reads. Off, the share is attached for
-	// invalidation and write-back only, and its cache holds what the consumer
-	// wrote and nothing else.
-	Prefetch bool
+	// Policy is how this share's cache is filled ahead of reads: the policy is
+	// the share's, so one cache serves shares that disagree. Off or zero, the
+	// share is attached for invalidation and write-back only, and its cache
+	// holds what the consumer wrote and nothing else.
+	Policy Policy
 
 	// Ephemeral discards the consumer's writes: nothing is ever carried back,
 	// including when the share goes, and its changes are never even asked
@@ -156,7 +154,7 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 	// file deleted here while nothing ran, and only the record of that fill
 	// can take it out.
 	go c.reconcileDeletions(share, root)
-	if !opts.Prefetch || c.Policy == PolicyOff || c.Policy == "" {
+	if opts.Policy == PolicyOff || opts.Policy == "" {
 		// Nothing to prefetch: the cache holds only what the consumer writes.
 		// Cached as well as Done, because write-back moves nothing while the
 		// cache lacks something the prefetch chose, and this one chose
@@ -164,7 +162,7 @@ func (c *Cache) Attach(share, root string, opts ShareOptions) {
 		c.shares.finish(state, true, nil)
 		return
 	}
-	c.startTree(share, root, state)
+	c.startTree(share, root, state, opts.Policy)
 }
 
 // Reports is one entry per share this cache holds, for a status command.
@@ -346,8 +344,14 @@ type shares struct {
 	mu    sync.Mutex
 	state map[string]*shareState
 
-	// prefetch is each share's tree and sender, for the tree policy.
+	// prefetch is each share's tree and sender, for the eager and tree
+	// policies.
 	prefetch map[string]*prefetch
+
+	// trees counts the prefetches whose policy is the tree. Touch runs on
+	// every NFS read, and with no such share it must cost one atomic load and
+	// not a lock.
+	trees atomic.Int32
 
 	// roots is where each share's files are on this machine, which is what
 	// invalidation needs to read a changed file back.
@@ -472,7 +476,12 @@ func (f *shares) forget(share string) {
 	delete(f.roots, share)
 	delete(f.manifests, share)
 	delete(f.recorded, share)
-	delete(f.prefetch, share)
+	if p, ok := f.prefetch[share]; ok {
+		delete(f.prefetch, share)
+		if p.policy == PolicyTree {
+			f.trees.Add(-1)
+		}
+	}
 }
 
 // noteSent records what a batch put in a share's cache.

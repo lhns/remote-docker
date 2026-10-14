@@ -124,6 +124,10 @@ type Session struct {
 	// rtt is the tunnel's last measured round trip in nanoseconds, for prefetch.
 	rtt atomic.Int64
 
+	// prefetch is the policy a mount naming none gets (ADR 0045); each share
+	// carries its own.
+	prefetch dircache.Policy
+
 	// watch is nil until the first share that watches. The session's own
 	// default starts it at Open; otherwise the first mount that resolves to
 	// watching does (Rewriter.StartWatcher), and so does the restore of a
@@ -232,6 +236,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 		if err != nil {
 			return nil, fmt.Errorf("prefetch: %w", err)
 		}
+		s.prefetch = policy
 		s.cache = &dircache.Cache{
 			Store:   s.liveStore,
 			Record:  newCachedStore(config.CachedPath(opts.Config.Name), opts.Log),
@@ -240,7 +245,6 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 			Skew:    s.skew,
 			Log:     opts.Log,
 			Ctx:     runCtx,
-			Policy:  policy,
 			Link:    s.link,
 		}
 		s.registry.OnRead = s.cache.Touch

@@ -41,10 +41,9 @@ func TestAttachReconcilesDeletionsWithPrefetchOff(t *testing.T) {
 	}
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.Policy = PolicyOff
 	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"kept.go", "gone.go"}}}
 
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyOff})
 
 	eventually(t, "the deleted file to be dropped", func() bool {
 		store.mu.Lock()
@@ -62,7 +61,6 @@ func deletedWhileAway(t *testing.T, record Record, root, file string) {
 	}
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.Policy = PolicyOff
 	c.Record = record
 	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
@@ -80,7 +78,6 @@ func TestAnInvalidationBatchIsRecorded(t *testing.T) {
 	record := &fakeRecord{}
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.Policy = PolicyOff
 	c.Record = record
 	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
@@ -99,9 +96,8 @@ func TestAnInterruptedPrefetchIsRecorded(t *testing.T) {
 	record := &fakeRecord{}
 	store := &fakeStore{applyErr: errors.New("the connection went")}
 	c, root := treeCache(t, store)
-	c.Policy = PolicyEager
 	c.Record = record
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyEager})
 	eventually(t, "the prefetch to fail", func() bool {
 		r := c.Reports()
 		return len(r) == 1 && r[0].Done && r[0].Err != nil
@@ -126,7 +122,6 @@ func TestWriteBackRefusesARecordedFileDeletedHere(t *testing.T) {
 		},
 	}
 	c := cacheWith(t, store)
-	c.Policy = PolicyOff
 	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"/stale.go"}}}
 	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
@@ -152,7 +147,6 @@ func TestWriteBackReadsTheRecordBeforeTheChanges(t *testing.T) {
 		files:   map[string]File{"/stale.go": {Path: "/stale.go", Body: strings.NewReader("x")}},
 	}
 	c := cacheWith(t, store)
-	c.Policy = PolicyOff
 	c.Record = &fakeRecord{}
 	c.Attach(share, root, ShareOptions{})
 	c.editRecord(share, []string{"/stale.go"}, true)

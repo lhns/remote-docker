@@ -67,6 +67,10 @@ type prefetch struct {
 	share, root string
 	state       *shareState
 
+	// policy is this share's own: eager sends the tree without waiting for
+	// reads, the tree follows them.
+	policy Policy
+
 	mu       sync.Mutex
 	tree     *Tree
 	queue    [][]Entry // demand batches, in order
@@ -78,14 +82,15 @@ type prefetch struct {
 
 // Touch records that the consumer read n bytes of path through the live
 // mount, and queues whatever the tree decides for the sender. Called on the
-// NFS server's own path for every read, so it never waits on the link; under
-// any policy but the tree it costs one comparison.
+// NFS server's own path for every read, so it never waits on the link; while no
+// share has the tree policy it costs one atomic load, and a share with any
+// other policy is skipped after one lookup.
 func (c *Cache) Touch(share, path string, n int64) {
-	if c.Policy != PolicyTree {
+	if c.shares.trees.Load() == 0 {
 		return
 	}
 	p := c.prefetchFor(share)
-	if p == nil {
+	if p == nil || p.policy != PolicyTree {
 		return
 	}
 	// The observer spells a path from the share root with a leading slash,
@@ -118,10 +123,10 @@ func (c *Cache) prefetchFor(share string) *prefetch {
 	return c.shares.prefetch[share]
 }
 
-// startTree is Attach for the tree policy: the walk feeds the tree as it
-// goes, the sender drains demand first and the walk's leftovers when the
-// consumer is quiet.
-func (c *Cache) startTree(share, root string, state *shareState) {
+// startTree is Attach for the eager and tree policies, which share one sender:
+// the walk feeds the tree as it goes, the sender drains demand first and the
+// walk's leftovers when the consumer is quiet (never waiting, for eager).
+func (c *Cache) startTree(share, root string, state *shareState, policy Policy) {
 	tree, err := NewTree(nil, Layout{Link: c.link()})
 	if err != nil {
 		// A Layout nobody could serve is a programming error, and the share
@@ -130,12 +135,18 @@ func (c *Cache) startTree(share, root string, state *shareState) {
 		c.shares.finish(state, false, err)
 		return
 	}
-	p := &prefetch{share: share, root: root, state: state, tree: tree, kick: make(chan struct{}, 1)}
+	p := &prefetch{share: share, root: root, state: state, policy: policy, tree: tree, kick: make(chan struct{}, 1)}
 	c.shares.mu.Lock()
 	if c.shares.prefetch == nil {
 		c.shares.prefetch = map[string]*prefetch{}
 	}
+	if old, ok := c.shares.prefetch[share]; ok && old.policy == PolicyTree {
+		c.shares.trees.Add(-1)
+	}
 	c.shares.prefetch[share] = p
+	if policy == PolicyTree {
+		c.shares.trees.Add(1)
+	}
 	c.shares.mu.Unlock()
 
 	go c.send(p)
@@ -228,7 +239,7 @@ func (c *Cache) next(p *prefetch) (batch []Entry, demand bool) {
 	}
 	// Eager has no demand batch to stay out of the way of: it neither
 	// waits for quiet nor keeps its batches small.
-	eager := c.Policy == PolicyEager
+	eager := p.policy == PolicyEager
 	if !eager && time.Since(p.lastRead) < quietFor {
 		return nil, false
 	}

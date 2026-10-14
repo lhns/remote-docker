@@ -85,6 +85,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Guard:    live.guard,
 
 		Watch:      watchWord(s.opts.Watch),
+		Prefetch:   prefetchWord(s.prefetch),
 		Mode:       s.opts.Mode,
 		ShareOwner: workspace.Owner{UID: s.opts.Config.ShareUID, GID: s.opts.Config.ShareGID, Set: true},
 		ModePaths:  s.opts.ModePaths,

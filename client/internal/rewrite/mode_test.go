@@ -21,6 +21,7 @@ type fakeCache struct {
 	attached string         // the export it was told about
 	from     string         // the directory behind it
 	mode     workspace.Mode // the mode it was told the share has
+	words    workspace.ShareWords
 	err      error
 }
 
@@ -34,8 +35,8 @@ func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int, m
 
 // Attach is asynchronous in the real one; here it records what it was told,
 // which is what the tests are about.
-func (f *fakeCache) Attach(export, localPath string, mode workspace.Mode) {
-	f.attached, f.from, f.mode = export, localPath, mode
+func (f *fakeCache) Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords) {
+	f.attached, f.from, f.mode, f.words = export, localPath, mode, words
 }
 
 // servingCache is a session whose cache channel opens.

@@ -4,7 +4,14 @@
 - Date: 2026-09-04
 - Current answer: `prefetch: off|eager|tree` (`REMOTE_DOCKER_PREFETCH`);
   `tree` follows the NFS misses, `eager` sends the whole tree smallest first.
-  Default off, pending the apply; see "What it measured".
+  Default off, pending the apply; see "What it measured". Amended 2026-10-14:
+  the policy is per share. A mount may say `prefetch=off|eager|tree` (ADR
+  0042), the setting is the default for one that does not, and only a
+  `read=cached` union has anything to fill. `dircache.ShareOptions.Policy`
+  carries it, so one cache serves a tree share and an eager one; `Touch` feeds
+  only tree shares and costs one atomic load while there are none. A share
+  restored after a restart is not attached to the cache, so its prefetch is
+  recorded and compared but not resumed.
 - Extends [ADR 0044](0044-a-delegated-share-is-a-cache.md), which decides
   that the share is a union; this record decides what goes into it and when.
   The read and write axes it hangs off are

@@ -163,6 +163,12 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 	}
 	resolved.Watch = watch
 
+	prefetch, err := r.resolvePrefetch(source, asked.Prefetch, got)
+	if err != nil {
+		return workspace.MountWords{}, err
+	}
+	resolved.Prefetch = prefetch
+
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
 		if _, err := r.openCache(ctx); err != nil {
@@ -229,6 +235,26 @@ func (r *Rewriter) resolveWatch(source string, asked workspace.Watch, mode works
 		watch = workspace.WatchPartial
 	}
 	return watch, nil
+}
+
+// resolvePrefetch settles one mount's prefetch. The word, else the session's
+// default, and off wherever the mode does not prefetch: only read=cached with a
+// union has a cache to fill and permission to trust it (ADR 0045). A word
+// asking for a fill where there is none is refused rather than ignored, since a
+// prefetch that silently does nothing is the setting somebody then tunes.
+func (r *Rewriter) resolvePrefetch(source string, asked workspace.Prefetch, mode workspace.Mode) (workspace.Prefetch, error) {
+	if asked.Prefetching() && !mode.Prefetch() {
+		return workspace.PrefetchUnset, fmt.Errorf("rewrite: %s asks for prefetch=%s, and %s does not prefetch\n"+
+			"  fix: drop prefetch=, or use read=cached with write=back or write=ephemeral", source, asked, mode)
+	}
+	prefetch := asked
+	if prefetch == workspace.PrefetchUnset {
+		prefetch = r.Prefetch
+	}
+	if prefetch == workspace.PrefetchUnset || !mode.Prefetch() {
+		prefetch = workspace.PrefetchOff
+	}
+	return prefetch, nil
 }
 
 // startWatcher makes sure the file watcher is running for a mount that needs

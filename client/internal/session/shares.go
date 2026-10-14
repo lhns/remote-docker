@@ -23,7 +23,7 @@ import (
 
 // shareRecord is one directory this workspace asked to export.
 //
-// Owner and Watch are the share's words, resolved. A record without one
+// Owner, Watch and Prefetch are the share's words, resolved. A record without one
 // predates the word and takes the session's default, which is why the file
 // version does not move: a bump would make every restore fail after an upgrade
 // (ADR 0027).
@@ -33,6 +33,7 @@ type shareRecord struct {
 	LastUsed time.Time `json:"lastUsed"`
 	Owner    string    `json:"owner,omitempty"` // uid:gid
 	Watch    string    `json:"watch,omitempty"`
+	Prefetch string    `json:"prefetch,omitempty"`
 }
 
 // words reads the record's share words. A field that does not parse is left
@@ -45,6 +46,9 @@ func (r shareRecord) words() workspace.ShareWords {
 	if watch, err := workspace.ParseWatch(r.Watch); err == nil {
 		w.Watch = watch
 	}
+	if prefetch, err := workspace.ParsePrefetch(r.Prefetch); err == nil {
+		w.Prefetch = prefetch
+	}
 	return w
 }
 
@@ -54,7 +58,7 @@ func recordFor(exportPath, localPath string, words workspace.ShareWords) shareRe
 	if words.Owner.Set {
 		rec.Owner = words.Owner.String()
 	}
-	rec.Watch = string(words.Watch)
+	rec.Watch, rec.Prefetch = string(words.Watch), string(words.Prefetch)
 	return rec
 }
 
@@ -170,7 +174,7 @@ func (s *shareStore) remember(exportPath, localPath string, words workspace.Shar
 	rec, known := s.records[exportPath]
 	// Not rewritten on every container: only on change or an hour-stale stamp.
 	next := recordFor(exportPath, localPath, words)
-	changed := !known || rec.Path != localPath || rec.Owner != next.Owner || rec.Watch != next.Watch || time.Since(rec.LastUsed) > time.Hour
+	changed := !known || rec.Path != localPath || rec.Owner != next.Owner || rec.Watch != next.Watch || rec.Prefetch != next.Prefetch || time.Since(rec.LastUsed) > time.Hour
 	if changed {
 		s.records[exportPath] = next
 	}

@@ -420,13 +420,39 @@ type shareCache struct {
 
 // Attach hands the share to the engine, if any, translating the mode into
 // dircache's terms, which cannot name workspace.Mode.
-func (c shareCache) Attach(export, localPath string, mode workspace.Mode) {
+func (c shareCache) Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords) {
 	if c.session.cache != nil {
+		policy := policyOf(words.Prefetch)
+		if !mode.Prefetch() {
+			policy = dircache.PolicyOff
+		}
 		c.session.cache.Attach(export, localPath, dircache.ShareOptions{
-			Prefetch:  mode.Prefetch(),
+			Policy:    policy,
 			Ephemeral: mode.Write == workspace.WriteEphemeral,
 		})
 	}
+}
+
+// policyOf is the fill policy a share's prefetch word stands for.
+func policyOf(p workspace.Prefetch) dircache.Policy {
+	switch p {
+	case workspace.PrefetchEager:
+		return dircache.PolicyEager
+	case workspace.PrefetchTree:
+		return dircache.PolicyTree
+	}
+	return dircache.PolicyOff
+}
+
+// prefetchWord is the share word a session's default policy stands for.
+func prefetchWord(p dircache.Policy) workspace.Prefetch {
+	switch p {
+	case dircache.PolicyEager:
+		return workspace.PrefetchEager
+	case dircache.PolicyTree:
+		return workspace.PrefetchTree
+	}
+	return workspace.PrefetchOff
 }
 
 // pathsPerFrame bounds the paths one request names: they ride in the header

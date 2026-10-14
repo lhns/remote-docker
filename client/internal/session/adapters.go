@@ -49,6 +49,9 @@ func refuseOtherWords(share *nfsserve.Share, asked workspace.ShareWords) error {
 	if asked.Watch == workspace.WatchUnset {
 		asked.Watch = share.Words.Watch
 	}
+	if asked.Prefetch == workspace.PrefetchUnset {
+		asked.Prefetch = share.Words.Prefetch
+	}
 	diffs := share.Words.Differences(asked)
 	if len(diffs) == 0 {
 		return nil

@@ -24,7 +24,7 @@ func TestAttachWithoutPrefetchWritesBack(t *testing.T) {
 		},
 	}
 	c := cacheWith(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: false})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyOff})
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111")
 
@@ -37,22 +37,20 @@ func TestAttachWithoutPrefetchWritesBack(t *testing.T) {
 	}
 }
 
-// A share that prefetches nothing, whether because it was attached without
-// prefetch or because the policy is off, is still known for invalidation and
-// write-back, reports done, and sends nothing, ever.
+// A share that prefetches nothing, whether its policy is off or was never
+// named, is still known for invalidation and write-back, reports done, and
+// sends nothing, ever.
 func TestAttachWithNothingToPrefetch(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		policy Policy
-		opts   ShareOptions
+		name string
+		opts ShareOptions
 	}{
-		{"attached without prefetch", PolicyTree, ShareOptions{Prefetch: false}},
-		{"policy off", PolicyOff, ShareOptions{Prefetch: true}},
+		{"policy off", ShareOptions{Policy: PolicyOff}},
+		{"no policy", ShareOptions{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeStore{}
 			c, root := treeCache(t, store)
-			c.Policy = tc.policy
 			c.Attach("/m/1111111111111111", root, tc.opts)
 
 			c.Touch("/m/1111111111111111", "/pkga/faa.go", 2000)
@@ -74,7 +72,7 @@ func TestAttachWithNothingToPrefetch(t *testing.T) {
 func TestTreeFillReportsComplete(t *testing.T) {
 	store := &fakeStore{}
 	c, root := treeCache(t, store)
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 
 	eventually(t, "the fill to finish", func() bool {
 		r := c.Reports()
@@ -106,10 +104,10 @@ func TestAttachRunsOncePerShare(t *testing.T) {
 	store := &fakeStore{}
 	c := cacheWith(t, store)
 
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	eventually(t, "the prefetch to finish", func() bool { r := c.Reports(); return len(r) == 1 && r[0].Done })
 
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	eventually(t, "one report", func() bool { return len(c.Reports()) == 1 })
 
 	store.mu.Lock()
@@ -128,10 +126,10 @@ func TestAttachWithNoStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := &Cache{Store: func() (Store, bool) { return nil, false }, Ctx: t.Context(), Policy: PolicyTree}
+	c := &Cache{Store: func() (Store, bool) { return nil, false }, Ctx: t.Context()}
 	t.Cleanup(c.Stop)
 
-	c.Attach("/m/1111111111111111", root, ShareOptions{Prefetch: true})
+	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyTree})
 	eventually(t, "the prefetch to finish", func() bool { r := c.Reports(); return len(r) == 1 && r[0].Done })
 
 	if err := c.Reports()[0].Err; err != nil {

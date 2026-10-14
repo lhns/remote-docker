@@ -63,8 +63,9 @@ type Cache interface {
 	Prepare(ctx context.Context, export, cache string, port int, mode workspace.Mode) (string, error)
 
 	// Attach registers the share and returns AT ONCE; any prefetch runs in the
-	// background, since a miss falls through to the live export.
-	Attach(export, localPath string, mode workspace.Mode)
+	// background, since a miss falls through to the live export. The share's
+	// own words say how it is filled.
+	Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords)
 }
 
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
@@ -107,6 +108,10 @@ type Rewriter struct {
 	// Watch is what a mount naming no watch= gets (ADR 0016); unset is off.
 	// `read=cached` and every union are never below partial whatever it says.
 	Watch workspace.Watch
+
+	// Prefetch is what a mount naming no prefetch= gets (ADR 0045); unset is
+	// off. It applies only where the mode prefetches at all.
+	Prefetch workspace.Prefetch
 
 	// StartWatcher makes the file watcher run, and is called when a mount
 	// resolves to watching. Nil is a session that cannot watch, and such a
@@ -597,7 +602,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, words worksp
 
 	if mode.Union() {
 		// A union path the caller binds, not a volume (ADR 0044).
-		merged, err := r.union(ctx, exportPath, name, localPath, labels, mode)
+		merged, err := r.union(ctx, exportPath, name, localPath, labels, words)
 		if err != nil {
 			return "", "", err
 		}
@@ -614,7 +619,8 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, words worksp
 // union creates the cache volume, prepares the union over the live export,
 // attaches the cache, and answers with the path the container binds
 // (ADR 0044).
-func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string, mode workspace.Mode) (string, error) {
+func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string, words workspace.MountWords) (string, error) {
+	mode := words.Mode
 	cache := workspace.CacheVolumeName(share)
 
 	// Empty map, not nil: JSON null is not an object.
@@ -634,7 +640,7 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 	}
 
 	// Asynchronous: the container starts against an empty cache.
-	channel.Attach(export, localPath, mode)
+	channel.Attach(export, localPath, mode, words.ShareWords)
 
 	return merged, nil
 }
