@@ -21,7 +21,7 @@ go 1.26.8
 require github.com/google/go-containerregistry v0.22.1
 
 require (
-	github.com/docker/cli v29.7.2+incompatible // indirect
+	github.com/docker/cli v29.9.0+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
