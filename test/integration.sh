@@ -1586,7 +1586,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     fi
 
     # A share's words are fixed once it exists.
-    if outputs 'already shared with owner=1000:1000.*asks for owner=2000:2000' dockert run --rm -v "$WORDSDIR:/w:owner=2000" alpine:3 true \
+    if outputs 'already shared with owner=1000:1000.*resolves to owner=2000:2000' dockert run --rm -v "$WORDSDIR:/w:owner=2000" alpine:3 true \
         && grep -q 'fix:' <<<"$LAST_OUTPUT"; then
         ok "a second owner for a registered directory is refused with a fix"
     else

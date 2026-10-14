@@ -661,7 +661,7 @@ func (m *Manager) warnUnion(d *Daemon, reported string) {
 	case workspace.UnionReady:
 		return
 	case workspace.UnionNoBinary:
-		what, fix = "has no fuse-overlayfs in its image", workspace.UnionImageRemedy
+		what, fix = "image has no fuse-overlayfs", workspace.UnionImageRemedy
 	case workspace.UnionNoDevice:
 		what, fix = "has no /dev/fuse", workspace.UnionDeviceRemedy
 	default:

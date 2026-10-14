@@ -384,8 +384,8 @@ premise of the project, and it applies to building it too. So:
   and one mode: two mounts of it disagreeing are refused, because the second
   EnsureVolume would silently recreate the first's volume. The same holds for
   the share's words: they are fixed when it is registered, the share records
-  its mode beside them (a mode difference is named first, since the watch it
-  implies differs too), and a mount of the same directory resolving to others is
+  its mode beside them (a mode difference is named first when words differ too,
+  since the watch it implies differs; a mode alone is not refused), and a mount of the same directory resolving to others is
   refused by `shareRegistrar` before
   `volumeFor`, because replacing a share's filesystem strands every handle a
   running container holds. A share's attributes come from the session's

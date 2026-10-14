@@ -98,6 +98,16 @@ func TestTheRegistrarNamesAModeDifferenceFirst(t *testing.T) {
 	if mode, watch := strings.Index(msg, "read="), strings.Index(msg, "watch="); mode < 0 || watch < 0 || mode > watch {
 		t.Errorf("err = %q, want the mode named before the watch", msg)
 	}
+
+	// A mode alone, with the same words, is not a refusal: the mounts of one
+	// directory in different modes have always been allowed.
+	back := workspace.MountWords{
+		Mode:       workspace.Mode{Read: workspace.ReadDirect, Write: workspace.WriteBack},
+		ShareWords: direct.ShareWords,
+	}
+	if _, _, err := reg.Share(dir, back); err != nil {
+		t.Errorf("another mode with the same words was refused: %v", err)
+	}
 }
 
 // What the registrar hands the workspace's volume is only as good as its

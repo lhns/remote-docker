@@ -40,20 +40,23 @@ func (s shareRegistrar) Share(localPath string, mount workspace.MountWords) (exp
 	return share.ExportPath, share.File, nil
 }
 
-// refuseOtherWords refuses a mount that resolves to a mode or words other than
-// the share already has. Both sides are concrete: the rewriter settles every
-// word before it asks. The mode is named first, because the watch it implies
-// differs with it and would otherwise take the blame.
+// refuseOtherWords refuses a mount that resolves to words other than the share
+// already has. Both sides are concrete: the rewriter settles every word before
+// it asks. A mode that differs is named first when words differ too, because
+// the watch it implies differs with it and would otherwise take the blame; a
+// mode alone is not refused here (it has always been allowed across
+// containers, with each mode's own volume).
 func refuseOtherWords(share *nfsserve.Share, haveMode workspace.Mode, asked workspace.MountWords) error {
+	diffs := share.Words.Differences(asked.ShareWords)
+	if len(diffs) == 0 {
+		return nil
+	}
 	var have, want []string
 	if haveMode != asked.Mode {
 		have, want = append(have, haveMode.String()), append(want, asked.Mode.String())
 	}
-	for _, d := range share.Words.Differences(asked.ShareWords) {
+	for _, d := range diffs {
 		have, want = append(have, d.Key+"="+d.A), append(want, d.Key+"="+d.B)
-	}
-	if len(have) == 0 {
-		return nil
 	}
 	return fmt.Errorf("rewrite: %[1]s is already shared with %[2]s and this mount resolves to %[3]s; a share's mode and words are fixed while the session runs\n"+
 		"  fix: give every mount of %[1]s the same words, or remove the containers using it and run `%[4]s`",
