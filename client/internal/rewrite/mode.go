@@ -320,11 +320,11 @@ func unionAvailable(reported string) error {
 		return nil
 	case workspace.UnionNoBinary:
 		return fmt.Errorf("the daemon serving it has no %s\n"+
-			"  fix: use write=through, or run the workspace's image for per-account daemons, with WORKSPACE_DIND_IMAGE",
-			"fuse-overlayfs")
+			"  fix: use write=through, or %s",
+			"fuse-overlayfs", workspace.UnionImageRemedy)
 	case workspace.UnionNoDevice:
-		return fmt.Errorf("the daemon serving it has no /dev/fuse\n" +
-			"  fix: use write=through, or load the fuse module on the host and run the daemon with the device")
+		return fmt.Errorf("the daemon serving it has no /dev/fuse\n"+
+			"  fix: use write=through, or %s", workspace.UnionDeviceRemedy)
 	default:
 		return fmt.Errorf("this workspace does not serve it" + FixUpdateWorkspace)
 	}

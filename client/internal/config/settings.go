@@ -15,25 +15,28 @@ import (
 // restarts. The session reports it and a command compares against it, so both
 // ends spell a value the same way (ADR 0017, amended 2026-10-14).
 //
-// Names are the user-facing spelling. An empty watch or prefetch is "off",
-// which is what it means, and the share owner is always uid:gid, so 1000,
-// 1000:1000 and 1000.1000 compare equal.
+// Names are the user-facing spelling, and every value is parsed and written
+// back in its canonical form, so what is compared is what a value means: watch
+// "on" is "partial", consistency "cached" is "read=cached,write=through", an
+// empty watch or prefetch is "off", and the share owner is uid:gid, so 1000,
+// 1000:1000 and 1000.1000 compare equal. A value that does not parse is kept
+// as written, which is a difference like any other.
 func (c Config) SessionSettings() map[string]string {
 	paths := make([]string, 0, len(c.ConsistencyPaths))
 	for dir, mode := range c.ConsistencyPaths {
-		paths = append(paths, dir+"="+mode)
+		paths = append(paths, dir+"="+canonicalMode(mode, workspace.ModeUnset))
 	}
 	sort.Strings(paths)
 
 	return map[string]string{
-		"consistency":       c.Consistency,
+		"consistency":       canonicalMode(c.Consistency, workspace.DefaultMode),
 		"consistency-paths": strings.Join(paths, ";"),
-		"watch":             offIfEmpty(c.Watch),
+		"watch":             canonicalWatch(c.Watch),
 		"watch-budget":      fmt.Sprint(c.WatchBudget),
 		"watch-exclude":     strings.Join(c.WatchExclude, ","),
 		"cache-files":       fmt.Sprint(c.CacheFiles),
 		"cache-bytes":       fmt.Sprint(c.CacheBytes),
-		"prefetch":          offIfEmpty(c.Prefetch),
+		"prefetch":          canonicalPrefetch(c.Prefetch),
 		"share-owner":       c.shareOwnerSetting(),
 		"idle-timeout":      c.IdleTimeout.String(),
 		"daemon-idle":       c.DaemonIdle.String(),
@@ -54,11 +57,34 @@ func (c Config) shareOwnerSetting() string {
 	return c.ShareOwner
 }
 
-func offIfEmpty(s string) string {
-	if s == "" {
-		return "off"
+// canonicalMode is a mode in its one spelling, with an axis it leaves unset
+// taken from fallback: a path's rule leaves it to the default, and the default
+// to read=direct,write=through (what rewrite does with a mount).
+func canonicalMode(s string, fallback workspace.Mode) string {
+	m, err := workspace.ParseMode(s)
+	if err != nil {
+		return s
 	}
-	return s
+	return m.Or(fallback).String()
+}
+
+func canonicalWatch(s string) string {
+	w, err := workspace.ParseWatchSetting(s)
+	if err != nil {
+		return s
+	}
+	return w.String()
+}
+
+func canonicalPrefetch(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return workspace.PrefetchOff.String()
+	}
+	p, err := workspace.ParsePrefetch(s)
+	if err != nil {
+		return s
+	}
+	return p.String()
 }
 
 // notSessionSettings is every Config field SessionSettings leaves out, and

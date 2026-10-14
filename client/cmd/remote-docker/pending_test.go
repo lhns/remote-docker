@@ -47,7 +47,10 @@ func TestAPendingRedeemWaitsUntilTheAccountLogsIn(t *testing.T) {
 }
 
 func TestAPendingRedeemThatNeverFinishesSaysSoAndKeepsTheConfig(t *testing.T) {
-	shortenAccountWait(t, 10*time.Millisecond, 300*time.Millisecond)
+	// The limit is long enough for a few polls and short enough to be quick; a
+	// dial that meets the limit reports an i/o timeout before the wait's own
+	// context does, which must still read as the account not being ready.
+	shortenAccountWait(t, 10*time.Millisecond, 2*time.Second)
 	m := startManageServer(t, `{"account":"alice","created":true,"pending":true}`, 0)
 	m.refuse = -1
 	out, err := runOut(t, "remote", "create", "ws", "--token", pendingInvite(t, m))

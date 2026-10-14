@@ -17,8 +17,10 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/metrics"
+	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/netns"
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Daemon is one account's running dockerd.
@@ -360,7 +362,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 				}
 				if m.answers(ctx, d) {
 					go m.warnIfSlowStorage(d)
-					go m.warnIfNoFuseOverlayfs(d)
+					go m.warnIfCannotServeUnion(d)
 					return d, nil
 				}
 			}
@@ -544,7 +546,7 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		m.mu.Unlock()
 
 		m.log().Info("adopted a running daemon", "account", account)
-		go m.warnIfNoFuseOverlayfs(adoptedDaemon)
+		go m.warnIfCannotServeUnion(adoptedDaemon)
 		adopted++
 	}
 	return adopted, nil
@@ -640,33 +642,40 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 		"account", d.Account, "container", ContainerName(d.Account))
 }
 
-// warnIfNoFuseOverlayfs says so, once per start or adoption, when the image a
-// daemon runs has no fuse-overlayfs.
+// warnIfCannotServeUnion says so, once per start or adoption, when the daemon
+// could not serve a union.
 //
 // A write=back or write=ephemeral mount is a union served by fuse-overlayfs,
 // which the union child resolves INSIDE the daemon's mount namespace (ADR
 // 0044), so the stock dind image cannot serve one. Without this the first sign
-// is that mount failing on a container start. Only a plain answer counts:
-// anything that stops the question being asked logs nothing.
-//
-// On its own goroutine and context, like warnIfSlowStorage.
-func (m *Manager) warnIfNoFuseOverlayfs(d *Daemon) {
+// is that mount failing on a container start. It asks what workspace-info
+// answers, unions.Capability, so there is one probe: a stat, not an exec.
+func (m *Manager) warnIfCannotServeUnion(d *Daemon) {
+	m.warnUnion(d, unions.Capability(d.Root()))
+}
+
+// warnUnion logs the reason a daemon's capability is not ready.
+func (m *Manager) warnUnion(d *Daemon, reported string) {
+	var what, fix string
+	switch reported {
+	case workspace.UnionReady:
+		return
+	case workspace.UnionNoBinary:
+		what, fix = "has no fuse-overlayfs in its image", workspace.UnionImageRemedy
+	case workspace.UnionNoDevice:
+		what, fix = "has no /dev/fuse", workspace.UnionDeviceRemedy
+	default:
+		what, fix = "cannot serve a union ("+reported+")", "see the workspace's agent log"
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
 	name := ContainerName(d.Account)
-	out, err := m.parent().Line(ctx, "exec", name, "sh", "-c",
-		"command -v fuse-overlayfs >/dev/null 2>&1 && echo yes || echo no")
-	if err != nil || out != "no" {
-		return
-	}
 	image, err := m.inspect(ctx, name, "{{.Config.Image}}")
 	if err != nil {
 		image = "(unknown)"
 	}
-	m.log().Warn("a daemon's image has no fuse-overlayfs, so write=back and write=ephemeral "+
-		"mounts cannot work in it. Run the workspace's own image for per-account daemons "+
-		"with WORKSPACE_DIND_IMAGE and remove the container to rebuild it.",
+	m.log().Warn("a daemon "+what+", so write=back and write=ephemeral mounts cannot work in it; "+fix,
 		"account", d.Account, "container", name, "image", image)
 }
 

@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -50,7 +52,11 @@ func WaitForAccount(ctx context.Context, cfg config.Config) error {
 		if waitCtx.Err() != nil {
 			return ErrAccountNotReady
 		}
-		if !strings.Contains(err.Error(), "unable to authenticate") {
+		// A refused login is the account not existing yet; so is a dial or
+		// handshake that ran into the wait's deadline, which reports its own
+		// timeout a moment before waitCtx does. The next pass through the
+		// loop decides whether that was the limit.
+		if !strings.Contains(err.Error(), "unable to authenticate") && !isTimeout(err) {
 			return err
 		}
 		select {
@@ -58,6 +64,14 @@ func WaitForAccount(ctx context.Context, cfg config.Config) error {
 		case <-time.After(AccountPollInterval):
 		}
 	}
+}
+
+// isTimeout reports a deadline of any spelling: the context's, the os's, or a
+// net.Error that says it timed out.
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout())
 }
 
 // tryLogin is one query session: a login and the workspace-info request.

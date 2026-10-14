@@ -56,6 +56,34 @@ func TestSessionSettingsAreCanonical(t *testing.T) {
 	}
 }
 
+// A value is compared by what it means: a spelling, an alias or the order of
+// words must not restart a session or warn on every command.
+func TestSessionSettingsCompareMeaningNotSpelling(t *testing.T) {
+	same := func(name string, a, b Config) {
+		t.Helper()
+		if x, y := a.SessionSettings()[name], b.SessionSettings()[name]; x != y {
+			t.Errorf("%s: %q != %q", name, x, y)
+		}
+	}
+	same("watch", Config{Watch: "on"}, Config{Watch: "partial"})
+	same("watch", Config{Watch: "best-effort"}, Config{Watch: "coarse"})
+	same("watch", Config{Watch: "FALSE"}, Config{})
+	same("consistency", Config{Consistency: "cached"}, Config{Consistency: "read=cached,write=through"})
+	same("consistency", Config{Consistency: "write=back,read=cached"}, Config{Consistency: "read=cached,write=back"})
+	same("consistency", Config{Consistency: "delegated"}, Config{Consistency: "read=cached, write=back"})
+	same("consistency", Config{Consistency: "consistent"}, Config{})
+	same("consistency-paths",
+		Config{ConsistencyPaths: map[string]string{"/a": "write=back,read=cached"}},
+		Config{ConsistencyPaths: map[string]string{"/a": "read=cached,write=back"}})
+	if got := (Config{Watch: "on"}).SessionSettings()["watch"]; got != "partial" {
+		t.Errorf("watch on = %q, want partial", got)
+	}
+	// A value that does not parse is kept as written, so it still differs.
+	if got := (Config{Watch: "sometimes"}).SessionSettings()["watch"]; got != "sometimes" {
+		t.Errorf("an unparseable watch = %q", got)
+	}
+}
+
 // A setting is compared only if an environment variable can name it, so every
 // one has a variable or is declared file-only.
 func TestEverySettingHasAVariableOrIsFileOnly(t *testing.T) {

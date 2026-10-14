@@ -48,7 +48,7 @@ type Options struct {
 
 	// Watch replays this machine's filesystem changes into the workspace
 	// (ADR 0016). Off by default.
-	Watch        fswatch.Mode
+	Watch        workspace.Watch
 	WatchBudget  int
 	WatchExclude []string
 
@@ -203,6 +203,9 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = DefaultIdleTimeout
 	}
+	if opts.Watch == workspace.WatchUnset {
+		opts.Watch = workspace.WatchOff
+	}
 	if !workspace.ValidRunID(opts.RunID) {
 		opts.RunID = workspace.NewRunID()
 	}
@@ -254,7 +257,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	if opts.Role.hosting() {
 		// A default of off starts no watcher: the first mount to resolve to
 		// watching does, or a share restored as one.
-		if opts.Watch != fswatch.ModeOff {
+		if opts.Watch.Watching() {
 			if err := s.startWatcher(); err != nil {
 				cancel()
 				return nil, err

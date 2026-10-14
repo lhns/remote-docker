@@ -7,53 +7,51 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// fuseDocker answers the two questions warnIfNoFuseOverlayfs asks.
-type fuseDocker struct {
-	execOut string
-	execErr error
-}
+// imageDocker answers the one question warnUnion asks the parent: the image.
+type imageDocker struct{}
 
-func (f fuseDocker) Line(_ context.Context, args ...string) (string, error) {
-	switch args[0] {
-	case "exec":
-		return f.execOut, f.execErr
-	case "inspect":
+func (imageDocker) Line(_ context.Context, args ...string) (string, error) {
+	if args[0] == "inspect" {
 		return "docker:28-dind", nil
 	}
 	return "", errors.New("unexpected " + strings.Join(args, " "))
 }
-func (fuseDocker) Run(context.Context, string, ...string) error      { return nil }
-func (fuseDocker) Output(context.Context, ...string) ([]byte, error) { return nil, nil }
+func (imageDocker) Run(context.Context, string, ...string) error      { return nil }
+func (imageDocker) Output(context.Context, ...string) ([]byte, error) { return nil, nil }
 
-func fuseWarning(f fuseDocker) string {
+func unionWarning(reported string) string {
 	var buf bytes.Buffer
 	m := &Manager{
 		Log:    slog.New(slog.NewTextHandler(&buf, nil)),
-		docker: func(string) docker { return f },
+		docker: func(string) docker { return imageDocker{} },
 	}
-	m.warnIfNoFuseOverlayfs(&Daemon{Account: "alice"})
+	m.warnUnion(&Daemon{Account: "alice"}, reported)
 	return buf.String()
 }
 
-func TestWarnsWhenTheDaemonImageHasNoFuseOverlayfs(t *testing.T) {
-	got := fuseWarning(fuseDocker{execOut: "no"})
-	for _, want := range []string{"fuse-overlayfs", "WORKSPACE_DIND_IMAGE", "docker:28-dind"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("warning %q lacks %q", got, want)
+// The warning carries the same remedy the client's refusal and the union child
+// print, and the image the daemon runs.
+func TestWarnsWithTheReasonTheCapabilityGave(t *testing.T) {
+	for reported, wants := range map[string][]string{
+		workspace.UnionNoBinary: {"fuse-overlayfs", workspace.UnionImageRemedy, "docker:28-dind"},
+		workspace.UnionNoDevice: {"/dev/fuse", workspace.UnionDeviceRemedy},
+		"":                      {"cannot serve a union"},
+	} {
+		got := unionWarning(reported)
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Errorf("%q: warning %q lacks %q", reported, got, want)
+			}
 		}
 	}
 }
 
-func TestSaysNothingWhenFuseOverlayfsIsThereOrCannotBeAsked(t *testing.T) {
-	for name, f := range map[string]fuseDocker{
-		"present":  {execOut: "yes"},
-		"cannot":   {execErr: errors.New("container is not running")},
-		"nonsense": {execOut: "???"},
-	} {
-		if got := fuseWarning(f); got != "" {
-			t.Errorf("%s: logged %q", name, got)
-		}
+func TestSaysNothingWhenTheDaemonCanServeAUnion(t *testing.T) {
+	if got := unionWarning(workspace.UnionReady); got != "" {
+		t.Errorf("logged %q", got)
 	}
 }

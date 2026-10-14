@@ -139,6 +139,15 @@ const (
 	UnionNoDevice = "no-dev-fuse"
 )
 
+// The remedy for each reason, spelled once for the child, the agent's warning
+// and the client's refusal. A daemon whose settings changed, the image
+// included, is recreated by the agent once nothing runs in it (daemons.reconcile),
+// so the container is not removed by hand.
+const (
+	UnionImageRemedy  = "set WORKSPACE_DIND_IMAGE to the workspace image and restart the agent; the daemon is recreated once idle"
+	UnionDeviceRemedy = "load the fuse module on the host and run the daemon with /dev/fuse"
+)
+
 // What Mode says: how this workspace serves daemons. Here rather than beside
 // the implementation in agent/internal/daemons, for the reason UnionReady above
 // is here -- the client compares against these, so a value spelled in only one

@@ -74,9 +74,9 @@ func (o Owner) String() string {
 
 // Watch is how much of what happens to a share on this machine is replayed
 // inside the workspace (ADR 0016): nothing, what can be replayed faithfully,
-// or also deletions and renames as a poke at the parent directory. Only the
-// canonical words; the aliases the session setting accepts (on, true, 1) are
-// not spellings of a mount's word.
+// or also deletions and renames as a poke at the parent directory. A mount
+// names a canonical word; the session setting also takes the aliases
+// ParseWatchSetting lists.
 type Watch string
 
 const (
@@ -97,6 +97,22 @@ func ParseWatch(s string) (Watch, error) {
 	default:
 		return WatchUnset, fmt.Errorf("workspace: watch=%q is not a watch mode; want one of %s", s, watchWords)
 	}
+}
+
+// ParseWatchSetting reads the session's own watch setting (REMOTE_DOCKER_WATCH
+// and the config file), which also takes the spellings people have used: on,
+// true, 1 and yes mean partial; best-effort means coarse; empty, false, 0 and
+// no mean off. A mount's watch= word takes canonical words only (ParseWatch).
+func ParseWatchSetting(s string) (Watch, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "off", "false", "0", "no":
+		return WatchOff, nil
+	case "partial", "on", "true", "1", "yes":
+		return WatchPartial, nil
+	case "coarse", "best-effort":
+		return WatchCoarse, nil
+	}
+	return WatchUnset, fmt.Errorf("workspace: unknown watch mode %q; want %s", s, watchWords)
 }
 
 // Watching reports whether this answer replays anything.
@@ -131,7 +147,8 @@ func ParsePrefetch(s string) (Prefetch, error) {
 // Prefetching reports whether this answer fills anything.
 func (p Prefetch) Prefetching() bool { return p == PrefetchEager || p == PrefetchTree }
 
-func (p Prefetch) display() string {
+// String is the canonical spelling; unset is off.
+func (p Prefetch) String() string {
 	if p == PrefetchUnset {
 		return string(PrefetchOff)
 	}
@@ -146,7 +163,8 @@ type ShareWords struct {
 	Prefetch Prefetch
 }
 
-func (w Watch) display() string {
+// String is the canonical spelling; unset is off.
+func (w Watch) String() string {
 	if w == WatchUnset {
 		return string(WatchOff)
 	}
@@ -166,10 +184,10 @@ func (w ShareWords) Differences(other ShareWords) []Difference {
 		out = append(out, Difference{"owner", w.Owner.String(), other.Owner.String()})
 	}
 	if w.Watch != other.Watch {
-		out = append(out, Difference{"watch", w.Watch.display(), other.Watch.display()})
+		out = append(out, Difference{"watch", w.Watch.String(), other.Watch.String()})
 	}
 	if w.Prefetch != other.Prefetch {
-		out = append(out, Difference{"prefetch", w.Prefetch.display(), other.Prefetch.display()})
+		out = append(out, Difference{"prefetch", w.Prefetch.String(), other.Prefetch.String()})
 	}
 	return out
 }
@@ -184,7 +202,11 @@ type MountWords struct {
 // shareKeySetting maps each key beyond read and write that a mount may carry
 // to the session setting that supplies its default. ParseMode, which reads the
 // session's own settings, refuses these keys and names that setting.
-var shareKeySetting = map[string]string{"owner": "shareOwner", "watch": "watch", "prefetch": "prefetch"}
+var shareKeySetting = map[string]string{
+	"owner":    "REMOTE_DOCKER_SHARE_OWNER",
+	"watch":    "REMOTE_DOCKER_WATCH",
+	"prefetch": "REMOTE_DOCKER_PREFETCH",
+}
 
 func isShareKey(key string) bool {
 	_, ok := shareKeySetting[key]

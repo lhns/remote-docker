@@ -15,7 +15,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/session"
-	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/workspace"
 )
@@ -49,7 +48,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	watch, err := fswatch.ParseMode(cfg.Watch)
+	watch, err := workspace.ParseWatchSetting(cfg.Watch)
 	if err != nil {
 		return err
 	}
@@ -83,7 +82,7 @@ func runSession(cmd *cobra.Command, cfg config.Config) error {
 	_, _ = fmt.Fprintf(out, "Docker endpoint ready. In another terminal:\n\n")
 	_, _ = fmt.Fprintf(out, "    %s\n\n", exportLine(s.Endpoint))
 	_, _ = fmt.Fprintln(out, "Then use docker normally. Ctrl-C here closes the session.")
-	if watch != fswatch.ModeOff {
+	if watch.Watching() {
 		_, _ = fmt.Fprintf(out,
 			"\nWatching this directory so file watchers in containers see your edits (%s).\n", watch)
 	}

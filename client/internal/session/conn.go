@@ -17,7 +17,6 @@ import (
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/client/internal/rewrite"
-	"github.com/lhns/remote-docker/core-client/fswatch"
 	"github.com/lhns/remote-docker/core-client/keys"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/machine"
@@ -84,7 +83,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:   live.clientID,
 		Guard:    live.guard,
 
-		Watch:      watchWord(s.opts.Watch),
+		Watch:      s.opts.Watch,
 		Prefetch:   prefetchWord(s.prefetch),
 		Mode:       s.opts.Mode,
 		ShareOwner: workspace.Owner{UID: s.opts.Config.ShareUID, GID: s.opts.Config.ShareGID, Set: true},
@@ -292,7 +291,7 @@ func (s *Session) syncWatch() {
 	shares := sharesOf(s.registry)
 	w.Sync(shares)
 	for _, share := range shares {
-		if share.Mode != fswatch.ModeOff {
+		if share.Mode.Watching() {
 			s.notifyWanted()
 			return
 		}
