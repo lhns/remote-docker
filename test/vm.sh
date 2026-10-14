@@ -267,6 +267,28 @@ else
     bad "the bind mount did not resolve: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
+# This daemon runs stock docker:dind, which has no fuse-overlayfs, so a union
+# cannot be served in it. The mount must be refused at once saying so, not after
+# the 90s a union is given to come up, and the agent says so when the daemon
+# starts. started/elapsed are in seconds.
+started=$SECONDS
+if outputs 'fuse-overlayfs' bash -c "cd '$WORK/project' && timeout 60 '$WORK/remote-docker' run --rm -v '$WORK/project:/w:write=back' alpine:3 true"; then
+    ok "a write=back mount names fuse-overlayfs when the daemon's image lacks it"
+else
+    bad "the write=back mount did not name fuse-overlayfs: [$LAST_OUTPUT]"
+fi
+elapsed=$((SECONDS - started))
+if [ "$LAST_STATUS" -ne 0 ] && [ "$elapsed" -le 20 ]; then
+    ok "and it was refused in ${elapsed}s rather than after the union's timeout"
+else
+    bad "the write=back mount took ${elapsed}s (status $LAST_STATUS): [$LAST_OUTPUT]"
+fi
+if outputs 'image has no fuse-overlayfs' cat "$WORK/agent-true.log"; then
+    ok "the agent warned that the daemon's image has no fuse-overlayfs"
+else
+    bad "no warning about fuse-overlayfs in the agent log: [$(tail -20 "$WORK/agent-true.log" | tr '\n' ' ')]"
+fi
+
 if out=$(rd remote status 2>&1) &&
     echo "$out" | grep -q "^status"; then
     ok "remote status answers against a machine workspace"

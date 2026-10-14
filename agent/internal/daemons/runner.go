@@ -360,6 +360,7 @@ func (m *Manager) await(ctx context.Context, account, name string) (*Daemon, err
 				}
 				if m.answers(ctx, d) {
 					go m.warnIfSlowStorage(d)
+					go m.warnIfNoFuseOverlayfs(d)
 					return d, nil
 				}
 			}
@@ -530,18 +531,20 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			continue
 		}
 
-		m.mu.Lock()
-		if m.byName == nil {
-			m.byName = map[string]*Daemon{}
-		}
-		m.byName[account] = &Daemon{
+		adoptedDaemon := &Daemon{
 			Account: account,
 			PID:     pid,
 			Socket:  SocketPathFor(account),
 		}
+		m.mu.Lock()
+		if m.byName == nil {
+			m.byName = map[string]*Daemon{}
+		}
+		m.byName[account] = adoptedDaemon
 		m.mu.Unlock()
 
 		m.log().Info("adopted a running daemon", "account", account)
+		go m.warnIfNoFuseOverlayfs(adoptedDaemon)
 		adopted++
 	}
 	return adopted, nil
@@ -635,6 +638,36 @@ func (m *Manager) warnIfSlowStorage(d *Daemon) {
 		"filesystem that refused overlay2; set WORKSPACE_DIND_STORAGE_DRIVER (fuse-overlayfs "+
 		"for Ceph- or NFS-backed data) and remove the container to rebuild it.",
 		"account", d.Account, "container", ContainerName(d.Account))
+}
+
+// warnIfNoFuseOverlayfs says so, once per start or adoption, when the image a
+// daemon runs has no fuse-overlayfs.
+//
+// A write=back or write=ephemeral mount is a union served by fuse-overlayfs,
+// which the union child resolves INSIDE the daemon's mount namespace (ADR
+// 0044), so the stock dind image cannot serve one. Without this the first sign
+// is that mount failing on a container start. Only a plain answer counts:
+// anything that stops the question being asked logs nothing.
+//
+// On its own goroutine and context, like warnIfSlowStorage.
+func (m *Manager) warnIfNoFuseOverlayfs(d *Daemon) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	name := ContainerName(d.Account)
+	out, err := m.parent().Line(ctx, "exec", name, "sh", "-c",
+		"command -v fuse-overlayfs >/dev/null 2>&1 && echo yes || echo no")
+	if err != nil || out != "no" {
+		return
+	}
+	image, err := m.inspect(ctx, name, "{{.Config.Image}}")
+	if err != nil {
+		image = "(unknown)"
+	}
+	m.log().Warn("a daemon's image has no fuse-overlayfs, so write=back and write=ephemeral "+
+		"mounts cannot work in it. Run the workspace's own image for per-account daemons "+
+		"with WORKSPACE_DIND_IMAGE and remove the container to rebuild it.",
+		"account", d.Account, "container", name, "image", image)
 }
 
 // reconcile brings a daemon created from older settings up to date.

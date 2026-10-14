@@ -553,7 +553,10 @@ premise of the project, and it applies to building it too. So:
   asks whether the path is a MOUNT (st_dev against its parent, which works from
   outside the namespace too -- `test/union-probe.sh` section 12), and the
   suites assert that a container's share reports fuse-overlayfs rather than the
-  daemon's own disk.
+  daemon's own disk. Readiness is still the mount and never the process, but a
+  child that EXITS before the mount answers ends `Prepare` at once with its own
+  stderr tail: waiting out `readyTimeout` for a missing fuse-overlayfs named no
+  cause, and the budget read as the likelier mistake (`test/vm.sh` section 4).
 - **The union child enters the daemon's NETWORK namespace as well as its pid
   and mount ones.** With a daemon per account the reverse forward carrying the
   NFS export is bound inside that daemon's netns and reaches nowhere else (ADR
