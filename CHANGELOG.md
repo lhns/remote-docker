@@ -15,6 +15,10 @@ software.
   that runs as another user.
 - Starting a container whose shared directory cannot mount now says why, and
   what to do, instead of printing the daemon's `connection refused`.
+- A `write=back` or `write=ephemeral` mount on a workspace whose per-account
+  daemon image lacks `fuse-overlayfs` now fails at once saying so, instead of
+  after 90 seconds with no cause, and the agent logs a warning when such a
+  daemon starts.
 
 ## 0.10.0 — 2026-10-07
 

@@ -12,8 +12,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path"
 	"sort"
 	"strings"
@@ -102,6 +104,10 @@ type Manager struct {
 	// m.shares, so nothing else would show that it happened.
 	probe   func(context.Context, union.Spec) error
 	onStart func(union.Spec)
+
+	// command builds the child. Nil in production, where it is union.Reexec of
+	// Self; tests substitute a process that exits or stays up.
+	command func(context.Context, union.Spec) *exec.Cmd
 }
 
 // live is one mounted union.
@@ -123,6 +129,26 @@ type live struct {
 	// on an agent restart costs one oversized reply and no correctness.
 	appliedMu sync.Mutex
 	applied   map[string]applied
+
+	// exit is why the child last stopped, so a Prepare still waiting for the
+	// mount can say so instead of waiting out readyTimeout. Set by the
+	// supervisor after every attempt.
+	exitMu sync.Mutex
+	exit   error
+}
+
+// setExit records why the child stopped.
+func (l *live) setExit(err error) {
+	l.exitMu.Lock()
+	l.exit = err
+	l.exitMu.Unlock()
+}
+
+// exited is why the child stopped, or nil while it has not.
+func (l *live) exited() error {
+	l.exitMu.Lock()
+	defer l.exitMu.Unlock()
+	return l.exit
 }
 
 // applied is one file as the client's stream left it.
@@ -304,7 +330,7 @@ func (m *Manager) mount(ctx context.Context, k, host, cacheVol string, spec unio
 	m.shares[k] = l
 	m.mu.Unlock()
 
-	if err := m.waitReady(ctx, spec); err != nil {
+	if err := m.waitReady(ctx, spec, l); err != nil {
 		m.discard(k, l)
 		return "", err
 	}
@@ -357,6 +383,10 @@ func (m *Manager) start(spec union.Spec, host string) *live {
 			if ctx.Err() != nil {
 				return
 			}
+			if err == nil {
+				err = errors.New("it exited without an error")
+			}
+			l.setExit(err)
 			logx.Or(m.Log).Warn("a union exited; mounting it again",
 				"export", spec.Export, "err", err, "in", restartDelay)
 			select {
@@ -405,29 +435,75 @@ func legacy(spec union.Spec) union.Spec {
 // run is one attempt: the agent re-executed as the child that enters the
 // daemon's namespace and becomes fuse-overlayfs.
 func (m *Manager) run(ctx context.Context, spec union.Spec) error {
-	cmd := union.Reexec(ctx, m.Self, union.ModeServe, spec)
+	var cmd *exec.Cmd
+	if m.command != nil {
+		cmd = m.command(ctx, spec)
+	} else {
+		cmd = union.Reexec(ctx, m.Self, union.ModeServe, spec)
+	}
 	// Both to stderr, as supervise.Dockerd does: what fuse-overlayfs says is
 	// the only account of why a union failed, and losing it would leave a
-	// share that does not work and says nothing.
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	// share that does not work and says nothing. The tail is kept as well, so
+	// a Prepare that finds the child gone can pass that account on.
+	tail := &tailBuffer{max: tailBytes}
+	w := io.MultiWriter(os.Stderr, tail)
+	cmd.Stdout, cmd.Stderr = w, w
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("unions: starting the union for %s: %w", spec.Export, err)
 	}
-	return cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		if msg := tail.String(); msg != "" {
+			return errors.New(msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// tailBytes bounds how much of the child's output is kept to report.
+const tailBytes = 2048
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = append([]byte(nil), t.buf[len(t.buf)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.buf))
 }
 
 // waitReady blocks until the union answers, or gives up.
 //
 // The mount is what is waited for, not the process: fuse-overlayfs is up before
 // its mount is, and a container bound to a mountpoint that is not yet a mount
-// sees an empty directory rather than an error.
-func (m *Manager) waitReady(ctx context.Context, spec union.Spec) error {
+// sees an empty directory rather than an error. A child that has exited
+// without the mount ever answering ends the wait at once with its own words
+// (the usual cause is fuse-overlayfs missing from the daemon's image); the
+// supervisor goes on restarting it, as it does for any union that fails later.
+func (m *Manager) waitReady(ctx context.Context, spec union.Spec, l *live) error {
 	started := time.Now()
 	deadline := started.Add(readyTimeout)
 	for {
 		if m.alive(spec) {
 			return nil
+		}
+		if err := l.exited(); err != nil {
+			return fmt.Errorf("unions: the union for %s stopped before it mounted: %w", spec.Export, err)
 		}
 		if time.Now().After(deadline) {
 			// How long, because the budget is the likeliest thing to be wrong

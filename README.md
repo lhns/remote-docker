@@ -787,7 +787,7 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
 | `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
-| `WORKSPACE_DIND_IMAGE` | `WORKSPACE_IMAGE`, else `docker:28-dind` | image a per-account daemon runs. Stock dind has no `fuse-overlayfs`, so no unions and no fuse-overlayfs storage driver |
+| `WORKSPACE_DIND_IMAGE` | `WORKSPACE_IMAGE`, else `docker:28-dind` | image a per-account daemon runs. Stock dind has no `fuse-overlayfs`, so no unions and no fuse-overlayfs storage driver; the agent logs a warning when a daemon starts without it |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
 | `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon, and the paths a bind may name; see below |
 | `WORKSPACE_DAEMON_READY_TIMEOUT` | `180` | seconds a cold per-account daemon has to answer; see below |
