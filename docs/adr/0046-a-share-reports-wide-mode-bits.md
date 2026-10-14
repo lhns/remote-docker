@@ -47,6 +47,14 @@ plain mount and at the top and inside a union, and `git status` as root.
 
 ## Amendment 2026-10-14: root is the default owner, and the owner is a setting
 
+- **Per mount, same day:** `owner=` in a mount's words sets the owner of that
+  share (ADR 0042), so two images in one project can each be right. The
+  setting is the default for a mount naming none. The share's attributes are
+  the session's with only the uid and gid replaced, because the session's carry
+  `AlwaysExecutable`, which Windows cannot do without; they are fixed when the
+  share is registered, so a second mount of the directory naming another owner
+  is refused rather than changing it under the first.
+
 - The first decision assumed that with wide bits nothing needs the numbers to
   match. git does: it refuses a worktree whose top directory is owned by
   another uid ("detected dubious ownership"), and root is not exempt. With the

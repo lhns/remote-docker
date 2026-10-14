@@ -32,6 +32,12 @@ type Share struct {
 	// a file at the target (ADR 0039).
 	File string
 
+	// Words are what this share was registered with, resolved: the owner is
+	// always set. Fixed for the life of the share, which is also why they
+	// can be compared: a share's filesystem is built with them and never
+	// replaced (ADR 0046).
+	Words workspace.ShareWords
+
 	fs billy.Filesystem
 }
 
@@ -55,12 +61,15 @@ type Registry struct {
 	// time and is told there is no such file or directory. Recreating the
 	// containers was the only way back.
 	//
+	// The words come back with the path, so a restored share reports the
+	// owner it was first given rather than the session's default.
+	//
 	// Nil means a miss is a miss, which is what a query session and every test
 	// without a record want. What it must NOT be is a way for the far side to
 	// name a directory: see session.shareStore, where the answer comes from
 	// what this machine wrote down and the id is recomputed from the path
 	// before it is believed.
-	Restore func(exportPath string) (localPath string, ok bool)
+	Restore func(exportPath string) (localPath string, words workspace.ShareWords, ok bool)
 
 	// Recorded names the exports Restore can answer for. A root handle carries
 	// only a digest of its export, and this is how one is matched to a record.
@@ -104,8 +113,13 @@ func NewRegistry(attrs Attrs) *Registry {
 
 // Register exports localPath at /m/<id>, deriving the id from the path so it
 // is the same on every run. A directory already registered is returned as it
-// stands rather than duplicated.
-func (r *Registry) Register(localPath string) (*Share, error) {
+// stands rather than duplicated, with ITS words: the caller compares them to
+// what it asked for.
+//
+// Unset words take the registry's attributes. They are applied to a copy of
+// them, because r.attrs is the session's (it carries AlwaysExecutable on
+// Windows) and nfsserve.DefaultAttrs is not.
+func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Share, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("nfsserve: cannot export %s: %w", localPath, err)
@@ -145,11 +159,18 @@ func (r *Registry) Register(localPath string) (*Share, error) {
 		base, file = filepath.Dir(localPath), filepath.Base(localPath)
 	}
 
+	attrs := r.attrs
+	if words.Owner.Set {
+		attrs.UID, attrs.GID = words.Owner.UID, words.Owner.GID
+	}
+	words.Owner = workspace.Owner{UID: attrs.UID, GID: attrs.GID, Set: true}
+
 	share := &Share{
 		ExportPath: exportPath,
 		LocalPath:  localPath,
 		File:       file,
-		fs:         withAttrs(r.shareFS(base, file), r.attrs, exportPath, r.OnRead),
+		Words:      words,
+		fs:         withAttrs(r.shareFS(base, file), attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
 	r.byPath[key] = share
@@ -196,11 +217,11 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	// composed. Which is also why the rest is "/" without asking: a restore
 	// registers exactly the path it was given.
 	clean := normalizeExport(exportPath)
-	local, ok := r.Restore(clean)
+	local, words, ok := r.Restore(clean)
 	if !ok {
 		return nil, "", false
 	}
-	share, err := r.Register(local)
+	share, err := r.Register(local, words)
 	if err != nil || share.ExportPath != clean {
 		return nil, "", false
 	}

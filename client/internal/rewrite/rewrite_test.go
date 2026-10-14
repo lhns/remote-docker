@@ -14,15 +14,20 @@ import (
 // fakeSharer records what was exported and hands back deterministic paths.
 type fakeSharer struct {
 	shared []string
-	files  map[string]string // local path -> base name, for single-file shares
+	files  map[string]string               // local path -> base name, for single-file shares
+	words  map[string]workspace.ShareWords // what each path was shared with
 	err    error
 }
 
-func (f *fakeSharer) Share(localPath string) (string, string, error) {
+func (f *fakeSharer) Share(localPath string, words workspace.ShareWords) (string, string, error) {
 	if f.err != nil {
 		return "", "", f.err
 	}
 	f.shared = append(f.shared, localPath)
+	if f.words == nil {
+		f.words = map[string]workspace.ShareWords{}
+	}
+	f.words[localPath] = words
 	return workspace.ExportPathForID(workspace.ShareID(localPath)), f.files[localPath], nil
 }
 

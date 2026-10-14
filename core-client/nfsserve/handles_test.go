@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 	nfs "github.com/willscott/go-nfs"
 )
 
@@ -96,7 +97,9 @@ func TestRootHandleRestoresARecordedExport(t *testing.T) {
 
 	r := NewRegistry(DefaultAttrs)
 	r.Recorded = func() []string { return []string{exportOf(dir)} }
-	r.Restore = func(export string) (string, bool) { return dir, export == exportOf(dir) }
+	r.Restore = func(export string) (string, workspace.ShareWords, bool) {
+		return dir, workspace.ShareWords{}, export == exportOf(dir)
+	}
 
 	if _, _, err := New(r, nil).handler.FromHandle(handle); err != nil {
 		t.Fatalf("a recorded export's root handle did not resolve: %v", err)
@@ -111,7 +114,7 @@ func TestRootHandlesDifferPerShare(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 
 	r := registryFor(t, first)
-	other, err := r.Register(second)
+	other, err := r.Register(second, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}

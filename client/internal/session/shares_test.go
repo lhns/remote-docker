@@ -33,12 +33,12 @@ func store(t *testing.T) (*shareStore, string, string) {
 // in another, and only creation registers a share.
 func TestARememberedShareIsRestoredInAnotherSession(t *testing.T) {
 	s, project, export := store(t)
-	s.remember(export, project)
+	s.remember(export, project, workspace.ShareWords{})
 
 	// Another session over the same record: nothing registered, everything
 	// remembered.
 	next := newShareStore(s.path, nil)
-	got, ok := next.restore(export)
+	got, _, ok := next.restore(export)
 	if !ok {
 		t.Fatal("a share this workspace has a volume for was not restored")
 	}
@@ -52,7 +52,7 @@ func TestARememberedShareIsRestoredInAnotherSession(t *testing.T) {
 func TestAnUnknownExportRestoresNothing(t *testing.T) {
 	s, _, _ := store(t)
 
-	if _, ok := s.restore("/m/0123456789abcdef"); ok {
+	if _, _, ok := s.restore("/m/0123456789abcdef"); ok {
 		t.Error("an export nobody recorded was restored")
 	}
 }
@@ -63,7 +63,7 @@ func TestAnUnknownExportRestoresNothing(t *testing.T) {
 // machine never offered.
 func TestATamperedRecordIsRefused(t *testing.T) {
 	s, project, export := store(t)
-	s.remember(export, project)
+	s.remember(export, project, workspace.ShareWords{})
 
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
@@ -83,7 +83,7 @@ func TestATamperedRecordIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok := newShareStore(s.path, nil).restore(export); ok {
+	if _, _, ok := newShareStore(s.path, nil).restore(export); ok {
 		t.Error("an export was resolved to a directory whose id does not match it")
 	}
 }
@@ -91,12 +91,12 @@ func TestATamperedRecordIsRefused(t *testing.T) {
 // A path that has gone is dropped rather than offered.
 func TestAMissingDirectoryIsDropped(t *testing.T) {
 	s, project, export := store(t)
-	s.remember(export, project)
+	s.remember(export, project, workspace.ShareWords{})
 
 	if err := os.RemoveAll(project); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := newShareStore(s.path, nil).restore(export); ok {
+	if _, _, ok := newShareStore(s.path, nil).restore(export); ok {
 		t.Error("a directory that no longer exists was restored")
 	}
 }
@@ -106,7 +106,7 @@ func TestAMissingDirectoryIsDropped(t *testing.T) {
 // with the same spelling, and the second is the dangerous one.
 func TestARecordFromAnotherMachineIsIgnored(t *testing.T) {
 	s, project, export := store(t)
-	s.remember(export, project)
+	s.remember(export, project, workspace.ShareWords{})
 
 	var file shareFile
 	data, err := os.ReadFile(s.path)
@@ -121,7 +121,7 @@ func TestARecordFromAnotherMachineIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok := newShareStore(s.path, nil).restore(export); ok {
+	if _, _, ok := newShareStore(s.path, nil).restore(export); ok {
 		t.Error("a record written on another machine was used")
 	}
 }
@@ -138,7 +138,7 @@ func TestAnOldRecordExpires(t *testing.T) {
 	}
 	s.save()
 
-	if _, ok := newShareStore(s.path, nil).restore(export); ok {
+	if _, _, ok := newShareStore(s.path, nil).restore(export); ok {
 		t.Error("a record older than the expiry was still offered")
 	}
 }
@@ -147,13 +147,13 @@ func TestAnOldRecordExpires(t *testing.T) {
 // be asked for again.
 func TestForgetDropsWhatHasNoVolume(t *testing.T) {
 	s, project, export := store(t)
-	s.remember(export, project)
+	s.remember(export, project, workspace.ShareWords{})
 
 	s.forget(map[string]bool{"/m/0123456789abcdef": true})
-	if _, ok := s.restore(export); ok {
+	if _, _, ok := s.restore(export); ok {
 		t.Error("a record survived the volume it belonged to")
 	}
-	if _, ok := newShareStore(s.path, nil).restore(export); ok {
+	if _, _, ok := newShareStore(s.path, nil).restore(export); ok {
 		t.Error("the dropped record came back from the file")
 	}
 }
@@ -177,9 +177,9 @@ func TestAnUnusableRecordIsEmptyRatherThanFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	export := workspace.ExportPathForID(workspace.ShareID(project))
-	s.remember(export, project)
+	s.remember(export, project, workspace.ShareWords{})
 
-	if _, ok := newShareStore(path, nil).restore(export); !ok {
+	if _, _, ok := newShareStore(path, nil).restore(export); !ok {
 		t.Error("the record did not recover after a corrupt file")
 	}
 }
@@ -188,10 +188,10 @@ func TestAnUnusableRecordIsEmptyRatherThanFatal(t *testing.T) {
 // than panic.
 func TestANilStoreRestoresNothing(t *testing.T) {
 	var s *shareStore
-	if _, ok := s.restore("/m/0123456789abcdef"); ok {
+	if _, _, ok := s.restore("/m/0123456789abcdef"); ok {
 		t.Error("a session with no record restored something")
 	}
-	s.remember("/m/0123456789abcdef", "somewhere")
+	s.remember("/m/0123456789abcdef", "somewhere", workspace.ShareWords{})
 	s.forget(nil)
 }
 
@@ -207,15 +207,15 @@ func TestConcurrentRemembersKeepTheNewerSet(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.remember(export, project)
+		s.remember(export, project, workspace.ShareWords{})
 	}()
 	<-held
-	s.remember(otherExport, other)
+	s.remember(otherExport, other, workspace.ShareWords{})
 	<-done
 
 	next := newShareStore(s.path, nil)
 	for _, e := range []string{export, otherExport} {
-		if _, ok := next.restore(e); !ok {
+		if _, _, ok := next.restore(e); !ok {
 			t.Errorf("%s is missing on disk after two concurrent remembers", e)
 		}
 	}

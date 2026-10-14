@@ -372,7 +372,7 @@ default.**
 | `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
-| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid[:gid]` every file in a share reports, for an image that runs as another user (gid defaults to the uid) |
+| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid.gid` every file in a share reports, for an image that runs as another user (gid defaults to the uid). The default for mounts naming no `owner=`; any one non-digit separates the ids. See [A container that is not root](#a-container-that-is-not-root) |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
@@ -1161,11 +1161,27 @@ stays supported: a single-account workspace has nothing to separate.
 
 ### A container that is not root
 
-Every file in a share is reported as owned by the workspace account (uid
-10000 and up) with mode 0666, every directory 0777, so an image that runs as
-its own user can read and write the share. A `chown` inside the container is
-accepted and does nothing, and a read-only bind (`ro`) is still read-only
+Every file in a share is reported as owned by root (`0:0`) with mode 0666,
+every directory 0777, so an image that runs as its own user can read and write
+the share. A `chown` inside the container is accepted and does nothing, and a
+read-only bind (`ro`) is still read-only
 ([ADR 0046](docs/adr/0046-a-share-reports-wide-mode-bits.md)).
+
+git refuses a repository owned by another uid, so an image that runs as a
+user needs the share to report that user. Name it on the mount, or for every
+mount with `REMOTE_DOCKER_SHARE_OWNER`:
+
+```bash
+docker run -v ./project:/app:owner=1000.2000 img      # uid 1000, gid 2000
+docker run -v ./project:/app:ro,owner=1000 img        # gid defaults to the uid
+docker run --mount 'type=bind,src=./project,dst=/app,"consistency=owner=1000:2000"' img
+```
+
+The separator is any one character that is not a digit, `=` or `,`. Write `.`
+in `-v`, whose option list cannot carry a fourth colon; `:` works in `--mount`
+and in a compose file's `consistency:`. One directory has one owner: a second
+mount of it naming another is refused until the containers using it are gone
+and the session restarted.
 
 **A named volume is not a share, and gets none of that.** Where the image has no
 directory at the mount path, the daemon creates it root-owned 0755, so a

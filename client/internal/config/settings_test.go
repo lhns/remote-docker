@@ -110,8 +110,25 @@ func TestDiffSettings(t *testing.T) {
 
 func TestNonDefaultSettings(t *testing.T) {
 	got := NonDefaultSettings(Config{Prefetch: "eager", ShareOwner: "1000"}.SessionSettings())
-	want := []string{"prefetch=eager", "share-owner=1000"}
+	want := []string{"prefetch=eager", "share-owner=1000:1000"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// One owner, however it is spelled, is one setting: a command asking for
+// 1000 must not restart a session that runs 1000:1000.
+func TestShareOwnerSpellingsAgree(t *testing.T) {
+	want := Config{ShareOwner: "1000:1000"}.SessionSettings()["share-owner"]
+	for _, in := range []string{"1000", "1000:1000", "1000.1000"} {
+		if got := (Config{ShareOwner: in}).SessionSettings()["share-owner"]; got != want {
+			t.Errorf("owner %q = %q, want %q", in, got, want)
+		}
+	}
+	if got := (Config{ShareUID: 1000, ShareGID: 1000}).SessionSettings()["share-owner"]; got != want {
+		t.Errorf("parsed owner = %q, want %q", got, want)
+	}
+	if got := (Config{}).SessionSettings()["share-owner"]; got != "0:0" {
+		t.Errorf("default owner = %q, want 0:0", got)
 	}
 }

@@ -158,6 +158,9 @@ func parseModeWord(word string) (Mode, error) {
 		w, err := parseWrite(value)
 		return Mode{Write: w}, err
 	default:
+		if setting, ok := shareKeySetting[axis]; ok {
+			return ModeUnset, fmt.Errorf("workspace: %s= is a word for one mount, not part of a mode; set %s for a default", axis, setting)
+		}
 		return ModeUnset, fmt.Errorf("workspace: %q is not a mount mode axis; want read= or write=", axis)
 	}
 }
@@ -173,7 +176,7 @@ func IsModeWord(s string) bool {
 		return true
 	}
 	axis, _, ok := strings.Cut(s, "=")
-	return ok && (axis == "read" || axis == "write")
+	return ok && (axis == "read" || axis == "write" || isShareKey(axis))
 }
 
 func parseRead(s string) (Read, error) {

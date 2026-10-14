@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	nfs "github.com/willscott/go-nfs"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // A hard link is made, and the second name IS the file: LINK as RFC 1813
@@ -116,7 +118,7 @@ func TestLinkIntoASingleFileShareIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(file)
+	share, err := r.Register(file, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}

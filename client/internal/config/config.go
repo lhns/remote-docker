@@ -89,7 +89,7 @@ type Config struct {
 	// DefaultDaemonStandby; negative never.
 	DaemonStandby time.Duration
 
-	// ShareOwner is the "uid[:gid]" every file in a share reports (ADR 0046);
+	// ShareOwner is the "uid[<sep>gid]" every file in a share reports (ADR 0046);
 	// ShareUID and ShareGID are it parsed, and zero when unset.
 	ShareOwner string
 	ShareUID   uint32
@@ -427,20 +427,15 @@ func duration(v string) (time.Duration, bool) {
 	return d, true
 }
 
-// ParseShareOwner reads "uid" or "uid:gid"; the gid defaults to the uid.
+// ParseShareOwner reads "uid", or a uid and a gid joined by one non-digit
+// character (1000:100 or 1000.100); the gid defaults to the uid. The same
+// grammar as a mount's owner= word.
 func ParseShareOwner(v string) (uid, gid uint32, err error) {
-	u, g, hasGID := strings.Cut(strings.TrimSpace(v), ":")
-	id, err := strconv.ParseUint(u, 10, 32)
+	o, err := workspace.ParseOwner(v)
 	if err != nil {
-		return 0, 0, fmt.Errorf("owner %q is not uid or uid:gid", v)
+		return 0, 0, err
 	}
-	gidv := id
-	if hasGID {
-		if gidv, err = strconv.ParseUint(g, 10, 32); err != nil {
-			return 0, 0, fmt.Errorf("owner %q is not uid or uid:gid", v)
-		}
-	}
-	return uint32(id), uint32(gidv), nil
+	return o.UID, o.GID, nil
 }
 
 func applyEnv(cfg *Config) {

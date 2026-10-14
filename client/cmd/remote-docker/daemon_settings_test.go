@@ -13,7 +13,7 @@ func TestSettingsMessages(t *testing.T) {
 		config.Config{Prefetch: "eager", Watch: "partial", ShareOwner: "1000"}.SessionSettings(),
 		func(string) bool { return true },
 	)
-	if got, want := describeChanges(changes), "prefetch off -> eager, share-owner unset -> 1000, watch off -> partial"; got != want {
+	if got, want := describeChanges(changes), "prefetch off -> eager, share-owner 0:0 -> 1000:1000, watch off -> partial"; got != want {
 		t.Errorf("describeChanges = %q, want %q", got, want)
 	}
 

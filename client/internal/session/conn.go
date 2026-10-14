@@ -83,9 +83,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		Client:   live.clientID,
 		Guard:    live.guard,
 
-		Mode:      s.opts.Mode,
-		ModePaths: s.opts.ModePaths,
-		Watching:  s.watch != nil,
+		Mode:       s.opts.Mode,
+		ShareOwner: workspace.Owner{UID: s.opts.Config.ShareUID, GID: s.opts.Config.ShareGID, Set: true},
+		ModePaths:  s.opts.ModePaths,
+		Watching:   s.watch != nil,
 
 		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },
 		UnionReady: info.Union,

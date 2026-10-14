@@ -1547,6 +1547,63 @@ fi
 hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
 
 echo
+echo "== 14b. words a mount carries for its share (ADR 0042) =="
+# The client here still runs with watching off and the owner at 0:0, so every
+# answer below comes from the mount itself.
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    WORDSDIR="$WORK/words"
+    mkdir -p "$WORDSDIR/sub"
+    echo "x" >"$WORDSDIR/sub/a"
+
+    # -v cannot carry a fourth colon, so the gid follows a dot there.
+    if outputs '^1000 1000$' dockert run --rm -v "$WORDSDIR:/w:owner=1000" alpine:3 stat -c '%u %g' /w; then
+        ok "owner=1000 on -v reports 1000:1000"
+    else
+        bad "owner=1000 reports [$LAST_OUTPUT], want 1000 1000"
+    fi
+    OWNER2DIR="$WORK/words-two"
+    mkdir -p "$OWNER2DIR"
+    if outputs '^1000 2000$' dockert run --rm -v "$OWNER2DIR:/w:owner=1000.2000" alpine:3 stat -c '%u %g' /w; then
+        ok "owner=1000.2000 on -v reports 1000:2000"
+    else
+        bad "owner=1000.2000 reports [$LAST_OUTPUT], want 1000 2000"
+    fi
+    OWNER3DIR="$WORK/words-three"
+    mkdir -p "$OWNER3DIR"
+    if outputs '^1000 2000$' dockert run --rm --mount "type=bind,src=$OWNER3DIR,dst=/w,\"consistency=owner=1000:2000\"" alpine:3 stat -c '%u %g' /w; then
+        ok "owner=1000:2000 on --mount reports 1000:2000"
+    else
+        bad "owner=1000:2000 on --mount reports [$LAST_OUTPUT], want 1000 2000"
+    fi
+
+    # A directory no mount named an owner for keeps the session's.
+    UNTOUCHED="$WORK/words-untouched"
+    mkdir -p "$UNTOUCHED"
+    if outputs '^0 0$' dockert run --rm -v "$UNTOUCHED:/w" alpine:3 stat -c '%u %g' /w; then
+        ok "a mount naming no owner reports the session's 0:0"
+    else
+        bad "a mount naming no owner reports [$LAST_OUTPUT], want 0 0"
+    fi
+
+    # A share's words are fixed once it exists.
+    if outputs 'already shared with owner=1000:1000.*asks for owner=2000:2000' dockert run --rm -v "$WORDSDIR:/w:owner=2000" alpine:3 true \
+        && grep -q 'fix:' <<<"$LAST_OUTPUT"; then
+        ok "a second owner for a registered directory is refused with a fix"
+    else
+        bad "a second owner was not refused as expected: [$LAST_OUTPUT]"
+    fi
+
+    # The reason owner= exists: git compares the owner with its own uid.
+    if outputs 'On branch|No commits yet' dockert run --rm --user 1000 --entrypoint sh -v "$WORDSDIR:/w:owner=1000" alpine/git -c 'cd /w && git init -q && git status'; then
+        ok "git as uid 1000 accepts an owner=1000 share without safe.directory"
+    else
+        bad "git status as uid 1000 on an owner=1000 share: [$LAST_OUTPUT]"
+    fi
+else
+    bad "no client is running, so the mount words could not be tested"
+fi
+
+echo
 echo "== 15. does replay make a container's watcher fire? =="
 # 11b shows a client-side change notifies nobody, 11d which syscall would; this
 # runs the whole path (client watcher, SSH channel, agent replay). The client is

@@ -115,11 +115,12 @@ func TestSplitMode(t *testing.T) {
 		// which understands more options than this program does.
 		{"rw,nocopy", workspace.ModeUnset, "rw,nocopy"},
 	} {
-		got, _, leftover, err := splitMode(c.options)
+		words, _, leftover, err := splitMode(c.options)
 		if err != nil {
 			t.Errorf("splitMode(%q): %v", c.options, err)
 			continue
 		}
+		got := words.Mode
 		if got != c.want || leftover != c.leftover {
 			t.Errorf("splitMode(%q) = %v, %q; want %v, %q",
 				c.options, got, leftover, c.want, c.leftover)

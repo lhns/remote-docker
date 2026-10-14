@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type readLog struct {
@@ -44,7 +46,7 @@ func TestReadsAreReportedByShareAndPath(t *testing.T) {
 	log := &readLog{}
 	r := NewRegistry(DefaultAttrs)
 	r.OnRead = log.observe
-	if _, err := r.Register(dir); err != nil {
+	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	share, _, ok := r.Lookup(exportOf(dir))

@@ -132,7 +132,7 @@ func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
 func registryFor(t testing.TB, dir string) *Registry {
 	t.Helper()
 	r := NewRegistry(DefaultAttrs)
-	if _, err := r.Register(dir); err != nil {
+	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	return r

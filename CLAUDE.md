@@ -364,8 +364,13 @@ premise of the project, and it applies to building it too. So:
 - **A docker.sock bind is the container's own daemon, never the parent's**
   (ADR 0049). `/var/run/docker.sock` as a bind source is passed through, even
   when this machine has one.
-- **A mode word is `read=X` or `write=Y`, nothing else, and it is consumed,
-  never forwarded** (ADR 0042). It arrives in a `-v` option list or in
+- **A mount word is `read=X`, `write=Y` or `owner=U[<sep>G]`, nothing else, and
+  it is consumed, never forwarded** (ADR 0042). `owner=` is a word of the SHARE
+  and not of the mode: `workspace.ParseMode` (the session settings) refuses it,
+  `ParseMount` reads it, and `IsModeWord` claims the key so a misspelt value is
+  refused here instead of reaching the daemon. `-v` cannot carry `1000:2000`
+  (docker/cli refuses a fourth colon), so the separator is any one non-digit
+  and docs write `owner=1000.2000`. It arrives in a `-v` option list or in
   `--mount consistency=` and describes the mount THIS program makes; the
   daemon REJECTS what it does not know, so it is taken out whether or not the
   bind is rewritten. Docker's own `default`/`consistent`/`cached`/`delegated`
@@ -376,7 +381,15 @@ premise of the project, and it applies to building it too. So:
   is `actimeo=60,nocto` and rests on the watcher poking what changed, which
   is why asking for it with watching off is refused. One directory is one share, one volume
   and one mode: two mounts of it disagreeing are refused, because the second
-  EnsureVolume would silently recreate the first's volume.
+  EnsureVolume would silently recreate the first's volume. The same holds for
+  `owner=`: a share's words are fixed when it is registered, and a mount of the
+  same directory naming others is refused by `shareRegistrar` before
+  `volumeFor`, because replacing a share's filesystem strands every handle a
+  running container holds. A share's attributes come from the session's
+  (`defaultAttrs`, which carries `AlwaysExecutable` on Windows) with only the
+  uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
+  silently on Windows. The share record gained `owner` WITHOUT a version bump:
+  `readBound` drops a record whose version differs.
 - **A share with `write != through` is a UNION, its lower carries the share's
   READ mode, and the agent is its only writer** (ADR 0042, ADR 0044). The live
   export is the lower layer and a local cache is the upper, so a read the
@@ -1136,7 +1149,7 @@ endpoint (`/exec/<id>/start`, `/exec/<id>/json`): 11, 0, 13 with `-i`, and 21
 through the embedded CLI. An INTERRUPTED `docker run`, in 6e: 130 where the
 container re-raises the signal, its own 77 where it picks one, and 0 where its
 pid 1 has no handler, ignores the signal and runs to completion, which stock
-docker does too. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read
+docker does too. *(Checked 2026-10-14 against docker/cli v29.8.2; re-read
 `getExitCode` and `forceExitAfter3TerminationSignals` in
 `cmd/docker/docker.go`.)*
 

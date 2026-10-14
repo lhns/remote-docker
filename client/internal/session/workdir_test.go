@@ -8,6 +8,7 @@ import (
 
 	"github.com/lhns/remote-docker/client/internal/config"
 	"github.com/lhns/remote-docker/client/internal/endpointtest"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // A volume outlives the client process, so the export it names must mean the
@@ -35,7 +36,7 @@ func TestTheWorkingDirectoryExportSurvivesAChangeOfDirectory(t *testing.T) {
 	}
 
 	s := open(first)
-	export, _, err := shareRegistrar{registry: s.registry, shares: s.shares}.Share(first)
+	export, _, err := shareRegistrar{registry: s.registry, shares: s.shares}.Share(first, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}
