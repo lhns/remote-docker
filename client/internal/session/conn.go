@@ -61,7 +61,6 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 		return nil, err
 	}
 	s.rtt.Store(int64(time.Since(started)))
-	s.registry.SetAttrs(attrsFor(info))
 
 	live := &liveConn{
 		ssh:      client,

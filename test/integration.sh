@@ -1963,8 +1963,8 @@ fi
 
 echo
 echo "== 15f. a container that is not root, and a tar that sets attributes =="
-# A share reports the account as owner with wide bits, and a union's upper is
-# wide too (ADR 0046). GNU tar sets utime, owner and mode on the descriptor it
+# A share reports root as owner with wide bits, and a union's upper is wide
+# too (ADR 0046). GNU tar sets utime, owner and mode on the descriptor it
 # just wrote; the defects behind that showed only from a Windows client and are
 # pinned by fileid_abs_test.go, resolve_test.go and machine.yml.
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
@@ -1972,10 +1972,18 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     mkdir -p "$USERDIR/sub"
     echo "x" >"$USERDIR/sub/a"
 
-    if outputs '^10000 10000 777$' dockert run --rm --user 1000 -v "$USERDIR:/w" alpine:3 stat -c '%u %g %a' /w; then
-        ok "a share reports the account as owner with wide bits"
+    if outputs '^0 0 777$' dockert run --rm --user 1000 -v "$USERDIR:/w" alpine:3 stat -c '%u %g %a' /w; then
+        ok "a share reports root as owner with wide bits"
     else
-        bad "a share reports [$LAST_OUTPUT], want the account uid and 777"
+        bad "a share reports [$LAST_OUTPUT], want 0 0 777"
+    fi
+    # git refuses a worktree owned by another uid ("dubious ownership") and
+    # root is not exempt. No safe.directory is set, so this fails unless the
+    # share's owner is the uid git runs as.
+    if outputs 'On branch|No commits yet' dockert run --rm --entrypoint sh -v "$USERDIR:/w" alpine/git -c 'cd /w && git init -q && git status'; then
+        ok "git as root accepts a share without safe.directory"
+    else
+        bad "git status as root on a share: [$LAST_OUTPUT]"
     fi
     if outputs 'MKDIR-OK' dockert run --rm --user 1000 -v "$USERDIR:/w" alpine:3 sh -c 'mkdir /w/made && echo MKDIR-OK'; then
         ok "a uid the image chose can create a directory on a plain mount"

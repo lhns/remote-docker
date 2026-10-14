@@ -196,13 +196,12 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	nfsserve.SetLogger(opts.Log)
 
 	s := &Session{
-		runID:   opts.RunID,
-		opts:    opts,
-		ctx:     runCtx,
-		cancel:  cancel,
-		stopped: make(chan struct{}),
-		// Corrected once the workspace reports its uid, before anything is served.
-		registry: nfsserve.NewRegistry(defaultAttrs()),
+		runID:    opts.RunID,
+		opts:     opts,
+		ctx:      runCtx,
+		cancel:   cancel,
+		stopped:  make(chan struct{}),
+		registry: nfsserve.NewRegistry(defaultAttrs(opts.Config.ShareUID, opts.Config.ShareGID)),
 	}
 	// Set before the first share is registered, whose filesystem is built with it.
 	s.registry.Log = opts.Log
@@ -430,18 +429,13 @@ func readInfo(ctx context.Context, client *tunnelclient.Client) (workspace.Info,
 	return workspace.ParseInfo(bytes.NewReader(out))
 }
 
-// defaultAttrs is what every file in a share reports (ADR 0046).
-func defaultAttrs() nfsserve.Attrs {
+// defaultAttrs is what every file in a share reports (ADR 0046): root unless
+// the user named another owner.
+func defaultAttrs(uid, gid uint32) nfsserve.Attrs {
 	a := nfsserve.DefaultAttrs
+	a.UID, a.GID = uid, gid
 	// Windows has no execute bit, so without this nothing on a share runs.
 	a.AlwaysExecutable = runtime.GOOS == "windows"
-	return a
-}
-
-func attrsFor(info workspace.Info) nfsserve.Attrs {
-	a := defaultAttrs()
-	a.UID = uint32(info.UID)
-	a.GID = uint32(info.GID)
 	return a
 }
 

@@ -2,7 +2,6 @@ package nfsserve
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path"
@@ -79,17 +78,16 @@ type Registry struct {
 	// first share is registered.
 	Log *slog.Logger
 
-	// The tracing threshold, read once. shareFS runs on every registration and
-	// again for every share on every SetAttrs, and a value that is not
-	// understood is worth saying once rather than once per share.
+	// The tracing threshold, read once. shareFS runs on every registration, and a
+	// value that is not understood is worth saying once rather than once per
+	// share.
 	traceOnce sync.Once
 	trace     time.Duration
 
 	// Neither map ever shrinks and there is no unregister, deliberately: a
 	// share removed leaves every container mounting it with `Stale file
 	// handle` against a mount that still looks fine. The reasoning is the
-	// "share registry never shrinks" invariant in CLAUDE.md. What a share
-	// HOLDS is released instead, by closeFS.
+	// "share registry never shrinks" invariant in CLAUDE.md.
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
 	byPath map[string]*Share // keyed by canonical local path
@@ -258,64 +256,8 @@ func normalizeExport(p string) string {
 	return strings.TrimSuffix(p, "/")
 }
 
-// SetAttrs changes the attributes reported for shares registered from now on,
-// and for existing ones: the workspace account's uid is only known once
-// connected, and a reconnect may report another.
-func (r *Registry) SetAttrs(attrs Attrs) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// A reconnect reports the same account, and go-nfs resolves every handle
-	// it issued before one to the stack it came from, which a rebuild closes.
-	if attrs == r.attrs {
-		return
-	}
-	r.attrs = attrs
-	for _, share := range r.shares {
-		// Rebuilt the same way it was registered: a single-file share must
-		// be rooted at its directory (ADR 0039), and rooting it at the file
-		// leaves a share nothing can mount.
-		base := share.LocalPath
-		if share.File != "" {
-			base = filepath.Dir(share.LocalPath)
-		}
-		outgoing := share.fs
-		share.fs = withAttrs(r.shareFS(base, share.File), attrs, share.ExportPath, r.OnRead)
-		closeFS(outgoing)
-	}
-}
-
-// closeFS gives up what a share's filesystem holds, which today is the
-// descriptor cache and nothing else. It walks the stack because every wrapper
-// embeds billy.Filesystem as an INTERFACE, so a Close on a layer below is not
-// promoted through the layers above it.
-func closeFS(fs billy.Filesystem) {
-	for fs != nil {
-		if c, ok := fs.(io.Closer); ok {
-			_ = c.Close()
-			return
-		}
-		fs = unwrapFS(fs)
-	}
-}
-
-// unwrapFS returns the layer under one of shareFS's wrappers, or nil at the
-// bottom. By concrete type, because shareFS leaves out either optional layer
-// when its switch says no, so a walk cannot assume what it will meet.
-func unwrapFS(fs billy.Filesystem) billy.Filesystem {
-	switch v := fs.(type) {
-	case *attrFS:
-		return v.Filesystem
-	case *singleFileFS:
-		return v.Filesystem
-	case *traceFS:
-		return v.Filesystem
-	}
-	return nil
-}
-
 // shareFS is a share's filesystem before attributes. The ONE place this is
-// built, so registration and SetAttrs cannot disagree about it.
+// built.
 //
 // The order is the whole of it. From the disk up: a bound osfs at base;
 // noFollowFS, which has to sit directly on it so that every layer above

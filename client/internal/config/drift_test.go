@@ -128,6 +128,10 @@ var settingSources = map[string]struct {
 		env: EnvDaemonIdle, override: false, sample: "45m0s",
 		want: func(c Config) string { return dur(c.DaemonIdle) },
 	},
+	"ShareOwner": {
+		env: EnvShareOwner, override: false, sample: "1000:100",
+		want: func(c Config) string { return c.ShareOwner },
+	},
 	"DaemonStandby": {
 		env: EnvDaemonStandby, override: false, sample: "20m0s",
 		want: func(c Config) string { return dur(c.DaemonStandby) },

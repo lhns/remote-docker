@@ -199,6 +199,24 @@ func TestServeReportsSynthesisedOwnership(t *testing.T) {
 	}
 }
 
+// With no owner named a share is root's, which is what git compares against
+// when it runs as root (ADR 0046).
+func TestServeReportsRootByDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := mustMount(t, serve(t, registryFor(t, dir)), exportOf(dir))
+
+	attr, err := target.Getattr("f")
+	if err != nil {
+		t.Fatalf("Getattr: %v", err)
+	}
+	if attr.UID != 0 || attr.GID != 0 {
+		t.Errorf("owner = %d:%d, want 0:0", attr.UID, attr.GID)
+	}
+}
+
 // An unregistered export must be refused. This is the boundary that keeps the
 // workspace's view of this machine limited to what the user named.
 func TestServeRefusesAnUnregisteredExport(t *testing.T) {

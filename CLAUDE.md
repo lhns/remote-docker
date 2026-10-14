@@ -648,8 +648,8 @@ premise of the project, and it applies to building it too. So:
   kernel marks the inode stale; GNU tar fails every utime/chown/chmod), or
   a create carrying a mode refused as leaving the share (EIO).
   `fileid_abs_test.go`, `resolve_test.go` and `machine.yml` pin them.
-- **A share reports 0666/0777 owned by the account, and a union's upper is
-  0777** (ADR 0046). A plain mount is granted by ACCESS whatever the mode; a
+- **A share reports 0666/0777 owned by root or `REMOTE_DOCKER_SHARE_OWNER`,
+  and a union's upper is 0777** (ADR 0046). A plain mount is granted by ACCESS whatever the mode; a
   union checks the copied mode locally and refused every uid but root.
 - **The share ROOT handle must survive this process; nothing below it needs
   to.** MOUNT issues the root handle once and the kernel never mounts again, so
@@ -668,13 +668,9 @@ premise of the project, and it applies to building it too. So:
   side can tell which exports still have a live kernel mount. `Shares` also
   feeds the idle release and `rewrite.Guard`, where "in use" must not depend on
   who asked. Bounded by design: one entry per distinct path this process has
-  exported, tens of bytes each, for the life of the client process. What a
-  share HOLDS is a different question, and is released. `SetAttrs` rebuilds
-  every share's filesystem when the account's attributes change, so the stack
-  it replaces is closed (`closeFS`), or its descriptor cache goes on holding
-  files open until its idle timers expire. It rebuilds NOTHING on a reconnect
-  that reports the same account: go-nfs resolves every handle issued before it
-  to the stack it came from, which would then serve with its cache closed.
+  exported, tens of bytes each, for the life of the client process. A share's
+  attributes are fixed at startup and its filesystem is built once, so nothing
+  replaces a stack that go-nfs still resolves handles to.
 
 - **A WebSocket connection carries its own liveness.**
   `sshd.armDeadPeerDetection` works on a `*net.TCPConn`, and a connection

@@ -340,3 +340,44 @@ func TestContextName(t *testing.T) {
 		t.Errorf("named context = %q, want dev", got)
 	}
 }
+
+func TestShareOwner(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		uid, gid uint32
+		bad      bool
+	}{
+		{"1000", 1000, 1000, false},
+		{"1000:100", 1000, 100, false},
+		{"0:0", 0, 0, false},
+		{"alice", 0, 0, true},
+		{"1000:", 0, 0, true},
+		{"-1", 0, 0, true},
+	} {
+		uid, gid, err := ParseShareOwner(tc.in)
+		if (err != nil) != tc.bad || uid != tc.uid || gid != tc.gid {
+			t.Errorf("ParseShareOwner(%q) = %d, %d, %v", tc.in, uid, gid, err)
+		}
+	}
+}
+
+func TestResolveShareOwnerNamesItsSource(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent.json")
+
+	t.Setenv(EnvShareOwner, "1000:100")
+	cfg, err := Resolve(Overrides{}, missing)
+	if err != nil || cfg.ShareUID != 1000 || cfg.ShareGID != 100 {
+		t.Fatalf("Resolve = %d:%d, %v; want 1000:100", cfg.ShareUID, cfg.ShareGID, err)
+	}
+
+	t.Setenv(EnvShareOwner, "bob")
+	if _, err := Resolve(Overrides{}, missing); err == nil || !strings.Contains(err.Error(), EnvShareOwner) {
+		t.Errorf("a bad environment owner = %v, want an error naming %s", err, EnvShareOwner)
+	}
+
+	t.Setenv(EnvShareOwner, "")
+	path := writeConfig(t, `{"host": "workspace.example", "shareOwner": "bob"}`)
+	if _, err := Resolve(Overrides{}, path); err == nil || !strings.Contains(err.Error(), "shareOwner") {
+		t.Errorf("a bad file owner = %v, want an error naming shareOwner", err)
+	}
+}
