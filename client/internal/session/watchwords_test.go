@@ -121,14 +121,14 @@ func TestTheRegistrarRefusesAnotherWatch(t *testing.T) {
 	dir := t.TempDir()
 	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
 
-	if _, _, err := reg.Share(dir, workspace.ShareWords{Watch: workspace.WatchPartial}); err != nil {
+	if _, _, err := reg.Share(dir, mountOf(workspace.ShareWords{Watch: workspace.WatchPartial})); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := reg.Share(dir, workspace.ShareWords{Watch: workspace.WatchOff})
+	_, _, err := reg.Share(dir, mountOf(workspace.ShareWords{Watch: workspace.WatchOff}))
 	if err == nil {
 		t.Fatal("a different watch for a registered share was accepted")
 	}
-	for _, want := range []string{"watch=partial", "watch=off", "\n  fix: ", "docker remote restart"} {
+	for _, want := range []string{"watch=partial", "watch=off", "\n  fix: ", "remote restart"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to contain %q", err, want)
 		}

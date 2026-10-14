@@ -46,9 +46,10 @@ func (g *Guard) exported(volume string) bool {
 type Sharer interface {
 	// Share exports localPath and returns its export path, e.g. "/m/<id>",
 	// and for a single file the base name the mount uses as a subpath
-	// (ADR 0039). The words are the share's own: a directory already shared
-	// with others is refused, since a share's words are fixed.
-	Share(localPath string, words workspace.ShareWords) (exportPath, file string, err error)
+	// (ADR 0039). The mode and words are the share's own, resolved: a
+	// directory already shared with others is refused, since a share's mode
+	// and words are fixed.
+	Share(localPath string, mount workspace.MountWords) (exportPath, file string, err error)
 }
 
 // VolumeEnsurer creates a volume on the workspace daemon if it is not already
@@ -98,8 +99,9 @@ type Rewriter struct {
 	Mode      workspace.Mode
 	ModePaths map[string]workspace.Mode
 
-	// ShareOwner is the owner a mount naming none reports (ADR 0046). Unset
-	// means root.
+	// ShareOwner is the owner a mount naming none reports (ADR 0046). The
+	// session always sets it, root unless REMOTE_DOCKER_SHARE_OWNER says
+	// otherwise; a Rewriter built without one treats it as root.
 	ShareOwner workspace.Owner
 
 	// OpenCache reaches the cache channel, opened only once a mount needs it.
@@ -110,12 +112,15 @@ type Rewriter struct {
 	// before anything is created.
 	UnionReady string
 
-	// Watch is what a mount naming no watch= gets (ADR 0016); unset is off.
-	// `read=cached` and every union are never below partial whatever it says.
+	// Watch is what a mount naming no watch= gets (ADR 0016). The session
+	// always sets it, to the REMOTE_DOCKER_WATCH setting; a Rewriter built
+	// without one treats it as off. `read=cached` and every union are never
+	// below partial whatever it says.
 	Watch workspace.Watch
 
-	// Prefetch is what a mount naming no prefetch= gets (ADR 0045); unset is
-	// off. It applies only where the mode prefetches at all.
+	// Prefetch is what a mount naming no prefetch= gets (ADR 0045). The
+	// session always sets it; a Rewriter built without one treats it as off.
+	// It applies only where the mode prefetches at all.
 	Prefetch workspace.Prefetch
 
 	// StartWatcher makes the file watcher run, and is called when a mount
@@ -580,7 +585,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, words worksp
 	// Held across registering the share AND creating its volume.
 	defer r.Guard.hold()()
 
-	exportPath, file, err := r.Shares.Share(localPath, words.ShareWords)
+	exportPath, file, err := r.Shares.Share(localPath, words)
 	if err != nil {
 		return "", "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
 	}

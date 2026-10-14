@@ -3,6 +3,8 @@ package main
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/lhns/remote-docker/client/internal/session"
 )
 
 // programName is the file this binary was installed as (often `docker`),
@@ -28,6 +30,9 @@ const defaultName = "remote-docker"
 func ourCommand(command string) string {
 	return programName() + " remote " + command
 }
+
+// The session's messages name commands too, and must spell them the same way.
+func init() { session.OurCommand = ourCommand }
 
 // version is set at build time; a client compares it with its session's.
 var version = "dev"

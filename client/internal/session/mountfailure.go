@@ -30,7 +30,7 @@ func explainMount(ourClient string, ourPort int, volume, client string, port int
 			"remove the container and run it again; compose: up --force-recreate", true
 	case ourPort > 0:
 		return fmt.Sprintf("volume %s: this session's file server is not answering on port %d", volume, port),
-			"run `docker remote restart`", true
+			"run `" + OurCommand("restart") + "`", true
 	}
 	return "", "", false
 }

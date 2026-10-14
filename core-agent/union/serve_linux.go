@@ -10,6 +10,8 @@ import (
 	"runtime"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Serve is what the re-executed child runs: enter the daemon's namespaces, make
