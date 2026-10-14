@@ -11,7 +11,8 @@
   carries it, so one cache serves a tree share and an eager one; `Touch` feeds
   only tree shares and costs one atomic load while there are none. A share
   restored after a restart is not attached to the cache, so its prefetch is
-  recorded and compared but not resumed.
+  recorded, restored into its words, compared by the registrar, and not
+  resumed (ADR 0027).
 - Extends [ADR 0044](0044-a-delegated-share-is-a-cache.md), which decides
   that the share is a union; this record decides what goes into it and when.
   The read and write axes it hangs off are

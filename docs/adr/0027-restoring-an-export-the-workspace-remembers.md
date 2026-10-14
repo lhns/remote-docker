@@ -98,15 +98,16 @@ digest is an identity rather than a security boundary.
 
 ## Amendment 2026-10-14: the record carries the share's words
 
-- A share's words (`owner=` and `watch=`, ADR 0042) are fixed at registration,
+- A share's words (`owner=`, `watch=` and `prefetch=`, ADR 0042) are fixed at registration,
   so a restore must register it with the words it had, or a container started
   later would see the session's default owner on a volume created for another,
   or an unwatched share where a watched one was.
-- The record gains `owner` (resolved, `uid:gid`) and `watch`, omitted when
+- The record gains `owner` (resolved, `uid:gid`), `watch` and `prefetch`, omitted when
   unset. A restored share that watches starts the watcher and is handed to it at
   once (`Registry.Restored`), because the mount that brought it back registered
-  nothing and so told nothing. A restored share is never attached to the cache,
-  which is why prefetch is not part of what is restored. The file
+  nothing and so told nothing. A restored share is never attached to the cache, so
+  its prefetch is recorded, restored into its words and compared by the
+  registrar, but not resumed (ADR 0045). The file
   version stays 1: `readBound` drops a record whose version differs, so a bump
   would make every restore fail after an upgrade. A record without the field
   takes the session's default.

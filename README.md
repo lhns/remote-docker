@@ -352,7 +352,9 @@ that has drifted.
 
 Every setting can be an environment variable, a key in `~/.remote-docker.json`,
 and for some a flag. Precedence, highest first: **flag, environment, file,
-default.**
+default.** This table lists every `REMOTE_DOCKER_*` variable the client reads
+(`client/internal/config/drift_test.go` fails when one is missing). The words a
+single mount can carry are in [Mount options](#mount-options).
 
 | environment | file key | flag | default |
 |---|---|---|---|
@@ -363,22 +365,24 @@ default.**
 | `REMOTE_DOCKER_USER` | `user` | `--user` | your local username, lowercased as the workspace does |
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
-| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create`/`set --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
-| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off`; the default for mounts naming no `watch=`. A mount can name its own (`watch=partial`), and `read=cached` and unions never get less than `partial`. See [File watching](#file-watching) |
+| `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create`/`set --consistency` | `read=direct,write=through`; the default for mounts naming no `read=`/`write=`. See [Mount options](#mount-options) |
+| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off`; the default for mounts naming no `watch=`. Also takes `on`, `true`, `1`, `yes` (`partial`) and `best-effort` (`coarse`). See [File watching](#file-watching) |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.gradle`, `.terraform` |
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
-| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads. The default for mounts naming no `prefetch=` |
+| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree`. The default for mounts naming no `prefetch=` |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
-| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid.gid` every file in a share reports, for an image that runs as another user (gid defaults to the uid). The default for mounts naming no `owner=`; any one non-digit separates the ids. See [A container that is not root](#a-container-that-is-not-root) |
+| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid:gid` every file in a share reports (gid defaults to the uid). The default for mounts naming no `owner=`. See [A container that is not root](#a-container-that-is-not-root) |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
-| `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
-| `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
-| `REMOTE_DOCKER_NFS_FDCACHE` | | | `2s` that a file stays open after the request that used it; `0` closes it on every request |
-| `REMOTE_DOCKER_NFS_NCONNECT` | | | off; `2`–`16` connections per share. **Needs Linux 5.3 on the workspace** and breaks every mount without it. See [More connections behind a share](#more-connections-behind-a-share) |
 | `REMOTE_DOCKER_STATE_DIR` | | | keys, known_hosts, logs. `%APPDATA%\remote-docker`, `~/.config/remote-docker` on Linux, `~/Library/Application Support/remote-docker` on macOS |
+| `REMOTE_DOCKER_IGNORE_CREDENTIAL_HELPERS` | | | off; set it to proceed when a registry login in `~/.docker/config.json` names a credential helper that is not installed, for a run that needs none of those registries |
+| `REMOTE_DOCKER_TRACE` | | | *expert, env only.* Off; `1` logs one line per API request |
+| `REMOTE_DOCKER_NFS_TRACE` | | | *expert, env only.* Off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
+| `REMOTE_DOCKER_NFS_FDCACHE` | | | *expert, env only.* `2s` that a file stays open after the request that used it; `0` closes it on every request |
+| `REMOTE_DOCKER_NFS_NCONNECT` | | | *expert, env only.* Off; `2`–`16` connections per share. **Needs Linux 5.3 on the workspace** and breaks every mount without it. See [More connections behind a share](#more-connections-behind-a-share) |
+| `REMOTE_DOCKER_NO_SESSION` | | | *internal, env only.* Set by the client on a docker command it runs itself so that command opens no session; not for you to set |
 
 Durations are written the way you say them: `90s`, `45m`, `-1s` for never.
 
@@ -435,6 +439,87 @@ address, port and user belong to the machine: change the port or user with
 `remote create` on an existing name replaces every setting, and refuses to for
 a workspace on this machine.
 
+## Mount options
+
+Everything a mount can say is a word in the mount's own option list. This is
+the one reference; the sections below explain why each exists. Words go in
+`docker run -v`, in `--mount`, and in a compose file, and each writes them a
+little differently (examples below the table).
+
+| word | values | default, and what sets it | meaning | needs, or is refused |
+|---|---|---|---|---|
+| `read=` | `direct`, `cached` | `direct`. `REMOTE_DOCKER_CONSISTENCY` / `consistency`, per directory `consistencyPaths` | `direct` revalidates every attribute each second; `cached` trusts them for a minute | `cached` is watched at least at `partial`, so `watch=off` with it is refused |
+| `write=` | `through`, `back`, `ephemeral` | `through`. Same setting as `read=` | `through` writes on this machine as it happens; `back` writes into a union on the workspace and carries it back within seconds; `ephemeral` writes into a union and never carries it back | `back` and `ephemeral` make a union: `fuse-overlayfs` in the account's daemon image, `/dev/fuse`, and a [workspace kernel that has FUSE](#running-a-workspace); watched at least at `partial`, so `watch=off` is refused; a single file is refused |
+| `watch=` | `off`, `partial`, `coarse` | `off`. `REMOTE_DOCKER_WATCH` / `watch`, which also takes `on`, `true`, `1`, `yes` (`partial`) and `best-effort` (`coarse`) | replays your edits inside the workspace so file watchers there fire; see [File watching](#file-watching) | a mount word takes only the three canonical values; `read=cached` and every union raise `off` to `partial` |
+| `prefetch=` | `off`, `eager`, `tree` | `off`. `REMOTE_DOCKER_PREFETCH` / `prefetch` | fills a union's cache ahead of reads, within `REMOTE_DOCKER_CACHE_FILES` and `_BYTES` | `eager` and `tree` need `read=cached` with `write=back` or `ephemeral`; anywhere else they are refused, not ignored |
+| `owner=` | `1000` (uid and gid), or uid and gid joined by one separator, as `1000.2000` | `0:0` (root). `REMOTE_DOCKER_SHARE_OWNER` / `shareOwner` | the uid and gid every file in the share reports, for an image that runs as another user; see [A container that is not root](#a-container-that-is-not-root) | the separator is any one character that is not a digit, `=` or `,`: write `.` in `-v`, whose option list cannot carry a fourth colon; `:` also works in `--mount` and compose. On a union the workspace must be able to give the root an owner, else the mount is refused |
+| `default`, `consistent` | | | Docker's own words for `read=direct,write=through` | any other bare word is refused |
+| `cached` | | | Docker's word for `read=cached,write=through` | |
+| `delegated` | | | Docker's word for `read=cached,write=back` | |
+| `ro` and other Docker options | | | untouched; `ro` stays read-only on the share | |
+
+An axis or word a mount does not name comes from the per-directory rule
+(`consistencyPaths`), then the setting, then the default. One directory is one
+share: every mount of it must resolve to the same mode and words, and a second
+mount that does not is refused until the containers using the directory are
+gone and the session is restarted. Our words are removed before the daemon
+sees the mount.
+
+**`docker run -v`**: the third field is a comma-separated list, `ro,read=cached`,
+never `:read=cached:ro`.
+
+```bash
+docker run -v ./project:/app:read=cached img
+docker run -v ./project:/app:ro,read=cached,watch=partial img
+docker run -v ./src:/app:read=cached,write=back,prefetch=tree,owner=1000.2000 img
+docker run -v ./target:/app/target:write=ephemeral img
+docker run -v ./data:/data:watch=off img      # holds for read=direct,write=through
+```
+
+```powershell
+docker run -v "${PWD}\project:/app:ro,read=cached,watch=partial" img
+docker run -v "${PWD}\src:/app:read=cached,write=back,owner=1000.2000" img
+```
+
+**`--mount`** is split on commas by the CLI, so the words go in one csv-quoted
+field named `consistency`, the quotes kept for the CLI to read. A single word
+needs none, which is also all PowerShell needs:
+
+```bash
+docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,write=back"' img
+docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,owner=1000:2000"' img
+```
+
+```powershell
+docker run --mount "type=bind,src=${PWD}\project,dst=/app,consistency=read=cached" img
+docker run --mount "type=bind,src=${PWD}\project,dst=/app,consistency=owner=1000:2000" img
+```
+
+**Compose** carries the words in the long volume syntax, as `consistency:`.
+Compose sends a bind through the API with the field only when the bind also
+sets an option such as `create_host_path: false`, so write both:
+
+```yaml
+    volumes:
+      - type: bind
+        source: ./workspace
+        target: /workspace
+        consistency: read=cached,write=back,owner=1000:2000
+        bind:
+          create_host_path: false
+```
+
+Compose's short syntax (`./project:/app:read=cached`) silently drops an option it
+does not know, so the mount gets the default mode; the client prints a warning
+naming the volume. `REMOTE_DOCKER_CONSISTENCY` changes the default for every
+mount, short syntax included.
+
+Defaults for whole directories, in `~/.remote-docker.json`:
+
+```json
+{"consistency": "read=cached", "consistencyPaths": {"/home/alice/app/target": "write=ephemeral"}}
+```
+
 ## File watching
 
 A container watching a directory on the share receives **no inotify events**
@@ -459,20 +544,11 @@ It is off by default because it costs one watch per shared directory (on macOS
 one file descriptor per file), within a budget. Costs, deletions and the budget
 are in [File watching in detail](#file-watching-in-detail).
 
-The setting is the default; a mount can name its own, so one hot-reloading
-directory costs watches and the rest do not:
-
-```bash
-docker run -v ./web:/app:watch=partial img      # only this directory is watched
-docker run -v ./web:/app:ro,watch=coarse img    # beside ro, comma-joined
-docker run -v ./data:/data:watch=off img        # not watched, whatever the setting says
-```
-
-`read=cached` and any `write=` other than `through` need the watcher to stay
-coherent, so they are watched at least at `partial` even when the setting is
-`off`, and `watch=off` on one is refused. Like every word of a share it is fixed
-for the directory while the session runs: a second mount of the directory
-naming another is refused.
+The setting is the default; a mount can name its own with `watch=`, so one
+hot-reloading directory costs watches and the rest do not
+([Mount options](#mount-options)). `read=cached` and any `write=` other than
+`through` need the watcher to stay coherent, so they are watched at least at
+`partial` and refuse `watch=off`.
 
 ## Faster access to a shared directory
 
@@ -484,62 +560,15 @@ are the table in [ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md),
 produced by `test/bench.sh` (the `bench` label on a pull request).
 
 Docker's own mount consistency says a directory may be cached, and every client
-already parses it:
-
-```bash
-docker run -v ./project:/app:ro,cached
-docker run --mount type=bind,source=./project,target=/app,consistency=cached
-#  compose:  volumes: [{type: bind, source: ./project, target: /app, consistency: cached}]
-```
-
-| `read=` | | `write=` | |
-|---|---|---|---|
-| `direct` *(default)* | revalidates every second | `through` *(default)* | on this machine as it happens |
-| `cached` | trusts attributes for a minute | `back` | in a union on the workspace, carried back within seconds |
-| | | `ephemeral` | in a union on the workspace, never carried back |
+already parses it, so `cached` works as it is. The words, their defaults and
+how to write them in `-v`, `--mount` and compose are in
+[Mount options](#mount-options).
 
 `read=cached` is the mount itself and works wherever a share works. Any
 `write=` other than `through` (including Docker's `delegated`) makes a union,
-which needs `fuse-overlayfs` in the image the account's daemon runs; a workspace
-that cannot make one says so before anything is created.
-
-```bash
-docker run -v ./project:/app:read=cached img                       # the one to reach for
-docker run -v ./project:/app:ro,read=cached img                    # beside ro, comma-joined
-docker run -v ./target:/app/target:write=ephemeral img             # a build directory
-docker run --mount 'type=bind,src=./project,dst=/app,"consistency=read=cached,write=back"' img
-```
-
-An axis a mount does not name comes from the per-directory rule
-(`consistencyPaths`), then the workspace setting, then the default. The third
-field of `-v` is a list: `ro,read=cached`, never `:read=cached:ro`. `--mount` is
-split on commas by the CLI, so both axes go in one csv-quoted field. Docker's own
-values keep their meaning: `consistent` and `default` are
-`read=direct,write=through`, `cached` is `read=cached,write=through`,
-`delegated` is `read=cached,write=back`.
-
-In a compose file only the long volume syntax carries these words, as
-`consistency:`, and compose sends a bind through the API that keeps the field
-only when the bind also sets an option such as `create_host_path: false`.
-Compose's short syntax (`./project:/app:read=cached`) silently discards any
-option it does not know, so the mount would get the default mode; the client
-prints a warning naming the volume instead. Setting
-`REMOTE_DOCKER_CONSISTENCY` changes the default for every mount, short syntax
-included.
-
-```yaml
-    volumes:
-      - type: bind
-        source: ./workspace
-        target: /workspace
-        consistency: read=cached,write=back
-        bind:
-          create_host_path: false
-```
-
-```json
-{"consistency": "read=cached", "consistencyPaths": {"/home/me/app/target": "write=ephemeral"}}
-```
+which needs `fuse-overlayfs` in the image the account's daemon runs and FUSE in
+the [workspace kernel](#running-a-workspace); a workspace that cannot make one
+says so before anything is created.
 
 **`read=cached` is the one to reach for on a slow link.** It roughly halves the
 time in ADR 0045's table.
@@ -554,16 +583,12 @@ Both are proven end to end in CI; conflict handling only by unit tests.
 **Neither is faster today**: a cold union reads no faster than a plain mount,
 and scattered reads are slower. Large writes are local.
 
-**Prefetch is off by default.** `prefetch: eager` or `prefetch: tree`
-(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union; a mount can
-name its own, `-v ./src:/app:read=cached,write=back,prefetch=tree`, and
-`prefetch=off` opts one out. Naming `eager` or `tree` on a mount that is not a
-`read=cached` union is refused
+**Prefetch is off by default**, and applies only to a `read=cached` union
 ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off).
+Turn it on with `REMOTE_DOCKER_PREFETCH` or a mount's `prefetch=`.
 
 **`read=cached` and every union need [file watching](#file-watching)**, so they
-turn it on for their directory (`partial`, or the setting if it is higher)
-whatever `REMOTE_DOCKER_WATCH` says, and refuse `watch=off`. An edit to an existing file arrives at once; a file
+turn it on for their directory whatever `REMOTE_DOCKER_WATCH` says. An edit to an existing file arrives at once; a file
 you create or delete can take up to a minute to appear in a listing unless
 watching is `coarse`. A union caches only what the watcher covers; anything
 under an excluded directory is read over the mount.
@@ -580,6 +605,8 @@ cache  /home/me/project: 12043 of 47112 files, 180.2MB of 2.1GB, 181.0MB sent, c
 
 The workspace's own image carries `fuse-overlayfs`; stock `docker:dind` does
 not (see `WORKSPACE_DIND_IMAGE` in [Workspace settings](#workspace-settings)).
+What a union needs from the workspace kernel is under
+[the kernel floor](#running-a-workspace).
 Switching a directory's mode costs a volume rebuild rather than a migration.
 
 ### More connections behind a share
@@ -625,19 +652,25 @@ the client mounts nothing. The one exception is
 
 Two things about an old workspace kernel that are *not* the floor:
 
-- **`write=back` and `write=ephemeral` need `fuse-overlayfs`**, which the agent
-  runs itself, as root, so the workspace's answer decides and no kernel version
-  is read. Upstream's man page says it "works with Linux 4.18 or newer"; its
-  README scopes 4.18 to running **from a user namespace**, which a per-account
-  dind does not. Neither states a floor for a root mount, so expect 4.18. RHEL 7
-  shipping the package (`fuse-overlayfs-0.7.2-6.el7_8` in Extras,
+- **`write=back` and `write=ephemeral` (a union) need `fuse-overlayfs`, FUSE
+  in the workspace kernel and `/dev/fuse` in the account's daemon container.**
+  The agent runs fuse-overlayfs itself, as root, and asks the daemon whether it
+  has the binary and the device, so no kernel version is read. fuse-overlayfs's
+  own 4.18 is for mounting from a user namespace (rootless engines); moby's
+  fuse-overlayfs *storage driver*, a different thing, hard-codes a 4.18 check.
+  Neither states a floor for a root mount, and no kernel older than the CI
+  runners' 6.x has served a union here: that is a judgement, so expect 4.18.
+  RHEL 7 shipping the package (`fuse-overlayfs-0.7.2-6.el7_8` in Extras,
   [RHEA-2020:1222](https://access.redhat.com/errata/RHEA-2020:1222)) is **not**
   evidence against that: Red Hat backported the kernel side into its 3.10
   branch and [said so](https://www.redhat.com/en/blog/rhel-78-and-final-update-container-tools).
-  *(Checked 2026-09-08 against
-  [the README](https://github.com/containers/fuse-overlayfs/blob/main/README.md)
-  and [the man page](https://github.com/containers/fuse-overlayfs/blob/main/fuse-overlayfs.1.md);
-  4.18 is Linux commit `4ad769f3c346`, "fuse: Allow fully unprivileged mounts".
+  *(Checked 2026-10-14 against
+  [the README](https://github.com/containers/fuse-overlayfs/blob/main/README.md),
+  [the man page](https://github.com/containers/fuse-overlayfs/blob/main/fuse-overlayfs.1.md)
+  and moby `daemon/graphdriver/fuse-overlayfs/fuseoverlayfs.go`, which calls
+  `kernel.CheckKernelVersion(4, 18, 0)` at v24.0.9; 4.18 is Linux commit
+  `4ad769f3c346`, "fuse: Allow fully unprivileged mounts". On a workspace:
+  `uname -r; ls -l /dev/fuse; grep fuse /proc/filesystems; fuse-overlayfs --version`.
   Nothing here has run a root mount on a pre-4.18 kernel without a backport,
   which is what would settle it.)*
 - **Docker itself has not been built for el7 since 26.1.4** (*checked 2026-09-08
@@ -834,7 +867,7 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_DOCKERD_ARGS` | empty | passed to the workspace's own dockerd |
 | `WORKSPACE_ENABLE_DIND` | `true` | |
 | `WORKSPACE_PER_USER_DIND` | `true` | a daemon per account; `false` shares one |
-| `WORKSPACE_DIND_IMAGE` | `WORKSPACE_IMAGE`, else `docker:28-dind` | image a per-account daemon runs. Stock dind has no `fuse-overlayfs`, so no unions and no fuse-overlayfs storage driver; the agent logs a warning when a daemon starts without it |
+| `WORKSPACE_DIND_IMAGE` | `WORKSPACE_IMAGE`, else `docker:28-dind` | image a per-account daemon runs. Stock dind has no `fuse-overlayfs`, so no unions and no fuse-overlayfs storage driver; the agent logs a warning when a daemon starts without it. Changing it recreates a daemon once it is idle |
 | `WORKSPACE_DIND_STORAGE_DRIVER` | inherited from `WORKSPACE_DOCKERD_ARGS` | |
 | `WORKSPACE_DIND_MOUNTS` | empty | extra bind mounts for every per-account daemon, and the paths a bind may name; see below |
 | `WORKSPACE_DAEMON_READY_TIMEOUT` | `180` | seconds a cold per-account daemon has to answer; see below |
@@ -849,6 +882,7 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_METRICS_ADDR` | empty | address such as `:9090` to serve Prometheus metrics on, in plain HTTP at `/metrics`; empty serves none. See [Metrics](#metrics) |
 | `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
+| `WORKSPACE_ELEVATED` | | *internal.* Set by the agent on the privileged child it starts for Swarm, so a misconfiguration cannot elevate in a loop ([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)); not for you to set |
 | `WORKSPACE_HOST_SOCKET` | `/var/run/host-docker.sock` | the node's Docker socket, for Swarm elevation |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
 
@@ -1187,21 +1221,13 @@ read-only bind (`ro`) is still read-only
 ([ADR 0046](docs/adr/0046-a-share-reports-wide-mode-bits.md)).
 
 git refuses a repository owned by another uid, so an image that runs as a
-user needs the share to report that user. Name it on the mount, or for every
-mount with `REMOTE_DOCKER_SHARE_OWNER`:
-
-```bash
-docker run -v ./project:/app:owner=1000.2000 img      # uid 1000, gid 2000
-docker run -v ./project:/app:ro,owner=1000 img        # gid defaults to the uid
-docker run --mount 'type=bind,src=./project,dst=/app,"consistency=owner=1000:2000"' img
-```
-
-It applies to every kind of mount, a `write=back` union's root included. The
-separator is any one character that is not a digit, `=` or `,`. Write `.`
-in `-v`, whose option list cannot carry a fourth colon; `:` works in `--mount`
-and in a compose file's `consistency:`. One directory has one owner: a second
-mount of it naming another is refused until the containers using it are gone
-and the session restarted.
+user needs the share to report that user. Name it on the mount with `owner=`, or
+for every mount with `REMOTE_DOCKER_SHARE_OWNER`, as `uid` or `uid:gid` (gid
+defaults to the uid); the separator rules for `-v` are in
+[Mount options](#mount-options). It applies to every kind of mount, a
+`write=back` union's root included. One directory has one owner: a second mount
+of it naming another is refused until the containers using it are gone and the
+session restarted.
 
 **A named volume is not a share, and gets none of that.** Where the image has no
 directory at the mount path, the daemon creates it root-owned 0755, so a
