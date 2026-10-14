@@ -1957,6 +1957,53 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             share_diagnostics
         fi
     fi
+
+    # Compose's short volume syntax drops our words, so the client warns. The
+    # long syntax's consistency: reaches the rewriter only through the Mount
+    # API, which compose uses for a bind with an advanced option such as
+    # create_host_path: false; a plain bind goes as a Binds string without it.
+    CMODES="$WORK/compose-modes"
+    mkdir -p "$CMODES"
+    echo "first" >"$CMODES/marker"
+    cat >"$CMODES/short.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    volumes:
+      - $CMODES:/w:read=cached,write=back
+COMPOSE
+    cat >"$CMODES/long.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    container_name: itest-compose-long
+    command: sleep 900
+    volumes:
+      - type: bind
+        source: $CMODES
+        target: /w
+        consistency: read=cached,write=back
+        bind:
+          create_host_path: false
+COMPOSE
+    if outputs 'compose drops "read=cached,write=back" from .*\(service app\)' \
+        timeout 60 "$WORK/remote-docker" compose -f "$CMODES/short.yaml" config; then
+        ok "compose's short volume syntax warns that it dropped the mode words"
+    else
+        bad "no warning for a dropped mode word: [$LAST_OUTPUT]"
+    fi
+    if timeout 180 "$WORK/remote-docker" compose -f "$CMODES/long.yaml" up -d >"$WORK/compose-modes.log" 2>&1; then
+        if union_is_fuse docker itest-compose-long; then
+            ok "compose's long syntax consistency: made a union"
+        else
+            bad "a compose long-syntax mount is not a fuse mount: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        timeout 120 "$WORK/remote-docker" compose -f "$CMODES/long.yaml" down -v >/dev/null 2>&1
+    else
+        bad "compose could not start the long-syntax stack"
+        sed 's/^/        /' "$WORK/compose-modes.log" | tail -20
+    fi
 else
     bad "no client is running, so the other corners could not be tested"
 fi

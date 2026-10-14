@@ -1418,9 +1418,12 @@ its pure planning function was.
 - **Page-cache warming as the landing zone** (ADR 0045, step 0.5). Written
   down as a probe and not run; it rests on the container's mount sharing a
   superblock with the agent's, which nothing has checked.
-- **Compose carrying our mode words.** `consistency: read=cached,write=back` in a compose
-  file may or may not survive compose-go's validation; the README says it is
-  unverified, and nothing tests it.
+- **Compose's short volume syntax carrying our mode words.** compose-go drops
+  them (`format/volume.go` ignores unknown options), so the client warns
+  (`composewarn.go`, unit tested) and nothing makes it work. The scan reads each
+  file's raw YAML and follows neither `include` nor `extends`. The long syntax's
+  `consistency:` survives only with `bind: {create_host_path: false}` (a plain
+  bind goes to the daemon as a `Binds` string); `integration.sh` 15e asserts that.
 - **Write-back's conflict resolution, and the measured clock offset.** All six
   rows of the baseline table are unit tested and the skew correction has its own
   test; no integration suite has ever made a file change in both places at once.
