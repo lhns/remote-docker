@@ -107,6 +107,11 @@ func reportStatus(out io.Writer, f facts) {
 		rowf(out, "account", "%s (uid %d), %s", f.info.User, f.info.UID, tunnel)
 	}
 
+	// What the session was started with, when it is not the defaults.
+	if non := config.NonDefaultSettings(f.local.Settings); len(non) > 0 {
+		row(out, "settings", strings.Join(non, ", "))
+	}
+
 	// How much of each cached share is local (ADR 0044).
 	for _, cache := range f.local.Caches {
 		row(out, "cache", cache)

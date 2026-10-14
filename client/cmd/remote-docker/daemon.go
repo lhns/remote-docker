@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -333,22 +334,61 @@ func ensureDaemon(cfg config.Config, endpoint string) error {
 	warnSlowStorage(os.Stderr, st)
 	warnTraceGoesNowhere(os.Stderr, st)
 
-	if !versionDiffers(st) {
+	versionDiffer := versionDiffers(st)
+	changes := config.DiffSettings(st.Settings, cfg.SessionSettings())
+	if !versionDiffer && len(changes) == 0 {
 		return nil
 	}
 
 	// Asked only on a mismatch: it costs a round trip to the workspace.
 	var idle proxy.Idle
 	if err := control(endpoint, http.MethodGet, "idle", &idle); err != nil || !idle.Safe {
-		warnVersionMismatch(st)
+		if versionDiffer {
+			warnVersionMismatch(st)
+		} else {
+			warnSettingsMismatch(os.Stderr, changes)
+		}
 		return nil
 	}
 
+	if !versionDiffer {
+		_, _ = fmt.Fprintf(os.Stderr, "restarting the session: %s\n", describeChanges(changes))
+	}
 	// A failed restart is a warning: the serving session still works.
 	if err := restartDaemon(cfg, endpoint); err != nil {
-		warnVersionMismatch(st)
+		if versionDiffer {
+			warnVersionMismatch(st)
+		} else {
+			warnSettingsMismatch(os.Stderr, changes)
+		}
 	}
 	return nil
+}
+
+// describeChanges reads "prefetch off -> eager, watch off -> partial".
+func describeChanges(changes []config.SettingChange) string {
+	parts := make([]string, len(changes))
+	for i, c := range changes {
+		parts[i] = fmt.Sprintf("%s %s -> %s", c.Name, unsetIfEmpty(c.Running), unsetIfEmpty(c.Ours))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func unsetIfEmpty(v string) string { return cmp.Or(v, "unset") }
+
+// warnSettingsMismatch reports settings a command carries that the session in
+// use ignores, because it reads them once, at start (ADR 0017).
+func warnSettingsMismatch(w io.Writer, changes []config.SettingChange) {
+	have := make([]string, len(changes))
+	ours := make([]string, len(changes))
+	for i, c := range changes {
+		have[i] = c.Name + "=" + unsetIfEmpty(c.Running)
+		ours[i] = c.Name + "=" + unsetIfEmpty(c.Ours)
+	}
+	_, _ = fmt.Fprintf(w,
+		"\nwarning: the running session has %s; %s here is ignored while it is in use.\n"+
+			"  fix: `%s` once nothing needs it, or `%s` now\n",
+		strings.Join(have, ", "), strings.Join(ours, ", "), ourCommand("restart"), ourCommand("restart -f"))
 }
 
 // versionDiffers reports whether a session was built from a different commit

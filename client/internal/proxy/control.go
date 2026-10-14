@@ -111,6 +111,11 @@ type Status struct {
 	Connected bool   `json:"connected"`
 	Since     string `json:"since"`
 
+	// Settings is what the session read at start (config.SessionSettings), so
+	// a command with different ones can say they are ignored. Nil from a
+	// session that predates it.
+	Settings map[string]string `json:"settings,omitempty"`
+
 	// Caches is one line per delegated share saying how much is cached (ADR 0044).
 	Caches []string `json:"caches,omitempty"`
 

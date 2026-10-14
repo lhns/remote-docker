@@ -26,6 +26,11 @@ DOCKER_TIMEOUT=180
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
+# Every session here runs with watching on (start_session sets it), and a
+# command whose settings differ from the running session restarts it or
+# warns, so the commands carry the same value (ADR 0017).
+export REMOTE_DOCKER_WATCH=partial
+
 cleanup() { cleanup_suite "${PC_PID:-}" "${PHONE_PID:-}"; }
 trap cleanup EXIT
 

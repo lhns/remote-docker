@@ -10,6 +10,11 @@ software.
 
 ## Unreleased
 
+- Settings such as `REMOTE_DOCKER_PREFETCH` or `REMOTE_DOCKER_WATCH` set on a
+  docker command are no longer silently ignored by a session that is already
+  running: an idle session is restarted with them, and one in use prints a
+  warning naming `remote restart`. `remote status` shows the settings a session
+  runs with.
 - git in a container no longer refuses a shared directory as "dubious
   ownership" when it runs as root; set `REMOTE_DOCKER_SHARE_OWNER` for an image
   that runs as another user.

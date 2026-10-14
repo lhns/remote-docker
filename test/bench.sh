@@ -119,7 +119,8 @@ fi
 echo
 echo "== the session =="
 # Watching, because read=cached refuses to run without it (ADR 0042).
-REMOTE_DOCKER_WATCH=partial "$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
+export REMOTE_DOCKER_WATCH=partial # commands carry the session's settings (ADR 0017)
+"$WORK/remote-docker" remote start --foreground >"$WORK/up.log" 2>&1 &
 CLIENT_PID=$!
 endpoint_up "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID" "$WORK/up.log" || exit 1
 export DOCKER_HOST="unix://$REMOTE_DOCKER_ENDPOINT"
@@ -174,8 +175,8 @@ WORKLOADS=${BENCH_WORKLOADS:-"dense subtree sparse dense3 parallel write"}
 restart_client() {
     local policy=$1
     stop_pid "$CLIENT_PID"
-    REMOTE_DOCKER_WATCH=partial REMOTE_DOCKER_PREFETCH="$policy" \
-        "$WORK/remote-docker" remote start --foreground >"$WORK/up-$policy.log" 2>&1 &
+    export REMOTE_DOCKER_PREFETCH="$policy" # the commands carry it too (ADR 0017)
+    "$WORK/remote-docker" remote start --foreground >"$WORK/up-$policy.log" 2>&1 &
     CLIENT_PID=$!
     if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
         bad "the client did not come back under prefetch=$policy"

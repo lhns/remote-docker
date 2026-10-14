@@ -326,6 +326,13 @@ as `docker rm` refuses a running container; `-f` goes ahead.
 Any command that needs a session starts one, including the embedded CLI. For a
 shell on the workspace, use `ssh`; the agent serves one to any enrolled key.
 
+A session reads its settings (`REMOTE_DOCKER_PREFETCH`, `_WATCH`,
+`_CONSISTENCY`, `_SHARE_OWNER`, the cache limits and the timeouts) once, when it
+starts. A command whose settings differ restarts an idle session and says what
+changed; if the session is in use it warns and leaves it alone, and `remote
+restart` applies them once nothing needs it. `remote status` lists the settings
+a session runs with when they are not the defaults.
+
 `remote use` sets the default in `~/.remote-docker.json` **and**
 `currentContext` in `~/.docker/config.json`, which compose, buildx,
 Testcontainers and IDE plugins resolve, so it redirects those tools too.
@@ -416,7 +423,7 @@ remote-docker remote set dev --user bob --watch off
 
 It takes the same flags as `create`. A new `--host` without `--port` goes back
 to the default port. A running session keeps its old settings until
-`remote restart`.
+`remote restart`, or until the next command restarts it because it is idle.
 
 On a [workspace on this machine](#a-workspace-on-this-machine-windows), the
 address, port and user belong to the machine: change the port or user with

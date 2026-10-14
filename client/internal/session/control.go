@@ -207,6 +207,7 @@ func (s *Session) Status() any {
 		Connected: connected,
 		Since:     s.started.Format(time.RFC3339),
 		Tracing:   proxy.Tracing(),
+		Settings:  s.opts.Config.SessionSettings(),
 	}
 	if drops, last := s.gate.dropped(); drops > 0 {
 		st.Drops = drops
