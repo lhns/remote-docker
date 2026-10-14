@@ -8,7 +8,7 @@ go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.3
-	github.com/compose-spec/compose-go/v2 v2.15.0
+	github.com/compose-spec/compose-go/v2 v2.16.1
 	github.com/docker/buildx v0.37.2
 	github.com/docker/cli v29.8.2+incompatible
 	github.com/docker/compose/v5 v5.5.1
