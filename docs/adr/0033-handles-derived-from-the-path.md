@@ -127,5 +127,6 @@ is willing to ask for again.
   error rather than silence.
 - **The export key must be checked against the live registry**, or a handle
   becomes a way to name a share that is no longer exported.
-- **`SetAttrs` rebuilds `share.fs` when the account's attributes change**, so
-  nothing may key on the filesystem pointer. The export path is the identity.
+- **A share's filesystem is built once, with the share's words** (ADR 0046), and
+  never replaced. Nothing may key on the filesystem pointer all the same: the
+  export path is the identity.

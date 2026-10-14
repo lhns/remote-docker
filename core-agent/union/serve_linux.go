@@ -10,6 +10,8 @@ import (
 	"runtime"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // Serve is what the re-executed child runs: enter the daemon's namespaces, make
@@ -40,8 +42,8 @@ func Serve(spec Spec) error {
 
 	args := spec.Args()
 	if _, err := exec.LookPath(args[0]); err != nil {
-		return fmt.Errorf("union: %s is not in the image this daemon runs: %w\n"+
-			"\tfix: run the workspace's own image for per-account daemons, with WORKSPACE_DIND_IMAGE", Binary, err)
+		return fmt.Errorf("%s is not in the image this daemon runs: %w\n  fix: %s",
+			Binary, err, workspace.UnionImageRemedy)
 	}
 
 	// A child, not an exec. This process holds a pid from the AGENT's pid

@@ -12,6 +12,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/lhns/remote-docker/core/notify"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 type fakeSink struct {
@@ -67,7 +68,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func startWatcher(t *testing.T, mode Mode, root string) (*Watcher, *fakeBackend, *fakeSink) {
+func startWatcher(t *testing.T, mode workspace.Watch, root string) (*Watcher, *fakeBackend, *fakeSink) {
 	t.Helper()
 	be := newFakeBackend()
 	w, err := New(Options{
@@ -142,7 +143,7 @@ func (o *lostObserver) count() int {
 // nothing else, so a deletion lost to it stayed shadowed by a cached copy.
 func TestWatcherReportsAKernelOverflow(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	w, be, sink := startWatcher(t, ModePartial, root)
+	w, be, sink := startWatcher(t, workspace.WatchPartial, root)
 	obs := &lostObserver{}
 	w.SetObserver(obs)
 
@@ -158,7 +159,7 @@ func TestWatcherReportsAKernelOverflow(t *testing.T) {
 
 func TestWatcherReportsAWrite(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	w, be, sink := startWatcher(t, ModePartial, root)
+	w, be, sink := startWatcher(t, workspace.WatchPartial, root)
 
 	be.events <- fsnotify.Event{Name: filepath.Join(root, "src", "a.go"), Op: fsnotify.Write}
 
@@ -176,7 +177,7 @@ func TestWatcherReportsAWrite(t *testing.T) {
 // nothing at all for one.
 func TestPartialModeDropsRemovals(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	_, be, sink := startWatcher(t, ModePartial, root)
+	_, be, sink := startWatcher(t, workspace.WatchPartial, root)
 
 	be.events <- fsnotify.Event{Name: filepath.Join(root, "src", "gone.go"), Op: fsnotify.Remove}
 	be.events <- fsnotify.Event{Name: filepath.Join(root, "src", "kept.go"), Op: fsnotify.Write}
@@ -199,7 +200,7 @@ func TestPartialModeDropsRemovals(t *testing.T) {
 // noticed at all. That is the user's trade, so the event must actually be sent.
 func TestCoarseModeSendsRemovals(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	_, be, sink := startWatcher(t, ModeCoarse, root)
+	_, be, sink := startWatcher(t, workspace.WatchCoarse, root)
 
 	be.events <- fsnotify.Event{Name: filepath.Join(root, "src", "gone.go"), Op: fsnotify.Remove}
 
@@ -230,8 +231,8 @@ func TestAShareInOffModeIsNotWatched(t *testing.T) {
 	w.SetSink(sink)
 
 	w.Sync([]Share{
-		{ExportPath: "/m/1111111111111111", LocalPath: watched, Mode: ModePartial},
-		{ExportPath: "/m/2222222222222222", LocalPath: off, Mode: ModeOff},
+		{ExportPath: "/m/1111111111111111", LocalPath: watched, Mode: workspace.WatchPartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: off, Mode: workspace.WatchOff},
 	})
 	waitFor(t, "the walk", func() bool { return w.Stats().Watched > 0 })
 
@@ -274,8 +275,8 @@ func TestSharesInOneWatcherKeepTheirOwnModes(t *testing.T) {
 	w.SetObserver(seen)
 
 	w.Sync([]Share{
-		{ExportPath: "/m/1111111111111111", LocalPath: partial, Mode: ModePartial},
-		{ExportPath: "/m/2222222222222222", LocalPath: coarse, Mode: ModeCoarse},
+		{ExportPath: "/m/1111111111111111", LocalPath: partial, Mode: workspace.WatchPartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: coarse, Mode: workspace.WatchCoarse},
 	})
 	waitFor(t, "the walk", func() bool { return w.Stats().Watched >= 4 })
 
@@ -308,8 +309,8 @@ func TestNestedSharesResolveToTheDeepest(t *testing.T) {
 	inner := filepath.Join(outer, "inner")
 
 	for _, order := range [][]Share{
-		{{ExportPath: "/m/1111111111111111", LocalPath: outer, Mode: ModePartial}, {ExportPath: "/m/2222222222222222", LocalPath: inner, Mode: ModeCoarse}},
-		{{ExportPath: "/m/2222222222222222", LocalPath: inner, Mode: ModeCoarse}, {ExportPath: "/m/1111111111111111", LocalPath: outer, Mode: ModePartial}},
+		{{ExportPath: "/m/1111111111111111", LocalPath: outer, Mode: workspace.WatchPartial}, {ExportPath: "/m/2222222222222222", LocalPath: inner, Mode: workspace.WatchCoarse}},
+		{{ExportPath: "/m/2222222222222222", LocalPath: inner, Mode: workspace.WatchCoarse}, {ExportPath: "/m/1111111111111111", LocalPath: outer, Mode: workspace.WatchPartial}},
 	} {
 		tr := newTree(runtime.GOOS, newFakeBackend(), 100, nil, nil)
 		tr.sync(order)
@@ -325,7 +326,7 @@ func TestNestedSharesResolveToTheDeepest(t *testing.T) {
 // what happened meanwhile must be admitted rather than quietly forgotten.
 func TestReconnectAnnouncesWhatWasMissed(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	w, be, first := startWatcher(t, ModePartial, root)
+	w, be, first := startWatcher(t, workspace.WatchPartial, root)
 	watched := w.Stats().Watched
 
 	w.SetSink(nil)
@@ -357,7 +358,7 @@ func TestReconnectAnnouncesWhatWasMissed(t *testing.T) {
 // inside it between the mkdir and the watch landing produced no event at all.
 func TestNewDirectoryIsWatchedAndItsContentsReported(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	w, be, sink := startWatcher(t, ModePartial, root)
+	w, be, sink := startWatcher(t, workspace.WatchPartial, root)
 
 	// The directory and its contents exist before we are told about it, which
 	// is the race as it actually happens.
@@ -387,7 +388,7 @@ func TestNewDirectoryIsWatchedAndItsContentsReported(t *testing.T) {
 // reported against the wrong export.
 func TestEventOutsideEveryShareIsIgnored(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src")
-	_, be, sink := startWatcher(t, ModePartial, root)
+	_, be, sink := startWatcher(t, workspace.WatchPartial, root)
 
 	be.events <- fsnotify.Event{Name: filepath.Join(t.TempDir(), "elsewhere.go"), Op: fsnotify.Write}
 	be.events <- fsnotify.Event{Name: filepath.Join(root, "marker.go"), Op: fsnotify.Write}
@@ -405,7 +406,7 @@ func TestEventOutsideEveryShareIsIgnored(t *testing.T) {
 // not work" with nothing in either log explaining it.
 func TestEverythingSentIsValid(t *testing.T) {
 	root := mkdirs(t, t.TempDir(), "src", "src/deep")
-	_, be, sink := startWatcher(t, ModeCoarse, root)
+	_, be, sink := startWatcher(t, workspace.WatchCoarse, root)
 
 	for _, name := range []string{"a.go", "src/b.go", "src/deep/c.go", ".env", "sp ace.txt"} {
 		be.events <- fsnotify.Event{Name: filepath.Join(root, filepath.FromSlash(name)), Op: fsnotify.Write}
@@ -421,45 +422,12 @@ func TestEverythingSentIsValid(t *testing.T) {
 
 func TestCloseIsIdempotent(t *testing.T) {
 	root := t.TempDir()
-	w, _, _ := startWatcher(t, ModePartial, root)
+	w, _, _ := startWatcher(t, workspace.WatchPartial, root)
 	if err := w.Close(); err != nil {
 		t.Errorf("first Close: %v", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
-	}
-}
-
-func TestParseMode(t *testing.T) {
-	tests := map[string]Mode{
-		"": ModeOff, "off": ModeOff, "OFF": ModeOff, "false": ModeOff, "0": ModeOff,
-		"partial": ModePartial, "on": ModePartial, "true": ModePartial, " partial ": ModePartial,
-		"coarse": ModeCoarse, "best-effort": ModeCoarse,
-	}
-	for in, want := range tests {
-		got, err := ParseMode(in)
-		if err != nil {
-			t.Errorf("ParseMode(%q): %v", in, err)
-		}
-		if got != want {
-			t.Errorf("ParseMode(%q) = %v, want %v", in, got, want)
-		}
-	}
-	if _, err := ParseMode("sometimes"); err == nil {
-		t.Error("ParseMode accepted an unknown mode")
-	}
-}
-
-func TestModeString(t *testing.T) {
-	for mode, want := range map[Mode]string{ModeOff: "off", ModePartial: "partial", ModeCoarse: "coarse"} {
-		if got := mode.String(); got != want {
-			t.Errorf("Mode(%d).String() = %q, want %q", int(mode), got, want)
-		}
-		// Round trips, so a value printed in `status` can be given back as
-		// configuration.
-		if back, err := ParseMode(want); err != nil || back != mode {
-			t.Errorf("ParseMode(%q) = %v, %v; want %v", want, back, err, mode)
-		}
 	}
 }
 

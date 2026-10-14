@@ -131,9 +131,9 @@ func hint(resp *http.Response) string {
 		// Not about the path: the agent takes the upgrade on any path
 		// (ADR 0034). A 404 is the proxy having no route to it, which is what
 		// a restarting or absent agent looks like from in front.
-		return "\n\tfix: the proxy answered 404, so it has no route to the agent; check the route and that the agent is up"
+		return "\n  fix: the proxy answered 404, so it has no route to the agent; check the route and that the agent is up"
 	case http.StatusBadGateway, http.StatusServiceUnavailable:
-		return "\n\tfix: the proxy could not reach the agent; check its --ws-addr and the route"
+		return "\n  fix: the proxy could not reach the agent; check its --ws-addr and the route"
 	}
 	return ""
 }

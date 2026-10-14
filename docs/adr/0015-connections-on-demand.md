@@ -62,10 +62,9 @@ fake dependency check, and a controllable clock's worth of sleeps.
 - The share registry deliberately outlives any single connection. Share ids are
   derived from the path (ADR 0007), so a reconnect reuses the same exports and
   the same remote volumes rather than orphaning a set per connection.
-- Attributes are a wrinkle: the registry outlives a connection, and the
-  account's uid is known only once the workspace answers. `Registry.SetAttrs`
-  corrects every share then. Nothing is served in between, so the defaults are
-  never observed.
+- Attributes need nothing from the connection: a share's owner comes from the
+  mount or the session's settings and is fixed when the share is registered
+  (ADR 0046), so a reconnect rebuilds no share.
 - `up` says the connection is deferred. "Ready" with nothing connected would
   otherwise look like a lie to anyone who checked with `ss` or `netstat`.
 - `status` connects deliberately: reporting what the workspace says is its

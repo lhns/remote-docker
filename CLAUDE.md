@@ -364,10 +364,10 @@ premise of the project, and it applies to building it too. So:
 - **A docker.sock bind is the container's own daemon, never the parent's**
   (ADR 0049). `/var/run/docker.sock` as a bind source is passed through, even
   when this machine has one.
-- **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]` or
-  `watch=off|partial|coarse`, nothing else, and it is consumed, never
-  forwarded** (ADR 0042). `owner=` and `watch=` are words of the SHARE and not
-  of the mode: `workspace.ParseMode` (the session settings) refuses them,
+- **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]`,
+  `watch=off|partial|coarse` or `prefetch=off|eager|tree`, nothing else, and it
+  is consumed, never forwarded** (ADR 0042). `owner=`, `watch=` and `prefetch=`
+  are words of the SHARE and not of the mode: `workspace.ParseMode` (the session settings) refuses them,
   `ParseMount` reads them, and `IsModeWord` claims the key so a misspelt value is
   refused here instead of reaching the daemon. `-v` cannot carry `1000:2000`
   (docker/cli refuses a fourth colon), so the separator is any one non-digit
@@ -383,14 +383,18 @@ premise of the project, and it applies to building it too. So:
   is why asking for it with watching off is refused. One directory is one share, one volume
   and one mode: two mounts of it disagreeing are refused, because the second
   EnsureVolume would silently recreate the first's volume. The same holds for
-  `owner=`: a share's words are fixed when it is registered, and a mount of the
-  same directory naming others is refused by `shareRegistrar` before
+  the share's words: they are fixed when it is registered, the share records
+  its mode beside them (a mode difference is named first when words differ too,
+  since the watch it implies differs; a mode alone is not refused), and a mount of the same directory resolving to others is
+  refused by `shareRegistrar` before
   `volumeFor`, because replacing a share's filesystem strands every handle a
   running container holds. A share's attributes come from the session's
   (`defaultAttrs`, which carries `AlwaysExecutable` on Windows) with only the
   uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
-  silently on Windows. The share record gained `owner` and `watch` WITHOUT a
-  version bump: `readBound` drops a record whose version differs.
+  silently on Windows. The share record gained `owner`, `watch` and `prefetch`
+  WITHOUT a version bump: `readBound` drops a record whose version differs.
+  Prefetch is recorded, restored into the words and compared, and not resumed:
+  a restored share is not attached to the cache (ADR 0027, ADR 0045).
 - **A union's root has the share's owner, and an agent that cannot do it is
   refused, not trusted** (ADR 0046). The merged root is the upper directory the
   agent creates as root; `owner=` on a `write=back` mount would otherwise
@@ -591,9 +595,14 @@ premise of the project, and it applies to building it too. So:
   outside the namespace too -- `test/union-probe.sh` section 12), and the
   suites assert that a container's share reports fuse-overlayfs rather than the
   daemon's own disk. Readiness is still the mount and never the process, but a
-  child that EXITS before the mount answers ends `Prepare` at once with its own
-  stderr tail: waiting out `readyTimeout` for a missing fuse-overlayfs named no
-  cause, and the budget read as the likelier mistake (`test/vm.sh` section 4).
+  child that EXITS TWICE before the mount answers ends `Prepare` with its last
+  error (the first exit is absorbed by the 2s restart, since a lower mounted
+  before the reverse forward is up fails once and then works), and the union is
+  discarded: waiting out `readyTimeout` for a missing fuse-overlayfs named no
+  cause, and the budget read as the likelier mistake. `test/vm.sh` section 4
+  proves only the capability refusal, which stops the client before `Prepare`;
+  the child failing after the capability said ready is covered by
+  `agent/internal/unions/child_test.go` alone.
 - **The union child enters the daemon's NETWORK namespace as well as its pid
   and mount ones.** With a daemon per account the reverse forward carrying the
   NFS export is bound inside that daemon's netns and reaches nowhere else (ADR
@@ -1483,6 +1492,15 @@ its pure planning function was.
   rows of the baseline table are unit tested and the skew correction has its own
   test; no integration suite has ever made a file change in both places at once.
   Say "unit tested", never "tested".
+- **A union child that fails after the capability check said ready.** With
+  stock dind `unions.Capability` says `no-fuse-overlayfs` and the client refuses
+  before `Prepare`, so no suite reaches the path where the child exits (a
+  missing binary the check could not see, a refused lower mount).
+  `agent/internal/unions/child_test.go` covers it with a stand-in child.
+- **A union on any workspace kernel but the runner's 6.x.** Every suite that
+  mounts one runs on a GitHub runner. The 4.18 expectation in README rests on
+  fuse-overlayfs's own documentation and a backport argument, not on a run; what
+  would settle it is a root mount on a stock pre-4.18 kernel.
 - **Union adoption anywhere but `test/vm.sh`.** It is asserted only there,
   because it is only reachable where dockerd outlives the agent (ADR 0025): in a
   container the agent is pid 1 and takes every dind with it. That suite needs

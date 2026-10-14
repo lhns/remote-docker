@@ -82,8 +82,8 @@ func TestParseMount(t *testing.T) {
 // accepting it there would silently do nothing.
 func TestParseModeRefusesOwnerAndNamesTheSetting(t *testing.T) {
 	_, err := ParseMode("read=cached,owner=1000")
-	if err == nil || !strings.Contains(err.Error(), "shareOwner") {
-		t.Errorf("ParseMode(owner=) = %v, want a refusal naming shareOwner", err)
+	if err == nil || !strings.Contains(err.Error(), "REMOTE_DOCKER_SHARE_OWNER") {
+		t.Errorf("ParseMode(owner=) = %v, want a refusal naming REMOTE_DOCKER_SHARE_OWNER", err)
 	}
 }
 

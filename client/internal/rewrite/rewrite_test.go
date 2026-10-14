@@ -19,7 +19,8 @@ type fakeSharer struct {
 	err    error
 }
 
-func (f *fakeSharer) Share(localPath string, words workspace.ShareWords) (string, string, error) {
+func (f *fakeSharer) Share(localPath string, mount workspace.MountWords) (string, string, error) {
+	words := mount.ShareWords
 	if f.err != nil {
 		return "", "", f.err
 	}

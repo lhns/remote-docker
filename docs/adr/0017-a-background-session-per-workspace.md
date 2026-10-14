@@ -123,6 +123,10 @@ with that. A session exits when it has been idle for `REMOTE_DOCKER_DAEMON_IDLE`
   A session reads `REMOTE_DOCKER_PREFETCH`, `_WATCH`, `_CONSISTENCY`,
   `_SHARE_OWNER`, the cache limits and the timeouts once, at start, so a
   command setting them against a running session was silently ignored.
+  Each value is compared by what it means, not how it is spelled: the map
+  holds the canonical form (`watch=on` is `partial`, `cached` is
+  `read=cached,write=through`, an owner is `uid:gid`), and a value that does not
+  parse is kept as written.
   `Config.SessionSettings` is the one map of them, in `proxy.Status` from the
   session and computed again by the command, which goes through the version
   mismatch path: an idle session is restarted with this command's settings and

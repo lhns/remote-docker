@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,53 +23,8 @@ import (
 
 	"github.com/lhns/remote-docker/core/logx"
 	"github.com/lhns/remote-docker/core/notify"
+	"github.com/lhns/remote-docker/core/workspace"
 )
-
-// Mode is how much of what we observe is worth sending.
-type Mode int
-
-const (
-	// ModeOff watches nothing. As a share's mode it keeps that share out of
-	// the watched set altogether.
-	ModeOff Mode = iota
-
-	// ModePartial sends only what the agent can replay faithfully: writes and
-	// creations. A deletion is never misrepresented as something else.
-	ModePartial
-
-	// ModeCoarse also sends deletions and renames, which the agent turns into
-	// a poke at the parent directory. A watcher that rescans notices; one that
-	// trusts the event kind is told something untrue. That is the user's trade
-	// to make, which is why it is a setting and not a heuristic.
-	ModeCoarse
-)
-
-func (m Mode) String() string {
-	switch m {
-	case ModeOff:
-		return "off"
-	case ModePartial:
-		return "partial"
-	case ModeCoarse:
-		return "coarse"
-	}
-	return fmt.Sprintf("Mode(%d)", int(m))
-}
-
-// ParseMode reads the configured value. Off is the default, including for the
-// empty string, so an unset variable disables the feature rather than enabling
-// something surprising.
-func ParseMode(s string) (Mode, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", "off", "false", "0", "no":
-		return ModeOff, nil
-	case "partial", "on", "true", "1", "yes":
-		return ModePartial, nil
-	case "coarse", "best-effort":
-		return ModeCoarse, nil
-	}
-	return ModeOff, fmt.Errorf("fswatch: unknown watch mode %q; want off, partial or coarse", s)
-}
 
 // Share is one export and the local directory behind it.
 //
@@ -80,10 +34,12 @@ type Share struct {
 	ExportPath string
 	LocalPath  string
 
-	// Mode is how much of this share's changes are worth sending. A share is
-	// watched by its own mode, so one watcher serves shares that disagree;
-	// ModeOff leaves it unwatched.
-	Mode Mode
+	// Mode is how much of this share's changes are worth sending: partial
+	// sends only what the agent can replay faithfully (writes and creations),
+	// coarse also sends deletions and renames as a poke at the parent
+	// directory (ADR 0016). A share is watched by its own mode, so one watcher
+	// serves shares that disagree; off, or unset, leaves it unwatched.
+	Mode workspace.Watch
 
 	// File is the base name when this share exports a single file rather than
 	// a directory (ADR 0039). The watch then goes on the CONTAINING directory,
@@ -228,7 +184,7 @@ func (w *Watcher) Sync(shares []Share) {
 	}
 }
 
-// Observer is told about every change before the mode strips any: ModePartial
+// Observer is told about every change before the mode strips any: partial
 // drops a deletion the Sink cannot replay, and a cache must have exactly that
 // event, or a cached copy shadows a file that is gone (ADR 0044).
 type Observer interface {
@@ -448,12 +404,12 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 
 	// Delivered before the mode strips anything, and that is the difference
 	// between the two consumers. A deletion cannot be REPLAYED faithfully
-	// through an NFS mount, which is what ModePartial is about; it can be
+	// through an NFS mount, which is what partial is about; it can be
 	// applied to a cache exactly (ADR 0044), where a stale entry would
 	// otherwise shadow a file that is gone.
 	w.observe(notify.Event{Export: root.export, Path: rel, Op: op, Dir: isDir})
 
-	if root.mode == ModePartial {
+	if root.mode == workspace.WatchPartial {
 		// Strip what this mode will not misrepresent. If nothing is left, the
 		// event is not worth a frame.
 		op &^= notify.OpRemove | notify.OpRename

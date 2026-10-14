@@ -38,6 +38,12 @@ type Share struct {
 	// replaced (ADR 0046).
 	Words workspace.ShareWords
 
+	// Mode is how the first mount of the share was served, recorded by
+	// ClaimMode: a share is one volume, and a second mount asking for another
+	// mode would recreate it under the first. Unset until a mount claims it,
+	// which includes a share restored from the record.
+	Mode workspace.Mode
+
 	fs billy.Filesystem
 }
 
@@ -188,6 +194,17 @@ func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Shar
 	r.shares[exportPath] = share
 	r.byPath[key] = share
 	return share, nil
+}
+
+// ClaimMode records mode as the share's if it has none, and returns the mode
+// the share has: the caller's when it was the first, else the earlier one.
+func (r *Registry) ClaimMode(share *Share, mode workspace.Mode) workspace.Mode {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if share.Mode == workspace.ModeUnset {
+		share.Mode = mode
+	}
+	return share.Mode
 }
 
 // Lookup finds the share serving an export path. A path below a share's root

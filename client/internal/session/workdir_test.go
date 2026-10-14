@@ -36,7 +36,7 @@ func TestTheWorkingDirectoryExportSurvivesAChangeOfDirectory(t *testing.T) {
 	}
 
 	s := open(first)
-	export, _, err := shareRegistrar{registry: s.registry, shares: s.shares}.Share(first, workspace.ShareWords{})
+	export, _, err := shareRegistrar{registry: s.registry, shares: s.shares}.Share(first, mountOf(workspace.ShareWords{}))
 	if err != nil {
 		t.Fatal(err)
 	}

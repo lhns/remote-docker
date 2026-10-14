@@ -14,7 +14,8 @@
 - A mount may also carry words of its SHARE, beside the two axes: `owner=` and
   `watch=off|partial|coarse` and `prefetch=off|eager|tree` (amendment 2026-10-14). They are fixed per
   directory, and the session settings do not accept them; each has a default of
-  its own (`shareOwner`, `watch`).
+  its own (`REMOTE_DOCKER_SHARE_OWNER`, `REMOTE_DOCKER_WATCH`,
+  `REMOTE_DOCKER_PREFETCH`).
 - `read=cached` and every union need the watcher, so a mount that resolves to
   either gets at least `watch=partial` whatever the session says, and asking for
   `watch=off` on one is refused. A session with watching off starts the watcher

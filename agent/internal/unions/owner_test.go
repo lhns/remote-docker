@@ -49,14 +49,60 @@ func TestPrepareGivesTheUnionRootItsOwner(t *testing.T) {
 		t.Fatalf("chowned %+v, want the upper given to 1000:2000", seen)
 	}
 
-	// A second prepare finds the union alive and applies the owner again, so a
-	// share whose owner changed between sessions is not left with the old one.
-	req.Owner = "5:6"
+	// A second prepare finds the union alive. The same owner is the same
+	// union; another is refused, because the supervisor would restart the
+	// child with the old one and revert it.
 	if _, err := m.Prepare(context.Background(), "alice", thisClient, Daemon{}, req); err != nil {
 		t.Fatalf("second Prepare: %v", err)
 	}
-	if starts.Load() != 1 || len(seen) != 2 || seen[1].uid != 5 || seen[1].gid != 6 {
-		t.Errorf("after the second prepare: %d starts, chowned %+v; want one union, re-owned to 5:6", starts.Load(), seen)
+	req.Owner = "5:6"
+	_, err := m.Prepare(context.Background(), "alice", thisClient, Daemon{}, req)
+	if err == nil || !strings.Contains(err.Error(), "one owner") || !strings.Contains(err.Error(), "\n  fix: ") {
+		t.Fatalf("a different owner on a live union = %v, want a refusal with a fix", err)
+	}
+	if starts.Load() != 1 || len(seen) != 1 {
+		t.Errorf("%d starts, chowned %+v; want one union, owned as it was", starts.Load(), seen)
+	}
+	l, _ := m.share("alice", thisClient, coldExport)
+	if l.spec.UID != 1000 || l.spec.GID != 2000 {
+		t.Errorf("the live spec is %d:%d, want 1000:2000", l.spec.UID, l.spec.GID)
+	}
+}
+
+// A union that cannot be given its owner is discarded, not left serving: a
+// registered union that answers makes every later Prepare for the share find
+// it alive and be refused or skip the chown.
+func TestAChownThatFailsDiscardsTheUnion(t *testing.T) {
+	m := manager(t)
+	fail := true
+	m.lchown = func(string, int, int) error {
+		if fail {
+			return errors.New("operation not permitted")
+		}
+		return nil
+	}
+	var starts atomic.Int64
+	m.onStart = func(union.Spec) { starts.Add(1) }
+	m.probe = func(context.Context, union.Spec) error {
+		if starts.Load() == 0 {
+			return errors.New("union: nothing is mounted there")
+		}
+		return nil
+	}
+
+	req := prepareFor(t, coldExport)
+	req.Owner = "1000:2000"
+	if _, err := m.Prepare(context.Background(), "alice", thisClient, Daemon{}, req); err == nil {
+		t.Fatal("Prepare succeeded although the owner could not be applied")
+	}
+	if _, ok := m.share("alice", thisClient, coldExport); ok {
+		t.Error("the union stayed registered after its chown failed")
+	}
+
+	fail = false
+	req.Owner = "5:6"
+	if _, err := m.Prepare(context.Background(), "alice", thisClient, Daemon{}, req); err != nil {
+		t.Errorf("a later Prepare with another owner = %v, want it to mount afresh", err)
 	}
 }
 

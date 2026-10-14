@@ -169,6 +169,26 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 	}
 	resolved.Prefetch = prefetch
 
+	// Refusals that need nothing from the workspace come first, then the ones
+	// that ask it, and only a mount that passed them all opens a channel or
+	// starts the watcher: a refused mount must leave nothing behind.
+	if got.Union() {
+		if err := unionAvailable(r.UnionReady); err != nil {
+			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
+				source, writeAsked(got.Write, spelled), err)
+		}
+	}
+
+	key := workspace.CanonicalKey(source)
+	if seen, ok := mounts[key]; ok {
+		if seen != resolved {
+			return workspace.MountWords{}, fmt.Errorf(
+				"rewrite: %s is mounted twice with different words, %s, and one directory has one share"+fixSameWords,
+				source, describeDifference(seen, resolved))
+		}
+		return resolved, nil
+	}
+
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
 		channel, err := r.openCache(ctx)
@@ -191,22 +211,7 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 			return workspace.MountWords{}, err
 		}
 	}
-	if got.Union() {
-		if err := unionAvailable(r.UnionReady); err != nil {
-			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
-				source, writeAsked(got.Write, spelled), err)
-		}
-	}
 
-	key := workspace.CanonicalKey(source)
-	if seen, ok := mounts[key]; ok {
-		if seen != resolved {
-			return workspace.MountWords{}, fmt.Errorf(
-				"rewrite: %s is mounted twice with different words, %s, and one directory has one share"+fixSameWords,
-				source, describeDifference(seen, resolved))
-		}
-		return resolved, nil
-	}
 	mounts[key] = resolved
 	return resolved, nil
 }
@@ -320,11 +325,11 @@ func unionAvailable(reported string) error {
 		return nil
 	case workspace.UnionNoBinary:
 		return fmt.Errorf("the daemon serving it has no %s\n"+
-			"  fix: use write=through, or run the workspace's image for per-account daemons, with WORKSPACE_DIND_IMAGE",
-			"fuse-overlayfs")
+			"  fix: use write=through, or %s",
+			"fuse-overlayfs", workspace.UnionImageRemedy)
 	case workspace.UnionNoDevice:
-		return fmt.Errorf("the daemon serving it has no /dev/fuse\n" +
-			"  fix: use write=through, or load the fuse module on the host and run the daemon with the device")
+		return fmt.Errorf("the daemon serving it has no /dev/fuse\n"+
+			"  fix: use write=through, or %s", workspace.UnionDeviceRemedy)
 	default:
 		return fmt.Errorf("this workspace does not serve it" + FixUpdateWorkspace)
 	}

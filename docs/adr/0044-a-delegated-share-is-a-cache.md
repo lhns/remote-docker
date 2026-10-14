@@ -304,7 +304,18 @@ nothing for a fill driven by reads.
   (`elevate.ImageEnv`, `WORKSPACE_IMAGE`); `daemons.DefaultImage`
   (`docker:28-dind`) is the last resort and lacks it. The workspace reports
   whether it can serve a union (`workspace.Info.Union`), and the client refuses
-  the mode by name, before creating anything, naming the remedy.
+  the mode by name, before creating anything, naming the remedy. It also needs
+  FUSE in the workspace kernel and `/dev/fuse` in that container; no kernel
+  older than the CI runners' 6.x has served one (README, "Running a workspace").
+- **A union that cannot start is reported on its second exit (amended
+  2026-10-14).** `Prepare` waits for the mount, not the process. The first exit
+  of the child is left to the supervisor's two-second restart, since a lower
+  mounted a moment before the reverse forward is up fails once and then works;
+  a second exit before the mount answered ends the wait with the child's last
+  error and discards the union, so one transient failure is absorbed and a
+  permanent one is not retried by a loop nobody waits on. A prepare naming
+  another owner than a live union has is refused (ADR 0046), and a chown that
+  fails discards the union rather than leaving one serving the wrong owner.
 - **A container's write reaches this machine after a delay.** The one
   guarantee a plain mount has and this does not; the README says so.
 - **A FUSE daemon per share is a process to supervise.** It fails loudly

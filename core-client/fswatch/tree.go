@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/lhns/remote-docker/core/logx"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // maxDeniedReported bounds how many distinct subtrees the budget report names.
@@ -23,7 +24,7 @@ type shareRoot struct {
 	parts  []string // normalised components, for matching
 
 	// mode is this share's own; the roots of one tree disagree.
-	mode Mode
+	mode workspace.Watch
 
 	// only is the single base name this root reports, for a share that exports
 	// one file. Empty for a directory, which reports everything below it.
@@ -123,7 +124,7 @@ func (t *tree) sync(shares []Share) {
 	// watches, and an event under it belongs to nobody.
 	want := make(map[string]bool, len(shares))
 	for _, s := range shares {
-		if s.Mode != ModeOff {
+		if s.Mode.Watching() {
 			want[s.ExportPath] = true
 		}
 	}

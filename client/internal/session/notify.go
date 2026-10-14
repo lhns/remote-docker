@@ -111,28 +111,6 @@ func (s *Session) notifyWanted() {
 	}
 }
 
-// watchOf is the watch mode a share is watched in.
-func watchOf(w workspace.Watch) fswatch.Mode {
-	switch w {
-	case workspace.WatchPartial:
-		return fswatch.ModePartial
-	case workspace.WatchCoarse:
-		return fswatch.ModeCoarse
-	}
-	return fswatch.ModeOff
-}
-
-// watchWord is the share word a session's default watch mode stands for.
-func watchWord(m fswatch.Mode) workspace.Watch {
-	switch m {
-	case fswatch.ModePartial:
-		return workspace.WatchPartial
-	case fswatch.ModeCoarse:
-		return workspace.WatchCoarse
-	}
-	return workspace.WatchOff
-}
-
 func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 	all := registry.Shares()
 	out := make([]fswatch.Share, 0, len(all))
@@ -141,7 +119,7 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 			ExportPath: share.ExportPath,
 			LocalPath:  share.LocalPath,
 			File:       share.File,
-			Mode:       watchOf(share.Words.Watch),
+			Mode:       share.Words.Watch,
 		})
 	}
 	return out
@@ -150,7 +128,7 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 // anyWatching reports whether some registered share is watched.
 func (s *Session) anyWatching() bool {
 	for _, share := range s.registry.Shares() {
-		if watchOf(share.Words.Watch) != fswatch.ModeOff {
+		if share.Words.Watch.Watching() {
 			return true
 		}
 	}
@@ -212,7 +190,7 @@ func (s *Session) closeWatcher() {
 // a container started against it is served unwatched until the next
 // reconcile.
 func (s *Session) shareRestored(share *nfsserve.Share) {
-	if watchOf(share.Words.Watch) == fswatch.ModeOff {
+	if !share.Words.Watch.Watching() {
 		return
 	}
 	if err := s.startWatcher(); err != nil {
@@ -231,7 +209,7 @@ func (s *Session) restoreShare(export string) (string, workspace.ShareWords, boo
 		return "", workspace.ShareWords{}, false
 	}
 	if words.Watch == workspace.WatchUnset {
-		words.Watch = watchWord(s.opts.Watch)
+		words.Watch = s.opts.Watch
 	}
 	if words.Prefetch == workspace.PrefetchUnset {
 		words.Prefetch = prefetchWord(s.prefetch)
