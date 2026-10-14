@@ -88,6 +88,15 @@ type Config struct {
 	// background session while keeping the endpoint bound. Zero is
 	// DefaultDaemonStandby; negative never.
 	DaemonStandby time.Duration
+
+	// ShareOwner is the "uid[:gid]" every file in a share reports (ADR 0046);
+	// ShareUID and ShareGID are it parsed, and zero when unset.
+	ShareOwner string
+	ShareUID   uint32
+	ShareGID   uint32
+
+	// shareOwnerSource names where ShareOwner came from, for its error.
+	shareOwnerSource string
 }
 
 // DefaultDaemonIdle is never: exiting takes the endpoint that compose, buildx
@@ -137,6 +146,7 @@ type Workspace struct {
 	IdleTimeout   string   `json:"idleTimeout,omitempty"`
 	DaemonIdle    string   `json:"daemonIdle,omitempty"`
 	DaemonStandby string   `json:"daemonStandby,omitempty"`
+	ShareOwner    string   `json:"shareOwner,omitempty"`
 
 	// Machine is set when this program provisioned the workspace's Linux
 	// system. It is the only record one was built, which is why `rm` refuses
@@ -239,6 +249,7 @@ const (
 	EnvIdleTimeout   = "REMOTE_DOCKER_IDLE_TIMEOUT"
 	EnvDaemonIdle    = "REMOTE_DOCKER_DAEMON_IDLE"
 	EnvDaemonStandby = "REMOTE_DOCKER_DAEMON_STANDBY"
+	EnvShareOwner    = "REMOTE_DOCKER_SHARE_OWNER"
 )
 
 // Resolve combines the sources in order of decreasing precedence: command
@@ -269,6 +280,15 @@ func (f File) Resolve(o Overrides) (Config, error) {
 	applyWorkspace(&cfg, ws)
 	applyEnv(&cfg)
 	applyOverrides(&cfg, o)
+
+	// An invalid owner is refused, not defaulted: files reporting an owner
+	// nobody chose is the failure this setting exists to fix.
+	if cfg.ShareOwner != "" {
+		cfg.ShareUID, cfg.ShareGID, err = ParseShareOwner(cfg.ShareOwner)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %s: %w", cfg.shareOwnerSource, err)
+		}
+	}
 
 	// The workspace lowercases the key file's name, so a user set as "Alice"
 	// logs in as the account that Alice.pub enrolled.
@@ -389,6 +409,9 @@ func applyWorkspace(cfg *Config, ws Workspace) {
 	if d, ok := duration(ws.DaemonIdle); ok {
 		cfg.DaemonIdle = d
 	}
+	if ws.ShareOwner != "" {
+		cfg.ShareOwner, cfg.shareOwnerSource = ws.ShareOwner, "the shareOwner setting"
+	}
 }
 
 // duration parses "90s", "-1s" and the like. Malformed means unset, never an
@@ -402,6 +425,22 @@ func duration(v string) (time.Duration, bool) {
 		return 0, false
 	}
 	return d, true
+}
+
+// ParseShareOwner reads "uid" or "uid:gid"; the gid defaults to the uid.
+func ParseShareOwner(v string) (uid, gid uint32, err error) {
+	u, g, hasGID := strings.Cut(strings.TrimSpace(v), ":")
+	id, err := strconv.ParseUint(u, 10, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("owner %q is not uid or uid:gid", v)
+	}
+	gidv := id
+	if hasGID {
+		if gidv, err = strconv.ParseUint(g, 10, 32); err != nil {
+			return 0, 0, fmt.Errorf("owner %q is not uid or uid:gid", v)
+		}
+	}
+	return uint32(id), uint32(gidv), nil
 }
 
 func applyEnv(cfg *Config) {
@@ -462,6 +501,9 @@ func applyEnv(cfg *Config) {
 	}
 	if d, ok := duration(os.Getenv(EnvDaemonStandby)); ok {
 		cfg.DaemonStandby = d
+	}
+	if v := os.Getenv(EnvShareOwner); v != "" {
+		cfg.ShareOwner, cfg.shareOwnerSource = v, EnvShareOwner
 	}
 }
 

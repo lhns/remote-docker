@@ -24,7 +24,9 @@ import (
 // the point. Windows has no uid or gid to report, which is why rclone, whose
 // --uid/--gid/--umask are unsupported there, made every file appear as uid
 // 1000 and made chown inside a container fail. Serving the filesystem
-// ourselves means reporting the uid the workspace account actually has.
+// ourselves means reporting a uid that is chosen, not inherited: root by
+// default, because git refuses a worktree owned by anyone but the uid running
+// it (ADR 0046).
 type Attrs struct {
 	UID uint32
 	GID uint32
@@ -51,11 +53,8 @@ type Attrs struct {
 // executableBits are the permissions granted when a file is executable.
 const executableBits = 0o111
 
-// DefaultAttrs is what a share reports when the account's uid is unknown.
-//
-// Wide bits rather than a guessed owner: a file readable and writable by
-// anyone is usable by whatever uid the container happens to run as, where a
-// wrong owner with tight bits is not usable by anyone.
+// DefaultAttrs is what a share reports unless the caller names another owner:
+// root, with wide bits so any uid can use the files (ADR 0046).
 var DefaultAttrs = Attrs{
 	UID:      0,
 	GID:      0,
@@ -70,8 +69,7 @@ type attrFS struct {
 
 	// export is which share this filesystem serves, so a handle can name it
 	// (ADR 0033). Carried here because go-nfs hands the handler a filesystem
-	// and nothing else, and because the POINTER cannot be the identity:
-	// SetAttrs rebuilds every share's filesystem when the account changes.
+	// and nothing else, and because a pointer is a poor identity.
 	export string
 
 	// prefix is where this filesystem sits inside the share: "" for the root,

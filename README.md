@@ -362,6 +362,7 @@ default.**
 | `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
+| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid[:gid]` every file in a share reports, for an image that runs as another user (gid defaults to the uid) |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
@@ -1203,11 +1204,11 @@ Windows client; CI fails on any difference not listed in
 
 | behaviour | on a share | why |
 |---|---|---|
-| owner and mode | every file is the workspace account's; a file reads back `0666`, plus `0111` where the real file is executable, and always `0777` from a Windows host, where there is no execute bit to preserve | ADR 0046, `Attrs.AlwaysExecutable` |
+| owner and mode | every file is owned by root (`0:0`), or by `REMOTE_DOCKER_SHARE_OWNER`; a file reads back `0666`, plus `0111` where the real file is executable, and always `0777` from a Windows host, where there is no execute bit to preserve | ADR 0046, `Attrs.AlwaysExecutable` |
 | `chown` | accepted, changes nothing | ownership is synthesised |
 | `utime`, `touch -d` | accepted, changes nothing: every SETATTR of times is dropped, so a `touch` does not move a file's mtime | the watcher replays a SETATTR to invalidate, and applying one looped |
 | `chmod` | reaches the file on this machine, with the owner's read and write forced on; the mode read back is still the synthesised one, so the execute bit on a Linux host is all a container can observe | the share is served as that owner |
-| `git` in a container | a repository on a share is refused as "detected dubious ownership" unless `safe.directory` is set | the share reports the workspace account as owner |
+| `git` in a container | works as root; an image running as another user sets `REMOTE_DOCKER_SHARE_OWNER` to its uid, or git refuses the repository as "detected dubious ownership" | git compares the share's owner with its own uid |
 | unlink of an open file | a `.nfs*` entry until the last close | NFS silly-rename |
 | Windows host: case | `a` and `A` are one file | NTFS is case-insensitive |
 | Windows host: names | `< > : " \| ? *`, a control character, a trailing dot or space, and the device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) are refused with EINVAL; the probe checks a sample of them | NTFS cannot spell them; native Docker refuses them too |

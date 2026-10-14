@@ -103,7 +103,7 @@ func TestLeasedStreamCloseWriteWithoutSupport(t *testing.T) {
 // forever: an idle release that can never fire, for a dependency that is not
 // ours.
 func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
-	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs())}
+	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
 	for _, dir := range []string{t.TempDir(), t.TempDir()} {
 		if _, err := s.registry.Register(dir); err != nil {
 			t.Fatal(err)
@@ -128,7 +128,7 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 // prepared in between was answered "not mounted" and then removed under the
 // guard, which knew only the share volume.
 func TestTheGuardCoversAShareCache(t *testing.T) {
-	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs())}
+	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
 	share, err := s.registry.Register(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

@@ -1,9 +1,7 @@
 package nfsserve
 
 import (
-	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -103,42 +101,4 @@ func TestNoObserverIsNoCost(t *testing.T) {
 	if _, wrapped := f.(*observedFile); wrapped {
 		t.Error("a file was wrapped with nobody to report to")
 	}
-}
-
-// SetAttrs rebuilds every share's filesystem. For a
-// single-file share it rebuilt it as a directory rooted at the FILE, dropping
-// the wrapper that hides the file's siblings and rooting osfs at something
-// that is not a directory.
-func TestSetAttrsKeepsASingleFileShareSingle(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"app.conf", "secret.conf"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	r := NewRegistry(DefaultAttrs)
-	if _, err := r.Register(filepath.Join(dir, "app.conf")); err != nil {
-		t.Fatal(err)
-	}
-	var share *Share
-	for _, s := range r.Shares() {
-		share = s
-	}
-	if share == nil || share.File != "app.conf" {
-		t.Fatalf("share = %+v, want a single-file share of app.conf", share)
-	}
-
-	check := func(when string) {
-		t.Helper()
-		if _, err := share.fs.Stat("app.conf"); err != nil {
-			t.Errorf("%s: the file itself is not reachable: %v", when, err)
-		}
-		if _, err := share.fs.Stat("secret.conf"); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("%s: the sibling is reachable (err=%v); the share stopped being a single file", when, err)
-		}
-	}
-	check("before SetAttrs")
-	r.SetAttrs(Attrs{UID: 1000, GID: 1000, FileMode: 0o644, DirMode: 0o755})
-	check("after SetAttrs")
 }
