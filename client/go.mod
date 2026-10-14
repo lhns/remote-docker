@@ -18,7 +18,7 @@ require (
 	github.com/lhns/remote-docker/core-client v0.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.57.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -203,7 +203,6 @@ require (
 	github.com/sigstore/timestamp-authority/v2 v2.1.2 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tchap/go-patricia/v2 v2.3.3 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/tilt-dev/fsnotify v1.4.8-0.20220602155310-fff9c274a375 // indirect
@@ -282,6 +281,7 @@ exclude google.golang.org/genproto v0.0.0-20230306155012-7f2fa6fef1f4
 require (
 	github.com/lhns/remote-docker/dircache v0.0.0
 	github.com/lhns/remote-docker/machine v0.0.0
+	github.com/spf13/pflag v1.0.10
 )
 
 replace github.com/lhns/remote-docker/dircache => ../dircache
