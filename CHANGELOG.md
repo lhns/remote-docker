@@ -10,41 +10,54 @@ software.
 
 ## Unreleased
 
-- **A mount can name who owns its files.** Files in a shared directory now
-  report root by default, so git in a container running as root no longer
-  refuses the directory as "dubious ownership". For an image that runs as
-  another user, write `-v ./project:/app:owner=1000.2000` (one number is both
-  ids), or set `REMOTE_DOCKER_SHARE_OWNER` for every mount. The same owner
-  applies to the root of a `write=back` or `write=ephemeral` mount, which needs
-  a workspace from this release: an older one refuses a non-root owner there,
-  naming the fix. A directory shared with one owner refuses another until its
-  containers are gone and the session is restarted. See "Mount options" in the
-  README for the spelling in `-v`, `--mount` and compose.
-- **A mount can choose whether its directory is watched.** `watch=partial`,
-  `watch=coarse` or `watch=off` beside the other words, with
-  `REMOTE_DOCKER_WATCH` as the default for mounts that name none. A session
-  with watching off starts the watcher for the first mount that needs it:
-  `read=cached` and `write=back|ephemeral` are no longer refused then, they
-  watch at `partial`.
-- **A mount can choose its own prefetch.** `prefetch=off|eager|tree` beside
-  `read=cached,write=back`, with `REMOTE_DOCKER_PREFETCH` as the default.
-- **A setting changed in a command's environment is no longer silently
-  ignored by a running session.** An idle session is restarted with it; one in
-  use prints a warning naming `remote restart`. A variable that is not set
-  changes nothing, and values are compared by meaning (`watch=on` is
-  `partial`). `remote status` lists the settings a session runs with.
-- **`docker compose` warns about dropped mount words.** A short-syntax volume
-  carrying `read=` or `write=` is silently stripped by compose; the warning names
-  the long `consistency:` form that works.
-- **A container that cannot mount its shared directory says why.** The message
-  names the cause and what to do instead of the daemon's `connection refused`.
-- **A union that cannot start fails quickly.** A `write=back` or
-  `write=ephemeral` mount on a workspace whose per-account daemon image lacks
-  `fuse-overlayfs` fails at once saying so, instead of after 90 seconds with no
-  cause, and the agent logs a warning when such a daemon starts. A union that
-  fails once is retried after two seconds; the second failure is reported.
-- The README now has a Mount options reference and a complete table of the
-  client's and the workspace's environment variables.
+### New
+
+- **Mount options in compose files.** `owner=`, `watch=` and `prefetch=` join
+  `read=` and `write=` as words a mount can carry, so a compose file can set
+  everything without configuring each machine. The `REMOTE_DOCKER_*` settings
+  become the defaults for mounts that name none. In compose, use the long
+  volume syntax with `consistency:` and `bind: {create_host_path: false}`. The
+  README's new "Mount options" section has every word and how to write it in
+  `-v`, `--mount` and compose.
+- **Choose who owns a shared directory.** `owner=1000` (or `1000.2000` for a
+  separate gid; `:` works outside `-v`) makes every file report that uid, for
+  an image that runs as another user. `REMOTE_DOCKER_SHARE_OWNER` sets it for
+  every mount. It also applies to the top of a `write=back` or
+  `write=ephemeral` mount, which needs a workspace from this release; an older
+  one refuses a non-root owner there and says so.
+- **Cached mounts watch themselves.** `read=cached`, `write=back` and
+  `write=ephemeral` used to be refused while watching was off. They now turn
+  watching on for their own directory.
+- **Changed settings reach a running session.** A `REMOTE_DOCKER_*` variable
+  set for a command that differs from what the background session started
+  with restarts the session if it is idle, and prints a warning naming
+  `remote restart` if it is in use. A variable you did not set changes
+  nothing. `remote status` lists the settings the session runs with.
+- **Compose warns when it drops mount words.** Compose's short volume syntax
+  silently strips `read=`, `owner=` and the rest; the warning names the volume
+  and the long form that works.
+- The README lists every client and workspace environment variable.
+
+### Fixes
+
+- **git in a container no longer refuses a shared directory** as "dubious
+  ownership" when it runs as root. Shared files now report root as their
+  owner by default.
+- **A container whose shared directory cannot be mounted says why**, naming
+  the cause and the fix instead of the daemon's `connection refused`.
+- **A `write=back` or `write=ephemeral` mount that cannot start fails within
+  seconds** with the reason, for example `fuse-overlayfs` missing from the
+  daemon's image, instead of after 90 seconds with none. The agent also warns
+  when it starts a daemon that cannot serve such a mount.
+
+### Upgrading
+
+- **Shared files report root instead of your account's uid** (10000 and up).
+  An image that relied on that number sets `owner=` or
+  `REMOTE_DOCKER_SHARE_OWNER`.
+- **One directory, one set of words.** Two containers mounting the same
+  directory with a different `owner=`, `watch=` or `prefetch=` are refused
+  until the first is gone and the session restarted.
 
 ## 0.10.0 — 2026-10-07
 
