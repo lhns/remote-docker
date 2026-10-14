@@ -2,8 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-08-07
-- Current answer: the proxy decodes `/containers/create` and copies everything
-  else through. A shell on the workspace is a stock `ssh`, not a subcommand
+- Current answer: the proxy decodes `/containers/create` and the error message
+  of a start or restart whose share volume could not mount, and copies
+  everything else through. A shell on the workspace is a stock `ssh`, not a subcommand
   ([ADR 0018](0018-one-way-to-do-each-thing.md)).
 
 ## Context
@@ -52,6 +53,14 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
   without buffering. Get this wrong and the proxy passes `docker ps` while
   failing `docker build`, `docker exec` and `docker logs -f`, which is a worse
   outcome than not working at all. See ADR 0009.
+- **Amendment, 2026-10-14: one response is read as well.** A `start` or
+  `restart` the daemon answers with a non-2xx `application/json` body is read,
+  bounded at 64 KiB, and when its message says a share volume's NFS mount was
+  refused (`volumes/rd-<client>-<share>/_data`, `port=<n>`, `connection
+  refused`) only `message` is rewritten to name the cause and a `fix:`. The
+  status and every other field are kept, and anything that does not match is
+  relayed byte for byte. The session supplies the diagnosis from its own
+  client id and tunnel port; it never asks the workspace.
 - The proxy sees every request, which is what makes ADR 0008's automatic port
   forwarding possible at no extra architectural cost.
 - Requests we do not understand are forwarded verbatim rather than rejected.

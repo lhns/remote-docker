@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -35,6 +36,11 @@ type Proxy struct {
 	Dialer   Dialer
 	Rewriter Rewriter
 	Log      *slog.Logger
+
+	// ExplainMountFailure, when set, is asked about a start or restart the
+	// daemon refused because a share volume could not mount. It returns the
+	// message and the remedy, or false to leave the daemon's text alone.
+	ExplainMountFailure func(volume, client string, port int) (msg, fix string, ok bool)
 
 	// Control answers ControlPrefix. Nil unless this session is the daemon.
 	Control Control
@@ -231,6 +237,10 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 		return false, nil
 	}
 
+	if p.ExplainMountFailure != nil && isContainerStart(req) && explainable(resp) {
+		p.explainMountFailure(resp)
+	}
+
 	// resp.Write does not buffer, so /events, /build and logs -f stream.
 	err = resp.Write(client)
 	written = time.Now()
@@ -307,6 +317,65 @@ func isHijack(resp *http.Response) bool {
 func contentType(resp *http.Response) string {
 	ct, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
 	return strings.ToLower(strings.TrimSpace(ct))
+}
+
+// isContainerStart matches POST /containers/{id}/start and /restart, versioned
+// or not.
+func isContainerStart(req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		return false
+	}
+	parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+	n := len(parts)
+	if n < 3 || parts[n-3] != "containers" {
+		return false
+	}
+	return parts[n-1] == "start" || parts[n-1] == "restart"
+}
+
+// explainable reports whether a response may hold a daemon error worth
+// reading: a failure carrying JSON, which a hijack never is.
+func explainable(resp *http.Response) bool {
+	return resp.StatusCode >= 300 && contentType(resp) == "application/json"
+}
+
+// explainMountFailure rewrites the message of a start the daemon refused
+// because a share volume would not mount, when the hook can say why. It reads
+// at most maxExplainBody bytes; every other outcome leaves resp relaying the
+// daemon's bytes as they came (ADR 0005).
+func (p *Proxy) explainMountFailure(resp *http.Response) {
+	head, err := io.ReadAll(io.LimitReader(resp.Body, maxExplainBody+1))
+	untouched := func() { resp.Body = readCloser{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body} }
+	if err != nil || len(head) > maxExplainBody {
+		untouched()
+		return
+	}
+	failure, ok := parseMountFailure(head)
+	if !ok {
+		untouched()
+		return
+	}
+	msg, fix, ok := p.ExplainMountFailure(failure.Volume, failure.Client, failure.Port)
+	if !ok {
+		untouched()
+		return
+	}
+	rewritten, err := rewriteMessage(head, msg+"\n  fix: "+fix)
+	if err != nil {
+		untouched()
+		return
+	}
+	p.log().Debug("explained a share mount failure", "volume", failure.Volume, "daemon", string(head))
+	resp.Body = io.NopCloser(bytes.NewReader(rewritten))
+	resp.ContentLength = int64(len(rewritten))
+	resp.TransferEncoding = nil
+	resp.Header.Del("Content-Length")
+}
+
+// readCloser reads from one reader and closes another.
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // isContainerCreate matches POST /containers/create and its versioned form,

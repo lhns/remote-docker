@@ -306,9 +306,12 @@ premise of the project, and it applies to building it too. So:
   anybody -- so a nil callback is refused by name rather than mid-handshake.
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
   and that is the whole reason the agent's go.sum did not move for it.
-- **Only `/containers/create` is ever decoded.** Everything else is copied
-  through. The body is handled as generic JSON, never typed structs, so
-  unknown fields survive.
+- **Only `/containers/create` is ever decoded, and the error message of a start
+  or restart that failed to mount a share volume** (ADR 0005, amended
+  2026-10-14). Everything else is copied through. Bodies are handled as generic
+  JSON, never typed structs, so unknown fields survive. The error is read
+  bounded at 64 KiB and only when it matches; a response that does not match is
+  relayed byte for byte.
 - **A rewritten mount keeps every option it arrived with, `ro` above all.**
   A bind becomes an NFS volume the workspace daemon mounts for itself, and that
   export is read-write -- so the read-only flag surviving the rewrite is the

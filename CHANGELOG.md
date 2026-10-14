@@ -8,6 +8,11 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+- Starting a container whose shared directory cannot mount now says why, and
+  what to do, instead of printing the daemon's `connection refused`.
+
 ## 0.10.0 — 2026-10-07
 
 ### New
