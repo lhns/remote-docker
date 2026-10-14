@@ -55,7 +55,10 @@ func warnDroppedModes(w io.Writer, opts *cli.ProjectOptions) {
 }
 
 // droppedModes returns the warning for each short-syntax volume in one compose
-// file that carries a mode word, as two lines each (diagnosis and fix).
+// file that carries a mode word, as two lines each (diagnosis and fix). The
+// fix names create_host_path: compose sends a bind with no advanced option as a
+// plain Binds string and drops consistency there too, so only a bind that needs
+// the Mount API (this one, or propagation) carries it to the daemon.
 func droppedModes(content []byte) []string {
 	var file struct {
 		Services map[string]struct {
@@ -96,7 +99,7 @@ func droppedModes(content []byte) []string {
 			mode := strings.Join(words, ",")
 			out = append(out,
 				fmt.Sprintf("compose drops %q from %s (service %s), so it mounts with the default mode", mode, spec[:i], name),
-				"  fix: use the long syntax with consistency: "+mode)
+				"  fix: use the long syntax with consistency: "+mode+" and bind: {create_host_path: false}")
 		}
 	}
 	return out

@@ -1958,8 +1958,10 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         fi
     fi
 
-    # Compose's short volume syntax drops our words, so the client warns; the
-    # long syntax's consistency: reaches the rewriter and makes a union.
+    # Compose's short volume syntax drops our words, so the client warns. The
+    # long syntax's consistency: reaches the rewriter only through the Mount
+    # API, which compose uses for a bind with an advanced option such as
+    # create_host_path: false; a plain bind goes as a Binds string without it.
     CMODES="$WORK/compose-modes"
     mkdir -p "$CMODES"
     echo "first" >"$CMODES/marker"
@@ -1981,6 +1983,8 @@ services:
         source: $CMODES
         target: /w
         consistency: read=cached,write=back
+        bind:
+          create_host_path: false
 COMPOSE
     if outputs 'compose drops "read=cached,write=back" from .*\(service app\)' \
         timeout 60 "$WORK/remote-docker" compose -f "$CMODES/short.yaml" config; then

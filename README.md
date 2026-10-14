@@ -494,9 +494,11 @@ values keep their meaning: `consistent` and `default` are
 `delegated` is `read=cached,write=back`.
 
 In a compose file only the long volume syntax carries these words, as
-`consistency:`. Compose's short syntax (`./project:/app:read=cached`) silently
-discards any option it does not know, so the mount would get the default mode;
-the client prints a warning naming the volume instead. Setting
+`consistency:`, and compose sends a bind through the API that keeps the field
+only when the bind also sets an option such as `create_host_path: false`.
+Compose's short syntax (`./project:/app:read=cached`) silently discards any
+option it does not know, so the mount would get the default mode; the client
+prints a warning naming the volume instead. Setting
 `REMOTE_DOCKER_CONSISTENCY` changes the default for every mount, short syntax
 included.
 
@@ -506,6 +508,8 @@ included.
         source: ./workspace
         target: /workspace
         consistency: read=cached,write=back
+        bind:
+          create_host_path: false
 ```
 
 ```json

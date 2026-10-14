@@ -27,13 +27,13 @@ services:
 	got := droppedModes([]byte(body))
 	want := []string{
 		`compose drops "read=cached,write=back" from ./workspace:/workspace (service claude), so it mounts with the default mode`,
-		`  fix: use the long syntax with consistency: read=cached,write=back`,
+		`  fix: use the long syntax with consistency: read=cached,write=back and bind: {create_host_path: false}`,
 		`compose drops "cached" from ./a:/a (service claude), so it mounts with the default mode`,
-		`  fix: use the long syntax with consistency: cached`,
+		`  fix: use the long syntax with consistency: cached and bind: {create_host_path: false}`,
 		`compose drops "delegated" from ./b:/b (service claude), so it mounts with the default mode`,
-		`  fix: use the long syntax with consistency: delegated`,
+		`  fix: use the long syntax with consistency: delegated and bind: {create_host_path: false}`,
 		`compose drops "read=cached" from C:\Users\alice\src:/w (service claude), so it mounts with the default mode`,
-		`  fix: use the long syntax with consistency: read=cached`,
+		`  fix: use the long syntax with consistency: read=cached and bind: {create_host_path: false}`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

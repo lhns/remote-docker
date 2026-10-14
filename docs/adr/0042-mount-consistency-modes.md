@@ -106,7 +106,10 @@ short volume parser knows `ro`, `rw`, `nocopy`, `propagation` and `z`/`Z` and
 ignores any other option (`format/volume.go`, v2.15.0), so
 `./src:/app:read=cached` mounts with the default mode and says nothing. The
 long syntax's `consistency:` is a free string that compose passes to
-`mount.Consistency`, which the rewriter already reads. The embedded compose
+`mount.Consistency`, which the rewriter already reads, but only for a bind
+sent through the Mount API: a bind with no advanced option goes as a `Binds`
+string and loses the field too (compose v5.5.1 `bindRequiresMountAPI`). Adding
+`bind: {create_host_path: false}` selects the Mount API. The embedded compose
 therefore warns about a short-syntax volume carrying one of our words and
 names the long form; it does not fail, since the mount still works.
 
