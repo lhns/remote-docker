@@ -30,7 +30,8 @@ import (
 type Mode int
 
 const (
-	// ModeOff watches nothing and opens no channel.
+	// ModeOff watches nothing. As a share's mode it keeps that share out of
+	// the watched set altogether.
 	ModeOff Mode = iota
 
 	// ModePartial sends only what the agent can replay faithfully: writes and
@@ -79,6 +80,11 @@ type Share struct {
 	ExportPath string
 	LocalPath  string
 
+	// Mode is how much of this share's changes are worth sending. A share is
+	// watched by its own mode, so one watcher serves shares that disagree;
+	// ModeOff leaves it unwatched.
+	Mode Mode
+
 	// File is the base name when this share exports a single file rather than
 	// a directory (ADR 0039). The watch then goes on the CONTAINING directory,
 	// because that is where the events for a file arrive -- an editor writing
@@ -99,9 +105,8 @@ type Sink interface {
 const DefaultQueueLen = 256
 
 // Options configures a Watcher. The zero value of every field is a working
-// default except Mode, which must be set for the watcher to do anything.
+// default.
 type Options struct {
-	Mode     Mode
 	Budget   int
 	Exclude  []string
 	Debounce time.Duration
@@ -121,7 +126,6 @@ type Options struct {
 // it (`status` reports the dircache's own figures); it is how the tests see the
 // budget, the exclude list and overflow reporting.
 type Stats struct {
-	Mode       Mode
 	Connected  bool
 	Watched    int
 	Budget     int
@@ -165,8 +169,8 @@ type Watcher struct {
 	closed sync.Once
 }
 
-// New starts a watcher. A ModeOff watcher is returned ready and inert, so
-// callers need no nil checks.
+// New starts a watcher. It watches nothing until Sync names shares, and what it
+// does with each is that share's own Mode.
 func New(opts Options) (*Watcher, error) {
 	if opts.goos == "" {
 		opts.goos = runtime.GOOS
@@ -192,12 +196,7 @@ func New(opts Options) (*Watcher, error) {
 		ctx:          ctx,
 		cancel:       cancel,
 	}
-	w.stats.Mode = opts.Mode
 	w.stats.Budget = opts.Budget
-
-	if opts.Mode == ModeOff {
-		return w, nil
-	}
 
 	be, err := opts.newBackend()
 	if err != nil {
@@ -217,9 +216,6 @@ func New(opts Options) (*Watcher, error) {
 // calling it from both the registration path and a periodic reconcile costs
 // nothing.
 func (w *Watcher) Sync(shares []Share) {
-	if w.opts.Mode == ModeOff {
-		return
-	}
 	// Non-blocking with replacement: only the latest set matters, and a
 	// caller reconciling on a ticker must never be held up by a walk.
 	select {
@@ -457,7 +453,7 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 	// otherwise shadow a file that is gone.
 	w.observe(notify.Event{Export: root.export, Path: rel, Op: op, Dir: isDir})
 
-	if w.opts.Mode == ModePartial {
+	if root.mode == ModePartial {
 		// Strip what this mode will not misrepresent. If nothing is left, the
 		// event is not worth a frame.
 		op &^= notify.OpRemove | notify.OpRename

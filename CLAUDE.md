@@ -364,8 +364,14 @@ premise of the project, and it applies to building it too. So:
 - **A docker.sock bind is the container's own daemon, never the parent's**
   (ADR 0049). `/var/run/docker.sock` as a bind source is passed through, even
   when this machine has one.
-- **A mode word is `read=X` or `write=Y`, nothing else, and it is consumed,
-  never forwarded** (ADR 0042). It arrives in a `-v` option list or in
+- **A mount word is `read=X`, `write=Y`, `owner=U[<sep>G]` or
+  `watch=off|partial|coarse`, nothing else, and it is consumed, never
+  forwarded** (ADR 0042). `owner=` and `watch=` are words of the SHARE and not
+  of the mode: `workspace.ParseMode` (the session settings) refuses them,
+  `ParseMount` reads them, and `IsModeWord` claims the key so a misspelt value is
+  refused here instead of reaching the daemon. `-v` cannot carry `1000:2000`
+  (docker/cli refuses a fourth colon), so the separator is any one non-digit
+  and docs write `owner=1000.2000`. It arrives in a `-v` option list or in
   `--mount consistency=` and describes the mount THIS program makes; the
   daemon REJECTS what it does not know, so it is taken out whether or not the
   bind is rewritten. Docker's own `default`/`consistent`/`cached`/`delegated`
@@ -376,7 +382,38 @@ premise of the project, and it applies to building it too. So:
   is `actimeo=60,nocto` and rests on the watcher poking what changed, which
   is why asking for it with watching off is refused. One directory is one share, one volume
   and one mode: two mounts of it disagreeing are refused, because the second
-  EnsureVolume would silently recreate the first's volume.
+  EnsureVolume would silently recreate the first's volume. The same holds for
+  `owner=`: a share's words are fixed when it is registered, and a mount of the
+  same directory naming others is refused by `shareRegistrar` before
+  `volumeFor`, because replacing a share's filesystem strands every handle a
+  running container holds. A share's attributes come from the session's
+  (`defaultAttrs`, which carries `AlwaysExecutable` on Windows) with only the
+  uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
+  silently on Windows. The share record gained `owner` and `watch` WITHOUT a
+  version bump: `readBound` drops a record whose version differs.
+- **A union's root has the share's owner, and an agent that cannot do it is
+  refused, not trusted** (ADR 0046). The merged root is the upper directory the
+  agent creates as root; `owner=` on a `write=back` mount would otherwise
+  change every file but the one git compares. The owner rides `OpPrepare`
+  (`cache.Request.Owner`), the child chowns the upper in `makeLayers`, and
+  `unions.Manager.chownUpper` repeats it once a union answers, because an
+  ADOPTED union was made by an earlier agent. The client reads the capability
+  from `cache.Hello.Owner` and refuses a non-root owner against a workspace
+  without it, before a volume is created: sending the field anyway is ignored
+  silently and the container gets a share it cannot use. Root is never sent, so
+  an old workspace keeps working for root.
+- **Watching is per share, and the watcher starts with the first share that
+  needs it** (ADR 0016, amended 2026-10-14). `read=cached` and every union
+  resolve to at least `partial`, and an explicit `watch=off` there is refused.
+  A watching share restored from the record starts the watcher itself
+  (`Registry.Restored`): the mount that restored it registered nothing, and a
+  restore that did not tell the watcher serves it unwatched. The notify channel
+  opens once some share watches, once per connection, at connect and from
+  `syncWatch` on a connection already up; opened only at connect, a mount made
+  after it never reaches a container. `fswatch.tree` holds no root for an
+  `off` share and resolves nested roots to the deepest, so which mode strips a
+  deletion does not depend on registration order. A watcher that will not start
+  refuses the mount that needed it and leaves the session open.
 - **A share with `write != through` is a UNION, its lower carries the share's
   READ mode, and the agent is its only writer** (ADR 0042, ADR 0044). The live
   export is the lower layer and a local cache is the upper, so a read the
@@ -586,6 +623,11 @@ premise of the project, and it applies to building it too. So:
   row, and a row above the floor fails the test. There is no way to ask the NFS
   client what it parses -- it answers EINVAL and names nothing -- so the check
   is the table, and CI cannot stand in for it: every runner is 6.x.
+- **Prefetch is a word of the share, resolved against the mode** (ADR 0045,
+  amended 2026-10-14): `prefetch=` or the session default, and off wherever the
+  mode is not `read=cached` with a union; naming `eager` or `tree` there is
+  refused. `Cache.Touch` keeps its atomic-count fast path (`shares.trees`);
+  a lock or a map lookup per NFS read is the silent regression.
 - **Prefetch is OFF unless `prefetch: eager|tree` says otherwise, and large
   files are never in it** (ADR 0045). Under `tree`, every NFS READ on a share
   with a cache is a miss, reported by `nfsserve`'s observer to
@@ -1106,6 +1148,19 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
 
+The words a mount carries for its share, in `integration.sh` 14b (2026-10-14):
+`owner=1000` and `owner=1000.2000` on `-v` and `owner=1000:2000` on `--mount`
+reporting those ids, a second owner for a registered directory refused with a
+fix, and the same on a `write=back` union's root with git as uid 1000 working
+there. `watch=partial` and `read=cached` turning the watcher on for their own
+directory with the session at `watch` off, `read=cached,watch=off` refused,
+`watch=coarse` poking the directory when a file is deleted here, and a client
+restart keeping both the owner and the watching of a share a container still
+mounts (the record carries the words). In 15e, `prefetch=off` beating the
+session's `tree`, and a compose `consistency:` carrying `watch=`, `prefetch=`
+and `owner=` into an owned union. What this cannot tell is `eager` from
+`tree` for a share nobody reads: both fill it at once.
+
 Keys and enrolment, in `integration.sh` 11f to 11i: a key in the enrolled
 directory and one in the operator's authenticating the same account (ADR
 0052); deleting a key file ending an open session, and emptying one ending it
@@ -1136,7 +1191,7 @@ endpoint (`/exec/<id>/start`, `/exec/<id>/json`): 11, 0, 13 with `-i`, and 21
 through the embedded CLI. An INTERRUPTED `docker run`, in 6e: 130 where the
 container re-raises the signal, its own 77 where it picks one, and 0 where its
 pid 1 has no handler, ignores the signal and runs to completion, which stock
-docker does too. *(Checked 2026-09-08 against docker/cli v29.7.2; re-read
+docker does too. *(Checked 2026-10-14 against docker/cli v29.8.2; re-read
 `getExitCode` and `forceExitAfter3TerminationSignals` in
 `cmd/docker/docker.go`.)*
 
@@ -1437,9 +1492,6 @@ its pure planning function was.
   set` against a config file, and `token ls` and `token rm` on both ends
   (`agent/internal/sshd/manage_test.go` over a real SSH connection,
   `agent/cmd/remote-dockerd/token_test.go`). No suite runs any of them.
-- **`coarse` watch mode.** The directory-level poke for deletions is unit
-  tested; no integration test asserts that a real watcher notices a deletion
-  through it.
 - **Watching at scale.** The budget, the exclude list and overflow reporting
   are unit tested against a fake backend. Nothing has run a watcher over a
   10,000-directory tree, and the macOS backend (kqueue, one fd per *file*) has

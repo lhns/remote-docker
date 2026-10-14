@@ -105,7 +105,7 @@ func TestLeasedStreamCloseWriteWithoutSupport(t *testing.T) {
 func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
 	for _, dir := range []string{t.TempDir(), t.TempDir()} {
-		if _, err := s.registry.Register(dir); err != nil {
+		if _, err := s.registry.Register(dir, workspace.ShareWords{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 // guard, which knew only the share volume.
 func TestTheGuardCoversAShareCache(t *testing.T) {
 	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
-	share, err := s.registry.Register(t.TempDir())
+	share, err := s.registry.Register(t.TempDir(), workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}

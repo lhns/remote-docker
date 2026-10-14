@@ -88,8 +88,12 @@ func (live *liveConn) close() {
 	if live.cancel != nil {
 		live.cancel()
 	}
-	if live.notify != nil {
-		_ = live.notify.Close()
+	live.notifyMu.Lock()
+	live.shut = true
+	notify := live.notify
+	live.notifyMu.Unlock()
+	if notify != nil {
+		_ = notify.Close()
 	}
 	if live.ports != nil {
 		_ = live.ports.Close()
@@ -282,9 +286,7 @@ func (s *Session) Stopped() <-chan struct{} { return s.stopped }
 
 // Close tears the session down.
 func (s *Session) Close() error {
-	if s.watch != nil {
-		_ = s.watch.Close()
-	}
+	s.closeWatcher()
 	// After the watcher, so no event can arm the timer again.
 	if s.cache != nil {
 		s.cache.Stop()

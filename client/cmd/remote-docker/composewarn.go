@@ -98,7 +98,7 @@ func droppedModes(content []byte) []string {
 			}
 			mode := strings.Join(words, ",")
 			out = append(out,
-				fmt.Sprintf("compose drops %q from %s (service %s), so it mounts with the default mode", mode, spec[:i], name),
+				fmt.Sprintf("compose drops %q from %s (service %s), so it mounts without them", mode, spec[:i], name),
 				"  fix: use the long syntax with consistency: "+mode+" and bind: {create_host_path: false}")
 		}
 	}

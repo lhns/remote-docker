@@ -16,6 +16,24 @@ software.
   prints a warning naming `remote restart`. A variable that is not set changes
   nothing. `remote status` shows the settings a session
   runs with.
+- A mount can choose its own prefetch: `prefetch=off|eager|tree` beside
+  `read=cached,write=back`. `REMOTE_DOCKER_PREFETCH` is the default for mounts
+  naming none.
+- A mount can say whether its own directory is watched: `-v ./web:/app:watch=partial`
+  (or `coarse`, or `off`). `REMOTE_DOCKER_WATCH` is now the default for mounts
+  naming none, and a session with it `off` starts the watcher on the first mount
+  that needs one. `read=cached` and unions are no longer refused when watching is
+  off: they turn it on for their directory, at `partial`.
+- `owner=` (and `REMOTE_DOCKER_SHARE_OWNER`) now also owns the root of a
+  `write=back` or `write=ephemeral` mount, which git as that uid refused before.
+  A workspace older than this release cannot do it and refuses a non-root owner
+  on such a mount, naming the fix.
+- A mount can name its own owner: `-v ./project:/app:owner=1000.2000` (or
+  `--mount ...,"consistency=owner=1000:2000"`). The separator is any one
+  non-digit; `-v` cannot carry a second colon, so use `.` there. One number is
+  both ids. `REMOTE_DOCKER_SHARE_OWNER` takes the same forms and stays the
+  default. A directory shared with one owner refuses another until its
+  containers are gone and the session is restarted.
 - git in a container no longer refuses a shared directory as "dubious
   ownership" when it runs as root; set `REMOTE_DOCKER_SHARE_OWNER` for an image
   that runs as another user.

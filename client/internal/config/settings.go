@@ -6,15 +6,18 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // SessionSettings is what a background session reads once, at start: the
 // settings a later command can set and have silently ignored until the session
 // restarts. The session reports it and a command compares against it, so both
-// ends spell a value the same way (ADR 0015, amended 2026-10-14).
+// ends spell a value the same way (ADR 0017, amended 2026-10-14).
 //
 // Names are the user-facing spelling. An empty watch or prefetch is "off",
-// which is what it means.
+// which is what it means, and the share owner is always uid:gid, so 1000,
+// 1000:1000 and 1000.1000 compare equal.
 func (c Config) SessionSettings() map[string]string {
 	paths := make([]string, 0, len(c.ConsistencyPaths))
 	for dir, mode := range c.ConsistencyPaths {
@@ -31,11 +34,24 @@ func (c Config) SessionSettings() map[string]string {
 		"cache-files":       fmt.Sprint(c.CacheFiles),
 		"cache-bytes":       fmt.Sprint(c.CacheBytes),
 		"prefetch":          offIfEmpty(c.Prefetch),
-		"share-owner":       c.ShareOwner,
+		"share-owner":       c.shareOwnerSetting(),
 		"idle-timeout":      c.IdleTimeout.String(),
 		"daemon-idle":       c.DaemonIdle.String(),
 		"daemon-standby":    c.DaemonStandby.String(),
 	}
+}
+
+// shareOwnerSetting is the owner in its one spelling. Read from the string
+// when there is one, because Resolve parses it into ShareUID and ShareGID and a
+// Config built by hand may not have.
+func (c Config) shareOwnerSetting() string {
+	if c.ShareOwner == "" {
+		return workspace.Owner{UID: c.ShareUID, GID: c.ShareGID, Set: true}.String()
+	}
+	if o, err := workspace.ParseOwner(c.ShareOwner); err == nil {
+		return o.String()
+	}
+	return c.ShareOwner
 }
 
 func offIfEmpty(s string) string {

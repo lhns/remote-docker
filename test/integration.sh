@@ -1547,6 +1547,204 @@ fi
 hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
 
 echo
+echo "== 14b. words a mount carries for its share (ADR 0042) =="
+# The client here still runs with watching off and the owner at 0:0, so every
+# answer below comes from the mount itself.
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    WORDSDIR="$WORK/words"
+    mkdir -p "$WORDSDIR/sub"
+    echo "x" >"$WORDSDIR/sub/a"
+
+    # -v cannot carry a fourth colon, so the gid follows a dot there.
+    if outputs '^1000 1000$' dockert run --rm -v "$WORDSDIR:/w:owner=1000" alpine:3 stat -c '%u %g' /w; then
+        ok "owner=1000 on -v reports 1000:1000"
+    else
+        bad "owner=1000 reports [$LAST_OUTPUT], want 1000 1000"
+    fi
+    OWNER2DIR="$WORK/words-two"
+    mkdir -p "$OWNER2DIR"
+    if outputs '^1000 2000$' dockert run --rm -v "$OWNER2DIR:/w:owner=1000.2000" alpine:3 stat -c '%u %g' /w; then
+        ok "owner=1000.2000 on -v reports 1000:2000"
+    else
+        bad "owner=1000.2000 reports [$LAST_OUTPUT], want 1000 2000"
+    fi
+    OWNER3DIR="$WORK/words-three"
+    mkdir -p "$OWNER3DIR"
+    if outputs '^1000 2000$' dockert run --rm --mount "type=bind,src=$OWNER3DIR,dst=/w,\"consistency=owner=1000:2000\"" alpine:3 stat -c '%u %g' /w; then
+        ok "owner=1000:2000 on --mount reports 1000:2000"
+    else
+        bad "owner=1000:2000 on --mount reports [$LAST_OUTPUT], want 1000 2000"
+    fi
+
+    # A directory no mount named an owner for keeps the session's.
+    UNTOUCHED="$WORK/words-untouched"
+    mkdir -p "$UNTOUCHED"
+    if outputs '^0 0$' dockert run --rm -v "$UNTOUCHED:/w" alpine:3 stat -c '%u %g' /w; then
+        ok "a mount naming no owner reports the session's 0:0"
+    else
+        bad "a mount naming no owner reports [$LAST_OUTPUT], want 0 0"
+    fi
+
+    # A share's words are fixed once it exists.
+    if outputs 'already shared with owner=1000:1000.*asks for owner=2000:2000' dockert run --rm -v "$WORDSDIR:/w:owner=2000" alpine:3 true \
+        && grep -q 'fix:' <<<"$LAST_OUTPUT"; then
+        ok "a second owner for a registered directory is refused with a fix"
+    else
+        bad "a second owner was not refused as expected: [$LAST_OUTPUT]"
+    fi
+
+    # A union's merged root is the upper the agent creates, so owner= needs the
+    # agent to hand it over; this is also the first mount to need the watcher.
+    UNIONOWN="$WORK/words-union"
+    mkdir -p "$UNIONOWN"
+    echo "x" >"$UNIONOWN/f"
+    if outputs '^1000$' dockert run --rm -v "$UNIONOWN:/w:write=back,owner=1000" alpine:3 stat -c '%u' /w; then
+        ok "owner=1000 on a write=back union reports 1000 at its root"
+    else
+        bad "a union with owner=1000 reports [$LAST_OUTPUT] at its root, want 1000"
+        dump_workspace_log 40
+    fi
+    if outputs '^1000$' dockert run --rm -v "$UNIONOWN:/w:write=back,owner=1000" alpine:3 stat -c '%u' /w/f; then
+        ok "a file under a union with owner=1000 reports 1000"
+    else
+        bad "a file in the owned union reports [$LAST_OUTPUT], want 1000"
+    fi
+    if outputs 'On branch|No commits yet' dockert run --rm --user 1000 --entrypoint sh -v "$UNIONOWN:/w:write=back,owner=1000" alpine/git -c 'cd /w && git init -q && git status'; then
+        ok "git as uid 1000 works on a write=back union with owner=1000"
+    else
+        bad "git status as uid 1000 on an owned union: [$LAST_OUTPUT]"
+        dump_workspace_log 40
+    fi
+
+    # watch= is per mount: this client runs with watching off, so every
+    # watched case below turns the watcher on for its own directory.
+    PROBES="$WORK/probes"
+    mkdir -p "$PROBES"
+    if [ -x "$WATCHPROBE" ] && cp "$WATCHPROBE" "$PROBES/watchprobe"; then
+        WORDSWATCH="$WORK/words-watch"
+        mkdir -p "$WORDSWATCH"
+        echo "before the watch" >"$WORDSWATCH/edit.txt"
+
+        if dockert run -d --name itest-watchword -v "$PROBES:/probe:ro" -v "$WORDSWATCH:/data:watch=partial" \
+            alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/watchword-run.log" 2>&1; then
+            wait_ready itest-watchword 30
+            sleep 2
+            echo "edited at $(date +%s)" >"$WORDSWATCH/edit.txt"
+            timeout 90 docker wait itest-watchword >/dev/null 2>&1
+            seen=$(docker logs itest-watchword 2>&1)
+            docker rm -f itest-watchword >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen"; then
+                ok "watch=partial on one mount fires inotify while the session watches nothing"
+            else
+                bad "watch=partial did not reach the container's watcher: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+            fi
+        else
+            bad "the watch=partial probe container would not start: $(cat "$WORK/watchword-run.log")"
+        fi
+
+        # read=cached needs the watcher, so it starts one rather than being
+        # refused for a session that watches nothing.
+        CACHEDDIR="$WORK/words-cached"
+        mkdir -p "$CACHEDDIR"
+        echo "before the watch" >"$CACHEDDIR/edit.txt"
+        if dockert run -d --name itest-watchcached -v "$PROBES:/probe:ro" -v "$CACHEDDIR:/data:read=cached" \
+            alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/watchcached-run.log" 2>&1; then
+            wait_ready itest-watchcached 30
+            sleep 2
+            echo "edited at $(date +%s)" >"$CACHEDDIR/edit.txt"
+            timeout 90 docker wait itest-watchcached >/dev/null 2>&1
+            seen=$(docker logs itest-watchcached 2>&1)
+            docker rm -f itest-watchcached >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen"; then
+                ok "read=cached starts the watcher for its directory with watching off"
+            else
+                bad "read=cached with the session at watch off never saw the edit: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+            fi
+        else
+            bad "read=cached was refused with the session at watch off: $(cat "$WORK/watchcached-run.log")"
+        fi
+
+        # A contradiction is refused with the way out.
+        if outputs 'watch=off.*read=cached' dockert run --rm -v "$CACHEDDIR:/w:read=cached,watch=off" alpine:3 true \
+            && grep -q 'fix: drop watch=off' <<<"$LAST_OUTPUT"; then
+            ok "read=cached,watch=off is refused with a fix"
+        else
+            bad "read=cached,watch=off was not refused as expected: [$LAST_OUTPUT]"
+        fi
+
+        # coarse: a deletion pokes the parent directory, which partial never does.
+        COARSEDIR="$WORK/words-coarse"
+        mkdir -p "$COARSEDIR"
+        echo "doomed" >"$COARSEDIR/doomed.txt"
+        if dockert run -d --name itest-watchcoarse -v "$PROBES:/probe:ro" -v "$COARSEDIR:/data:watch=coarse" \
+            alpine:3 /probe/watchprobe -timeout 45s /data >"$WORK/watchcoarse-run.log" 2>&1; then
+            wait_ready itest-watchcoarse 30
+            sleep 2
+            rm -f "$COARSEDIR/doomed.txt"
+            timeout 90 docker wait itest-watchcoarse >/dev/null 2>&1
+            seen=$(docker logs itest-watchcoarse 2>&1)
+            docker rm -f itest-watchcoarse >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*IN_MODIFY" <<<"$seen"; then
+                ok "watch=coarse pokes the directory when a file is deleted here"
+            else
+                bad "watch=coarse showed no event for a deletion: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+            fi
+        else
+            bad "the watch=coarse probe container would not start: $(cat "$WORK/watchcoarse-run.log")"
+        fi
+
+        # The words outlive the client process: the record carries them, so a
+        # container started before a restart is still served as that owner and
+        # still watched, though the new session watches nothing by default.
+        SURVIVEDIR="$WORK/words-survives"
+        mkdir -p "$SURVIVEDIR"
+        echo "before the restart" >"$SURVIVEDIR/edit.txt"
+        if dockert run -d --name itest-survive -v "$PROBES:/probe:ro" -v "$SURVIVEDIR:/data:owner=1000,watch=partial" \
+            alpine:3 /probe/watchprobe -timeout 120s /data >"$WORK/survive-run.log" 2>&1; then
+            wait_ready itest-survive 30
+            stop_pid "$CLIENT_PID"
+            CLIENT_PID=""
+            "$WORK/remote-docker" remote start --foreground >"$WORK/survive-up.log" 2>&1 &
+            CLIENT_PID=$!
+            if ! wait_endpoint "$REMOTE_DOCKER_ENDPOINT" "$CLIENT_PID"; then
+                bad "the client did not come back after a restart"
+                sed 's/^/        /' "$WORK/survive-up.log"
+            else
+                if outputs '^1000$' dockert exec itest-survive stat -c '%u' /data; then
+                    ok "a restart keeps the owner of a share a container still mounts"
+                else
+                    bad "after a restart the share reports [$LAST_OUTPUT], want 1000"
+                fi
+                sleep 2
+                echo "edited after the restart $(date +%s)" >"$SURVIVEDIR/edit.txt"
+                timeout 150 docker wait itest-survive >/dev/null 2>&1
+                seen=$(docker logs itest-survive 2>&1)
+                if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen"; then
+                    ok "a restart keeps watching a share a container still mounts"
+                else
+                    bad "an edit after a restart never reached the container: [$(tail -5 <<<"$seen" | tr '\n' ' ')]"
+                    sed 's/^/        /' "$WORK/survive-up.log" | tail -20
+                fi
+            fi
+            docker rm -f itest-survive >/dev/null 2>&1
+        else
+            bad "the restart probe container would not start: $(cat "$WORK/survive-run.log")"
+        fi
+    else
+        bad "could not build the watch probe, so the watch words were not tested"
+    fi
+
+    # The reason owner= exists: git compares the owner with its own uid.
+    if outputs 'On branch|No commits yet' dockert run --rm --user 1000 --entrypoint sh -v "$WORDSDIR:/w:owner=1000" alpine/git -c 'cd /w && git init -q && git status'; then
+        ok "git as uid 1000 accepts an owner=1000 share without safe.directory"
+    else
+        bad "git status as uid 1000 on an owner=1000 share: [$LAST_OUTPUT]"
+    fi
+else
+    bad "no client is running, so the mount words could not be tested"
+fi
+
+echo
 echo "== 15. does replay make a container's watcher fire? =="
 # 11b shows a client-side change notifies nobody, 11d which syscall would; this
 # runs the whole path (client watcher, SSH channel, agent replay). The client is
@@ -1958,6 +2156,19 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         fi
     fi
 
+    # prefetch=off on one mount beats the session's tree: the share is a union
+    # that is never filled.
+    NOPREFETCH="$WORK/prefetch-off"
+    mkdir -p "$NOPREFETCH"
+    echo "first" >"$NOPREFETCH/marker"
+    if dockert run -d --name itest-prefetch-off -v "$NOPREFETCH:/w:read=cached,write=back,prefetch=off" alpine:3 sleep 900 >"$WORK/prefetch-off-run.log" 2>&1; then
+        sleep 8
+        nothing_prefetched "read=cached,write=back,prefetch=off" "$NOPREFETCH"
+        dockert rm -f itest-prefetch-off >/dev/null 2>&1
+    else
+        bad "a prefetch=off union would not start: $(cat "$WORK/prefetch-off-run.log")"
+    fi
+
     # Compose's short volume syntax drops our words, so the client warns. The
     # long syntax's consistency: reaches the rewriter only through the Mount
     # API, which compose uses for a bind with an advanced option such as
@@ -1991,6 +2202,50 @@ COMPOSE
         ok "compose's short volume syntax warns that it dropped the mode words"
     else
         bad "no warning for a dropped mode word: [$LAST_OUTPUT]"
+    fi
+    # Its own directory: one directory has one set of words, and long.yaml
+    # below shares CMODES with the session's defaults.
+    CWORDS="$WORK/compose-words"
+    mkdir -p "$CWORDS"
+    echo "first" >"$CWORDS/marker"
+    cat >"$CMODES/words.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    container_name: itest-compose-words
+    command: sleep 900
+    volumes:
+      - type: bind
+        source: $CWORDS
+        target: /w
+        consistency: read=cached,write=back,watch=coarse,prefetch=eager,owner=1000
+        bind:
+          create_host_path: false
+COMPOSE
+    cat >"$CMODES/shortowner.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    volumes:
+      - $CMODES:/w:owner=1000.1000
+COMPOSE
+    if outputs 'compose drops "owner=1000.1000" from .*\(service app\)' \
+        timeout 60 "$WORK/remote-docker" compose -f "$CMODES/shortowner.yaml" config; then
+        ok "compose's short volume syntax warns that it dropped owner="
+    else
+        bad "no warning for a dropped owner word: [$LAST_OUTPUT]"
+    fi
+    if timeout 180 "$WORK/remote-docker" compose -f "$CMODES/words.yaml" up -d >"$WORK/compose-words.log" 2>&1; then
+        if union_is_fuse docker itest-compose-words && outputs '^1000$' docker exec itest-compose-words stat -c '%u' /w/marker; then
+            ok "compose's consistency: carries watch=, prefetch= and owner= into a union"
+        else
+            bad "the compose words did not make an owned union: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        timeout 120 "$WORK/remote-docker" compose -f "$CMODES/words.yaml" down -v >/dev/null 2>&1
+    else
+        bad "compose could not start the words stack"
+        sed 's/^/        /' "$WORK/compose-words.log" | tail -20
     fi
     if timeout 180 "$WORK/remote-docker" compose -f "$CMODES/long.yaml" up -d >"$WORK/compose-modes.log" 2>&1; then
         if union_is_fuse docker itest-compose-long; then

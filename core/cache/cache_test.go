@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -145,5 +146,42 @@ func TestCacheCodecNegotiation(t *testing.T) {
 				t.Errorf("Accepts(%q) = %v, want %v", c.codec, got, c.want)
 			}
 		})
+	}
+}
+
+// The owner rides the prepare, defaults to root, and is checked like any other
+// field the agent will act on.
+func TestPrepareOwner(t *testing.T) {
+	vol, err := workspace.CacheVolumeForExport("aabbccdd", "/m/00112233445566ff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Op: OpPrepare, Export: "/m/00112233445566ff", Port: 30001, Cache: vol}
+
+	if o, err := req.OwnerOf(); err != nil || o != (workspace.Owner{Set: true}) {
+		t.Errorf("no owner = %v, %v; want root", o, err)
+	}
+	req.Owner = "1000:2000"
+	if err := req.Validate(); err != nil {
+		t.Errorf("a valid owner was refused: %v", err)
+	}
+	if o, _ := req.OwnerOf(); o.UID != 1000 || o.GID != 2000 {
+		t.Errorf("OwnerOf = %v", o)
+	}
+	req.Owner = "alice"
+	if err := req.Validate(); err == nil {
+		t.Error("an owner that is not one was accepted")
+	}
+
+	// Absent from the wire when empty, so an agent before the field sees the
+	// frame it always did; and the agent's greeting says it applies one.
+	req.Owner = ""
+	line, _ := json.Marshal(req)
+	if strings.Contains(string(line), `"o"`) {
+		t.Errorf("an empty owner reached the wire: %s", line)
+	}
+	hello, _ := json.Marshal(Hello{Version: Version, Owner: true})
+	if !strings.Contains(string(hello), `"o":true`) {
+		t.Errorf("hello = %s, want the capability announced", hello)
 	}
 }

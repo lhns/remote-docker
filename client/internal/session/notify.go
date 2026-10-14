@@ -13,6 +13,7 @@ import (
 	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
 	"github.com/lhns/remote-docker/core/notify"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // notifySink writes change frames to the agent over the workspace-notify
@@ -62,12 +63,25 @@ func (s *notifySink) Send(_ context.Context, frame notify.Frame) error {
 
 func (s *notifySink) Close() error { return s.stream.Close() }
 
-// startNotify attaches the watcher to a new connection. A workspace without
-// the channel is warned about once, not failed.
+// startNotify attaches the watcher to a connection, once per connection and
+// only when some share watches: a session that watches nothing opens no
+// channel. It runs at connect and again whenever a mount makes a share watch
+// on a connection that is already up (notifyWanted). A workspace without the
+// channel is warned about once, not failed.
 func (s *Session) startNotify(live *liveConn) {
-	if s.watch == nil {
+	w := s.watcher()
+	if w == nil || !s.anyWatching() {
 		return
 	}
+
+	live.notifyMu.Lock()
+	if live.notifyTried {
+		live.notifyMu.Unlock()
+		return
+	}
+	live.notifyTried = true
+	live.notifyMu.Unlock()
+
 	sink, err := openNotify(s.ctx, live.ssh)
 	if err != nil {
 		s.notifyOnce.Do(func() {
@@ -75,9 +89,48 @@ func (s *Session) startNotify(live *liveConn) {
 		})
 		return
 	}
+
+	live.notifyMu.Lock()
+	if live.shut {
+		live.notifyMu.Unlock()
+		_ = sink.Close()
+		return
+	}
 	live.notify = sink
-	s.watch.SetSink(sink)
-	s.syncWatch()
+	live.notifyMu.Unlock()
+	w.SetSink(sink)
+}
+
+// notifyWanted opens the channel on the current connection, if there is one
+// and it has none. Off the caller's goroutine: it is called from share
+// registration, which holds the volume guard, and opening the channel is a
+// round trip. A connection made later is covered by connect.
+func (s *Session) notifyWanted() {
+	if live, ok := s.gate.currentLive(); ok && live != nil {
+		go s.startNotify(live)
+	}
+}
+
+// watchOf is the watch mode a share is watched in.
+func watchOf(w workspace.Watch) fswatch.Mode {
+	switch w {
+	case workspace.WatchPartial:
+		return fswatch.ModePartial
+	case workspace.WatchCoarse:
+		return fswatch.ModeCoarse
+	}
+	return fswatch.ModeOff
+}
+
+// watchWord is the share word a session's default watch mode stands for.
+func watchWord(m fswatch.Mode) workspace.Watch {
+	switch m {
+	case fswatch.ModePartial:
+		return workspace.WatchPartial
+	case fswatch.ModeCoarse:
+		return workspace.WatchCoarse
+	}
+	return workspace.WatchOff
 }
 
 func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
@@ -88,9 +141,102 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 			ExportPath: share.ExportPath,
 			LocalPath:  share.LocalPath,
 			File:       share.File,
+			Mode:       watchOf(share.Words.Watch),
 		})
 	}
 	return out
+}
+
+// anyWatching reports whether some registered share is watched.
+func (s *Session) anyWatching() bool {
+	for _, share := range s.registry.Shares() {
+		if watchOf(share.Words.Watch) != fswatch.ModeOff {
+			return true
+		}
+	}
+	return false
+}
+
+// watcher is the file watcher, or nil while none has been started. It starts
+// with the first mount that needs it when the session's own default is off.
+func (s *Session) watcher() *fswatch.Watcher {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	return s.watch
+}
+
+// startWatcher starts the watcher if it is not running. A failure refuses the
+// mount that needed it and leaves the session open.
+func (s *Session) startWatcher() error {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+
+	if s.watch != nil {
+		return nil
+	}
+	if s.watchClosed || s.ctx.Err() != nil {
+		return fmt.Errorf("the session is closing")
+	}
+	if !s.opts.Role.hosting() {
+		return fmt.Errorf("this session does not serve mounts")
+	}
+	w, err := fswatch.New(fswatch.Options{
+		Budget:  s.opts.WatchBudget,
+		Exclude: fswatch.ExcludesOr(s.opts.WatchExclude),
+		Log:     s.opts.Log,
+	})
+	if err != nil {
+		return err
+	}
+	// Sees every change before the mode filters any: a deletion the cache
+	// misses leaves it serving a file that is gone (ADR 0044).
+	w.SetObserver(cacheObserver{cache: s.cache})
+	s.watch = w
+	// A connection that is already up has no sink for it yet.
+	return nil
+}
+
+// closeWatcher stops the watcher, and keeps a late mount from starting another.
+func (s *Session) closeWatcher() {
+	s.watchMu.Lock()
+	w := s.watch
+	s.watchClosed = true
+	s.watchMu.Unlock()
+	if w != nil {
+		_ = w.Close()
+	}
+}
+
+// shareRestored is told of a share brought back from the record, which no
+// mount registered: if it watches, the watcher must exist and know it now, or
+// a container started against it is served unwatched until the next
+// reconcile.
+func (s *Session) shareRestored(share *nfsserve.Share) {
+	if watchOf(share.Words.Watch) == fswatch.ModeOff {
+		return
+	}
+	if err := s.startWatcher(); err != nil {
+		s.log().Warn("a restored share needs the file watcher, and it would not start; edits to "+share.LocalPath+" will not reach the workspace", "err", err)
+		return
+	}
+	s.syncWatch()
+}
+
+// restoreShare answers a mount for an export this session has not registered,
+// with the words the record held. A record from before a word existed takes
+// the session's default for it.
+func (s *Session) restoreShare(export string) (string, workspace.ShareWords, bool) {
+	path, words, ok := s.shares.restore(export)
+	if !ok {
+		return "", workspace.ShareWords{}, false
+	}
+	if words.Watch == workspace.WatchUnset {
+		words.Watch = watchWord(s.opts.Watch)
+	}
+	if words.Prefetch == workspace.PrefetchUnset {
+		words.Prefetch = prefetchWord(s.prefetch)
+	}
+	return path, words, true
 }
 
 // reconcileShares periodically resyncs the watcher, covering shares registered

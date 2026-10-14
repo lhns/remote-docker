@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // A socket is refused, and the reason matters: it is not that single files
@@ -21,7 +23,7 @@ func TestRegisterRefusesASocket(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	_, err = NewRegistry(DefaultAttrs).Register(sock)
+	_, err = NewRegistry(DefaultAttrs).Register(sock, workspace.ShareWords{})
 	if err == nil {
 		t.Fatal("Register(socket) = nil error, want a refusal")
 	}

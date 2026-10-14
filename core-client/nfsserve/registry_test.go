@@ -16,11 +16,11 @@ func TestRegisterIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 
-	first, err := r.Register(dir)
+	first, err := r.Register(dir, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	second, err := r.Register(dir)
+	second, err := r.Register(dir, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("second Register: %v", err)
 	}
@@ -36,11 +36,11 @@ func TestRegisterDistinctDirectories(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 
-	shareA, err := r.Register(a)
+	shareA, err := r.Register(a, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register(a): %v", err)
 	}
-	shareB, err := r.Register(b)
+	shareB, err := r.Register(b, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register(b): %v", err)
 	}
@@ -63,7 +63,7 @@ func TestRegisterAFile(t *testing.T) {
 	}
 	r := NewRegistry(DefaultAttrs)
 
-	share, err := r.Register(file)
+	share, err := r.Register(file, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register(file): %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRegisterRejectsWhatItCannotServe(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 
-	if _, err := r.Register(filepath.Join(dir, "does-not-exist")); err == nil {
+	if _, err := r.Register(filepath.Join(dir, "does-not-exist"), workspace.ShareWords{}); err == nil {
 		t.Error("Register(missing) = nil error, want an error")
 	}
 }
@@ -109,7 +109,7 @@ func TestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(dir)
+	share, err := r.Register(dir, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestLookup(t *testing.T) {
 func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
-	if _, err := r.Register(dir); err != nil {
+	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	export := exportOf(dir)
@@ -181,7 +181,7 @@ func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(dir)
+	share, err := r.Register(dir, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,12 +217,12 @@ func TestLookupOrRestore(t *testing.T) {
 
 	r := NewRegistry(Attrs{})
 	asked := 0
-	r.Restore = func(path string) (string, bool) {
+	r.Restore = func(path string) (string, workspace.ShareWords, bool) {
 		asked++
 		if path == export {
-			return dir, true
+			return dir, workspace.ShareWords{}, true
 		}
-		return "", false
+		return "", workspace.ShareWords{}, false
 	}
 
 	// A miss the resolver knows about comes back.
@@ -256,7 +256,7 @@ func TestOnlyMountRestores(t *testing.T) {
 	export := workspace.ExportPathForID(workspace.ShareID(dir))
 
 	r := NewRegistry(Attrs{})
-	r.Restore = func(string) (string, bool) { return dir, true }
+	r.Restore = func(string) (string, workspace.ShareWords, bool) { return dir, workspace.ShareWords{}, true }
 
 	if _, _, ok := r.Lookup(export); ok {
 		t.Error("Lookup restored a share")

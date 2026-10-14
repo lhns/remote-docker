@@ -50,6 +50,8 @@ func (s *Server) serveCache(session gssh.Session, account sessionAccount) {
 	hello := &cache.Hello{
 		Version: cache.Version,
 		Codecs:  cache.Codecs(),
+		// A prepare's owner is applied to the union's root (ADR 0046).
+		Owner: true,
 	}
 	if err := enc.Encode(cache.Reply{Hello: hello}); err != nil {
 		_ = session.Exit(1)

@@ -364,15 +364,15 @@ default.**
 | `REMOTE_DOCKER_ENDPOINT` | `endpoint` | `--endpoint` | `\\.\pipe\docker_remote`, or a socket in the state directory |
 | `REMOTE_DOCKER_WORKSPACE` | (`default`) | `--workspace` | the file's default |
 | `REMOTE_DOCKER_CONSISTENCY` | `consistency`, `consistencyPaths` | `remote create`/`set --consistency` | `read=direct,write=through`. See [Faster access to a shared directory](#faster-access-to-a-shared-directory) |
-| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off` |
+| `REMOTE_DOCKER_WATCH` | `watch` | `remote create`/`set --watch` | `off`; the default for mounts naming no `watch=`. A mount can name its own (`watch=partial`), and `read=cached` and unions never get less than `partial`. See [File watching](#file-watching) |
 | `REMOTE_DOCKER_WATCH_BUDGET` | `watchBudget` | | 4096 Linux, 1024 Windows, 512 macOS |
 | `REMOTE_DOCKER_WATCH_EXCLUDE` | `watchExclude` | | `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.gradle`, `.terraform` |
 | `REMOTE_DOCKER_CACHE_FILES` | `cacheFiles` | | 20000, files prefetch may copy into a union |
 | `REMOTE_DOCKER_CACHE_BYTES` | `cacheBytes` | | 2 GiB, bytes prefetch may copy into a union |
-| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads |
+| `REMOTE_DOCKER_PREFETCH` | `prefetch` | | `off`; `eager` or `tree` fills a `read=cached` union ahead of reads. The default for mounts naming no `prefetch=` |
 | `REMOTE_DOCKER_IDLE_TIMEOUT` | `idleTimeout` | | `1m` before an unused connection is dropped |
 | `REMOTE_DOCKER_DAEMON_STANDBY` | `daemonStandby` | | `30m` before an unused session lets go of the workspace, keeping its endpoint |
-| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid[:gid]` every file in a share reports, for an image that runs as another user (gid defaults to the uid) |
+| `REMOTE_DOCKER_SHARE_OWNER` | `shareOwner` | | `0:0`; the `uid` or `uid.gid` every file in a share reports, for an image that runs as another user (gid defaults to the uid). The default for mounts naming no `owner=`; any one non-digit separates the ids. See [A container that is not root](#a-container-that-is-not-root) |
 | `REMOTE_DOCKER_DAEMON_IDLE` | `daemonIdle` | | how long before an unused session EXITS. Unset never does, because that takes the endpoint with it |
 | `REMOTE_DOCKER_TRACE` | | | off; `1` logs one line per API request |
 | `REMOTE_DOCKER_NFS_TRACE` | | | off; a threshold (`250ms`, or bare milliseconds, least `1ms`) above which a share's filesystem calls are logged |
@@ -459,6 +459,21 @@ It is off by default because it costs one watch per shared directory (on macOS
 one file descriptor per file), within a budget. Costs, deletions and the budget
 are in [File watching in detail](#file-watching-in-detail).
 
+The setting is the default; a mount can name its own, so one hot-reloading
+directory costs watches and the rest do not:
+
+```bash
+docker run -v ./web:/app:watch=partial img      # only this directory is watched
+docker run -v ./web:/app:ro,watch=coarse img    # beside ro, comma-joined
+docker run -v ./data:/data:watch=off img        # not watched, whatever the setting says
+```
+
+`read=cached` and any `write=` other than `through` need the watcher to stay
+coherent, so they are watched at least at `partial` even when the setting is
+`off`, and `watch=off` on one is refused. Like every word of a share it is fixed
+for the directory while the session runs: a second mount of the directory
+naming another is refused.
+
 ## Faster access to a shared directory
 
 Reading through the share costs a round trip per file, and the mount
@@ -540,11 +555,15 @@ Both are proven end to end in CI; conflict handling only by unit tests.
 and scattered reads are slower. Large writes are local.
 
 **Prefetch is off by default.** `prefetch: eager` or `prefetch: tree`
-(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union
+(`REMOTE_DOCKER_PREFETCH`) turns it on for a `read=cached` union; a mount can
+name its own, `-v ./src:/app:read=cached,write=back,prefetch=tree`, and
+`prefetch=off` opts one out. Naming `eager` or `tree` on a mount that is not a
+`read=cached` union is refused
 ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off).
 
-**`read=cached` and every union need [file watching](#file-watching) on**, and
-refuse to run without it. An edit to an existing file arrives at once; a file
+**`read=cached` and every union need [file watching](#file-watching)**, so they
+turn it on for their directory (`partial`, or the setting if it is higher)
+whatever `REMOTE_DOCKER_WATCH` says, and refuse `watch=off`. An edit to an existing file arrives at once; a file
 you create or delete can take up to a minute to appear in a listing unless
 watching is `coarse`. A union caches only what the watcher covers; anything
 under an excluded directory is read over the mount.
@@ -1161,11 +1180,28 @@ stays supported: a single-account workspace has nothing to separate.
 
 ### A container that is not root
 
-Every file in a share is reported as owned by the workspace account (uid
-10000 and up) with mode 0666, every directory 0777, so an image that runs as
-its own user can read and write the share. A `chown` inside the container is
-accepted and does nothing, and a read-only bind (`ro`) is still read-only
+Every file in a share is reported as owned by root (`0:0`) with mode 0666,
+every directory 0777, so an image that runs as its own user can read and write
+the share. A `chown` inside the container is accepted and does nothing, and a
+read-only bind (`ro`) is still read-only
 ([ADR 0046](docs/adr/0046-a-share-reports-wide-mode-bits.md)).
+
+git refuses a repository owned by another uid, so an image that runs as a
+user needs the share to report that user. Name it on the mount, or for every
+mount with `REMOTE_DOCKER_SHARE_OWNER`:
+
+```bash
+docker run -v ./project:/app:owner=1000.2000 img      # uid 1000, gid 2000
+docker run -v ./project:/app:ro,owner=1000 img        # gid defaults to the uid
+docker run --mount 'type=bind,src=./project,dst=/app,"consistency=owner=1000:2000"' img
+```
+
+It applies to every kind of mount, a `write=back` union's root included. The
+separator is any one character that is not a digit, `=` or `,`. Write `.`
+in `-v`, whose option list cannot carry a fourth colon; `:` works in `--mount`
+and in a compose file's `consistency:`. One directory has one owner: a second
+mount of it naming another is refused until the containers using it are gone
+and the session restarted.
 
 **A named volume is not a share, and gets none of that.** Where the image has no
 directory at the mount path, the daemon creates it root-owned 0755, so a
@@ -1295,8 +1331,7 @@ endpoint goes with it: tools pointed at the endpoint then fail until a
 
 **Deletions are the gap.** `unlink` of a name that is already gone fails
 before the kernel generates anything, so a deletion cannot be replayed
-faithfully. `coarse` approximates it with a directory-level event (unit tested
-only); `partial` says nothing rather than something wrong. A watcher that
+faithfully. `coarse` approximates it with a directory-level event (`integration.sh` 14b); `partial` says nothing rather than something wrong. A watcher that
 rescans notices; one that trusts the event *kind* is misled
 ([ADR 0014](docs/adr/0014-inotify-does-not-see-client-changes.md)).
 

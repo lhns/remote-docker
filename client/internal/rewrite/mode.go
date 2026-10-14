@@ -9,15 +9,16 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
-// A mount's mode words are read from `-v` options or `--mount` Consistency and
-// always consumed: the daemon rejects ours by name (ADR 0042).
+// A mount's words (read, write, owner, and Docker's own) are read from `-v`
+// options or `--mount` Consistency and always consumed: the daemon rejects
+// ours by name (ADR 0042).
 
-// splitMode takes the mode words out of a `-v` option list, leaving every other
-// option, `ro` above all, untouched. It returns the mode, the Docker word used
-// if any (for writeAsked), and the remaining options.
-func splitMode(options string) (workspace.Mode, string, string, error) {
+// splitMode takes the words out of a `-v` option list, leaving every other
+// option, `ro` above all, untouched. It returns the words, the Docker word
+// used if any (for writeAsked), and the remaining options.
+func splitMode(options string) (workspace.MountWords, string, string, error) {
 	if options == "" {
-		return workspace.ModeUnset, "", "", nil
+		return workspace.MountWords{}, "", "", nil
 	}
 
 	var words []string
@@ -30,11 +31,11 @@ func splitMode(options string) (workspace.Mode, string, string, error) {
 		}
 	}
 	asked := strings.Join(words, ",")
-	mode, err := workspace.ParseMode(asked)
+	got, err := workspace.ParseMount(asked)
 	if err != nil {
-		return workspace.ModeUnset, "", "", fmt.Errorf("rewrite: %w", err)
+		return workspace.MountWords{}, "", "", fmt.Errorf("rewrite: %w", err)
 	}
-	return mode, dockerSpelling(asked), strings.Join(kept, ","), nil
+	return got, dockerSpelling(asked), strings.Join(kept, ","), nil
 }
 
 // dockerSpelling is the Docker word to quote back, or "" for our own words.
@@ -47,25 +48,25 @@ func dockerSpelling(asked string) string {
 
 // takeMode reads and removes a `--mount` entry's Consistency field. Both axes
 // arrive csv-quoted: `"consistency=read=cached,write=back"`.
-func takeMode(mount map[string]json.RawMessage) (workspace.Mode, string, error) {
+func takeMode(mount map[string]json.RawMessage) (workspace.MountWords, string, error) {
 	raw, ok := mount["Consistency"]
 	if !ok || string(raw) == "null" {
-		return workspace.ModeUnset, "", nil
+		return workspace.MountWords{}, "", nil
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return workspace.ModeUnset, "", fmt.Errorf("rewrite: decoding mount consistency: %w", err)
+		return workspace.MountWords{}, "", fmt.Errorf("rewrite: decoding mount consistency: %w", err)
 	}
-	mode, err := workspace.ParseMode(value)
+	got, err := workspace.ParseMount(value)
 	if err != nil {
-		return workspace.ModeUnset, "", fmt.Errorf("rewrite: %w", err)
+		return workspace.MountWords{}, "", fmt.Errorf("rewrite: %w", err)
 	}
 	delete(mount, "Consistency")
-	return mode, dockerSpelling(value), nil
+	return got, dockerSpelling(value), nil
 }
 
-// withoutOurWords takes the read= and write= words out of an option list the
-// daemon will see as it is, keeping Docker's own. A misspelt one of ours is
+// withoutOurWords takes our words (read=, write=, owner=) out of an option list
+// the daemon will see as it is, keeping Docker's own. A misspelt one of ours is
 // refused here as it would be on a rewritten bind.
 func withoutOurWords(options string) (string, error) {
 	var ours, kept []string
@@ -79,7 +80,7 @@ func withoutOurWords(options string) (string, error) {
 	if len(ours) == 0 {
 		return options, nil
 	}
-	if _, err := workspace.ParseMode(strings.Join(ours, ",")); err != nil {
+	if _, err := workspace.ParseMount(strings.Join(ours, ",")); err != nil {
 		return "", fmt.Errorf("rewrite: %w", err)
 	}
 	return strings.Join(kept, ","), nil
@@ -114,7 +115,7 @@ func dropOurConsistency(mount map[string]json.RawMessage) (bool, error) {
 
 // Remedies named more than once.
 const (
-	fixWatchOn = "\n  fix: set watch to partial or coarse for this workspace"
+	fixSameWords = "\n  fix: give both mounts the same words"
 
 	// FixUpdateWorkspace is for a workspace that cannot serve a union at all.
 	FixUpdateWorkspace = "\n  fix: update the workspace, or use write=through"
@@ -138,46 +139,159 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 	return best.Or(r.Mode)
 }
 
-// resolveMode settles one mount's mode and refuses what cannot be served. Two
-// mounts of one directory disagreeing are refused: the volume is per share,
-// and the second EnsureVolume would silently recreate the first's.
-func (r *Rewriter) resolveMode(ctx context.Context, modes map[string]workspace.Mode, source string, asked workspace.Mode, spelled string) (workspace.Mode, error) {
-	got := asked.Or(r.modeFor(source)).Or(workspace.DefaultMode)
+// resolveMount settles one mount's words and refuses what cannot be served.
+// Two mounts of one directory disagreeing are refused: the volume is per
+// share, and the second EnsureVolume would silently recreate the first's.
+func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace.MountWords, source string, asked workspace.MountWords, spelled string) (workspace.MountWords, error) {
+	resolved := workspace.MountWords{
+		Mode:       asked.Mode.Or(r.modeFor(source)).Or(workspace.DefaultMode),
+		ShareWords: asked.ShareWords,
+	}
+	// A concrete owner always: root unless the session names another, so a
+	// share's words compare without knowing where a default came from.
+	if !resolved.Owner.Set {
+		resolved.Owner = r.ShareOwner
+	}
+	if !resolved.Owner.Set {
+		resolved.Owner = workspace.Owner{Set: true}
+	}
+	got := resolved.Mode
+
+	watch, err := r.resolveWatch(source, asked.Watch, got)
+	if err != nil {
+		return workspace.MountWords{}, err
+	}
+	resolved.Watch = watch
+
+	prefetch, err := r.resolvePrefetch(source, asked.Prefetch, got)
+	if err != nil {
+		return workspace.MountWords{}, err
+	}
+	resolved.Prefetch = prefetch
 
 	if got.Union() {
 		wants := writeAsked(got.Write, spelled)
-		if _, err := r.openCache(ctx); err != nil {
-			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for %s, and %w",
+		channel, err := r.openCache(ctx)
+		if err != nil {
+			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
 				source, wants, err)
 		}
-		if !r.Watching {
-			// Without the watcher a cached copy stays stale forever (ADR 0044).
-			return workspace.ModeUnset, fmt.Errorf(
-				"rewrite: %s asks for %s, whose cache is kept honest by the watcher, and watching is off"+fixWatchOn,
-				source, wants)
-		}
-		if err := unionAvailable(r.UnionReady); err != nil {
-			return workspace.ModeUnset, fmt.Errorf("rewrite: %s asks for %s, and %w",
-				source, wants, err)
+		// A union's root is created by the agent as root. A workspace that
+		// cannot hand it to another owner would serve a share its container
+		// cannot use, and git there would refuse it as somebody else's, so
+		// the mount is refused before anything is created.
+		if resolved.Owner != (workspace.Owner{Set: true}) && !channel.ServesOwner() {
+			return workspace.MountWords{}, fmt.Errorf(
+				"rewrite: %s asks for %s with owner=%s, and this workspace cannot give a union's root an owner"+FixUpdateWorkspace,
+				source, wants, resolved.Owner)
 		}
 	}
-	if got.Read == workspace.ReadCached && !r.Watching {
-		return workspace.ModeUnset, fmt.Errorf(
-			"rewrite: %s asks for read=%s, which needs the watcher to stay coherent, and watching is off"+fixWatchOn,
-			source, got.Read)
+	if watch.Watching() {
+		if err := r.startWatcher(source); err != nil {
+			return workspace.MountWords{}, err
+		}
+	}
+	if got.Union() {
+		if err := unionAvailable(r.UnionReady); err != nil {
+			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
+				source, writeAsked(got.Write, spelled), err)
+		}
 	}
 
 	key := workspace.CanonicalKey(source)
-	if seen, ok := modes[key]; ok {
-		if seen != got {
-			return workspace.ModeUnset, fmt.Errorf(
-				"rewrite: %s is mounted twice with different modes, %v and %v, and one directory has one mount",
-				source, seen, got)
+	if seen, ok := mounts[key]; ok {
+		if seen != resolved {
+			return workspace.MountWords{}, fmt.Errorf(
+				"rewrite: %s is mounted twice with different words, %s, and one directory has one share"+fixSameWords,
+				source, describeDifference(seen, resolved))
 		}
-		return got, nil
+		return resolved, nil
 	}
-	modes[key] = got
-	return got, nil
+	mounts[key] = resolved
+	return resolved, nil
+}
+
+// resolveWatch settles one mount's watch. The word, else the session's
+// default, and a mount that cannot stay coherent without the watcher gets at
+// least partial: a long attribute cache, or a copy in a union, with nothing
+// to invalidate it is stale for good, and that fails by succeeding (ADR 0042,
+// ADR 0044). Asking for off on such a mount is a contradiction and is refused.
+func (r *Rewriter) resolveWatch(source string, asked workspace.Watch, mode workspace.Mode) (workspace.Watch, error) {
+	cached, union := mode.Read == workspace.ReadCached, mode.Union()
+	needs := cached || union
+
+	if asked == workspace.WatchOff && needs {
+		var why, fix string
+		switch {
+		case cached && union:
+			why, fix = "read=cached and write="+string(mode.Write)+", which need the watcher to stay coherent",
+				"drop watch=off, or use read=direct,write=through"
+		case cached:
+			why, fix = "read=cached, which needs the watcher to stay coherent", "drop watch=off, or use read=direct"
+		default:
+			why, fix = "write="+string(mode.Write)+", whose cache is kept honest by the watcher", "drop watch=off, or use write=through"
+		}
+		return workspace.WatchUnset, fmt.Errorf("rewrite: %s asks for watch=off, and %s\n  fix: %s", source, why, fix)
+	}
+
+	watch := asked
+	if watch == workspace.WatchUnset {
+		watch = r.Watch
+	}
+	if watch == workspace.WatchUnset {
+		watch = workspace.WatchOff
+	}
+	if watch == workspace.WatchOff && needs {
+		watch = workspace.WatchPartial
+	}
+	return watch, nil
+}
+
+// resolvePrefetch settles one mount's prefetch. The word, else the session's
+// default, and off wherever the mode does not prefetch: only read=cached with a
+// union has a cache to fill and permission to trust it (ADR 0045). A word
+// asking for a fill where there is none is refused rather than ignored, since a
+// prefetch that silently does nothing is the setting somebody then tunes.
+func (r *Rewriter) resolvePrefetch(source string, asked workspace.Prefetch, mode workspace.Mode) (workspace.Prefetch, error) {
+	if asked.Prefetching() && !mode.Prefetch() {
+		return workspace.PrefetchUnset, fmt.Errorf("rewrite: %s asks for prefetch=%s, and %s does not prefetch\n"+
+			"  fix: drop prefetch=, or use read=cached with write=back or write=ephemeral", source, asked, mode)
+	}
+	prefetch := asked
+	if prefetch == workspace.PrefetchUnset {
+		prefetch = r.Prefetch
+	}
+	if prefetch == workspace.PrefetchUnset || !mode.Prefetch() {
+		prefetch = workspace.PrefetchOff
+	}
+	return prefetch, nil
+}
+
+// startWatcher makes sure the file watcher is running for a mount that needs
+// it. A session that watches nothing by default starts it here, on the first
+// such mount, and one that cannot start it refuses the mount rather than
+// serving it stale.
+func (r *Rewriter) startWatcher(source string) error {
+	if r.StartWatcher == nil {
+		return fmt.Errorf("rewrite: %s needs the file watcher, which this session does not run\n"+
+			"  fix: use a session that serves mounts (docker remote start)", source)
+	}
+	if err := r.StartWatcher(); err != nil {
+		return fmt.Errorf("rewrite: %s needs the file watcher, and it would not start: %w", source, err)
+	}
+	return nil
+}
+
+// describeDifference names what two mounts of one directory disagree about.
+func describeDifference(a, b workspace.MountWords) string {
+	var parts []string
+	if a.Mode != b.Mode {
+		parts = append(parts, fmt.Sprintf("%v and %v", a.Mode, b.Mode))
+	}
+	for _, d := range a.Differences(b.ShareWords) {
+		parts = append(parts, fmt.Sprintf("%s=%s and %s=%s", d.Key, d.A, d.Key, d.B))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // openCache reaches the session's cache channel, refusing if there is none.

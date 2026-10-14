@@ -112,6 +112,14 @@ type Request struct {
 	// union's lower. Empty means cached, from clients before the field.
 	Read string `json:"r,omitempty"`
 
+	// Owner is the uid and gid the share reports, "uid:gid", for OpPrepare: the
+	// merged root is the upper directory the agent creates as root, and a
+	// container running as another uid is refused by git there (ADR 0046).
+	// Empty means 0:0, which is also what an agent before the field does, so a
+	// client sends it only when it is not that and the agent announced
+	// Hello.Owner.
+	Owner string `json:"o,omitempty"`
+
 	// Paths are what OpDrop removes and OpPull fetches, spelled as a share
 	// path: leading slash, forward slashes, no "." or "..".
 	Paths []string `json:"d,omitempty"`
@@ -162,11 +170,25 @@ type Hello struct {
 	// which is why the client picks from THIS list and never from what it can
 	// produce.
 	Codecs []string `json:"z,omitempty"`
+
+	// Owner says this agent gives a union's root the owner a prepare names. An
+	// agent without it ignores the field, so the root stays root's and a
+	// non-root container cannot use the share: the client refuses that mount
+	// by name instead (cache.Hello.Owner is how it knows).
+	Owner bool `json:"o,omitempty"`
 }
 
 // Accepts reports whether the agent that sent this greeting can read a codec.
 func (h Hello) Accepts(codec string) bool {
 	return codec == CodecNone || slices.Contains(h.Codecs, codec)
+}
+
+// OwnerOf is the owner a prepare asks for: 0:0 when it names none.
+func (r Request) OwnerOf() (workspace.Owner, error) {
+	if r.Owner == "" {
+		return workspace.Owner{Set: true}, nil
+	}
+	return workspace.ParseOwner(r.Owner)
 }
 
 // Validate rejects a request the agent should not act on. Called on both
@@ -190,6 +212,9 @@ func (r Request) Validate() error {
 		if !workspace.IsManagedVolume(r.Cache) {
 			return fmt.Errorf("workspace: cache prepare for %s names %q, which is not a managed volume",
 				r.Export, r.Cache)
+		}
+		if _, err := r.OwnerOf(); err != nil {
+			return fmt.Errorf("workspace: cache prepare for %s: %w", r.Export, err)
 		}
 	case OpApply:
 		if r.Bytes < 0 {

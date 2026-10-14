@@ -22,10 +22,44 @@ import (
 )
 
 // shareRecord is one directory this workspace asked to export.
+//
+// Owner, Watch and Prefetch are the share's words, resolved. A record without one
+// predates the word and takes the session's default, which is why the file
+// version does not move: a bump would make every restore fail after an upgrade
+// (ADR 0027).
 type shareRecord struct {
 	Export   string    `json:"export"`
 	Path     string    `json:"path"`
 	LastUsed time.Time `json:"lastUsed"`
+	Owner    string    `json:"owner,omitempty"` // uid:gid
+	Watch    string    `json:"watch,omitempty"`
+	Prefetch string    `json:"prefetch,omitempty"`
+}
+
+// words reads the record's share words. A field that does not parse is left
+// unset, so the share takes the session's default rather than being lost.
+func (r shareRecord) words() workspace.ShareWords {
+	var w workspace.ShareWords
+	if o, err := workspace.ParseOwner(r.Owner); err == nil {
+		w.Owner = o
+	}
+	if watch, err := workspace.ParseWatch(r.Watch); err == nil {
+		w.Watch = watch
+	}
+	if prefetch, err := workspace.ParsePrefetch(r.Prefetch); err == nil {
+		w.Prefetch = prefetch
+	}
+	return w
+}
+
+// recordFor is the record of one share with the words it was registered with.
+func recordFor(exportPath, localPath string, words workspace.ShareWords) shareRecord {
+	rec := shareRecord{Export: exportPath, Path: localPath, LastUsed: time.Now()}
+	if words.Owner.Set {
+		rec.Owner = words.Owner.String()
+	}
+	rec.Watch, rec.Prefetch = string(words.Watch), string(words.Prefetch)
+	return rec
 }
 
 // shareFile is the share record on disk.
@@ -131,7 +165,7 @@ func (s *shareStore) usable(rec shareRecord) bool {
 }
 
 // remember records a share, so a container started later can still be served.
-func (s *shareStore) remember(exportPath, localPath string) {
+func (s *shareStore) remember(exportPath, localPath string, words workspace.ShareWords) {
 	if s == nil {
 		return
 	}
@@ -139,9 +173,10 @@ func (s *shareStore) remember(exportPath, localPath string) {
 	s.mu.Lock()
 	rec, known := s.records[exportPath]
 	// Not rewritten on every container: only on change or an hour-stale stamp.
-	changed := !known || rec.Path != localPath || time.Since(rec.LastUsed) > time.Hour
+	next := recordFor(exportPath, localPath, words)
+	changed := !known || rec.Path != localPath || rec.Owner != next.Owner || rec.Watch != next.Watch || rec.Prefetch != next.Prefetch || time.Since(rec.LastUsed) > time.Hour
 	if changed {
-		s.records[exportPath] = shareRecord{Export: exportPath, Path: localPath, LastUsed: time.Now()}
+		s.records[exportPath] = next
 	}
 	s.mu.Unlock()
 
@@ -151,9 +186,9 @@ func (s *shareStore) remember(exportPath, localPath string) {
 }
 
 // restore answers a mount for an export this session has not registered.
-func (s *shareStore) restore(exportPath string) (string, bool) {
+func (s *shareStore) restore(exportPath string) (string, workspace.ShareWords, bool) {
 	if s == nil {
-		return "", false
+		return "", workspace.ShareWords{}, false
 	}
 
 	s.mu.Lock()
@@ -161,15 +196,16 @@ func (s *shareStore) restore(exportPath string) (string, bool) {
 	s.mu.Unlock()
 
 	if !ok || !s.usable(rec) {
-		return "", false
+		return "", workspace.ShareWords{}, false
 	}
 
 	if s.log != nil {
 		s.log.Info("restoring an export the workspace still has a volume for",
 			"export", exportPath, "path", rec.Path)
 	}
-	s.remember(exportPath, rec.Path)
-	return rec.Path, true
+	words := rec.words()
+	s.remember(exportPath, rec.Path, words)
+	return rec.Path, words, true
 }
 
 // exports names every recorded export, for matching a root handle to one.

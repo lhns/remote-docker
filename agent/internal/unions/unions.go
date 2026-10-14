@@ -105,6 +105,10 @@ type Manager struct {
 	probe   func(context.Context, union.Spec) error
 	onStart func(union.Spec)
 
+	// lchown is os.Lchown, replaced by a test: the paths a test prepares name
+	// no real directory.
+	lchown func(path string, uid, gid int) error
+
 	// command builds the child. Nil in production, where it is union.Reexec of
 	// Self; tests substitute a process that exits or stays up.
 	command func(context.Context, union.Spec) *exec.Cmd
@@ -198,6 +202,25 @@ func (l *live) relocate(p string) (string, error) {
 	return replay.Relocate(p, func() (string, error) { return l.spec.Root(), nil })
 }
 
+// chownUpper gives the union's upper directory, which is the merged root, to
+// the owner a prepare names. Through the daemon's filesystem as the agent sees
+// it, relocated and never following a link: the daemon's answers are untrusted
+// (replay.Relocate).
+func (m *Manager) chownUpper(l *live, want union.Spec) error {
+	upper, err := l.relocate(want.Upper())
+	if err != nil {
+		return fmt.Errorf("unions: finding the cache layer of %s: %w", want.Export, err)
+	}
+	chown := os.Lchown
+	if m.lchown != nil {
+		chown = m.lchown
+	}
+	if err := chown(upper, int(want.UID), int(want.GID)); err != nil {
+		return fmt.Errorf("unions: giving the root of %s to %d:%d: %w", want.Export, want.UID, want.GID, err)
+	}
+	return nil
+}
+
 // ErrNoShare is what every op answers for a share this workspace is not
 // serving. Named so the client can stop asking rather than guess from a string.
 var ErrNoShare = errors.New("no union for this share")
@@ -249,7 +272,15 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 		read = workspace.ReadCached
 	}
 
+	// Validated above, so this only fails for a request that skipped it.
+	owner, err := req.OwnerOf()
+	if err != nil {
+		return "", fmt.Errorf("unions: %w", err)
+	}
+
 	spec := union.Spec{
+		UID:      owner.UID,
+		GID:      owner.GID,
 		PID:      d.PID,
 		Export:   req.Export,
 		Client:   client,
@@ -268,6 +299,13 @@ func (m *Manager) Prepare(ctx context.Context, account, client string, d Daemon,
 		// Outside m.mu, for the reason on the pending field: a wedged server
 		// takes aliveTimeout to say so.
 		if known && m.alive(existing.spec) {
+			// Idempotent: a union that outlived the session that made it, or
+			// an agent restart that adopted it, gets the owner its share has
+			// now. The kernel's mount keeps serving; the root's attributes
+			// follow once its cache expires.
+			if err := m.chownUpper(existing, spec); err != nil {
+				return "", err
+			}
 			return existing.spec.Merged(), nil
 		}
 
@@ -332,6 +370,12 @@ func (m *Manager) mount(ctx context.Context, k, host, cacheVol string, spec unio
 
 	if err := m.waitReady(ctx, spec, l); err != nil {
 		m.discard(k, l)
+		return "", err
+	}
+	// Also for a union ADOPTED rather than mounted by this child: its upper
+	// was made by whichever agent mounted it, with whatever owner that one
+	// was given.
+	if err := m.chownUpper(l, spec); err != nil {
 		return "", err
 	}
 	return spec.Merged(), nil

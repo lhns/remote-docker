@@ -93,7 +93,7 @@ func TestServeAnUnrelatedDirectory(t *testing.T) {
 	}
 
 	r := registryFor(t, first)
-	share, err := r.Register(other)
+	share, err := r.Register(other, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestServeReportsSynthesisedOwnership(t *testing.T) {
 	}
 
 	r := NewRegistry(Attrs{UID: 10042, GID: 10043, FileMode: 0o664, DirMode: 0o775})
-	if _, err := r.Register(dir); err != nil {
+	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	target := mustMount(t, serve(t, r), exportOf(dir))
@@ -258,7 +258,7 @@ func TestServeReportsExecutableFiles(t *testing.T) {
 		DirMode:          0o755,
 		AlwaysExecutable: true,
 	})
-	if _, err := r.Register(dir); err != nil {
+	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	target := mustMount(t, serve(t, r), exportOf(dir))
@@ -288,7 +288,7 @@ func TestServePreservesRealExecutableBits(t *testing.T) {
 	}
 
 	r := NewRegistry(Attrs{UID: 1000, GID: 1000, FileMode: 0o644, DirMode: 0o755})
-	if _, err := r.Register(dir); err != nil {
+	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	target := mustMount(t, serve(t, r), exportOf(dir))
@@ -327,8 +327,8 @@ func TestServeRestoresAnUnregisteredExport(t *testing.T) {
 	// Nothing is registered, which is what a fresh session looks like.
 	r := NewRegistry(DefaultAttrs)
 	export := workspace.ExportPathForID(workspace.ShareID(dir))
-	r.Restore = func(path string) (string, bool) {
-		return dir, path == export
+	r.Restore = func(path string) (string, workspace.ShareWords, bool) {
+		return dir, workspace.ShareWords{}, path == export
 	}
 
 	target := mustMount(t, serve(t, r), export)
@@ -411,7 +411,7 @@ func TestServeASingleFile(t *testing.T) {
 	}
 
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(filepath.Join(dir, "nginx.conf"))
+	share, err := r.Register(filepath.Join(dir, "nginx.conf"), workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

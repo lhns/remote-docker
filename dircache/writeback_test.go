@@ -12,9 +12,8 @@ import (
 func cacheWith(t *testing.T, store *fakeStore) *Cache {
 	t.Helper()
 	c := &Cache{
-		Store:  func() (Store, bool) { return store, true },
-		Ctx:    t.Context(),
-		Policy: PolicyTree,
+		Store: func() (Store, bool) { return store, true },
+		Ctx:   t.Context(),
 	}
 	t.Cleanup(c.Stop)
 	return c

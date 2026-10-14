@@ -31,6 +31,10 @@ type cacheChannel struct {
 	// codec is the payload encoding the workspace announced in its greeting.
 	codec string
 
+	// owner says the workspace gives a union's root the owner a prepare names
+	// (cache.Hello.Owner). An agent before it ignores the field.
+	owner bool
+
 	// turn is held for a whole exchange (see do). A channel rather than a
 	// mutex so that waiting for it honours the caller's context.
 	turn chan struct{}
@@ -60,6 +64,7 @@ func openCache(ctx context.Context, client *tunnelclient.Client) (*cacheChannel,
 	if reply.Hello.Accepts(cache.CodecZstd) {
 		c.codec = cache.CodecZstd
 	}
+	c.owner = reply.Hello.Owner
 	return c, nil
 }
 
@@ -337,15 +342,25 @@ func (c *cacheChannel) Mounted(ctx context.Context) ([]string, error) {
 	return reply.Caches, nil
 }
 
+// ServesOwner reports whether the workspace gives a union's root the owner a
+// prepare names.
+func (c *cacheChannel) ServesOwner() bool { return c.owner }
+
 // Prepare mounts a share's union and answers with the path a container binds.
-func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port int, mode workspace.Mode) (string, error) {
-	reply, err := c.do(ctx, cache.Request{
+func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port int, mode workspace.Mode, owner workspace.Owner) (string, error) {
+	req := cache.Request{
 		Op:     cache.OpPrepare,
 		Export: export,
 		Port:   port,
 		Cache:  volume,
 		Read:   string(mode.Read),
-	}, nil)
+	}
+	// Sent only when it is not root, which is what an agent without the field
+	// makes the root anyway.
+	if owner.Set && owner != (workspace.Owner{Set: true}) {
+		req.Owner = owner.String()
+	}
+	reply, err := c.do(ctx, req, nil)
 	if err != nil {
 		return "", err
 	}
@@ -420,13 +435,39 @@ type shareCache struct {
 
 // Attach hands the share to the engine, if any, translating the mode into
 // dircache's terms, which cannot name workspace.Mode.
-func (c shareCache) Attach(export, localPath string, mode workspace.Mode) {
+func (c shareCache) Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords) {
 	if c.session.cache != nil {
+		policy := policyOf(words.Prefetch)
+		if !mode.Prefetch() {
+			policy = dircache.PolicyOff
+		}
 		c.session.cache.Attach(export, localPath, dircache.ShareOptions{
-			Prefetch:  mode.Prefetch(),
+			Policy:    policy,
 			Ephemeral: mode.Write == workspace.WriteEphemeral,
 		})
 	}
+}
+
+// policyOf is the fill policy a share's prefetch word stands for.
+func policyOf(p workspace.Prefetch) dircache.Policy {
+	switch p {
+	case workspace.PrefetchEager:
+		return dircache.PolicyEager
+	case workspace.PrefetchTree:
+		return dircache.PolicyTree
+	}
+	return dircache.PolicyOff
+}
+
+// prefetchWord is the share word a session's default policy stands for.
+func prefetchWord(p dircache.Policy) workspace.Prefetch {
+	switch p {
+	case dircache.PolicyEager:
+		return workspace.PrefetchEager
+	case dircache.PolicyTree:
+		return workspace.PrefetchTree
+	}
+	return workspace.PrefetchOff
 }
 
 // pathsPerFrame bounds the paths one request names: they ride in the header

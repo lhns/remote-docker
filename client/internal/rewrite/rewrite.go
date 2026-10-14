@@ -46,8 +46,9 @@ func (g *Guard) exported(volume string) bool {
 type Sharer interface {
 	// Share exports localPath and returns its export path, e.g. "/m/<id>",
 	// and for a single file the base name the mount uses as a subpath
-	// (ADR 0039).
-	Share(localPath string) (exportPath, file string, err error)
+	// (ADR 0039). The words are the share's own: a directory already shared
+	// with others is refused, since a share's words are fixed.
+	Share(localPath string, words workspace.ShareWords) (exportPath, file string, err error)
 }
 
 // VolumeEnsurer creates a volume on the workspace daemon if it is not already
@@ -59,11 +60,17 @@ type VolumeEnsurer interface {
 // Cache is the workspace's end of a share with a union (ADR 0044). Prepare
 // mounts the union and answers with the path the container binds.
 type Cache interface {
-	Prepare(ctx context.Context, export, cache string, port int, mode workspace.Mode) (string, error)
+	Prepare(ctx context.Context, export, cache string, port int, mode workspace.Mode, owner workspace.Owner) (string, error)
+
+	// ServesOwner reports whether the workspace gives a union's root the
+	// owner Prepare names. One that does not leaves it root's, which a
+	// container running as another uid cannot use.
+	ServesOwner() bool
 
 	// Attach registers the share and returns AT ONCE; any prefetch runs in the
-	// background, since a miss falls through to the live export.
-	Attach(export, localPath string, mode workspace.Mode)
+	// background, since a miss falls through to the live export. The share's
+	// own words say how it is filled.
+	Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords)
 }
 
 // Rewriter converts bind mounts naming local paths into NFS-backed volumes.
@@ -91,6 +98,10 @@ type Rewriter struct {
 	Mode      workspace.Mode
 	ModePaths map[string]workspace.Mode
 
+	// ShareOwner is the owner a mount naming none reports (ADR 0046). Unset
+	// means root.
+	ShareOwner workspace.Owner
+
 	// OpenCache reaches the cache channel, opened only once a mount needs it.
 	// Its error is the tail of the refusal. Nil means no cache at all.
 	OpenCache func(ctx context.Context) (Cache, error)
@@ -99,9 +110,18 @@ type Rewriter struct {
 	// before anything is created.
 	UnionReady string
 
-	// Watching says whether local changes are replayed. `read=cached` and every
-	// union need it, and are refused without it rather than served stale.
-	Watching bool
+	// Watch is what a mount naming no watch= gets (ADR 0016); unset is off.
+	// `read=cached` and every union are never below partial whatever it says.
+	Watch workspace.Watch
+
+	// Prefetch is what a mount naming no prefetch= gets (ADR 0045); unset is
+	// off. It applies only where the mode prefetches at all.
+	Prefetch workspace.Prefetch
+
+	// StartWatcher makes the file watcher run, and is called when a mount
+	// resolves to watching. Nil is a session that cannot watch, and such a
+	// mount is refused rather than served stale.
+	StartWatcher func() error
 
 	// Guard is shared with the Collector.
 	Guard *Guard
@@ -193,8 +213,8 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	var requested workspace.RequestedPorts
 
 	// A directory in both mount lists is one share: the second sees the
-	// first's mode.
-	modes := map[string]workspace.Mode{}
+	// first's words.
+	modes := map[string]workspace.MountWords{}
 
 	if hostConfigRaw, ok := payload["HostConfig"]; ok {
 		if err := json.Unmarshal(hostConfigRaw, &hostConfig); err != nil {
@@ -298,7 +318,7 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace
 // rewriteBinds handles HostConfig.Binds, the `-v` form. A single-FILE bind
 // needs a subpath, which a bind string cannot carry, so it is moved to Mounts
 // in the same walk: the daemon rejects one target in both lists (ADR 0039).
-func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.Mode, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
+func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.MountWords, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
 	raw, ok := hostConfig["Binds"]
 	if !ok || string(raw) == "null" {
 		return nil, nil
@@ -342,12 +362,12 @@ func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.
 			return nil, err
 		}
 		parsed.Options = options
-		mode, err := r.resolveMode(ctx, modes, parsed.Source, asked, spelled)
+		words, err := r.resolveMount(ctx, modes, parsed.Source, asked, spelled)
 		if err != nil {
 			return nil, err
 		}
 
-		volume, file, err := r.volumeFor(ctx, parsed.Source, mode)
+		volume, file, err := r.volumeFor(ctx, parsed.Source, words)
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +460,7 @@ func setSubpath(mount map[string]json.RawMessage, file string) error {
 
 // rewriteMounts handles HostConfig.Mounts, the `--mount` form that Compose and
 // the API-level clients prefer.
-func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace.Mode, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
+func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace.MountWords, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
 	raw, ok := hostConfig["Mounts"]
 	if (!ok || string(raw) == "null") && len(moved) == 0 {
 		return nil
@@ -485,19 +505,19 @@ func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace
 		if err != nil {
 			return err
 		}
-		mode, err := r.resolveMode(ctx, modes, source, asked, spelled)
+		words, err := r.resolveMount(ctx, modes, source, asked, spelled)
 		if err != nil {
 			return err
 		}
 
-		volume, file, err := r.volumeFor(ctx, source, mode)
+		volume, file, err := r.volumeFor(ctx, source, words)
 		if err != nil {
 			return err
 		}
 
 		// A union is a path, so it is BOUND; as a volume name Docker would
 		// create an empty volume by that name.
-		if mode.Union() {
+		if words.Mode.Union() {
 			mount["Type"] = json.RawMessage(`"bind"`)
 		} else {
 			mount["Type"] = json.RawMessage(`"volume"`)
@@ -554,11 +574,13 @@ func supportsSubpath(version string) bool {
 
 // volumeFor exports a local directory and returns the name of the volume
 // backing it on the workspace, creating that volume if needed.
-func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspace.Mode) (name, file string, err error) {
+func (r *Rewriter) volumeFor(ctx context.Context, localPath string, words workspace.MountWords) (name, file string, err error) {
+	mode := words.Mode
+
 	// Held across registering the share AND creating its volume.
 	defer r.Guard.hold()()
 
-	exportPath, file, err := r.Shares.Share(localPath)
+	exportPath, file, err := r.Shares.Share(localPath, words.ShareWords)
 	if err != nil {
 		return "", "", fmt.Errorf("rewrite: exporting %s: %w", localPath, err)
 	}
@@ -585,7 +607,7 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspa
 
 	if mode.Union() {
 		// A union path the caller binds, not a volume (ADR 0044).
-		merged, err := r.union(ctx, exportPath, name, localPath, labels, mode)
+		merged, err := r.union(ctx, exportPath, name, localPath, labels, words)
 		if err != nil {
 			return "", "", err
 		}
@@ -602,7 +624,8 @@ func (r *Rewriter) volumeFor(ctx context.Context, localPath string, mode workspa
 // union creates the cache volume, prepares the union over the live export,
 // attaches the cache, and answers with the path the container binds
 // (ADR 0044).
-func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string, mode workspace.Mode) (string, error) {
+func (r *Rewriter) union(ctx context.Context, export, share, localPath string, labels map[string]string, words workspace.MountWords) (string, error) {
+	mode := words.Mode
 	cache := workspace.CacheVolumeName(share)
 
 	// Empty map, not nil: JSON null is not an object.
@@ -616,13 +639,13 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: reaching the workspace's cache for %s: %w", localPath, err)
 	}
 
-	merged, err := channel.Prepare(ctx, export, cache, r.NFSPort, mode)
+	merged, err := channel.Prepare(ctx, export, cache, r.NFSPort, mode, words.Owner)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: preparing the cache for %s: %w", localPath, err)
 	}
 
 	// Asynchronous: the container starts against an empty cache.
-	channel.Attach(export, localPath, mode)
+	channel.Attach(export, localPath, mode, words.ShareWords)
 
 	return merged, nil
 }

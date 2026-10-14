@@ -2,12 +2,15 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"strings"
 
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
 	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core-client/tunnelclient"
+	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // shareRegistrar adapts the NFS registry to the rewriter's Sharer. Every bind
@@ -19,16 +22,48 @@ type shareRegistrar struct {
 	changed  func()
 }
 
-func (s shareRegistrar) Share(localPath string) (exportPath, file string, err error) {
-	share, err := s.registry.Register(localPath)
+func (s shareRegistrar) Share(localPath string, words workspace.ShareWords) (exportPath, file string, err error) {
+	share, err := s.registry.Register(localPath, words)
 	if err != nil {
 		return "", "", err
 	}
-	s.shares.remember(share.ExportPath, share.LocalPath)
+	// A share's words are fixed when it is registered: its filesystem is built
+	// with them and never replaced (ADR 0046). A mount asking for others is
+	// refused before anything is created for it.
+	if err := refuseOtherWords(share, words); err != nil {
+		return "", "", err
+	}
+	s.shares.remember(share.ExportPath, share.LocalPath, share.Words)
 	if s.changed != nil {
 		s.changed()
 	}
 	return share.ExportPath, share.File, nil
+}
+
+// refuseOtherWords refuses a mount whose words differ from those the share
+// already has. Words a mount left unset are not compared.
+func refuseOtherWords(share *nfsserve.Share, asked workspace.ShareWords) error {
+	if !asked.Owner.Set {
+		asked.Owner = share.Words.Owner
+	}
+	if asked.Watch == workspace.WatchUnset {
+		asked.Watch = share.Words.Watch
+	}
+	if asked.Prefetch == workspace.PrefetchUnset {
+		asked.Prefetch = share.Words.Prefetch
+	}
+	diffs := share.Words.Differences(asked)
+	if len(diffs) == 0 {
+		return nil
+	}
+	var have, want []string
+	for _, d := range diffs {
+		have = append(have, d.Key+"="+d.A)
+		want = append(want, d.Key+"="+d.B)
+	}
+	return fmt.Errorf("rewrite: %s is already shared with %s and this mount asks for %s; a share's words are fixed while the session runs\n"+
+		"  fix: give every mount of %[1]s the same words, or remove the containers using it and run docker remote restart",
+		share.LocalPath, strings.Join(have, ","), strings.Join(want, ","))
 }
 
 // sshForwarder adapts the SSH client to the port manager's Forwarder.

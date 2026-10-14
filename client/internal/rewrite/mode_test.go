@@ -21,21 +21,26 @@ type fakeCache struct {
 	attached string         // the export it was told about
 	from     string         // the directory behind it
 	mode     workspace.Mode // the mode it was told the share has
+	words    workspace.ShareWords
+	owner    workspace.Owner // the owner Prepare was told
+	noOwner  bool            // a workspace before the owner field
 	err      error
 }
 
-func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int, mode workspace.Mode) (string, error) {
+func (f *fakeCache) ServesOwner() bool { return !f.noOwner }
+
+func (f *fakeCache) Prepare(_ context.Context, export, cache string, port int, mode workspace.Mode, owner workspace.Owner) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
-	f.prepared, f.cache, f.port, f.read = export, cache, port, mode.Read
+	f.prepared, f.cache, f.port, f.read, f.owner = export, cache, port, mode.Read, owner
 	return "/run/rd-union/testshare/merged", nil
 }
 
 // Attach is asynchronous in the real one; here it records what it was told,
 // which is what the tests are about.
-func (f *fakeCache) Attach(export, localPath string, mode workspace.Mode) {
-	f.attached, f.from, f.mode = export, localPath, mode
+func (f *fakeCache) Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords) {
+	f.attached, f.from, f.mode, f.words = export, localPath, mode, words
 }
 
 // servingCache is a session whose cache channel opens.
@@ -53,7 +58,7 @@ func refusingCache(err error) func(context.Context) (Cache, error) {
 // with a watcher behind it.
 func cachedRewriter() (*Rewriter, *fakeVolumes) {
 	r, _, v := newRewriter()
-	r.Watching = true
+	r.StartWatcher = func() error { return nil }
 	return r, v
 }
 
@@ -115,11 +120,12 @@ func TestSplitMode(t *testing.T) {
 		// which understands more options than this program does.
 		{"rw,nocopy", workspace.ModeUnset, "rw,nocopy"},
 	} {
-		got, _, leftover, err := splitMode(c.options)
+		words, _, leftover, err := splitMode(c.options)
 		if err != nil {
 			t.Errorf("splitMode(%q): %v", c.options, err)
 			continue
 		}
+		got := words.Mode
 		if got != c.want || leftover != c.leftover {
 			t.Errorf("splitMode(%q) = %v, %q; want %v, %q",
 				c.options, got, leftover, c.want, c.leftover)
@@ -588,7 +594,7 @@ func TestAMountModeThatIsNotOneIsRefused(t *testing.T) {
 // rather than mount the file.
 func TestASingleFileTakesAModeToo(t *testing.T) {
 	r, sharer, volumes := newRewriter()
-	r.Watching = true
+	r.StartWatcher = func() error { return nil }
 	sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
 
 	out, err := r.ContainerCreate(t.Context(),
@@ -616,7 +622,7 @@ func TestASingleFileRefusesAUnion(t *testing.T) {
 		`{"HostConfig":{"Mounts":[{"Type":"bind","Source":"/home/alice/app.conf","Target":"/etc/app.conf","Consistency":"write=back"}]}}`,
 	} {
 		r, sharer, volumes := newRewriter()
-		r.Watching = true
+		r.StartWatcher = func() error { return nil }
 		cache := &fakeCache{}
 		r.OpenCache = servingCache(cache)
 		r.UnionReady = workspace.UnionReady
