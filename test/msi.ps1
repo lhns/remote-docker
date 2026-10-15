@@ -462,6 +462,9 @@ Ok 'the reinstalled service starts'
 # ---------------------------------------------------------------------------
 Section '18. uninstall deletes the workspace and everything setup made'
 
+# Teardown deletes the group only when nobody it did not add is in it, so the
+# member this test added by hand leaves first (as an administrator would).
+& net.exe localgroup $Group $StdName /delete | Out-Null
 Invoke-Msi @('/x', $StandinNextMsi) 'hyperv-uninstall' 0
 Assert-NotInstalled
 $ops = Ops
