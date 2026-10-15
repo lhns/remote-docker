@@ -31,6 +31,7 @@ type brokerFake struct {
 	// block makes Look wait for it, or for its context: a Hyper-V call that
 	// hangs. ctxDone receives when a blocked Look's context ended.
 	block      chan struct{}
+	blockOn    string // when set, only this machine's Look waits
 	ctxDone    chan struct{}
 	destroyErr error
 	onDestroy  func()
@@ -51,7 +52,7 @@ func (f *brokerFake) got() string {
 func (f *brokerFake) Available(context.Context) error { f.rec("available", ""); return nil }
 func (f *brokerFake) Look(ctx context.Context, n string) (State, hyperVNotes, error) {
 	f.rec("look", n)
-	if f.block != nil {
+	if f.block != nil && (f.blockOn == "" || f.blockOn == n) {
 		select {
 		case <-f.block:
 		case <-ctx.Done():
@@ -742,13 +743,12 @@ func TestBrokerOneHungMachineDoesNotBlockAnother(t *testing.T) {
 	if err := h.as(sidAlice, false, sidAlice).Create(ctx, sampleSpec("fast")); err != nil {
 		t.Fatal(err)
 	}
-	h.fake.block = make(chan struct{})
+	h.fake.block, h.fake.blockOn = make(chan struct{}), "hung"
 	defer close(h.fake.block)
 	hung := h.as(sidAlice, false, sidAlice)
 	go func() { _, _, _ = hung.Look(ctx, "hung") }()
 	waitCalls(t, h.fake, "look", 2) // create's, then the hung one
 
-	h.fake.block = nil
 	done := make(chan error, 1)
 	go func() { done <- h.as(sidBob, false, sidBob).Start(ctx, "fast") }()
 	select {

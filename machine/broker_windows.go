@@ -220,8 +220,8 @@ func changeLocalGroupMember(proc *windows.LazyProc, group string, sid *windows.S
 // protectedSecurity returns attributes carrying the protected DACL, so a
 // directory is born with it and there is no moment it inherits from a parent
 // where Users may create things.
-func protectedSecurity() (*windows.SecurityAttributes, *windows.SECURITY_DESCRIPTOR, error) {
-	sd, err := windows.SecurityDescriptorFromString(brokerDirSDDL)
+func protectedSecurity(owner string) (*windows.SecurityAttributes, *windows.SECURITY_DESCRIPTOR, error) {
+	sd, err := windows.SecurityDescriptorFromString(owner + brokerDirSDDL)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -237,7 +237,11 @@ func protectedSecurity() (*windows.SecurityAttributes, *windows.SECURITY_DESCRIP
 // directory, so a name pre-created there is a trap and the service refuses to
 // start on it rather than adopt it.
 func ensureProtectedDir(path string) error {
-	sa, sd, err := protectedSecurity()
+	// Owned by Administrators, whoever creates it: a directory owned by the
+	// installing user would be refused by verifyProtectedDir. Only SYSTEM or an
+	// elevated administrator may assign that owner; anyone else gets a
+	// directory under their own, which nothing here will ever accept.
+	sa, sd, err := protectedSecurity("O:BA")
 	if err != nil {
 		return err
 	}
@@ -246,6 +250,13 @@ func ensureProtectedDir(path string) error {
 		return err
 	}
 	err = windows.CreateDirectory(p, sa)
+	if errors.Is(err, windows.ERROR_INVALID_OWNER) {
+		sa, sd, err = protectedSecurity("")
+		if err != nil {
+			return err
+		}
+		err = windows.CreateDirectory(p, sa)
+	}
 	if err == nil {
 		return nil
 	}
