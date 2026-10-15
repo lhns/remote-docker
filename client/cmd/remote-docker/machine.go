@@ -62,6 +62,7 @@ type machineOptions struct {
 	rootfs   string
 	cpus     int
 	memoryMB int
+	proxy    string
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
@@ -71,6 +72,8 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
 	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
+	cmd.Flags().StringVar(&o.proxy, "proxy", "",
+		"hyperv: http(s) proxy URL for the Flatcar download and the machine's docker daemon, e.g. http://proxy.example:3128")
 
 	// No --port or --user: `remote` has both persistently, and pflag silently
 	// skips a duplicate (ADR 0024).
@@ -97,9 +100,11 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 		CPUs:     o.cpus,
 		MemoryMB: o.memoryMB,
 		Account:  overrides.User,
+		Proxy:    o.proxy,
 	}
 	if recorded != nil && recorded.Machine != nil {
 		m := recorded.Machine
+		spec.Proxy = cmp.Or(spec.Proxy, m.Proxy)
 		spec.Port = cmp.Or(spec.Port, recorded.Port)
 		spec.Account = cmp.Or(spec.Account, recorded.User)
 		spec.CPUs = cmp.Or(spec.CPUs, m.CPUs)
@@ -109,6 +114,14 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 				spec.Rootfs = m.Rootfs
 				spec.Fetched = machine.IsFetched(m.Rootfs)
 			}
+		}
+	}
+	if spec.Proxy != "" {
+		if backend != "hyperv" {
+			return machine.Spec{}, fmt.Errorf("--proxy applies to hyperv machines only; a %s machine uses this computer's network", backend)
+		}
+		if _, err := machine.ParseProxy(spec.Proxy); err != nil {
+			return machine.Spec{}, err
 		}
 	}
 	spec.Port = cmp.Or(spec.Port, config.DefaultSSHPort)
@@ -252,6 +265,9 @@ func machineName(args []string) (string, error) {
 // findBackend is machine.Find, replaced in tests.
 var findBackend = machine.Find
 
+// prepareRootfs is machine.PrepareRootfs, replaced in tests.
+var prepareRootfs = machine.PrepareRootfs
+
 // stopSessionFor stops the workspace's background session, if one is serving.
 // Best effort, but every failure is reported: a surviving session makes the
 // next docker command fail with a bare EOF over a dead connection.
@@ -315,7 +331,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	case action == machine.Create:
 		// Fetched only when building: it is several hundred megabytes.
 		if spec.Rootfs == "" {
-			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
+			if spec.Rootfs, err = prepareRootfs(ctx, spec.Backend, spec.Image, spec.Proxy, out); err != nil {
 				return err
 			}
 			spec.Fetched = true
@@ -477,6 +493,7 @@ func machineRecord(spec machine.Spec) *config.Machine {
 		Rootfs:     spec.Rootfs,
 		CPUs:       spec.CPUs,
 		MemoryMB:   spec.MemoryMB,
+		Proxy:      spec.Proxy,
 		Generation: spec.Generation(),
 	}
 }

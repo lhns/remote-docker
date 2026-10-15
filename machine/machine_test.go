@@ -73,6 +73,7 @@ func TestEveryFieldChangesTheGeneration(t *testing.T) {
 		{"MemoryMB", func(s *Spec) { s.MemoryMB = 8192 }},
 		{"Port", func(s *Spec) { s.Port = 2223 }},
 		{"Account", func(s *Spec) { s.Account = "bob" }},
+		{"Proxy", func(s *Spec) { s.Proxy = "http://proxy.example:3128" }},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			changed := spec()

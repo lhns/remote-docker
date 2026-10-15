@@ -2,7 +2,7 @@
 
 package machine
 
-// The Hyper-V backend: the part that runs powershell.exe.
+// The Hyper-V executor: the part that runs powershell.exe.
 //
 // Everything it decides lives in hyperv.go and is tested on any platform. What
 // is here is process running, kept thinner than the WSL backend's because that
@@ -19,23 +19,25 @@ import (
 	"strings"
 )
 
-func init() { registered = append(registered, hyperVBackend{}) }
+func init() { registered = append(registered, hyperVBackend{exec: newDirectHyperV()}) }
 
-type hyperVBackend struct{}
+// directHyperV runs every operation as PowerShell in this process's session,
+// with this process's rights.
+type directHyperV struct {
+	// run executes one script with stdin and returns its output. A field so
+	// the test can record the scripts; powershell is the only real one.
+	run func(ctx context.Context, script, stdin string) (string, error)
+}
 
-func (hyperVBackend) Name() string { return "hyperv" }
+func newDirectHyperV() directHyperV { return directHyperV{run: powershell} }
 
-// ps runs one PowerShell script, wrapped by psScript, and returns its output.
+// powershell runs one script, wrapped by psScript, and returns its output.
 //
 // -NoProfile because a user's profile can print banners into what is parsed
 // here, and -NonInteractive so a cmdlet that wants confirmation fails instead
-// of waiting for a keystroke nobody will send.
-func (b hyperVBackend) ps(ctx context.Context, script string) (string, error) {
-	return b.psWithInput(ctx, script, "")
-}
-
-// psWithInput is ps with stdin, for data that must not be on a command line.
-func (hyperVBackend) psWithInput(ctx context.Context, script, stdin string) (string, error) {
+// of waiting for a keystroke nobody will send. stdin is for data that must not
+// be on a command line.
+func powershell(ctx context.Context, script, stdin string) (string, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe",
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psScript(script))
 	cmd.Stdin = strings.NewReader(stdin)
@@ -48,19 +50,23 @@ func (hyperVBackend) psWithInput(ctx context.Context, script, stdin string) (str
 	return text, nil
 }
 
-// Available reports why this backend cannot be used, or nil.
+func (d directHyperV) ps(ctx context.Context, script string) (string, error) {
+	return d.run(ctx, script, "")
+}
+
+// Available reports why Hyper-V cannot be used, or nil.
 //
 // Two questions with different fixes: Hyper-V may not be installed, which needs
 // a Windows edition that has it and a reboot; or it may be installed and this
 // program not elevated. Reported rather than elevated silently, which is where
 // ADR 0026 records that the project's "nothing needs to be installed" premise
 // stops being true.
-func (b hyperVBackend) Available(ctx context.Context) error {
+func (d directHyperV) Available(ctx context.Context) error {
 	if _, err := exec.LookPath("powershell.exe"); err != nil {
 		return errors.New("PowerShell is not available, so Hyper-V cannot be managed from here")
 	}
 
-	out, err := b.ps(ctx, "(Get-Command Get-VM -ErrorAction SilentlyContinue) -ne $null")
+	out, err := d.ps(ctx, "(Get-Command Get-VM -ErrorAction SilentlyContinue) -ne $null")
 	if err != nil || !strings.EqualFold(strings.TrimSpace(out), "True") {
 		return errors.New("Hyper-V is not enabled on this Windows\n" +
 			"  fix: `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All` in an administrator terminal, then reboot")
@@ -70,7 +76,7 @@ func (b hyperVBackend) Available(ctx context.Context) error {
 	// administrator" and "may this process manage virtual machines" are not the
 	// same question: Hyper-V Administrators is a group that grants the second
 	// without the first.
-	out, err = b.ps(ctx, "try { Get-VM -ErrorAction Stop | Out-Null; 'yes' } catch { 'no' }")
+	out, err = d.ps(ctx, "try { Get-VM -ErrorAction Stop | Out-Null; 'yes' } catch { 'no' }")
 	if err != nil || !strings.EqualFold(strings.TrimSpace(out), "yes") {
 		return errors.New("this terminal may not manage Hyper-V machines\n" +
 			"  fix: run it as administrator, or add yourself to the Hyper-V Administrators group and sign in again")
@@ -78,10 +84,10 @@ func (b hyperVBackend) Available(ctx context.Context) error {
 	return nil
 }
 
-// look reads a machine's state and its recorded notes, in one call (psGetVM) so
+// Look reads a machine's state and its recorded notes, in one call (psGetVM) so
 // the two cannot disagree. A machine that is not there prints nothing.
-func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNotes, error) {
-	out, err := b.ps(ctx, psGetVM(machineName(name)))
+func (d directHyperV) Look(ctx context.Context, name string) (State, hyperVNotes, error) {
+	out, err := d.ps(ctx, psGetVM(machineName(name)))
 	if err != nil {
 		return Absent, hyperVNotes{}, err
 	}
@@ -93,19 +99,12 @@ func (b hyperVBackend) look(ctx context.Context, name string) (State, hyperVNote
 	return parseVMState(lines[0]), notes, nil
 }
 
-func (b hyperVBackend) Inspect(ctx context.Context, name string) (Observed, error) {
-	return observeVM(b.look(ctx, name))
-}
-
-// Create builds the machine from a Flatcar image and one Ignition document,
+// Create builds the machine from a Flatcar disk and one Ignition document,
 // handed to it over KVP before its first boot (psAddKVP).
-//
-// The image is a file the user downloaded, named by --rootfs, exactly as the
-// WSL backend takes a rootfs. Nothing is fetched here.
-func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
+func (d directHyperV) Create(ctx context.Context, spec Spec) error {
 	if spec.Rootfs == "" {
-		return errors.New("no image to build from: a Hyper-V machine is created from a Flatcar disk image\n" +
-			"  fix: see docs/testing-machines.md for the one command that downloads it")
+		return errors.New("no disk to build from: a Hyper-V machine is created from a Flatcar disk image\n" +
+			"  fix: omit --rootfs to download one, or pass a downloaded .vhdx")
 	}
 
 	// Before the copy, which is over a gigabyte.
@@ -130,17 +129,17 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	}
 
 	// Copied, not used in place. The machine writes to its disk, and destroying
-	// the file the user downloaded, which is also the file the next machine is
-	// built from, is a surprise worth the disk space.
+	// the file the next machine is built from is a surprise worth the disk
+	// space.
 	vhd := filepath.Join(dir, "disk.vhdx")
 	if err := copyFile(spec.Rootfs, vhd); err != nil {
 		return fmt.Errorf("copying the disk image: %w", err)
 	}
 
-	if _, err := b.ps(ctx, psNewVM(machineName(spec.Name), vhd, dir, spec)); err != nil {
+	if _, err := d.ps(ctx, psNewVM(machineName(spec.Name), vhd, dir, spec)); err != nil {
 		return fmt.Errorf("creating the machine: %w", err)
 	}
-	if _, err := b.psWithInput(ctx, psAddKVP(machineName(spec.Name)), input); err != nil {
+	if _, err := d.run(ctx, psAddKVP(machineName(spec.Name)), input); err != nil {
 		return fmt.Errorf("handing the machine its configuration: %w", err)
 	}
 
@@ -149,59 +148,41 @@ func (b hyperVBackend) Create(ctx context.Context, spec Spec) error {
 	// never received, nor as built from settings it only half matches. See
 	// hyperVBuilding for what it carries until then.
 	notes := hyperVNotes{Generation: spec.Generation(), Key: keyFingerprint(spec.PublicKey)}
-	if _, err := b.ps(ctx, psSetNotes(machineName(spec.Name), notes)); err != nil {
+	if _, err := d.ps(ctx, psSetNotes(machineName(spec.Name), notes)); err != nil {
 		return err
 	}
-	return b.Start(ctx, spec.Name)
+	return d.Start(ctx, spec.Name)
 }
 
-// Retract removes the Ignition document's KVP items, private host key
-// included. Removing items already gone succeeds.
-func (b hyperVBackend) Retract(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, psRemoveKVP(machineName(name)))
+func (d directHyperV) Retract(ctx context.Context, name string) error {
+	_, err := d.ps(ctx, psRemoveKVP(machineName(name)))
 	return err
 }
 
-// Enrol reports whether this key already reaches the machine. It cannot write
-// one: see hyperVEnrolment.
-func (b hyperVBackend) Enrol(ctx context.Context, name, _, publicKey string) error {
-	_, notes, err := b.look(ctx, name)
-	if err != nil {
-		return err
-	}
-	return hyperVEnrolment(notes, publicKey)
-}
-
-func (b hyperVBackend) Start(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, psStart(machineName(name)))
+func (d directHyperV) Start(ctx context.Context, name string) error {
+	_, err := d.ps(ctx, psStart(machineName(name)))
 	return err
 }
 
-// Hold is nothing. A Hyper-V machine runs until it is stopped: unlike a WSL
-// distribution it has no idle timeout, so there is nothing to hold open.
-func (hyperVBackend) Hold(context.Context, string) (io.Closer, error) {
-	return closerFunc(func() error { return nil }), nil
-}
-
-func (b hyperVBackend) Address(ctx context.Context, name string) (string, error) {
-	out, err := b.ps(ctx, psAddress(machineName(name)))
+func (d directHyperV) Address(ctx context.Context, name string) (string, error) {
+	out, err := d.ps(ctx, psAddress(machineName(name)))
 	if err != nil {
 		return "", err
 	}
 	return parseVMAddress(out), nil
 }
 
-func (b hyperVBackend) Stop(ctx context.Context, name string) error {
-	_, err := b.ps(ctx, psStop(machineName(name)))
+func (d directHyperV) Stop(ctx context.Context, name string) error {
+	_, err := d.ps(ctx, psStop(machineName(name)))
 	return err
 }
 
-func (b hyperVBackend) Destroy(ctx context.Context, name string) error {
+func (d directHyperV) Destroy(ctx context.Context, name string) error {
 	dir, err := stateDir(name)
 	if err != nil {
 		return err
 	}
-	_, err = b.ps(ctx, psRemoveVM(machineName(name), dir))
+	_, err = d.ps(ctx, psRemoveVM(machineName(name), dir))
 	return err
 }
 

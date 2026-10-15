@@ -146,8 +146,10 @@ Changing versions replaces the filesystem rather than upgrading it, so
 `remote machine rebuild` is the repair path. It discards the images and
 containers inside the machine, never your files, which live here.
 
-A Hyper-V backend exists (`--backend hyperv`, from a Flatcar disk image). It is
-tested end to end by hand on Windows 11; no CI can run it, so
+A Hyper-V backend exists (`--backend hyperv`). It downloads Flatcar's Hyper-V
+disk image itself (pinned and checksum-verified, about 600 MB, once), and
+`--proxy <url>` sends that download and the machine's docker daemon through an
+HTTP proxy. It is tested end to end by hand on Windows 11; no CI can run it, so
 `docs/testing-machines.md` is how to check it on yours.
 
 ## What works

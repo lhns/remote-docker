@@ -173,6 +173,11 @@ type Machine struct {
 	CPUs     int `json:"cpus,omitempty"`
 	MemoryMB int `json:"memoryMb,omitempty"`
 
+	// Proxy is the http(s) proxy a Hyper-V machine's docker daemon was built
+	// with, so a rebuild keeps it. May hold credentials, like the rest of this
+	// private file.
+	Proxy string `json:"proxy,omitempty"`
+
 	// Generation hashes the build settings; a mismatch means out of date.
 	Generation string `json:"generation,omitempty"`
 

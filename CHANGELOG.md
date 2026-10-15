@@ -12,6 +12,11 @@ software.
 
 ### New
 
+- **Hyper-V workspaces download their Flatcar image themselves.**
+  `remote machine create --backend hyperv` fetches a pinned Flatcar disk,
+  checks its SHA512 before unpacking it and keeps it for the next machine, so
+  the manual download is optional. `--proxy <url>` sends that download and the
+  machine's docker daemon through an HTTP proxy, and a rebuild keeps it.
 - **Mount a directory differently in each container.** `read=`, `write=` and
   `owner=` now apply per container, so one directory can be a live mount in one
   and a cached union in another at the same time, and changing a mount's words
@@ -20,6 +25,9 @@ software.
 
 ### Fixes
 
+- **`--backend hyperv` without `--rootfs` no longer builds from the wrong
+  file.** It copied the workspace image's tarball in place of a disk, which
+  cannot boot.
 - **compose now warns about a long-syntax bind that loses its mount options.**
   compose drops `consistency:` from a bind unless the volume also has
   `bind: {create_host_path: false}`, so the mount came up in the default mode

@@ -85,6 +85,12 @@ type Spec struct {
 	// machine (ADR 0026).
 	PublicKey string
 
+	// Proxy is an http(s) proxy URL, or empty. A Hyper-V machine's docker
+	// daemon pulls the workspace image and every other image through it, and
+	// the Flatcar download uses it too. Part of Generation when set: it decides
+	// what the Ignition document says.
+	Proxy string
+
 	// HostKey is the agent's private host key, as PEM, written in before the
 	// agent first starts so the caller can pin its public half (ADR 0026).
 	// Empty leaves the agent to generate its own. Not part of Generation
@@ -123,6 +129,11 @@ func (s Spec) Generation() string {
 		fmt.Sprintf("memory=%d", s.MemoryMB),
 		fmt.Sprintf("port=%d", s.Port),
 		"account=" + s.Account,
+	}
+	// Only when set, so a machine built before this field existed keeps its
+	// generation instead of reading as out of date.
+	if s.Proxy != "" {
+		parts = append(parts, "proxy="+s.Proxy)
 	}
 	sort.Strings(parts)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))

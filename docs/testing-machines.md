@@ -153,14 +153,17 @@ add yourself, then sign out and in again, or `Get-VMSwitch` above keeps
 failing with a permission error. Nothing else in the procedure needs
 elevation.
 
-The machine needs Flatcar's Hyper-V disk image. This is the only download in
-the whole procedure, and it is a published artifact rather than an installer
-that runs. About 584 MB zipped and 1.2 GB unpacked, plus a copy of the same
-size per machine.
-*(Checked 2026-10-05: stable 4757.2.1. The file names changed since the
-`.vhdx.bz2` this runbook used to name, which is now 404. Re-check with
-`curl.exe -sIL <url>` on the two URLs below, and the docs at
-https://www.flatcar.org/docs/latest/deploy/virt-options/hyper-v/.)*
+The machine boots Flatcar's Hyper-V disk image. `create` downloads it itself:
+a pinned version, SHA512-checked before it is unpacked, kept in
+`%LOCALAPPDATA%emote-dockerootfs`, so a second machine downloads nothing.
+About 584 MB zipped and 1.2 GB unpacked, plus a copy of the same size per
+machine. Behind a proxy, add `--proxy http://proxy.example:3128`: it is used
+for the download and set in the VM's docker daemon.
+*(Checked 2026-10-15: stable 4757.2.1. The pin and the commands that re-check
+it are in `machine/flatcar.go`.)*
+
+Downloading by hand is now optional, for an air-gapped computer or to test a
+different Flatcar, and goes to `--rootfs`:
 
 ```powershell
 $base = "https://stable.release.flatcar-linux.net/amd64-usr/current"

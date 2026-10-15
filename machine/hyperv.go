@@ -170,18 +170,27 @@ func ignition(spec Spec, publicKey string) (string, error) {
 		files = append(files, ignitionFile(hostKeyFile, spec.HostKey))
 	}
 
+	units := []any{
+		map[string]any{
+			"name":     "remote-dockerd.service",
+			"enabled":  true,
+			"contents": unit,
+		},
+	}
+	if spec.Proxy != "" {
+		units = append(units, map[string]any{
+			"name": "docker.service",
+			"dropins": []any{map[string]any{
+				"name":     "http-proxy.conf",
+				"contents": dockerProxyDropIn(spec.Proxy),
+			}},
+		})
+	}
+
 	doc := map[string]any{
 		"ignition": map[string]any{"version": "3.4.0"},
 		"storage":  map[string]any{"files": files},
-		"systemd": map[string]any{
-			"units": []any{
-				map[string]any{
-					"name":     "remote-dockerd.service",
-					"enabled":  true,
-					"contents": unit,
-				},
-			},
-		},
+		"systemd":  map[string]any{"units": units},
 	}
 
 	raw, err := json.Marshal(doc)
@@ -189,6 +198,25 @@ func ignition(spec Spec, publicKey string) (string, error) {
 		return "", fmt.Errorf("building the machine's configuration: %w", err)
 	}
 	return string(raw), nil
+}
+
+// proxyBypass is what the VM's docker daemon reaches directly: itself, link
+// local addresses, and the Default Switch's NAT network (172.16.0.0/12 holds
+// every range Windows picks for it).
+const proxyBypass = "localhost,127.0.0.0/8,::1,169.254.0.0/16,172.16.0.0/12"
+
+// dockerProxyDropIn is /etc/systemd/system/docker.service.d/http-proxy.conf.
+// The daemon pulls the workspace image and every container image, and reads
+// its proxy from its own environment and nowhere else.
+func dockerProxyDropIn(proxy string) string {
+	// systemd expands %; machine.ParseProxy has already refused quotes and
+	// spaces.
+	p := strings.ReplaceAll(proxy, "%", "%%")
+	return strings.Join([]string{
+		"[Service]",
+		fmt.Sprintf(`Environment="HTTP_PROXY=%s" "HTTPS_PROXY=%s" "NO_PROXY=%s"`, p, p, proxyBypass),
+		"",
+	}, "\n")
 }
 
 // ignitionFile is one file Ignition writes, readable by root alone.
