@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,8 +69,9 @@ type prefetch struct {
 	state       *shareState
 
 	// policy is this share's own: eager sends the tree without waiting for
-	// reads, the tree follows them.
-	policy Policy
+	// reads, the tree follows them. Atomic because a later attach raises it
+	// while Touch, which runs on every NFS read, reads it without a lock.
+	policy atomic.Value // Policy
 
 	mu       sync.Mutex
 	tree     *Tree
@@ -90,7 +92,7 @@ func (c *Cache) Touch(share, path string, n int64) {
 		return
 	}
 	p := c.prefetchFor(share)
-	if p == nil || p.policy != PolicyTree {
+	if p == nil || p.pol() != PolicyTree {
 		return
 	}
 	// The observer spells a path from the share root with a leading slash,
@@ -108,6 +110,9 @@ func (c *Cache) Touch(share, path string, n int64) {
 		p.wake()
 	}
 }
+
+// pol is the share's current policy.
+func (p *prefetch) pol() Policy { return p.policy.Load().(Policy) }
 
 func (p *prefetch) wake() {
 	select {
@@ -135,12 +140,13 @@ func (c *Cache) startTree(share, root string, state *shareState, policy Policy) 
 		c.shares.finish(state, false, err)
 		return
 	}
-	p := &prefetch{share: share, root: root, state: state, policy: policy, tree: tree, kick: make(chan struct{}, 1)}
+	p := &prefetch{share: share, root: root, state: state, tree: tree, kick: make(chan struct{}, 1)}
+	p.policy.Store(policy)
 	c.shares.mu.Lock()
 	if c.shares.prefetch == nil {
 		c.shares.prefetch = map[string]*prefetch{}
 	}
-	if old, ok := c.shares.prefetch[share]; ok && old.policy == PolicyTree {
+	if old, ok := c.shares.prefetch[share]; ok && old.pol() == PolicyTree {
 		c.shares.trees.Add(-1)
 	}
 	c.shares.prefetch[share] = p
@@ -151,6 +157,57 @@ func (c *Cache) startTree(share, root string, state *shareState, policy Policy) 
 
 	go c.send(p)
 	go c.feedTree(p)
+}
+
+// raise lifts an attached share's policy to policy when that is stronger: off
+// to tree or eager starts the fill, tree to eager lets the sender stop waiting
+// for reads. A weaker or equal policy changes nothing, because the share runs
+// at the highest any consumer asked for (ADR 0042). Touch is not touched: it
+// still reads one atomic, and a raise only stores to it.
+func (c *Cache) raise(share, root string, policy Policy) {
+	if rank(policy) == 0 {
+		return
+	}
+	c.shares.mu.Lock()
+	state := c.shares.state[share]
+	c.shares.mu.Unlock()
+	if state == nil {
+		return
+	}
+	if p := c.prefetchFor(share); p != nil {
+		if rank(policy) <= rank(p.pol()) {
+			return
+		}
+		c.shares.mu.Lock()
+		// The count Touch's fast path reads: eager is not driven by reads.
+		if p.pol() == PolicyTree && policy != PolicyTree {
+			c.shares.trees.Add(-1)
+		}
+		p.policy.Store(policy)
+		state.opts.Policy = policy
+		c.shares.mu.Unlock()
+		p.wake()
+		return
+	}
+
+	// Attached with nothing to fill, so it was marked done at once. It is not
+	// any more: the new fill reports its own end.
+	c.shares.mu.Lock()
+	state.Done, state.Cached, state.Err = false, false, nil
+	state.opts.Policy = policy
+	c.shares.mu.Unlock()
+	c.startTree(share, root, state, policy)
+}
+
+// rank orders policies by how much they send: off, then tree, then eager.
+func rank(p Policy) int {
+	switch p {
+	case PolicyTree:
+		return 1
+	case PolicyEager:
+		return 2
+	}
+	return 0
 }
 
 // feedTree walks the share's root into the tree in batches. The tree is
@@ -239,7 +296,7 @@ func (c *Cache) next(p *prefetch) (batch []Entry, demand bool) {
 	}
 	// Eager has no demand batch to stay out of the way of: it neither
 	// waits for quiet nor keeps its batches small.
-	eager := p.policy == PolicyEager
+	eager := p.pol() == PolicyEager
 	if !eager && time.Since(p.lastRead) < quietFor {
 		return nil, false
 	}

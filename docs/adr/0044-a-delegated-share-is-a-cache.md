@@ -316,6 +316,9 @@ nothing for a fill driven by reads.
   permanent one is not retried by a loop nobody waits on. A prepare naming
   another owner than a live union has is refused (ADR 0046), and a chown that
   fails discards the union rather than leaving one serving the wrong owner.
+  Since 2026-10-15 the owner is part of the share id (ADR 0042), so a different
+  owner is a different export and a different union and that refusal can no
+  longer be reached; it stays as a guard.
 - **A container's write reaches this machine after a delay.** The one
   guarantee a plain mount has and this does not; the README says so.
 - **A FUSE daemon per share is a process to supervise.** It fails loudly

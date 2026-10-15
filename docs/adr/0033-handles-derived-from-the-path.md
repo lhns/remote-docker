@@ -7,7 +7,10 @@
   `helpers/cachinghandler.go` `Rename`; the caching behaviour this record rests
   on is unchanged.
 
-> A share's ROOT handle is a function of its export path. Everything below it
+> A share's ROOT handle is a function of its export path. (The export path
+> carries the share's variant since 2026-10-15, ADR 0042: one directory mounted
+> two ways has two exports and so two root handles, and the derivation here is
+> unchanged.) Everything below it
 > stays a cache, because the kernel can ask again for those and cannot ask again
 > for the root.
 

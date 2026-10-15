@@ -9,8 +9,9 @@ import (
 
 // The words a mount may carry beyond read= and write= (ADR 0042). Where the
 // mode decides how a mount is served, these decide what its share reports and
-// does. They belong to the SHARE: one directory is one share, so every mount
-// of it must agree.
+// does. owner= is identity: a directory mounted with another owner is another
+// share. watch= and prefetch= are effort spent on one share, which runs at the
+// highest level any mount of it asked for (Max, ADR 0042).
 //
 //	owner=1000        the uid, and gid, every file in the share reports
 //	owner=1000.2000   uid and gid; any one non-digit separates them
@@ -115,6 +116,30 @@ func ParseWatchSetting(s string) (Watch, error) {
 	return WatchUnset, fmt.Errorf("workspace: unknown watch mode %q; want %s", s, watchWords)
 }
 
+// watchRank orders the answers by how much they replay.
+func watchRank(w Watch) int {
+	switch w {
+	case WatchPartial:
+		return 1
+	case WatchCoarse:
+		return 2
+	}
+	return 0
+}
+
+// Max is the stronger of two answers: off < partial < coarse. Coarse is partial
+// plus a poke at the parent for deletions and renames, so it does everything
+// partial does.
+func (w Watch) Max(other Watch) Watch {
+	if watchRank(other) > watchRank(w) {
+		return other
+	}
+	if w == WatchUnset {
+		return other
+	}
+	return w
+}
+
 // Watching reports whether this answer replays anything.
 func (w Watch) Watching() bool { return w == WatchPartial || w == WatchCoarse }
 
@@ -144,6 +169,29 @@ func ParsePrefetch(s string) (Prefetch, error) {
 	}
 }
 
+// prefetchRank orders the answers by how much they send.
+func prefetchRank(p Prefetch) int {
+	switch p {
+	case PrefetchTree:
+		return 1
+	case PrefetchEager:
+		return 2
+	}
+	return 0
+}
+
+// Max is the stronger of two answers: off < tree < eager. Eager sends
+// everything up to the budget; tree sends what reads point at.
+func (p Prefetch) Max(other Prefetch) Prefetch {
+	if prefetchRank(other) > prefetchRank(p) {
+		return other
+	}
+	if p == PrefetchUnset {
+		return other
+	}
+	return p
+}
+
 // Prefetching reports whether this answer fills anything.
 func (p Prefetch) Prefetching() bool { return p == PrefetchEager || p == PrefetchTree }
 
@@ -156,7 +204,7 @@ func (p Prefetch) String() string {
 }
 
 // ShareWords are the words that belong to a share rather than to one mount of
-// it. Comparable, so two mounts of one directory are checked with ==.
+// it. Owner is part of the share's identity; Watch and Prefetch are raised.
 type ShareWords struct {
 	Owner    Owner
 	Watch    Watch
@@ -169,27 +217,6 @@ func (w Watch) String() string {
 		return string(WatchOff)
 	}
 	return string(w)
-}
-
-// Difference is one key two sets of share words disagree about, each side in
-// the spelling a person would write: Key "owner", A "1000:1000".
-type Difference struct {
-	Key, A, B string
-}
-
-// Differences lists each key on which w and other disagree, for refusals.
-func (w ShareWords) Differences(other ShareWords) []Difference {
-	var out []Difference
-	if w.Owner != other.Owner {
-		out = append(out, Difference{"owner", w.Owner.String(), other.Owner.String()})
-	}
-	if w.Watch != other.Watch {
-		out = append(out, Difference{"watch", w.Watch.String(), other.Watch.String()})
-	}
-	if w.Prefetch != other.Prefetch {
-		out = append(out, Difference{"prefetch", w.Prefetch.String(), other.Prefetch.String()})
-	}
-	return out
 }
 
 // MountWords is everything one mount can say: how it is served, and what its

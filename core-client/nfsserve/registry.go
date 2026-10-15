@@ -32,19 +32,37 @@ type Share struct {
 	// a file at the target (ADR 0039).
 	File string
 
-	// Words are what this share was registered with, resolved: the owner is
-	// always set. Fixed for the life of the share, which is also why they
-	// can be compared: a share's filesystem is built with them and never
-	// replaced (ADR 0046).
-	Words workspace.ShareWords
-
-	// Mode is how the first mount of the share was served, recorded by
-	// ClaimMode: a share is one volume, and a second mount asking for another
-	// mode would recreate it under the first. Unset until a mount claims it,
-	// which includes a share restored from the record.
+	// Mode is how this share is served. It is part of the share's identity
+	// (ADR 0042): a mount asking for another mode gets another share. Unset
+	// only for a share restored from a record written before the variant was
+	// recorded, which no new mount ever resolves to.
 	Mode workspace.Mode
 
+	// words are what this share is registered with, resolved: the owner is
+	// always set. The owner is identity and fixed, since the filesystem is
+	// built with it and never replaced (ADR 0046); watch and prefetch are
+	// raised by later mounts, never lowered, hence the lock. Read with Words.
+	mu    sync.RWMutex
+	words workspace.ShareWords
+
 	fs billy.Filesystem
+}
+
+// Words returns the share's words as they stand now. Watch and prefetch only
+// rise, so a caller holding the answer may be a step behind but never ahead.
+func (s *Share) Words() workspace.ShareWords {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.words
+}
+
+// raise lifts watch and prefetch to the stronger of what the share has and
+// what a mount asked for (ADR 0042).
+func (s *Share) raise(w workspace.ShareWords) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.words.Watch = s.words.Watch.Max(w.Watch)
+	s.words.Prefetch = s.words.Prefetch.Max(w.Prefetch)
 }
 
 // Registry holds the set of local directories currently exported.
@@ -67,15 +85,17 @@ type Registry struct {
 	// time and is told there is no such file or directory. Recreating the
 	// containers was the only way back.
 	//
-	// The words come back with the path, so a restored share reports the
-	// owner it was first given rather than the session's default.
+	// The words and the mode come back with the path, so a restored share
+	// reports the owner it was first given rather than the session's default.
+	// A zero mode says the record predates the variant: the share is restored
+	// under the export the record names and no new mount resolves to it.
 	//
 	// Nil means a miss is a miss, which is what a query session and every test
 	// without a record want. What it must NOT be is a way for the far side to
 	// name a directory: see session.shareStore, where the answer comes from
 	// what this machine wrote down and the id is recomputed from the path
 	// before it is believed.
-	Restore func(exportPath string) (localPath string, words workspace.ShareWords, ok bool)
+	Restore func(exportPath string) (localPath string, mode workspace.Mode, words workspace.ShareWords, ok bool)
 
 	// Restored is told of a share Restore just brought back, after the
 	// registry's lock is released. A share restored from a record is unknown
@@ -112,7 +132,7 @@ type Registry struct {
 	// "share registry never shrinks" invariant in CLAUDE.md.
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
-	byPath map[string]*Share // keyed by canonical local path
+	byPath map[string]*Share // keyed by canonical local path and variant
 }
 
 // NewRegistry returns an empty registry reporting the given attributes.
@@ -124,15 +144,24 @@ func NewRegistry(attrs Attrs) *Registry {
 	}
 }
 
-// Register exports localPath at /m/<id>, deriving the id from the path so it
-// is the same on every run. A directory already registered is returned as it
-// stands rather than duplicated, with ITS words: the caller compares them to
-// what it asked for.
+// Register exports localPath as the variant mode and the owner in words name,
+// at /m/<id> with the id derived from both so it is the same on every run
+// (ADR 0007). A directory already registered as that variant is returned as it
+// stands rather than duplicated, its watch and prefetch raised to the stronger
+// of what it has and what was asked; another variant of the same directory is
+// a share of its own.
 //
 // Unset words take the registry's attributes. They are applied to a copy of
 // them, because r.attrs is the session's (it carries AlwaysExecutable on
 // Windows) and nfsserve.DefaultAttrs is not.
-func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Share, error) {
+func (r *Registry) Register(localPath string, mode workspace.Mode, words workspace.ShareWords) (*Share, error) {
+	return r.register(localPath, "", mode, words)
+}
+
+// register is Register with the export named when a record names it. An empty
+// export is derived from the variant; a recorded one is believed only as far
+// as restoreExport checked it.
+func (r *Registry) register(localPath, recorded string, mode workspace.Mode, words workspace.ShareWords) (*Share, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("nfsserve: cannot export %s: %w", localPath, err)
@@ -148,15 +177,39 @@ func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Shar
 			localPath, describeMode(info.Mode()))
 	}
 
-	key := workspace.CanonicalKey(localPath)
+	attrs := r.attrs
+	if words.Owner.Set {
+		attrs.UID, attrs.GID = words.Owner.UID, words.Owner.GID
+	}
+	words.Owner = workspace.Owner{UID: attrs.UID, GID: attrs.GID, Set: true}
+	if words.Watch == workspace.WatchUnset {
+		words.Watch = workspace.WatchOff
+	}
+	if words.Prefetch == workspace.PrefetchUnset {
+		words.Prefetch = workspace.PrefetchOff
+	}
+
+	// A share restored from a record that names no variant is known by its
+	// export alone: it is not what any mount resolves to, so a new mount of
+	// the directory gets a share of its own instead of the old one.
+	legacy := recorded != "" && mode == workspace.ModeUnset
+	exportPath := recorded
+	if exportPath == "" {
+		exportPath = workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: words.Owner}))
+	}
+	key := variantKey(localPath, mode, words.Owner)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if existing, ok := r.byPath[key]; ok {
+	if existing, ok := r.shares[exportPath]; ok {
+		existing.raise(words)
 		return existing, nil
 	}
-	exportPath := workspace.ExportPathForID(workspace.ShareID(localPath))
+	if existing, ok := r.byPath[key]; ok && !legacy {
+		existing.raise(words)
+		return existing, nil
+	}
 
 	// WithBoundOS keeps every operation inside baseDir. It is the boundary
 	// that stops a crafted path escaping a share, and it is why each share
@@ -172,39 +225,40 @@ func (r *Registry) Register(localPath string, words workspace.ShareWords) (*Shar
 		base, file = filepath.Dir(localPath), filepath.Base(localPath)
 	}
 
-	attrs := r.attrs
-	if words.Owner.Set {
-		attrs.UID, attrs.GID = words.Owner.UID, words.Owner.GID
-	}
-	words.Owner = workspace.Owner{UID: attrs.UID, GID: attrs.GID, Set: true}
-	if words.Watch == workspace.WatchUnset {
-		words.Watch = workspace.WatchOff
-	}
-	if words.Prefetch == workspace.PrefetchUnset {
-		words.Prefetch = workspace.PrefetchOff
-	}
-
 	share := &Share{
 		ExportPath: exportPath,
 		LocalPath:  localPath,
 		File:       file,
-		Words:      words,
+		Mode:       mode,
+		words:      words,
 		fs:         withAttrs(r.shareFS(base, file), attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
-	r.byPath[key] = share
+	if !legacy {
+		r.byPath[key] = share
+	}
 	return share, nil
 }
 
-// ClaimMode records mode as the share's if it has none, and returns the mode
-// the share has: the caller's when it was the first, else the earlier one.
-func (r *Registry) ClaimMode(share *Share, mode workspace.Mode) workspace.Mode {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if share.Mode == workspace.ModeUnset {
-		share.Mode = mode
+// variantKey identifies one variant of one directory.
+func variantKey(localPath string, mode workspace.Mode, owner workspace.Owner) string {
+	return workspace.CanonicalKey(localPath) + "\x00" + mode.String() + "\x00" + owner.String()
+}
+
+// restoreExport reports whether a recorded export is one this program would
+// have given localPath: derived from the variant when the record has one, from
+// the path alone when it predates the variant. The far side names an id and
+// never a path, and the id is recomputed before it is believed (ADR 0027).
+func restoreExport(export, localPath string, mode workspace.Mode, words workspace.ShareWords) bool {
+	if mode == workspace.ModeUnset {
+		return export == workspace.ExportPathForID(workspace.LegacyShareID(localPath))
 	}
-	return share.Mode
+	// The owner a record names is the one the share was registered with; an
+	// unset one cannot be what produced a variant id.
+	if !words.Owner.Set {
+		return false
+	}
+	return export == workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: words.Owner}))
 }
 
 // Lookup finds the share serving an export path. A path below a share's root
@@ -247,11 +301,11 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	// composed. Which is also why the rest is "/" without asking: a restore
 	// registers exactly the path it was given.
 	clean := normalizeExport(exportPath)
-	local, words, ok := r.Restore(clean)
-	if !ok {
+	local, mode, words, ok := r.Restore(clean)
+	if !ok || !restoreExport(clean, local, mode, words) {
 		return nil, "", false
 	}
-	share, err := r.Register(local, words)
+	share, err := r.register(local, clean, mode, words)
 	if err != nil || share.ExportPath != clean {
 		return nil, "", false
 	}

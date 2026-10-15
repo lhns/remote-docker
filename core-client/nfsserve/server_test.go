@@ -93,7 +93,7 @@ func TestServeAnUnrelatedDirectory(t *testing.T) {
 	}
 
 	r := registryFor(t, first)
-	share, err := r.Register(other, workspace.ShareWords{})
+	share, err := r.Register(other, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -179,10 +179,11 @@ func TestServeReportsSynthesisedOwnership(t *testing.T) {
 	}
 
 	r := NewRegistry(Attrs{UID: 10042, GID: 10043, FileMode: 0o664, DirMode: 0o775})
-	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
+	share, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	target := mustMount(t, serve(t, r), exportOf(dir))
+	target := mustMount(t, serve(t, r), share.ExportPath)
 
 	attr, err := target.Getattr("f")
 	if err != nil {
@@ -258,10 +259,11 @@ func TestServeReportsExecutableFiles(t *testing.T) {
 		DirMode:          0o755,
 		AlwaysExecutable: true,
 	})
-	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
+	share, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	target := mustMount(t, serve(t, r), exportOf(dir))
+	target := mustMount(t, serve(t, r), share.ExportPath)
 
 	attr, err := target.Getattr("script.sh")
 	if err != nil {
@@ -288,10 +290,11 @@ func TestServePreservesRealExecutableBits(t *testing.T) {
 	}
 
 	r := NewRegistry(Attrs{UID: 1000, GID: 1000, FileMode: 0o644, DirMode: 0o755})
-	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
+	share, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	target := mustMount(t, serve(t, r), exportOf(dir))
+	target := mustMount(t, serve(t, r), share.ExportPath)
 
 	script, err := target.Getattr("script.sh")
 	if err != nil {
@@ -326,9 +329,9 @@ func TestServeRestoresAnUnregisteredExport(t *testing.T) {
 
 	// Nothing is registered, which is what a fresh session looks like.
 	r := NewRegistry(DefaultAttrs)
-	export := workspace.ExportPathForID(workspace.ShareID(dir))
-	r.Restore = func(path string) (string, workspace.ShareWords, bool) {
-		return dir, workspace.ShareWords{}, path == export
+	export := workspace.ExportPathForID(workspace.LegacyShareID(dir))
+	r.Restore = func(path string) (string, workspace.Mode, workspace.ShareWords, bool) {
+		return dir, workspace.ModeUnset, workspace.ShareWords{}, path == export
 	}
 
 	target := mustMount(t, serve(t, r), export)
@@ -411,7 +414,7 @@ func TestServeASingleFile(t *testing.T) {
 	}
 
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(filepath.Join(dir, "nginx.conf"), workspace.ShareWords{})
+	share, err := r.Register(filepath.Join(dir, "nginx.conf"), workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

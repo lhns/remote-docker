@@ -118,7 +118,7 @@ func TestLinkIntoASingleFileShareIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(file, workspace.ShareWords{})
+	share, err := r.Register(file, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -350,8 +350,8 @@ func (w *Watcher) process(out chan<- notify.Frame) {
 // handle turns one backend event into pending work, and keeps the watched set
 // in step with what just happened to the tree.
 func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
-	root, rel, ok := t.rootFor(e.Name)
-	if !ok {
+	roots := t.rootsFor(e.Name)
+	if len(roots) == 0 {
 		// An event for a path under no current share. Ordinary during a
 		// resync, and nothing can be done with it.
 		return
@@ -370,12 +370,14 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 		if info, err := os.Lstat(e.Name); err == nil && info.IsDir() {
 			isDir = true
 			if !t.isExcluded(filepath.Base(e.Name)) {
-				t.addTree(root, e.Name, func(p string, dir bool) {
-					if childRel, ok := relativeTo(w.opts.goos, root.parts, p); ok {
-						c.add(time.Now(), notify.Event{
-							Export: root.export, Path: childRel,
-							Op: notify.OpCreate, Dir: dir,
-						})
+				t.addTree(roots[0].root, e.Name, func(p string, dir bool) {
+					for _, m := range roots {
+						if childRel, ok := relativeTo(w.opts.goos, m.root.parts, p); ok {
+							c.add(time.Now(), notify.Event{
+								Export: m.root.export, Path: childRel,
+								Op: notify.OpCreate, Dir: dir,
+							})
+						}
 					}
 				})
 			}
@@ -402,6 +404,15 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 		return
 	}
 
+	// Every root at the path gets the event, each by its own mode (a directory
+	// mounted several ways is several roots, ADR 0042).
+	for _, m := range roots {
+		w.deliver(c, m.root, m.rel, op, isDir)
+	}
+}
+
+// deliver reports one event to one share.
+func (w *Watcher) deliver(c *coalescer, root *shareRoot, rel string, op notify.Op, isDir bool) {
 	// Delivered before the mode strips anything, and that is the difference
 	// between the two consumers. A deletion cannot be REPLAYED faithfully
 	// through an NFS mount, which is what partial is about; it can be

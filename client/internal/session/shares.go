@@ -18,22 +18,40 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/core-client/nfsserve"
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
 // shareRecord is one directory this workspace asked to export.
 //
-// Owner, Watch and Prefetch are the share's words, resolved. A record without one
-// predates the word and takes the session's default, which is why the file
-// version does not move: a bump would make every restore fail after an upgrade
-// (ADR 0027).
+// Read, Write and Owner are the share's variant and Watch and Prefetch its
+// raised words, all resolved. A record without one predates the word and takes
+// the session's default, which is why the file version does not move: a bump
+// would make every restore fail after an upgrade (ADR 0027). A record with no
+// read and write was written before the variant was in the export id; it
+// restores under its recorded export and the mode stays unknown.
 type shareRecord struct {
 	Export   string    `json:"export"`
 	Path     string    `json:"path"`
 	LastUsed time.Time `json:"lastUsed"`
+	Read     string    `json:"read,omitempty"`
+	Write    string    `json:"write,omitempty"`
 	Owner    string    `json:"owner,omitempty"` // uid:gid
 	Watch    string    `json:"watch,omitempty"`
 	Prefetch string    `json:"prefetch,omitempty"`
+}
+
+// mode reads the record's variant mode. Unset when the record predates it, or
+// when it does not parse.
+func (r shareRecord) mode() workspace.Mode {
+	if r.Read == "" || r.Write == "" {
+		return workspace.ModeUnset
+	}
+	got, err := workspace.ParseMode("read=" + r.Read + ",write=" + r.Write)
+	if err != nil {
+		return workspace.ModeUnset
+	}
+	return got
 }
 
 // words reads the record's share words. A field that does not parse is left
@@ -52,9 +70,14 @@ func (r shareRecord) words() workspace.ShareWords {
 	return w
 }
 
-// recordFor is the record of one share with the words it was registered with.
-func recordFor(exportPath, localPath string, words workspace.ShareWords) shareRecord {
-	rec := shareRecord{Export: exportPath, Path: localPath, LastUsed: time.Now()}
+// recordFor is the record of one share as it stands: its variant and the words
+// it has been raised to.
+func recordFor(share *nfsserve.Share) shareRecord {
+	words := share.Words()
+	rec := shareRecord{Export: share.ExportPath, Path: share.LocalPath, LastUsed: time.Now()}
+	if share.Mode != workspace.ModeUnset {
+		rec.Read, rec.Write = string(share.Mode.Read), string(share.Mode.Write)
+	}
 	if words.Owner.Set {
 		rec.Owner = words.Owner.String()
 	}
@@ -147,14 +170,20 @@ func newShareStore(path string, log *slog.Logger) *shareStore {
 }
 
 // usable reports whether a record still describes a directory this machine may
-// export. The id is RECOMPUTED from the path, so an edited record cannot make
-// /m/<id> resolve anywhere else. A directory recreated at the same path is not
-// detected.
+// export. The id is RECOMPUTED from the path and the variant, so an edited
+// record cannot make /m/<id> resolve anywhere else; a record with no variant
+// must carry the id releases before it derived from the path alone. A
+// directory recreated at the same path is not detected.
 func (s *shareStore) usable(rec shareRecord) bool {
 	if rec.Export == "" || rec.Path == "" {
 		return false
 	}
-	if rec.Export != workspace.ExportPathForID(workspace.ShareID(rec.Path)) {
+	if mode := rec.mode(); mode != workspace.ModeUnset {
+		owner := rec.words().Owner
+		if !owner.Set || rec.Export != workspace.ExportPathForID(workspace.ShareIDFor(rec.Path, workspace.ShareVariant{Mode: mode, Owner: owner})) {
+			return false
+		}
+	} else if rec.Export != workspace.ExportPathForID(workspace.LegacyShareID(rec.Path)) {
 		return false
 	}
 	if !rec.LastUsed.IsZero() && time.Since(rec.LastUsed) > shareUnused {
@@ -165,18 +194,19 @@ func (s *shareStore) usable(rec shareRecord) bool {
 }
 
 // remember records a share, so a container started later can still be served.
-func (s *shareStore) remember(exportPath, localPath string, words workspace.ShareWords) {
+func (s *shareStore) remember(share *nfsserve.Share) {
 	if s == nil {
 		return
 	}
 
 	s.mu.Lock()
-	rec, known := s.records[exportPath]
+	rec, known := s.records[share.ExportPath]
 	// Not rewritten on every container: only on change or an hour-stale stamp.
-	next := recordFor(exportPath, localPath, words)
-	changed := !known || rec.Path != localPath || rec.Owner != next.Owner || rec.Watch != next.Watch || rec.Prefetch != next.Prefetch || time.Since(rec.LastUsed) > time.Hour
+	next := recordFor(share)
+	changed := !known || rec.Path != next.Path || rec.Read != next.Read || rec.Write != next.Write ||
+		rec.Owner != next.Owner || rec.Watch != next.Watch || rec.Prefetch != next.Prefetch || time.Since(rec.LastUsed) > time.Hour
 	if changed {
-		s.records[exportPath] = next
+		s.records[share.ExportPath] = next
 	}
 	s.mu.Unlock()
 
@@ -185,10 +215,11 @@ func (s *shareStore) remember(exportPath, localPath string, words workspace.Shar
 	}
 }
 
-// restore answers a mount for an export this session has not registered.
-func (s *shareStore) restore(exportPath string) (string, workspace.ShareWords, bool) {
+// restore answers a mount for an export this session has not registered, with
+// the record's variant: an unset mode says it predates the variant.
+func (s *shareStore) restore(exportPath string) (string, workspace.Mode, workspace.ShareWords, bool) {
 	if s == nil {
-		return "", workspace.ShareWords{}, false
+		return "", workspace.ModeUnset, workspace.ShareWords{}, false
 	}
 
 	s.mu.Lock()
@@ -196,16 +227,30 @@ func (s *shareStore) restore(exportPath string) (string, workspace.ShareWords, b
 	s.mu.Unlock()
 
 	if !ok || !s.usable(rec) {
-		return "", workspace.ShareWords{}, false
+		return "", workspace.ModeUnset, workspace.ShareWords{}, false
 	}
 
 	if s.log != nil {
 		s.log.Info("restoring an export the workspace still has a volume for",
 			"export", exportPath, "path", rec.Path)
 	}
-	words := rec.words()
-	s.remember(exportPath, rec.Path, words)
-	return rec.Path, words, true
+	s.touch(exportPath)
+	return rec.Path, rec.mode(), rec.words(), true
+}
+
+// touch refreshes a record's stamp, so one a container still mounts is not
+// forgotten for being unused.
+func (s *shareStore) touch(exportPath string) {
+	s.mu.Lock()
+	rec, ok := s.records[exportPath]
+	if ok {
+		rec.LastUsed = time.Now()
+		s.records[exportPath] = rec
+	}
+	s.mu.Unlock()
+	if ok {
+		s.save()
+	}
 }
 
 // exports names every recorded export, for matching a root handle to one.

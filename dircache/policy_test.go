@@ -35,10 +35,10 @@ func TestPoliciesArePerShare(t *testing.T) {
 
 	// The tree share is still yielding to reads, so what it holds follows them.
 	p := c.prefetchFor(tree)
-	if p == nil || p.policy != PolicyTree {
+	if p == nil || p.pol() != PolicyTree {
 		t.Fatalf("the tree share's prefetch = %+v", p)
 	}
-	if q := c.prefetchFor(eager); q == nil || q.policy != PolicyEager {
+	if q := c.prefetchFor(eager); q == nil || q.pol() != PolicyEager {
 		t.Fatalf("the eager share's prefetch = %+v", q)
 	}
 }

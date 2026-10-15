@@ -314,9 +314,9 @@ func TestNestedSharesResolveToTheDeepest(t *testing.T) {
 	} {
 		tr := newTree(runtime.GOOS, newFakeBackend(), 100, nil, nil)
 		tr.sync(order)
-		root, rel, ok := tr.rootFor(filepath.Join(inner, "x.go"))
-		if !ok || root.export != "/m/2222222222222222" || rel != "/x.go" {
-			t.Errorf("order %v: rootFor = %v %q %v, want the inner share", order, root, rel, ok)
+		got := tr.rootsFor(filepath.Join(inner, "x.go"))
+		if len(got) != 1 || got[0].root.export != "/m/2222222222222222" || got[0].rel != "/x.go" {
+			t.Errorf("order %v: rootsFor = %+v, want the inner share", order, got)
 		}
 	}
 }
@@ -439,5 +439,54 @@ func TestExcludesOr(t *testing.T) {
 	}
 	if got := ExcludesOr([]string{}); len(got) != 0 {
 		t.Errorf("ExcludesOr([]) = %v, want an empty list", got)
+	}
+}
+
+// One directory mounted two ways: an event reaches both shares, each by its own
+// mode. The cache is told of both before any mode strips anything.
+func TestTwoSharesOnOnePathEachGetTheEvent(t *testing.T) {
+	dir := mkdirs(t, t.TempDir(), "src")
+
+	be := newFakeBackend()
+	w, err := New(Options{Budget: 100, Debounce: time.Millisecond, MaxDelay: 5 * time.Millisecond, goos: runtime.GOOS,
+		newBackend: func() (backend, error) { return be, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	sink := &fakeSink{}
+	w.SetSink(sink)
+	seen := &recordingObserver{}
+	w.SetObserver(seen)
+
+	w.Sync([]Share{
+		{ExportPath: "/m/1111111111111111", LocalPath: dir, Mode: workspace.WatchPartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: dir, Mode: workspace.WatchCoarse},
+	})
+	waitFor(t, "the walk", func() bool { return w.Stats().Watched >= 2 })
+
+	be.events <- fsnotify.Event{Name: filepath.Join(dir, "src", "a.go"), Op: fsnotify.Write}
+	be.events <- fsnotify.Event{Name: filepath.Join(dir, "src", "gone.go"), Op: fsnotify.Remove}
+
+	has := func(export string, op notify.Op) bool {
+		for _, e := range sink.events() {
+			if e.Export == export && e.Op&op != 0 {
+				return true
+			}
+		}
+		return false
+	}
+	waitFor(t, "both shares' writes and the coarse removal", func() bool {
+		return has("/m/1111111111111111", notify.OpWrite) && has("/m/2222222222222222", notify.OpWrite) &&
+			has("/m/2222222222222222", notify.OpRemove)
+	})
+	time.Sleep(50 * time.Millisecond)
+	if has("/m/1111111111111111", notify.OpRemove) {
+		t.Error("the partial share was sent a deletion")
+	}
+	for _, export := range []string{"/m/1111111111111111", "/m/2222222222222222"} {
+		if got := seen.count(export); got != 2 {
+			t.Errorf("the observer saw %d events for %s, want both", got, export)
+		}
 	}
 }

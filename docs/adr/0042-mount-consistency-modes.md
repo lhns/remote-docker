@@ -1,7 +1,7 @@
 # 0042 — Docker's mount consistency, applied to the NFS mount
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-14
+- Date: 2026-09-01, last amended 2026-10-15
 - Current answer: a mount has two settings, `read=direct|cached` and
   `write=through|back|ephemeral`, and those two words are the only spelling:
   `-v /a:/b:ro,read=cached`, `--mount '...,"consistency=read=cached,write=back"'`,
@@ -12,10 +12,17 @@
   write into a union ([ADR 0044](0044-a-delegated-share-is-a-cache.md)), and
   only `back` carries it home.
 - A mount may also carry words of its SHARE, beside the two axes: `owner=` and
-  `watch=off|partial|coarse` and `prefetch=off|eager|tree` (amendment 2026-10-14). They are fixed per
-  directory, and the session settings do not accept them; each has a default of
-  its own (`REMOTE_DOCKER_SHARE_OWNER`, `REMOTE_DOCKER_WATCH`,
+  `watch=off|partial|coarse` and `prefetch=off|eager|tree` (amendment 2026-10-14).
+  The session settings do not accept them; each has a default of its own
+  (`REMOTE_DOCKER_SHARE_OWNER`, `REMOTE_DOCKER_WATCH`,
   `REMOTE_DOCKER_PREFETCH`).
+- A share is identified by (directory, read, write, owner) (amendment
+  2026-10-15). A mount asking for a new combination gets its own share, export,
+  volume and union beside the others, and nothing is refused or replaced.
+  `watch=` and `prefetch=` are effort spent on one share: it runs at the
+  highest level any mount of it asked for (`off < partial < coarse`,
+  `off < tree < eager`), raised silently and never lowered while the session
+  runs, and events are not filtered per container.
 - `read=cached` and every union need the watcher, so a mount that resolves to
   either gets at least `watch=partial` whatever the session says, and asking for
   `watch=off` on one is refused. A session with watching off starts the watcher
@@ -170,13 +177,38 @@ Selecting a cached read with `watch=off` is refused — a long attribute cache
 with nothing to invalidate it is a stale mount, and a stale mount fails by
 succeeding.
 
-**One directory is one share, one volume and one set of words.** Two mounts of
-the same source asking for different things, in one request or across containers
-(a share already registered or restored), are refused with the keys that
-differ. A share's filesystem is built with its words and never replaced, so
-they are fixed while the session runs. The alternative is
-silent: the second `EnsureVolume` recreates the volume the first just made, and
-both containers run under whichever was written last.
+**One directory is one share per read, write and owner** (amended 2026-10-15,
+replacing "one directory is one share, one volume and one set of words").
+Originally two mounts of one source asking for different things were refused
+with the keys that differ, because a share's filesystem is built with its words
+and the second `EnsureVolume` would recreate the volume the first just made. A
+user hit it for good: a compose file with `prefetch=eager`, `down`, then a mount
+resolving to the session's `prefetch=tree` was refused until `remote restart`,
+since the registry never shrinks. The refusal was also uneven: a different
+`read=` alone was allowed, and mapped to the same volume name with other
+options.
+
+- **Identity.** `read`, `write` and `owner` apply per container, so they are in
+  the share id: `ShareIDFor` hashes `canonical path, read, write, uid:gid`, still
+  16 hex characters, so `/m/<id>`, the volume name, the cache and notify
+  protocols and the whole agent are unchanged. The agent keys on
+  `(account, client, export)`, so unions, layers, cache volumes, pokes and
+  collection separate per id by themselves. Every variant gets a new id,
+  the default one included; the old path-only formula survives as
+  `LegacyShareID`, for restoring records ADR 0027 describes.
+- **Effort.** `watch=` and `prefetch=` rise: a mount of an existing variant
+  raises the share's words to the stronger of the two and never lowers them.
+  The registry raises them under a lock and the share is read through an
+  accessor, because the watcher and the cache hold the pointer. Prefetch's
+  order is a choice made here: `eager` sends everything up to the budget, `tree`
+  what reads point at.
+- **Still refused.** `watch=off` on a mount that needs the watcher (`read=cached`
+  or a union) contradicts itself within one mount, and says so. Nothing
+  disagrees between mounts any more.
+- **Cost.** Each variant is a volume and, for a union, a cache volume and a
+  fuse-overlayfs process. A container sees what is written through another
+  share only after that share's writes reach this machine (a union's write-back
+  delay) or its cache is invalidated by the watcher.
 
 ## What it bought
 
@@ -207,10 +239,10 @@ never across the two.
 
 ## Consequences
 
-- **Switching costs a volume recreation and nothing else.** `replaceIfStale`
-  already rebuilds a managed volume whose driver options changed, so a mode
-  change needs no migration. A volume a container still holds is refused with
-  the remedy, which is that container.
+- **Switching mode is a new volume, not a recreation** (amended 2026-10-15). The
+  mode is in the share id, so a container asking for another one mounts another
+  volume beside the first; `replaceIfStale` no longer sees a mode change. The
+  old volume is collected once no container names it.
 - **What the poke refreshes is the inode it names, and nothing else.** An edit
   to an existing file is the case this covers exactly: the SETATTR reply carries
   the file's real attributes, the workspace's NFS client sees the new mtime and

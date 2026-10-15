@@ -105,7 +105,7 @@ func TestLeasedStreamCloseWriteWithoutSupport(t *testing.T) {
 func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
 	for _, dir := range []string{t.TempDir(), t.TempDir()} {
-		if _, err := s.registry.Register(dir, workspace.ShareWords{}); err != nil {
+		if _, err := s.registry.Register(dir, workspace.DefaultMode, workspace.ShareWords{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -117,7 +117,7 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 
 	// Another account's managed volume carries the same prefix and must not
 	// be claimed.
-	theirs := workspace.VolumeNameForID("", workspace.ShareID("/somebody/elses/project"))
+	theirs := workspace.VolumeNameForID("", workspace.LegacyShareID("/somebody/elses/project"))
 	if ours[theirs] {
 		t.Errorf("claimed %s, which belongs to another session", theirs)
 	}
@@ -129,7 +129,7 @@ func TestOurVolumesNamesOnlyOurShares(t *testing.T) {
 // guard, which knew only the share volume.
 func TestTheGuardCoversAShareCache(t *testing.T) {
 	s := &Session{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
-	share, err := s.registry.Register(t.TempDir(), workspace.ShareWords{})
+	share, err := s.registry.Register(t.TempDir(), workspace.DefaultMode, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestTheGuardCoversAShareCache(t *testing.T) {
 	if !s.exportsVolume("", workspace.CacheVolumeName(volume)) {
 		t.Errorf("the cache over an exported share, %s, is not covered", workspace.CacheVolumeName(volume))
 	}
-	theirs := workspace.VolumeNameForID("", workspace.ShareID("/somebody/elses/project"))
+	theirs := workspace.VolumeNameForID("", workspace.LegacyShareID("/somebody/elses/project"))
 	if s.exportsVolume("", workspace.CacheVolumeName(theirs)) {
 		t.Error("claimed the cache over a share this session does not export")
 	}

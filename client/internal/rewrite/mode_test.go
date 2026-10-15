@@ -576,112 +576,47 @@ func TestARefusedUnionNamesTheWordThatAskedForIt(t *testing.T) {
 	}
 }
 
-// One directory is one share and one volume, so two mounts of it asking for
-// different things can only get one of them. Refused, because the alternative
-// is both containers quietly running under whichever was written last.
-func TestOneDirectoryCannotHaveTwoModes(t *testing.T) {
-	r, _ := cachedRewriter()
+// A directory mounted with two reads is two shares and two volumes, each with
+// its own options, and nothing is refused: read and write are properties of a
+// container's mount, not of the directory (ADR 0042).
+func TestOneDirectoryMountedTwoWaysGetsTwoVolumes(t *testing.T) {
+	r, volumes := cachedRewriter()
+	sharer := r.Shares.(*fakeSharer)
 
-	_, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
+	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
 		`"/home/alice/project:/app:read=cached","/home/alice/project:/also:read=direct"]}}`))
-	if err == nil || !strings.Contains(err.Error(), "twice") {
-		t.Fatalf("err = %v, want a refusal naming the repeat", err)
+	if err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if len(volumes.created) != 2 || len(sharer.exports) != 2 || sharer.exports[0] == sharer.exports[1] {
+		t.Fatalf("volumes = %v, exports = %v; want two of each", volumes.created, sharer.exports)
 	}
 
-	// The same directory asking for the same thing twice is ordinary, in
+	binds, _ := decodeHostConfig(t, out)["Binds"].([]any)
+	byTarget := map[string]string{}
+	for _, b := range binds {
+		parts := strings.SplitN(b.(string), ":", 3)
+		byTarget[parts[1]] = parts[0]
+	}
+	cached, direct := byTarget["/app"], byTarget["/also"]
+	if cached == "" || direct == "" || cached == direct {
+		t.Fatalf("binds = %v, want a volume each", binds)
+	}
+	if o := volumes.created[cached]["o"]; !strings.Contains(o, "actimeo=60") {
+		t.Errorf("read=cached volume options = %q, want its attribute cache", o)
+	}
+	if o := volumes.created[direct]["o"]; strings.Contains(o, "actimeo=60") {
+		t.Errorf("read=direct volume options = %q, want no long attribute cache", o)
+	}
+
+	// The same directory asking for the same thing twice is one share, in
 	// either spelling.
-	r, volumes := cachedRewriter()
+	r, volumes = cachedRewriter()
 	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
 		`"/home/alice/project:/app:read=cached","/home/alice/project:/also:read=cached,write=through"]}}`)); err != nil {
 		t.Fatalf("ContainerCreate: %v", err)
 	}
 	if o := optionsFor(t, volumes); !strings.Contains(o, "actimeo=60") {
 		t.Errorf("volume options = %q", o)
-	}
-}
-
-// A word nobody else in the toolchain understands is refused where it is
-// written, rather than forwarded to a daemon that will report something else.
-func TestAMountModeThatIsNotOneIsRefused(t *testing.T) {
-	r, _ := cachedRewriter()
-
-	for _, value := range []string{"fast", "read=fast", "write=fast"} {
-		_, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Mounts":[`+
-			`{"Type":"bind","Source":"/home/alice/project","Target":"/app","Consistency":"`+value+`"}]}}`))
-		if err == nil || !strings.Contains(err.Error(), "fast") {
-			t.Errorf("%s: err = %v, want the word named", value, err)
-		}
-	}
-}
-
-// A single file leaves Binds for Mounts (ADR 0039), and the mode is consumed
-// before that walk: fileMount refuses any option it does not know, so a word
-// left in the list would make `-v file:/f:ro,read=cached` fail on the option
-// rather than mount the file.
-func TestASingleFileTakesAModeToo(t *testing.T) {
-	r, sharer, volumes := newRewriter()
-	r.StartWatcher = func() error { return nil }
-	sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
-
-	out, err := r.ContainerCreate(t.Context(),
-		[]byte(`{"HostConfig":{"Binds":["/home/alice/app.conf:/etc/app.conf:ro,read=cached"]}}`))
-	if err != nil {
-		t.Fatalf("ContainerCreate: %v", err)
-	}
-
-	mount := decodeHostConfig(t, out)["Mounts"].([]any)[0].(map[string]any)
-	if mount["ReadOnly"] != true {
-		t.Errorf("ReadOnly = %v, want the flag that keeps a container out of the file", mount["ReadOnly"])
-	}
-	if o := optionsFor(t, volumes); !strings.Contains(o, "actimeo=60") {
-		t.Errorf("volume options = %q, want the long attribute cache", o)
-	}
-}
-
-// A union is bound by path and a file is mounted by subpath. Combined, the
-// -v form became a volume named after the union's path and the --mount form a
-// bind carrying VolumeOptions, both after the union had been prepared. Refused
-// by name before anything is created.
-func TestASingleFileRefusesAUnion(t *testing.T) {
-	for _, body := range []string{
-		`{"HostConfig":{"Binds":["/home/alice/app.conf:/etc/app.conf:ro,write=back"]}}`,
-		`{"HostConfig":{"Mounts":[{"Type":"bind","Source":"/home/alice/app.conf","Target":"/etc/app.conf","Consistency":"write=back"}]}}`,
-	} {
-		r, sharer, volumes := newRewriter()
-		r.StartWatcher = func() error { return nil }
-		cache := &fakeCache{}
-		r.OpenCache = servingCache(cache)
-		r.UnionReady = workspace.UnionReady
-		sharer.files = map[string]string{"/home/alice/app.conf": "app.conf"}
-
-		out, err := r.ContainerCreate(t.Context(), []byte(body))
-		if err == nil {
-			t.Errorf("%s\n  was rewritten to %s", body, out)
-			continue
-		}
-		if !strings.Contains(err.Error(), "fix: mount the directory") {
-			t.Errorf("err = %v, want the remedy", err)
-		}
-		if cache.prepared != "" || len(volumes.created) != 0 {
-			t.Errorf("a refused mount still prepared %q and created %v", cache.prepared, volumes.created)
-		}
-	}
-}
-
-// A union holds actual copies, so the watcher is what keeps them honest: a
-// cached copy of a file that changed here is the one way this mode could be
-// wrong rather than merely slow.
-func TestAUnionNeedsTheWatcherToo(t *testing.T) {
-	r, _, _ := newRewriter()
-	r.OpenCache = servingCache(&fakeCache{})
-	r.UnionReady = workspace.UnionReady
-
-	_, err := r.ContainerCreate(t.Context(),
-		[]byte(`{"HostConfig":{"Binds":["/home/alice/project:/app:read=cached,write=back"]}}`))
-	if err == nil {
-		t.Fatal("a cache was served with nothing to keep it honest")
-	}
-	if !strings.Contains(err.Error(), "watch") {
-		t.Errorf("error = %v, want the setting named", err)
 	}
 }

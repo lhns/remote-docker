@@ -11,12 +11,19 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
+// defaultShareID is the id of a directory mounted with no words: the default
+// mode, owned by root.
+func defaultShareID(localPath string) string {
+	return workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: workspace.DefaultMode, Owner: workspace.Owner{Set: true}})
+}
+
 // fakeSharer records what was exported and hands back deterministic paths.
 type fakeSharer struct {
-	shared []string
-	files  map[string]string               // local path -> base name, for single-file shares
-	words  map[string]workspace.ShareWords // what each path was shared with
-	err    error
+	shared  []string
+	exports []string                        // the export each Share call answered with, in order
+	files   map[string]string               // local path -> base name, for single-file shares
+	words   map[string]workspace.ShareWords // what each path was shared with
+	err     error
 }
 
 func (f *fakeSharer) Share(localPath string, mount workspace.MountWords) (string, string, error) {
@@ -25,11 +32,12 @@ func (f *fakeSharer) Share(localPath string, mount workspace.MountWords) (string
 		return "", "", f.err
 	}
 	f.shared = append(f.shared, localPath)
+	f.exports = append(f.exports, workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mount.Mode, Owner: mount.Owner})))
 	if f.words == nil {
 		f.words = map[string]workspace.ShareWords{}
 	}
 	f.words[localPath] = words
-	return workspace.ExportPathForID(workspace.ShareID(localPath)), f.files[localPath], nil
+	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mount.Mode, Owner: mount.Owner})), f.files[localPath], nil
 }
 
 type fakeVolumes struct {
@@ -80,7 +88,7 @@ func TestRewriteBinds(t *testing.T) {
 	binds := decodeHostConfig(t, out)["Binds"].([]any)
 	got := binds[0].(string)
 
-	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))
+	wantVolume := workspace.VolumeNameForID("", defaultShareID("/home/alice/project"))
 	want := wantVolume + ":/app:ro"
 	if got != want {
 		t.Errorf("bind = %q, want %q", got, want)
@@ -116,11 +124,11 @@ func TestRewriteBindsOfUnrelatedDirectories(t *testing.T) {
 	if len(binds) != 2 {
 		t.Fatalf("got %d binds, want 2", len(binds))
 	}
-	if first, want := binds[0].(string), workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))+":/app"; first != want {
+	if first, want := binds[0].(string), workspace.VolumeNameForID("", defaultShareID("/home/alice/project"))+":/app"; first != want {
 		t.Errorf("first bind = %q, want %q", first, want)
 	}
 	second := binds[1].(string)
-	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/mnt/data"))
+	wantVolume := workspace.VolumeNameForID("", defaultShareID("/mnt/data"))
 	if second != wantVolume+":/data" {
 		t.Errorf("second bind = %q, want %q", second, wantVolume+":/data")
 	}
@@ -170,7 +178,7 @@ func TestRewriteMounts(t *testing.T) {
 	if first["Type"] != "volume" {
 		t.Errorf("Type = %v, want volume", first["Type"])
 	}
-	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/src"))
+	wantVolume := workspace.VolumeNameForID("", defaultShareID("/home/alice/src"))
 	if first["Source"] != wantVolume {
 		t.Errorf("Source = %v, want %q", first["Source"], wantVolume)
 	}
@@ -405,7 +413,7 @@ func TestRewritePreservesVolumeDriver(t *testing.T) {
 
 	// Ours is created explicitly with the local driver, so the name is already
 	// taken by the time the container is created.
-	wantVolume := workspace.VolumeNameForID("", workspace.ShareID("/src"))
+	wantVolume := workspace.VolumeNameForID("", defaultShareID("/src"))
 	if _, ok := volumes.created[wantVolume]; !ok {
 		t.Errorf("volume %q was not created ahead of the container", wantVolume)
 	}
@@ -463,7 +471,7 @@ func TestASingleFileBindMovesToMounts(t *testing.T) {
 	}
 	mount := mounts[0].(map[string]any)
 
-	wantVolume := workspace.VolumeNameForID("", workspace.ShareID(local))
+	wantVolume := workspace.VolumeNameForID("", defaultShareID(local))
 	if mount["Type"] != "volume" || mount["Source"] != wantVolume {
 		t.Errorf("mount = %v, want a volume mount of %q", mount, wantVolume)
 	}
@@ -493,7 +501,7 @@ func TestADirectoryBindIsUnaffectedByAFileBeside(t *testing.T) {
 
 	hc := decodeHostConfig(t, out)
 	binds, _ := hc["Binds"].([]any)
-	want := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/src")) + ":/app"
+	want := workspace.VolumeNameForID("", defaultShareID("/home/alice/src")) + ":/app"
 	if len(binds) != 1 || binds[0] != want {
 		t.Errorf("Binds = %v, want [%q]", binds, want)
 	}
@@ -615,7 +623,7 @@ func TestADaemonOwnedSourceIsLeftAlone(t *testing.T) {
 		t.Errorf("the daemon's own path was rewritten to %v", binds[0])
 	}
 	// The bind beside it is untouched by any of this.
-	want := workspace.VolumeNameForID("", workspace.ShareID("/home/me/src")) + ":/app"
+	want := workspace.VolumeNameForID("", defaultShareID("/home/me/src")) + ":/app"
 	if binds[1] != want {
 		t.Errorf("the ordinary bind = %v, want %q", binds[1], want)
 	}

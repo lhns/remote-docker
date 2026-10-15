@@ -1585,13 +1585,39 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         bad "a mount naming no owner reports [$LAST_OUTPUT], want 0 0"
     fi
 
-    # A share's words are fixed once it exists.
-    if outputs 'already shared with owner=1000:1000.*resolves to owner=2000:2000' dockert run --rm -v "$WORDSDIR:/w:owner=2000" alpine:3 true \
-        && grep -q 'fix:' <<<"$LAST_OUTPUT"; then
-        ok "a second owner for a registered directory is refused with a fix"
+    # Another owner for a directory already shared is a share of its own, so two
+    # containers can use one directory at once, each seeing its owner (ADR 0042).
+    # A file one writes is the same file the other reads: the directory is
+    # shared, only the ownership it reports differs.
+    docker rm -f itest-owner-a itest-owner-b >/dev/null 2>&1
+    if dockert run -d --name itest-owner-a -v "$WORDSDIR:/w:owner=1000" alpine:3 sleep 300 >"$WORK/owner-a.log" 2>&1 \
+        && dockert run -d --name itest-owner-b -v "$WORDSDIR:/w:owner=2000" alpine:3 sleep 300 >"$WORK/owner-b.log" 2>&1; then
+        if outputs '^1000 1000$' docker exec itest-owner-a stat -c '%u %g' /w; then
+            ok "two owners on one directory: the first container reports 1000:1000"
+        else
+            bad "the owner=1000 container reports [$LAST_OUTPUT], want 1000 1000"
+        fi
+        if outputs '^2000 2000$' docker exec itest-owner-b stat -c '%u %g' /w; then
+            ok "two owners on one directory: the second, running at the same time, reports 2000:2000"
+        else
+            bad "the owner=2000 container reports [$LAST_OUTPUT], want 2000 2000"
+        fi
+        docker exec itest-owner-a sh -c 'echo from-owner-a >/w/shared-by-owners' >/dev/null 2>&1
+        if wait_output '^from-owner-a$' 30 docker exec itest-owner-b cat /w/shared-by-owners; then
+            ok "a file written under one owner is read under the other"
+        else
+            bad "the second owner never saw the first's file: [$LAST_OUTPUT]"
+            dump_workspace_log 40
+        fi
+        if [ "$(cat "$WORDSDIR/shared-by-owners" 2>/dev/null)" = "from-owner-a" ]; then
+            ok "and it is the file on this machine"
+        else
+            bad "the file on this machine holds [$(cat "$WORDSDIR/shared-by-owners" 2>&1)], want from-owner-a"
+        fi
     else
-        bad "a second owner was not refused as expected: [$LAST_OUTPUT]"
+        bad "two owners for one directory could not both start: $(cat "$WORK/owner-a.log" "$WORK/owner-b.log" 2>&1 | tail -4 | tr '\n' ' ')"
     fi
+    docker rm -f itest-owner-a itest-owner-b >/dev/null 2>&1
 
     # A union's merged root is the upper the agent creates, so owner= needs the
     # agent to hand it over; this is also the first mount to need the watcher.
@@ -1664,6 +1690,39 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "read=cached was refused with the session at watch off: $(cat "$WORK/watchcached-run.log")"
         fi
 
+        # A later mount of the same share raises its watch: the first container
+        # asked for none, the second for partial, and the edit reaches both,
+        # because events are not filtered per container (ADR 0042).
+        RAISEDIR="$WORK/words-raise"
+        mkdir -p "$RAISEDIR"
+        echo "before the raise" >"$RAISEDIR/edit.txt"
+        if dockert run -d --name itest-raise-a -v "$PROBES:/probe:ro" -v "$RAISEDIR:/data:watch=off" \
+            alpine:3 /probe/watchprobe -timeout 40s /data >"$WORK/raise-a.log" 2>&1 \
+            && dockert run -d --name itest-raise-b -v "$PROBES:/probe:ro" -v "$RAISEDIR:/data:watch=partial" \
+                alpine:3 /probe/watchprobe -timeout 40s /data >"$WORK/raise-b.log" 2>&1; then
+            wait_ready itest-raise-a 30
+            wait_ready itest-raise-b 30
+            sleep 2
+            echo "edited at $(date +%s)" >"$RAISEDIR/edit.txt"
+            timeout 90 docker wait itest-raise-a itest-raise-b >/dev/null 2>&1
+            seen_a=$(docker logs itest-raise-a 2>&1)
+            seen_b=$(docker logs itest-raise-b 2>&1)
+            docker rm -f itest-raise-a itest-raise-b >/dev/null 2>&1
+            if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen_b"; then
+                ok "a mount asking for watch=partial watches the share an earlier watch=off mount made"
+            else
+                bad "the raising mount saw no edit: [$(tail -5 <<<"$seen_b" | tr '\n' ' ')]"
+            fi
+            if grep -qE "^INOTIFY .*(IN_MODIFY|IN_CLOSE_WRITE).* edit\.txt$" <<<"$seen_a"; then
+                ok "and so does the container that asked for none: events are not filtered per container"
+            else
+                bad "the watch=off container saw no edit on a share another mount raised: [$(tail -5 <<<"$seen_a" | tr '\n' ' ')]"
+            fi
+        else
+            docker rm -f itest-raise-a itest-raise-b >/dev/null 2>&1
+            bad "the raise probe containers would not start: $(cat "$WORK/raise-a.log" "$WORK/raise-b.log" 2>&1 | tail -4 | tr '\n' ' ')"
+        fi
+
         # A contradiction is refused with the way out.
         if outputs 'watch=off.*read=cached' dockert run --rm -v "$CACHEDDIR:/w:read=cached,watch=off" alpine:3 true \
             && grep -q 'fix: drop watch=off' <<<"$LAST_OUTPUT"; then
@@ -1699,6 +1758,17 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         SURVIVEDIR="$WORK/words-survives"
         mkdir -p "$SURVIVEDIR"
         echo "before the restart" >"$SURVIVEDIR/edit.txt"
+        # A read=cached container too: the record carries the variant, so the
+        # restored share is the same one and is still watched.
+        SURVIVECACHED="$WORK/words-survives-cached"
+        mkdir -p "$SURVIVECACHED"
+        echo "cached before the restart" >"$SURVIVECACHED/marker"
+        survive_cached=false
+        if dockert run -d --name itest-survive-cached -v "$SURVIVECACHED:/data:read=cached" alpine:3 sleep 600 >"$WORK/survive-cached.log" 2>&1; then
+            survive_cached=true
+        else
+            bad "the read=cached restart container would not start: $(cat "$WORK/survive-cached.log")"
+        fi
         if dockert run -d --name itest-survive -v "$PROBES:/probe:ro" -v "$SURVIVEDIR:/data:owner=1000,watch=partial" \
             alpine:3 /probe/watchprobe -timeout 120s /data >"$WORK/survive-run.log" 2>&1; then
             wait_ready itest-survive 30
@@ -1715,6 +1785,20 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
                 else
                     bad "after a restart the share reports [$LAST_OUTPUT], want 1000"
                 fi
+                if [ "$survive_cached" = true ]; then
+                    if outputs '^cached before the restart$' dockert exec itest-survive-cached cat /data/marker; then
+                        ok "a restart keeps serving a read=cached share a container still mounts"
+                    else
+                        bad "after a restart the read=cached share reads [$LAST_OUTPUT]"
+                    fi
+                    echo "cached after the restart" >"$SURVIVECACHED/marker"
+                    if wait_output '^cached after the restart$' 30 docker exec itest-survive-cached cat /data/marker; then
+                        ok "and an edit made after the restart reaches it, so it is still watched"
+                    else
+                        bad "an edit after a restart never reached the read=cached container: [$LAST_OUTPUT]"
+                        sed 's/^/        /' "$WORK/survive-up.log" | tail -20
+                    fi
+                fi
                 sleep 2
                 echo "edited after the restart $(date +%s)" >"$SURVIVEDIR/edit.txt"
                 timeout 150 docker wait itest-survive >/dev/null 2>&1
@@ -1726,8 +1810,9 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
                     sed 's/^/        /' "$WORK/survive-up.log" | tail -20
                 fi
             fi
-            docker rm -f itest-survive >/dev/null 2>&1
+            docker rm -f itest-survive itest-survive-cached >/dev/null 2>&1
         else
+            docker rm -f itest-survive-cached >/dev/null 2>&1
             bad "the restart probe container would not start: $(cat "$WORK/survive-run.log")"
         fi
     else
@@ -1742,6 +1827,117 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     fi
 else
     bad "no client is running, so the mount words could not be tested"
+fi
+
+echo
+echo "== 14c. a compose project whose words change between runs (ADR 0042) =="
+# The reported case: a stack with prefetch=eager, taken down, and the same stack
+# with the word gone resolved to the session's default and was refused until
+# `remote restart`. This client's default is prefetch off, which is the same
+# disagreement as the report's tree.
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    PFDIR="$WORK/prefetch-changes"
+    mkdir -p "$PFDIR"
+    echo "first" >"$PFDIR/marker"
+    for variant in eager plain; do
+        words="read=cached,write=back"
+        [ "$variant" = eager ] && words="$words,prefetch=eager"
+        cat >"$PFDIR/$variant.yaml" <<COMPOSE
+services:
+  app:
+    image: alpine:3
+    container_name: itest-prefetch-change
+    command: sleep 900
+    volumes:
+      - type: bind
+        source: $PFDIR
+        target: /w
+        consistency: $words
+        bind:
+          create_host_path: false
+COMPOSE
+    done
+    if timeout 180 "$WORK/remote-docker" compose -p itestprefetch -f "$PFDIR/eager.yaml" up -d >"$WORK/prefetch-eager.log" 2>&1; then
+        ok "a stack with prefetch=eager comes up"
+        timeout 120 "$WORK/remote-docker" compose -p itestprefetch -f "$PFDIR/eager.yaml" down >/dev/null 2>&1
+        if timeout 180 "$WORK/remote-docker" compose -p itestprefetch -f "$PFDIR/plain.yaml" up -d >"$WORK/prefetch-plain.log" 2>&1; then
+            ok "the same stack without prefetch= comes up again, with no restart in between"
+            if union_is_fuse docker itest-prefetch-change && outputs '^first$' docker exec itest-prefetch-change cat /w/marker; then
+                ok "and it is a working union"
+            else
+                bad "the second run is not a working union: [$LAST_OUTPUT]"
+                dump_workspace_log 40
+            fi
+        else
+            bad "the same stack without prefetch= was refused: $(tail -5 "$WORK/prefetch-plain.log" | tr '\n' ' ')"
+        fi
+        timeout 120 "$WORK/remote-docker" compose -p itestprefetch -f "$PFDIR/plain.yaml" down -v >/dev/null 2>&1
+    else
+        bad "a stack with prefetch=eager would not come up"
+        sed 's/^/        /' "$WORK/prefetch-eager.log" | tail -20
+    fi
+else
+    bad "no client is running, so changing a compose project's words could not be tested"
+fi
+
+echo
+echo "== 14d. one directory mounted two ways at the same time (ADR 0042) =="
+# write=through (the live mount) and read=cached,write=back (a union) are two
+# shares of one directory: neither is refused and neither changes under the
+# other, while both see the same files.
+if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+    MIXDIR="$WORK/mixed"
+    mkdir -p "$MIXDIR"
+    echo "first" >"$MIXDIR/marker"
+    docker rm -f itest-mix-a itest-mix-b >/dev/null 2>&1
+    if dockert run -d --name itest-mix-a -v "$MIXDIR:/w" alpine:3 sleep 600 >"$WORK/mix-a.log" 2>&1 \
+        && dockert run -d --name itest-mix-b -v "$MIXDIR:/w:read=cached,write=back" alpine:3 sleep 600 >"$WORK/mix-b.log" 2>&1; then
+        ok "both containers run on one directory"
+
+        if outputs ' /w nfs' docker exec itest-mix-a sh -c 'grep " /w " /proc/mounts'; then
+            ok "the write=through container is on the NFS mount"
+        else
+            bad "the write=through container's /w is [$LAST_OUTPUT], want nfs"
+        fi
+        if union_is_fuse docker itest-mix-b; then
+            ok "the read=cached,write=back container is on a union"
+        else
+            bad "the union container's /w is [$LAST_OUTPUT], want fuse"
+            dump_workspace_log 40
+        fi
+
+        echo "edited here" >"$MIXDIR/marker"
+        for c in a b; do
+            if wait_output '^edited here$' 30 docker exec "itest-mix-$c" cat /w/marker; then
+                ok "an edit here reaches container $c (${WAITED}s)"
+            else
+                bad "container $c did not see an edit made here: [$LAST_OUTPUT]"
+                dump_workspace_log 40
+            fi
+        done
+
+        docker exec itest-mix-a sh -c 'echo from-a >/w/from-a' >/dev/null 2>&1
+        if wait_output '^from-a$' 30 docker exec itest-mix-b cat /w/from-a; then
+            ok "a write in the live mount reaches the union"
+        else
+            bad "the union never saw the live mount's write: [$LAST_OUTPUT]"
+            dump_workspace_log 40
+        fi
+
+        if write_comes_back docker itest-mix-b "$MIXDIR" "mixed directory" back; then
+            if wait_output '^written by itest-mix-b$' 30 docker exec itest-mix-a cat /w/written-there; then
+                ok "and the union's write, once it is back here, reaches the live mount"
+            else
+                bad "the live mount never saw the union's write: [$LAST_OUTPUT]"
+            fi
+        fi
+    else
+        bad "the two containers on one directory could not both start: $(cat "$WORK/mix-a.log" "$WORK/mix-b.log" 2>&1 | tail -4 | tr '\n' ' ')"
+        dump_workspace_log 40
+    fi
+    docker rm -f itest-mix-a itest-mix-b >/dev/null 2>&1
+else
+    bad "no client is running, so two mounts of one directory could not be tested"
 fi
 
 echo
@@ -2203,11 +2399,6 @@ COMPOSE
     else
         bad "no warning for a dropped mode word: [$LAST_OUTPUT]"
     fi
-    # Its own directory: one directory has one set of words, and long.yaml
-    # below shares CMODES with the session's defaults.
-    CWORDS="$WORK/compose-words"
-    mkdir -p "$CWORDS"
-    echo "first" >"$CWORDS/marker"
     cat >"$CMODES/words.yaml" <<COMPOSE
 services:
   app:
@@ -2216,7 +2407,7 @@ services:
     command: sleep 900
     volumes:
       - type: bind
-        source: $CWORDS
+        source: $CMODES
         target: /w
         consistency: read=cached,write=back,watch=coarse,prefetch=eager,owner=1000
         bind:
