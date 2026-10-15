@@ -42,9 +42,14 @@ type hyperVExecutor interface {
 
 // hyperVBackend is the Hyper-V Backend, over an executor. It holds no platform
 // code, so it is tested everywhere with a fake.
-type hyperVBackend struct{ exec hyperVExecutor }
+type hyperVBackend struct {
+	exec hyperVExecutor
+	// broker names the variant whose executor asks the SYSTEM service
+	// (broker_client.go); the decisions are the same.
+	broker bool
+}
 
-func (hyperVBackend) Name() string { return "hyperv" }
+func (b hyperVBackend) Name() string { return BackendKey("hyperv", b.broker) }
 
 func (b hyperVBackend) Available(ctx context.Context) error { return b.exec.Available(ctx) }
 

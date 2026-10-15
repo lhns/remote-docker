@@ -1,0 +1,93 @@
+package main
+
+// The Hyper-V service commands (ADR 0055): `remote machine service`, hidden,
+// run by the service manager and the installer and never by hand. And the one
+// decision the user-facing commands make about it.
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/lhns/remote-docker/client/internal/config"
+	"github.com/lhns/remote-docker/machine"
+)
+
+// brokerInstalled is machine.BrokerInstalled, replaced in tests.
+var brokerInstalled = machine.BrokerInstalled
+
+// decideBroker says whether a Hyper-V machine is made and run through the
+// service. A machine that exists keeps what it was built with: one made by
+// PowerShell in this session has no record at the service, and one the service
+// made cannot be reached any other way. A new one uses the service whenever it
+// is installed, which is what lets a user who is not an administrator have one.
+func decideBroker(spec *machine.Spec, recorded *config.Workspace, rootfsFlag string) error {
+	spec.Broker = false
+	if spec.Backend != "hyperv" {
+		return nil
+	}
+	if recorded != nil && recorded.Machine != nil {
+		spec.Broker = recorded.Machine.Broker
+	} else if ok, err := brokerInstalled(); err == nil {
+		spec.Broker = ok
+	}
+	if spec.Broker && rootfsFlag != "" {
+		return errors.New("--rootfs cannot be used with the Hyper-V service, which downloads its own Flatcar disk\n" +
+			"  fix: omit --rootfs")
+	}
+	return nil
+}
+
+func newMachineServiceCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "service",
+		Short:  "The Hyper-V service (run by the installer)",
+		Hidden: true,
+		Args:   onlySubcommands,
+		RunE:   helpWhenBare,
+	}
+
+	var userSID string
+	setup := &cobra.Command{
+		Use:   "setup",
+		Short: "Create the " + machine.BrokerGroup + " group and add a user to it",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			if userSID == "" {
+				return errors.New("--user-sid is required")
+			}
+			return machine.BrokerSetup(userSID)
+		},
+	}
+	setup.Flags().StringVar(&userSID, "user-sid", "", "the SID of the user who may use the service")
+
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "run",
+			Short: "Run the service (started by the service manager)",
+			Args:  cobra.NoArgs,
+			RunE:  func(*cobra.Command, []string) error { return machine.RunBrokerService() },
+		},
+		setup,
+		&cobra.Command{
+			Use:   "teardown",
+			Short: "Destroy the service's machines and undo setup",
+			Args:  cobra.NoArgs,
+			RunE:  func(cmd *cobra.Command, _ []string) error { return machine.BrokerTeardown(cmd.Context()) },
+		},
+		&cobra.Command{
+			Use:   "purge",
+			Short: "Destroy every machine the service owns",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				names, err := machine.BrokerPurgeLocal(cmd.Context())
+				for _, n := range names {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "destroyed %q\n", n)
+				}
+				return err
+			},
+		},
+	)
+	return cmd
+}

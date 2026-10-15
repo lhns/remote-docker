@@ -460,7 +460,7 @@ with the images, containers and volumes inside it. Your files are not in it.
 // destroyMachine destroys a workspace's machine. An unknown backend is an
 // error, so `rm` refuses rather than orphaning a running machine.
 func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
-	backend, err := findBackend(m.Backend)
+	backend, err := findBackend(m.BackendKey())
 	if err != nil {
 		return fmt.Errorf("cannot destroy the %s machine %q: %w", m.Backend, m.Name, err)
 	}

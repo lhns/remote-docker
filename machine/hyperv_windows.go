@@ -27,6 +27,17 @@ type directHyperV struct {
 	// run executes one script with stdin and returns its output. A field so
 	// the test can record the scripts; powershell is the only real one.
 	run func(ctx context.Context, script, stdin string) (string, error)
+
+	// dir is where a machine's files go. Nil means the user's profile
+	// (stateDir); the service sets its own ProgramData one.
+	dir func(name string) (string, error)
+}
+
+func (d directHyperV) stateDir(name string) (string, error) {
+	if d.dir != nil {
+		return d.dir(name)
+	}
+	return stateDir(name)
 }
 
 func newDirectHyperV() directHyperV { return directHyperV{run: powershell} }
@@ -120,7 +131,7 @@ func (d directHyperV) Create(ctx context.Context, spec Spec) error {
 		return err
 	}
 
-	dir, err := stateDir(spec.Name)
+	dir, err := d.stateDir(spec.Name)
 	if err != nil {
 		return err
 	}
@@ -178,7 +189,7 @@ func (d directHyperV) Stop(ctx context.Context, name string) error {
 }
 
 func (d directHyperV) Destroy(ctx context.Context, name string) error {
-	dir, err := stateDir(name)
+	dir, err := d.stateDir(name)
 	if err != nil {
 		return err
 	}

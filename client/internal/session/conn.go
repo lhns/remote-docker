@@ -156,7 +156,7 @@ func dial(ctx context.Context, cfg config.Config, signer ssh.Signer, hostKey ssh
 	if m := cfg.Machine; m != nil {
 		// Held first: a WSL machine with no session in it shuts down under a
 		// working connection.
-		if hold, err = machineHold(ctx, m.Backend, m.Name); err != nil {
+		if hold, err = machineHold(ctx, m.BackendKey(), m.Name); err != nil {
 			return nil, nil, err
 		}
 		defer func() {
@@ -165,7 +165,7 @@ func dial(ctx context.Context, cfg config.Config, signer ssh.Signer, hostKey ssh
 			}
 		}()
 		// Its address changes at boot.
-		if host, err = machineLocate(ctx, m.Backend, m.Name, transport.Port); err != nil {
+		if host, err = machineLocate(ctx, m.BackendKey(), m.Name, transport.Port); err != nil {
 			return nil, nil, err
 		}
 	}

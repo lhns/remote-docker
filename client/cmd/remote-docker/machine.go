@@ -51,6 +51,7 @@ default.`,
 		newMachineStopCommand(),
 		newMachineRebuildCommand(),
 		newMachineStatusCommand(),
+		newMachineServiceCommand(),
 	)
 	return cmd
 }
@@ -195,6 +196,9 @@ is not a thing a create command should decide.`,
 			if spec.Backend, err = opts.backendFor(args[0], recordedWorkspace(args[0])); err != nil {
 				return err
 			}
+			if err := decideBroker(&spec, recordedWorkspace(args[0]), opts.rootfs); err != nil {
+				return err
+			}
 			return createMachine(cmd, args[0], spec, false)
 		},
 	}
@@ -233,8 +237,12 @@ then "machine create --backend".`,
 					return err
 				}
 			}
-			spec, err := opts.spec(name, recordedWorkspace(name))
+			recorded := recordedWorkspace(name)
+			spec, err := opts.spec(name, recorded)
 			if err != nil {
+				return err
+			}
+			if err := decideBroker(&spec, recorded, opts.rootfs); err != nil {
 				return err
 			}
 			return createMachine(cmd, name, spec, true)
@@ -299,7 +307,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
 
-	backend, err := findBackend(spec.Backend)
+	backend, err := findBackend(spec.BackendKey())
 	if err != nil {
 		return err
 	}
@@ -329,8 +337,13 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		fallthrough
 
 	case action == machine.Create:
-		// Fetched only when building: it is several hundred megabytes.
-		if spec.Rootfs == "" {
+		// Fetched only when building: it is several hundred megabytes. Not by
+		// us when the service builds: it downloads its own copy, and a path
+		// from here is one it would open as SYSTEM.
+		if spec.Broker {
+			spec.Fetched = true
+			_, _ = fmt.Fprintln(out, "the Hyper-V service builds it; downloading Flatcar may take minutes")
+		} else if spec.Rootfs == "" {
 			if spec.Rootfs, err = prepareRootfs(ctx, spec.Backend, spec.Image, spec.Proxy, out); err != nil {
 				return err
 			}
@@ -373,7 +386,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	// Waited for until the agent listens, so "created" means usable. Held open
 	// meanwhile: an empty WSL machine shuts down after ~30s and never gets there.
-	hold, err := machine.Hold(ctx, spec.Backend, name)
+	hold, err := machine.Hold(ctx, spec.BackendKey(), name)
 	if err != nil {
 		return err
 	}
@@ -381,7 +394,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	// At its own address, not loopback: WSL's localhost relay was measured
 	// refusing connections to a listening agent (machine.yml, 2026-08-11).
-	if _, err := machine.Locate(ctx, spec.Backend, name, spec.Port); err != nil {
+	if _, err := machine.Locate(ctx, spec.BackendKey(), name, spec.Port); err != nil {
 		return err
 	}
 
@@ -494,6 +507,7 @@ func machineRecord(spec machine.Spec) *config.Machine {
 		CPUs:       spec.CPUs,
 		MemoryMB:   spec.MemoryMB,
 		Proxy:      spec.Proxy,
+		Broker:     spec.Broker,
 		Generation: spec.Generation(),
 	}
 }
@@ -526,14 +540,14 @@ a connection to the machine's previous address.`,
 				stopSessionFor(cmd, name)
 
 				// Held while waiting: an empty WSL machine shuts down again.
-				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
+				hold, err := machine.Hold(ctx, ws.Machine.BackendKey(), ws.Machine.Name)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = hold.Close() }()
 
 				// Located, so "started" means the agent is listening.
-				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
+				if _, err := machine.Locate(ctx, ws.Machine.BackendKey(), ws.Machine.Name, ws.Port); err != nil {
 					return err
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", name)
@@ -687,7 +701,7 @@ func withMachine(cmd *cobra.Command, args []string, fn func(context.Context, mac
 			"  fix: these commands manage machines created with `%s`",
 			name, ourCommand("machine create <name>"))
 	}
-	backend, err := findBackend(ws.Machine.Backend)
+	backend, err := findBackend(ws.Machine.BackendKey())
 	if err != nil {
 		return err
 	}

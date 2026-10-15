@@ -85,6 +85,11 @@ machine/go.mod           PROVISIONING A WORKSPACE ON THIS MACHINE, and its
                          Its windows-tagged files are executed in ONE place, the
                          `test (windows)` job of ci.yml, so `machine` must stay
                          in that job's subset.
+                         broker*.go: THE HYPER-V SERVICE (ADR 0055), a SYSTEM
+                         Windows service that makes machines for users who are
+                         not administrators, and the pipe client that asks it.
+                         The service's logic is untagged and tested everywhere;
+                         `broker_windows.go` has the pipe, the SID and the group.
 
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
@@ -963,6 +968,21 @@ premise of the project, and it applies to building it too. So:
   `wsl -l -v` marks the default distribution with an asterisk COLUMN, so the
   name of a default distribution is not the first field. Both are tested on a
   machine with no WSL, which is the only way they are tested at all.
+- **The Hyper-V service authorises BEFORE reading a byte, takes typed
+  operations only, and never acts on a path the caller named** (ADR 0055).
+  `brokerServer.serveConn` identifies the caller from the pipe
+  (impersonation, never a field in a request), checks SYSTEM, an enabled
+  Administrators token or a DIRECT member of `remote-docker-users` read live on
+  every connection, and only then decodes a request, with unknown fields
+  refused. Every op but `create` and `available` needs the machine recorded
+  for the caller's SID in `machines.json`; `create` refuses a taken name
+  whoever owns it. A machine's files are `machines\<name>` under ProgramData
+  with a validated name, never anything from a request; the directory is born
+  with a protected DACL. The client verifies the pipe is owned by SYSTEM or
+  Administrators before sending (a squatted pipe would receive the host key).
+  A machine created through it has `broker: true` and every later operation
+  goes the same way (`config.Machine.BackendKey`). Real Hyper-V behind it is
+  by hand only; a real named pipe with a stand-in is CI.
 - **A machine-backed workspace is an ordinary workspace with a lifecycle.**
   The `machine` block in the config is the only thing that differs anywhere,
   and two commands read it: `rm`, which has a machine to destroy (ADR 0026),

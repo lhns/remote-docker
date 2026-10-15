@@ -96,6 +96,11 @@ type Spec struct {
 	// Empty leaves the agent to generate its own. Not part of Generation
 	// either: a new one is made for every build.
 	HostKey string
+
+	// Broker says a Hyper-V machine is made and run through the SYSTEM service
+	// (ADR 0055), whose disk and directory these are. Not part of Generation:
+	// it is who asks, not what is built. See BackendKey.
+	Broker bool
 }
 
 // hostKeyFile is where the agent loads its host key: WORKSPACE_HOSTKEY_DIR as

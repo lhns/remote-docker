@@ -12,6 +12,12 @@ software.
 
 ### New
 
+- **A Hyper-V service lets a standard user have a workspace.** A Windows
+  service `remote-docker-machines` (SYSTEM) makes, starts and destroys Hyper-V
+  machines over a named pipe for members of the local group
+  `remote-docker-users`, checked live so nobody signs out. Each user can touch
+  only the machines they created. `remote machine create --backend hyperv`
+  uses it once the installer has set it up; the installer itself comes next.
 - **Hyper-V workspaces download their Flatcar image themselves.**
   `remote machine create --backend hyperv` fetches a pinned Flatcar disk,
   checks its SHA512 before unpacking it and keeps it for the next machine, so
