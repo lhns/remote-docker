@@ -395,7 +395,7 @@ while (-not (Test-Path "$Dir\go") -and (Get-Date) -lt $end) { Start-Sleep -Milli
 '@
 Remove-Item "$Pub\first.*", "$Pub\second.*", "$Pub\go" -ErrorAction SilentlyContinue
 
-$live = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
+$live = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
   -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, ('"' + $Exe + '"'), $Pub) -WindowStyle Hidden -PassThru `
   -RedirectStandardOutput "$Pub\live.out" -RedirectStandardError "$Pub\live.err"
 
@@ -430,7 +430,7 @@ Stop-Service $Service -Force
 (Get-Service $Service).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
 Ok 'stopped the service'
 Remove-Item "$Pub\stop.*" -ErrorAction SilentlyContinue
-$p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
+$p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
   -ArgumentList @('remote', 'machine', 'stop', 'other') -WindowStyle Hidden -PassThru `
   -RedirectStandardOutput "$Pub\stop.out" -RedirectStandardError "$Pub\stop.err"
 $null = $p.WaitForExit(180000)
