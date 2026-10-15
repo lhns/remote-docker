@@ -269,6 +269,45 @@ half a minute after that `rm` may refuse because the session cannot say
 whether it is in use; that passes once the session notices the connection is
 dead, or `rm -f` goes ahead.
 
+### The MSI's Hyper-V workspace, by hand (ADR 0048 amendment, ADR 0055)
+
+CI runs this against a stand-in for Hyper-V. Real Hyper-V, and the identity the
+installer runs under, are checked here, on a computer with Hyper-V enabled and
+a standard user account (`alice`) that has never been an administrator.
+
+1. As `alice`, run the MSI with `HYPERVWORKSPACE` ticked, and type an
+   administrator's credentials at the prompt (also try it from a second
+   account's elevated prompt). Wait for the Flatcar download.
+   ```powershell
+   Get-Service remote-docker-machines; sc.exe sdshow remote-docker-machines
+   net localgroup remote-docker-users          # alice is a member
+   Get-Content $env:USERPROFILE\.remote-docker.json   # alice's profile, broker: true
+   docker context ls                           # hyperv, in alice's profile
+   ```
+   The entry must be in alice's profile and not the administrator's, which is
+   the thing CI cannot see: [UserSID] under over-the-shoulder elevation, and the
+   impersonated action's environment.
+2. In a shell opened before the install, without signing out:
+   ```powershell
+   mkdir t; echo hi > t\marker; cd t
+   remote-docker run --rm -v ${PWD}:/w alpine cat /w/marker     # hi
+   ```
+3. Restart the computer; as `alice` repeat step 2. The service is stopped after
+   a reboot and her command starts it.
+4. Pull an image and make a volume in the machine, then install a newer MSI over
+   it (`msiexec /i newer.msi`, no properties). The service, the group, the VM,
+   `alice`'s config and the image and volume must all still be there.
+5. Uninstall. Then:
+   ```powershell
+   Get-VM                                    # no rd-hyperv
+   Test-Path $env:ProgramData\remote-docker  # False
+   Get-Service remote-docker-machines        # not found
+   net localgroup remote-docker-users        # not found
+   Get-Content $env:USERPROFILE\.remote-docker.json; docker context ls   # no hyperv
+   ```
+   If a different user uninstalls, `alice`'s entry and context stay (`remote rm`
+   removes them) and the VM is destroyed by teardown regardless.
+
 ## What to capture when something fails
 
 - the command and its whole output, not the last line;

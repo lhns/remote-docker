@@ -2,6 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-09-08
+- Current answer: one MSI per architecture, `docker.exe` an optional feature,
+  and, since 2026-10-15, an optional Hyper-V workspace whose install, upgrade
+  and removal run the program's own commands as custom actions (amendment
+  below). Nothing else runs code at install time.
 
 ## Context
 
@@ -87,6 +91,49 @@ version (`sha-9370b24`) has no mapping to that at all, so
 `installer/windows/build.ps1` validates the shape and the ranges and exits
 naming the version. Truncating instead would produce an upgrade that never
 fires, which is silent for a release cycle.
+
+## Amendment 2026-10-15: the Hyper-V workspace, and custom actions
+
+"No custom action" held for the `docker.exe` feature and no longer holds for
+the whole package. The checkbox "Set up a Hyper-V workspace" (`HYPERVWORKSPACE`,
+default off, on a dialog after the feature tree; `WORKSPACENAME`,
+`WORKSPACEIMAGE`, `WORKSPACEPROXY`) runs the program's own hidden commands
+through `WixQuietExec` (WixToolset.Util.wixext 5.0.2, which logs their output
+and fails the action on a non-zero exit), so the logic is Go that unit tests
+reach and the MSI only sequences it (ADR 0055).
+
+| When | As | Action |
+|---|---|---|
+| install | SYSTEM | `sc create` + `sc sdset` for `remote-docker-machines` |
+| install | SYSTEM | `remote machine service setup --user-sid [UserSID]` |
+| install | the installing user (impersonated) | `remote machine create <name> --backend hyperv --image ...` |
+| uninstall, first | the uninstalling user | `remote rm -f <remembered name>`, before StopServices |
+| uninstall, then | SYSTEM | `remote machine service teardown`, after DeleteServices |
+
+- **`sc.exe`, not `ServiceInstall`.** MSI takes a service's binary from the key
+  FILE of its component; that is the exe in the always-installed component, and
+  the service must exist only when the box is ticked. The descriptor is the
+  stock LocalSystem one plus Authenticated Users: start, query, interrogate, so
+  a standard user can start it after a reboot and stop or change nothing.
+- **Each install action has a rollback** that undoes it (`rm`, stop, teardown,
+  `sc delete`), so a refused name or a failed download leaves nothing. A failed
+  create fails the install with 1603 and create's own message in the log.
+- **An upgrade runs none of it.** The flag and name are remembered in
+  `HKLM\Software\lhns\remote-docker` (strings, found by a `RegistrySearch`),
+  because an upgrade's command line does not repeat `HYPERVWORKSPACE=1`; they
+  decide that the service is recreated after the old product removes it.
+  Create, setup and teardown are conditioned on `NOT UPGRADINGPRODUCTCODE` and
+  `NOT WIX_UPGRADE_DETECTED`. Ticking the box on an upgrade from a package
+  without it does nothing; uninstall and install again.
+- **Uninstall is best effort.** `rm` runs for the user who uninstalls; another
+  user's config entry cannot be reached and stays. Both actions ignore failure,
+  so a machine that cannot be removed does not make the product impossible to
+  uninstall.
+- **`HYPERVSERVICE`** (default `vmms`) names the Windows service whose key says
+  Hyper-V is enabled. Only the tests set it, because runners have no Hyper-V.
+- **CI runs the real service against a stand-in for Hyper-V**, compiled in by
+  the `rdstandin` build tag, and asserts that no release binary contains it.
+  The dialog is built and never clicked by CI.
 
 ## Consequences
 

@@ -64,6 +64,7 @@ type machineOptions struct {
 	cpus     int
 	memoryMB int
 	proxy    string
+	image    string
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
@@ -75,6 +76,9 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
 	cmd.Flags().StringVar(&o.proxy, "proxy", "",
 		"hyperv: http(s) proxy URL for the Flatcar download and the machine's docker daemon, e.g. http://proxy.example:3128")
+
+	cmd.Flags().StringVar(&o.image, "image", "",
+		"workspace image to run in the machine, e.g. from a registry mirror; defaults to this version's published image")
 
 	// No --port or --user: `remote` has both persistently, and pflag silently
 	// skips a duplicate (ADR 0024).
@@ -95,7 +99,7 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 		Name:    name,
 		Backend: backend,
 		// Part of the generation, so a new client version rebuilds (ADR 0026).
-		Image:    machine.DefaultImage(version),
+		Image:    cmp.Or(o.image, machine.DefaultImage(version)),
 		Rootfs:   o.rootfs,
 		Port:     overrides.Port,
 		CPUs:     o.cpus,

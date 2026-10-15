@@ -62,3 +62,12 @@ func TestProxyIsHyperVOnlyAndRecorded(t *testing.T) {
 		t.Errorf("rebuild proxy = %q generation %s, want %q and %s", got.Proxy, got.Generation(), built.Proxy, built.Generation())
 	}
 }
+
+func TestMachineImageFlag(t *testing.T) {
+	if got := mustSpec(t, &machineOptions{image: "mirror.example/ws:1"}, "dev", nil).Image; got != "mirror.example/ws:1" {
+		t.Errorf("image = %q, want the flag's", got)
+	}
+	if got := mustSpec(t, &machineOptions{}, "dev", nil).Image; !strings.HasPrefix(got, "ghcr.io/lhns/remote-docker-workspace:") {
+		t.Errorf("image = %q, want the default", got)
+	}
+}

@@ -5,7 +5,6 @@ package machine
 import (
 	"context"
 	"errors"
-	"io"
 	"path/filepath"
 	"time"
 
@@ -18,6 +17,8 @@ import (
 // instead of a user's profile. A service writing or deleting under a path a
 // caller influences is an arbitrary write through a junction, so the path is a
 // function of a validated name and this root and nothing else.
+//
+//nolint:unused // the rdstandin build replaces its only caller
 func serviceHyperV(root string) directHyperV {
 	d := newDirectHyperV()
 	d.dir = func(name string) (string, error) {
@@ -32,7 +33,7 @@ func serviceHyperV(root string) directHyperV {
 // newServiceServer wires the server to the real pipe, group and directory.
 func newServiceServer(root string) *brokerServer {
 	fetch := make(chan struct{}, 1) // one download at a time into the shared cache
-	return newBrokerServer(serviceHyperV(root), filepath.Join(root, "machines.json"),
+	return newBrokerServer(serviceExecutor(root), filepath.Join(root, "machines.json"),
 		pipeCaller, brokerGroupMembers,
 		func(ctx context.Context, proxy string) (string, error) {
 			// Waited for with the caller's deadline, or one slow download
@@ -43,7 +44,7 @@ func newServiceServer(root string) *brokerServer {
 			case <-ctx.Done():
 				return "", ctx.Err()
 			}
-			return ensureFlatcar(ctx, flatcarPinned, filepath.Join(root, "rootfs"), proxy, io.Discard)
+			return serviceDisk(ctx, root, proxy)
 		})
 }
 

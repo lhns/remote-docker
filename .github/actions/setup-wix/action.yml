@@ -1,6 +1,6 @@
 name: setup wix
 description: >-
-  WiX v5 as a dotnet global tool, with the UI extension the installer uses.
+  WiX v5 as a dotnet global tool, with the UI and Util extensions the installer uses.
 
 # WINDOWS RUNNERS ONLY. WiX loads anywhere .NET does and works only on Windows,
 # which is why both callers of this action are Windows jobs (ADR 0048).
@@ -33,5 +33,7 @@ runs:
         Add-Content -Path $env:GITHUB_PATH -Value $tools
         $env:PATH = $env:PATH + [IO.Path]::PathSeparator + $tools
         wix extension add -g "WixToolset.UI.wixext/${{ inputs.version }}"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        wix extension add -g "WixToolset.Util.wixext/${{ inputs.version }}"
         if ($LASTEXITCODE -ne 0) { exit 1 }
         wix --version

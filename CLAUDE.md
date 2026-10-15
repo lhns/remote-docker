@@ -158,7 +158,9 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          listener of its own (ADR 0054)
 
 image/                   the workspace container (Dockerfile only)
-installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code of its
+                         own: the optional Hyper-V workspace runs this program's
+                         hidden commands as custom actions (ADR 0048 amendment).
                          Built ON WINDOWS: WiX loads on Linux and then says its
                          behaviour is undefined, and means it. `docker.exe` is
                          a Feature and a DuplicateFile, so the payload ships
@@ -232,6 +234,7 @@ bash test/bench.sh
 # truncating it into an upgrade that never fires.
 dotnet tool install --global wix --version 5.0.2
 wix extension add -g WixToolset.UI.wixext/5.0.2
+wix extension add -g WixToolset.Util.wixext/5.0.2
 installer/windows/build.ps1 -Version 0.6.0 -Arch x64 `
   -Binary dist/windows_amd64/remote-docker.exe `
   -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
@@ -1408,8 +1411,20 @@ prepended, `remote-docker remote --help` running from a shell whose PATH came
 from the registry rather than from this process, the `docker.exe` feature
 absent by default and working when `ADDLOCAL` asks for it, the refusal firing
 against a `docker.exe` in System32 with a message naming it, the override, and
-an uninstall that takes both names and the PATH entry with it. It is
-`msi.yml`, which runs on changes under `installer/windows/` rather than on
+an uninstall that takes both names and the PATH entry with it. It also runs the
+optional Hyper-V workspace against a STAND-IN for Hyper-V (the `rdstandin` build
+tag, `machine/broker_standin_windows.go`, which logs create/start/stop/destroy
+under `%ProgramData%\remote-docker-standin` beside the directory teardown
+deletes; `msi.yml` asserts no release binary contains it): the service
+installed as LocalSystem with Authenticated Users able to start and nothing
+more, the group, the machine, config entry and docker context in the installing
+user's profile, a STANDARD local user refused with the group's name and then
+served by the same logon after `net localgroup ... /add`, that user starting a
+stopped service, a name that create refuses failing the install with its
+message in the log and rolling everything back, an upgrade that changes none of
+the record, the config or the group and logs no destroy or second create, and
+an uninstall that destroys both machines and removes the service, the group,
+ProgramData, the config entry and the context. It is `msi.yml`, which runs on changes under `installer/windows/` rather than on
 every push -- a Windows runner per push answers the same question every time,
 which is the argument that keeps `bench.sh` behind a label. NOT on the release
 path: see the not-tested list below.
@@ -1420,6 +1435,13 @@ Keep this list honest, and name the assertion rather than the area: "the
 `docker run` mechanism under `elevate` is tested" was written here while only
 its pure planning function was.
 
+- **The MSI's Hyper-V workspace against real Hyper-V, and as a real standard
+  user.** CI proves the installer, service, group, rollback and upgrade around
+  a stand-in. By hand only (`docs/testing-machines.md`): real Hyper-V under the
+  service, that `[UserSID]` is the launching user under over-the-shoulder UAC
+  (a standard user typing admin credentials), that the impersonated action
+  writes that user's profile and not SYSTEM's or the administrator's, the
+  dialog (never clicked by CI), and a reboot with the service stopped.
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
   through the routing mesh -- needs a real cluster. CI cannot cover it. The

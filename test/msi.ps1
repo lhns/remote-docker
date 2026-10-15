@@ -1,7 +1,10 @@
 # The Windows installer, end to end: install, what lands on PATH, the docker.exe
-# feature, the refusal that guards it, and uninstall.
+# feature, the refusal that guards it, uninstall, and the optional Hyper-V
+# workspace (service, group, a machine, upgrade, removal) against a stand-in
+# for Hyper-V.
 #
-#   pwsh test/msi.ps1 -Msi dist/remote-docker_0.6.0_windows_amd64.msi
+#   pwsh test/msi.ps1 -Msi dist/remote-docker_0.6.0_windows_amd64.msi `
+#     -StandinMsi dist/standin_0.0.1.msi -StandinNextMsi dist/standin_0.0.2.msi
 #
 # Runs elevated and makes machine-wide changes: it installs to Program Files,
 # edits the system PATH, and moves any docker.exe it finds out of the way so the
@@ -10,11 +13,17 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][string]$Msi
+  [Parameter(Mandatory = $true)][string]$Msi,
+  # The same package built with the rdstandin tag (a stand-in for Hyper-V), at
+  # two versions, for the Hyper-V workspace sections and the upgrade.
+  [Parameter(Mandatory = $true)][string]$StandinMsi,
+  [Parameter(Mandatory = $true)][string]$StandinNextMsi
 )
 
 $ErrorActionPreference = 'Stop'
 $Msi = (Resolve-Path $Msi).Path
+$StandinMsi = (Resolve-Path $StandinMsi).Path
+$StandinNextMsi = (Resolve-Path $StandinNextMsi).Path
 $Temp = [System.IO.Path]::GetTempPath()
 $InstallDir = Join-Path $env:ProgramFiles 'remote-docker'
 $Exe = Join-Path $InstallDir 'remote-docker.exe'
@@ -212,6 +221,262 @@ Invoke-Msi @('/x', $Msi) 'uninstall-override' 0
 Assert-NotInstalled
 
 Remove-Item $stub -Force
+
+# ===========================================================================
+# The optional Hyper-V workspace (ADR 0048 amendment, ADR 0055). The package is
+# built with the rdstandin tag: the real service, pipe, group and installer
+# around a stand-in for Hyper-V, which logs create/start/stop/destroy under
+# %ProgramData%\remote-docker-standin (beside the service's directory, so the
+# teardown that deletes that one leaves the log to read). HYPERVSERVICE names
+# the Windows service whose presence means Hyper-V is enabled; msiserver stands
+# in for vmms here.
+
+$Service = 'remote-docker-machines'
+$Group = 'remote-docker-users'
+$ServiceDir = Join-Path $env:ProgramData 'remote-docker'
+$StandinDir = Join-Path $env:ProgramData 'remote-docker-standin'
+$OpsLog = Join-Path $StandinDir 'ops.log'
+$MyConfig = Join-Path $env:USERPROFILE '.remote-docker.json'
+$HyperVOn = @('HYPERVWORKSPACE=1', 'HYPERVSERVICE=msiserver')
+$RegKey = 'HKLM:\SOFTWARE\lhns\remote-docker'
+
+function ServiceExists() {
+  $null = & sc.exe query $Service 2>&1
+  return ($LASTEXITCODE -eq 0)
+}
+
+function GroupText() {
+  $text = (& net.exe localgroup $Group 2>&1 | Out-String)
+  return @{ Exists = ($LASTEXITCODE -eq 0); Text = $text }
+}
+
+function Ops() {
+  if (-not (Test-Path $OpsLog)) { return @() }
+  return @(Get-Content $OpsLog | ForEach-Object { ($_ -split ' ')[1..2] -join ' ' })
+}
+
+function ConfigEntry([string]$Path, [string]$Name) {
+  if (-not (Test-Path $Path)) { return $null }
+  $json = Get-Content $Path -Raw | ConvertFrom-Json
+  if (-not $json.workspaces) { return $null }
+  return $json.workspaces.$Name
+}
+
+function ContextNames() {
+  return (& $script:Tool context ls --format '{{.Name}}' 2>&1 | Out-String)
+}
+
+function Assert-NoHyperV([string]$What) {
+  if (ServiceExists) { Fail "$What : the service $Service exists" }
+  if ((GroupText).Exists) { Fail "$What : the group $Group exists" }
+  if (Test-Path $ServiceDir) { Fail "$What : $ServiceDir exists" }
+  if (Get-ItemProperty $RegKey -Name HyperVWorkspace -ErrorAction SilentlyContinue) {
+    Fail "$What : the remembered HyperVWorkspace value is still in the registry"
+  }
+  if (ConfigEntry $MyConfig 'hyperv') { Fail "$What : $MyConfig still has a hyperv entry" }
+  Ok "$What : no service, no group, no $ServiceDir, no registry flag, no config entry"
+}
+
+function Log-Of([string]$Tag) { return Get-Content (Join-Path $LogDir "$Tag.log") -Raw }
+
+# A tool that outlives the uninstall, for looking at the docker contexts after.
+$Tool = Join-Path $Temp 'remote-docker-tool.exe'
+
+if (Test-Path $StandinDir) { Remove-Item -Recurse -Force $StandinDir }
+
+# ---------------------------------------------------------------------------
+Section '10. what this runner has'
+
+$vmms = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\vmms' -ErrorAction SilentlyContinue
+if ($vmms) { Ok 'this runner has the vmms service key (so Hyper-V is "enabled" here)' }
+else { Ok 'this runner has no vmms service key' }
+
+# ---------------------------------------------------------------------------
+Section '11. HYPERVWORKSPACE=1 without Hyper-V is refused with the way to enable it'
+
+Invoke-Msi @('/i', $StandinMsi, 'HYPERVWORKSPACE=1', 'HYPERVSERVICE=nosuchservice') 'hyperv-absent' 1603
+$log = Log-Of 'hyperv-absent'
+if ($log -notmatch 'Hyper-V is not enabled on this computer') { Fail 'the refusal message is not in the log' }
+if ($log -notmatch 'Enable-WindowsOptionalFeature') { Fail 'the refusal does not give the command that enables Hyper-V' }
+Ok 'refused, and the message names the command'
+Assert-NotInstalled
+Assert-NoHyperV 'after the refusal'
+
+# ---------------------------------------------------------------------------
+Section '12. a refused workspace name fails the install, reaches the log, and rolls everything back'
+
+Invoke-Msi (@('/i', $StandinMsi) + $HyperVOn + @('WORKSPACENAME=INVALID')) 'hyperv-badname' 1603
+$log = Log-Of 'hyperv-badname'
+if ($log -notmatch 'not a valid machine name') {
+  Fail "create's own message is not in the log; tail: $($log.Substring([Math]::Max(0, $log.Length - 3000)))"
+}
+Ok 'the message from create is in the msiexec log'
+Assert-NotInstalled
+Assert-NoHyperV 'after the rollback'
+if ((Ops) -contains 'create INVALID') { Fail 'a machine was created under the refused name' }
+
+# ---------------------------------------------------------------------------
+Section '13. with the box unticked nothing of the workspace is installed'
+
+Invoke-Msi @('/i', $StandinMsi) 'standin-off' 0
+Assert-NoHyperV 'checkbox off'
+Invoke-Msi @('/x', $StandinMsi) 'standin-off-uninstall' 0
+Assert-NotInstalled
+Assert-NoHyperV 'checkbox off, after uninstall'
+
+# ---------------------------------------------------------------------------
+Section '14. ticking it installs the service, the group, the machine and the context'
+
+Invoke-Msi (@('/i', $StandinMsi) + $HyperVOn) 'hyperv-install' 0
+
+$qc = (& sc.exe qc $Service | Out-String)
+if ($qc -notmatch 'DEMAND_START') { Fail "the service is not demand start: $qc" }
+if ($qc -notmatch 'LocalSystem') { Fail "the service does not run as LocalSystem: $qc" }
+if ($qc -notmatch 'remote machine service run') { Fail "the service does not run the service command: $qc" }
+Ok 'the service is LocalSystem, demand start, running `remote machine service run`'
+
+$sd = (& sc.exe sdshow $Service | Out-String).Trim()
+if ($sd -notmatch '\(A;;[A-Z]*RP[A-Z]*;;;AU\)') { Fail "Authenticated Users cannot start the service: $sd" }
+if ($sd -match '\(A;;[A-Z]*(WD|DC|SD|WO)[A-Z]*;;;AU\)') { Fail "Authenticated Users hold more than start and query: $sd" }
+if ($sd -notmatch ';;;SY\)' -or $sd -notmatch ';;;BA\)') { Fail "SYSTEM or Administrators lost their rights: $sd" }
+Ok "Authenticated Users may start it and nothing more: $sd"
+
+$g = GroupText
+if (-not $g.Exists) { Fail "the group $Group does not exist" }
+if ($g.Text -notmatch [regex]::Escape($env:USERNAME)) { Fail "the installing user is not in ${Group}: $($g.Text)" }
+Ok "$Group exists with $env:USERNAME in it"
+
+$entry = ConfigEntry $MyConfig 'hyperv'
+if (-not $entry) { Fail "no hyperv entry in $MyConfig; the create ran as another user? $(Get-Content $MyConfig -Raw -ErrorAction SilentlyContinue)" }
+if ($entry.machine.broker -ne $true) { Fail "the entry is not brokered: $($entry | ConvertTo-Json -Depth 5)" }
+if ($entry.machine.image -notmatch '^ghcr\.io/lhns/remote-docker-workspace:0\.0\.1$') { Fail "unexpected image: $($entry.machine.image)" }
+Ok "$MyConfig has the hyperv entry with broker: true and the release's image"
+
+Copy-Item $Exe $Tool -Force
+$contexts = ContextNames
+if ($contexts -notmatch '(?m)^hyperv\s*$') { Fail "no docker context named hyperv: $contexts" }
+Ok 'the docker context exists'
+
+$ops = Ops
+if (@($ops | Where-Object { $_ -eq 'create hyperv' }).Count -ne 1) { Fail "expected one 'create hyperv'; the stand-in log has: $($ops -join '; ')" }
+Ok 'the stand-in saw exactly one create'
+
+$state = (Get-ItemProperty $RegKey)
+if ($state.HyperVWorkspace -ne '1' -or $state.WorkspaceName -ne 'hyperv') { Fail "the remembered state is wrong: $($state | Out-String)" }
+Ok 'the flag and the name are remembered for upgrade and uninstall'
+
+# ---------------------------------------------------------------------------
+Section '15. a standard user is refused until added to the group, with no new logon'
+
+$Pub = 'C:\Users\Public\rdtest'
+New-Item -ItemType Directory -Force -Path $Pub | Out-Null
+& icacls.exe $Pub /grant 'Everyone:(OI)(CI)M' | Out-Null
+$StdName = 'rdstd'
+$StdPass = 'Rd-Std-' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '!A1'
+if (Get-LocalUser -Name $StdName -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $StdName }
+$null = New-LocalUser -Name $StdName -Password (ConvertTo-SecureString $StdPass -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires
+Add-LocalGroupMember -Group 'Users' -Member $StdName
+if ((Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like "*\$StdName" })) { Fail "$StdName is an administrator" }
+Ok "created the standard user $StdName"
+$cred = New-Object System.Management.Automation.PSCredential($StdName, (ConvertTo-SecureString $StdPass -AsPlainText -Force))
+
+# One process that keeps its logon token across the group change: it asks, waits
+# for the signal, and asks again. Two Start-Process calls would be two logons,
+# and the second token would already carry the group.
+$liveScript = Join-Path $Pub 'live.ps1'
+Set-Content -Path $liveScript -Encoding ascii -Value @'
+param($Exe, $Dir)
+& $Exe remote machine create other --backend hyperv *> "$Dir\first.out"
+"$LASTEXITCODE" | Set-Content "$Dir\first.code"
+$end = (Get-Date).AddSeconds(240)
+while (-not (Test-Path "$Dir\go") -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 500 }
+& $Exe remote machine create other --backend hyperv *> "$Dir\second.out"
+"$LASTEXITCODE" | Set-Content "$Dir\second.code"
+'@
+Remove-Item "$Pub\first.*", "$Pub\second.*", "$Pub\go" -ErrorAction SilentlyContinue
+
+$null = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
+  -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, $Exe, $Pub) -WindowStyle Hidden -PassThru
+
+$deadline = (Get-Date).AddSeconds(120)
+while (-not (Test-Path "$Pub\first.code") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+if (-not (Test-Path "$Pub\first.code")) { Fail 'the standard user process never reported (did Start-Process -Credential work here?)' }
+$first = (Get-Content "$Pub\first.out" -Raw)
+if ((Get-Content "$Pub\first.code").Trim() -eq '0') { Fail "a user outside the group was served: $first" }
+if ($first -notmatch 'remote-docker-users') { Fail "the refusal does not name the group: $first" }
+Ok "refused, and it names the group: $($first.Trim())"
+
+& net.exe localgroup $Group $StdName /add | Out-Null
+if ($LASTEXITCODE -ne 0) { Fail "adding $StdName to $Group failed" }
+Set-Content "$Pub\go" 'go'
+$deadline = (Get-Date).AddSeconds(240)
+while (-not (Test-Path "$Pub\second.code") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+if (-not (Test-Path "$Pub\second.code")) { Fail 'the second request never finished' }
+$second = (Get-Content "$Pub\second.out" -Raw)
+if ((Get-Content "$Pub\second.code").Trim() -ne '0') { Fail "the same process, now in the group, was refused: $second" }
+Ok 'the same logon, added to the group a moment ago, is served'
+if (@(Ops | Where-Object { $_ -eq 'create other' }).Count -ne 1) { Fail "expected one 'create other': $((Ops) -join '; ')" }
+
+# ---------------------------------------------------------------------------
+Section '16. a stopped service is started by a standard user'
+
+Stop-Service $Service -Force
+(Get-Service $Service).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
+Ok 'stopped the service'
+Remove-Item "$Pub\stop.*" -ErrorAction SilentlyContinue
+$p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
+  -ArgumentList @('remote', 'machine', 'stop', 'other') -WindowStyle Hidden -PassThru `
+  -RedirectStandardOutput "$Pub\stop.out" -RedirectStandardError "$Pub\stop.err"
+$null = $p.WaitForExit(180000)
+$out = (Get-Content "$Pub\stop.out", "$Pub\stop.err" -Raw -ErrorAction SilentlyContinue) -join ''
+if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "the standard user could not use a stopped service; output: $out" }
+if ((Get-Service $Service).Status -ne 'Running') { Fail 'the command succeeded but the service is not running' }
+Ok 'the client started the service (SERVICE_START for Authenticated Users) and the command went through'
+
+# ---------------------------------------------------------------------------
+Section '17. an upgrade touches nothing'
+
+$hashRecords = (Get-FileHash (Join-Path $ServiceDir 'machines.json')).Hash
+$hashConfig = (Get-FileHash $MyConfig).Hash
+$opsBefore = (Ops) -join "`n"
+$membersBefore = (GroupText).Text
+
+Invoke-Msi @('/i', $StandinNextMsi) 'hyperv-upgrade' 0
+
+$ver = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+  Where-Object { $_.DisplayName -eq 'remote-docker' }).DisplayVersion
+if ($ver -ne '0.0.2') { Fail "after the upgrade the installed version is '$ver', not 0.0.2" }
+Ok 'version 0.0.2 is installed'
+if (-not (ServiceExists)) { Fail 'the service is gone after the upgrade' }
+$sd = (& sc.exe sdshow $Service | Out-String).Trim()
+if ($sd -notmatch '\(A;;[A-Z]*RP[A-Z]*;;;AU\)') { Fail "the upgraded service lost the Authenticated Users grant: $sd" }
+Ok 'the service is installed again, with the grant'
+if ((Get-FileHash (Join-Path $ServiceDir 'machines.json')).Hash -ne $hashRecords) { Fail 'machines.json changed' }
+if ((Get-FileHash $MyConfig).Hash -ne $hashConfig) { Fail "$MyConfig changed" }
+if ((GroupText).Text -ne $membersBefore) { Fail "the group changed: $((GroupText).Text)" }
+if (((Ops) -join "`n") -ne $opsBefore) { Fail "the stand-in saw operations during the upgrade: $((Ops) -join '; ')" }
+Ok 'the record, the config entry, the group and the machine are untouched; no destroy, no second create'
+Start-Service $Service
+Ok 'the reinstalled service starts'
+
+# ---------------------------------------------------------------------------
+Section '18. uninstall deletes the workspace and everything setup made'
+
+Invoke-Msi @('/x', $StandinNextMsi) 'hyperv-uninstall' 0
+Assert-NotInstalled
+$ops = Ops
+foreach ($want in 'destroy hyperv', 'destroy other') {
+  if ($ops -notcontains $want) { Fail "no '$want' in the stand-in log: $($ops -join '; ')" }
+}
+Ok "both machines were destroyed (hyperv by 'remote rm', other by the teardown): $($ops -join '; ')"
+Assert-NoHyperV 'after uninstall'
+if (Get-ItemProperty "$RegKey\Service" -ErrorAction SilentlyContinue) { Fail 'the setup record is still in the registry' }
+$contexts = ContextNames
+if ($contexts -match '(?m)^hyperv\s*$') { Fail "the docker context hyperv is still there: $contexts" }
+Ok 'the docker context is gone'
+
+Remove-LocalUser -Name $StdName -ErrorAction SilentlyContinue
+Remove-Item $Tool -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host 'all sections passed' -ForegroundColor Green

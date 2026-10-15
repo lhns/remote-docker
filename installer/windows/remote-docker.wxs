@@ -80,6 +80,150 @@
               Condition="NOT Installed AND &amp;DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
     </InstallExecuteSequence>
 
+    <!--
+      THE HYPER-V WORKSPACE (ADR 0048 amendment, ADR 0055). Optional, off by
+      default: a service, a group and one VM, set up by the program itself.
+
+      Conditions, written out because a property set before the dialog is
+      stale after it:
+        fresh install  NOT Installed AND NOT WIX_UPGRADE_DETECTED AND HYPERVWORKSPACE="1"
+        wanted         the above, or HYPERVINSTALLED (remembered below), which
+                       is how an upgrade, whose command line does not repeat
+                       HYPERVWORKSPACE=1, still gets its service back
+      An upgrade removes the old product first and reinstalls the service, and
+      runs no create, setup or teardown on either side.
+    -->
+    <Property Id="HYPERVWORKSPACE" Secure="yes" />
+    <Property Id="WORKSPACENAME" Value="hyperv" Secure="yes" />
+    <Property Id="WORKSPACEIMAGE" Value="ghcr.io/lhns/remote-docker-workspace:$(Version)" Secure="yes" />
+    <Property Id="WORKSPACEPROXY" Secure="yes" />
+    <Property Id="WORKSPACEKEEP" Secure="yes" />
+
+    <!-- The Windows service whose presence means Hyper-V is enabled. Only a test names another. -->
+    <Property Id="HYPERVSERVICE" Value="vmms" Secure="yes" />
+    <Property Id="HYPERVPRESENT" Secure="yes">
+      <RegistrySearch Id="RS.HyperV" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\[HYPERVSERVICE]"
+                      Name="ImagePath" Type="raw" />
+    </Property>
+
+    <!-- What an earlier install of this product recorded (component C.HyperV). -->
+    <Property Id="HYPERVINSTALLED" Secure="yes">
+      <RegistrySearch Id="RS.HyperVInstalled" Root="HKLM" Key="Software\lhns\remote-docker"
+                      Name="HyperVWorkspace" Type="raw" />
+    </Property>
+    <Property Id="REMEMBEREDNAME" Secure="yes">
+      <RegistrySearch Id="RS.WorkspaceName" Root="HKLM" Key="Software\lhns\remote-docker"
+                      Name="WorkspaceName" Type="raw" />
+    </Property>
+
+    <SetProperty Id="WORKSPACEKEEP" Value="[WORKSPACENAME]" Before="CostInitialize" Sequence="both"
+                 Condition="NOT HYPERVINSTALLED" />
+    <CustomAction Id="KeepRememberedName" Property="WORKSPACEKEEP" Value="[REMEMBEREDNAME]" />
+    <InstallUISequence>
+      <Custom Action="KeepRememberedName" Before="CostInitialize" Condition="HYPERVINSTALLED" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="KeepRememberedName" Before="CostInitialize" Condition="HYPERVINSTALLED" />
+    </InstallExecuteSequence>
+
+    <CustomAction Id="RefuseNoHyperV"
+                  Error="Hyper-V is not enabled on this computer, so a Hyper-V workspace cannot be set up.&#xA;fix: in an administrator PowerShell run `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All`, restart, and run this installer again." />
+    <InstallUISequence>
+      <Custom Action="RefuseNoHyperV" After="CostFinalize"
+              Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT HYPERVINSTALLED AND HYPERVWORKSPACE=&quot;1&quot; AND NOT HYPERVPRESENT" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="RefuseNoHyperV" After="CostFinalize"
+              Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT HYPERVINSTALLED AND HYPERVWORKSPACE=&quot;1&quot; AND NOT HYPERVPRESENT" />
+    </InstallExecuteSequence>
+
+    <?define Fresh = 'NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT HYPERVINSTALLED AND HYPERVWORKSPACE="1"' ?>
+    <?define Wanted = 'NOT Installed AND (HYPERVINSTALLED OR (NOT WIX_UPGRADE_DETECTED AND HYPERVWORKSPACE="1"))' ?>
+    <?define Leaving = 'REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND HYPERVINSTALLED' ?>
+    <?define Exe = '"[INSTALLFOLDER]remote-docker.exe"' ?>
+    <?define Sc = '"[System64Folder]sc.exe"' ?>
+
+    <!--
+      The service is made with sc.exe and not ServiceInstall: that takes the
+      service binary from the KEY FILE of its component, which is the exe in
+      the always-installed component, and the service must exist only when
+      the box was ticked. Its security descriptor is the stock one for a
+      LocalSystem service plus Authenticated Users: start, query, interrogate.
+      Nothing else, so a standard user can start it after a reboot and can
+      stop, reconfigure or delete nothing.
+
+      Every action runs the program's own hidden commands (client
+      machine_service.go) through WixQuietExec, which writes the command's
+      output into the log and fails the action on a non-zero exit.
+    -->
+    <!-- Install, in script order. Each rollback precedes the action it undoes. -->
+    <CustomAction Id="R.SvcDelete" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="CA.SvcCreate" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="CA.SvcSdset" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="R.Teardown" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="R.StopSvc" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="CA.Setup" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="R.Rm" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="rollback" Impersonate="yes" Return="ignore" />
+    <!-- As the installing user, so the entry, keys and docker context are theirs. -->
+    <CustomAction Id="CA.Create" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="yes" Return="check" />
+
+    <!-- Uninstall. Ignored on failure: an uninstall that cannot finish is worse than a leftover. -->
+    <CustomAction Id="CA.Rm" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="CA.Teardown" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <SetProperty Id="R.SvcDelete" Value="$(Sc) delete remote-docker-machines" Before="R.SvcDelete" Sequence="execute"
+                 Condition="$(Wanted)" />
+    <SetProperty Id="CA.SvcCreate" Before="CA.SvcCreate" Sequence="execute" Condition="$(Wanted)"
+                 Value="$(Sc) create remote-docker-machines binPath= &quot;\&quot;[INSTALLFOLDER]remote-docker.exe\&quot; remote machine service run&quot; start= demand obj= LocalSystem DisplayName= &quot;remote-docker Hyper-V machines&quot;" />
+    <SetProperty Id="CA.SvcSdset" Before="CA.SvcSdset" Sequence="execute" Condition="$(Wanted)"
+                 Value="$(Sc) sdset remote-docker-machines D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)(A;;CCLCSWRPLORC;;;AU)" />
+    <SetProperty Id="R.Teardown" Value="$(Exe) remote machine service teardown" Before="R.Teardown" Sequence="execute"
+                 Condition="$(Fresh)" />
+    <SetProperty Id="R.StopSvc" Value="&quot;[System64Folder]net.exe&quot; stop remote-docker-machines" Before="R.StopSvc" Sequence="execute"
+                 Condition="$(Fresh)" />
+    <SetProperty Id="CA.Setup" Value="$(Exe) remote machine service setup --user-sid [UserSID]" Before="CA.Setup" Sequence="execute"
+                 Condition="$(Fresh)" />
+    <SetProperty Id="R.Rm" Value="$(Exe) remote rm -f &quot;[WORKSPACENAME]&quot;" Before="R.Rm" Sequence="execute"
+                 Condition="$(Fresh)" />
+    <SetProperty Id="PROXYARG" Value="--proxy &quot;[WORKSPACEPROXY]&quot;" Before="CostInitialize" Sequence="execute"
+                 Condition="WORKSPACEPROXY" />
+    <SetProperty Id="CA.Create" Before="CA.Create" Sequence="execute" Condition="$(Fresh)"
+                 Value="$(Exe) remote machine create &quot;[WORKSPACENAME]&quot; --backend hyperv --image &quot;[WORKSPACEIMAGE]&quot; [PROXYARG]" />
+    <SetProperty Id="CA.Rm" Value="$(Exe) remote rm -f &quot;[REMEMBEREDNAME]&quot;" Before="CA.Rm" Sequence="execute"
+                 Condition="$(Leaving)" />
+    <SetProperty Id="CA.Teardown" Value="$(Exe) remote machine service teardown" Before="CA.Teardown" Sequence="execute"
+                 Condition="$(Leaving)" />
+
+    <InstallExecuteSequence>
+      <Custom Action="R.SvcDelete" After="InstallFiles" Condition="$(Wanted)" />
+      <Custom Action="CA.SvcCreate" After="R.SvcDelete" Condition="$(Wanted)" />
+      <Custom Action="CA.SvcSdset" After="CA.SvcCreate" Condition="$(Wanted)" />
+      <Custom Action="R.Teardown" After="CA.SvcSdset" Condition="$(Fresh)" />
+      <Custom Action="R.StopSvc" After="R.Teardown" Condition="$(Fresh)" />
+      <Custom Action="CA.Setup" After="R.StopSvc" Condition="$(Fresh)" />
+      <Custom Action="R.Rm" After="CA.Setup" Condition="$(Fresh)" />
+      <Custom Action="CA.Create" After="R.Rm" Condition="$(Fresh)" />
+
+      <Custom Action="CA.Rm" Before="StopServices" Condition="$(Leaving)" />
+      <Custom Action="CA.Teardown" After="DeleteServices" Condition="$(Leaving)" />
+    </InstallExecuteSequence>
+
+    <UI>
+      <ProgressText Action="CA.Create" Message="Creating the Hyper-V workspace; downloading Flatcar may take minutes" />
+      <ProgressText Action="CA.SvcCreate" Message="Installing the Hyper-V service" />
+      <ProgressText Action="CA.Rm" Message="Removing the Hyper-V workspace" />
+    </UI>
+
     <Feature Id="Main" Title="remote-docker" Level="1" AllowAbsent="no" AllowAdvertise="no"
              Description="The remote-docker command, added to the system PATH.">
       <Component Id="C.RemoteDockerExe" Directory="INSTALLFOLDER">
@@ -95,6 +239,21 @@
                        Type="integer" Value="1" KeyPath="yes" />
         <Environment Id="E.Path" Name="PATH" Value="[INSTALLFOLDER]"
                      Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+
+      <!--
+        Present exactly while the Hyper-V workspace is: the remembered flag and
+        name that survive an upgrade, and the service's stop and removal (the
+        service itself is made by CA.SvcCreate). A string "1" and not a DWORD,
+        which a RegistrySearch reads back as "#1".
+      -->
+      <Component Id="C.HyperV" Directory="INSTALLFOLDER"
+                 Condition="HYPERVINSTALLED OR (NOT Installed AND NOT WIX_UPGRADE_DETECTED AND HYPERVWORKSPACE=&quot;1&quot;)">
+        <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="HyperVWorkspace"
+                       Type="string" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="WorkspaceName"
+                       Type="string" Value="[WORKSPACEKEEP]" />
+        <ServiceControl Id="SC.Machines" Name="remote-docker-machines" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
 
       <!--
@@ -117,6 +276,50 @@
     </Feature>
 
     <ui:WixUI Id="WixUI_FeatureTree" />
+
+    <!--
+      One dialog after the feature tree, on a fresh install only. The stock
+      sequence already sends CustomizeDlg Next to VerifyReadyDlg at Order 1;
+      the later NewDialog at Order 2 wins, which is how WixUI is customised
+      without copying it. Built here, never clicked by CI.
+    -->
+    <UI>
+      <Dialog Id="HyperVDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Hyper-V workspace" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="A Linux machine on this computer, ready to use when setup ends." />
+
+        <Control Id="Enable" Type="CheckBox" X="20" Y="54" Width="330" Height="18" Property="HYPERVWORKSPACE"
+                 CheckBoxValue="1" Text="Set up a Hyper-V workspace" DisableCondition="NOT HYPERVPRESENT" />
+        <Control Id="NoHyperV" Type="Text" X="38" Y="74" Width="320" Height="30" NoPrefix="yes"
+                 Text="Hyper-V is not enabled on this computer. In an administrator PowerShell run: Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All" HideCondition="HYPERVPRESENT" />
+
+        <Control Id="NameLabel" Type="Text" X="38" Y="110" Width="90" Height="15" NoPrefix="yes" Text="Workspace name" />
+        <Control Id="Name" Type="Edit" X="130" Y="108" Width="140" Height="18" Property="WORKSPACENAME" Text="{80}" DisableCondition="NOT HYPERVWORKSPACE = &quot;1&quot;" />
+        <Control Id="ImageLabel" Type="Text" X="38" Y="134" Width="90" Height="15" NoPrefix="yes" Text="Workspace image" />
+        <Control Id="Image" Type="Edit" X="130" Y="132" Width="225" Height="18" Property="WORKSPACEIMAGE" Text="{250}" DisableCondition="NOT HYPERVWORKSPACE = &quot;1&quot;" />
+        <Control Id="ProxyLabel" Type="Text" X="38" Y="158" Width="90" Height="15" NoPrefix="yes" Text="Proxy (optional)" />
+        <Control Id="Proxy" Type="Edit" X="130" Y="156" Width="225" Height="18" Property="WORKSPACEPROXY" Text="{250}" DisableCondition="NOT HYPERVWORKSPACE = &quot;1&quot;" />
+        <Control Id="Warning" Type="Text" X="20" Y="190" Width="335" Height="30" NoPrefix="yes"
+                 Text="Uninstalling deletes this workspace's containers, images and volumes." />
+      </Dialog>
+
+      <Publish Dialog="CustomizeDlg" Control="Next" Event="NewDialog" Value="HyperVDlg" Order="2"
+               Condition="NOT Installed AND NOT HYPERVINSTALLED" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="HyperVDlg" Order="4"
+               Condition="NOT Installed AND NOT HYPERVINSTALLED" />
+      <Publish Dialog="HyperVDlg" Control="Back" Event="NewDialog" Value="CustomizeDlg" />
+      <Publish Dialog="HyperVDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+    </UI>
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
   </Package>
 </Wix>

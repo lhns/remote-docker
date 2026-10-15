@@ -136,7 +136,7 @@ func BrokerPurgeLocal(ctx context.Context) ([]string, error) {
 	if err != nil || root == "" {
 		return nil, err
 	}
-	srv := newBrokerServer(serviceHyperV(root), filepath.Join(root, "machines.json"), nil, nil, nil)
+	srv := newBrokerServer(serviceExecutor(root), filepath.Join(root, "machines.json"), nil, nil, nil)
 	done, errs := srv.purgeAll(ctx)
 	return done, errors.Join(errs...)
 }
@@ -150,7 +150,7 @@ func BrokerTeardown(ctx context.Context) error {
 
 	root, err := checkedRoot()
 	if err == nil && root != "" {
-		srv := newBrokerServer(serviceHyperV(root), filepath.Join(root, "machines.json"), nil, nil, nil)
+		srv := newBrokerServer(serviceExecutor(root), filepath.Join(root, "machines.json"), nil, nil, nil)
 		_, perrs := srv.purgeAll(ctx)
 		err = errors.Join(perrs...)
 	}
