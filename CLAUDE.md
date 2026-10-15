@@ -978,8 +978,9 @@ premise of the project, and it applies to building it too. So:
   for the caller's SID in `machines.json`; `create` refuses a taken name
   whoever owns it. A machine's files are `machines\<name>` under ProgramData
   with a validated name, never anything from a request; the directory is born
-  with a protected DACL. The client verifies the pipe is owned by SYSTEM or
-  Administrators before sending (a squatted pipe would receive the host key).
+  with a protected DACL. The pipe's DACL withholds pipe-instance creation from users and the client
+  checks the answering process is the service's before sending (a squatted
+  pipe would receive the host key; the pipe's owner proves nothing).
   A machine created through it has `broker: true` and every later operation
   goes the same way (`config.Machine.BackendKey`). Real Hyper-V behind it is
   by hand only; a real named pipe with a stand-in is CI.

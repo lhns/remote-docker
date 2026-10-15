@@ -1406,7 +1406,7 @@ sequenceDiagram
     participant S as service (SYSTEM)
     participant H as Hyper-V, ProgramData
 
-    C->>P: connect (client checks the pipe's owner first)
+    C->>P: connect (client checks who answers is the service)
     P->>S: caller identified from the pipe, nothing read
     S->>S: SYSTEM or admin, else live member of remote-docker-users
     S-->>C: refused, request never read
@@ -1417,7 +1417,7 @@ sequenceDiagram
 ```
 
 **E — a caller who is not allowed (1).** The pipe grants Authenticated Users
-read and write and denies network logons, so anyone at the keyboard connects.
+read and write (not instance creation) and denies network logons, so anyone at the keyboard connects.
 What stops them is the check inside: the caller's SID comes from
 impersonating the pipe client, never from a request, and a SID that is
 neither SYSTEM, an enabled Administrators token nor a direct member of
@@ -1449,9 +1449,13 @@ own it and it is not a reparse point. *Covered by*
 `TestDirectoryThatIsAReparsePointIsRefused`.
 
 **S — a squatted pipe (1).** With the service stopped, a user can create a pipe
-of the same name and receive the next request, private host key included. The
-client reads the pipe's owner before sending and refuses anything but SYSTEM
-or Administrators. *Covered by* `TestBrokerClientRefusesAPipeNotOwnedBySystem`.
+of the same name and receive the next request, private host key included; with
+it running, a second instance of the pipe would be handed connections too. The
+DACL gives Authenticated Users no right to create an instance (`0x12019b`, not
+`GENERIC_WRITE`), and the client compares the process answering on the pipe
+with the service's own process id before sending anything. *Covered by*
+`TestBrokerClientRefusesAPipeTheServiceDoesNotServe` and
+`TestBrokerConstantsArePinned`.
 
 **D — a member (3).** Eight concurrent connections, no per-user quota. One
 member can fill the disk with machines. *Accepted*: members are users an

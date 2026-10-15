@@ -26,7 +26,7 @@
 | Piece | Choice |
 |---|---|
 | Service | `remote-docker-machines`, LocalSystem, demand start; `remote machine service run` (hidden). The installer grants Authenticated Users `SERVICE_START` and nothing else on it |
-| Pipe | `\\.\pipe\remote-docker-machines`, `D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`: network logons denied first, SYSTEM and Administrators full, Authenticated Users read/write |
+| Pipe | `\\.\pipe\remote-docker-machines`, `D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;AU)`: network logons denied first, SYSTEM and Administrators full, Authenticated Users read and write WITHOUT `FILE_CREATE_PIPE_INSTANCE` (`0x4`, which is what `GENERIC_WRITE` includes on a pipe), so no user can add an instance of the running pipe |
 | Identity | `ImpersonateNamedPipeClient` on a locked thread, `OpenThreadToken`, the token's user SID and whether Administrators is ENABLED in it, `RevertToSelf`. Nothing is read from the pipe. The SID is never in a request |
 | Authorisation | SYSTEM or an Administrators-enabled token, or a SID that is a DIRECT member of local group `remote-docker-users`, read with `NetLocalGroupGetMembers` (level 0, SIDs) on EVERY connection. A group that cannot be read allows administrators only |
 | Operations | `available look create start stop address retract destroy`, plus `purge` (administrators only). JSON, one request and one answer per connection, unknown fields refused. No op takes a path, a script or a command |
@@ -66,9 +66,12 @@ fix, not worked around.
   Administrators own it and it is not a reparse point; otherwise it refuses to
   start and writes why to `%TEMP%\remote-docker-service.log` (SYSTEM's).
 - **A squatted pipe.** While the service is stopped a user can create a pipe
-  of the same name and be sent a request, private host key included. The
-  client therefore checks the pipe's OWNER before sending: only SYSTEM or
-  Administrators.
+  of the same name, and while it runs a second instance of it if the DACL lets
+  them; either would be sent a request, private host key included. The DACL
+  withholds instance creation, and the client compares the process answering
+  on the pipe (`GetNamedPipeServerProcessId`) with the service's own process
+  id from the service manager before sending anything. The pipe's owner would
+  not do: it belongs to the name, not to the instance.
 - **Proxy.** The proxy is the caller's choice, as it is on the direct path;
   what is pinned is the Flatcar URL and its SHA512, so a proxy cannot change
   the image. A caller's proxy URL is also visible in the machine they created.

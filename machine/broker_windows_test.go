@@ -4,6 +4,7 @@ package machine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -27,6 +29,13 @@ func self(t *testing.T) brokerCaller {
 	return c
 }
 
+// testPipeSDDL is the service's descriptor plus full control for this test
+// process, which stands in for SYSTEM as the pipe's creator.
+func testPipeSDDL(t *testing.T) string {
+	t.Helper()
+	return brokerPipeSDDL + "(A;;GA;;;" + self(t).SID + ")"
+}
+
 // A real named pipe, the real SID read off it and the real SDDL, with a fake
 // Hyper-V behind it.
 func TestBrokerOverARealNamedPipe(t *testing.T) {
@@ -34,7 +43,7 @@ func TestBrokerOverARealNamedPipe(t *testing.T) {
 	ctx := context.Background()
 
 	path := fmt.Sprintf(`\\.\pipe\remote-docker-test-%d`, os.Getpid())
-	l, err := listenPipe(path)
+	l, err := listenPipe(path, testPipeSDDL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,13 +61,19 @@ func TestBrokerOverARealNamedPipe(t *testing.T) {
 	defer cancel()
 	go func() { _ = srv.Serve(sctx, l) }()
 
-	// This process is the "service" here, so its pipe is owned by this user and
-	// not by SYSTEM; the real check is exercised below.
-	trusted := pipeServerTrusted
-	pipeServerTrusted = func(*windows.SID) bool { return true }
-	defer func() { pipeServerTrusted = trusted }()
+	// This process is the "service" here, so it stands in for the service's pid
+	// and the client's check of who answers still runs on the real pipe.
+	savedPID := servicePID
+	servicePID = func() (uint32, error) { return uint32(os.Getpid()), nil }
+	defer func() { servicePID = savedPID }()
 
-	ex := brokerExecutor{dial: func(ctx context.Context) (net.Conn, error) { return dialPipe(ctx, path) }}
+	ex := brokerExecutor{dial: func(ctx context.Context) (net.Conn, error) {
+		conn, err := dialPipe(ctx, path)
+		// Connected, and silent for a moment before the request: the service
+		// must be able to tell who this is without any bytes pending.
+		time.Sleep(100 * time.Millisecond)
+		return conn, err
+	}}
 
 	if !me.Admin {
 		// Not in the group: refused, and told so, over the real pipe.
@@ -88,27 +103,36 @@ func TestBrokerOverARealNamedPipe(t *testing.T) {
 	}
 }
 
-// A pipe created by an ordinary user is not the service's, and the client
-// refuses to send it anything.
-func TestBrokerClientRefusesAPipeNotOwnedBySystem(t *testing.T) {
-	if self(t).Admin {
-		t.Skip("an elevated token's pipes are owned by Administrators, which is trusted")
-	}
+// A pipe that something else serves is refused before anything is sent: with
+// the service stopped, and with it running but answered by another process.
+func TestBrokerClientRefusesAPipeTheServiceDoesNotServe(t *testing.T) {
 	path := fmt.Sprintf(`\\.\pipe\remote-docker-squat-%d`, os.Getpid())
-	l, err := listenPipe(path)
+	l, err := listenPipe(path, testPipeSDDL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = l.Close() }()
 	go func() {
-		if c, err := l.Accept(); err == nil {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
 			_ = c.Close()
 		}
 	}()
 
-	_, err = dialPipe(context.Background(), path)
-	if err == nil || !strings.Contains(err.Error(), "refusing to send it anything") {
-		t.Errorf("err = %v", err)
+	savedPID := servicePID
+	defer func() { servicePID = savedPID }()
+	for name, pid := range map[string]func() (uint32, error){
+		"service not running":        func() (uint32, error) { return 0, errors.New("the service is not running") },
+		"another process is service": func() (uint32, error) { return uint32(os.Getpid()) + 4, nil },
+	} {
+		servicePID = pid
+		_, err := dialPipe(context.Background(), path)
+		if err == nil || !strings.Contains(err.Error(), "refusing to send it anything") {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }
 

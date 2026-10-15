@@ -111,10 +111,3 @@ func (e brokerExecutor) Address(ctx context.Context, name string) (string, error
 	resp, err := e.call(ctx, BrokerRequest{Op: opAddress, Name: name})
 	return resp.Address, err
 }
-
-// BrokerPurge asks the service to destroy every machine it owns. Administrators
-// only; the installer's uninstall runs it.
-func BrokerPurge(ctx context.Context) ([]string, error) {
-	resp, err := brokerExecutor{dial: dialBroker}.call(ctx, BrokerRequest{Op: opPurge})
-	return resp.Purged, err
-}

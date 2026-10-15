@@ -3,6 +3,7 @@ package machine
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -103,10 +104,29 @@ func newBrokerHarness(t *testing.T) *brokerHarness {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); _ = h.srv.Serve(ctx, l) }()
+	go func() { defer close(done); _ = h.srv.Serve(ctx, drainingListener{l}) }()
 	t.Cleanup(func() { cancel(); _ = l.Close(); <-done })
 	h.addr = l.Addr().String()
 	return h
+}
+
+// drainingListener hands out connections that read what is left before they
+// close. Over TCP, closing with unread input resets the connection and the
+// client loses the refusal it was about to read; a named pipe does not do that.
+// The service's own code never reads on that path (failConn pins it).
+type drainingListener struct{ net.Listener }
+
+func (l drainingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	return drainingConn{c}, err
+}
+
+type drainingConn struct{ net.Conn }
+
+func (c drainingConn) Close() error {
+	_ = c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _ = io.Copy(io.Discard, c.Conn)
+	return c.Conn.Close()
 }
 
 // as sets who the next connections are from.
@@ -539,7 +559,7 @@ func TestBrokerRecordsAreAtomicAndNeverOverwriteWhatTheyCannotRead(t *testing.T)
 func TestBrokerConstantsArePinned(t *testing.T) {
 	// A change to either descriptor changes who can reach SYSTEM's service, so
 	// it is made on purpose.
-	if brokerPipeSDDL != "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)" {
+	if brokerPipeSDDL != "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;AU)" {
 		t.Errorf("pipe SDDL = %s", brokerPipeSDDL)
 	}
 	if brokerDirSDDL != "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" {

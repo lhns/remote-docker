@@ -132,3 +132,12 @@ func TestEveryOperationOnABrokerMachineGoesThroughTheBroker(t *testing.T) {
 		t.Errorf("events: %s", got)
 	}
 }
+
+// hyperv-broker is what a record says, not something to ask for: it would be
+// recorded as a backend of its own.
+func TestTheBrokeredBackendCannotBeNamedOnTheCommandLine(t *testing.T) {
+	_, err := (&machineOptions{backend: "hyperv-broker"}).spec("dev", nil)
+	if err == nil || !strings.Contains(err.Error(), "hyperv") {
+		t.Errorf("err = %v", err)
+	}
+}

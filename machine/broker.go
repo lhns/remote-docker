@@ -31,10 +31,13 @@ const (
 )
 
 // brokerPipeSDDL: SYSTEM and Administrators full, Authenticated Users read and
-// write, and network logons denied first. A named pipe is also reachable over
+// write WITHOUT creating a pipe instance, and network logons denied first. The
+// mask is FILE_GENERIC_READ | FILE_GENERIC_WRITE minus 0x4: on a pipe,
+// FILE_APPEND_DATA is FILE_CREATE_PIPE_INSTANCE, and a user who could make a
+// second instance would be handed connections meant for the service. A named pipe is also reachable over
 // SMB, and the service is for people sitting at this computer. Who may DO
 // anything is decided inside, after the caller is identified.
-const brokerPipeSDDL = "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)"
+const brokerPipeSDDL = "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;AU)"
 
 // brokerDirSDDL is the DACL of the service's directory in ProgramData:
 // protected, so nothing is inherited from a parent where Users may create

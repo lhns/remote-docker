@@ -453,6 +453,9 @@ func Find(name string) (Backend, error) {
 		return b, nil
 	}
 
+	// The brokered variant is not a thing to ask for: a machine's record says
+	// it (BackendKey).
+	delete(available, brokerBackend)
 	names := slices.Sorted(maps.Keys(available))
 
 	if len(names) == 0 {

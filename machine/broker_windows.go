@@ -291,20 +291,17 @@ func ensureBrokerDirs(root string) error {
 
 // ---- the pipe -------------------------------------------------------------
 
-func listenBroker() (net.Listener, error) { return listenPipe(brokerPipe) }
+func listenBroker() (net.Listener, error) { return listenPipe(brokerPipe, brokerPipeSDDL) }
 
-func listenPipe(path string) (net.Listener, error) {
+// listenPipe takes the descriptor so a test, whose server is an ordinary user
+// and not SYSTEM, can add itself: every instance after the first is created by
+// the listener and needs the right that Authenticated Users deliberately lack.
+func listenPipe(path, sddl string) (net.Listener, error) {
 	return winio.ListenPipe(path, &winio.PipeConfig{
-		SecurityDescriptor: brokerPipeSDDL,
+		SecurityDescriptor: sddl,
 		InputBufferSize:    64 << 10,
 		OutputBufferSize:   64 << 10,
 	})
-}
-
-// pipeServerTrusted says whether the owner of a pipe is who the service runs
-// as. A replaceable variable for the tests, whose server is the test process.
-var pipeServerTrusted = func(owner *windows.SID) bool {
-	return owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid)
 }
 
 // dialBroker connects to the service, starting it first when it is stopped.
@@ -319,12 +316,20 @@ func dialBroker(ctx context.Context) (net.Conn, error) {
 	return dialPipe(ctx, brokerPipe)
 }
 
+// pipeClientAccess is what a client opens the pipe for: the rights the pipe's
+// DACL gives Authenticated Users and no more. GENERIC_WRITE would ask for
+// FILE_APPEND_DATA, which on a pipe is creating an instance, and be refused.
+const pipeClientAccess = 0x12019b
+
 // dialPipe connects to the pipe, waiting for it to exist.
 func dialPipe(ctx context.Context, path string) (net.Conn, error) {
+	// The dial itself waits for a busy pipe until the context ends.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		conn, err := winio.DialPipeAccessImpLevel(ctx, path,
-			windows.GENERIC_READ|windows.GENERIC_WRITE, winio.PipeImpLevelIdentification)
+			pipeClientAccess, winio.PipeImpLevelIdentification)
 		if err == nil {
 			if verr := verifyPipeServer(conn); verr != nil {
 				_ = conn.Close()
@@ -343,28 +348,53 @@ func dialPipe(ctx context.Context, path string) (net.Conn, error) {
 	}
 }
 
-// verifyPipeServer refuses a pipe that something else created. A standard user
-// can create a pipe of this name while the service is stopped and would then
-// be handed the request, private host key included. The owner of a pipe is
-// whoever created it, and only SYSTEM and Administrators can make one of
-// those owners.
+// verifyPipeServer refuses a pipe the service does not serve. The process on
+// the other end must be the service's own process: a user who creates the pipe
+// while the service is stopped, or a second instance of it while it runs
+// (the pipe's owner belongs to the name and says nothing about which instance
+// answers), would otherwise be sent the request, private host key included.
 func verifyPipeServer(conn net.Conn) error {
 	f, ok := conn.(interface{ Fd() uintptr })
 	if !ok {
 		return errors.New("not a named pipe connection")
 	}
-	sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
-	if err != nil {
-		return fmt.Errorf("cannot tell who owns %s: %w", brokerPipe, err)
+	refuse := func(why string) error {
+		return fmt.Errorf("%s is not served by the Hyper-V service (%s); refusing to send it anything", brokerPipe, why)
 	}
-	owner, _, err := sd.Owner()
-	if err != nil {
-		return err
+	var pipePID uint32
+	if err := windows.GetNamedPipeServerProcessId(windows.Handle(f.Fd()), &pipePID); err != nil {
+		return refuse(err.Error())
 	}
-	if !pipeServerTrusted(owner) {
-		return fmt.Errorf("%s is not owned by the Hyper-V service (it is owned by %s); refusing to send it anything", brokerPipe, owner)
+	svcPID, err := servicePID()
+	if err != nil {
+		return refuse(err.Error())
+	}
+	if pipePID == 0 || pipePID != svcPID {
+		return refuse(fmt.Sprintf("process %d answers, the service is process %d", pipePID, svcPID))
 	}
 	return nil
+}
+
+// servicePID is the process id of the running service. A variable for the
+// tests, whose server is the test process.
+var servicePID = brokerServicePID
+
+func brokerServicePID() (uint32, error) {
+	svc, err := openBrokerService(windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return 0, fmt.Errorf("the service is not available: %w", err)
+	}
+	defer func() { _ = windows.CloseServiceHandle(svc) }()
+	var st windows.SERVICE_STATUS_PROCESS
+	var needed uint32
+	if err := windows.QueryServiceStatusEx(svc, windows.SC_STATUS_PROCESS_INFO,
+		(*byte)(unsafe.Pointer(&st)), uint32(unsafe.Sizeof(st)), &needed); err != nil {
+		return 0, err
+	}
+	if st.CurrentState != windows.SERVICE_RUNNING || st.ProcessId == 0 {
+		return 0, errors.New("the service is not running")
+	}
+	return st.ProcessId, nil
 }
 
 // ---- the service control manager -----------------------------------------

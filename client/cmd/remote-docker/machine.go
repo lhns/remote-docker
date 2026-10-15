@@ -144,6 +144,9 @@ const defaultBackend = "wsl"
 // machine is refused: it would build a second machine beside the first and
 // overwrite the only record that the first exists.
 func (o *machineOptions) backendFor(name string, recorded *config.Workspace) (string, error) {
+	if o.backend == machine.BackendKey("hyperv", true) {
+		return "", fmt.Errorf("no machine backend named %q; use hyperv, which goes through the Hyper-V service when it is installed", o.backend)
+	}
 	if recorded == nil || recorded.Machine == nil {
 		return cmp.Or(o.backend, defaultBackend), nil
 	}
