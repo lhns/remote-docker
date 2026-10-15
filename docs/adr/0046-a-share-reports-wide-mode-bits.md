@@ -33,11 +33,12 @@
   because `-v` cannot carry a fourth colon (ADR 0042). An invalid value is an
   error naming its source, because a wrong owner is the silent failure this
   decision exists to remove.
-- **Fixed per share.** The share's attributes are the session's with only the
-  uid and gid replaced (the session's carry `AlwaysExecutable`, which Windows
-  cannot do without), set when the share is registered. A second mount of the
-  directory naming another owner is refused rather than changing it under the
-  first. The setting is read once per session, so `Registry.SetAttrs` and the
+- **Fixed per share, and a share is per owner** (amended 2026-10-15). The
+  share's attributes are the session's with only the uid and gid replaced (the
+  session's carry `AlwaysExecutable`, which Windows cannot do without), set when
+  the share is registered. The owner is part of the share id (ADR 0042), so a
+  second mount of the directory naming another owner is a share of its own with
+  its own export and volume, and nothing is changed under the first. The setting is read once per session, so `Registry.SetAttrs` and the
   rebuild on connect no longer exist.
 - **The union root.** The merged root is the upper the agent creates, so git as
   another uid refused a `write=back` share even with the owner set. The client

@@ -341,8 +341,7 @@ else
         # Shared mode, because section 3's per-account dind runs stock
         # docker:dind (daemons.DefaultImage), which lacks fuse-overlayfs.
         #
-        # A directory of its own: one directory is one share and one mode
-        # (ADR 0042), and section 5 mounted the project plainly.
+        # A directory of its own, so section 5's project mount is not mixed in.
         UNIONDIR="$WORK/uniondir"
         mkdir -p "$UNIONDIR"
         echo "served from the machine" >"$UNIONDIR/marker"

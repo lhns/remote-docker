@@ -46,7 +46,7 @@ func TestReadsAreReportedByShareAndPath(t *testing.T) {
 	log := &readLog{}
 	r := NewRegistry(DefaultAttrs)
 	r.OnRead = log.observe
-	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
+	if _, err := r.Register(dir, workspace.DefaultMode, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	share, _, ok := r.Lookup(exportOf(dir))

@@ -9,8 +9,7 @@ import (
 
 // A mount that is refused leaves nothing behind: a workspace that cannot serve
 // the union is found out before the cache channel is opened or the watcher is
-// started, and a second mount of a directory disagreeing with the first never
-// starts anything for itself.
+// started, and so is a mount that contradicts itself.
 func TestARefusedMountOpensNoChannelAndStartsNoWatcher(t *testing.T) {
 	r, _, _, started := watchRewriter(workspace.WatchOff)
 	opened := 0
@@ -23,12 +22,15 @@ func TestARefusedMountOpensNoChannelAndStartsNoWatcher(t *testing.T) {
 		t.Errorf("a refused union opened the channel %d times and started the watcher %d times", opened, *started)
 	}
 
+	// Contradicting itself is still refused: a cached mount cannot watch
+	// nothing, and the refusal starts nothing either.
 	r, _, _, started = watchRewriter(workspace.WatchOff)
-	body := []byte(`{"HostConfig":{"Binds":["` + watchProject + `:/a:watch=partial","` + watchProject + `:/b:watch=coarse"]}}`)
-	if _, err := r.ContainerCreate(t.Context(), body); err == nil {
-		t.Fatal("two mounts of one directory with different words were accepted")
+	r.OpenCache = func(context.Context) (Cache, error) { opened++; return &fakeCache{}, nil }
+	r.UnionReady = workspace.UnionReady
+	if _, err := r.ContainerCreate(t.Context(), bindBody("read=cached,write=back,watch=off")); err == nil {
+		t.Fatal("read=cached with watch=off was accepted")
 	}
-	if *started != 1 {
-		t.Errorf("the watcher was started %d times, want only the first mount's", *started)
+	if opened != 0 || *started != 0 {
+		t.Errorf("a contradicting mount opened the channel %d times and started the watcher %d times", opened, *started)
 	}
 }

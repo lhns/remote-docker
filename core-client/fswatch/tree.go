@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/lhns/remote-docker/core/logx"
@@ -85,18 +86,26 @@ func dirKey(goos, p string) string {
 	return joined
 }
 
-// rootFor finds the share a path belongs to, and its path within that share.
+// rootMatch is a share an event belongs to and its path within that share.
+type rootMatch struct {
+	root *shareRoot
+	rel  string
+}
+
+// rootsFor finds the shares a path belongs to, and its path within each.
 //
 // The one funnel every event goes through, which is why a single-file share is
 // filtered here: its watch is on the containing directory, so the siblings
 // generate events that belong to nobody.
 //
 // Of nested shares the DEEPEST wins, whatever order they registered in: roots
-// can carry different modes now, and which one strips a deletion must not
-// depend on which directory was mounted first.
-func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
-	var best *shareRoot
-	var bestRel string
+// can carry different modes, and which one strips a deletion must not depend
+// on which directory was mounted first. A directory mounted several ways is
+// several roots at ONE path (ADR 0042), and all of them are deepest together:
+// each gets the event and applies its own mode.
+func (t *tree) rootsFor(local string) []rootMatch {
+	var out []rootMatch
+	deepest := 0
 	for _, r := range t.roots {
 		rel, ok := relativeTo(t.goos, r.parts, local)
 		if !ok {
@@ -105,14 +114,14 @@ func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
 		if r.only != "" && rel != "/"+r.only {
 			continue
 		}
-		if best == nil || len(r.parts) > len(best.parts) {
-			best, bestRel = r, rel
+		switch {
+		case len(r.parts) > deepest:
+			deepest, out = len(r.parts), append(out[:0], rootMatch{r, rel})
+		case len(r.parts) == deepest:
+			out = append(out, rootMatch{r, rel})
 		}
 	}
-	if best == nil {
-		return nil, "", false
-	}
-	return best, bestRel, true
+	return out
 }
 
 // sync reconciles the watched set against the shares that currently exist.
@@ -122,31 +131,35 @@ func (t *tree) rootFor(local string) (*shareRoot, string, bool) {
 func (t *tree) sync(shares []Share) {
 	// A share whose mode is off is not in the tree at all: no root, no
 	// watches, and an event under it belongs to nobody.
-	want := make(map[string]bool, len(shares))
+	want := make(map[string]workspace.Watch, len(shares))
 	for _, s := range shares {
 		if s.Mode.Watching() {
-			want[s.ExportPath] = true
+			want[s.ExportPath] = s.Mode
 		}
 	}
 
-	for _, r := range t.roots {
-		if !want[r.export] {
-			t.removeTree(r.local)
-		}
-	}
-
+	dropped := false
 	have := make(map[string]bool, len(t.roots))
 	kept := t.roots[:0]
 	for _, r := range t.roots {
-		if want[r.export] {
-			kept = append(kept, r)
-			have[r.export] = true
+		mode, ok := want[r.export]
+		if !ok {
+			dropped = true
+			continue
 		}
+		// A mount raised the share's watch: the root follows, so an
+		// existing export is not left at the level it was first seen at.
+		r.mode = mode
+		kept = append(kept, r)
+		have[r.export] = true
 	}
 	t.roots = kept
+	if dropped {
+		t.unwatchUncovered()
+	}
 
 	for _, s := range shares {
-		if !want[s.ExportPath] || have[s.ExportPath] {
+		if _, ok := want[s.ExportPath]; !ok || have[s.ExportPath] {
 			continue
 		}
 		local := s.LocalPath
@@ -160,6 +173,11 @@ func (t *tree) sync(shares []Share) {
 			mode:   s.Mode,
 			only:   s.File,
 		}
+		// A directory root at this very path already walked the tree (the same
+		// directory mounted another way): its watches serve this one, and
+		// walking again would only re-read it. Not a root above it: that walk
+		// skipped the excluded names, which a share of one is entitled to.
+		shared := r.only == "" && t.walkedAt(r.parts)
 		t.roots = append(t.roots, r)
 		if r.only != "" {
 			// One watch, and no walk: the siblings in that directory are not
@@ -168,7 +186,9 @@ func (t *tree) sync(shares []Share) {
 			t.addOne(r.local)
 			continue
 		}
-		t.addTree(r, r.local, nil)
+		if !shared {
+			t.addTree(r, r.local, nil)
+		}
 	}
 }
 
@@ -303,6 +323,60 @@ func (t *tree) removeTree(dir string) {
 			_ = t.be.Remove(path)
 		}
 	}
+}
+
+// unwatchUncovered drops the watch on every directory no remaining root needs.
+// Roots on one path share its watches, and so do nested ones, so a root's
+// departure takes only what no sibling or ancestor still covers.
+func (t *tree) unwatchUncovered() {
+	for key, path := range t.dirs {
+		if t.covered(path) {
+			continue
+		}
+		delete(t.dirs, key)
+		_ = t.be.Remove(path)
+	}
+}
+
+// covered reports whether some root watches dir: a directory root covers
+// itself and everything below it, a single-file root only its directory.
+func (t *tree) covered(dir string) bool {
+	if t.treeCovered(dir) {
+		return true
+	}
+	parts := splitLocal(t.goos, dir)
+	for _, r := range t.roots {
+		if r.only != "" && len(parts) == len(r.parts) {
+			if _, ok := relativeTo(t.goos, r.parts, dir); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// walkedAt reports whether a directory root at exactly parts has been walked.
+func (t *tree) walkedAt(parts []string) bool {
+	for _, o := range t.roots {
+		if o.only == "" && slices.Equal(o.parts, parts) {
+			return true
+		}
+	}
+	return false
+}
+
+// treeCovered reports whether a directory root contains dir, so its walk has
+// already watched what is below.
+func (t *tree) treeCovered(dir string) bool {
+	for _, r := range t.roots {
+		if r.only != "" {
+			continue
+		}
+		if _, ok := relativeTo(t.goos, r.parts, dir); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // removeOne drops a single directory's watch, for a delete.

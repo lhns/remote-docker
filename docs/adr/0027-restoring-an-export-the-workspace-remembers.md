@@ -1,7 +1,7 @@
 # 0027 — Restoring an export the workspace remembers
 
 - Status: Accepted; amends [ADR 0007](0007-virtual-nfs-export-namespace.md)
-- Date: 2026-08-11; amended 2026-09-25, 2026-10-14
+- Date: 2026-08-11; amended 2026-09-25, 2026-10-14, 2026-10-15
 - Current answer: restore lazily, from a MOUNT or a share ROOT HANDLE that
   misses, through the checks below. Never eagerly, never from a lookup.
 
@@ -27,7 +27,7 @@ registry has never heard of it, and the server answers MNT3ERR_NOENT. `down`
 worked because deleting the containers forces `up` to create them again, which
 runs the rewrite, which registers the share.
 
-Nothing could recover it unaided: `ShareID` is `sha256(path)[:16]` and cannot be
+Nothing could recover it unaided: a share id is a truncated digest and cannot be
 inverted, so given only an export path there is no way back to a directory.
 
 See also [ADR 0032](0032-the-workspace-is-the-record.md), which is the same
@@ -111,11 +111,23 @@ digest is an identity rather than a security boundary.
   version stays 1: `readBound` drops a record whose version differs, so a bump
   would make every restore fail after an upgrade. A record without the field
   takes the session's default.
-- Known gap: a restored share is whatever words the FIRST container to
-  register the directory gave it. A new container naming other words is
-  refused by the registrar like any other (`give every mount of /p the same
-  words`), and containers that already exist find the share the new one
-  registered first.
+
+## Amendment 2026-10-15: the record carries the share's variant
+
+- The id is derived from the path AND the variant (read, write, owner; ADR 0007,
+  ADR 0042), so the record gains `read` and `write`. The version stays 1 for the
+  reason above, and a record is checked by what it carries: one with a variant
+  must have `export == ShareIDFor(path, variant)` (the owner being part of it),
+  and one without, written by 0.11 or earlier, must have
+  `export == LegacyShareID(path)`.
+- A share restored from a record without a variant has an unknown mode. It goes
+  into the registry by export only and never into the by-path map, so it keeps
+  serving the containers that mount it and a new mount of the directory gets a
+  share, export and volume of its own. This is what makes upgrading safe: nothing
+  that already runs changes under it.
+- `remember` writes the share as it stands, with watch and prefetch raised to
+  what the mounts asked for, so a restored share watches and fills as the
+  strongest of its mounts did.
 
 ## Where
 

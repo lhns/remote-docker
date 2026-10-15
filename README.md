@@ -459,11 +459,13 @@ little differently (examples below the table).
 | `ro` and other Docker options | | | untouched; `ro` stays read-only on the share | |
 
 An axis or word a mount does not name comes from the per-directory rule
-(`consistencyPaths`), then the setting, then the default. One directory is one
-share: every mount of it must resolve to the same mode and words, and a second
-mount that does not is refused until the containers using the directory are
-gone and the session is restarted. Our words are removed before the daemon
-sees the mount.
+(`consistencyPaths`), then the setting, then the default. Each combination of
+`read=`, `write=` and `owner=` is a share of its own, so one directory can be
+mounted differently in each container at the same time; nothing is refused for
+differing. `watch=` and `prefetch=` are per share instead: the share runs at the
+strongest any of its mounts asked for (`coarse` over `partial` over `off`,
+`eager` over `tree` over `off`), and it does not drop back while the session
+runs. Our words are removed before the daemon sees the mount.
 
 **`docker run -v`**: the third field is a comma-separated list, `ro,read=cached`,
 never `:read=cached:ro`.
@@ -1225,9 +1227,10 @@ user needs the share to report that user. Name it on the mount with `owner=`, or
 for every mount with `REMOTE_DOCKER_SHARE_OWNER`, as `uid` or `uid:gid` (gid
 defaults to the uid); the separator rules for `-v` are in
 [Mount options](#mount-options). It applies to every kind of mount, a
-`write=back` union's root included. One directory has one owner: a second mount
-of it naming another is refused until the containers using it are gone and the
-session restarted.
+`write=back` union's root included. One directory can have several owners at
+once: a mount naming another owner is a share of its own, beside the first,
+with its own volume. Containers running together under different owners see
+the same files.
 
 **A named volume is not a share, and gets none of that.** Where the image has no
 directory at the mount path, the daemon creates it root-owned 0755, so a

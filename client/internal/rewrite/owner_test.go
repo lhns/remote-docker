@@ -52,42 +52,25 @@ func TestOwnerWordReachesTheShare(t *testing.T) {
 	}
 }
 
-// Mounts of one directory in one request must agree on its owner, with the
-// session default counting as an answer.
-func TestOneDirectoryCannotHaveTwoOwners(t *testing.T) {
-	r, _, _ := newRewriter()
-	_, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
-		`"/home/alice/project:/app:owner=1000","/home/alice/project:/also"]}}`))
-	if err == nil {
-		t.Fatal("two owners for one directory were served")
+// Mounts of one directory in one request with another owner are another share
+// each, with their own volume (ADR 0046). The session default counts as an
+// answer; the same owner in two spellings is one share.
+func TestOneDirectoryWithTwoOwnersGetsTwoShares(t *testing.T) {
+	r, sharer, volumes := newRewriter()
+	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
+		`"/home/alice/project:/app:owner=1000","/home/alice/project:/also"]}}`)); err != nil {
+		t.Fatalf("two owners for one directory were refused: %v", err)
 	}
-	for _, want := range []string{"owner=1000:1000 and owner=0:0", "\n  fix: "} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err = %q, want it to contain %q", err, want)
-		}
+	if len(volumes.created) != 2 || sharer.exports[0] == sharer.exports[1] {
+		t.Errorf("volumes = %v, exports = %v; want two of each", volumes.created, sharer.exports)
 	}
 
-	r, _, _ = newRewriter()
+	r, sharer, volumes = newRewriter()
 	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
 		`"/home/alice/project:/app:owner=1000","/home/alice/project:/also:owner=1000.1000"]}}`)); err != nil {
 		t.Errorf("the same owner in two spellings was refused: %v", err)
 	}
-}
-
-// A named volume is the user's own and has no owner to set, but the word is
-// ours, so it is consumed and checked rather than forwarded to the daemon.
-func TestOwnerWordLeavesANamedVolume(t *testing.T) {
-	r, sharer, _ := newRewriter()
-	out, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":["data:/data:ro,owner=1000"]}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(out), `"data:/data:ro"`) || len(sharer.shared) != 0 {
-		t.Errorf("out = %s, shared %v", out, sharer.shared)
-	}
-
-	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":["data:/data:owner=bob"]}}`)); err == nil ||
-		!strings.Contains(err.Error(), "1000.2000") {
-		t.Errorf("a misspelt owner on a named volume = %v, want the forms named", err)
+	if len(volumes.created) != 1 || sharer.exports[0] != sharer.exports[1] {
+		t.Errorf("volumes = %v, exports = %v; want one share", volumes.created, sharer.exports)
 	}
 }

@@ -344,20 +344,20 @@ func TestSyncIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRootForFindsTheOwningShare(t *testing.T) {
+func TestRootsForFindsTheOwningShare(t *testing.T) {
 	a := t.TempDir()
 	b := t.TempDir()
 	be := newFakeBackend()
 	tr := newTestTree(t, be, 100, nil)
 	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: a, Mode: workspace.WatchPartial}, {ExportPath: "/m/0123456789abcdef", LocalPath: b, Mode: workspace.WatchPartial}})
 
-	root, rel, ok := tr.rootFor(filepath.Join(b, "x", "y.go"))
-	if !ok || root.export != "/m/0123456789abcdef" || rel != "/x/y.go" {
-		t.Errorf("rootFor = %v, %q, %v; want the second share and /x/y.go", root, rel, ok)
+	got := tr.rootsFor(filepath.Join(b, "x", "y.go"))
+	if len(got) != 1 || got[0].root.export != "/m/0123456789abcdef" || got[0].rel != "/x/y.go" {
+		t.Errorf("rootsFor = %+v; want the second share and /x/y.go", got)
 	}
 
-	if _, _, ok := tr.rootFor(filepath.Join(t.TempDir(), "elsewhere")); ok {
-		t.Error("rootFor claimed a path outside every share")
+	if got := tr.rootsFor(filepath.Join(t.TempDir(), "elsewhere")); len(got) != 0 {
+		t.Error("rootsFor claimed a path outside every share")
 	}
 }
 
@@ -413,10 +413,10 @@ func TestASingleFileShareReportsOnlyItsOwnFile(t *testing.T) {
 	tr := newTestTree(t, newFakeBackend(), 100, nil)
 	tr.sync([]Share{{ExportPath: "/m/abc", LocalPath: conf, File: "nginx.conf", Mode: workspace.WatchPartial}})
 
-	if _, rel, ok := tr.rootFor(conf); !ok || rel != "/nginx.conf" {
-		t.Errorf("rootFor(the file) = %q, %v; want /nginx.conf, true", rel, ok)
+	if got := tr.rootsFor(conf); len(got) != 1 || got[0].rel != "/nginx.conf" {
+		t.Errorf("rootsFor(the file) = %+v; want /nginx.conf", got)
 	}
-	if _, _, ok := tr.rootFor(filepath.Join(dir, "secret.env")); ok {
+	if got := tr.rootsFor(filepath.Join(dir, "secret.env")); len(got) != 0 {
 		t.Error("a sibling of the exported file was reported as part of the share")
 	}
 }
@@ -468,5 +468,76 @@ func TestRemoveTreeAsksTheBackendWithTheAddedSpelling(t *testing.T) {
 	}
 	if !slices.Contains(be.removedList(), filepath.Join(root, "Src")) {
 		t.Errorf("removed %v, want the child spelled as it was added", be.removedList())
+	}
+}
+
+// A directory mounted several ways is several roots at one path (ADR 0042), and
+// all of them are the deepest there: an event belongs to each.
+func TestRootsAtOnePathAreAllDeepest(t *testing.T) {
+	dir := mkdirs(t, t.TempDir(), "src")
+	tr := newTestTree(t, newFakeBackend(), 100, nil)
+	tr.sync([]Share{
+		{ExportPath: "/m/1111111111111111", LocalPath: dir, Mode: workspace.WatchPartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: dir, Mode: workspace.WatchCoarse},
+	})
+
+	got := tr.rootsFor(filepath.Join(dir, "src", "a.go"))
+	if len(got) != 2 || got[0].rel != "/src/a.go" || got[1].rel != "/src/a.go" {
+		t.Fatalf("rootsFor = %+v, want both roots at the path", got)
+	}
+	if got[0].root.mode == got[1].root.mode {
+		t.Errorf("the roots share a mode %q; each must keep its own", got[0].root.mode)
+	}
+}
+
+// Removing one of two roots on a path leaves the other watching: they share the
+// directory watches, and the departing one must not take them.
+func TestRemovingOneRootKeepsASiblingsWatches(t *testing.T) {
+	dir := mkdirs(t, t.TempDir(), "src")
+	be := newFakeBackend()
+	tr := newTestTree(t, be, 100, nil)
+	both := []Share{
+		{ExportPath: "/m/1111111111111111", LocalPath: dir, Mode: workspace.WatchPartial},
+		{ExportPath: "/m/2222222222222222", LocalPath: dir, Mode: workspace.WatchCoarse},
+	}
+	tr.sync(both)
+	if len(be.removedList()) != 0 {
+		t.Fatalf("adding a second root removed watches: %v", be.removedList())
+	}
+	watched := len(tr.dirs)
+
+	// The first share stops being watched (its mode is off); the second stays.
+	tr.sync([]Share{
+		{ExportPath: "/m/1111111111111111", LocalPath: dir, Mode: workspace.WatchOff},
+		both[1],
+	})
+	if len(tr.dirs) != watched || len(be.removedList()) != 0 {
+		t.Errorf("a sibling's watches were stripped: %d of %d left, removed %v", len(tr.dirs), watched, be.removedList())
+	}
+	if !tr.watching(filepath.Join(dir, "src")) {
+		t.Error("the surviving root lost its watch on src")
+	}
+
+	// And when the last goes, so do the watches.
+	tr.sync(nil)
+	if len(tr.dirs) != 0 {
+		t.Errorf("%d watches left with no root", len(tr.dirs))
+	}
+}
+
+// A mount that raises a share's watch reaches an export already in the tree: the
+// root follows, instead of staying at the level it was first seen at.
+func TestSyncAppliesARaisedModeToAnExistingRoot(t *testing.T) {
+	dir := mkdirs(t, t.TempDir(), "src")
+	tr := newTestTree(t, newFakeBackend(), 100, nil)
+	share := Share{ExportPath: "/m/1111111111111111", LocalPath: dir, Mode: workspace.WatchPartial}
+	tr.sync([]Share{share})
+
+	share.Mode = workspace.WatchCoarse
+	tr.sync([]Share{share})
+
+	got := tr.rootsFor(filepath.Join(dir, "src", "a.go"))
+	if len(tr.roots) != 1 || len(got) != 1 || got[0].root.mode != workspace.WatchCoarse {
+		t.Errorf("roots = %d, match %+v; want one root raised to coarse", len(tr.roots), got)
 	}
 }

@@ -122,7 +122,14 @@ least `partial`; asking for `off` there is refused. A share in `off` has no
 watches at all. One watcher serves shares that disagree: each watched root
 carries its own mode and strips deletions by it, nested roots resolve to the
 deepest, and the cache observer still sees every event of a watched root before
-any mode strips one (ADR 0044). The watcher starts with the first share that
+any mode strips one (ADR 0044). *Amended 2026-10-15:* a directory mounted
+several ways is several roots at one path (ADR 0042). They are all the deepest
+there, so each event goes to every one of them with that root's own mode;
+removing one keeps the watches a sibling still needs; and a mount of a share
+that asks for more raises the share's watch, which `sync` applies to a root the
+tree already holds. A share's watch is the strongest any of its mounts asked
+for and is never lowered while the session runs, and events are not filtered
+per container. The watcher starts with the first share that
 watches, so a session defaulting to `off` costs nothing until then, and the
 notify channel opens only once some share watches, on a connection already up
 as well as at connect.

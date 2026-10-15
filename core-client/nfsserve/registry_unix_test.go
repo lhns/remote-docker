@@ -23,7 +23,7 @@ func TestRegisterRefusesASocket(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	_, err = NewRegistry(DefaultAttrs).Register(sock, workspace.ShareWords{})
+	_, err = NewRegistry(DefaultAttrs).Register(sock, workspace.ModeUnset, workspace.ShareWords{})
 	if err == nil {
 		t.Fatal("Register(socket) = nil error, want a refusal")
 	}

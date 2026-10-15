@@ -16,11 +16,11 @@ func TestRegisterIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 
-	first, err := r.Register(dir, workspace.ShareWords{})
+	first, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	second, err := r.Register(dir, workspace.ShareWords{})
+	second, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("second Register: %v", err)
 	}
@@ -36,11 +36,11 @@ func TestRegisterDistinctDirectories(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 
-	shareA, err := r.Register(a, workspace.ShareWords{})
+	shareA, err := r.Register(a, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register(a): %v", err)
 	}
-	shareB, err := r.Register(b, workspace.ShareWords{})
+	shareB, err := r.Register(b, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register(b): %v", err)
 	}
@@ -63,7 +63,7 @@ func TestRegisterAFile(t *testing.T) {
 	}
 	r := NewRegistry(DefaultAttrs)
 
-	share, err := r.Register(file, workspace.ShareWords{})
+	share, err := r.Register(file, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register(file): %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRegisterRejectsWhatItCannotServe(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
 
-	if _, err := r.Register(filepath.Join(dir, "does-not-exist"), workspace.ShareWords{}); err == nil {
+	if _, err := r.Register(filepath.Join(dir, "does-not-exist"), workspace.ModeUnset, workspace.ShareWords{}); err == nil {
 		t.Error("Register(missing) = nil error, want an error")
 	}
 }
@@ -109,7 +109,7 @@ func TestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(dir, workspace.ShareWords{})
+	share, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestLookup(t *testing.T) {
 func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
-	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
+	if _, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	export := exportOf(dir)
@@ -181,7 +181,7 @@ func TestLookupRefusesUnregisteredPaths(t *testing.T) {
 func TestLookupDoesNotMatchPartialSegments(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(DefaultAttrs)
-	share, err := r.Register(dir, workspace.ShareWords{})
+	share, err := r.Register(dir, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,16 +213,16 @@ func TestNormalizeExport(t *testing.T) {
 // already knows.
 func TestLookupOrRestore(t *testing.T) {
 	dir := t.TempDir()
-	export := workspace.ExportPathForID(workspace.ShareID(dir))
+	export := workspace.ExportPathForID(workspace.LegacyShareID(dir))
 
 	r := NewRegistry(Attrs{})
 	asked := 0
-	r.Restore = func(path string) (string, workspace.ShareWords, bool) {
+	r.Restore = func(path string) (string, workspace.Mode, workspace.ShareWords, bool) {
 		asked++
 		if path == export {
-			return dir, workspace.ShareWords{}, true
+			return dir, workspace.ModeUnset, workspace.ShareWords{}, true
 		}
-		return "", workspace.ShareWords{}, false
+		return "", workspace.ModeUnset, workspace.ShareWords{}, false
 	}
 
 	// A miss the resolver knows about comes back.
@@ -253,10 +253,12 @@ func TestLookupOrRestore(t *testing.T) {
 // the watcher read them, and "in use" cannot depend on who asked.
 func TestOnlyMountRestores(t *testing.T) {
 	dir := t.TempDir()
-	export := workspace.ExportPathForID(workspace.ShareID(dir))
+	export := workspace.ExportPathForID(workspace.LegacyShareID(dir))
 
 	r := NewRegistry(Attrs{})
-	r.Restore = func(string) (string, workspace.ShareWords, bool) { return dir, workspace.ShareWords{}, true }
+	r.Restore = func(string) (string, workspace.Mode, workspace.ShareWords, bool) {
+		return dir, workspace.ModeUnset, workspace.ShareWords{}, true
+	}
 
 	if _, _, ok := r.Lookup(export); ok {
 		t.Error("Lookup restored a share")

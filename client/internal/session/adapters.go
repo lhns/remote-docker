@@ -2,9 +2,7 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"strings"
 
 	"github.com/lhns/remote-docker/client/internal/ports"
 	"github.com/lhns/remote-docker/client/internal/proxy"
@@ -22,45 +20,21 @@ type shareRegistrar struct {
 	changed  func()
 }
 
+// Share registers the mount's variant, which is its own share beside any other
+// variant of the directory. A mount of a variant already shared raises that
+// share's watch and prefetch, never lowers them, and nothing is refused
+// (ADR 0042). The watcher is told whether or not the level rose: it is cheap,
+// and it is how a raised watch reaches an export already in its tree.
 func (s shareRegistrar) Share(localPath string, mount workspace.MountWords) (exportPath, file string, err error) {
-	share, err := s.registry.Register(localPath, mount.ShareWords)
+	share, err := s.registry.Register(localPath, mount.Mode, mount.ShareWords)
 	if err != nil {
 		return "", "", err
 	}
-	// A share's mode and words are fixed when it is registered: its volume and
-	// filesystem are built with them and never replaced (ADR 0046). A mount
-	// asking for others is refused before anything is created for it.
-	if err := refuseOtherWords(share, s.registry.ClaimMode(share, mount.Mode), mount); err != nil {
-		return "", "", err
-	}
-	s.shares.remember(share.ExportPath, share.LocalPath, share.Words)
+	s.shares.remember(share)
 	if s.changed != nil {
 		s.changed()
 	}
 	return share.ExportPath, share.File, nil
-}
-
-// refuseOtherWords refuses a mount that resolves to words other than the share
-// already has. Both sides are concrete: the rewriter settles every word before
-// it asks. A mode that differs is named first when words differ too, because
-// the watch it implies differs with it and would otherwise take the blame; a
-// mode alone is not refused here (it has always been allowed across
-// containers, with each mode's own volume).
-func refuseOtherWords(share *nfsserve.Share, haveMode workspace.Mode, asked workspace.MountWords) error {
-	diffs := share.Words.Differences(asked.ShareWords)
-	if len(diffs) == 0 {
-		return nil
-	}
-	var have, want []string
-	if haveMode != asked.Mode {
-		have, want = append(have, haveMode.String()), append(want, asked.Mode.String())
-	}
-	for _, d := range diffs {
-		have, want = append(have, d.Key+"="+d.A), append(want, d.Key+"="+d.B)
-	}
-	return fmt.Errorf("rewrite: %[1]s is already shared with %[2]s and this mount resolves to %[3]s; a share's mode and words are fixed while the session runs\n"+
-		"  fix: give every mount of %[1]s the same words, or remove the containers using it and run `%[4]s`",
-		share.LocalPath, strings.Join(have, ","), strings.Join(want, ","), OurCommand("restart"))
 }
 
 // sshForwarder adapts the SSH client to the port manager's Forwarder.

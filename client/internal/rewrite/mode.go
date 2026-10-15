@@ -113,13 +113,9 @@ func dropOurConsistency(mount map[string]json.RawMessage) (bool, error) {
 	return true, nil
 }
 
-// Remedies named more than once.
-const (
-	fixSameWords = "\n  fix: give both mounts the same words"
-
-	// FixUpdateWorkspace is for a workspace that cannot serve a union at all.
-	FixUpdateWorkspace = "\n  fix: update the workspace, or use write=through"
-)
+// FixUpdateWorkspace is the remedy for a workspace that cannot serve a union at
+// all.
+const FixUpdateWorkspace = "\n  fix: update the workspace, or use write=through"
 
 // modeFor is the mode for axes a mount left unset: the DEEPEST configured path
 // containing it, so nested rules never depend on map order, else the default.
@@ -140,8 +136,9 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 }
 
 // resolveMount settles one mount's words and refuses what cannot be served.
-// Two mounts of one directory disagreeing are refused: the volume is per
-// share, and the second EnsureVolume would silently recreate the first's.
+// Two mounts of one directory asking for another read, write or owner are two
+// shares and nothing here compares them; mounts of one variant are one share,
+// and their watch and prefetch rise to the strongest asked (ADR 0042).
 func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace.MountWords, source string, asked workspace.MountWords, spelled string) (workspace.MountWords, error) {
 	resolved := workspace.MountWords{
 		Mode:       asked.Mode.Or(r.modeFor(source)).Or(workspace.DefaultMode),
@@ -179,13 +176,18 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 		}
 	}
 
-	key := workspace.CanonicalKey(source)
+	key := workspace.CanonicalKey(source) + "\x00" + got.String() + "\x00" + resolved.Owner.String()
 	if seen, ok := mounts[key]; ok {
-		if seen != resolved {
-			return workspace.MountWords{}, fmt.Errorf(
-				"rewrite: %s is mounted twice with different words, %s, and one directory has one share"+fixSameWords,
-				source, describeDifference(seen, resolved))
+		// The union, its owner and the share are settled by the first mount of
+		// the variant. This one may still ask for a watch the first did not.
+		if watch.Watching() {
+			if err := r.startWatcher(source); err != nil {
+				return workspace.MountWords{}, err
+			}
 		}
+		seen.Watch = seen.Watch.Max(resolved.Watch)
+		seen.Prefetch = seen.Prefetch.Max(resolved.Prefetch)
+		mounts[key] = seen
 		return resolved, nil
 	}
 
@@ -285,18 +287,6 @@ func (r *Rewriter) startWatcher(source string) error {
 		return fmt.Errorf("rewrite: %s needs the file watcher, and it would not start: %w", source, err)
 	}
 	return nil
-}
-
-// describeDifference names what two mounts of one directory disagree about.
-func describeDifference(a, b workspace.MountWords) string {
-	var parts []string
-	if a.Mode != b.Mode {
-		parts = append(parts, fmt.Sprintf("%v and %v", a.Mode, b.Mode))
-	}
-	for _, d := range a.Differences(b.ShareWords) {
-		parts = append(parts, fmt.Sprintf("%s=%s and %s=%s", d.Key, d.A, d.Key, d.B))
-	}
-	return strings.Join(parts, ", ")
 }
 
 // openCache reaches the session's cache channel, refusing if there is none.

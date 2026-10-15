@@ -160,25 +160,40 @@ func TestWatchWordInMountAndNamedVolume(t *testing.T) {
 	}
 }
 
-// Two mounts of one directory in a request agree on the RESOLVED watch: one
-// that took the default and one that named another are two answers.
-func TestOneDirectoryCannotHaveTwoWatches(t *testing.T) {
-	r, _, _, _ := watchRewriter(workspace.WatchOff)
-	_, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
-		`"`+watchProject+`:/app:watch=partial","`+watchProject+`:/also"]}}`))
-	if err == nil {
-		t.Fatal("two watches for one directory were served")
-	}
-	for _, want := range []string{"watch=partial and watch=off", "\n  fix: give both mounts the same words"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err = %q, want it to contain %q", err, want)
+// Two mounts of one variant in a request are one share at the strongest watch
+// either asked for, and the watcher starts for it even when the first asked for
+// none. Nothing is refused.
+func TestMountsOfOneVariantRaiseTheWatch(t *testing.T) {
+	for _, order := range [][2]string{{"watch=partial", "watch=coarse"}, {"watch=coarse", "watch=partial"}} {
+		r, sharer, volumes, _ := watchRewriter(workspace.WatchOff)
+		if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
+			`"`+watchProject+`:/app:`+order[0]+`","`+watchProject+`:/also:`+order[1]+`"]}}`)); err != nil {
+			t.Fatalf("%v: %v", order, err)
+		}
+		if len(volumes.created) != 1 || sharer.exports[0] != sharer.exports[1] {
+			t.Errorf("%v: volumes = %v, exports = %v; want one share", order, volumes.created, sharer.exports)
 		}
 	}
 
-	// read=cached resolves to partial, so it agrees with naming partial.
-	r, _, _, _ = watchRewriter(workspace.WatchOff)
+	// The first mount asks for nothing and the second for a watch: the
+	// watcher must still start, though the share is already registered.
+	r, _, _, started := watchRewriter(workspace.WatchOff)
 	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
-		`"`+watchProject+`:/app:watch=partial","`+watchProject+`:/also:read=cached"]}}`)); err == nil {
-		t.Error("read=cached and plain partial share a directory with different modes and was served")
+		`"`+watchProject+`:/app","`+watchProject+`:/also:watch=partial"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if *started != 1 {
+		t.Errorf("the watcher was started %d times, want once for the second mount", *started)
+	}
+
+	// read=cached resolves to partial, so it is a share of its own with the
+	// watch that mode needs, beside the one the plain mount named.
+	r, sharer, _, _ := watchRewriter(workspace.WatchOff)
+	if _, err := r.ContainerCreate(t.Context(), []byte(`{"HostConfig":{"Binds":[`+
+		`"`+watchProject+`:/app:watch=partial","`+watchProject+`:/also:read=cached"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if sharer.exports[0] == sharer.exports[1] {
+		t.Error("read=cached and a plain mount were served as one share")
 	}
 }

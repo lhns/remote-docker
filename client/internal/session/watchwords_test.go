@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -25,18 +24,25 @@ func hostingSession(t *testing.T, defaultWatch workspace.Watch, shares *shareSto
 	return s
 }
 
-// The watch word is recorded with the share, resolved, and a later container
-// naming another rewrites the record.
+// The watch word is recorded with the share, resolved, and a later mount
+// asking for more raises the record.
 func TestTheWatchWordIsRememberedAndRestored(t *testing.T) {
-	s, project, export := store(t)
-	partial := workspace.ShareWords{Watch: workspace.WatchPartial}
-	s.remember(export, project, partial)
+	s, project, _ := store(t)
+	reg := nfsserve.NewRegistry(defaultAttrs(0, 0))
+	share, err := reg.Register(project, workspace.DefaultMode, workspace.ShareWords{Watch: workspace.WatchPartial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.remember(share)
 
-	if _, words, ok := newShareStore(s.path, nil).restore(export); !ok || words.Watch != workspace.WatchPartial {
+	if _, _, words, ok := newShareStore(s.path, nil).restore(share.ExportPath); !ok || words.Watch != workspace.WatchPartial {
 		t.Fatalf("restored %v, %v; want watch=partial", words, ok)
 	}
-	s.remember(export, project, workspace.ShareWords{Watch: workspace.WatchCoarse})
-	if _, words, _ := newShareStore(s.path, nil).restore(export); words.Watch != workspace.WatchCoarse {
+	if _, err := reg.Register(project, workspace.DefaultMode, workspace.ShareWords{Watch: workspace.WatchCoarse}); err != nil {
+		t.Fatal(err)
+	}
+	s.remember(share)
+	if _, _, words, _ := newShareStore(s.path, nil).restore(share.ExportPath); words.Watch != workspace.WatchCoarse {
 		t.Errorf("after remembering coarse, restored %v", words)
 	}
 }
@@ -44,7 +50,8 @@ func TestTheWatchWordIsRememberedAndRestored(t *testing.T) {
 // A record from before the word existed restores with the session's default,
 // which is what the share would have had.
 func TestARecordWithoutAWatchTakesTheSessionDefault(t *testing.T) {
-	st, project, export := store(t)
+	st, project, _ := store(t)
+	export := workspace.ExportPathForID(workspace.LegacyShareID(project))
 	machine, account := thisMachine()
 	data, err := json.Marshal(map[string]any{
 		"version": shareFileVersion, "machine": machine, "user": account,
@@ -58,7 +65,7 @@ func TestARecordWithoutAWatchTakesTheSessionDefault(t *testing.T) {
 	}
 
 	s := hostingSession(t, workspace.WatchCoarse, newShareStore(st.path, nil))
-	_, words, ok := s.restoreShare(export)
+	_, _, words, ok := s.restoreShare(export)
 	if !ok || words.Watch != workspace.WatchCoarse {
 		t.Errorf("restoreShare = %v, %v; want the session's coarse", words, ok)
 	}
@@ -68,8 +75,10 @@ func TestARecordWithoutAWatchTakesTheSessionDefault(t *testing.T) {
 // share: the mount that brought it back registered nothing, so nothing else
 // would, and the container started against it would be served unwatched.
 func TestARestoredWatchingShareStartsTheWatcher(t *testing.T) {
-	st, project, export := store(t)
-	st.remember(export, project, workspace.ShareWords{Watch: workspace.WatchPartial})
+	st, project, _ := store(t)
+	share := shareWith(t, project, workspace.DefaultMode, workspace.ShareWords{Watch: workspace.WatchPartial})
+	st.remember(share)
+	export := share.ExportPath
 
 	s := hostingSession(t, workspace.WatchOff, newShareStore(st.path, nil))
 	if s.watcher() != nil {
@@ -93,8 +102,10 @@ func TestARestoredWatchingShareStartsTheWatcher(t *testing.T) {
 
 // A share that does not watch leaves a session with no watcher alone.
 func TestARestoredShareThatDoesNotWatchStartsNothing(t *testing.T) {
-	st, project, export := store(t)
-	st.remember(export, project, workspace.ShareWords{Watch: workspace.WatchOff})
+	st, project, _ := store(t)
+	share := shareWith(t, project, workspace.DefaultMode, workspace.ShareWords{Watch: workspace.WatchOff})
+	st.remember(share)
+	export := share.ExportPath
 
 	s := hostingSession(t, workspace.WatchOff, newShareStore(st.path, nil))
 	if _, _, ok := s.registry.LookupOrRestore(export); !ok {
@@ -115,26 +126,59 @@ func TestNoWatcherStartsAfterClose(t *testing.T) {
 	}
 }
 
-// The registrar compares the RESOLVED watch, so a mount taking the default
-// against a share that watches is refused, naming the key and the way out.
-func TestTheRegistrarRefusesAnotherWatch(t *testing.T) {
+// A mount of a variant already shared raises its watch and never lowers it, and
+// the watcher is told each time, which is how a raised level reaches an export
+// the watcher already holds (ADR 0042).
+func TestTheRegistrarRaisesTheWatchAndNeverLowersIt(t *testing.T) {
 	dir := t.TempDir()
-	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0))}
+	told := 0
+	reg := shareRegistrar{registry: nfsserve.NewRegistry(defaultAttrs(0, 0)), changed: func() { told++ }}
 
+	var export string
+	for _, watch := range []workspace.Watch{workspace.WatchOff, workspace.WatchPartial, workspace.WatchOff, workspace.WatchCoarse, workspace.WatchPartial} {
+		got, _, err := reg.Share(dir, mountOf(workspace.ShareWords{Watch: watch}))
+		if err != nil {
+			t.Fatalf("watch=%s: %v", watch, err)
+		}
+		if export != "" && got != export {
+			t.Fatalf("watch=%s made another share: %s, then %s", watch, export, got)
+		}
+		export = got
+	}
+	share, _, _ := reg.registry.Lookup(export)
+	if got := share.Words().Watch; got != workspace.WatchCoarse {
+		t.Errorf("watch = %q after off, partial, off, coarse, partial; want coarse", got)
+	}
+	if told != 5 {
+		t.Errorf("the watcher was told %d times, want once per mount", told)
+	}
+}
+
+// A mount raising a share's watch on a session whose watcher is already running
+// reaches the watcher, not just the registry.
+func TestARaisedWatchReachesTheRunningWatcher(t *testing.T) {
+	dir := t.TempDir()
+	s := hostingSession(t, workspace.WatchOff, nil)
+	if err := s.startWatcher(); err != nil {
+		t.Fatal(err)
+	}
+	reg := shareRegistrar{registry: s.registry, changed: s.syncWatch}
+
+	if _, _, err := reg.Share(dir, mountOf(workspace.ShareWords{Watch: workspace.WatchOff})); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.watcher().Stats().Watched; got != 0 {
+		t.Fatalf("an unwatched share has %d watches", got)
+	}
 	if _, _, err := reg.Share(dir, mountOf(workspace.ShareWords{Watch: workspace.WatchPartial})); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := reg.Share(dir, mountOf(workspace.ShareWords{Watch: workspace.WatchOff}))
-	if err == nil {
-		t.Fatal("a different watch for a registered share was accepted")
-	}
-	for _, want := range []string{"watch=partial", "watch=off", "\n  fix: ", "remote restart"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err = %q, want it to contain %q", err, want)
+	deadline := time.Now().Add(5 * time.Second)
+	for s.watcher().Stats().Watched == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the raised watch never reached the watcher")
 		}
-	}
-	if !strings.Contains(err.Error(), dir) {
-		t.Errorf("err = %q, want the directory named", err)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -144,7 +188,7 @@ func TestSharesOfCarriesEachSharesMode(t *testing.T) {
 	for dir, watch := range map[string]workspace.Watch{
 		t.TempDir(): workspace.WatchCoarse, t.TempDir(): workspace.WatchPartial, t.TempDir(): workspace.WatchOff,
 	} {
-		if _, err := registry.Register(dir, workspace.ShareWords{Watch: watch}); err != nil {
+		if _, err := registry.Register(dir, workspace.DefaultMode, workspace.ShareWords{Watch: watch}); err != nil {
 			t.Fatal(err)
 		}
 	}

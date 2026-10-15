@@ -119,7 +119,7 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 			ExportPath: share.ExportPath,
 			LocalPath:  share.LocalPath,
 			File:       share.File,
-			Mode:       share.Words.Watch,
+			Mode:       share.Words().Watch,
 		})
 	}
 	return out
@@ -128,7 +128,7 @@ func sharesOf(registry *nfsserve.Registry) []fswatch.Share {
 // anyWatching reports whether some registered share is watched.
 func (s *Session) anyWatching() bool {
 	for _, share := range s.registry.Shares() {
-		if share.Words.Watch.Watching() {
+		if share.Words().Watch.Watching() {
 			return true
 		}
 	}
@@ -190,7 +190,7 @@ func (s *Session) closeWatcher() {
 // a container started against it is served unwatched until the next
 // reconcile.
 func (s *Session) shareRestored(share *nfsserve.Share) {
-	if !share.Words.Watch.Watching() {
+	if !share.Words().Watch.Watching() {
 		return
 	}
 	if err := s.startWatcher(); err != nil {
@@ -201,12 +201,12 @@ func (s *Session) shareRestored(share *nfsserve.Share) {
 }
 
 // restoreShare answers a mount for an export this session has not registered,
-// with the words the record held. A record from before a word existed takes
-// the session's default for it.
-func (s *Session) restoreShare(export string) (string, workspace.ShareWords, bool) {
-	path, words, ok := s.shares.restore(export)
+// with the variant and words the record held. A record from before a word
+// existed takes the session's default for it.
+func (s *Session) restoreShare(export string) (string, workspace.Mode, workspace.ShareWords, bool) {
+	path, mode, words, ok := s.shares.restore(export)
 	if !ok {
-		return "", workspace.ShareWords{}, false
+		return "", workspace.ModeUnset, workspace.ShareWords{}, false
 	}
 	if words.Watch == workspace.WatchUnset {
 		words.Watch = s.opts.Watch
@@ -214,7 +214,7 @@ func (s *Session) restoreShare(export string) (string, workspace.ShareWords, boo
 	if words.Prefetch == workspace.PrefetchUnset {
 		words.Prefetch = prefetchWord(s.prefetch)
 	}
-	return path, words, true
+	return path, mode, words, true
 }
 
 // reconcileShares periodically resyncs the watcher, covering shares registered

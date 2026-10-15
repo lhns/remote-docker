@@ -148,15 +148,33 @@ func TestIsModeWordClaimsWatch(t *testing.T) {
 	}
 }
 
-func TestShareWordsDifferences(t *testing.T) {
-	a := ShareWords{Owner: Owner{1000, 1000, true}, Watch: WatchPartial}
-	b := ShareWords{Owner: Owner{0, 0, true}, Watch: WatchUnset}
-	got := a.Differences(b)
-	if len(got) != 2 || got[0] != (Difference{"owner", "1000:1000", "0:0"}) || got[1] != (Difference{"watch", "partial", "off"}) {
-		t.Errorf("Differences = %v", got)
+func TestWatchAndPrefetchTakeTheStronger(t *testing.T) {
+	for _, tc := range []struct{ a, b, want Watch }{
+		{WatchUnset, WatchOff, WatchOff},
+		{WatchOff, WatchPartial, WatchPartial},
+		{WatchPartial, WatchOff, WatchPartial},
+		{WatchPartial, WatchCoarse, WatchCoarse},
+		{WatchCoarse, WatchPartial, WatchCoarse},
+		{WatchCoarse, WatchOff, WatchCoarse},
+		{WatchOff, WatchUnset, WatchOff},
+		{WatchUnset, WatchUnset, WatchUnset},
+	} {
+		if got := tc.a.Max(tc.b); got != tc.want {
+			t.Errorf("Watch(%q).Max(%q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		}
 	}
-	if d := a.Differences(a); len(d) != 0 {
-		t.Errorf("identical words differ: %v", d)
+	for _, tc := range []struct{ a, b, want Prefetch }{
+		{PrefetchUnset, PrefetchOff, PrefetchOff},
+		{PrefetchOff, PrefetchTree, PrefetchTree},
+		{PrefetchTree, PrefetchOff, PrefetchTree},
+		{PrefetchTree, PrefetchEager, PrefetchEager},
+		{PrefetchEager, PrefetchTree, PrefetchEager},
+		{PrefetchEager, PrefetchOff, PrefetchEager},
+		{PrefetchOff, PrefetchUnset, PrefetchOff},
+	} {
+		if got := tc.a.Max(tc.b); got != tc.want {
+			t.Errorf("Prefetch(%q).Max(%q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		}
 	}
 }
 

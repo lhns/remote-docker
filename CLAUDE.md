@@ -380,21 +380,28 @@ premise of the project, and it applies to building it too. So:
   ours. `--mount` is split on
   commas by the CLI, so both axes reach it as one csv-quoted field. `read=cached`
   is `actimeo=60,nocto` and rests on the watcher poking what changed, which
-  is why asking for it with watching off is refused. One directory is one share, one volume
-  and one mode: two mounts of it disagreeing are refused, because the second
-  EnsureVolume would silently recreate the first's volume. The same holds for
-  the share's words: they are fixed when it is registered, the share records
-  its mode beside them (a mode difference is named first when words differ too,
-  since the watch it implies differs; a mode alone is not refused), and a mount of the same directory resolving to others is
-  refused by `shareRegistrar` before
-  `volumeFor`, because replacing a share's filesystem strands every handle a
-  running container holds. A share's attributes come from the session's
+  is why asking for it with watching off is refused. A share is one
+  directory per read, write and owner, and nothing is refused between mounts:
+  `workspace.ShareIDFor` hashes the path with all three, so a mount asking for a
+  new combination gets its own export, volume and union beside the others, and
+  nothing changes under a running container. Every variant has a new id, the
+  default one included; `LegacyShareID` (the path alone) exists only to restore
+  a 0.11 record, and a share restored that way goes into the registry by export
+  and NEVER into the by-path map, or a new mount would land on it. `watch=` and
+  `prefetch=` are effort spent on one share and RISE: the share runs at the
+  highest any mount of it asked for (`Watch.Max`, `Prefetch.Max`), raised
+  silently under the registry's lock and read through `Share.Words()` because
+  the watcher and the cache hold the pointer. Only `watch=off` on a mount that
+  needs the watcher is still refused, being a contradiction within one mount.
+  A share's attributes come from the session's
   (`defaultAttrs`, which carries `AlwaysExecutable` on Windows) with only the
   uid and gid replaced; building them from `nfsserve.DefaultAttrs` loses that
-  silently on Windows. The share record gained `owner`, `watch` and `prefetch`
-  WITHOUT a version bump: `readBound` drops a record whose version differs.
-  Prefetch is recorded, restored into the words and compared, and not resumed:
-  a restored share is not attached to the cache (ADR 0027, ADR 0045).
+  silently on Windows. The share record gained `read`, `write`, `owner`, `watch`
+  and `prefetch` WITHOUT a version bump: `readBound` drops a record whose version
+  differs. A record with a variant must have the export that variant derives, and
+  one without must have the legacy one. Prefetch is recorded and restored into
+  the words, and not resumed: a restored share is not attached to the cache
+  (ADR 0027, ADR 0042, ADR 0045).
 - **A union's root has the share's owner, and an agent that cannot do it is
   refused, not trusted** (ADR 0046). The merged root is the upper directory the
   agent creates as root; `owner=` on a `write=back` mount would otherwise
@@ -416,7 +423,10 @@ premise of the project, and it applies to building it too. So:
   `syncWatch` on a connection already up; opened only at connect, a mount made
   after it never reaches a container. `fswatch.tree` holds no root for an
   `off` share and resolves nested roots to the deepest, so which mode strips a
-  deletion does not depend on registration order. A watcher that will not start
+  deletion does not depend on registration order. A directory mounted several
+  ways is several roots at one path, all deepest: every event goes to each with
+  that root's own mode, removing one root keeps a sibling's watches, and `sync`
+  applies a raised mode to a root it already holds (ADR 0042). A watcher that will not start
   refuses the mount that needed it and leaves the session open.
 - **A share with `write != through` is a UNION, its lower carries the share's
   READ mode, and the agent is its only writer** (ADR 0042, ADR 0044). The live
@@ -1159,13 +1169,19 @@ alongside it.
 
 The words a mount carries for its share, in `integration.sh` 14b (2026-10-14):
 `owner=1000` and `owner=1000.2000` on `-v` and `owner=1000:2000` on `--mount`
-reporting those ids, a second owner for a registered directory refused with a
-fix, and the same on a `write=back` union's root with git as uid 1000 working
-there. `watch=partial` and `read=cached` turning the watcher on for their own
+reporting those ids, two containers on one directory at once with `owner=1000`
+and `owner=2000` each reporting its own and reading the other's file, and the
+same on a `write=back` union's root with git as uid 1000 working there. `watch=partial` and `read=cached` turning the watcher on for their own
 directory with the session at `watch` off, `read=cached,watch=off` refused,
 `watch=coarse` poking the directory when a file is deleted here, and a client
 restart keeping both the owner and the watching of a share a container still
-mounts (the record carries the words). In 15e, `prefetch=off` beating the
+mounts, `read=cached` ones included (the record carries the variant and the
+words). A later mount raising the watch of a share an earlier `watch=off` mount
+made, with the edit reaching both containers. In 14c, a compose project with
+`prefetch=eager` brought `down` and up again without it, not refused; in 14d,
+`write=through` and `read=cached,write=back` containers on one directory at
+once, nfs in one and fuse-overlayfs in the other, with an edit here, a write in
+either and the other seeing it. In 15e, `prefetch=off` beating the
 session's `tree`, and a compose `consistency:` carrying `watch=`, `prefetch=`
 and `owner=` into an owned union. What this cannot tell is `eager` from
 `tree` for a share nobody reads: both fill it at once.

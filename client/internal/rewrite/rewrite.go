@@ -46,9 +46,9 @@ func (g *Guard) exported(volume string) bool {
 type Sharer interface {
 	// Share exports localPath and returns its export path, e.g. "/m/<id>",
 	// and for a single file the base name the mount uses as a subpath
-	// (ADR 0039). The mode and words are the share's own, resolved: a
-	// directory already shared with others is refused, since a share's mode
-	// and words are fixed.
+	// (ADR 0039). The mode and words are the mount's, resolved: the mode and
+	// owner pick the share, so another one gets a share of its own, and a
+	// repeat of one raises its watch and prefetch (ADR 0042).
 	Share(localPath string, mount workspace.MountWords) (exportPath, file string, err error)
 }
 

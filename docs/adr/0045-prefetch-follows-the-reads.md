@@ -11,8 +11,11 @@
   carries it, so one cache serves a tree share and an eager one; `Touch` feeds
   only tree shares and costs one atomic load while there are none. A share
   restored after a restart is not attached to the cache, so its prefetch is
-  recorded, restored into its words, compared by the registrar, and not
-  resumed (ADR 0027).
+  recorded, restored into its words, and not resumed (ADR 0027). Amended
+  2026-10-15: a later mount of the same share raises the policy (`off < tree <
+  eager`) and never lowers it: `Cache.Attach` on a known share lifts it, starting
+  the fill if there was none, and `Touch` keeps its atomic-count fast path
+  because a raise only stores to state the sender reads.
 - Extends [ADR 0044](0044-a-delegated-share-is-a-cache.md), which decides
   that the share is a union; this record decides what goes into it and when.
   The read and write axes it hangs off are

@@ -97,8 +97,8 @@ func TestRootHandleRestoresARecordedExport(t *testing.T) {
 
 	r := NewRegistry(DefaultAttrs)
 	r.Recorded = func() []string { return []string{exportOf(dir)} }
-	r.Restore = func(export string) (string, workspace.ShareWords, bool) {
-		return dir, workspace.ShareWords{}, export == exportOf(dir)
+	r.Restore = func(export string) (string, workspace.Mode, workspace.ShareWords, bool) {
+		return dir, workspace.DefaultMode, workspace.ShareWords{Owner: workspace.Owner{UID: DefaultAttrs.UID, GID: DefaultAttrs.GID, Set: true}}, export == exportOf(dir)
 	}
 
 	if _, _, err := New(r, nil).handler.FromHandle(handle); err != nil {
@@ -114,7 +114,7 @@ func TestRootHandlesDifferPerShare(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 
 	r := registryFor(t, first)
-	other, err := r.Register(second, workspace.ShareWords{})
+	other, err := r.Register(second, workspace.ModeUnset, workspace.ShareWords{})
 	if err != nil {
 		t.Fatal(err)
 	}

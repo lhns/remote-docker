@@ -11,7 +11,7 @@ import (
 
 // The client serves a single NFS export whose root is synthetic: each local
 // directory the client shares appears beneath it as /m/<id>, the id derived
-// from its path. The working directory is no exception.
+// from its path and how it is mounted. The working directory is no exception.
 //
 // One export means one server, one reverse-tunnel port and one round of NFS
 // handle state, while still supporting bind sources anywhere on the client:
@@ -85,12 +85,37 @@ func isDriveLetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// ShareID is the stable identifier for a local directory, derived from its
-// canonical key. The same directory always yields the same id, on this run and
-// on the next one, which is what lets a reconnecting client keep its NFS
-// handles and its remote volumes rather than orphaning them.
-func ShareID(localPath string) string {
-	sum := sha256.Sum256([]byte(CanonicalKey(localPath)))
+// ShareVariant is what makes two mounts of one directory different shares
+// (ADR 0042): how the mount is served and who owns what it reports. Both are
+// resolved, so the same mount always names the same variant.
+type ShareVariant struct {
+	Mode  Mode
+	Owner Owner
+}
+
+// ShareIDFor is the stable identifier for a local directory mounted as variant,
+// derived from its canonical key and the variant. The same mount always yields
+// the same id, on this run and on the next one, which is what lets a
+// reconnecting client keep its NFS handles and its remote volumes rather than
+// orphaning them. Every variant has its own id, so mounting one directory two
+// ways gives two exports, two volumes and two unions that never meet.
+//
+// Watch and prefetch are not here: they are effort spent on a share and rise
+// with the mounts that ask for them (ADR 0042).
+func ShareIDFor(localPath string, v ShareVariant) string {
+	return digestID(fmt.Sprintf("%s\x00%s\x00%s\x00%d:%d",
+		CanonicalKey(localPath), v.Mode.Read, v.Mode.Write, v.Owner.UID, v.Owner.GID))
+}
+
+// LegacyShareID is the id releases before the variant derived from the path
+// alone. Only restoring a record they wrote uses it (ADR 0027); nothing new
+// is given one, and ShareIDFor never returns it.
+func LegacyShareID(localPath string) string {
+	return digestID(CanonicalKey(localPath))
+}
+
+func digestID(key string) string {
+	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])[:idLen]
 }
 

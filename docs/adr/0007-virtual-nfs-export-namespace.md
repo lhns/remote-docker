@@ -36,8 +36,10 @@ directory the NEXT client started in, so a container created from one project
 mounted another after a restart.
 
 `<share id>` is 16 hex characters of the SHA-256 of the directory's canonical
-path. Canonicalisation folds case and separators on Windows and cleans the path
-everywhere, so two spellings of the same directory produce one share.
+path and how it is mounted: read, write and owner (amended 2026-10-15, ADR
+0042; it was the path alone). Canonicalisation folds case and separators on
+Windows and cleans the path everywhere, so two spellings of the same directory
+produce one share, and the same directory mounted a different way is another.
 
 ## Consequences
 
@@ -54,10 +56,10 @@ everywhere, so two spellings of the same directory produce one share.
   against a directory that was right there. What restores a share is a MOUNT
   that missed, never a session starting, and the workspace names an id rather
   than a path: the record is a capability list this machine checks again on
-  every read, and `ShareID` cannot be inverted, so an id nobody wrote down
+  every read, and a share id cannot be inverted, so an id nobody wrote down
   resolves to nothing.
-- Share ids are stable across runs, because they are derived from the path
-  rather than allocated. A reconnecting client keeps its NFS handles and its
+- Share ids are stable across runs, because they are derived from the path and
+  the mount's variant rather than allocated. A reconnecting client keeps its NFS handles and its
   remote volumes instead of orphaning one set per session.
 - Case folding is Windows-only and deliberately so. Folding case on a
   case-sensitive filesystem would merge two genuinely different directories

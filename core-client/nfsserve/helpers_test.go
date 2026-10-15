@@ -132,7 +132,7 @@ func mustMount(t *testing.T, addr, export string) *nfsclient.Target {
 func registryFor(t testing.TB, dir string) *Registry {
 	t.Helper()
 	r := NewRegistry(DefaultAttrs)
-	if _, err := r.Register(dir, workspace.ShareWords{}); err != nil {
+	if _, err := r.Register(dir, workspace.DefaultMode, workspace.ShareWords{}); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -158,7 +158,7 @@ func unsetEnv(t *testing.T, key string) {
 
 // exportOf is the export a registry serves dir at.
 func exportOf(dir string) string {
-	return workspace.ExportPathForID(workspace.ShareID(dir))
+	return workspace.ExportPathForID(workspace.ShareIDFor(dir, workspace.ShareVariant{Mode: workspace.DefaultMode, Owner: workspace.Owner{UID: DefaultAttrs.UID, GID: DefaultAttrs.GID, Set: true}}))
 }
 
 // dirShare registers dir and returns its share, for a test that asks the

@@ -139,9 +139,11 @@ type ShareOptions struct {
 //
 // Attached once per share: a second consumer of the same directory finds the
 // share already known, and re-sending the tree would cost the link twice for
-// nothing.
+// nothing. It can still ask for more: a stronger policy raises the share's,
+// and a weaker one is ignored (ADR 0042).
 func (c *Cache) Attach(share, root string, opts ShareOptions) {
 	if _, known := c.shares.get(share); known {
+		c.raise(share, root, opts.Policy)
 		return
 	}
 	state := &shareState{opts: opts}
@@ -478,7 +480,7 @@ func (f *shares) forget(share string) {
 	delete(f.recorded, share)
 	if p, ok := f.prefetch[share]; ok {
 		delete(f.prefetch, share)
-		if p.policy == PolicyTree {
+		if p.pol() == PolicyTree {
 			f.trees.Add(-1)
 		}
 	}

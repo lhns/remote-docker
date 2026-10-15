@@ -10,6 +10,14 @@ software.
 
 ## Unreleased
 
+### New
+
+- **Mount a directory differently in each container.** `read=`, `write=` and
+  `owner=` now apply per container, so one directory can be a live mount in one
+  and a cached union in another at the same time, and changing a mount's words
+  no longer needs a restart. `watch=` and `prefetch=` are shared: the directory
+  runs at the strongest any of its mounts asked for.
+
 ### Fixes
 
 - **compose now warns about a long-syntax bind that loses its mount options.**
@@ -20,6 +28,14 @@ software.
   The first connection after the daemon stopped could refuse every
   `write=back` and `delegated` mount with "update the workspace" until the
   session went idle. The client now asks the workspace again before refusing.
+
+### Upgrading
+
+- **Each container created after the upgrade gets a new volume.** Every mount
+  now has an id that includes how it is mounted, so the same directory mounted
+  the same way is a different volume from before. Containers that already exist
+  keep working, and their old volumes are collected once those containers are
+  gone.
 
 ## 0.11.0 — 2026-10-14
 

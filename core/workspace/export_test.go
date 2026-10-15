@@ -69,14 +69,15 @@ func TestCanonicalKeyForPOSIX(t *testing.T) {
 // volumes instead of orphaning one per session.
 func TestShareIDIsStable(t *testing.T) {
 	const p = "/home/alice/project"
-	first := ShareID(p)
+	v := ShareVariant{Mode: DefaultMode, Owner: Owner{UID: 1000, GID: 1000, Set: true}}
+	first := ShareIDFor(p, v)
 	for range 100 {
-		if got := ShareID(p); got != first {
-			t.Fatalf("ShareID(%q) is not stable: %q then %q", p, first, got)
+		if got := ShareIDFor(p, v); got != first {
+			t.Fatalf("ShareIDFor(%q) is not stable: %q then %q", p, first, got)
 		}
 	}
 	if len(first) != idLen {
-		t.Errorf("ShareID length = %d, want %d", len(first), idLen)
+		t.Errorf("ShareIDFor length = %d, want %d", len(first), idLen)
 	}
 }
 
@@ -89,16 +90,59 @@ func TestShareIDDistinguishesDifferentPaths(t *testing.T) {
 		"/home/alice/project/sub",
 		"/",
 	} {
-		id := ShareID(p)
+		id := ShareIDFor(p, ShareVariant{Mode: DefaultMode})
 		if prev, ok := seen[id]; ok {
-			t.Errorf("ShareID collision: %q and %q both yield %q", prev, p, id)
+			t.Errorf("ShareIDFor collision: %q and %q both yield %q", prev, p, id)
 		}
 		seen[id] = p
 	}
 }
 
+// A directory mounted a different way is a different share: read, write and
+// owner are identity, and nothing else is.
+func TestShareIDFollowsTheVariant(t *testing.T) {
+	const p = "/home/alice/project"
+	base := ShareVariant{Mode: DefaultMode, Owner: Owner{UID: 1000, GID: 1000, Set: true}}
+	id := ShareIDFor(p, base)
+
+	for name, v := range map[string]ShareVariant{
+		"read":      {Mode: Mode{ReadCached, WriteThrough}, Owner: base.Owner},
+		"write":     {Mode: Mode{ReadDirect, WriteBack}, Owner: base.Owner},
+		"uid":       {Mode: base.Mode, Owner: Owner{UID: 2000, GID: 1000, Set: true}},
+		"gid":       {Mode: base.Mode, Owner: Owner{UID: 1000, GID: 2000, Set: true}},
+		"read+both": {Mode: Mode{ReadCached, WriteBack}, Owner: Owner{UID: 0, GID: 0, Set: true}},
+	} {
+		if got := ShareIDFor(p, v); got == id {
+			t.Errorf("a different %s yields the same id %q", name, id)
+		}
+	}
+	if got := ShareIDFor(p, base); got != id {
+		t.Errorf("the same variant yields %q then %q", id, got)
+	}
+}
+
+// Every variant, the default included, has an id no release before this one
+// derived from the path alone, so an old volume is never taken for a new share.
+func TestShareIDNeverEqualsTheLegacyID(t *testing.T) {
+	const p = "/home/alice/project"
+	legacy := LegacyShareID(p)
+	if len(legacy) != idLen {
+		t.Errorf("LegacyShareID length = %d, want %d", len(legacy), idLen)
+	}
+	for _, v := range []ShareVariant{
+		{},
+		{Mode: DefaultMode},
+		{Mode: DefaultMode, Owner: Owner{Set: true}},
+		{Mode: Mode{ReadCached, WriteBack}, Owner: Owner{UID: 1000, GID: 1000, Set: true}},
+	} {
+		if ShareIDFor(p, v) == legacy {
+			t.Errorf("ShareIDFor(%+v) equals the legacy id", v)
+		}
+	}
+}
+
 func TestExportAndVolumeNamesRoundTrip(t *testing.T) {
-	id := ShareID("/home/alice/project")
+	id := LegacyShareID("/home/alice/project")
 
 	export := ExportPathForID(id)
 	if !strings.HasPrefix(export, ExportMountPrefix) {
@@ -284,7 +328,7 @@ func TestNFSVolumeOptionsVaryOnlyTheAttributeCache(t *testing.T) {
 // silently returns the first's volume, and a container comes up reading
 // somebody else's project.
 func TestVolumeNamesCarryTheClient(t *testing.T) {
-	id := ShareID("/home/alice/project")
+	id := LegacyShareID("/home/alice/project")
 
 	phone := VolumeNameForID("aabbccdd", id)
 	pc := VolumeNameForID("11223344", id)
@@ -299,7 +343,7 @@ func TestVolumeNamesCarryTheClient(t *testing.T) {
 }
 
 func TestParseVolumeName(t *testing.T) {
-	id := ShareID("/home/alice/project")
+	id := LegacyShareID("/home/alice/project")
 
 	for _, tc := range []struct {
 		name         string
@@ -356,7 +400,7 @@ func TestClientID(t *testing.T) {
 		t.Errorf("client id %q is %d characters, want %d", a, len(a), clientIDLen)
 	}
 	// It goes in a volume name, so it has to survive being read back out.
-	if _, _, ok := ParseVolumeName(VolumeNameForID(a, ShareID("/x"))); !ok {
+	if _, _, ok := ParseVolumeName(VolumeNameForID(a, LegacyShareID("/x"))); !ok {
 		t.Errorf("a volume named for client %q does not parse", a)
 	}
 }
@@ -366,7 +410,7 @@ func TestClientID(t *testing.T) {
 // claims and everything leaves alone, which is how disk disappears quietly.
 func TestCacheVolumesBelongToTheirShare(t *testing.T) {
 	const client = "aabbccdd"
-	id := ShareID("/home/alice/project")
+	id := LegacyShareID("/home/alice/project")
 
 	share := VolumeNameForID(client, id)
 	cache := VolumeNameForCache(client, id)

@@ -69,7 +69,7 @@ func TestNConnect(t *testing.T) {
 // rewriter that was told nothing asks for nothing.
 func TestNConnectReachesTheVolume(t *testing.T) {
 	const bind = `{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app"]}}`
-	volume := workspace.VolumeNameForID("", workspace.ShareID("/home/alice/project"))
+	volume := workspace.VolumeNameForID("", defaultShareID("/home/alice/project"))
 
 	r, _, volumes := newRewriter()
 	if _, err := r.ContainerCreate(t.Context(), []byte(bind)); err != nil {
