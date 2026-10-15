@@ -155,7 +155,7 @@ elevation.
 
 The machine boots Flatcar's Hyper-V disk image. `create` downloads it itself:
 a pinned version, SHA512-checked before it is unpacked, kept in
-`%LOCALAPPDATA%emote-dockerootfs`, so a second machine downloads nothing.
+`%LOCALAPPDATA%\remote-docker\rootfs`, so a second machine downloads nothing.
 About 584 MB zipped and 1.2 GB unpacked, plus a copy of the same size per
 machine. Behind a proxy, add `--proxy http://proxy.example:3128`: it is used
 for the download and set in the VM's docker daemon.
