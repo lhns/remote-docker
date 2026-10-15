@@ -10,6 +10,7 @@ package machine
 
 import (
 	"archive/zip"
+	"cmp"
 	"context"
 	"crypto/sha512"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // flatcarSource is one Flatcar release's Hyper-V image.
@@ -31,7 +33,17 @@ type flatcarSource struct {
 	URL     string
 	// SHA512 is the zip's, lower-case hex, from the release's .DIGESTS file.
 	SHA512 string
+	// MaxBytes caps the download: the zip's size plus a margin. Zero means
+	// flatcarMaxDownload. The hash is checked only after the last byte, and
+	// the proxy may be a caller's, so the size is bounded first.
+	MaxBytes int64
 }
+
+// flatcarMaxDownload is the cap for the pinned zip (about 600 MB) with room.
+const flatcarMaxDownload = 1 << 30
+
+// flatcarDownloadTimeout bounds one download.
+var flatcarDownloadTimeout = 30 * time.Minute
 
 // flatcarPinned is the image a new Hyper-V machine boots.
 //
@@ -124,6 +136,9 @@ func ParseProxy(raw string) (*url.URL, error) {
 // its SHA512 is the pinned one. Hashed while it is written, so a bad file is
 // never unpacked.
 func download(ctx context.Context, client *http.Client, src flatcarSource, dir string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, flatcarDownloadTimeout)
+	defer cancel()
+	limit := cmp.Or(src.MaxBytes, flatcarMaxDownload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {
 		return "", err
@@ -137,6 +152,10 @@ func download(ctx context.Context, client *http.Client, src flatcarSource, dir s
 		return "", fmt.Errorf("%s answered %s", src.URL, resp.Status)
 	}
 
+	if resp.ContentLength > limit {
+		return "", fmt.Errorf("%s announces %d bytes, more than the %d allowed; refusing it", src.URL, resp.ContentLength, limit)
+	}
+
 	tmp, err := os.CreateTemp(dir, ".flatcar-*.zip")
 	if err != nil {
 		return "", err
@@ -148,8 +167,13 @@ func download(ctx context.Context, client *http.Client, src flatcarSource, dir s
 	}
 
 	h := sha512.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
+	// One byte more than the cap, so a body over it is told from one at it.
+	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, limit+1))
+	if err != nil {
 		return fail(err)
+	}
+	if n > limit {
+		return fail(fmt.Errorf("%s sent more than the %d bytes allowed; refusing it", src.URL, limit))
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != src.SHA512 {
 		return fail(fmt.Errorf("the download's SHA512 is %s, not the pinned %s; refusing it", got, src.SHA512))

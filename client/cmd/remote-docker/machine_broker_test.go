@@ -141,3 +141,23 @@ func TestTheBrokeredBackendCannotBeNamedOnTheCommandLine(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+type goneServiceBackend struct{ fakeBackend }
+
+func (goneServiceBackend) Destroy(context.Context, string) error {
+	return machine.ErrBrokerNotInstalled
+}
+
+// After the service is uninstalled its machines are gone with it, and `rm` says
+// how to forget the workspace.
+func TestRmOfABrokerMachineAfterUninstallPointsAtKeepMachine(t *testing.T) {
+	withConfig(t, &config.File{Default: "dev", Workspaces: map[string]config.Workspace{
+		"dev": {Host: "127.0.0.1", Port: 1, Machine: &config.Machine{Backend: "hyperv", Name: "dev", Broker: true}},
+	}})
+	withBackend(t, &goneServiceBackend{fakeBackend{log: &events{}}})
+
+	err := run(t, "remote", "rm", "dev", "-f")
+	if err == nil || !strings.Contains(err.Error(), "rm dev --keep-machine` forgets the workspace") {
+		t.Errorf("err = %v", err)
+	}
+}

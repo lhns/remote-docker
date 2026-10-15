@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // brokerRecord says whose a machine is. Owner is a SID, read off the pipe when
@@ -59,8 +60,11 @@ func (r brokerRecords) save(m map[string]brokerRecord) error {
 		return err
 	}
 	_, werr := tmp.Write(raw)
+	// Flushed before the rename, or a crash can leave the name pointing at an
+	// empty file, which reads as a record nobody can parse.
+	serr := tmp.Sync()
 	cerr := tmp.Close()
-	if err := errors.Join(werr, cerr); err != nil {
+	if err := errors.Join(werr, serr, cerr); err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
 	}
@@ -80,12 +84,15 @@ func (r brokerRecords) put(name string, rec brokerRecord) error {
 	return r.save(m)
 }
 
-func (r brokerRecords) remove(name string) error {
+// removeIf deletes a record only while it still names owner, so an operation
+// that finished late cannot delete the record of a machine somebody else has
+// since been given.
+func (r brokerRecords) removeIf(name, owner string) error {
 	m, err := r.load()
 	if err != nil {
 		return err
 	}
-	if _, ok := m[name]; !ok {
+	if rec, ok := m[name]; !ok || !strings.EqualFold(rec.Owner, owner) {
 		return nil
 	}
 	delete(m, name)

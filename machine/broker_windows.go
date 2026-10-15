@@ -129,12 +129,11 @@ func callerOfToken(tok windows.Token) (brokerCaller, error) {
 // ---- the live group -------------------------------------------------------
 
 const (
-	errMoreData       = 234
-	errMemberInAlias  = 1378
-	errMemberNoAlias  = 1377
-	errAliasExists    = 1379
-	nerrGroupExists   = 2223
-	nerrGroupNotFound = 2220
+	errMemberInAlias  syscallErrno = 1378
+	errMemberNoAlias  syscallErrno = 1377
+	errAliasExists    syscallErrno = 1379
+	nerrGroupExists   syscallErrno = 2223
+	nerrGroupNotFound syscallErrno = 2220
 )
 
 // localGroupMembers lists the SIDs that are DIRECT members of a local group,
@@ -253,6 +252,27 @@ func ensureProtectedDir(path string) error {
 	if !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return err
 	}
+	if err := verifyProtectedDir(path); err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// verifyProtectedDir refuses a directory that is not a plain directory owned
+// by SYSTEM or Administrators. Everything that reads or deletes under the
+// service's root asks this first: ProgramData lets any user create a folder
+// there, and a user's folder or junction must never be what SYSTEM reads
+// machines.json from or removes.
+func verifyProtectedDir(path string) error {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
 	attrs, err := windows.GetFileAttributes(p)
 	if err != nil {
 		return err
@@ -271,12 +291,7 @@ func ensureProtectedDir(path string) error {
 	if !owner.IsWellKnown(windows.WinLocalSystemSid) && !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
 		return fmt.Errorf("%s is owned by %s, not by SYSTEM or Administrators", path, owner)
 	}
-	dacl, _, err := sd.DACL()
-	if err != nil {
-		return err
-	}
-	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	return nil
 }
 
 // ensureBrokerDirs creates the root and the two directories under it.
@@ -429,19 +444,22 @@ func openBrokerService(access uint32) (windows.Handle, error) {
 	return windows.OpenService(scm, name, access)
 }
 
-// startBrokerService starts the service if it is stopped. The installer grants
-// Authenticated Users the right to start it and nothing else; who may DO
-// anything is decided inside.
+// startBrokerService starts the service if it is stopped and waits for it to
+// run. The installer grants Authenticated Users the right to start it and
+// nothing else; who may DO anything is decided inside. StartService is called
+// once: a service that stops again straight away is reported, not restarted
+// every few hundred milliseconds by whoever asked.
 func startBrokerService(ctx context.Context) error {
 	svc, err := openBrokerService(windows.SERVICE_QUERY_STATUS | windows.SERVICE_START)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return errors.New("the Hyper-V service is not installed")
+			return ErrBrokerNotInstalled
 		}
 		return fmt.Errorf("opening the Hyper-V service: %w", err)
 	}
 	defer func() { _ = windows.CloseServiceHandle(svc) }()
 
+	started := false
 	for {
 		var st windows.SERVICE_STATUS
 		if err := windows.QueryServiceStatus(svc, &st); err != nil {
@@ -451,6 +469,10 @@ func startBrokerService(ctx context.Context) error {
 		case windows.SERVICE_RUNNING:
 			return nil
 		case windows.SERVICE_STOPPED:
+			if started {
+				return errors.New("the Hyper-V service stopped right after starting; see the Application event log")
+			}
+			started = true
 			err := windows.StartService(svc, 0, nil)
 			if err != nil && !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 				return fmt.Errorf("starting the Hyper-V service: %w", err)
@@ -462,4 +484,21 @@ func startBrokerService(ctx context.Context) error {
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
+}
+
+// brokerServiceRunning reports whether the service process is up.
+func brokerServiceRunning() (bool, error) {
+	svc, err := openBrokerService(windows.SERVICE_QUERY_STATUS)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = windows.CloseServiceHandle(svc) }()
+	var st windows.SERVICE_STATUS
+	if err := windows.QueryServiceStatus(svc, &st); err != nil {
+		return false, err
+	}
+	return st.CurrentState != windows.SERVICE_STOPPED, nil
 }

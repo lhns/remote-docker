@@ -61,10 +61,17 @@ fix, not worked around.
   are held to shapes that cannot break out of the systemd unit, the Ignition
   JSON or a PowerShell literal.
 - **A pre-created ProgramData directory.** ProgramData lets Users create
-  folders. The service creates its directories with the protected DACL at
-  birth, and one that already exists is adopted only if SYSTEM or
-  Administrators own it and it is not a reparse point; otherwise it refuses to
-  start and writes why to `%TEMP%\remote-docker-service.log` (SYSTEM's).
+  folders. `service setup` (the installer, as SYSTEM) creates the directories
+  with the protected DACL at install, before any user can. One that exists
+  anyway is adopted only if SYSTEM or Administrators own it and it is not a
+  reparse point; otherwise the service refuses to start. That refusal is a
+  denial of service a user can cause by pre-creating the folder before
+  install, and nothing worse: the service reads and writes nothing there.
+  Teardown and `service purge` make the same check before reading
+  `machines.json` or deleting, and refuse while the service is running (two
+  processes would write the record). Startup failures go to the Windows event
+  log, never to a file: SYSTEM writing a path in a directory users can plant a
+  link in is an arbitrary overwrite.
 - **A squatted pipe.** While the service is stopped a user can create a pipe
   of the same name, and while it runs a second instance of it if the DACL lets
   them; either would be sent a request, private host key included. The DACL
@@ -75,9 +82,22 @@ fix, not worked around.
 - **Proxy.** The proxy is the caller's choice, as it is on the direct path;
   what is pinned is the Flatcar URL and its SHA512, so a proxy cannot change
   the image. A caller's proxy URL is also visible in the machine they created.
-- **Resource use.** Eight concurrent connections, 30 seconds to send a request
-  once authorised, 64 KiB per request. A member can create as many machines as
-  the disk holds; there is no quota. Accepted: members are trusted users.
+- **A member wedging the service.** Every operation has a deadline (2 minutes;
+  45 for create, which includes the Flatcar download; 15 for purge) and ends
+  when the caller's connection drops (a read on the connection returns). A
+  stop the guest ignores falls back to `Stop-VM -TurnOff` after 90 seconds. A
+  caller may have 2 operations running (administrators 4, counted apart, so
+  purge is never starved), 32 connections are served at once, 30 seconds to
+  send a request once authorised. Operations on one machine queue behind its
+  name's lock, which waits with the caller's deadline; `machines.json` is
+  locked only for a file read or write, never across a Hyper-V call. The
+  Flatcar download is capped in size and time before its hash is checked.
+- **Cleanup that fails.** A create that fails destroys what it made. If that
+  also fails the record is kept, so the machine stays destroyable by its
+  owner or by a purge; a destroy removes a record only while it still names
+  the caller.
+- **Quota.** A member can create as many machines as the disk holds; there is
+  no per-user quota. Accepted: members are trusted users.
 - **Purge.** Destroys every recorded machine; administrators only; run at
   uninstall.
 

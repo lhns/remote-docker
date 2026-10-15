@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The direct executor is the PowerShell the backend ran before the executor
@@ -76,5 +77,29 @@ func TestDirectHyperVRunsTheScriptsItAlwaysDid(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(vhd); string(got) != "disk" {
 		t.Error("the disk was not copied beside the machine")
+	}
+}
+
+// A stop the guest ignores does not hold the operation: after the grace the
+// machine is turned off.
+func TestDirectHyperVStopFallsBackToTurnOff(t *testing.T) {
+	saved := stopGrace
+	stopGrace = 100 * time.Millisecond
+	defer func() { stopGrace = saved }()
+
+	var scripts []string
+	d := directHyperV{run: func(ctx context.Context, script, _ string) (string, error) {
+		scripts = append(scripts, script)
+		if script == psStop("rd-dev") {
+			<-ctx.Done() // the guest never answers
+			return "", ctx.Err()
+		}
+		return "", nil
+	}}
+	if err := d.Stop(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) != 2 || scripts[1] != psStopForce("rd-dev") || !strings.Contains(scripts[1], "-TurnOff") {
+		t.Errorf("scripts = %q", scripts)
 	}
 }

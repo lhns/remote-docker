@@ -3,6 +3,7 @@ package machine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -26,6 +27,13 @@ type brokerFake struct {
 	calls     []string
 	vms       map[string]State
 	createErr error
+
+	// block makes Look wait for it, or for its context: a Hyper-V call that
+	// hangs. ctxDone receives when a blocked Look's context ended.
+	block      chan struct{}
+	ctxDone    chan struct{}
+	destroyErr error
+	onDestroy  func()
 }
 
 func newBrokerFake() *brokerFake { return &brokerFake{vms: map[string]State{}} }
@@ -41,8 +49,18 @@ func (f *brokerFake) got() string {
 	return strings.Join(f.calls, ",")
 }
 func (f *brokerFake) Available(context.Context) error { f.rec("available", ""); return nil }
-func (f *brokerFake) Look(_ context.Context, n string) (State, hyperVNotes, error) {
+func (f *brokerFake) Look(ctx context.Context, n string) (State, hyperVNotes, error) {
 	f.rec("look", n)
+	if f.block != nil {
+		select {
+		case <-f.block:
+		case <-ctx.Done():
+			if f.ctxDone != nil {
+				f.ctxDone <- struct{}{}
+			}
+			return Absent, hyperVNotes{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.vms[n], hyperVNotes{Generation: "g", Key: keyFingerprint("k")}, nil
@@ -66,8 +84,14 @@ func (f *brokerFake) Address(_ context.Context, n string) (string, error) {
 func (f *brokerFake) Retract(_ context.Context, n string) error { f.rec("retract", n); return nil }
 func (f *brokerFake) Destroy(_ context.Context, n string) error {
 	f.rec("destroy", n)
+	if f.onDestroy != nil {
+		f.onDestroy()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.destroyErr != nil {
+		return f.destroyErr
+	}
 	delete(f.vms, n)
 	return nil
 }
@@ -346,7 +370,7 @@ func TestBrokerRefusesMalformedNames(t *testing.T) {
 	h := newBrokerHarness(t)
 	alice := h.as(sidAlice, false, sidAlice)
 
-	for _, name := range []string{"", "Dev", "-dev", "dev_1", "a/b", `..\x`, "dev.vhdx", "d e", strings.Repeat("a", 64), "rd-x\n", `c:\x`} {
+	for _, name := range []string{"", "Dev", "-dev", "dev_1", "a/b", `..\x`, "dev.vhdx", "d e", "con", "nul", "com1", "lpt9", "aux", "prn", strings.Repeat("a", 64), "rd-x\n", `c:\x`} {
 		if err := alice.Start(ctx, name); err == nil || brokerCode(t, err) != codeInvalid {
 			t.Errorf("start %q: %v", name, err)
 		}
@@ -570,5 +594,169 @@ func TestBrokerConstantsArePinned(t *testing.T) {
 	}
 	if g1, g2 := (Spec{Name: "a"}).Generation(), (Spec{Name: "a", Broker: true}).Generation(); g1 != g2 {
 		t.Error("the broker flag changed the generation: a machine cannot move between them")
+	}
+}
+
+// waitCalls waits until the fake has seen n calls of op.
+func waitCalls(t *testing.T, f *brokerFake, op string, n int) {
+	t.Helper()
+	for range 200 {
+		f.mu.Lock()
+		got := strings.Count(","+strings.Join(f.calls, ",")+",", ","+op+" ")
+		f.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("never saw %d %s calls: %s", n, op, f.got())
+}
+
+// One caller cannot take every slot: a third operation from the same SID is
+// refused while two hang, and neither another member nor an administrator is
+// held up by it.
+func TestBrokerCapsOperationsPerCaller(t *testing.T) {
+	ctx := context.Background()
+	h := newBrokerHarness(t)
+	h.fake.block = make(chan struct{})
+	defer close(h.fake.block)
+
+	alice := h.as(sidAlice, false, sidAlice, sidBob)
+	for i := range perCallerOps {
+		go func() { _, _, _ = alice.Look(ctx, fmt.Sprintf("m%d", i)) }()
+	}
+	waitCalls(t, h.fake, "look", perCallerOps)
+
+	if _, _, err := alice.Look(ctx, "m9"); err == nil || brokerCode(t, err) != codeBusy {
+		t.Fatalf("a third operation: %v, want busy", err)
+	}
+
+	// Others get through to the fake (and then wait with it, so ask
+	// something that does not look).
+	if err := h.as(sidBob, false, sidAlice, sidBob).Available(ctx); err != nil {
+		t.Errorf("another member was held up: %v", err)
+	}
+	if err := h.as(sidSystem, true).Available(ctx); err != nil {
+		t.Errorf("an administrator was held up: %v", err)
+	}
+}
+
+// A Hyper-V call that never returns ends at the operation's deadline, and the
+// caller is told.
+func TestBrokerOperationTimesOut(t *testing.T) {
+	saved := brokerOpTimeout
+	brokerOpTimeout = 150 * time.Millisecond
+	defer func() { brokerOpTimeout = saved }()
+
+	h := newBrokerHarness(t)
+	h.fake.block = make(chan struct{}) // never released
+	start := time.Now()
+	_, _, err := h.as(sidAlice, false, sidAlice).Look(context.Background(), "dev")
+	if err == nil || !strings.Contains(err.Error(), "deadline") {
+		t.Errorf("err = %v, want the deadline", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %s", time.Since(start))
+	}
+}
+
+// The operation stops when the caller's connection goes away.
+func TestBrokerOperationStopsWhenTheCallerDisconnects(t *testing.T) {
+	h := newBrokerHarness(t)
+	h.fake.block = make(chan struct{})
+	h.fake.ctxDone = make(chan struct{}, 1)
+	h.as(sidAlice, false, sidAlice)
+
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = conn.Write([]byte(`{"op":"look","name":"dev"}`))
+	waitCalls(t, h.fake, "look", 1)
+	_ = conn.Close()
+
+	select {
+	case <-h.fake.ctxDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the operation kept running after its caller left")
+	}
+}
+
+// A create that fails and cannot remove what it made keeps the record, so the
+// machine can still be destroyed, by its owner or by a purge.
+func TestBrokerFailedCreateWithFailedCleanupKeepsTheRecord(t *testing.T) {
+	ctx := context.Background()
+	h := newBrokerHarness(t)
+	h.fake.createErr = errors.New("New-VM failed")
+	h.fake.destroyErr = errors.New("Remove-VM failed")
+	alice := h.as(sidAlice, false, sidAlice)
+
+	err := alice.Create(ctx, sampleSpec("dev"))
+	if err == nil || !strings.Contains(err.Error(), "Remove-VM failed") || !strings.Contains(err.Error(), "remote rm dev") {
+		t.Fatalf("err = %v", err)
+	}
+	recs, _ := h.srv.records.load()
+	if recs["dev"].Owner != sidAlice {
+		t.Fatalf("records = %v: the orphan is no longer anybody's", recs)
+	}
+
+	// Nobody else can take the name, and the owner can finish the job.
+	if err := h.as(sidBob, false, sidBob).Create(ctx, sampleSpec("dev")); err == nil {
+		t.Error("another member took the name of an orphan")
+	}
+	h.fake.destroyErr = nil
+	alice = h.as(sidAlice, false, sidAlice)
+	if err := alice.Destroy(ctx, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if recs, _ := h.srv.records.load(); len(recs) != 0 {
+		t.Errorf("records = %v after destroy", recs)
+	}
+}
+
+// A destroy that finishes after the record has changed hands does not delete
+// the new owner's record.
+func TestBrokerDestroyKeepsAnotherOwnersRecord(t *testing.T) {
+	ctx := context.Background()
+	h := newBrokerHarness(t)
+	alice := h.as(sidAlice, false, sidAlice)
+	if err := alice.Create(ctx, sampleSpec("dev")); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.onDestroy = func() {
+		_ = h.srv.records.put("dev", brokerRecord{Owner: sidBob})
+	}
+	if err := alice.Destroy(ctx, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if recs, _ := h.srv.records.load(); recs["dev"].Owner != sidBob {
+		t.Errorf("records = %v: alice's destroy removed bob's record", recs)
+	}
+}
+
+// No lock is held across a Hyper-V call: a hung operation on one machine does
+// not stop a record from being read for another.
+func TestBrokerOneHungMachineDoesNotBlockAnother(t *testing.T) {
+	ctx := context.Background()
+	h := newBrokerHarness(t)
+	if err := h.as(sidAlice, false, sidAlice).Create(ctx, sampleSpec("fast")); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.block = make(chan struct{})
+	defer close(h.fake.block)
+	hung := h.as(sidAlice, false, sidAlice)
+	go func() { _, _, _ = hung.Look(ctx, "hung") }()
+	waitCalls(t, h.fake, "look", 2) // create's, then the hung one
+
+	h.fake.block = nil
+	done := make(chan error, 1)
+	go func() { done <- h.as(sidBob, false, sidBob).Start(ctx, "fast") }()
+	select {
+	case err := <-done:
+		if err == nil || brokerCode(t, err) != codeNotYours {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a call on another machine waited on the hung one")
 	}
 }

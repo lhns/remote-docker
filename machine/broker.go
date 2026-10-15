@@ -67,6 +67,7 @@ const (
 	codeTaken      = "taken"       // create: the name is in use
 	codeInvalid    = "invalid"     // a malformed request
 	codeFailed     = "failed"      // Hyper-V said no
+	codeBusy       = "busy"        // the caller has too many operations running
 )
 
 // BrokerRequest is one operation. The caller is never in it: the service reads
@@ -109,6 +110,10 @@ type BrokerResponse struct {
 	Purged  []string     `json:"purged,omitempty"` // purge
 }
 
+// ErrBrokerNotInstalled is returned when the service is not installed, so a
+// caller can point at the way out.
+var ErrBrokerNotInstalled = errors.New("the Hyper-V service is not installed")
+
 // BrokerError is a refusal or failure the service reported.
 type BrokerError struct{ Code, Message string }
 
@@ -130,10 +135,20 @@ var (
 // validBrokerName holds a machine name to what becomes a directory name and a
 // VM name: nothing that is a path.
 func validBrokerName(name string) error {
-	if !brokerNameRE.MatchString(name) {
+	if !brokerNameRE.MatchString(name) || reservedDeviceName(name) {
 		return fmt.Errorf("%q is not a valid machine name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 63 characters", name)
 	}
 	return nil
+}
+
+// reservedDeviceName reports a name Windows treats as a device in any
+// directory: con, prn, aux, nul, com1-9 and lpt1-9.
+func reservedDeviceName(name string) bool {
+	switch name {
+	case "con", "prn", "aux", "nul":
+		return true
+	}
+	return len(name) == 4 && (strings.HasPrefix(name, "com") || strings.HasPrefix(name, "lpt")) && name[3] >= '1' && name[3] <= '9'
 }
 
 // validate checks a create request. Everything in it ends up in a systemd unit,

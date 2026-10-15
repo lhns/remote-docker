@@ -234,3 +234,33 @@ func TestBrokerSetupAndTeardownAreIdempotent(t *testing.T) {
 		t.Error("the group it created is still there")
 	}
 }
+
+// Teardown and purge read and delete under the service's root only after the
+// same check the service makes at start.
+func TestVerifyProtectedDirRefusesADirectoryTheUserOwns(t *testing.T) {
+	if self(t).Admin {
+		t.Skip("an elevated token's directories are owned by Administrators, which is trusted")
+	}
+	dir := filepath.Join(t.TempDir(), "remote-docker")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyProtectedDir(dir); err == nil || !strings.Contains(err.Error(), "not by SYSTEM or Administrators") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestVerifyProtectedDirRefusesAJunction(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Skipf("cannot create a junction here: %v %s", err, out)
+	}
+	if err := verifyProtectedDir(link); err == nil {
+		t.Error("a junction was accepted")
+	}
+}

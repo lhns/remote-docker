@@ -16,6 +16,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/session"
 	"github.com/lhns/remote-docker/core/enrol"
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/machine"
 )
 
 // The workspaces in ~/.remote-docker.json, each with a docker context written
@@ -466,6 +467,12 @@ func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "destroying the %s machine %q\n", m.Backend, m.Name)
 	if err := backend.Destroy(cmd.Context(), m.Name); err != nil {
+		if errors.Is(err, machine.ErrBrokerNotInstalled) {
+			// Uninstalling the service destroyed the machines it made.
+			return fmt.Errorf("destroying the %s machine %q: %w\n"+
+				"  fix: `%s` forgets the workspace; the uninstall already removed the machine",
+				m.Backend, m.Name, err, ourCommand("rm "+m.Name+" --keep-machine"))
+		}
 		return fmt.Errorf("destroying the %s machine %q: %w", m.Backend, m.Name, err)
 	}
 	return nil

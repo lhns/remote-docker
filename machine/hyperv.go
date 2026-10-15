@@ -380,6 +380,11 @@ func psStop(vm string) string {
 	return fmt.Sprintf("Stop-VM -Name %s -Force", psQuote(vm))
 }
 
+// psStopForce turns the machine off without asking the guest.
+func psStopForce(vm string) string {
+	return fmt.Sprintf("Stop-VM -Name %s -TurnOff -Force", psQuote(vm))
+}
+
 // psAddress asks the guest, through the integration services, what address it
 // was given. Its KVP daemon reports one about 30 seconds after Start-VM and
 // nothing until then (2026-10-05), which Locate waits out.

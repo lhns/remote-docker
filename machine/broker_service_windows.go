@@ -6,12 +6,11 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
 )
 
 // serviceHyperV is the executor the service runs: the same PowerShell as the
@@ -32,12 +31,18 @@ func serviceHyperV(root string) directHyperV {
 
 // newServiceServer wires the server to the real pipe, group and directory.
 func newServiceServer(root string) *brokerServer {
-	var fetch sync.Mutex // one download at a time into the shared cache
+	fetch := make(chan struct{}, 1) // one download at a time into the shared cache
 	return newBrokerServer(serviceHyperV(root), filepath.Join(root, "machines.json"),
 		pipeCaller, brokerGroupMembers,
 		func(ctx context.Context, proxy string) (string, error) {
-			fetch.Lock()
-			defer fetch.Unlock()
+			// Waited for with the caller's deadline, or one slow download
+			// would hold every other create past theirs.
+			select {
+			case fetch <- struct{}{}:
+				defer func() { <-fetch }()
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 			return ensureFlatcar(ctx, flatcarPinned, filepath.Join(root, "rootfs"), proxy, io.Discard)
 		})
 }
@@ -78,9 +83,13 @@ func (brokerService) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 	}
 	if err != nil {
 		// A service has no stderr and the manager reports only that it
-		// stopped, so the reason goes where an administrator can find it.
-		_ = os.WriteFile(filepath.Join(os.TempDir(), "remote-docker-service.log"),
-			[]byte(time.Now().Format(time.RFC3339)+" "+err.Error()+"\r\n"), 0o600)
+		// stopped, so the reason goes to the Application event log. Never a
+		// file: a path SYSTEM writes in a directory users can plant a link in
+		// is an overwrite. An unregistered source still logs there.
+		if log, lerr := eventlog.Open(BrokerServiceName); lerr == nil {
+			_ = log.Error(1, "the Hyper-V service could not start: "+err.Error())
+			_ = log.Close()
+		}
 		return true, 1
 	}
 

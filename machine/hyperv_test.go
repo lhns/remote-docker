@@ -567,3 +567,9 @@ func TestPSRemoveVMWithTheVMGone(t *testing.T) {
 		t.Errorf("the disk is not deleted whether or not the VM was there:\n%s", remove)
 	}
 }
+
+func TestPSStopForceTurnsTheMachineOff(t *testing.T) {
+	if got := psStopForce("rd-dev"); got != "Stop-VM -Name 'rd-dev' -TurnOff -Force" {
+		t.Errorf("psStopForce = %s", got)
+	}
+}

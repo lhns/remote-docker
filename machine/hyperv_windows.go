@@ -17,6 +17,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func init() { registered = append(registered, hyperVBackend{exec: newDirectHyperV()}) }
@@ -48,8 +51,27 @@ func newDirectHyperV() directHyperV { return directHyperV{run: powershell} }
 // here, and -NonInteractive so a cmdlet that wants confirmation fails instead
 // of waiting for a keystroke nobody will send. stdin is for data that must not
 // be on a command line.
+// powershellPath is Windows PowerShell by its full path under the system
+// directory, never found through PATH: the service runs this as SYSTEM, and a
+// PATH entry a user can write to would be run as SYSTEM.
+func powershellPath() (string, error) {
+	dir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return "", err
+	}
+	exe := filepath.Join(dir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	if _, err := os.Stat(exe); err != nil {
+		return "", errors.New("PowerShell is not available, so Hyper-V cannot be managed from here")
+	}
+	return exe, nil
+}
+
 func powershell(ctx context.Context, script, stdin string) (string, error) {
-	cmd := exec.CommandContext(ctx, "powershell.exe",
+	exe, err := powershellPath()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, exe,
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psScript(script))
 	cmd.Stdin = strings.NewReader(stdin)
 
@@ -73,8 +95,8 @@ func (d directHyperV) ps(ctx context.Context, script string) (string, error) {
 // ADR 0026 records that the project's "nothing needs to be installed" premise
 // stops being true.
 func (d directHyperV) Available(ctx context.Context) error {
-	if _, err := exec.LookPath("powershell.exe"); err != nil {
-		return errors.New("PowerShell is not available, so Hyper-V cannot be managed from here")
+	if _, err := powershellPath(); err != nil {
+		return err
 	}
 
 	out, err := d.ps(ctx, "(Get-Command Get-VM -ErrorAction SilentlyContinue) -ne $null")
@@ -183,8 +205,21 @@ func (d directHyperV) Address(ctx context.Context, name string) (string, error) 
 	return parseVMAddress(out), nil
 }
 
+// stopGrace is how long a graceful stop may take before the machine is turned
+// off. A guest that ignores the shutdown request would otherwise hold the
+// operation, and with the service the machine's name, until the context ends.
+var stopGrace = 90 * time.Second
+
 func (d directHyperV) Stop(ctx context.Context, name string) error {
-	_, err := d.ps(ctx, psStop(machineName(name)))
+	gctx, cancel := context.WithTimeout(ctx, stopGrace)
+	defer cancel()
+	_, err := d.ps(gctx, psStop(machineName(name)))
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	// Graceful did not finish. The guest's docker state is journalled; a
+	// machine that cannot be stopped is worse.
+	_, err = d.ps(ctx, psStopForce(machineName(name)))
 	return err
 }
 

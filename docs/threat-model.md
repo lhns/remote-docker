@@ -1444,9 +1444,12 @@ unknown JSON fields are refused. *Covered by* `TestBrokerRefusesMalformedNames`,
 so a pre-created `remote-docker` there would hand its creator the service's
 writes. The service creates it with a protected DACL (SYSTEM and
 Administrators), and adopts an existing one only if SYSTEM or Administrators
-own it and it is not a reparse point. *Covered by*
-`TestProtectedDirectoryHasOnlySystemAndAdministrators` and
-`TestDirectoryThatIsAReparsePointIsRefused`.
+own it and it is not a reparse point; `service setup` creates it at install,
+and teardown and purge make the same check before reading or deleting. Startup
+failures go to the event log, not to a file in a directory users can plant a
+link in. *Covered by* `TestProtectedDirectoryHasOnlySystemAndAdministrators`,
+`TestVerifyProtectedDirRefusesADirectoryTheUserOwns` and
+`TestVerifyProtectedDirRefusesAJunction`.
 
 **S — a squatted pipe (1).** With the service stopped, a user can create a pipe
 of the same name and receive the next request, private host key included; with
@@ -1457,7 +1460,13 @@ with the service's own process id before sending anything. *Covered by*
 `TestBrokerClientRefusesAPipeTheServiceDoesNotServe` and
 `TestBrokerConstantsArePinned`.
 
-**D — a member (3).** Eight concurrent connections, no per-user quota. One
+**D — a member (3).** Operations have deadlines and end with their caller's
+connection; a caller has two running at once and administrators their own
+four, so one member cannot take every slot or lock out purge; a hung Hyper-V
+call holds one machine's name and nothing else. *Covered by*
+`TestBrokerCapsOperationsPerCaller`, `TestBrokerOperationTimesOut`,
+`TestBrokerOperationStopsWhenTheCallerDisconnects` and
+`TestBrokerOneHungMachineDoesNotBlockAnother`. There is no per-user quota: one
 member can fill the disk with machines. *Accepted*: members are users an
 administrator chose.
 
