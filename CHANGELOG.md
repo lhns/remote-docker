@@ -16,6 +16,10 @@ software.
   compose drops `consistency:` from a bind unless the volume also has
   `bind: {create_host_path: false}`, so the mount came up in the default mode
   with nothing said. The warning names the volume and the line to add.
+- **A cached mount is no longer refused while your workspace daemon starts.**
+  The first connection after the daemon stopped could refuse every
+  `write=back` and `delegated` mount with "update the workspace" until the
+  session went idle. The client now asks the workspace again before refusing.
 
 ## 0.11.0 — 2026-10-14
 
