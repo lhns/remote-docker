@@ -91,6 +91,10 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 		OpenCache:  func(ctx context.Context) (rewrite.Cache, error) { return s.shareCacheFor(ctx, live) },
 		UnionReady: info.Union,
+		AskUnion: func(ctx context.Context) (string, error) {
+			now, err := readInfo(ctx, live.ssh)
+			return now.Union, err
+		},
 
 		DockerVersion: info.Docker,
 		DaemonPaths:   info.DaemonPaths,

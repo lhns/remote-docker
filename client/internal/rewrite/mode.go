@@ -173,7 +173,7 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 	// that ask it, and only a mount that passed them all opens a channel or
 	// starts the watcher: a refused mount must leave nothing behind.
 	if got.Union() {
-		if err := unionAvailable(r.UnionReady); err != nil {
+		if err := unionAvailable(r.unionCapability(ctx)); err != nil {
 			return workspace.MountWords{}, fmt.Errorf("rewrite: %s asks for %s, and %w",
 				source, writeAsked(got.Write, spelled), err)
 		}
@@ -319,6 +319,17 @@ func writeAsked(write workspace.Write, spelled string) string {
 
 // unionAvailable turns the workspace's answer into a remedy. Empty is an agent
 // predating the field, which cannot serve one.
+// unionCapability is UnionReady, asked again when it is not ready.
+func (r *Rewriter) unionCapability(ctx context.Context) string {
+	if r.UnionReady == workspace.UnionReady || r.AskUnion == nil {
+		return r.UnionReady
+	}
+	if got, err := r.AskUnion(ctx); err == nil {
+		return got
+	}
+	return r.UnionReady
+}
+
 func unionAvailable(reported string) error {
 	switch reported {
 	case workspace.UnionReady:

@@ -112,6 +112,11 @@ type Rewriter struct {
 	// before anything is created.
 	UnionReady string
 
+	// AskUnion reads workspace.Info.Union again. The agent answers from the
+	// account's daemon only once it is running, and at connect it is often
+	// still starting, which reads as a workspace without unions.
+	AskUnion func(ctx context.Context) (string, error)
+
 	// Watch is what a mount naming no watch= gets (ADR 0016). The session
 	// always sets it, to the REMOTE_DOCKER_WATCH setting; a Rewriter built
 	// without one treats it as off. `read=cached` and every union are never

@@ -522,6 +522,32 @@ func TestAUnionIsRefusedWhereTheWorkspaceCannotServeIt(t *testing.T) {
 	}
 }
 
+// The capability read at connect is asked again before a refusal: a daemon
+// still starting then answered "" and every write=back on that connection was
+// told to update the workspace.
+func TestAUnionAsksAgainBeforeRefusing(t *testing.T) {
+	const bind = `{"Image":"alpine","HostConfig":{"Binds":["/home/alice/project:/app:read=cached,write=back"]}}`
+	for _, c := range []struct {
+		now     string
+		err     error
+		refused bool
+	}{
+		{workspace.UnionReady, nil, false},
+		{"", nil, true},
+		{workspace.UnionNoBinary, nil, true},
+		{workspace.UnionReady, errors.New("connection lost"), true},
+	} {
+		r, _ := cachedRewriter()
+		r.OpenCache = servingCache(&fakeCache{})
+		r.UnionReady = ""
+		r.AskUnion = func(context.Context) (string, error) { return c.now, c.err }
+		_, err := r.ContainerCreate(t.Context(), []byte(bind))
+		if (err != nil) != c.refused {
+			t.Errorf("asked again: %q, %v: err = %v, want refused %v", c.now, c.err, err, c.refused)
+		}
+	}
+}
+
 // A refusal quotes the word the person wrote: `delegated` is Docker's spelling
 // of read=cached,write=back, and naming only write=back names something they
 // never typed.
