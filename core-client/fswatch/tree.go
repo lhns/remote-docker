@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/lhns/remote-docker/core/logx"
@@ -172,10 +173,11 @@ func (t *tree) sync(shares []Share) {
 			mode:   s.Mode,
 			only:   s.File,
 		}
-		// Another root already walked this tree (the same directory mounted
-		// another way): its watches serve this one, and walking again would only
-		// re-read it.
-		shared := r.only == "" && t.treeCovered(local)
+		// A directory root at this very path already walked the tree (the same
+		// directory mounted another way): its watches serve this one, and
+		// walking again would only re-read it. Not a root above it: that walk
+		// skipped the excluded names, which a share of one is entitled to.
+		shared := r.only == "" && t.walkedAt(r.parts)
 		t.roots = append(t.roots, r)
 		if r.only != "" {
 			// One watch, and no walk: the siblings in that directory are not
@@ -348,6 +350,16 @@ func (t *tree) covered(dir string) bool {
 			if _, ok := relativeTo(t.goos, r.parts, dir); ok {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// walkedAt reports whether a directory root at exactly parts has been walked.
+func (t *tree) walkedAt(parts []string) bool {
+	for _, o := range t.roots {
+		if o.only == "" && slices.Equal(o.parts, parts) {
+			return true
 		}
 	}
 	return false

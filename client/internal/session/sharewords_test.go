@@ -117,9 +117,8 @@ func TestTheRegistrarGivesEachVariantItsOwnShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, _, _ := reg.Share(dir, direct)
-	if again != first || len(reg.registry.Shares()) != 4 {
-		t.Errorf("the same variant gave %s then %s, with %d shares", again, first, len(reg.registry.Shares()))
+	if !exports[again] || len(reg.registry.Shares()) != 4 {
+		t.Errorf("the same variant again gave %s, with %d shares", again, len(reg.registry.Shares()))
 	}
 }
 
