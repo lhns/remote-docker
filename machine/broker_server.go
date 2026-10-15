@@ -249,9 +249,14 @@ func (s *brokerServer) serveConn(ctx context.Context, conn net.Conn) {
 	opCtx, cancel := context.WithTimeout(ctx, opTimeout(req.Op))
 	defer cancel()
 	go func() {
+		// Looped: a byte left over after the request, such as the encoder's
+		// trailing newline, must not end the watch.
 		var b [1]byte
-		if _, err := conn.Read(b[:]); err != nil {
-			cancel()
+		for {
+			if _, err := conn.Read(b[:]); err != nil {
+				cancel()
+				return
+			}
 		}
 	}()
 
