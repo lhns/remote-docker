@@ -395,12 +395,18 @@ while (-not (Test-Path "$Dir\go") -and (Get-Date) -lt $end) { Start-Sleep -Milli
 '@
 Remove-Item "$Pub\first.*", "$Pub\second.*", "$Pub\go" -ErrorAction SilentlyContinue
 
-$null = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
-  -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, $Exe, $Pub) -WindowStyle Hidden -PassThru
+$live = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
+  -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, $Exe, $Pub) -WindowStyle Hidden -PassThru `
+  -RedirectStandardOutput "$Pub\live.out" -RedirectStandardError "$Pub\live.err"
 
 $deadline = (Get-Date).AddSeconds(120)
 while (-not (Test-Path "$Pub\first.code") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-if (-not (Test-Path "$Pub\first.code")) { Fail 'the standard user process never reported (did Start-Process -Credential work here?)' }
+if (-not (Test-Path "$Pub\first.code")) {
+  $exited = $live.HasExited
+  $code = if ($exited) { $live.ExitCode } else { 'still running' }
+  $seen = (Get-Content "$Pub\live.out", "$Pub\live.err" -ErrorAction SilentlyContinue) -join "`n"
+  Fail "the standard user process never reported (exit: $code); its output: $seen; pub dir: $((Get-ChildItem $Pub | ForEach-Object Name) -join ', ')"
+}
 $first = (Get-Content "$Pub\first.out" -Raw)
 if ((Get-Content "$Pub\first.code").Trim() -eq '0') { Fail "a user outside the group was served: $first" }
 if ($first -notmatch 'remote-docker-users') { Fail "the refusal does not name the group: $first" }
