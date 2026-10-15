@@ -24,6 +24,31 @@ services:
         source: ./workspace
         target: /long
         consistency: read=cached,write=back
+      - type: bind
+        source: ./workspace
+        target: /kept
+        consistency: read=cached,write=back
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./workspace
+        target: /created
+        consistency: cached
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ./workspace
+        target: /propagated
+        consistency: cached
+        bind:
+          propagation: rprivate
+      - type: bind
+        source: ./workspace
+        target: /plain
+      - type: volume
+        source: data
+        target: /named
+        consistency: cached
 `
 	got := droppedModes([]byte(body))
 	want := []string{
@@ -37,6 +62,10 @@ services:
 		`  fix: use the long syntax with consistency: read=cached and bind: {create_host_path: false}`,
 		`compose drops "owner=1000.2000" from ./c:/c (service claude), so it mounts without them`,
 		`  fix: use the long syntax with consistency: owner=1000.2000 and bind: {create_host_path: false}`,
+		`compose drops "read=cached,write=back" from ./workspace:/long (service claude), so it mounts without them`,
+		`  fix: add bind: {create_host_path: false} to that volume`,
+		`compose drops "cached" from ./workspace:/created (service claude), so it mounts without them`,
+		`  fix: add bind: {create_host_path: false} to that volume`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
