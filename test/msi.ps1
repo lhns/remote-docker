@@ -396,7 +396,7 @@ while (-not (Test-Path "$Dir\go") -and (Get-Date) -lt $end) { Start-Sleep -Milli
 Remove-Item "$Pub\first.*", "$Pub\second.*", "$Pub\go" -ErrorAction SilentlyContinue
 
 $live = Start-Process -FilePath powershell.exe -Credential $cred -LoadUserProfile -WorkingDirectory $env:SystemRoot `
-  -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, $Exe, $Pub) -WindowStyle Hidden -PassThru `
+  -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $liveScript, ('"' + $Exe + '"'), $Pub) -WindowStyle Hidden -PassThru `
   -RedirectStandardOutput "$Pub\live.out" -RedirectStandardError "$Pub\live.err"
 
 $deadline = (Get-Date).AddSeconds(120)
