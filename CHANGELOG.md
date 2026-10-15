@@ -8,6 +8,15 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### Fixes
+
+- **compose now warns about a long-syntax bind that loses its mount options.**
+  compose drops `consistency:` from a bind unless the volume also has
+  `bind: {create_host_path: false}`, so the mount came up in the default mode
+  with nothing said. The warning names the volume and the line to add.
+
 ## 0.11.0 — 2026-10-14
 
 ### New
