@@ -367,6 +367,52 @@ if sudo fuse-overlayfs -o "lowerdir=$LOWER,upperdir=$UPPER,workdir=$WORKDIR" "$F
     info "3,000 files applied through the union: ${apply_t}s ($rate files/s); straight to disk: ${disk_t}s"
     rm -rf "$WORK/apply-disk-$$"
 
+    # Landing a file whose name the LOWER has, in place (what the agent does)
+    # against a temporary renamed over it (what it does not, ADR 0044). The
+    # rows below record why: a file landed by rename comes back after an rm.
+    # Recorded, not asserted. The lower is a local NFS server, so a link's
+    # latency, where a copy-up's data read costs most, is absent from the timings.
+    sudo mkdir -p "$LOWER/landing"
+    for i in $(seq 1 200); do head -c 2048 /dev/zero | sudo tee "$LOWER/landing/f$i" >/dev/null; done
+    sleep 1
+    inplace_t=$( { time -p sudo sh -c "for i in \$(seq 1 100); do head -c 2048 /dev/zero >$FUSE_MERGED/landing/f\$i; done"; } 2>&1 | awk '/^real/ {print $2}')
+    rename_t=$( { time -p sudo sh -c "for i in \$(seq 101 200); do head -c 2048 /dev/zero >$FUSE_MERGED/landing/.rd-fill-\$i && mv $FUSE_MERGED/landing/.rd-fill-\$i $FUSE_MERGED/landing/f\$i; done"; } 2>&1 | awk '/^real/ {print $2}')
+    info "100 files the lower has, landed in place: ${inplace_t}s; landed by rename: ${rename_t}s"
+    # Deleting what was landed. The lower keeps these files here, so a file that
+    # is still present afterwards means the delete left no whiteout.
+    sudo rm "$FUSE_MERGED/landing/f1" "$FUSE_MERGED/landing/f101"
+    report "after rm of a file landed in place (f1): visible? and what the upper holds" \
+        sudo sh -c "test -e $FUSE_MERGED/landing/f1 && echo VISIBLE || echo GONE; ls -l $UPPER/landing/f1 2>&1"
+    report "after rm of a file landed by rename (f101): visible? and what the upper holds" \
+        sudo sh -c "test -e $FUSE_MERGED/landing/f101 && echo VISIBLE || echo GONE; ls -l $UPPER/landing/f101 2>&1"
+
+    # Ways to land that might keep the whiteout. Each ends in an rm, and a
+    # VISIBLE answer is the lower showing through.
+    M=$FUSE_MERGED/landing
+    land() { sudo sh -c "printf new >$M/.rd-fill-x && mv $M/.rd-fill-x $M/$1"; }
+    sudo chmod 666 "$M/f110"
+    land f110
+    sudo rm "$M/f110"
+    land f111
+    sudo stat "$M/f111" >/dev/null
+    sudo rm "$M/f111"
+    land f112
+    sudo rm "$M/f112"
+    sudo rm -f "$M/f112"
+    sudo rm "$M/f113"
+    land f113
+    sudo rm "$M/f113"
+    sudo cat "$M/f114" >/dev/null
+    land f114
+    sudo rm "$M/f114"
+    for pair in "f110 copy-up first (chmod), then rename" "f111 rename, then stat, then rm" \
+        "f112 rename, rm, rm again" "f113 rm first, rename, rm" "f114 read first, rename, rm"; do
+        set -- $pair
+        n=$1
+        shift
+        report "landing variant: $*" sudo sh -c "test -e $M/$n && echo VISIBLE || echo GONE"
+    done
+
     if build_probe watchprobe "$WORK/watchprobe"; then
         sudo mkdir -p "$FUSE_MERGED/fusewatch"
         echo "before" | sudo tee "$FUSE_MERGED/fusewatch/reloaded.txt" >/dev/null

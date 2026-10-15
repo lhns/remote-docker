@@ -116,13 +116,29 @@ func writeEntry(r *os.Root, header *tar.Header, body io.Reader) (os.FileInfo, er
 		if err := r.MkdirAll(path.Dir(target), 0o755); err != nil {
 			return nil, fmt.Errorf("unions: creating the directory for %s: %w", header.Name, err)
 		}
-		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode().Perm())
+		// Never O_TRUNC (ADR 0044). A container may have the file open or
+		// mapped (git maps its index, packs and the files it hashes), and
+		// emptying it first is SIGBUS for a mapping and a short read for
+		// everything else. Overwritten from the start instead, and cut only if
+		// the new content is shorter, so a refill of unchanged content (the
+		// usual one) never changes the size a reader sees.
+		//
+		// Not a temporary renamed over the target: fuse-overlayfs forgets that
+		// a renamed-in file hides one in the lower, so a later `rm` of it
+		// shows the lower's file again (test/union-probe.sh section 6d).
+		f, err := r.OpenFile(target, os.O_WRONLY|os.O_CREATE, header.FileInfo().Mode().Perm())
 		if err != nil {
 			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
 		}
 		if _, err := io.Copy(f, body); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)
+		}
+		if st, err := f.Stat(); err == nil && st.Size() > header.Size {
+			if err := f.Truncate(header.Size); err != nil {
+				_ = f.Close()
+				return nil, fmt.Errorf("unions: shortening %s: %w", header.Name, err)
+			}
 		}
 		if err := f.Close(); err != nil {
 			return nil, fmt.Errorf("unions: writing %s: %w", header.Name, err)

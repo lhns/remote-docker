@@ -2159,6 +2159,67 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             bad "a deleted file is still visible through the union: [$LAST_OUTPUT]"
             share_diagnostics
         fi
+
+        # A file the cache refills while a container reads it is not emptied first
+        # (ADR 0044): a reader saw it short,
+        # and a mapping of it (git maps what it hashes) died with a bus error.
+        # The runner rewrites one file with IDENTICAL content over and over, so
+        # every rewrite is an invalidation that refills it. Each rewrite is a
+        # rename here too, so the live export never shows a short file either
+        # and anything short comes from the cache.
+        CHURN_SIZE=204800
+        head -c "$CHURN_SIZE" /dev/zero | tr '\0' 'x' >"$WORK/churn.src"
+        churn_writer() {
+            local i
+            for i in $(seq 1 25); do
+                cp "$WORK/churn.src" "$WORK/churn.tmp.$i" && mv "$WORK/churn.tmp.$i" "$UNIONDIR/churn.txt"
+                sleep 0.3
+            done
+        }
+        cp "$WORK/churn.src" "$WORK/churn.tmp.0" && mv "$WORK/churn.tmp.0" "$UNIONDIR/churn.txt"
+        wait_output "^$CHURN_SIZE\$" 20 docker exec itest-deleg sh -c 'wc -c </w/churn.txt' >/dev/null
+        churn_writer &
+        CHURN_PID=$!
+        if outputs '^bad=0 reads=[1-9]' dockert exec itest-deleg sh -c '
+            bad=0; reads=0; end=$(( $(date +%s) + 9 ))
+            while [ "$(date +%s)" -lt "$end" ]; do
+                n=$(wc -c </w/churn.txt); reads=$((reads + 1))
+                [ "$n" = '"$CHURN_SIZE"' ] || { bad=$((bad + 1)); echo "read $n bytes"; }
+            done
+            echo "bad=$bad reads=$reads"'; then
+            ok "a file the cache refills is read whole on every read"
+        else
+            bad "reading a file while the cache refilled it: [$LAST_OUTPUT]"
+            share_diagnostics
+        fi
+        wait "$CHURN_PID" 2>/dev/null
+
+        # The mapped path. git hash-object maps a file it hashes, and a bus
+        # error ends it with 135, which the loop reports.
+        if command -v git >/dev/null 2>&1 && dockert run -d --name itest-deleg-git --entrypoint sleep \
+            -v "$UNIONDIR:/w:read=cached,write=back" alpine/git 300 >"$WORK/deleg-git-run.log" 2>&1; then
+            want=$(git hash-object "$WORK/churn.src")
+            churn_writer &
+            CHURN_PID=$!
+            if outputs '^died=0 hashes=[1-9]' dockert exec itest-deleg-git sh -c '
+                died=0; hashes=0; end=$(( $(date +%s) + 9 ))
+                while [ "$(date +%s)" -lt "$end" ]; do
+                    h=$(git hash-object /w/churn.txt 2>&1) || { died=$((died + 1)); echo "git exited $?: $h"; continue; }
+                    hashes=$((hashes + 1))
+                    [ "$h" = '"$want"' ] || { died=$((died + 1)); echo "hashed to $h"; }
+                done
+                echo "died=$died hashes=$hashes"'; then
+                ok "git hashing a file the cache refills never dies or reads it short"
+            else
+                bad "git hash-object while the cache refilled the file: [$LAST_OUTPUT]"
+                share_diagnostics
+            fi
+            wait "$CHURN_PID" 2>/dev/null
+            docker rm -f itest-deleg-git >/dev/null 2>&1
+        else
+            info "no git on the runner or alpine/git unavailable; the mapped-read case was not run"
+        fi
+        rm -f "$UNIONDIR/churn.txt" "$WORK"/churn.tmp.* "$WORK/churn.src"
     else
         bad "a container would not start against a write=back union"
         sed 's/^/        /' "$WORK/deleg-run.log"

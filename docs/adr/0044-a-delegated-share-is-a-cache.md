@@ -85,6 +85,37 @@ real filesystem operation in the container's own view and its inotify fires
 natively**: `IN_MODIFY`, `IN_CLOSE_WRITE` and, for the first time here,
 `IN_DELETE` (sections 5 and 6d).
 
+### A file lands without being emptied first (amended 2026-10-15)
+
+- `writeEntry` used to open the target with `O_TRUNC`, so a file a container
+  had open or mapped was emptied and rewritten under it: a reader saw it
+  short, and a mapping (git maps its index, packs and the files it hashes) died
+  with SIGBUS. It now overwrites from the start and calls `ftruncate` only when
+  the new content is SHORTER. A refill of unchanged content, which is what most
+  invalidations and prefetch batches are, never changes the size a reader
+  sees. Still open: a changed file is torn for a reader mid-write, and a
+  mapped file that shrinks faults on the part past the new end.
+- **Writing a temporary and renaming it over the target was tried and
+  rejected.** It would have been atomic, but fuse-overlayfs does not whiteout
+  on a later unlink of a renamed-in file: after `rm`, the lower's file shows
+  through (`test/union-probe.sh` section 6d, run 2026-10-15: GONE after `rm` of
+  a file landed in place; VISIBLE after `rm` of one landed by rename, whether
+  or not the target was copied up, read or looked up first; GONE only after a
+  second `rm`). A container deleting a file the cache had refilled would see it
+  come back, and the end-to-end case `read=cached,write=ephemeral` failed on
+  it. Re-check with the probe if fuse-overlayfs changes.
+- Write-back on this machine does rename, because there is no overlay in the
+  way: `dircache/writeback.go` writes `.rd-writeback-<random>` under the
+  share's `os.Root` (`O_EXCL`) and renames it over the user's file. It used to
+  truncate the user's file and then copy the body from the network, so a
+  stream that failed half way left a source file cut short. A body that fails
+  leaves the file as it was. A rename Windows refuses (another program holds
+  the file without share-delete) fails the round before the manifest moves,
+  so the change is still pending and the next round, five seconds later, tries
+  again; it never falls back to truncating. The fill's walk and the watcher
+  (`core-client/fswatch`) ignore that prefix. The temporary is visible to
+  `ls` and to a git status for the length of one write; accepted.
+
 ### The child enters three namespaces
 
 Mounting is done by a child that enters the daemon's **pid**, **network** and
