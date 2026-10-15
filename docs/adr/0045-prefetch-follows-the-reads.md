@@ -212,7 +212,12 @@ over a link with latency.
   Writing under a temporary name and renaming over the lower's also avoids
   the copy-up's data read. Both belong in `agent/internal/unions/write.go`,
   measured by `union-probe.sh` over a shaped NFS lower before the bench runs
-  again.
+  again. *(2026-10-15: the rename was tried and rejected, because
+  fuse-overlayfs loses the whiteout of a renamed-in file (ADR 0044). The probe
+  prints in-place against rename for files the lower has; on a local NFS lower
+  with no link latency, 100 files took 0.18s in place and 0.28s by rename, so
+  nothing here supports the rename saving the copy-up. The pipelined pool is
+  still not built.)*
 - Prefetch is off by default until then; `eager` stays selectable so the next
   table compares both in one job.
 - The union's write path has the same shape: a create looks the new name up

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -350,6 +351,12 @@ func (w *Watcher) process(out chan<- notify.Frame) {
 // handle turns one backend event into pending work, and keeps the watched set
 // in step with what just happened to the tree.
 func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
+	// The temporary a write-back lands a file through (dircache): ours, and
+	// reporting it would invalidate a name that exists for one write.
+	if strings.HasPrefix(filepath.Base(e.Name), writebackPrefix) {
+		return
+	}
+
 	roots := t.rootsFor(e.Name)
 	if len(roots) == 0 {
 		// An event for a path under no current share. Ordinary during a

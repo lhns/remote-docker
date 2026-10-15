@@ -660,6 +660,21 @@ premise of the project, and it applies to building it too. So:
 - **A batch lands through the merged mount, and the apply is SERIAL and
   COPIES UP**, so landing a file costs more round trips than reading it and a
   cold union is no faster than a plain mount (ADR 0045, 2026-09-04).
+- **A file we land is never truncated first, and the agent does not rename it
+  into place** (ADR 0044, 2026-10-15). A container may have it open or mapped
+  (git maps its index and what it hashes): emptying it is SIGBUS for a
+  mapping and a short read for the rest, so the agent overwrites from the
+  start and cuts only if the content is shorter, which leaves a refill of
+  unchanged content invisible to a reader. A temporary renamed over the
+  target would be atomic and is NOT used: fuse-overlayfs forgets that a
+  renamed-in file hides one in the lower, so a later `rm` shows the lower's
+  file again (`union-probe.sh` 6d, 2026-10-15). A changed file is still torn
+  for a reader mid-write, and a mapped file that shrinks still faults.
+  Write-back on THIS machine does rename (`.rd-writeback-<random>` under the
+  share's `os.Root`, `dircache/writeback.go`): no overlay there, and a failed
+  body or refused rename (Windows, file held open) leaves the user's file
+  as it was and the change pending for the next round. The fill's walk and
+  the watcher ignore that prefix.
 - **A fill cannot carry a deletion, so the client records what it sent** (ADR
   0044). A fill overwrites and adds; a file deleted here while nothing was
   running leaves no event for anyone to replay, so it stays in the cache and

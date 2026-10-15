@@ -28,6 +28,18 @@ software.
   The first connection after the daemon stopped could refuse every
   `write=back` and `delegated` mount with "update the workspace" until the
   session went idle. The client now asks the workspace again before refusing.
+- **No more "Bus error" or short reads while the cache fills a file.** `git`
+  and other programs reading a file while a `write=back` or `write=ephemeral`
+  cache refilled it could crash with "Bus error" or read it short. The cache
+  no longer empties a file before rewriting it, so refilling a file with the
+  same content is invisible to a program reading it. A file whose content
+  really changes can still read torn for an instant, and a program mapping a
+  file that shrinks can still fault.
+- **A change copied back to your machine replaces the file in one step.** A
+  container's change used to be written into your file in place, so a dropped
+  connection could leave a source file truncated. The old file stays whole
+  until the new one is complete, and a file another program holds open on
+  Windows is retried on the next round.
 
 ### Upgrading
 

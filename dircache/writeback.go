@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -179,21 +181,55 @@ func writeUnder(r *os.Root, file File) error {
 	if err := r.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return err
 	}
-	f, err := r.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode.Perm())
-	if err != nil {
-		return err
+
+	// Written beside the target and renamed over it, never into it: an editor
+	// or a build reading the file meanwhile sees the old one whole, and a
+	// stream that fails half way (a dropped link, an agent restart) leaves the
+	// user's file as it was instead of truncated.
+	//
+	// A rename can be refused, on Windows when another program holds the file
+	// open without share-delete. That is an error like any other here: the
+	// round ends without moving the manifest, so the change is still pending
+	// and the next round tries again. Never a fallback to truncating it.
+	var f *os.File
+	var tmp string
+	for range 10 {
+		tmp = filepath.Join(filepath.Dir(rel), writebackPrefix+strconv.FormatUint(rand.Uint64(), 16))
+		var err error
+		f, err = r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, file.Mode.Perm())
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		f = nil
 	}
-	if _, err := io.Copy(f, file.Body); err != nil {
-		_ = f.Close()
-		return err
+	if f == nil {
+		return errors.New("no free temporary name")
 	}
-	if err := f.Close(); err != nil {
-		return err
+
+	_, err := io.Copy(f, file.Body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
 	// The time the CONSUMER wrote it, which is what a plain mount would have
 	// shown, and what the next round compares against.
-	if !file.ModTime.IsZero() {
-		_ = r.Chtimes(rel, time.Time{}, file.ModTime)
+	if err == nil && !file.ModTime.IsZero() {
+		_ = r.Chtimes(tmp, time.Time{}, file.ModTime)
+	}
+	if err == nil {
+		err = r.Rename(tmp, rel)
+	}
+	if err != nil {
+		_ = r.Remove(tmp)
+		return err
 	}
 	return nil
 }
+
+// writebackPrefix names the temporary a file is written to before it replaces
+// its target. The consumer's tree is the user's, so a name with this prefix is
+// ours: the watcher in core-client/fswatch ignores it (it keeps its own copy of
+// the string, since this module imports nothing).
+const writebackPrefix = ".rd-writeback-"

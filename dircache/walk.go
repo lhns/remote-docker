@@ -98,6 +98,10 @@ func walk(root string, excludes []string, yield func(Entry)) Stats {
 		if p == root {
 			return nil
 		}
+		// A write-back landing in progress: ours, never the user's file.
+		if !d.IsDir() && strings.HasPrefix(d.Name(), writebackPrefix) {
+			return nil
+		}
 		if skip[d.Name()] {
 			stats.Excluded++
 			if d.IsDir() {

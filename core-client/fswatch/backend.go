@@ -84,6 +84,12 @@ var DefaultExcludes = []string{
 	".terraform",
 }
 
+// writebackPrefix starts the name of the temporary a write-back writes a file
+// to before renaming it over its target. Events for it are never reported. The
+// same string is in dircache/writeback.go, which imports nothing, so change
+// both together.
+const writebackPrefix = ".rd-writeback-"
+
 // ExcludesOr is the exclude list actually applied: DefaultExcludes for nil, an
 // explicit list as it stands, an empty one included. The cache and the watcher
 // both resolve through it; a cache deciding for itself prefetches a directory
