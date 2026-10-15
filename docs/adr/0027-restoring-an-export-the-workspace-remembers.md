@@ -111,8 +111,6 @@ digest is an identity rather than a security boundary.
   version stays 1: `readBound` drops a record whose version differs, so a bump
   would make every restore fail after an upgrade. A record without the field
   takes the session's default.
-- ~~Known gap: a new container naming other words is refused by the
-  registrar.~~ Closed by the amendment below.
 
 ## Amendment 2026-10-15: the record carries the share's variant
 
