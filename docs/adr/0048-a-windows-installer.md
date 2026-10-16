@@ -1,7 +1,7 @@
 # 0048. A Windows installer, and it will not take the name `docker`
 
 - Status: Accepted
-- Date: 2026-09-08
+- Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace), 2026-10-16 (rollback, Restart Manager)
 - Current answer: one MSI per architecture, `docker.exe` an optional feature,
   and, since 2026-10-15, an optional Hyper-V workspace feature whose install,
   upgrade and removal run the program's own commands as custom actions
@@ -107,6 +107,7 @@ reach and the MSI only sequences it (ADR 0055).
 |---|---|---|
 | feature added | SYSTEM | `sc create` + `sc sdset` for `remote-docker-machines` (also in an upgrade) |
 | feature added | SYSTEM | `remote machine service setup --user-sid [UserSID]` |
+| feature added | the installing user (impersonated) | `remote machine service refuse-existing <name>`, then the rollback `rm` |
 | feature added | the installing user (impersonated) | `remote machine create <name> --backend hyperv --image ...` |
 | feature removed, first | the uninstalling user | `remote rm -f <remembered name>`, before StopServices |
 | feature removed, then | SYSTEM | `remote machine service teardown`, after DeleteServices |
@@ -129,6 +130,21 @@ reach and the MSI only sequences it (ADR 0055).
 - **Each install action has a rollback** that undoes it (`rm`, stop, teardown,
   `sc delete`), so a refused name or a failed download leaves nothing. A failed
   create fails the install with 1603 and create's own message in the log.
+- **The rollback `rm` is scheduled only once nothing has the name**
+  (2026-10-16). It is `remote rm -f <name>`, which removed whatever had the
+  name: an install whose create failed because the user already had a
+  workspace called `hyperv` deleted that workspace and its machine.
+  `remote machine service refuse-existing <name>`, deferred and as the
+  installing user, now runs just before it and fails on any workspace entry,
+  machine or not, and on any Hyper-V machine of that name. The rollback
+  script is written as the installation script runs, and only what is already
+  in it is rolled back
+  ([Rollback Custom Actions](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions),
+  read 2026-10-16), so after a refusal there is no `rm` to run, and once the
+  check passed, anything of that name is this install's. A marker in the
+  machine block was the alternative; it needs a per-run token the MSI has no
+  property for, and leaves a plain workspace's entry to be overwritten by
+  create.
 - **An upgrade runs none of it but the service.** MajorUpgrade migrates the
   feature's state, so in the new product it arrives as an install; the service
   is recreated after the old product's removal deletes it, and create, setup
@@ -138,6 +154,25 @@ reach and the MSI only sequences it (ADR 0055).
   keep the name and tell the new product a workspace exists. An upgrade that
   would add or drop the feature is refused naming Modify, since it would run
   half of either.
+- **A running background session is closed by Restart Manager** (2026-10-16).
+  Windows Installer asks Restart Manager to stop whatever holds a file it
+  replaces, always in a silent install and from the files-in-use dialog
+  otherwise, and Restart Manager stops a console program by sending
+  CTRL_C_EVENT to its console
+  ([Using Windows Installer with Restart Manager](https://learn.microsoft.com/en-us/windows/win32/msi/using-windows-installer-with-restart-manager),
+  [Guidelines for Applications](https://learn.microsoft.com/en-us/windows/win32/rstmgr/guidelines-for-applications),
+  both read 2026-10-16). The session was started `DETACHED_PROCESS`, with no
+  console, so `RmShutdown` failed with 351 (ERROR_FAIL_SHUTDOWN) and the
+  0.12.0 to 0.12.1 upgrade said it could not close applications until the
+  session was killed by hand. It now gets a console of its own with no window
+  (`CREATE_NO_WINDOW`, `spawn_windows.go`) and takes the event as Ctrl-C:
+  it closes, releasing its endpoint and lock, and the next docker command
+  starts it again. `spawn_windows_test.go` calls `RmShutdown` on both ways of
+  starting it. Another user's session is what the hand test had, and
+  `test/msi.ps1` 17b asserts it: a standard user's session gone after an
+  upgrade and starting again. A session started before this change is still
+  detached, so the first upgrade from such a version can still ask for it to
+  be closed (`remote stop`, or end the process).
 - **Uninstall is best effort.** `rm` runs for the user who uninstalls; another
   user's config entry cannot be reached and stays. Both actions ignore failure,
   so a machine that cannot be removed does not make the product impossible to

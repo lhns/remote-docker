@@ -36,6 +36,18 @@ software.
 
 ### Fixes
 
+- **A Hyper-V workspace no longer takes over memory and disk.** A new machine
+  grows to at most `--memory` megabytes (4096 unless you say otherwise) and
+  shuts down with Windows instead of saving its memory to a file the same
+  size. A machine created earlier keeps its settings until it is rebuilt.
+- **Upgrading on Windows closes a running background session itself.** The
+  installer used to report that it could not close remote-docker while a
+  session ran. A session started by an earlier version still has to be closed
+  by hand, once.
+- **The installer no longer deletes a workspace that already had the name.**
+  Setting up the Hyper-V workspace under a name already in use now fails
+  naming it, instead of failing later and removing that workspace while
+  rolling back.
 - **`--backend hyperv` without `--rootfs` no longer builds from the wrong
   file.** It copied the workspace image's tarball in place of a disk, which
   cannot boot.

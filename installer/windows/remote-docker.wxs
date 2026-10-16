@@ -194,6 +194,13 @@
                   Execute="rollback" Impersonate="no" Return="ignore" />
     <CustomAction Id="CA.Setup" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   Execute="deferred" Impersonate="no" Return="check" />
+    <!--
+      Fails the install when the name is already a workspace or a machine.
+      Before R.Rm, so that rollback is only ever scheduled once nothing had
+      the name: a rollback action runs only if the script reached it.
+    -->
+    <CustomAction Id="CA.RefuseExisting" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  Execute="deferred" Impersonate="yes" Return="check" />
     <CustomAction Id="R.Rm" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
                   Execute="rollback" Impersonate="yes" Return="ignore" />
     <!-- As the installing user, so the entry, keys and docker context are theirs. -->
@@ -218,6 +225,8 @@
                  Condition="$(Added)" />
     <SetProperty Id="CA.Setup" Value="$(Exe) remote machine service setup --user-sid [UserSID]" Before="CA.Setup" Sequence="execute"
                  Condition="$(Added)" />
+    <SetProperty Id="CA.RefuseExisting" Value="$(Exe) remote machine service refuse-existing &quot;[WORKSPACENAME]&quot;" Before="CA.RefuseExisting" Sequence="execute"
+                 Condition="$(Added)" />
     <SetProperty Id="R.Rm" Value="$(Exe) remote rm -f &quot;[WORKSPACENAME]&quot;" Before="R.Rm" Sequence="execute"
                  Condition="$(Added)" />
     <SetProperty Id="PROXYARG" Value="--proxy &quot;[WORKSPACEPROXY]&quot;" Before="CostInitialize" Sequence="execute"
@@ -236,7 +245,8 @@
       <Custom Action="R.Teardown" After="CA.SvcSdset" Condition="$(Added)" />
       <Custom Action="R.StopSvc" After="R.Teardown" Condition="$(Added)" />
       <Custom Action="CA.Setup" After="R.StopSvc" Condition="$(Added)" />
-      <Custom Action="R.Rm" After="CA.Setup" Condition="$(Added)" />
+      <Custom Action="CA.RefuseExisting" After="CA.Setup" Condition="$(Added)" />
+      <Custom Action="R.Rm" After="CA.RefuseExisting" Condition="$(Added)" />
       <Custom Action="CA.Create" After="R.Rm" Condition="$(Added)" />
 
       <Custom Action="CA.Rm" Before="StopServices" Condition="$(Leaving)" />

@@ -1421,8 +1421,11 @@ more, the group, the machine, config entry and docker context in the installing
 user's profile, a STANDARD local user refused with the group's name and then
 served by the same logon after `net localgroup ... /add`, that user starting a
 stopped service, a name that create refuses failing the install with its
-message in the log and rolling everything back, an upgrade that changes none of
-the record, the config or the group and logs no destroy or second create, and
+message in the log and rolling everything back, a name an existing workspace
+already has refused with that workspace left as it was, an upgrade that
+changes none of the record, the config or the group and logs no destroy or
+second create while closing the standard user's background session, which
+then starts again, and
 an uninstall that destroys both machines and removes the service, the group,
 ProgramData, the config entry and the context. It is `msi.yml`, which runs on changes under `installer/windows/` rather than on
 every push -- a Windows runner per push answers the same question every time,

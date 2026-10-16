@@ -45,6 +45,7 @@ func modeOf(cfg config.Config) (workspace.Mode, map[string]workspace.Mode, error
 // runSession holds a session open until something ends it. It is also what a
 // background session runs.
 func runSession(cmd *cobra.Command, cfg config.Config) error {
+	acceptCtrlC()
 	ctx, cancel := signalContext()
 	defer cancel()
 

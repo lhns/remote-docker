@@ -308,12 +308,32 @@ Section '12. a refused workspace name fails the install, reaches the log, and ro
 Invoke-Msi (@('/i', $StandinMsi) + $HyperVOn + @('WORKSPACENAME=INVALID')) 'hyperv-badname' 1603
 $log = Log-Of 'hyperv-badname'
 if ($log -notmatch 'not a valid machine name') {
-  Fail "create's own message is not in the log; tail: $($log.Substring([Math]::Max(0, $log.Length - 3000)))"
+  Fail "the name check's message is not in the log; tail: $($log.Substring([Math]::Max(0, $log.Length - 3000)))"
 }
-Ok 'the message from create is in the msiexec log'
+Ok "the service's own name check is in the msiexec log"
 Assert-NotInstalled
 Assert-NoHyperV 'after the rollback'
 if ((Ops) -contains 'create INVALID') { Fail 'a machine was created under the refused name' }
+
+# ---------------------------------------------------------------------------
+Section '12b. a workspace that already has the name is refused, and the rollback leaves it alone'
+
+# The rollback's `remote rm` used to remove whatever had the name, so a failed
+# install deleted the user's own workspace of that name.
+$configBefore = if (Test-Path $MyConfig) { Get-Content $MyConfig -Raw } else { $null }
+Set-Content -Path $MyConfig -Encoding ascii -Value '{"workspaces":{"kept":{"host":"build.example","port":22,"user":"alice"}}}'
+Invoke-Msi (@('/i', $StandinMsi) + $HyperVOn + @('WORKSPACENAME=kept')) 'hyperv-existing' 1603
+$log = Log-Of 'hyperv-existing'
+if ($log -notmatch 'a workspace named "kept" already exists') {
+  Fail "the refusal is not in the log; tail: $($log.Substring([Math]::Max(0, $log.Length - 3000)))"
+}
+Ok 'refused, naming the workspace'
+$kept = ConfigEntry $MyConfig 'kept'
+if (-not $kept -or $kept.host -ne 'build.example') { Fail "the existing workspace is gone or changed: $(Get-Content $MyConfig -Raw -ErrorAction SilentlyContinue)" }
+if (@(Ops | Where-Object { $_ -match ' kept$' }).Count -ne 0) { Fail "the stand-in saw operations on kept: $((Ops) -join '; ')" }
+Ok 'the existing workspace is still there, unchanged, and no machine was made or destroyed for it'
+Assert-NotInstalled
+if ($null -eq $configBefore) { Remove-Item $MyConfig -Force } else { Set-Content -Path $MyConfig -Value $configBefore -NoNewline }
 
 # ---------------------------------------------------------------------------
 Section '13. the properties without the feature install nothing of the workspace'
@@ -457,7 +477,26 @@ if (-not (ServiceExists)) { Fail 'the service is gone after the refused upgrade'
 Ok 'refused by name, and 0.0.1 is still installed with its service'
 
 # ---------------------------------------------------------------------------
-Section '17b. an upgrade touches nothing'
+Section '17b. an upgrade touches nothing, and stops a standard user''s background session'
+
+# Another user's session holding remote-docker.exe open: Restart Manager has to
+# stop it for the upgrade to replace the file (ADR 0048).
+function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
+  $p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+    -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
+  $null = $p.WaitForExit(120000)
+  $out = (Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -Raw -ErrorAction SilentlyContinue) -join ''
+  if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
+}
+function SessionProcess() {
+  return @(Get-CimInstance Win32_Process -Filter "Name='remote-docker.exe'" |
+    Where-Object { $_.CommandLine -match 'start --foreground --workspace other' })
+}
+Invoke-AsStd @('remote', 'start', 'other') 'sess-start'
+$sessions = SessionProcess
+if ($sessions.Count -ne 1) { Fail "expected one background session of $StdName, found $($sessions.Count)" }
+Ok "$StdName has a background session running $Exe (pid $($sessions[0].ProcessId))"
 
 $hashRecords = (Get-FileHash (Join-Path $ServiceDir 'machines.json')).Hash
 $hashConfig = (Get-FileHash $MyConfig).Hash
@@ -479,6 +518,13 @@ if ((Get-FileHash $MyConfig).Hash -ne $hashConfig) { Fail "$MyConfig changed" }
 if ((GroupText).Text -ne $membersBefore) { Fail "the group changed: $((GroupText).Text)" }
 if (((Ops) -join "`n") -ne $opsBefore) { Fail "the stand-in saw operations during the upgrade: $((Ops) -join '; ')" }
 Ok 'the record, the config entry, the group and the machine are untouched; no destroy, no second create'
+if ((SessionProcess).Count -ne 0) { Fail "the background session of $StdName survived the upgrade, so the old file was not replaced in place" }
+Ok "the upgrade stopped $StdName's session"
+Invoke-AsStd @('remote', 'start', 'other') 'sess-restart'
+if ((SessionProcess).Count -ne 1) { Fail "the session of $StdName did not start again after the upgrade" }
+Invoke-AsStd @('remote', 'stop', 'other') 'sess-stop'
+if ((SessionProcess).Count -ne 0) { Fail "remote stop left the session of $StdName running" }
+Ok 'it starts again from the upgraded program, and stops'
 Start-Service $Service
 Ok 'the reinstalled service starts'
 

@@ -5,6 +5,7 @@ package main
 // decision the user-facing commands make about it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -35,6 +36,38 @@ func decideBroker(spec *machine.Spec, recorded *config.Workspace, rootfsFlag str
 	if spec.Broker && rootfsFlag != "" {
 		return errors.New("--rootfs cannot be used with the Hyper-V service, which downloads its own Flatcar disk\n" +
 			"  fix: omit --rootfs")
+	}
+	return nil
+}
+
+// refuseExistingWorkspace fails when a workspace entry or a Hyper-V machine
+// already has this name. The installer runs it just before its rollback
+// `remote rm`, which a failure here keeps out of the rollback script, so that
+// rm only ever removes what the install's own create made (ADR 0048).
+func refuseExistingWorkspace(ctx context.Context, name string) error {
+	file, err := config.Load("")
+	if err != nil {
+		return err
+	}
+	if _, ok := file.Workspaces[name]; ok {
+		return fmt.Errorf("a workspace named %q already exists, and setup will not replace it\n"+
+			"  fix: choose another workspace name, or remove that one first with `%s`", name, ourCommand("rm "+name))
+	}
+	spec := machine.Spec{Name: name, Backend: "hyperv"}
+	if err := decideBroker(&spec, nil, ""); err != nil {
+		return err
+	}
+	backend, err := findBackend(spec.BackendKey())
+	if err != nil {
+		return err
+	}
+	observed, err := backend.Inspect(ctx, name)
+	if err != nil {
+		return fmt.Errorf("cannot tell whether a machine named %q exists: %w", name, err)
+	}
+	if observed.State != machine.Absent {
+		return fmt.Errorf("a Hyper-V machine named %q already exists with no workspace for it\n"+
+			"  fix: choose another workspace name", name)
 	}
 	return nil
 }
@@ -70,6 +103,14 @@ func newMachineServiceCommand() *cobra.Command {
 			RunE:  func(*cobra.Command, []string) error { return machine.RunBrokerService() },
 		},
 		setup,
+		&cobra.Command{
+			Use:   "refuse-existing <name>",
+			Short: "Fail if a workspace or machine already has this name",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return refuseExistingWorkspace(cmd.Context(), args[0])
+			},
+		},
 		&cobra.Command{
 			Use:   "teardown",
 			Short: "Destroy the service's machines and undo setup",

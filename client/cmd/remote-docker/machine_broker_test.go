@@ -161,3 +161,51 @@ func TestRmOfABrokerMachineAfterUninstallPointsAtKeepMachine(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// The installer's guard before it schedules its rollback `remote rm`: any
+// entry with the name, machine or not, and any machine with it, is refused.
+func TestRefuseExistingWorkspace(t *testing.T) {
+	withBrokerProbe(t, true, nil)
+	for _, tc := range []struct {
+		name    string
+		entries map[string]config.Workspace
+		state   machine.State
+		refused string
+	}{
+		{"nothing there", nil, machine.Absent, ""},
+		{"a plain workspace", map[string]config.Workspace{"hyperv": {Host: "build.example", Port: 22}}, machine.Absent, "already exists"},
+		{"a machine workspace", map[string]config.Workspace{"hyperv": {Host: "127.0.0.1", Port: 2222,
+			Machine: &config.Machine{Backend: "hyperv", Name: "hyperv", Broker: true}}}, machine.Running, "already exists"},
+		{"a machine with no entry", nil, machine.Stopped, "no workspace for it"},
+		{"another name is no obstacle", map[string]config.Workspace{"other": {Host: "build.example", Port: 22}}, machine.Absent, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withConfig(t, &config.File{Workspaces: tc.entries})
+			var asked []string
+			savedFind := findBackend
+			findBackend = func(key string) (machine.Backend, error) {
+				asked = append(asked, key)
+				return &fakeBackend{log: &events{}, state: tc.state}, nil
+			}
+			t.Cleanup(func() { findBackend = savedFind })
+
+			err := run(t, "remote", "machine", "service", "refuse-existing", "hyperv")
+			switch {
+			case tc.refused == "" && err != nil:
+				t.Fatalf("refused: %v", err)
+			case tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)):
+				t.Fatalf("err = %v, want one saying %q", err, tc.refused)
+			}
+			if len(asked) > 0 && !slices.Equal(asked, []string{"hyperv-broker"}) {
+				t.Errorf("asked backends %v, want the one create would use", asked)
+			}
+			file, err := config.Load("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(file.Workspaces) != len(tc.entries) {
+				t.Errorf("the check changed the config: %+v", file.Workspaces)
+			}
+		})
+	}
+}
