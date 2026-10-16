@@ -73,7 +73,7 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
-	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
+	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "Hyper-V: the most memory in MB it may grow to; 0 means 4096. WSL ignores it")
 	cmd.Flags().StringVar(&o.proxy, "proxy", "",
 		"hyperv: http(s) proxy URL for the Flatcar download and the machine's docker daemon, e.g. http://proxy.example:3128")
 

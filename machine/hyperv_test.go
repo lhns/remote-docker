@@ -322,7 +322,7 @@ func TestPSQuote(t *testing.T) {
 }
 
 func TestPSCommands(t *testing.T) {
-	spec := Spec{Name: "dev", Backend: "hyperv", Port: 2222, CPUs: 4, MemoryMB: 4096}
+	spec := Spec{Name: "dev", Backend: "hyperv", Port: 2222, CPUs: 4, MemoryMB: 6144}
 
 	create := psNewVM("rd-dev", `C:\m\disk.vhdx`, `C:\m`, spec)
 	for _, want := range []string{
@@ -334,18 +334,31 @@ func TestPSCommands(t *testing.T) {
 		// with secure boot on does not boot at all.
 		"Set-VMFirmware -VMName 'rd-dev' -EnableSecureBoot Off",
 		"Set-VMProcessor -VMName 'rd-dev' -Count 4",
-		"Set-VMMemory -VMName 'rd-dev' -StartupBytes 4096MB",
+		// --memory is the most the guest may grow to, and it starts lower.
+		"Set-VMMemory -VMName 'rd-dev' -DynamicMemoryEnabled $true -MinimumBytes 512MB -StartupBytes 1024MB -MaximumBytes 6144MB",
+		// Save would reserve the guest's memory on the host's disk.
+		"-AutomaticStopAction ShutDown",
 	} {
 		if !strings.Contains(create, want) {
 			t.Errorf("the create command is missing %q:\n%s", want, create)
 		}
 	}
 
-	// Zero means the platform's default, which is a better number than one
-	// invented here -- so nothing is set at all.
+	// Zero CPUs is the platform's default. Zero memory is not: New-VM's
+	// ceiling is 1 TB and the guest grows into whatever it is allowed.
 	bare := psNewVM("rd-dev", "d.vhdx", "d", Spec{Name: "dev"})
-	if strings.Contains(bare, "Set-VMProcessor") || strings.Contains(bare, "Set-VMMemory") {
-		t.Errorf("an unset cpu or memory was turned into a number:\n%s", bare)
+	if strings.Contains(bare, "Set-VMProcessor") {
+		t.Errorf("an unset cpu count was turned into a number:\n%s", bare)
+	}
+	if !strings.Contains(bare, "-StartupBytes 1024MB -MaximumBytes 4096MB") {
+		t.Errorf("an unset memory is not bounded by the default:\n%s", bare)
+	}
+
+	// A ceiling below the usual startup is the startup too, and the minimum
+	// never exceeds the startup, or Set-VMMemory refuses the line.
+	small := psNewVM("rd-dev", "d.vhdx", "d", Spec{Name: "dev", MemoryMB: 256})
+	if !strings.Contains(small, "-MinimumBytes 256MB -StartupBytes 256MB -MaximumBytes 256MB") {
+		t.Errorf("a small --memory is not both the startup and the ceiling:\n%s", small)
 	}
 
 	// Destroy takes the disk with it. Remove-VM alone leaves it, which quietly
