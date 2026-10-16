@@ -406,7 +406,10 @@ with the images, containers and volumes inside it. Your files are not in it.
 			}
 			ws, ok := file.Workspaces[name]
 			if !ok {
-				return noWorkspaceNamed(name)
+				if keepMachine {
+					return noWorkspaceNamed(name)
+				}
+				return removeUnenteredMachine(cmd, name)
 			}
 
 			// Before removal: the context name derives from the entry.
@@ -475,6 +478,30 @@ func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
 		}
 		return fmt.Errorf("destroying the %s machine %q: %w", m.Backend, m.Name, err)
 	}
+	return nil
+}
+
+// removeUnenteredMachine destroys the Hyper-V service's machine of this name
+// when no workspace entry has it, which is what a create leaves that failed
+// after the service built the machine and before the entry was written. The
+// service answers only for its caller's machines (ADR 0055), so one it reports
+// is this user's to remove.
+func removeUnenteredMachine(cmd *cobra.Command, name string) error {
+	if ok, err := brokerInstalled(); err != nil || !ok {
+		return noWorkspaceNamed(name)
+	}
+	m := &config.Machine{Backend: "hyperv", Name: name, Broker: true}
+	backend, err := findBackend(m.BackendKey())
+	if err != nil {
+		return noWorkspaceNamed(name)
+	}
+	if observed, err := backend.Inspect(cmd.Context(), name); err != nil || observed.State == machine.Absent {
+		return noWorkspaceNamed(name)
+	}
+	if err := destroyMachine(cmd, m); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed the machine %q, which had no workspace entry\n", name)
 	return nil
 }
 

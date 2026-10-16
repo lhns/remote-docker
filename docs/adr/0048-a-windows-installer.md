@@ -128,7 +128,12 @@ reach and the MSI only sequences it (ADR 0055).
   stock LocalSystem one plus Authenticated Users: start, query, interrogate, so
   a standard user can start it after a reboot and stop or change nothing.
 - **Each install action has a rollback** that undoes it (`rm`, stop, teardown,
-  `sc delete`), so a refused name or a failed download leaves nothing. A failed
+  `sc delete`), so a refused name or a failed download leaves nothing. A
+  machine the service built whose entry create never wrote is destroyed by
+  the rollback `rm` (which asks the service when there is no entry), and by
+  the rollback teardown regardless, which destroys every machine the service
+  recorded: this install created the service, so each is its own or one an
+  earlier uninstall's teardown failed to remove. A failed
   create fails the install with 1603 and create's own message in the log.
 - **The rollback `rm` is scheduled only once nothing has the name**
   (2026-10-16). It is `remote rm -f <name>`, which removed whatever had the

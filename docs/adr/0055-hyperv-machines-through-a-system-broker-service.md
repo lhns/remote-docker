@@ -95,7 +95,10 @@ fix, not worked around.
 - **Cleanup that fails.** A create that fails destroys what it made. If that
   also fails the record is kept, so the machine stays destroyable by its
   owner or by a purge; a destroy removes a record only while it still names
-  the caller.
+  the caller. The owner's way is `remote rm <name>`, which asks the service
+  when no workspace entry has the name: a create that failed after the
+  service answered and before the entry was written leaves exactly that
+  (2026-10-16).
 - **Quota.** A member can create as many machines as the disk holds; there is
   no per-user quota. Accepted: members are trusted users.
 - **Purge.** Destroys every recorded machine; administrators only; run at
