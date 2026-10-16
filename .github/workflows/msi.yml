@@ -138,7 +138,10 @@ jobs:
           # just asked for and would fail the step.
           exit 0
 
+      # About 4 minutes when it passes. Bounded so a hang fails while the step
+      # below can still print the logs, instead of running to GitHub's 6 hours.
       - name: install, uninstall, the docker.exe feature and the Hyper-V workspace
+        timeout-minutes: 30
         shell: pwsh
         run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi -StandinMsi dist/msi/standin_0.0.1.msi -StandinNextMsi dist/msi/standin_0.0.2.msi
 
@@ -149,6 +152,14 @@ jobs:
         run: |
           if (Test-Path "$env:TEMP\msi-logs") {
             Get-ChildItem "$env:TEMP\msi-logs" | ForEach-Object {
+              Write-Host "== $($_.Name)"; Get-Content $_.FullName
+            }
+          }
+          Write-Host "== still running"
+          Get-CimInstance Win32_Process -Filter "Name='msiexec.exe' OR Name='remote-docker.exe'" |
+            ForEach-Object { Write-Host "$($_.ProcessId) $($_.CommandLine)" }
+          if (Test-Path "$env:ProgramData\remote-docker-standin") {
+            Get-ChildItem "$env:ProgramData\remote-docker-standin" -File | ForEach-Object {
               Write-Host "== $($_.Name)"; Get-Content $_.FullName
             }
           }

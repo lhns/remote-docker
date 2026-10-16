@@ -55,7 +55,17 @@ function Invoke-Msi([string[]]$Arguments, [string]$Tag, [int]$Expect) {
   $log = Join-Path $LogDir "$Tag.log"
   $all = $Arguments + @('/qn', '/l*v', $log)
   Write-Host "  msiexec $($all -join ' ')"
-  $p = Start-Process -FilePath msiexec.exe -ArgumentList $all -Wait -PassThru
+  $p = Start-Process -FilePath msiexec.exe -ArgumentList $all -PassThru
+  # Bounded, so a hang fails here with the log and what was still running,
+  # rather than at the job's limit with nothing to read.
+  if (-not $p.WaitForExit(10 * 60 * 1000)) {
+    Write-Host "  msiexec still running after 10 minutes; still running:" -ForegroundColor Yellow
+    Get-CimInstance Win32_Process -Filter "Name='msiexec.exe' OR Name='remote-docker.exe'" |
+      ForEach-Object { Write-Host "    $($_.ProcessId) $($_.CommandLine)" }
+    if (Test-Path $log) { Get-Content $log -Tail 200 }
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Fail "msiexec did not finish within 10 minutes"
+  }
   if ($p.ExitCode -ne $Expect) {
     Write-Host "  exit $($p.ExitCode), expected $Expect; log follows:" -ForegroundColor Yellow
     if (Test-Path $log) { Get-Content $log }
