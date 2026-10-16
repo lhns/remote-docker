@@ -275,10 +275,26 @@ CI runs this against a stand-in for Hyper-V. Real Hyper-V, and the identity the
 installer runs under, are checked here, on a computer with Hyper-V enabled and
 a standard user account (`alice`) that has never been an administrator.
 
-1. As `alice`, run the MSI with the "Hyper-V workspace" feature selected,
-   check that the page after the feature tree takes typing in all three
-   fields, and type an administrator's credentials at the prompt (also try it
-   from a second account's elevated prompt). Wait for the Flatcar download.
+There is no need to sign in as `alice`. On your own desktop, run
+`runas /user:alice powershell` yourself (it asks for alice's password): that
+window is alice, the installer started from it shows the over-the-shoulder
+prompt, and it is the shell opened before the install that step 2 needs. Do
+not have an automation tool run `runas` for you: from inside a job object
+`CreateProcessWithLogonW` returned ERROR_ACCESS_DENIED (2026-10-16).
+
+1. In alice's window, start the MSI. Keep each value on its own line: a long
+   `msiexec /i <msi> /l*v <log>` line broken by the terminal leaves `/l*v`
+   with no file, and msiexec then installs nothing. `-Wait` makes the checks
+   below run after the install.
+   ```powershell
+   $msi = "C:\Users\Public\remote-docker_0.6.0_windows_amd64.msi"
+   $log = "$env:TEMP\install.log"
+   Start-Process msiexec -Wait -ArgumentList "/i", $msi, "/l*v", $log
+   ```
+   Select the "Hyper-V workspace" feature, check that the page after the
+   feature tree takes typing in all three fields, and type an administrator's
+   credentials at the prompt (also try it from a second account's elevated
+   prompt). It returns after the Flatcar download. Then:
    ```powershell
    Get-Service remote-docker-machines; sc.exe sdshow remote-docker-machines
    net localgroup remote-docker-users          # alice is a member
@@ -288,16 +304,23 @@ a standard user account (`alice`) that has never been an administrator.
    The entry must be in alice's profile and not the administrator's, which is
    the thing CI cannot see: [UserSID] under over-the-shoulder elevation, and the
    impersonated action's environment.
-2. In a shell opened before the install, without signing out:
+2. In alice's window, opened before the install, without signing out.
+   `Set-Content -Encoding ascii` because `echo hi >` in Windows PowerShell 5.1
+   writes UTF-16 with a BOM, which `cat` prints as garbage:
    ```powershell
-   mkdir t; echo hi > t\marker; cd t
+   cd ~; mkdir t; Set-Content t\marker hi -Encoding ascii; cd t
    remote-docker run --rm -v ${PWD}:/w alpine cat /w/marker     # hi
    ```
-3. Restart the computer; as `alice` repeat step 2. The service is stopped after
-   a reboot and her command starts it.
+3. Restart the computer, open alice's window again and repeat step 2's
+   `run` in `~\t`. The service is stopped after a reboot and her command
+   starts it.
 4. Pull an image and make a volume in the machine, then install a newer MSI over
-   it (`msiexec /i newer.msi`, no properties). The service, the group, the VM,
-   `alice`'s config and the image and volume must all still be there.
+   it as in step 1, with no properties. The service, the group, the VM,
+   `alice`'s config and the image and volume must all still be there. Leave
+   alice's background session running: the installer closes it through
+   Restart Manager. One started by 0.11.0 or earlier it cannot close, and
+   says so; run `remote-docker remote stop` in alice's window (or end the
+   process), then Retry.
 5. Uninstall. Then:
    ```powershell
    Get-VM                                    # no rd-hyperv
