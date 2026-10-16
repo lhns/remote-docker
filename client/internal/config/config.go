@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/machine"
 )
 
 // DefaultSSHPort is the workspace's sshd port.
@@ -173,8 +174,19 @@ type Machine struct {
 	CPUs     int `json:"cpus,omitempty"`
 	MemoryMB int `json:"memoryMb,omitempty"`
 
+	// Proxy is the http(s) proxy a Hyper-V machine's docker daemon was built
+	// with, so a rebuild keeps it. May hold credentials, like the rest of this
+	// private file.
+	Proxy string `json:"proxy,omitempty"`
+
 	// Generation hashes the build settings; a mismatch means out of date.
 	Generation string `json:"generation,omitempty"`
+
+	// Broker says the machine was created through the SYSTEM service
+	// (ADR 0055), so every later operation on it goes there too. Absent on
+	// a machine made by PowerShell in this user's own session, which keeps
+	// running that way.
+	Broker bool `json:"broker,omitempty"`
 
 	// HostKey is the public half of the host key this program built the
 	// machine with, in authorized_keys form. A session accepts that key and no
@@ -182,6 +194,10 @@ type Machine struct {
 	// machine built before keys were made here, which falls back to known_hosts.
 	HostKey string `json:"hostKey,omitempty"`
 }
+
+// BackendKey is the name the machine package knows this machine's backend by:
+// the brokered variant when it was created through the service.
+func (m Machine) BackendKey() string { return machine.BackendKey(m.Backend, m.Broker) }
 
 // Names lists the configured workspaces in a stable order.
 func (f File) Names() []string {

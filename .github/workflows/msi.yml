@@ -10,6 +10,8 @@ on:
       - "test/msi.ps1"
       - ".github/workflows/msi.yml"
       - ".github/actions/setup-wix/**"
+      - "machine/broker_standin_windows.go"
+      - "client/cmd/remote-docker/machine_service.go"
   push:
     branches: [main]
     paths:
@@ -17,6 +19,8 @@ on:
       - "test/msi.ps1"
       - ".github/workflows/msi.yml"
       - ".github/actions/setup-wix/**"
+      - "machine/broker_standin_windows.go"
+      - "client/cmd/remote-docker/machine_service.go"
   workflow_dispatch:
 
 permissions:
@@ -45,6 +49,32 @@ jobs:
               go build -trimpath -ldflags "-s -w" \
               -o "../windows/${arch}/remote-docker.exe" ./cmd/remote-docker
           done
+
+      # The installer's Hyper-V workspace is tested against a stand-in for
+      # Hyper-V, which only the rdstandin build tag compiles in. Built here
+      # beside the release-shaped binaries, and the two kinds are told apart
+      # below: a release binary must not carry it.
+      - name: build the stand-in client for windows
+        run: |
+          set -eux
+          cd client
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -tags rdstandin -ldflags "-s -w" \
+            -o ../windows/standin-amd64/remote-docker.exe ./cmd/remote-docker
+
+      - name: only the stand-in contains the stand-in
+        run: |
+          set -eu
+          marker=REMOTE-DOCKER-STANDIN-HYPERV
+          for f in windows/amd64/remote-docker.exe windows/arm64/remote-docker.exe; do
+            info="$(go version -m "$f")"
+            case "$info" in *rdstandin*) echo "$f was built with rdstandin"; echo "$info"; exit 1;; esac
+            if grep -q "$marker" "$f"; then echo "$f contains $marker"; exit 1; fi
+          done
+          info="$(go version -m windows/standin-amd64/remote-docker.exe)"
+          case "$info" in *rdstandin*) ;; *) echo "the stand-in binary lacks the rdstandin tag"; echo "$info"; exit 1;; esac
+          grep -q "$marker" windows/standin-amd64/remote-docker.exe || { echo "the stand-in binary lacks $marker"; exit 1; }
+          echo "release binaries are clean; the stand-in is marked"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -77,6 +107,17 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
 
+      # The same package with the stand-in client, at two versions, for the
+      # Hyper-V workspace and the upgrade between them.
+      - name: build the stand-in msis
+        shell: pwsh
+        run: |
+          foreach ($v in '0.0.1', '0.0.2') {
+            ./installer/windows/build.ps1 -Version $v -Arch x64 `
+              -Binary windows/standin-amd64/remote-docker.exe -Out "dist/msi/standin_$v.msi"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
       - name: a snapshot version is refused rather than truncated
         shell: pwsh
         run: |
@@ -97,9 +138,9 @@ jobs:
           # just asked for and would fail the step.
           exit 0
 
-      - name: install, uninstall, and the docker.exe feature
+      - name: install, uninstall, the docker.exe feature and the Hyper-V workspace
         shell: pwsh
-        run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi
+        run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi -StandinMsi dist/msi/standin_0.0.1.msi -StandinNextMsi dist/msi/standin_0.0.2.msi
 
       # For a job that died outside the suite, which prints its own.
       - name: the msiexec logs

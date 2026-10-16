@@ -51,6 +51,7 @@ default.`,
 		newMachineStopCommand(),
 		newMachineRebuildCommand(),
 		newMachineStatusCommand(),
+		newMachineServiceCommand(),
 	)
 	return cmd
 }
@@ -62,6 +63,8 @@ type machineOptions struct {
 	rootfs   string
 	cpus     int
 	memoryMB int
+	proxy    string
+	image    string
 }
 
 func (o *machineOptions) install(cmd *cobra.Command) {
@@ -70,7 +73,12 @@ func (o *machineOptions) install(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.rootfs, "rootfs", "",
 		"build from this file instead of the published one: the workspace image's filesystem as a tar (wsl), or a Flatcar disk image (hyperv)")
 	cmd.Flags().IntVar(&o.cpus, "cpus", 0, "processors to give it; 0 uses the backend's default")
-	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "megabytes to give it; 0 uses the backend's default")
+	cmd.Flags().IntVar(&o.memoryMB, "memory", 0, "Hyper-V: the most memory in MB it may grow to; 0 means 4096. WSL ignores it")
+	cmd.Flags().StringVar(&o.proxy, "proxy", "",
+		"hyperv: http(s) proxy URL for the Flatcar download and the machine's docker daemon, e.g. http://proxy.example:3128")
+
+	cmd.Flags().StringVar(&o.image, "image", "",
+		"workspace image to run in the machine, e.g. from a registry mirror; defaults to this version's published image")
 
 	// No --port or --user: `remote` has both persistently, and pflag silently
 	// skips a duplicate (ADR 0024).
@@ -91,15 +99,17 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 		Name:    name,
 		Backend: backend,
 		// Part of the generation, so a new client version rebuilds (ADR 0026).
-		Image:    machine.DefaultImage(version),
+		Image:    cmp.Or(o.image, machine.DefaultImage(version)),
 		Rootfs:   o.rootfs,
 		Port:     overrides.Port,
 		CPUs:     o.cpus,
 		MemoryMB: o.memoryMB,
 		Account:  overrides.User,
+		Proxy:    o.proxy,
 	}
 	if recorded != nil && recorded.Machine != nil {
 		m := recorded.Machine
+		spec.Proxy = cmp.Or(spec.Proxy, m.Proxy)
 		spec.Port = cmp.Or(spec.Port, recorded.Port)
 		spec.Account = cmp.Or(spec.Account, recorded.User)
 		spec.CPUs = cmp.Or(spec.CPUs, m.CPUs)
@@ -109,6 +119,14 @@ func (o *machineOptions) spec(name string, recorded *config.Workspace) (machine.
 				spec.Rootfs = m.Rootfs
 				spec.Fetched = machine.IsFetched(m.Rootfs)
 			}
+		}
+	}
+	if spec.Proxy != "" {
+		if backend != "hyperv" {
+			return machine.Spec{}, fmt.Errorf("--proxy applies to hyperv machines only; a %s machine uses this computer's network", backend)
+		}
+		if _, err := machine.ParseProxy(spec.Proxy); err != nil {
+			return machine.Spec{}, err
 		}
 	}
 	spec.Port = cmp.Or(spec.Port, config.DefaultSSHPort)
@@ -130,6 +148,9 @@ const defaultBackend = "wsl"
 // machine is refused: it would build a second machine beside the first and
 // overwrite the only record that the first exists.
 func (o *machineOptions) backendFor(name string, recorded *config.Workspace) (string, error) {
+	if o.backend == machine.BackendKey("hyperv", true) {
+		return "", fmt.Errorf("no machine backend named %q; use hyperv, which goes through the Hyper-V service when it is installed", o.backend)
+	}
 	if recorded == nil || recorded.Machine == nil {
 		return cmp.Or(o.backend, defaultBackend), nil
 	}
@@ -182,6 +203,9 @@ is not a thing a create command should decide.`,
 			if spec.Backend, err = opts.backendFor(args[0], recordedWorkspace(args[0])); err != nil {
 				return err
 			}
+			if err := decideBroker(&spec, recordedWorkspace(args[0]), opts.rootfs); err != nil {
+				return err
+			}
 			return createMachine(cmd, args[0], spec, false)
 		},
 	}
@@ -220,8 +244,12 @@ then "machine create --backend".`,
 					return err
 				}
 			}
-			spec, err := opts.spec(name, recordedWorkspace(name))
+			recorded := recordedWorkspace(name)
+			spec, err := opts.spec(name, recorded)
 			if err != nil {
+				return err
+			}
+			if err := decideBroker(&spec, recorded, opts.rootfs); err != nil {
 				return err
 			}
 			return createMachine(cmd, name, spec, true)
@@ -251,6 +279,9 @@ func machineName(args []string) (string, error) {
 
 // findBackend is machine.Find, replaced in tests.
 var findBackend = machine.Find
+
+// prepareRootfs is machine.PrepareRootfs, replaced in tests.
+var prepareRootfs = machine.PrepareRootfs
 
 // stopSessionFor stops the workspace's background session, if one is serving.
 // Best effort, but every failure is reported: a surviving session makes the
@@ -283,7 +314,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
 
-	backend, err := findBackend(spec.Backend)
+	backend, err := findBackend(spec.BackendKey())
 	if err != nil {
 		return err
 	}
@@ -313,9 +344,14 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 		fallthrough
 
 	case action == machine.Create:
-		// Fetched only when building: it is several hundred megabytes.
-		if spec.Rootfs == "" {
-			if spec.Rootfs, err = machine.EnsureRootfs(ctx, spec.Image, out); err != nil {
+		// Fetched only when building: it is several hundred megabytes. Not by
+		// us when the service builds: it downloads its own copy, and a path
+		// from here is one it would open as SYSTEM.
+		if spec.Broker {
+			spec.Fetched = true
+			_, _ = fmt.Fprintln(out, "the Hyper-V service builds it; downloading Flatcar may take minutes")
+		} else if spec.Rootfs == "" {
+			if spec.Rootfs, err = prepareRootfs(ctx, spec.Backend, spec.Image, spec.Proxy, out); err != nil {
 				return err
 			}
 			spec.Fetched = true
@@ -357,7 +393,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	// Waited for until the agent listens, so "created" means usable. Held open
 	// meanwhile: an empty WSL machine shuts down after ~30s and never gets there.
-	hold, err := machine.Hold(ctx, spec.Backend, name)
+	hold, err := machine.Hold(ctx, spec.BackendKey(), name)
 	if err != nil {
 		return err
 	}
@@ -365,7 +401,7 @@ func createMachine(cmd *cobra.Command, name string, spec machine.Spec, rebuild b
 
 	// At its own address, not loopback: WSL's localhost relay was measured
 	// refusing connections to a listening agent (machine.yml, 2026-08-11).
-	if _, err := machine.Locate(ctx, spec.Backend, name, spec.Port); err != nil {
+	if _, err := machine.Locate(ctx, spec.BackendKey(), name, spec.Port); err != nil {
 		return err
 	}
 
@@ -477,6 +513,8 @@ func machineRecord(spec machine.Spec) *config.Machine {
 		Rootfs:     spec.Rootfs,
 		CPUs:       spec.CPUs,
 		MemoryMB:   spec.MemoryMB,
+		Proxy:      spec.Proxy,
+		Broker:     spec.Broker,
 		Generation: spec.Generation(),
 	}
 }
@@ -509,14 +547,14 @@ a connection to the machine's previous address.`,
 				stopSessionFor(cmd, name)
 
 				// Held while waiting: an empty WSL machine shuts down again.
-				hold, err := machine.Hold(ctx, ws.Machine.Backend, ws.Machine.Name)
+				hold, err := machine.Hold(ctx, ws.Machine.BackendKey(), ws.Machine.Name)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = hold.Close() }()
 
 				// Located, so "started" means the agent is listening.
-				if _, err := machine.Locate(ctx, ws.Machine.Backend, ws.Machine.Name, ws.Port); err != nil {
+				if _, err := machine.Locate(ctx, ws.Machine.BackendKey(), ws.Machine.Name, ws.Port); err != nil {
 					return err
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "started %q\n", name)
@@ -670,7 +708,7 @@ func withMachine(cmd *cobra.Command, args []string, fn func(context.Context, mac
 			"  fix: these commands manage machines created with `%s`",
 			name, ourCommand("machine create <name>"))
 	}
-	backend, err := findBackend(ws.Machine.Backend)
+	backend, err := findBackend(ws.Machine.BackendKey())
 	if err != nil {
 		return err
 	}

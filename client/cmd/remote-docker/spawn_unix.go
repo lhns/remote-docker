@@ -12,3 +12,6 @@ import (
 func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
+
+// acceptCtrlC matters on Windows only (spawn_windows.go).
+func acceptCtrlC() {}

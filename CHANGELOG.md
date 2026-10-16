@@ -12,6 +12,22 @@ software.
 
 ### New
 
+- **The Windows installer can set up a Hyper-V workspace.** Select the
+  "Hyper-V workspace" feature (or pass `ADDLOCAL=Main,HyperV`) and the user who
+  ran the installer, standard user or not, can use a Linux machine on this
+  computer straight away; an upgrade leaves it alone, and removing the feature
+  or uninstalling deletes it.
+- **A Hyper-V service lets a standard user have a workspace.** A Windows
+  service `remote-docker-machines` (SYSTEM) makes, starts and destroys Hyper-V
+  machines over a named pipe for members of the local group
+  `remote-docker-users`, checked live so nobody signs out. Each user can touch
+  only the machines they created. `remote machine create --backend hyperv`
+  uses it once the installer has set it up.
+- **Hyper-V workspaces download their Flatcar image themselves.**
+  `remote machine create --backend hyperv` fetches a pinned Flatcar disk,
+  checks its SHA512 before unpacking it and keeps it for the next machine, so
+  the manual download is optional. `--proxy <url>` sends that download and the
+  machine's docker daemon through an HTTP proxy, and a rebuild keeps it.
 - **Mount a directory differently in each container.** `read=`, `write=` and
   `owner=` now apply per container, so one directory can be a live mount in one
   and a cached union in another at the same time, and changing a mount's words
@@ -20,6 +36,21 @@ software.
 
 ### Fixes
 
+- **A Hyper-V workspace no longer takes over memory and disk.** A new machine
+  grows to at most `--memory` megabytes (4096 unless you say otherwise) and
+  shuts down with Windows instead of saving its memory to a file the same
+  size. A machine created earlier keeps its settings until it is rebuilt.
+- **Upgrading on Windows closes a running background session itself.** The
+  installer used to report that it could not close remote-docker while a
+  session ran. A session started by an earlier version still has to be closed
+  by hand, once.
+- **The installer no longer deletes a workspace that already had the name.**
+  Setting up the Hyper-V workspace under a name already in use now fails
+  naming it, instead of failing later and removing that workspace while
+  rolling back.
+- **`--backend hyperv` without `--rootfs` no longer builds from the wrong
+  file.** It copied the workspace image's tarball in place of a disk, which
+  cannot boot.
 - **compose now warns about a long-syntax bind that loses its mount options.**
   compose drops `consistency:` from a bind unless the volume also has
   `bind: {create_host_path: false}`, so the mount came up in the default mode

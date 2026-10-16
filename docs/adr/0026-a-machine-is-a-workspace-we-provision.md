@@ -1,11 +1,13 @@
 # 0026. A machine is a workspace we provision
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md)
-- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand, Ignition over KVP)
+- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand, Ignition over KVP), 2026-10-15 (Flatcar fetched, proxy), 2026-10-16 (Hyper-V memory bounded, shut down not saved)
 - Current answer: a machine is an ordinary workspace plus a lifecycle, with its
   host key made and pinned by the client. WSL runs in CI; Hyper-V has run by
-  hand on one computer and takes its Ignition document over KVP, removed once
-  the agent answers.
+  hand on one computer, downloads its pinned and verified Flatcar disk itself,
+  takes its Ignition document over KVP, removed once the agent answers, and
+  grows to at most `--memory` (4096 MB by default), shutting down rather than
+  saving.
 
 ## Context
 
@@ -145,6 +147,58 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
     destroys the VM.
   - Hyper-V has no cmdlet for this, so it is WMI, and the call may finish as a
     job (4096) whose state has to be polled for the real answer.
+
+## A Hyper-V machine's disk is fetched, pinned and verified (2026-10-15)
+
+- **Forced by:** the manual download step in `docs/testing-machines.md`, and a
+  bug beside it. `remote machine create --backend hyperv` without `--rootfs`
+  called `EnsureRootfs` like every backend, so Hyper-V copied the workspace
+  image's tarball to `disk.vhdx` and booted nothing.
+- **Decision:** `machine.PrepareRootfs` picks the file per backend. WSL gets
+  the workspace image's filesystem as before. Hyper-V gets Flatcar's Hyper-V
+  disk: `machine.EnsureFlatcar` downloads the zip of a version pinned in code
+  (`flatcarPinned`: version, URL under that version, SHA512), checks the
+  SHA512 **before** unpacking, and keeps the `.vhdx` in the rootfs cache. A
+  mismatch is refused and caches nothing; a second create reuses the file.
+  `--rootfs` still overrides.
+- **Pinned, not `current`:** the bytes cannot move under the hash. A client
+  release bumps the pin; an old pin keeps working because old releases stay on
+  the server. *(Checked 2026-10-15: stable 4757.2.1, 583,866,025 bytes. Re-check
+  with the two `curl` commands in the comment on `flatcarPinned`.)*
+- **`--proxy`** (Hyper-V only) is an http(s) URL used for the download, and
+  written into the VM by Ignition as a `docker.service` drop-in
+  (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` for loopback, link-local and
+  172.16.0.0/12), so the VM's daemon pulls the workspace image through it. It
+  is recorded in the `machine` block and joins `Spec.Generation` only when set,
+  so no existing machine reads as out of date. Without it the download follows
+  the environment's proxy settings and the VM uses none.
+- **The Hyper-V backend runs through an executor** (`hyperVExecutor`): typed
+  operations (available, look, create, start, stop, address, retract, destroy)
+  with one implementation, `directHyperV`, which runs the same PowerShell as
+  before. It exists so a later implementation can carry the same operations to
+  another process without sharing a line of the backend's decisions.
+- **Costs:** about 600 MB downloaded once, and the zip is unpacked to 1.2 GB;
+  a proxy URL with credentials sits in `config.json`, which is private to the
+  user like the rest of it.
+
+## A Hyper-V machine's memory is bounded and it shuts down rather than saves (2026-10-16)
+
+- **Measured 2026-10-16** (Windows 11 Pro 25H2 build 26200.9457, vmms
+  10.0.26100, Flatcar 4757.2.1, host 15.4 GB): a machine made without
+  `--memory` had New-VM's defaults, dynamic memory from 1 GB up to 1024 GB and
+  `AutomaticStopAction Save`. After about two hours of light use it was
+  assigned 9.2 GB, and the save-state reservation took the same 9.2 GB of C:
+  (11.5 GB free became 2.3 GB; stopping the VM gave it back). Capped at 3 GB
+  it reached 3.0 GB within five minutes of boot: the guest takes what it is
+  allowed.
+- **Decision:** every machine is made with `-AutomaticStopAction ShutDown` (no
+  save-state file; the agent and dockerd stop cleanly) and dynamic memory
+  starting at 1 GB (or the ceiling, if lower) with a ceiling of `--memory`, or
+  4096 MB when that is not given. The default is applied in `psNewVM`, not in
+  the Spec, so a machine built without `--memory` keeps its generation.
+- **Cost:** a machine made before this keeps its old settings until it is
+  recreated or changed with `Set-VM` and `Set-VMMemory` by hand; a host
+  shutdown now waits for the guest to shut down instead of saving it.
 
 ## Both backends are located the same way, and Hyper-V uses no hvsock
 

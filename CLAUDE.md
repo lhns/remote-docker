@@ -85,6 +85,11 @@ machine/go.mod           PROVISIONING A WORKSPACE ON THIS MACHINE, and its
                          Its windows-tagged files are executed in ONE place, the
                          `test (windows)` job of ci.yml, so `machine` must stay
                          in that job's subset.
+                         broker*.go: THE HYPER-V SERVICE (ADR 0055), a SYSTEM
+                         Windows service that makes machines for users who are
+                         not administrators, and the pipe client that asks it.
+                         The service's logic is untagged and tested everywhere;
+                         `broker_windows.go` has the pipe, the SID and the group.
 
 core-client/go.mod       YOUR OWN MACHINE, minus Docker. 0 docker packages in
                          its graph, against the client's 191 -- which is the
@@ -153,7 +158,9 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          listener of its own (ADR 0054)
 
 image/                   the workspace container (Dockerfile only)
-installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code.
+installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code of its
+                         own: the optional Hyper-V workspace runs this program's
+                         hidden commands as custom actions (ADR 0048 amendment).
                          Built ON WINDOWS: WiX loads on Linux and then says its
                          behaviour is undefined, and means it. `docker.exe` is
                          a Feature and a DuplicateFile, so the payload ships
@@ -227,6 +234,7 @@ bash test/bench.sh
 # truncating it into an upgrade that never fires.
 dotnet tool install --global wix --version 5.0.2
 wix extension add -g WixToolset.UI.wixext/5.0.2
+wix extension add -g WixToolset.Util.wixext/5.0.2
 installer/windows/build.ps1 -Version 0.6.0 -Arch x64 `
   -Binary dist/windows_amd64/remote-docker.exe `
   -Out dist/msi/remote-docker_0.6.0_windows_amd64.msi
@@ -963,6 +971,22 @@ premise of the project, and it applies to building it too. So:
   `wsl -l -v` marks the default distribution with an asterisk COLUMN, so the
   name of a default distribution is not the first field. Both are tested on a
   machine with no WSL, which is the only way they are tested at all.
+- **The Hyper-V service authorises BEFORE reading a byte, takes typed
+  operations only, and never acts on a path the caller named** (ADR 0055).
+  `brokerServer.serveConn` identifies the caller from the pipe
+  (impersonation, never a field in a request), checks SYSTEM, an enabled
+  Administrators token or a DIRECT member of `remote-docker-users` read live on
+  every connection, and only then decodes a request, with unknown fields
+  refused. Every op but `create` and `available` needs the machine recorded
+  for the caller's SID in `machines.json`; `create` refuses a taken name
+  whoever owns it. A machine's files are `machines\<name>` under ProgramData
+  with a validated name, never anything from a request; the directory is born
+  with a protected DACL. The pipe's DACL withholds pipe-instance creation from users and the client
+  checks the answering process is the service's before sending (a squatted
+  pipe would receive the host key; the pipe's owner proves nothing).
+  A machine created through it has `broker: true` and every later operation
+  goes the same way (`config.Machine.BackendKey`). Real Hyper-V behind it is
+  by hand only; a real named pipe with a stand-in is CI.
 - **A machine-backed workspace is an ordinary workspace with a lifecycle.**
   The `machine` block in the config is the only thing that differs anywhere,
   and two commands read it: `rm`, which has a machine to destroy (ADR 0026),
@@ -1387,8 +1411,23 @@ prepended, `remote-docker remote --help` running from a shell whose PATH came
 from the registry rather than from this process, the `docker.exe` feature
 absent by default and working when `ADDLOCAL` asks for it, the refusal firing
 against a `docker.exe` in System32 with a message naming it, the override, and
-an uninstall that takes both names and the PATH entry with it. It is
-`msi.yml`, which runs on changes under `installer/windows/` rather than on
+an uninstall that takes both names and the PATH entry with it. It also runs the
+optional Hyper-V workspace against a STAND-IN for Hyper-V (the `rdstandin` build
+tag, `machine/broker_standin_windows.go`, which logs create/start/stop/destroy
+under `%ProgramData%\remote-docker-standin` beside the directory teardown
+deletes; `msi.yml` asserts no release binary contains it): the service
+installed as LocalSystem with Authenticated Users able to start and nothing
+more, the group, the machine, config entry and docker context in the installing
+user's profile, a STANDARD local user refused with the group's name and then
+served by the same logon after `net localgroup ... /add`, that user starting a
+stopped service, a name that create refuses failing the install with its
+message in the log and rolling everything back, a name an existing workspace
+already has refused with that workspace left as it was, an upgrade that
+changes none of the record, the config or the group and logs no destroy or
+second create while closing the standard user's background session, which
+then starts again, and
+an uninstall that destroys both machines and removes the service, the group,
+ProgramData, the config entry and the context. It is `msi.yml`, which runs on changes under `installer/windows/` rather than on
 every push -- a Windows runner per push answers the same question every time,
 which is the argument that keeps `bench.sh` behind a label. NOT on the release
 path: see the not-tested list below.
@@ -1399,6 +1438,13 @@ Keep this list honest, and name the assertion rather than the area: "the
 `docker run` mechanism under `elevate` is tested" was written here while only
 its pure planning function was.
 
+- **The MSI's Hyper-V workspace against real Hyper-V, and as a real standard
+  user.** CI proves the installer, service, group, rollback and upgrade around
+  a stand-in. By hand only (`docs/testing-machines.md`): real Hyper-V under the
+  service, that `[UserSID]` is the launching user under over-the-shoulder UAC
+  (a standard user typing admin credentials), that the impersonated action
+  writes that user's profile and not SYSTEM's or the administrator's, the
+  dialog (never clicked by CI), and a reboot with the service stopped.
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
   through the routing mesh -- needs a real cluster. CI cannot cover it. The

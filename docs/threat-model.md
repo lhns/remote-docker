@@ -1392,6 +1392,88 @@ cap and no write timeout. A scrape reads the gauges under the same locks
 sessions use, which are held for a map walk. Accepted with the listener: it is
 opt-in, and keeping it off the internet is the deployment's job.
 
+## Flow 11: the Hyper-V service
+
+A Windows service running as SYSTEM, reached by any local user through a named
+pipe, that creates and destroys Hyper-V machines for the callers it allows
+(ADR 0055). A SYSTEM-level surface whose callers are ordinary users.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as client (any local user)
+    participant P as named pipe remote-docker-machines
+    participant S as service (SYSTEM)
+    participant H as Hyper-V, ProgramData
+
+    C->>P: connect (client checks who answers is the service)
+    P->>S: caller identified from the pipe, nothing read
+    S->>S: SYSTEM or admin, else live member of remote-docker-users
+    S-->>C: refused, request never read
+    C->>S: one typed request
+    S->>S: name valid, machine recorded for this SID
+    S->>H: the same PowerShell the direct path runs
+    S-->>C: answer
+```
+
+**E — a caller who is not allowed (1).** The pipe grants Authenticated Users
+read and write (not instance creation) and denies network logons, so anyone at the keyboard connects.
+What stops them is the check inside: the caller's SID comes from
+impersonating the pipe client, never from a request, and a SID that is
+neither SYSTEM, an enabled Administrators token nor a direct member of
+`remote-docker-users` gets a refusal without one byte of its input read. A
+group that cannot be read allows administrators only. *Covered by*
+`TestBrokerAuthorisation`, `TestBrokerNeverReadsForAnUnauthorisedCaller` and
+`TestBrokerOverARealNamedPipe`.
+
+**E — one member acting on another's machine (3).** Every operation but
+`create` and `available` needs the machine recorded for the caller's SID in
+`machines.json`. A Hyper-V VM the service did not create is recorded for
+nobody and is never touched, so a user's own `rd-` VM is safe. `create`
+refuses a name that is recorded or exists, whoever owns it. *Covered by*
+`TestBrokerOwnership` and `TestBrokerRefusesAMachineHyperVHasThatIsNotRecorded`.
+
+**T — a path or a script from the caller (3).** No operation takes either. The
+machine's directory is the service's `machines\` plus a name matching
+`^[a-z0-9][a-z0-9-]{0,62}$`; account, image, key and proxy are held to shapes
+that cannot leave the unit file, the Ignition JSON or a PowerShell literal;
+unknown JSON fields are refused. *Covered by* `TestBrokerRefusesMalformedNames`,
+`TestBrokerRefusesBadCreateSettings` and `TestBrokerRefusesUnknownOpsAndFields`.
+
+**T/E — the service's directory (4).** ProgramData lets Users create folders,
+so a pre-created `remote-docker` there would hand its creator the service's
+writes. The service creates it with a protected DACL (SYSTEM and
+Administrators), and adopts an existing one only if SYSTEM or Administrators
+own it and it is not a reparse point; `service setup` creates it at install,
+and teardown and purge make the same check before reading or deleting. Startup
+failures go to the event log, not to a file in a directory users can plant a
+link in. *Covered by* `TestProtectedDirectoryHasOnlySystemAndAdministrators`,
+`TestVerifyProtectedDirRefusesADirectoryTheUserOwns` and
+`TestVerifyProtectedDirRefusesAJunction`.
+
+**S — a squatted pipe (1).** With the service stopped, a user can create a pipe
+of the same name and receive the next request, private host key included; with
+it running, a second instance of the pipe would be handed connections too. The
+DACL gives Authenticated Users no right to create an instance (`0x12019b`, not
+`GENERIC_WRITE`), and the client compares the process answering on the pipe
+with the service's own process id before sending anything. *Covered by*
+`TestBrokerClientRefusesAPipeTheServiceDoesNotServe` and
+`TestBrokerConstantsArePinned`.
+
+**D — a member (3).** Operations have deadlines and end with their caller's
+connection; a caller has two running at once and administrators their own
+four, so one member cannot take every slot or lock out purge; a hung Hyper-V
+call holds one machine's name and nothing else. *Covered by*
+`TestBrokerCapsOperationsPerCaller`, `TestBrokerOperationTimesOut`,
+`TestBrokerOperationStopsWhenTheCallerDisconnects` and
+`TestBrokerOneHungMachineDoesNotBlockAnother`. There is no per-user quota: one
+member can fill the disk with machines. *Accepted*: members are users an
+administrator chose.
+
+**E — group membership by nesting (1).** Only DIRECT members count. A user in
+a domain group that is a member of `remote-docker-users` is refused, and told
+the command that adds them. A stricter reading is the safe direction.
+
 ---
 
 ## The software you run

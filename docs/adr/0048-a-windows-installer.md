@@ -1,7 +1,11 @@
 # 0048. A Windows installer, and it will not take the name `docker`
 
 - Status: Accepted
-- Date: 2026-09-08
+- Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace), 2026-10-16 (rollback, Restart Manager)
+- Current answer: one MSI per architecture, `docker.exe` an optional feature,
+  and, since 2026-10-15, an optional Hyper-V workspace feature whose install,
+  upgrade and removal run the program's own commands as custom actions
+  (amendment below). Nothing else runs code at install time.
 
 ## Context
 
@@ -87,6 +91,103 @@ version (`sha-9370b24`) has no mapping to that at all, so
 `installer/windows/build.ps1` validates the shape and the ranges and exits
 naming the version. Truncating instead would produce an upgrade that never
 fires, which is silent for a release cycle.
+
+## Amendment 2026-10-15: the Hyper-V workspace, and custom actions
+
+"No custom action" held for the `docker.exe` feature and no longer holds for
+the whole package. The feature "Hyper-V workspace" (`HyperV`, off by default,
+selected silently with `ADDLOCAL=Main,HyperV`; a dialog after the feature tree,
+shown only when this session adds it, takes `WORKSPACENAME`, `WORKSPACEIMAGE`
+and `WORKSPACEPROXY`) runs the program's own hidden commands
+through `WixQuietExec` (WixToolset.Util.wixext 5.0.2, which logs their output
+and fails the action on a non-zero exit), so the logic is Go that unit tests
+reach and the MSI only sequences it (ADR 0055).
+
+| When | As | Action |
+|---|---|---|
+| feature added | SYSTEM | `sc create` + `sc sdset` for `remote-docker-machines` (also in an upgrade) |
+| feature added | SYSTEM | `remote machine service setup --user-sid [UserSID]` |
+| feature added | the installing user (impersonated) | `remote machine service refuse-existing <name>`, then the rollback `rm` |
+| feature added | the installing user (impersonated) | `remote machine create <name> --backend hyperv --image ...` |
+| feature removed, first | the uninstalling user | `remote rm -f <remembered name>`, before StopServices |
+| feature removed, then | SYSTEM | `remote machine service teardown`, after DeleteServices |
+
+- **A feature, not a checkbox.** Every action keys on the feature's state
+  transition (`&HyperV`, `!HyperV`), so a fresh install, Modify adding it,
+  Modify removing it and an uninstall are one mechanism. Without Hyper-V
+  (`HYPERVPRESENT` empty) the feature is level 0 and hidden; naming it in
+  `ADDLOCAL` then is refused, because MSI skips a level 0 feature silently.
+  The checkbox it replaces was found unusable by hand on 2026-10-16: its
+  fields had a `DisableCondition` and no `EnableCondition`, and MSI applies
+  only the control conditions that have rows, so ticking the box left them
+  grey. CI installs silently and never saw it.
+
+- **`sc.exe`, not `ServiceInstall`.** MSI takes a service's binary from the key
+  FILE of its component; that is the exe in the always-installed component, and
+  the service must exist only with the feature. The descriptor is the
+  stock LocalSystem one plus Authenticated Users: start, query, interrogate, so
+  a standard user can start it after a reboot and stop or change nothing.
+- **Each install action has a rollback** that undoes it (`rm`, stop, teardown,
+  `sc delete`), so a refused name or a failed download leaves nothing. A
+  machine the service built whose entry create never wrote is destroyed by
+  the rollback `rm` (which asks the service when there is no entry), and by
+  the rollback teardown regardless, which destroys every machine the service
+  recorded: this install created the service, so each is its own or one an
+  earlier uninstall's teardown failed to remove. A failed
+  create fails the install with 1603 and create's own message in the log.
+- **The rollback `rm` is scheduled only once nothing has the name**
+  (2026-10-16). It is `remote rm -f <name>`, which removed whatever had the
+  name: an install whose create failed because the user already had a
+  workspace called `hyperv` deleted that workspace and its machine.
+  `remote machine service refuse-existing <name>`, deferred and as the
+  installing user, now runs just before it and fails on any workspace entry,
+  machine or not, and on any Hyper-V machine of that name. The rollback
+  script is written as the installation script runs, and only what is already
+  in it is rolled back
+  ([Rollback Custom Actions](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions),
+  read 2026-10-16), so after a refusal there is no `rm` to run, and once the
+  check passed, anything of that name is this install's. A marker in the
+  machine block was the alternative; it needs a per-run token the MSI has no
+  property for, and leaves a plain workspace's entry to be overwritten by
+  create.
+- **An upgrade runs none of it but the service.** MajorUpgrade migrates the
+  feature's state, so in the new product it arrives as an install; the service
+  is recreated after the old product's removal deletes it, and create, setup
+  and teardown are conditioned on `NOT WIX_UPGRADE_DETECTED` and
+  `NOT UPGRADINGPRODUCTCODE`. The flag and name in
+  `HKLM\Software\lhns\remote-docker` (strings, found by a `RegistrySearch`)
+  keep the name and tell the new product a workspace exists. An upgrade that
+  would add or drop the feature is refused naming Modify, since it would run
+  half of either.
+- **A running background session is closed by Restart Manager** (2026-10-16).
+  Windows Installer asks Restart Manager to stop whatever holds a file it
+  replaces, always in a silent install and from the files-in-use dialog
+  otherwise, and Restart Manager stops a console program by sending
+  CTRL_C_EVENT to its console
+  ([Using Windows Installer with Restart Manager](https://learn.microsoft.com/en-us/windows/win32/msi/using-windows-installer-with-restart-manager),
+  [Guidelines for Applications](https://learn.microsoft.com/en-us/windows/win32/rstmgr/guidelines-for-applications),
+  both read 2026-10-16). The session was started `DETACHED_PROCESS`, with no
+  console, so `RmShutdown` failed with 351 (ERROR_FAIL_SHUTDOWN) and the
+  0.12.0 to 0.12.1 upgrade said it could not close applications until the
+  session was killed by hand. It now gets a console of its own with no window
+  (`CREATE_NO_WINDOW`, `spawn_windows.go`) and takes the event as Ctrl-C:
+  it closes, releasing its endpoint and lock, and the next docker command
+  starts it again. `spawn_windows_test.go` calls `RmShutdown` on both ways of
+  starting it. Another user's session is what the hand test had, and
+  `test/msi.ps1` 17b asserts it: a standard user's session gone after an
+  upgrade and starting again. A session started before this change is still
+  detached, so the first upgrade from such a version can still ask for it to
+  be closed (`remote stop`, or end the process).
+- **Uninstall is best effort.** `rm` runs for the user who uninstalls; another
+  user's config entry cannot be reached and stays. Both actions ignore failure,
+  so a machine that cannot be removed does not make the product impossible to
+  uninstall.
+- **`HYPERVSERVICE`** (default `vmms`) names the Windows service whose key says
+  Hyper-V is enabled. Only the tests set it, because runners have no Hyper-V.
+- **CI runs the real service against a stand-in for Hyper-V**, compiled in by
+  the `rdstandin` build tag, and asserts that no release binary contains it.
+  The dialog is built and never clicked by CI; Modify adding and removing the
+  feature is run silently (`ADDLOCAL=HyperV`, `REMOVE=HyperV`).
 
 ## Consequences
 

@@ -16,6 +16,7 @@ import (
 	"github.com/lhns/remote-docker/client/internal/session"
 	"github.com/lhns/remote-docker/core/enrol"
 	"github.com/lhns/remote-docker/core/workspace"
+	"github.com/lhns/remote-docker/machine"
 )
 
 // The workspaces in ~/.remote-docker.json, each with a docker context written
@@ -405,7 +406,10 @@ with the images, containers and volumes inside it. Your files are not in it.
 			}
 			ws, ok := file.Workspaces[name]
 			if !ok {
-				return noWorkspaceNamed(name)
+				if keepMachine {
+					return noWorkspaceNamed(name)
+				}
+				return removeUnenteredMachine(cmd, name)
 			}
 
 			// Before removal: the context name derives from the entry.
@@ -460,14 +464,44 @@ with the images, containers and volumes inside it. Your files are not in it.
 // destroyMachine destroys a workspace's machine. An unknown backend is an
 // error, so `rm` refuses rather than orphaning a running machine.
 func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
-	backend, err := findBackend(m.Backend)
+	backend, err := findBackend(m.BackendKey())
 	if err != nil {
 		return fmt.Errorf("cannot destroy the %s machine %q: %w", m.Backend, m.Name, err)
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "destroying the %s machine %q\n", m.Backend, m.Name)
 	if err := backend.Destroy(cmd.Context(), m.Name); err != nil {
+		if errors.Is(err, machine.ErrBrokerNotInstalled) {
+			// Uninstalling the service destroyed the machines it made.
+			return fmt.Errorf("destroying the %s machine %q: %w\n"+
+				"  fix: `%s` forgets the workspace; the uninstall already removed the machine",
+				m.Backend, m.Name, err, ourCommand("rm "+m.Name+" --keep-machine"))
+		}
 		return fmt.Errorf("destroying the %s machine %q: %w", m.Backend, m.Name, err)
 	}
+	return nil
+}
+
+// removeUnenteredMachine destroys the Hyper-V service's machine of this name
+// when no workspace entry has it, which is what a create leaves that failed
+// after the service built the machine and before the entry was written. The
+// service answers only for its caller's machines (ADR 0055), so one it reports
+// is this user's to remove.
+func removeUnenteredMachine(cmd *cobra.Command, name string) error {
+	if ok, err := brokerInstalled(); err != nil || !ok {
+		return noWorkspaceNamed(name)
+	}
+	m := &config.Machine{Backend: "hyperv", Name: name, Broker: true}
+	backend, err := findBackend(m.BackendKey())
+	if err != nil {
+		return noWorkspaceNamed(name)
+	}
+	if observed, err := backend.Inspect(cmd.Context(), name); err != nil || observed.State == machine.Absent {
+		return noWorkspaceNamed(name)
+	}
+	if err := destroyMachine(cmd, m); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed the machine %q, which had no workspace entry\n", name)
 	return nil
 }
 

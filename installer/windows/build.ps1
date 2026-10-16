@@ -65,6 +65,7 @@ try {
   wix build `
     -arch $Arch `
     -ext WixToolset.UI.wixext `
+    -ext WixToolset.Util.wixext `
     -bindpath $work `
     -d "BinPath=$payload" `
     -d "Version=$Version" `

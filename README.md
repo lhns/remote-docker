@@ -115,6 +115,28 @@ Desktop's two), not PATH, which Windows Installer cannot enumerate
 PATH is not noticed, and it keeps winning, because the install directory is
 appended.
 
+**The Hyper-V workspace feature** ("Hyper-V workspace" in the feature tree,
+off by default) installs a service and one Linux VM on this machine, as the
+workspace you name on the page after it (default `hyperv`), usable at once by
+the user who ran the installer, even a standard user who typed administrator
+credentials at the prompt: no sign-out, no administrator rights afterwards. It
+can also be added or removed later from Settings > Apps > remote-docker >
+Modify. It needs Hyper-V enabled; without it the feature is not offered and a
+silent install naming it is refused, naming the command that enables it.
+
+```powershell
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,HyperV WORKSPACENAME=dev `
+  WORKSPACEIMAGE=registry.example/remote-docker-workspace:0.6.0 WORKSPACEPROXY=http://proxy.example:3128
+```
+
+`WORKSPACEIMAGE` (a registry mirror) and `WORKSPACEPROXY` are optional. Another
+person on the same computer is added with
+`net localgroup remote-docker-users <user> /add` and then makes their own
+workspace with `remote machine create <name> --backend hyperv`. **Uninstalling
+deletes the workspace's containers, images and volumes**, and every other
+user's workspace made through the service; their config entries stay behind
+until they run `remote rm`. An upgrade touches none of it.
+
 **The MSI is unsigned** (the project has no code-signing certificate), so
 SmartScreen warns about an unrecognised publisher. It is also **not** in the
 release's `checksums.txt`, which is written before the installers are built. If
@@ -146,8 +168,10 @@ Changing versions replaces the filesystem rather than upgrading it, so
 `remote machine rebuild` is the repair path. It discards the images and
 containers inside the machine, never your files, which live here.
 
-A Hyper-V backend exists (`--backend hyperv`, from a Flatcar disk image). It is
-tested end to end by hand on Windows 11; no CI can run it, so
+A Hyper-V backend exists (`--backend hyperv`). It downloads Flatcar's Hyper-V
+disk image itself (pinned and checksum-verified, about 600 MB, once), and
+`--proxy <url>` sends that download and the machine's docker daemon through an
+HTTP proxy. It is tested end to end by hand on Windows 11; no CI can run it, so
 `docs/testing-machines.md` is how to check it on yours.
 
 ## What works

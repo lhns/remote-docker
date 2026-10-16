@@ -85,11 +85,22 @@ type Spec struct {
 	// machine (ADR 0026).
 	PublicKey string
 
+	// Proxy is an http(s) proxy URL, or empty. A Hyper-V machine's docker
+	// daemon pulls the workspace image and every other image through it, and
+	// the Flatcar download uses it too. Part of Generation when set: it decides
+	// what the Ignition document says.
+	Proxy string
+
 	// HostKey is the agent's private host key, as PEM, written in before the
 	// agent first starts so the caller can pin its public half (ADR 0026).
 	// Empty leaves the agent to generate its own. Not part of Generation
 	// either: a new one is made for every build.
 	HostKey string
+
+	// Broker says a Hyper-V machine is made and run through the SYSTEM service
+	// (ADR 0055), whose disk and directory these are. Not part of Generation:
+	// it is who asks, not what is built. See BackendKey.
+	Broker bool
 }
 
 // hostKeyFile is where the agent loads its host key: WORKSPACE_HOSTKEY_DIR as
@@ -123,6 +134,11 @@ func (s Spec) Generation() string {
 		fmt.Sprintf("memory=%d", s.MemoryMB),
 		fmt.Sprintf("port=%d", s.Port),
 		"account=" + s.Account,
+	}
+	// Only when set, so a machine built before this field existed keeps its
+	// generation instead of reading as out of date.
+	if s.Proxy != "" {
+		parts = append(parts, "proxy="+s.Proxy)
 	}
 	sort.Strings(parts)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
@@ -437,6 +453,9 @@ func Find(name string) (Backend, error) {
 		return b, nil
 	}
 
+	// The brokered variant is not a thing to ask for: a machine's record says
+	// it (BackendKey).
+	delete(available, brokerBackend)
 	names := slices.Sorted(maps.Keys(available))
 
 	if len(names) == 0 {
