@@ -275,9 +275,10 @@ CI runs this against a stand-in for Hyper-V. Real Hyper-V, and the identity the
 installer runs under, are checked here, on a computer with Hyper-V enabled and
 a standard user account (`alice`) that has never been an administrator.
 
-1. As `alice`, run the MSI with `HYPERVWORKSPACE` ticked, and type an
-   administrator's credentials at the prompt (also try it from a second
-   account's elevated prompt). Wait for the Flatcar download.
+1. As `alice`, run the MSI with the "Hyper-V workspace" feature selected,
+   check that the page after the feature tree takes typing in all three
+   fields, and type an administrator's credentials at the prompt (also try it
+   from a second account's elevated prompt). Wait for the Flatcar download.
    ```powershell
    Get-Service remote-docker-machines; sc.exe sdshow remote-docker-machines
    net localgroup remote-docker-users          # alice is a member
@@ -307,6 +308,10 @@ a standard user account (`alice`) that has never been an administrator.
    ```
    If a different user uninstalls, `alice`'s entry and context stay (`remote rm`
    removes them) and the VM is destroyed by teardown regardless.
+6. Install without the feature, then in Settings > Apps > remote-docker >
+   Modify > Change select it: the page from step 1 appears and the workspace is
+   created as in step 1. Modify again and deselect it: the checks of step 5
+   hold, and `remote-docker.exe` is still installed.
 
 ## What to capture when something fails
 

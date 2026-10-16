@@ -12,10 +12,11 @@ software.
 
 ### New
 
-- **The Windows installer can set up a Hyper-V workspace.** Tick "Set up a
-  Hyper-V workspace" (or pass `HYPERVWORKSPACE=1`) and the user who ran the
-  installer, standard user or not, can use a Linux machine on this computer
-  straight away; an upgrade leaves it alone and uninstalling deletes it.
+- **The Windows installer can set up a Hyper-V workspace.** Select the
+  "Hyper-V workspace" feature (or pass `ADDLOCAL=Main,HyperV`) and the user who
+  ran the installer, standard user or not, can use a Linux machine on this
+  computer straight away; an upgrade leaves it alone, and removing the feature
+  or uninstalling deletes it.
 - **A Hyper-V service lets a standard user have a workspace.** A Windows
   service `remote-docker-machines` (SYSTEM) makes, starts and destroys Hyper-V
   machines over a named pipe for members of the local group

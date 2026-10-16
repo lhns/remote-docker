@@ -1,7 +1,7 @@
 # The Windows installer, end to end: install, what lands on PATH, the docker.exe
 # feature, the refusal that guards it, uninstall, and the optional Hyper-V
-# workspace (service, group, a machine, upgrade, removal) against a stand-in
-# for Hyper-V.
+# workspace feature (service, group, a machine, upgrade, removal, adding and
+# removing it with Modify) against a stand-in for Hyper-V.
 #
 #   pwsh test/msi.ps1 -Msi dist/remote-docker_0.6.0_windows_amd64.msi `
 #     -StandinMsi dist/standin_0.0.1.msi -StandinNextMsi dist/standin_0.0.2.msi
@@ -237,7 +237,7 @@ $ServiceDir = Join-Path $env:ProgramData 'remote-docker'
 $StandinDir = Join-Path $env:ProgramData 'remote-docker-standin'
 $OpsLog = Join-Path $StandinDir 'ops.log'
 $MyConfig = Join-Path $env:USERPROFILE '.remote-docker.json'
-$HyperVOn = @('HYPERVWORKSPACE=1', 'HYPERVSERVICE=msiserver')
+$HyperVOn = @('ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=msiserver')
 $RegKey = 'HKLM:\SOFTWARE\lhns\remote-docker'
 
 function ServiceExists() {
@@ -292,9 +292,9 @@ if ($vmms) { Ok 'this runner has the vmms service key (so Hyper-V is "enabled" h
 else { Ok 'this runner has no vmms service key' }
 
 # ---------------------------------------------------------------------------
-Section '11. HYPERVWORKSPACE=1 without Hyper-V is refused with the way to enable it'
+Section '11. ADDLOCAL=HyperV without Hyper-V is refused with the way to enable it'
 
-Invoke-Msi @('/i', $StandinMsi, 'HYPERVWORKSPACE=1', 'HYPERVSERVICE=nosuchservice') 'hyperv-absent' 1603
+Invoke-Msi @('/i', $StandinMsi, 'ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=nosuchservice') 'hyperv-absent' 1603
 $log = Log-Of 'hyperv-absent'
 if ($log -notmatch 'Hyper-V is not enabled on this computer') { Fail 'the refusal message is not in the log' }
 if ($log -notmatch 'Enable-WindowsOptionalFeature') { Fail 'the refusal does not give the command that enables Hyper-V' }
@@ -316,16 +316,22 @@ Assert-NoHyperV 'after the rollback'
 if ((Ops) -contains 'create INVALID') { Fail 'a machine was created under the refused name' }
 
 # ---------------------------------------------------------------------------
-Section '13. with the box unticked nothing of the workspace is installed'
+Section '13. the properties without the feature install nothing of the workspace'
 
-Invoke-Msi @('/i', $StandinMsi) 'standin-off' 0
-Assert-NoHyperV 'checkbox off'
+Invoke-Msi @('/i', $StandinMsi, 'HYPERVSERVICE=msiserver', 'WORKSPACENAME=hyperv') 'standin-off' 0
+Assert-NoHyperV 'feature not selected'
 Invoke-Msi @('/x', $StandinMsi) 'standin-off-uninstall' 0
 Assert-NotInstalled
-Assert-NoHyperV 'checkbox off, after uninstall'
+Assert-NoHyperV 'feature not selected, after uninstall'
+
+# Without Hyper-V the feature is level 0, which even ADDLOCAL=ALL leaves out.
+Invoke-Msi @('/i', $StandinMsi, 'ADDLOCAL=ALL', 'HYPERVSERVICE=nosuchservice') 'standin-all-absent' 0
+Assert-NoHyperV 'ADDLOCAL=ALL without Hyper-V'
+Invoke-Msi @('/x', $StandinMsi) 'standin-all-absent-uninstall' 0
+Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
-Section '14. ticking it installs the service, the group, the machine and the context'
+Section '14. the feature installs the service, the group, the machine and the context'
 
 Invoke-Msi (@('/i', $StandinMsi) + $HyperVOn) 'hyperv-install' 0
 
@@ -440,7 +446,18 @@ if ((Get-Service $Service).Status -ne 'Running') { Fail 'the command succeeded b
 Ok 'the client started the service (SERVICE_START for Authenticated Users) and the command went through'
 
 # ---------------------------------------------------------------------------
-Section '17. an upgrade touches nothing'
+Section '17. an upgrade that would drop the workspace is refused'
+
+Invoke-Msi @('/i', $StandinNextMsi, 'ADDLOCAL=Main') 'hyperv-upgrade-drop' 1603
+if ((Log-Of 'hyperv-upgrade-drop') -notmatch 'cannot be added or removed during an upgrade') { Fail 'the refusal message is not in the log' }
+$ver = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+  Where-Object { $_.DisplayName -eq 'remote-docker' }).DisplayVersion
+if ($ver -ne '0.0.1') { Fail "after the refused upgrade the installed version is '$ver', not 0.0.1" }
+if (-not (ServiceExists)) { Fail 'the service is gone after the refused upgrade' }
+Ok 'refused by name, and 0.0.1 is still installed with its service'
+
+# ---------------------------------------------------------------------------
+Section '17b. an upgrade touches nothing'
 
 $hashRecords = (Get-FileHash (Join-Path $ServiceDir 'machines.json')).Hash
 $hashConfig = (Get-FileHash $MyConfig).Hash
@@ -485,6 +502,31 @@ if ($contexts -match '(?m)^hyperv\s*$') { Fail "the docker context hyperv is sti
 Ok 'the docker context is gone'
 
 Remove-LocalUser -Name $StdName -ErrorAction SilentlyContinue
+
+# ---------------------------------------------------------------------------
+Section '19. an upgrade cannot add the workspace, and Modify adds and removes it'
+
+Invoke-Msi @('/i', $StandinMsi) 'modify-base' 0
+Invoke-Msi (@('/i', $StandinNextMsi) + $HyperVOn) 'modify-upgrade-add' 1603
+if ((Log-Of 'modify-upgrade-add') -notmatch 'cannot be added or removed during an upgrade') { Fail 'the refusal message is not in the log' }
+Assert-NoHyperV 'after the refused upgrade'
+
+$creates = @(Ops | Where-Object { $_ -eq 'create hyperv' }).Count
+Invoke-Msi @('/i', $StandinMsi, 'ADDLOCAL=HyperV', 'HYPERVSERVICE=msiserver') 'modify-add' 0
+if (-not (ServiceExists)) { Fail "Modify added the feature and $Service does not exist" }
+if (-not (GroupText).Exists) { Fail "Modify added the feature and $Group does not exist" }
+if (-not (ConfigEntry $MyConfig 'hyperv')) { Fail "Modify added the feature and $MyConfig has no hyperv entry" }
+if (@(Ops | Where-Object { $_ -eq 'create hyperv' }).Count -ne $creates + 1) { Fail "expected one more 'create hyperv': $((Ops) -join '; ')" }
+Ok 'Modify adding the feature ran service create, setup and create'
+
+$destroys = @(Ops | Where-Object { $_ -eq 'destroy hyperv' }).Count
+Invoke-Msi @('/i', $StandinMsi, 'REMOVE=HyperV') 'modify-remove' 0
+if (-not (Test-Path $Exe)) { Fail "removing the feature took $Exe with it" }
+if (@(Ops | Where-Object { $_ -eq 'destroy hyperv' }).Count -ne $destroys + 1) { Fail "expected one more 'destroy hyperv': $((Ops) -join '; ')" }
+Assert-NoHyperV 'after Modify removed the feature'
+Invoke-Msi @('/x', $StandinMsi) 'modify-uninstall' 0
+Assert-NotInstalled
+
 Remove-Item $Tool -Force -ErrorAction SilentlyContinue
 
 Write-Host ''

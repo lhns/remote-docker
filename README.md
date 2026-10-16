@@ -115,16 +115,17 @@ Desktop's two), not PATH, which Windows Installer cannot enumerate
 PATH is not noticed, and it keeps winning, because the install directory is
 appended.
 
-**The Hyper-V workspace option** ("Set up a Hyper-V workspace", off by default)
-installs a service and one Linux VM on this machine, as the workspace you name
-(default `hyperv`), usable at once by the user who ran the installer, even a
-standard user who typed administrator credentials at the prompt: no sign-out,
-no administrator rights afterwards. It needs Hyper-V enabled; without it the
-box is greyed out and a silent install with `HYPERVWORKSPACE=1` is refused,
-naming the command that enables it.
+**The Hyper-V workspace feature** ("Hyper-V workspace" in the feature tree,
+off by default) installs a service and one Linux VM on this machine, as the
+workspace you name on the page after it (default `hyperv`), usable at once by
+the user who ran the installer, even a standard user who typed administrator
+credentials at the prompt: no sign-out, no administrator rights afterwards. It
+can also be added or removed later from Settings > Apps > remote-docker >
+Modify. It needs Hyper-V enabled; without it the feature is not offered and a
+silent install naming it is refused, naming the command that enables it.
 
 ```powershell
-msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn HYPERVWORKSPACE=1 WORKSPACENAME=dev `
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,HyperV WORKSPACENAME=dev `
   WORKSPACEIMAGE=registry.example/remote-docker-workspace:0.6.0 WORKSPACEPROXY=http://proxy.example:3128
 ```
 
