@@ -3,6 +3,7 @@ package dircache
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,41 @@ func TestWriteUnderKeepsTheModificationTime(t *testing.T) {
 	}
 	if !info.ModTime().Truncate(time.Second).Equal(wrote) {
 		t.Errorf("mtime = %v, want %v", info.ModTime(), wrote)
+	}
+}
+
+// A file already here keeps its permission bits when a change lands on it,
+// whatever bits the consumer's copy had; a new file takes the consumer's.
+func TestWriteUnderKeepsAnExistingFilesPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows maps only the read-only bit")
+	}
+	root := t.TempDir()
+	secret := filepath.Join(root, "secret.env")
+	if err := os.WriteFile(secret, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := openRoot(t, root)
+
+	if err := writeUnder(r, File{Path: "/secret.env", Mode: 0o644, Body: strings.NewReader("new\n")}); err != nil {
+		t.Fatalf("writeUnder: %v", err)
+	}
+	if err := writeUnder(r, File{Path: "/new.sh", Mode: 0o700, Body: strings.NewReader("#!/bin/sh\n")}); err != nil {
+		t.Fatalf("writeUnder: %v", err)
+	}
+
+	if info, err := os.Stat(secret); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0o600 {
+		t.Errorf("existing file mode = %v, want it kept at 0600", info.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(secret); string(got) != "new\n" {
+		t.Errorf("existing file content = %q, want the change", got)
+	}
+	if info, err := os.Stat(filepath.Join(root, "new.sh")); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("new file mode = %v, want the consumer's executable bit", info.Mode().Perm())
 	}
 }
 

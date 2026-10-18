@@ -132,11 +132,13 @@ left running for days. Before reading a failure:
 
 ## Hyper-V
 
-**Run by hand once, on 2026-10-05, and never in CI**: GitHub's runners do not
-offer Hyper-V. That run is recorded in [ADR
-0026](adr/0026-a-machine-is-a-workspace-we-provision.md), with the versions it
-used and the three bugs it found. Any other Windows build, Flatcar release or
-network setup is unproven, so a report from one is worth more than a patch.
+**Run by hand on one computer and never in CI**: GitHub's runners do not offer
+Hyper-V. The backend ran on 2026-10-05 ([ADR
+0026](adr/0026-a-machine-is-a-workspace-we-provision.md), with the versions and
+the three bugs it found), and the installer's workspace through the service
+once on 2026-10-16 ([ADR 0048](adr/0048-a-windows-installer.md), "Run by
+hand"). Any other Windows build, Flatcar release or Hyper-V setup is unproven,
+so a report from one is worth more than a patch.
 
 ### Before you start
 
@@ -146,12 +148,14 @@ Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V
 Get-VMSwitch                   # must list "Default Switch", and must not fail
 ```
 
-Hyper-V machine management needs administrator, or the local Hyper-V
-Administrators group. `remote machine create` reports that and stops; it does
-not elevate itself (ADR 0026). **Membership takes effect at the next logon**:
-add yourself, then sign out and in again, or `Get-VMSwitch` above keeps
-failing with a permission error. Nothing else in the procedure needs
-elevation.
+Without the Hyper-V service, machine management needs administrator or the
+local Hyper-V Administrators group; `remote machine create` reports that and
+stops, and does not elevate itself (ADR 0026). **That membership takes effect
+at the next logon**: add yourself, then sign out and in again, or `Get-VMSwitch`
+above keeps failing with a permission error. Where the MSI installed the
+service (the MSI section below, ADR 0055), `create` goes through it instead,
+and a direct member of `remote-docker-users` needs neither, from the next
+command. Nothing else in the procedure needs elevation.
 
 The machine boots Flatcar's Hyper-V disk image. `create` downloads it itself:
 a pinned version, SHA512-checked before it is unpacked, kept in
@@ -162,7 +166,7 @@ for the download and set in the VM's docker daemon.
 *(Checked 2026-10-15: stable 4757.2.1. The pin and the commands that re-check
 it are in `machine/flatcar.go`.)*
 
-Downloading by hand is now optional, for an air-gapped computer or to test a
+Downloading by hand is optional, for an air-gapped computer or to test a
 different Flatcar, and goes to `--rootfs`:
 
 ```powershell
@@ -182,7 +186,7 @@ Remove-Item flatcar_production_hyperv_vhdx_image.vhdx.zip
 ### The procedure
 
 ```powershell
-remote-docker remote machine create dev --backend hyperv --rootfs .\flatcar.vhdx
+remote-docker remote machine create dev --backend hyperv   # --rootfs .\flatcar.vhdx for a hand download
 remote-docker remote machine status dev       # running, settings current, agent answering
 remote-docker remote ls
 
@@ -193,10 +197,10 @@ remote-docker run --rm -v "${PWD}:/w" alpine:3 cat /w/marker
 
 Expected: `create` returns once the agent answers, about a minute and a half
 the first time (93 seconds on 2026-10-05, most of it the machine pulling the
-workspace image); `docker run` prints `hello`. The warning `create` prints
-about the backend is expected; one saying the private host key is still in
-the KVP items is not. Once `create` has returned, the snippet under "Ignition
-did not apply" below lists no `ignition.config.*` item.
+workspace image, plus the Flatcar download the first time); `docker run`
+prints `hello`. A warning that the private host key is still in the KVP items
+is a failure. Once `create` has returned, the snippet under "Ignition did not
+apply" below lists no `ignition.config.*` item.
 
 Then the rest of the WSL procedure applies with `--backend hyperv` added:
 create again (`already matches; nothing to do`), `machine rebuild dev -f`
@@ -264,6 +268,9 @@ docker context ls                        # no dev
 
 `rm` removes the disk too. `Remove-VM` alone leaves it, silently keeping
 gigabytes per machine, so the directory being gone is the thing to check. A
+machine made through the service keeps its disk under
+`%ProgramData%\remote-docker\machines` instead, which only an administrator
+can list. A
 VM already removed by hand (`Remove-VM`) does not stop it, though for about
 half a minute after that `rm` may refuse because the session cannot say
 whether it is in use; that passes once the session notices the connection is
@@ -273,7 +280,11 @@ dead, or `rm -f` goes ahead.
 
 CI runs this against a stand-in for Hyper-V. Real Hyper-V, and the identity the
 installer runs under, are checked here, on a computer with Hyper-V enabled and
-a standard user account (`alice`) that has never been an administrator.
+a standard user account (`alice`) that has never been an administrator. Run
+once, on 2026-10-16, on one computer, as a standard user at the
+over-the-shoulder prompt: the install, a reboot, an upgrade whose files-in-use
+dialog closed a running session, Modify adding and removing the feature, and
+the uninstall (ADR 0048, "Run by hand").
 
 There is no need to sign in as `alice`. On your own desktop, run
 `runas /user:alice powershell` yourself (it asks for alice's password): that
@@ -318,8 +329,8 @@ not have an automation tool run `runas` for you: from inside a job object
    it as in step 1, with no properties. The service, the group, the VM,
    `alice`'s config and the image and volume must all still be there. Leave
    alice's background session running: the installer closes it through
-   Restart Manager. One started by 0.11.0 or earlier it cannot close, and
-   says so; run `remote-docker remote stop` in alice's window (or end the
+   Restart Manager. A session started by 0.11.0 or earlier cannot be closed
+   that way; run `remote-docker remote stop` in alice's window (or end the
    process), then Retry.
 5. Uninstall. Then:
    ```powershell

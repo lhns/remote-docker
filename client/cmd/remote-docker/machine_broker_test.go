@@ -19,6 +19,16 @@ func withBrokerProbe(t *testing.T, installed bool, err error) {
 	t.Cleanup(func() { brokerInstalled = saved })
 }
 
+// withBackendAsked is withBackend, also recording the key each lookup named.
+func withBackendAsked(t *testing.T, b machine.Backend) *[]string {
+	t.Helper()
+	var asked []string
+	saved := findBackend
+	findBackend = func(key string) (machine.Backend, error) { asked = append(asked, key); return b, nil }
+	t.Cleanup(func() { findBackend = saved })
+	return &asked
+}
+
 // A new Hyper-V machine goes through the service when it is installed; one
 // that exists keeps what it was built with.
 func TestDecideBroker(t *testing.T) {
@@ -59,7 +69,7 @@ func TestDecideBroker(t *testing.T) {
 	}
 }
 
-// brokerBackend records the key it was found by and the spec it built from.
+// brokerFakeBackend records the spec it built from.
 type brokerFakeBackend struct {
 	fakeBackend
 	built *machine.Spec
@@ -74,11 +84,7 @@ func TestCreateThroughTheServiceRecordsBrokerAndFetchesNothing(t *testing.T) {
 	withConfig(t, nil)
 	withBrokerProbe(t, true, nil)
 	be := &brokerFakeBackend{fakeBackend: fakeBackend{log: &events{}}}
-
-	var asked []string
-	savedFind := findBackend
-	findBackend = func(key string) (machine.Backend, error) { asked = append(asked, key); return be, nil }
-	t.Cleanup(func() { findBackend = savedFind })
+	asked := withBackendAsked(t, be)
 	savedPrepare := prepareRootfs
 	prepareRootfs = func(context.Context, string, string, string, io.Writer) (string, error) {
 		t.Error("the client downloaded a disk the service fetches itself")
@@ -89,8 +95,8 @@ func TestCreateThroughTheServiceRecordsBrokerAndFetchesNothing(t *testing.T) {
 	// Fails after the record is written, at the wait for the agent.
 	_ = run(t, "remote", "machine", "create", "dev", "--backend", "hyperv")
 
-	if !slices.Contains(asked, "hyperv-broker") || slices.Contains(asked, "hyperv") {
-		t.Errorf("backends asked for: %v", asked)
+	if !slices.Contains(*asked, "hyperv-broker") || slices.Contains(*asked, "hyperv") {
+		t.Errorf("backends asked for: %v", *asked)
 	}
 	if be.built == nil || be.built.Rootfs != "" || !be.built.Broker {
 		t.Fatalf("built from %+v", be.built)
@@ -111,13 +117,7 @@ func TestEveryOperationOnABrokerMachineGoesThroughTheBroker(t *testing.T) {
 		"old": {Host: "127.0.0.1", Port: 1, Machine: &config.Machine{Backend: "hyperv", Name: "old"}},
 	}})
 	log := &events{}
-	var asked []string
-	savedFind := findBackend
-	findBackend = func(key string) (machine.Backend, error) {
-		asked = append(asked, key)
-		return &fakeBackend{log: log}, nil
-	}
-	t.Cleanup(func() { findBackend = savedFind })
+	asked := withBackendAsked(t, &fakeBackend{log: log})
 
 	_ = run(t, "remote", "machine", "stop", "dev", "-f")
 	_ = run(t, "remote", "machine", "status", "dev")
@@ -125,8 +125,8 @@ func TestEveryOperationOnABrokerMachineGoesThroughTheBroker(t *testing.T) {
 	_ = run(t, "remote", "rm", "old", "-f")
 
 	want := []string{"hyperv-broker", "hyperv-broker", "hyperv-broker", "hyperv"}
-	if !slices.Equal(asked, want) {
-		t.Errorf("backends asked for: %v, want %v", asked, want)
+	if !slices.Equal(*asked, want) {
+		t.Errorf("backends asked for: %v, want %v", *asked, want)
 	}
 	if got := log.String(); !strings.Contains(got, "destroy dev") || !strings.Contains(got, "destroy old") {
 		t.Errorf("events: %s", got)
@@ -181,13 +181,7 @@ func TestRefuseExistingWorkspace(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withConfig(t, &config.File{Workspaces: tc.entries})
-			var asked []string
-			savedFind := findBackend
-			findBackend = func(key string) (machine.Backend, error) {
-				asked = append(asked, key)
-				return &fakeBackend{log: &events{}, state: tc.state}, nil
-			}
-			t.Cleanup(func() { findBackend = savedFind })
+			asked := withBackendAsked(t, &fakeBackend{log: &events{}, state: tc.state})
 
 			err := run(t, "remote", "machine", "service", "refuse-existing", "hyperv")
 			switch {
@@ -196,8 +190,8 @@ func TestRefuseExistingWorkspace(t *testing.T) {
 			case tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)):
 				t.Fatalf("err = %v, want one saying %q", err, tc.refused)
 			}
-			if len(asked) > 0 && !slices.Equal(asked, []string{"hyperv-broker"}) {
-				t.Errorf("asked backends %v, want the one create would use", asked)
+			if len(*asked) > 0 && !slices.Equal(*asked, []string{"hyperv-broker"}) {
+				t.Errorf("asked backends %v, want the one create would use", *asked)
 			}
 			file, err := config.Load("")
 			if err != nil {

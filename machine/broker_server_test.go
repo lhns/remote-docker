@@ -238,7 +238,7 @@ func TestBrokerFailsClosedWhenTheGroupCannotBeRead(t *testing.T) {
 	}
 }
 
-// failReader fails the test if anything reads from it.
+// failConn fails the test if anything reads from it, or arms a read.
 type failConn struct {
 	net.Conn
 	t      *testing.T

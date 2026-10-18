@@ -222,9 +222,9 @@ func (r *Rewriter) ContainerCreate(ctx context.Context, body []byte) ([]byte, er
 	var hostConfig map[string]json.RawMessage
 	var requested workspace.RequestedPorts
 
-	// A directory in both mount lists is one share: the second sees the
-	// first's words.
-	modes := map[string]workspace.MountWords{}
+	// The variants this request has already prepared, keyed by directory,
+	// mode and owner: a repeat needs no second union or volume.
+	modes := map[string]bool{}
 
 	if hostConfigRaw, ok := payload["HostConfig"]; ok {
 		if err := json.Unmarshal(hostConfigRaw, &hostConfig); err != nil {
@@ -328,7 +328,7 @@ func (r *Rewriter) label(payload map[string]json.RawMessage, requested workspace
 // rewriteBinds handles HostConfig.Binds, the `-v` form. A single-FILE bind
 // needs a subpath, which a bind string cannot carry, so it is moved to Mounts
 // in the same walk: the daemon rejects one target in both lists (ADR 0039).
-func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]workspace.MountWords, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
+func (r *Rewriter) rewriteBinds(ctx context.Context, modes map[string]bool, hostConfig map[string]json.RawMessage, changed *bool) ([]map[string]json.RawMessage, error) {
 	raw, ok := hostConfig["Binds"]
 	if !ok || string(raw) == "null" {
 		return nil, nil
@@ -470,7 +470,7 @@ func setSubpath(mount map[string]json.RawMessage, file string) error {
 
 // rewriteMounts handles HostConfig.Mounts, the `--mount` form that Compose and
 // the API-level clients prefer.
-func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]workspace.MountWords, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
+func (r *Rewriter) rewriteMounts(ctx context.Context, modes map[string]bool, hostConfig map[string]json.RawMessage, moved []map[string]json.RawMessage, changed *bool) error {
 	raw, ok := hostConfig["Mounts"]
 	if (!ok || string(raw) == "null") && len(moved) == 0 {
 		return nil
@@ -643,7 +643,7 @@ func (r *Rewriter) union(ctx context.Context, export, share, localPath string, l
 		return "", fmt.Errorf("rewrite: creating the cache for %s: %w", localPath, err)
 	}
 
-	// Memoised: resolveMode already opened it.
+	// Memoised: resolveMount already opened it.
 	channel, err := r.openCache(ctx)
 	if err != nil {
 		return "", fmt.Errorf("rewrite: reaching the workspace's cache for %s: %w", localPath, err)

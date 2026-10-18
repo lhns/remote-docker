@@ -1,7 +1,8 @@
 # 0033 — The root handle is derived, the rest are not
 
 - Status: Accepted
-- Date: 2026-08-13
+- Date: 2026-08-13; amended 2026-10-15 (an export per variant, derivation
+  unchanged)
 - The go-nfs internals cited here are upstream `v0.0.4`, which the project now
   consumes as a fork ([ADR 0047](0047-a-forked-go-nfs.md)). The fork patches
   `helpers/cachinghandler.go` `Rename`; the caching behaviour this record rests

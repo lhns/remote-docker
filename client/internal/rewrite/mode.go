@@ -139,7 +139,7 @@ func (r *Rewriter) modeFor(localPath string) workspace.Mode {
 // Two mounts of one directory asking for another read, write or owner are two
 // shares and nothing here compares them; mounts of one variant are one share,
 // and their watch and prefetch rise to the strongest asked (ADR 0042).
-func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace.MountWords, source string, asked workspace.MountWords, spelled string) (workspace.MountWords, error) {
+func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]bool, source string, asked workspace.MountWords, spelled string) (workspace.MountWords, error) {
 	resolved := workspace.MountWords{
 		Mode:       asked.Mode.Or(r.modeFor(source)).Or(workspace.DefaultMode),
 		ShareWords: asked.ShareWords,
@@ -177,7 +177,7 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 	}
 
 	key := workspace.CanonicalKey(source) + "\x00" + got.String() + "\x00" + resolved.Owner.String()
-	if seen, ok := mounts[key]; ok {
+	if mounts[key] {
 		// The union, its owner and the share are settled by the first mount of
 		// the variant. This one may still ask for a watch the first did not.
 		if watch.Watching() {
@@ -185,9 +185,6 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 				return workspace.MountWords{}, err
 			}
 		}
-		seen.Watch = seen.Watch.Max(resolved.Watch)
-		seen.Prefetch = seen.Prefetch.Max(resolved.Prefetch)
-		mounts[key] = seen
 		return resolved, nil
 	}
 
@@ -214,7 +211,7 @@ func (r *Rewriter) resolveMount(ctx context.Context, mounts map[string]workspace
 		}
 	}
 
-	mounts[key] = resolved
+	mounts[key] = true
 	return resolved, nil
 }
 
@@ -307,8 +304,6 @@ func writeAsked(write workspace.Write, spelled string) string {
 	return fmt.Sprintf("write=%s, which %s means", write, spelled)
 }
 
-// unionAvailable turns the workspace's answer into a remedy. Empty is an agent
-// predating the field, which cannot serve one.
 // unionCapability is UnionReady, asked again when it is not ready.
 func (r *Rewriter) unionCapability(ctx context.Context) string {
 	if r.UnionReady == workspace.UnionReady || r.AskUnion == nil {
@@ -320,6 +315,8 @@ func (r *Rewriter) unionCapability(ctx context.Context) string {
 	return r.UnionReady
 }
 
+// unionAvailable turns the workspace's answer into a remedy. Empty is an agent
+// predating the field, which cannot serve one.
 func unionAvailable(reported string) error {
 	switch reported {
 	case workspace.UnionReady:

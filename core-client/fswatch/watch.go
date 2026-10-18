@@ -377,7 +377,7 @@ func (w *Watcher) handle(t *tree, c *coalescer, e fsnotify.Event) {
 		if info, err := os.Lstat(e.Name); err == nil && info.IsDir() {
 			isDir = true
 			if !t.isExcluded(filepath.Base(e.Name)) {
-				t.addTree(roots[0].root, e.Name, func(p string, dir bool) {
+				t.addTree(e.Name, func(p string, dir bool) {
 					for _, m := range roots {
 						if childRel, ok := relativeTo(w.opts.goos, m.root.parts, p); ok {
 							c.add(time.Now(), notify.Event{

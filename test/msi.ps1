@@ -289,6 +289,11 @@ function Assert-NoHyperV([string]$What) {
 
 function Log-Of([string]$Tag) { return Get-Content (Join-Path $LogDir "$Tag.log") -Raw }
 
+function InstalledVersion() {
+  return (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+    Where-Object { $_.DisplayName -eq 'remote-docker' }).DisplayVersion
+}
+
 # A tool that outlives the uninstall, for looking at the docker contexts after.
 $Tool = Join-Path $Temp 'remote-docker-tool.exe'
 
@@ -328,8 +333,8 @@ if ((Ops) -contains 'create INVALID') { Fail 'a machine was created under the re
 # ---------------------------------------------------------------------------
 Section '12b. a workspace that already has the name is refused, and the rollback leaves it alone'
 
-# The rollback's `remote rm` used to remove whatever had the name, so a failed
-# install deleted the user's own workspace of that name.
+# The rollback's `remote rm` must not run for a name that was already taken, or
+# a failed install deletes the user's own workspace of that name.
 $configBefore = if (Test-Path $MyConfig) { Get-Content $MyConfig -Raw } else { $null }
 Set-Content -Path $MyConfig -Encoding ascii -Value '{"workspaces":{"kept":{"host":"build.example","port":22,"user":"alice"}}}'
 Invoke-Msi (@('/i', $StandinMsi) + $HyperVOn + @('WORKSPACENAME=kept')) 'hyperv-existing' 1603
@@ -416,6 +421,15 @@ if ((Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like
 Ok "created the standard user $StdName"
 $cred = New-Object System.Management.Automation.PSCredential($StdName, (ConvertTo-SecureString $StdPass -AsPlainText -Force))
 
+function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
+  $p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
+    -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
+  $null = $p.WaitForExit(180000)
+  $out = (Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -Raw -ErrorAction SilentlyContinue) -join ''
+  if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
+}
+
 # One process that keeps its logon token across the group change: it asks, waits
 # for the signal, and asks again. Two Start-Process calls would be two logons,
 # and the second token would already carry the group.
@@ -465,13 +479,7 @@ Section '16. a stopped service is started by a standard user'
 Stop-Service $Service -Force
 (Get-Service $Service).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
 Ok 'stopped the service'
-Remove-Item "$Pub\stop.*" -ErrorAction SilentlyContinue
-$p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-  -ArgumentList @('remote', 'machine', 'stop', 'other') -WindowStyle Hidden -PassThru `
-  -RedirectStandardOutput "$Pub\stop.out" -RedirectStandardError "$Pub\stop.err"
-$null = $p.WaitForExit(180000)
-$out = (Get-Content "$Pub\stop.out", "$Pub\stop.err" -Raw -ErrorAction SilentlyContinue) -join ''
-if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "the standard user could not use a stopped service; output: $out" }
+Invoke-AsStd @('remote', 'machine', 'stop', 'other') 'stop'
 if ((Get-Service $Service).Status -ne 'Running') { Fail 'the command succeeded but the service is not running' }
 Ok 'the client started the service (SERVICE_START for Authenticated Users) and the command went through'
 
@@ -480,8 +488,7 @@ Section '17. an upgrade that would drop the workspace is refused'
 
 Invoke-Msi @('/i', $StandinNextMsi, 'ADDLOCAL=Main') 'hyperv-upgrade-drop' 1603
 if ((Log-Of 'hyperv-upgrade-drop') -notmatch 'cannot be added or removed during an upgrade') { Fail 'the refusal message is not in the log' }
-$ver = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-  Where-Object { $_.DisplayName -eq 'remote-docker' }).DisplayVersion
+$ver = InstalledVersion
 if ($ver -ne '0.0.1') { Fail "after the refused upgrade the installed version is '$ver', not 0.0.1" }
 if (-not (ServiceExists)) { Fail 'the service is gone after the refused upgrade' }
 Ok 'refused by name, and 0.0.1 is still installed with its service'
@@ -491,14 +498,6 @@ Section '17b. an upgrade touches nothing, and stops a standard user''s backgroun
 
 # Another user's session holding remote-docker.exe open: Restart Manager has to
 # stop it for the upgrade to replace the file (ADR 0048).
-function Invoke-AsStd([string[]]$Arguments, [string]$Tag) {
-  $p = Start-Process -FilePath $Exe -Credential $cred -LoadUserProfile -UseNewEnvironment -WorkingDirectory $env:SystemRoot `
-    -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput "$Pub\$Tag.out" -RedirectStandardError "$Pub\$Tag.err"
-  $null = $p.WaitForExit(120000)
-  $out = (Get-Content "$Pub\$Tag.out", "$Pub\$Tag.err" -Raw -ErrorAction SilentlyContinue) -join ''
-  if (-not $p.HasExited -or $p.ExitCode -ne 0) { Fail "$StdName could not run '$($Arguments -join ' ')'; output: $out" }
-}
 function SessionProcess() {
   return @(Get-CimInstance Win32_Process -Filter "Name='remote-docker.exe'" |
     Where-Object { $_.CommandLine -match 'start --foreground --workspace other' })
@@ -515,8 +514,7 @@ $membersBefore = (GroupText).Text
 
 Invoke-Msi @('/i', $StandinNextMsi) 'hyperv-upgrade' 0
 
-$ver = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-  Where-Object { $_.DisplayName -eq 'remote-docker' }).DisplayVersion
+$ver = InstalledVersion
 if ($ver -ne '0.0.2') { Fail "after the upgrade the installed version is '$ver', not 0.0.2" }
 Ok 'version 0.0.2 is installed'
 if (-not (ServiceExists)) { Fail 'the service is gone after the upgrade' }
@@ -558,6 +556,7 @@ if ($contexts -match '(?m)^hyperv\s*$') { Fail "the docker context hyperv is sti
 Ok 'the docker context is gone'
 
 Remove-LocalUser -Name $StdName -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $Pub -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------------------
 Section '19. an upgrade cannot add the workspace, and Modify adds and removes it'

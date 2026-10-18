@@ -1,7 +1,7 @@
 # 0044 — A share with `write != through` is a union, not a snapshot
 
 - Status: Accepted
-- Date: 2026-09-01, last amended 2026-10-06
+- Date: 2026-09-01, last amended 2026-10-15
 - Supersedes the retired 0043 (`delegated` as a copy), which stands only in
   the sense that a cache contains one
 - Closes [ADR 0014](0014-inotify-does-not-see-client-changes.md) **for a
@@ -10,6 +10,8 @@
   is a union whose lower is the live export, mounted with the share's read
   mode, and whose upper is a local layer the agent alone writes; the page
   cache is the cache and the union is where a batch lands ([ADR 0045](0045-prefetch-follows-the-reads.md)).
+  A landed file is overwritten in place, never emptied first and never renamed
+  in; write-back on this machine renames a complete temporary over the file.
 
 ## What forced it
 
@@ -344,12 +346,11 @@ nothing for a fill driven by reads.
   mounted a moment before the reverse forward is up fails once and then works;
   a second exit before the mount answered ends the wait with the child's last
   error and discards the union, so one transient failure is absorbed and a
-  permanent one is not retried by a loop nobody waits on. A prepare naming
-  another owner than a live union has is refused (ADR 0046), and a chown that
-  fails discards the union rather than leaving one serving the wrong owner.
-  Since 2026-10-15 the owner is part of the share id (ADR 0042), so a different
-  owner is a different export and a different union and that refusal can no
-  longer be reached; it stays as a guard.
+  permanent one is not retried by a loop nobody waits on. A chown that fails
+  discards the union rather than leaving one serving the wrong owner. A
+  prepare naming another owner than a live union has is refused (ADR 0046);
+  since the owner joined the share id (2026-10-15, ADR 0042) a different owner
+  is a different union, so that refusal is only a guard.
 - **A container's write reaches this machine after a delay.** The one
   guarantee a plain mount has and this does not; the README says so.
 - **A FUSE daemon per share is a process to supervise.** It fails loudly

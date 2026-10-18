@@ -45,12 +45,6 @@ func (d directHyperV) stateDir(name string) (string, error) {
 
 func newDirectHyperV() directHyperV { return directHyperV{run: powershell} }
 
-// powershell runs one script, wrapped by psScript, and returns its output.
-//
-// -NoProfile because a user's profile can print banners into what is parsed
-// here, and -NonInteractive so a cmdlet that wants confirmation fails instead
-// of waiting for a keystroke nobody will send. stdin is for data that must not
-// be on a command line.
 // powershellPath is Windows PowerShell by its full path under the system
 // directory, never found through PATH: the service runs this as SYSTEM, and a
 // PATH entry a user can write to would be run as SYSTEM.
@@ -66,6 +60,12 @@ func powershellPath() (string, error) {
 	return exe, nil
 }
 
+// powershell runs one script, wrapped by psScript, and returns its output.
+//
+// -NoProfile because a user's profile can print banners into what is parsed
+// here, and -NonInteractive so a cmdlet that wants confirmation fails instead
+// of waiting for a keystroke nobody will send. stdin is for data that must not
+// be on a command line.
 func powershell(ctx context.Context, script, stdin string) (string, error) {
 	exe, err := powershellPath()
 	if err != nil {

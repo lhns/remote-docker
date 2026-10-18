@@ -24,16 +24,16 @@ func init() {
 	registered = append(registered, hyperVBackend{exec: brokerExecutor{dial: dialBroker}, broker: true})
 }
 
+// x/sys/windows wraps none of these.
 var (
-	advapi32                                  = windows.NewLazySystemDLL("advapi32.dll")
-	procImpersonateNamedPipeClnt              = advapi32.NewProc("ImpersonateNamedPipeClient")
-	netapi32                                  = windows.NewLazySystemDLL("netapi32.dll")
-	procNetLocalGroupGetMembers               = netapi32.NewProc("NetLocalGroupGetMembers")
-	procNetLocalGroupAdd                      = netapi32.NewProc("NetLocalGroupAdd")
-	procNetLocalGroupDel                      = netapi32.NewProc("NetLocalGroupDel")
-	procNetLocalGroupAddMembers               = netapi32.NewProc("NetLocalGroupAddMembers")
-	procNetLocalGroupDelMembers               = netapi32.NewProc("NetLocalGroupDelMembers")
-	errGroupMissing              syscallErrno = 1376 // ERROR_NO_SUCH_ALIAS
+	advapi32                     = windows.NewLazySystemDLL("advapi32.dll")
+	procImpersonateNamedPipeClnt = advapi32.NewProc("ImpersonateNamedPipeClient")
+	netapi32                     = windows.NewLazySystemDLL("netapi32.dll")
+	procNetLocalGroupGetMembers  = netapi32.NewProc("NetLocalGroupGetMembers")
+	procNetLocalGroupAdd         = netapi32.NewProc("NetLocalGroupAdd")
+	procNetLocalGroupDel         = netapi32.NewProc("NetLocalGroupDel")
+	procNetLocalGroupAddMembers  = netapi32.NewProc("NetLocalGroupAddMembers")
+	procNetLocalGroupDelMembers  = netapi32.NewProc("NetLocalGroupDelMembers")
 )
 
 type syscallErrno = windows.Errno
@@ -129,11 +129,12 @@ func callerOfToken(tok windows.Token) (brokerCaller, error) {
 // ---- the live group -------------------------------------------------------
 
 const (
-	errMemberInAlias  syscallErrno = 1378
+	errGroupMissing   syscallErrno = 1376 // ERROR_NO_SUCH_ALIAS
 	errMemberNoAlias  syscallErrno = 1377
+	errMemberInAlias  syscallErrno = 1378
 	errAliasExists    syscallErrno = 1379
-	nerrGroupExists   syscallErrno = 2223
 	nerrGroupNotFound syscallErrno = 2220
+	nerrGroupExists   syscallErrno = 2223
 )
 
 // localGroupMembers lists the SIDs that are DIRECT members of a local group,

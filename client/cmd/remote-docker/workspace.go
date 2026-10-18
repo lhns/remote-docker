@@ -485,17 +485,29 @@ func destroyMachine(cmd *cobra.Command, m *config.Machine) error {
 // when no workspace entry has it, which is what a create leaves that failed
 // after the service built the machine and before the entry was written. The
 // service answers only for its caller's machines (ADR 0055), so one it reports
-// is this user's to remove.
+// is this user's to remove. Only an answer that there is no such machine of
+// the caller's says "no workspace named"; a service that cannot be asked says
+// why, rather than sending somebody to look for a typo.
 func removeUnenteredMachine(cmd *cobra.Command, name string) error {
-	if ok, err := brokerInstalled(); err != nil || !ok {
+	ok, err := brokerInstalled()
+	if err != nil {
+		return fmt.Errorf("no workspace named %q, and cannot tell whether the Hyper-V service has a machine of that name: %w", name, err)
+	}
+	if !ok {
 		return noWorkspaceNamed(name)
 	}
 	m := &config.Machine{Backend: "hyperv", Name: name, Broker: true}
 	backend, err := findBackend(m.BackendKey())
 	if err != nil {
-		return noWorkspaceNamed(name)
+		return err
 	}
-	if observed, err := backend.Inspect(cmd.Context(), name); err != nil || observed.State == machine.Absent {
+	observed, err := backend.Inspect(cmd.Context(), name)
+	switch {
+	case machine.IsNotYours(err):
+		return noWorkspaceNamed(name)
+	case err != nil:
+		return fmt.Errorf("no workspace named %q, and asking the Hyper-V service for a machine of that name failed: %w", name, err)
+	case observed.State == machine.Absent:
 		return noWorkspaceNamed(name)
 	}
 	if err := destroyMachine(cmd, m); err != nil {

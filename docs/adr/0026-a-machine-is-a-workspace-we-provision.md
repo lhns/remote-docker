@@ -1,13 +1,15 @@
 # 0026. A machine is a workspace we provision
 
 - Status: Accepted; extends [ADR 0025](0025-the-agent-as-a-guest.md)
-- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand, Ignition over KVP), 2026-10-15 (Flatcar fetched, proxy), 2026-10-16 (Hyper-V memory bounded, shut down not saved)
+- Date: 2026-08-11; amended 2026-10-04 (host keys), 2026-10-05 (Hyper-V run by hand, Ignition over KVP), 2026-10-15 (Flatcar fetched, proxy, executor), 2026-10-16 (Hyper-V memory bounded, shut down not saved)
 - Current answer: a machine is an ordinary workspace plus a lifecycle, with its
   host key made and pinned by the client. WSL runs in CI; Hyper-V has run by
   hand on one computer, downloads its pinned and verified Flatcar disk itself,
   takes its Ignition document over KVP, removed once the agent answers, and
   grows to at most `--memory` (4096 MB by default), shutting down rather than
-  saving.
+  saving. Where the Hyper-V service is installed, a standard user's Hyper-V
+  machine is made through it
+  ([ADR 0055](0055-hyperv-machines-through-a-system-broker-service.md)).
 
 ## Context
 
@@ -82,12 +84,10 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   - A record without `hostKey` falls back to known_hosts: a machine built
     before this, and `rm --keep-machine` then `create`, which builds nothing.
 
-## The Hyper-V backend was merged unverified, then tested by hand
+## The Hyper-V backend is verified by hand
 
-- **Merged unrun, on purpose.** No CI offers Hyper-V, so waiting for a run of
-  `docs/testing-machines.md` would have held it in a branch indefinitely. It
-  cost nothing until somebody typed `--backend hyperv`: no other path reaches
-  it, and the WSL backend imports none of it.
+- **Merged before it had run**, because no CI offers Hyper-V. Nothing reaches
+  it but `--backend hyperv`, and the WSL backend imports none of it.
 - **The first run, 2026-10-05:** Windows 11 Pro 25H2 build 26200.9457, Hyper-V
   vmms 10.0.26100.8875, Flatcar stable 4757.2.1 (kernel 6.12.111) from
   `flatcar_production_hyperv_vhdx_image.vhdx.zip`, a Gen 2 VM with secure boot
@@ -107,8 +107,8 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   second run the same day found the Ignition items present from `New-VM`
   until the agent answered (93s) and gone when `create` returned, a rebuilt
   machine booting configured, and `rm` completing on a VM deleted by hand.
-- **No warning.** The hand run retired `machine create`'s "unproven" warning.
-  It still has no CI coverage.
+  That run retired `machine create`'s "unproven" warning. The installer's
+  hand run through the service (2026-10-16) is in ADR 0048.
 
 ## A Hyper-V machine's Ignition goes over KVP
 
@@ -140,8 +140,7 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
 - **Costs:**
   - From creation until the agent first answers, about 90 seconds, the
     private host key is readable through WMI by anybody who may administer
-    Hyper-V on this computer, without access to the disk under
-    `%LOCALAPPDATA%`.
+    Hyper-V on this computer, without access to the machine's disk.
   - If the removal fails, `create` warns and succeeds, and the key stays in
     the KVP items until a later `create` removes it or `rebuild` or `rm`
     destroys the VM.
@@ -173,10 +172,10 @@ Locating rests on two measurements, made on 2026-08-11 in `machine.yml`'s
   so no existing machine reads as out of date. Without it the download follows
   the environment's proxy settings and the VM uses none.
 - **The Hyper-V backend runs through an executor** (`hyperVExecutor`): typed
-  operations (available, look, create, start, stop, address, retract, destroy)
-  with one implementation, `directHyperV`, which runs the same PowerShell as
-  before. It exists so a later implementation can carry the same operations to
-  another process without sharing a line of the backend's decisions.
+  operations (available, look, create, start, stop, address, retract, destroy).
+  `directHyperV` runs the PowerShell; `brokerExecutor` carries the same
+  operations to the Hyper-V service (ADR 0055), so the backend's decisions
+  exist once.
 - **Costs:** about 600 MB downloaded once, and the zip is unpacked to 1.2 GB;
   a proxy URL with credentials sits in `config.json`, which is private to the
   user like the rest of it.
@@ -284,7 +283,8 @@ a label could not be read destroys work for bookkeeping.
   restoring the spike workflow from that commit.)* Hyper-V is not available
   there and has no automated coverage.
 - **"Nothing needs to be installed" stops being true here.** WSL needs a
-  one-time install and Hyper-V needs administrator rights; the program reports
-  that rather than quietly elevating.
+  one-time install. Hyper-V needs administrator rights or Hyper-V
+  Administrators, or the service the MSI installs (ADR 0055); without either
+  the program reports it rather than quietly elevating.
 - **Two backends that share nothing** but the interface: the cost of covering
   both the machine that has WSL and the one that cannot.

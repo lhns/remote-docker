@@ -126,6 +126,13 @@ func (e *BrokerError) Error() string {
 	return e.Message
 }
 
+// IsNotYours reports whether the service refused because the machine belongs
+// to someone else, or is in Hyper-V and not one it manages.
+func IsNotYours(err error) bool {
+	var be *BrokerError
+	return errors.As(err, &be) && be.Code == codeNotYours
+}
+
 var (
 	brokerNameRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	brokerAccountRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,29}$`)
@@ -205,8 +212,7 @@ func BackendKey(backend string, broker bool) string {
 // BackendKey is BackendKey for a Spec.
 func (s Spec) BackendKey() string { return BackendKey(s.Backend, s.Broker) }
 
-func stateName(s State) string { return s.String() }
-
+// parseStateName reverses State.String, which is how a state crosses the pipe.
 func parseStateName(s string) State {
 	switch s {
 	case "running":
