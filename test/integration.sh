@@ -906,7 +906,10 @@ else
         # files. The forward must be USED: ssh opens the local listener at once
         # and asks for the channel only on connect, so merely starting `ssh -L`
         # passes whatever the server decides.
-        local_port=$((first_port + 5000))
+        # A port nothing on the runner holds: a fixed one was once taken by
+        # something else, ssh could not listen, and the check below read the
+        # missing refusal as a breach.
+        local_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
         timeout 30 ssh -i "$REMOTE_DOCKER_STATE_DIR/id_ed25519" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ExitOnForwardFailure=yes -o BatchMode=yes \
@@ -921,6 +924,9 @@ else
 
         if grep -qi "administratively prohibited\|open failed" "$WORK/reach.log"; then
             ok "one account cannot dial another's NFS port"
+        elif grep -qi "cannot listen\|could not request local forwarding" "$WORK/reach.log"; then
+            bad "could not test dialling $ACCOUNT's NFS port: ssh -L did not listen on $local_port"
+            sed 's/^/        /' "$WORK/reach.log"
         else
             bad "SECURITY: $OTHER reached $ACCOUNT's NFS port $first_port"
             sed 's/^/        /' "$WORK/reach.log"
