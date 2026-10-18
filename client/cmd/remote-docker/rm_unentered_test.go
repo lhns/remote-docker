@@ -9,11 +9,14 @@ import (
 	"github.com/lhns/remote-docker/machine"
 )
 
-// notYoursBackend is the service refusing a machine that is not the caller's.
-type notYoursBackend struct{ fakeBackend }
+// refusingBackend is the service refusing to answer, with the given code.
+type refusingBackend struct {
+	fakeBackend
+	code string
+}
 
-func (notYoursBackend) Inspect(context.Context, string) (machine.Observed, error) {
-	return machine.Observed{}, &machine.BrokerError{Message: "the workspace name is taken by another user of this computer"}
+func (b refusingBackend) Inspect(context.Context, string) (machine.Observed, error) {
+	return machine.Observed{}, &machine.BrokerError{Code: b.code, Message: "refused: " + b.code}
 }
 
 // A create that failed after the service built its machine and before the
@@ -24,16 +27,19 @@ func TestRmOfANameWithNoEntryDestroysOnlyTheCallersServiceMachine(t *testing.T) 
 		name      string
 		installed bool
 		state     machine.State
-		notYours  bool
+		refusal   string // the service's refusal code, or "" for an answer
 		args      []string
 		destroyed bool
+		wantErr   string
 	}{
-		{"the caller's machine", true, machine.Running, false, nil, true},
-		{"a stopped one", true, machine.Stopped, false, nil, true},
-		{"nothing of that name", true, machine.Absent, false, nil, false},
-		{"another user's, or one the service does not manage", true, machine.Running, true, nil, false},
-		{"no service", false, machine.Running, false, nil, false},
-		{"--keep-machine", true, machine.Running, false, []string{"--keep-machine"}, false},
+		{"the caller's machine", true, machine.Running, "", nil, true, ""},
+		{"a stopped one", true, machine.Stopped, "", nil, true, ""},
+		{"nothing of that name", true, machine.Absent, "", nil, false, `no workspace named "dev"`},
+		{"another user's, or one the service does not manage", true, machine.Running, "not-yours", nil, false, `no workspace named "dev"`},
+		// The service could not answer: say why, not that the name is unknown.
+		{"the service refusing the caller", true, machine.Running, "not-allowed", nil, false, "may not use the Hyper-V service"},
+		{"no service", false, machine.Running, "", nil, false, `no workspace named "dev"`},
+		{"--keep-machine", true, machine.Running, "", []string{"--keep-machine"}, false, `"dev"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withConfig(t, &config.File{Workspaces: map[string]config.Workspace{
@@ -42,8 +48,8 @@ func TestRmOfANameWithNoEntryDestroysOnlyTheCallersServiceMachine(t *testing.T) 
 			withBrokerProbe(t, tc.installed, nil)
 			log := &events{}
 			var backend machine.Backend = &fakeBackend{log: log, state: tc.state}
-			if tc.notYours {
-				backend = &notYoursBackend{fakeBackend{log: log, state: tc.state}}
+			if tc.refusal != "" {
+				backend = &refusingBackend{fakeBackend{log: log, state: tc.state}, tc.refusal}
 			}
 			asked := withBackendAsked(t, backend)
 
@@ -54,8 +60,8 @@ func TestRmOfANameWithNoEntryDestroysOnlyTheCallersServiceMachine(t *testing.T) 
 				t.Fatalf("destroyed = %v, want %v (err %v, events %s)", destroyed, tc.destroyed, err, log)
 			case tc.destroyed && err != nil:
 				t.Fatalf("err = %v", err)
-			case !tc.destroyed && (err == nil || !strings.Contains(err.Error(), `"dev"`)):
-				t.Fatalf("err = %v, want no workspace named dev", err)
+			case !tc.destroyed && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
 			}
 			for _, k := range *asked {
 				if k != "hyperv-broker" {
