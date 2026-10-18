@@ -181,19 +181,25 @@ func TestProtectedDirectoryHasOnlySystemAndAdministrators(t *testing.T) {
 	}
 }
 
-func TestDirectoryThatIsAReparsePointIsRefused(t *testing.T) {
+// junction makes a directory junction, which needs no privilege, unlike a
+// symlink.
+func junction(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(root, "link")
-	// A junction needs no privilege, unlike a symlink.
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
 		t.Skipf("cannot create a junction here: %v %s", err, out)
 	}
-	if err := ensureProtectedDir(link); err == nil {
-		t.Error("a symlinked directory was adopted")
+	return link
+}
+
+func TestDirectoryThatIsAReparsePointIsRefused(t *testing.T) {
+	if err := ensureProtectedDir(junction(t)); err == nil {
+		t.Error("a junction was adopted")
 	}
 }
 
@@ -251,16 +257,7 @@ func TestVerifyProtectedDirRefusesADirectoryTheUserOwns(t *testing.T) {
 }
 
 func TestVerifyProtectedDirRefusesAJunction(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "target")
-	if err := os.Mkdir(target, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(root, "link")
-	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
-		t.Skipf("cannot create a junction here: %v %s", err, out)
-	}
-	if err := verifyProtectedDir(link); err == nil {
+	if err := verifyProtectedDir(junction(t)); err == nil {
 		t.Error("a junction was accepted")
 	}
 }

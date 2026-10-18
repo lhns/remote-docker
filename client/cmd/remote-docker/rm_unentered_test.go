@@ -45,10 +45,7 @@ func TestRmOfANameWithNoEntryDestroysOnlyTheCallersServiceMachine(t *testing.T) 
 			if tc.notYours {
 				backend = &notYoursBackend{fakeBackend{log: log, state: tc.state}}
 			}
-			var asked []string
-			savedFind := findBackend
-			findBackend = func(key string) (machine.Backend, error) { asked = append(asked, key); return backend, nil }
-			t.Cleanup(func() { findBackend = savedFind })
+			asked := withBackendAsked(t, backend)
 
 			err := run(t, append([]string{"remote", "rm", "dev", "-f"}, tc.args...)...)
 			destroyed := strings.Contains(log.String(), "destroy dev")
@@ -60,7 +57,7 @@ func TestRmOfANameWithNoEntryDestroysOnlyTheCallersServiceMachine(t *testing.T) 
 			case !tc.destroyed && (err == nil || !strings.Contains(err.Error(), `"dev"`)):
 				t.Fatalf("err = %v, want no workspace named dev", err)
 			}
-			for _, k := range asked {
+			for _, k := range *asked {
 				if k != "hyperv-broker" {
 					t.Errorf("asked backend %q", k)
 				}

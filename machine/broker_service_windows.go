@@ -5,6 +5,7 @@ package machine
 import (
 	"context"
 	"errors"
+	"net"
 	"path/filepath"
 	"time"
 
@@ -66,21 +67,16 @@ func (brokerService) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 	if err == nil {
 		err = ensureBrokerDirs(root)
 	}
-	var l interface {
-		Close() error
+	var l net.Listener
+	if err == nil {
+		l, err = listenBroker()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
 	if err == nil {
 		srv := newServiceServer(root)
-		listener, lerr := listenBroker()
-		if lerr != nil {
-			err = lerr
-		} else {
-			l = listener
-			go func() { defer close(done); _ = srv.Serve(ctx, listener) }()
-		}
+		go func() { defer close(done); _ = srv.Serve(ctx, l) }()
 	}
 	if err != nil {
 		// A service has no stderr and the manager reports only that it

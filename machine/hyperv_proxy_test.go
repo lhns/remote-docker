@@ -60,16 +60,12 @@ func TestIgnitionProxyDropIn(t *testing.T) {
 	}
 }
 
-// A machine built before Proxy existed must not read as out of date.
+// A machine built before Proxy existed must not read as out of date: with no
+// proxy, the generation is the one 0.11.0 computed for the same spec. That a
+// proxy moves it is TestEveryFieldChangesTheGeneration's.
 func TestEmptyProxyLeavesTheGenerationAlone(t *testing.T) {
-	a := Spec{Name: "dev", Backend: "hyperv", Port: 2222, Account: "dev"}
-	b := a
-	b.Proxy = ""
-	if a.Generation() != b.Generation() {
-		t.Error("an empty proxy changed the generation")
-	}
-	b.Proxy = "http://proxy.example:3128"
-	if a.Generation() == b.Generation() {
-		t.Error("a proxy left the generation alone")
+	spec := Spec{Name: "dev", Backend: "hyperv", Port: 2222, Account: "dev"}
+	if got, want := spec.Generation(), "d4aeeb69910362ce"; got != want {
+		t.Errorf("generation = %s, want %s, which 0.11.0 computed", got, want)
 	}
 }

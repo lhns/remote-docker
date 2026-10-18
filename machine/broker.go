@@ -205,8 +205,7 @@ func BackendKey(backend string, broker bool) string {
 // BackendKey is BackendKey for a Spec.
 func (s Spec) BackendKey() string { return BackendKey(s.Backend, s.Broker) }
 
-func stateName(s State) string { return s.String() }
-
+// parseStateName reverses State.String, which is how a state crosses the pipe.
 func parseStateName(s string) State {
 	switch s {
 	case "running":
