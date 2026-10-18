@@ -187,7 +187,7 @@ func (t *tree) sync(shares []Share) {
 			continue
 		}
 		if !shared {
-			t.addTree(r, r.local, nil)
+			t.addTree(r.local, nil)
 		}
 	}
 }
@@ -207,7 +207,7 @@ func (t *tree) sync(shares []Share) {
 // the moment after the watch lands, which is harmless: a replay is a
 // notification, not a mutation, and duplication is much better than the
 // silent loss this whole package exists to remove.
-func (t *tree) addTree(r *shareRoot, dir string, emit func(path string, isDir bool)) {
+func (t *tree) addTree(dir string, emit func(path string, isDir bool)) {
 	queue := []string{dir}
 	for len(queue) > 0 {
 		current := queue[0]
@@ -341,15 +341,10 @@ func (t *tree) unwatchUncovered() {
 // covered reports whether some root watches dir: a directory root covers
 // itself and everything below it, a single-file root only its directory.
 func (t *tree) covered(dir string) bool {
-	if t.treeCovered(dir) {
-		return true
-	}
 	parts := splitLocal(t.goos, dir)
 	for _, r := range t.roots {
-		if r.only != "" && len(parts) == len(r.parts) {
-			if _, ok := relativeTo(t.goos, r.parts, dir); ok {
-				return true
-			}
+		if _, ok := relativeTo(t.goos, r.parts, dir); ok && (r.only == "" || len(parts) == len(r.parts)) {
+			return true
 		}
 	}
 	return false
@@ -359,20 +354,6 @@ func (t *tree) covered(dir string) bool {
 func (t *tree) walkedAt(parts []string) bool {
 	for _, o := range t.roots {
 		if o.only == "" && slices.Equal(o.parts, parts) {
-			return true
-		}
-	}
-	return false
-}
-
-// treeCovered reports whether a directory root contains dir, so its walk has
-// already watched what is below.
-func (t *tree) treeCovered(dir string) bool {
-	for _, r := range t.roots {
-		if r.only != "" {
-			continue
-		}
-		if _, ok := relativeTo(t.goos, r.parts, dir); ok {
 			return true
 		}
 	}

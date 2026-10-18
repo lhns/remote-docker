@@ -153,8 +153,10 @@ long syntax's `consistency:` is a free string that compose passes to
 sent through the Mount API: a bind with no advanced option goes as a `Binds`
 string and loses the field too (compose v5.5.1 `bindRequiresMountAPI`). Adding
 `bind: {create_host_path: false}` selects the Mount API. The embedded compose
-therefore warns about a short-syntax volume carrying one of our words and
-names the long form; it does not fail, since the mount still works.
+therefore warns about a short-syntax volume carrying one of our words, and
+about a long-syntax bind carrying `consistency:` without
+`create_host_path: false`, naming the fix (`composewarn.go`); it does not fail,
+since the mount still works.
 
 **Precedence, one rule:** the mount outranks a per-path rule, which outranks the
 workspace default.
@@ -177,17 +179,15 @@ Selecting a cached read with `watch=off` is refused — a long attribute cache
 with nothing to invalidate it is a stale mount, and a stale mount fails by
 succeeding.
 
-**One directory is one share per read, write and owner** (amended 2026-10-15,
-replacing "one directory is one share, one volume and one set of words").
-Originally two mounts of one source asking for different things were refused
-with the keys that differ, because a share's filesystem is built with its words
-and the second `EnsureVolume` would recreate the volume the first just made. A
-user hit it for good: a compose file with `prefetch=eager`, `down`, then a mount
-resolving to the session's `prefetch=tree` was refused until `remote restart`,
-since the registry never shrinks. The refusal was also uneven: a different
-`read=` alone was allowed, and mapped to the same volume name with other
-options.
+**One directory is one share per read, write and owner** (amended 2026-10-15).
 
+- **Replaced:** one share per directory, with a second mount asking for other
+  words refused, since a share's filesystem is built with its words and a
+  second `EnsureVolume` would recreate the first's volume. The registry never
+  shrinks, so a compose project brought `down` with `prefetch=eager` and `up`
+  without it was refused until `remote restart`. The refusal was also uneven:
+  a different `read=` alone passed and reused the volume name with other
+  options.
 - **Identity.** `read`, `write` and `owner` apply per container, so they are in
   the share id: `ShareIDFor` hashes `canonical path, read, write, uid:gid`, still
   16 hex characters, so `/m/<id>`, the volume name, the cache and notify
@@ -197,11 +197,11 @@ options.
   the default one included; the old path-only formula survives as
   `LegacyShareID`, for restoring records ADR 0027 describes.
 - **Effort.** `watch=` and `prefetch=` rise: a mount of an existing variant
-  raises the share's words to the stronger of the two and never lowers them.
-  The registry raises them under a lock and the share is read through an
-  accessor, because the watcher and the cache hold the pointer. Prefetch's
-  order is a choice made here: `eager` sends everything up to the budget, `tree`
-  what reads point at.
+  raises the share's words to the stronger of the two (`Watch.Max`,
+  `Prefetch.Max`) and never lowers them. The registry raises them under a
+  lock and the share is read through an accessor (`Share.Words`), because the
+  watcher and the cache hold the pointer. Prefetch's order is a choice made
+  here: `eager` sends everything up to the budget, `tree` what reads point at.
 - **Still refused.** `watch=off` on a mount that needs the watcher (`read=cached`
   or a union) contradicts itself within one mount, and says so. Nothing
   disagrees between mounts any more.

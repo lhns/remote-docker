@@ -96,38 +96,30 @@ indistinguishable without recording an inode. And a 64-bit id collision would
 resolve to the wrong directory, which ADR 0007 already answers by saying the
 digest is an identity rather than a security boundary.
 
-## Amendment 2026-10-14: the record carries the share's words
+## The record carries the share's words and variant (amended 2026-10-14, 2026-10-15)
 
-- A share's words (`owner=`, `watch=` and `prefetch=`, ADR 0042) are fixed at registration,
-  so a restore must register it with the words it had, or a container started
-  later would see the session's default owner on a volume created for another,
-  or an unwatched share where a watched one was.
-- The record gains `owner` (resolved, `uid:gid`), `watch` and `prefetch`, omitted when
-  unset. A restored share that watches starts the watcher and is handed to it at
+- **Words** (`owner=`, `watch=`, `prefetch=`, ADR 0042). A restore registers
+  the share with the words it had, or a container started later would see the
+  session's default owner on a volume created for another, or an unwatched share
+  where a watched one was. The record carries `owner` (resolved, `uid:gid`),
+  `watch` and `prefetch`, omitted when unset; a record without one takes the
+  session's default. `remember` writes the share as it stands, with watch and
+  prefetch raised to what its mounts asked for.
+- **Variant** (`read`, `write`, and the owner above). The share id is derived
+  from the path AND the variant (ADR 0007, ADR 0042), and a record is checked by
+  what it carries: one with a variant must have
+  `export == ShareIDFor(path, variant)`, and one without, written by 0.11 or
+  earlier, must have `export == LegacyShareID(path)`.
+- **A legacy record restores by export only.** Its mode is unknown, so the
+  share keeps the legacy export, which no mount derives (the registry is keyed
+  by export alone): it keeps serving the containers that mount it, and a new mount of the directory
+  gets a share, export and volume of its own. This is what makes upgrading safe.
+- **A restored share that watches starts the watcher** and is handed to it at
   once (`Registry.Restored`), because the mount that brought it back registered
-  nothing and so told nothing. A restored share is never attached to the cache, so
-  its prefetch is recorded, restored into its words and compared by the
-  registrar, but not resumed (ADR 0045). The file
-  version stays 1: `readBound` drops a record whose version differs, so a bump
-  would make every restore fail after an upgrade. A record without the field
-  takes the session's default.
-
-## Amendment 2026-10-15: the record carries the share's variant
-
-- The id is derived from the path AND the variant (read, write, owner; ADR 0007,
-  ADR 0042), so the record gains `read` and `write`. The version stays 1 for the
-  reason above, and a record is checked by what it carries: one with a variant
-  must have `export == ShareIDFor(path, variant)` (the owner being part of it),
-  and one without, written by 0.11 or earlier, must have
-  `export == LegacyShareID(path)`.
-- A share restored from a record without a variant has an unknown mode. It goes
-  into the registry by export only and never into the by-path map, so it keeps
-  serving the containers that mount it and a new mount of the directory gets a
-  share, export and volume of its own. This is what makes upgrading safe: nothing
-  that already runs changes under it.
-- `remember` writes the share as it stands, with watch and prefetch raised to
-  what the mounts asked for, so a restored share watches and fills as the
-  strongest of its mounts did.
+  nothing and so told nothing. It is never attached to the cache, so its
+  prefetch is restored into its words and not resumed (ADR 0045).
+- **The file version stays 1** through both: `readBound` drops a record whose
+  version differs, so a bump would make every restore fail after an upgrade.
 
 ## Where
 

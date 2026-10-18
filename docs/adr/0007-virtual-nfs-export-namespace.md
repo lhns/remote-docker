@@ -1,7 +1,12 @@
 # 0007. A virtual NFS export namespace
 
 - Status: Accepted
-- Date: 2026-08-07
+- Date: 2026-08-07; amended 2026-09-24 (no `/cwd` export), 2026-10-15 (the id
+  includes how the directory is mounted)
+- Current answer: one NFS export with a synthetic root, an entry `/m/<share id>`
+  per share registered on demand, the working directory included. The id is 16
+  hex characters of SHA-256 over the canonical path and the mount's read, write
+  and owner (ADR 0042), and a recorded export is restored by ADR 0027.
 
 ## Context
 
@@ -59,8 +64,8 @@ produce one share, and the same directory mounted a different way is another.
   every read, and a share id cannot be inverted, so an id nobody wrote down
   resolves to nothing.
 - Share ids are stable across runs, because they are derived from the path and
-  the mount's variant rather than allocated. A reconnecting client keeps its NFS handles and its
-  remote volumes instead of orphaning one set per session.
+  the mount's variant rather than allocated. A reconnecting client keeps its
+  NFS handles and its remote volumes instead of orphaning one set per session.
 - Case folding is Windows-only and deliberately so. Folding case on a
   case-sensitive filesystem would merge two genuinely different directories
   into one share.

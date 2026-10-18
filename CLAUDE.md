@@ -394,8 +394,8 @@ premise of the project, and it applies to building it too. So:
   new combination gets its own export, volume and union beside the others, and
   nothing changes under a running container. Every variant has a new id, the
   default one included; `LegacyShareID` (the path alone) exists only to restore
-  a 0.11 record, and a share restored that way goes into the registry by export
-  and NEVER into the by-path map, or a new mount would land on it. `watch=` and
+  a 0.11 record, and a share restored that way keeps that legacy export, which
+  no mount derives, so a new mount never lands on it. `watch=` and
   `prefetch=` are effort spent on one share and RISE: the share runs at the
   highest any mount of it asked for (`Watch.Max`, `Prefetch.Max`), raised
   silently under the registry's lock and read through `Share.Words()` because
@@ -434,8 +434,8 @@ premise of the project, and it applies to building it too. So:
   deletion does not depend on registration order. A directory mounted several
   ways is several roots at one path, all deepest: every event goes to each with
   that root's own mode, removing one root keeps a sibling's watches, and `sync`
-  applies a raised mode to a root it already holds (ADR 0042). A watcher that will not start
-  refuses the mount that needed it and leaves the session open.
+  applies a raised mode to a root it already holds (ADR 0042). A watcher that
+  will not start refuses the mount that needed it and leaves the session open.
 - **A share with `write != through` is a UNION, its lower carries the share's
   READ mode, and the agent is its only writer** (ADR 0042, ADR 0044). The live
   export is the lower layer and a local cache is the upper, so a read the
@@ -981,12 +981,12 @@ premise of the project, and it applies to building it too. So:
   for the caller's SID in `machines.json`; `create` refuses a taken name
   whoever owns it. A machine's files are `machines\<name>` under ProgramData
   with a validated name, never anything from a request; the directory is born
-  with a protected DACL. The pipe's DACL withholds pipe-instance creation from users and the client
-  checks the answering process is the service's before sending (a squatted
-  pipe would receive the host key; the pipe's owner proves nothing).
-  A machine created through it has `broker: true` and every later operation
-  goes the same way (`config.Machine.BackendKey`). Real Hyper-V behind it is
-  by hand only; a real named pipe with a stand-in is CI.
+  with a protected DACL. The pipe's DACL withholds pipe-instance creation from
+  users, and the client checks the answering process is the service's before
+  sending: a squatted pipe would receive the host key, and the pipe's owner
+  proves nothing. A machine created through it has `broker: true` and every
+  later operation goes the same way (`config.Machine.BackendKey`). CI runs a
+  real named pipe against a stand-in; real Hyper-V behind it is by hand only.
 - **A machine-backed workspace is an ordinary workspace with a lifecycle.**
   The `machine` block in the config is the only thing that differs anywhere,
   and two commands read it: `rm`, which has a machine to destroy (ADR 0026),
@@ -1210,7 +1210,8 @@ The words a mount carries for its share, in `integration.sh` 14b (2026-10-14):
 `owner=1000` and `owner=1000.2000` on `-v` and `owner=1000:2000` on `--mount`
 reporting those ids, two containers on one directory at once with `owner=1000`
 and `owner=2000` each reporting its own and reading the other's file, and the
-same on a `write=back` union's root with git as uid 1000 working there. `watch=partial` and `read=cached` turning the watcher on for their own
+same on a `write=back` union's root with git as uid 1000 working there.
+`watch=partial` and `read=cached` turning the watcher on for their own
 directory with the session at `watch` off, `read=cached,watch=off` refused,
 `watch=coarse` poking the directory when a file is deleted here, and a client
 restart keeping both the owner and the watching of a share a container still
@@ -1411,26 +1412,27 @@ prepended, `remote-docker remote --help` running from a shell whose PATH came
 from the registry rather than from this process, the `docker.exe` feature
 absent by default and working when `ADDLOCAL` asks for it, the refusal firing
 against a `docker.exe` in System32 with a message naming it, the override, and
-an uninstall that takes both names and the PATH entry with it. It also runs the
-optional Hyper-V workspace against a STAND-IN for Hyper-V (the `rdstandin` build
-tag, `machine/broker_standin_windows.go`, which logs create/start/stop/destroy
-under `%ProgramData%\remote-docker-standin` beside the directory teardown
-deletes; `msi.yml` asserts no release binary contains it): the service
-installed as LocalSystem with Authenticated Users able to start and nothing
-more, the group, the machine, config entry and docker context in the installing
-user's profile, a STANDARD local user refused with the group's name and then
-served by the same logon after `net localgroup ... /add`, that user starting a
-stopped service, a name that create refuses failing the install with its
-message in the log and rolling everything back, a name an existing workspace
-already has refused with that workspace left as it was, an upgrade that
-changes none of the record, the config or the group and logs no destroy or
-second create while closing the standard user's background session, which
-then starts again, and
-an uninstall that destroys both machines and removes the service, the group,
-ProgramData, the config entry and the context. It is `msi.yml`, which runs on changes under `installer/windows/` rather than on
-every push -- a Windows runner per push answers the same question every time,
-which is the argument that keeps `bench.sh` behind a label. NOT on the release
-path: see the not-tested list below.
+an uninstall that takes both names and the PATH entry with it. Sections 11 to 19
+run the optional Hyper-V workspace against a STAND-IN for Hyper-V (the
+`rdstandin` build tag, `machine/broker_standin_windows.go`, which logs its
+operations under `%ProgramData%\remote-docker-standin`; `msi.yml` asserts no
+release binary contains it): the feature refused without Hyper-V, the service
+installed as LocalSystem with Authenticated Users able to start and query it
+and nothing more, the group, the machine, config entry and docker context in
+the installing user's profile, a STANDARD local user refused with the group's
+name and then served by the same logon after `net localgroup ... /add`, that
+user starting a stopped service, a name create refuses failing the install
+with its message in the log and rolling everything back, a name an existing
+workspace already has refused with that workspace left as it was, an upgrade
+that would add or drop the feature refused, an upgrade that changes none of
+the record, the config or the group and logs no destroy or second create while
+closing the standard user's background session, which then starts again, an
+uninstall that destroys both machines and removes the service, the group,
+ProgramData, the config entry and the context, and Modify adding and removing
+the feature. It is `msi.yml`, which runs on changes under `installer/windows/`
+rather than on every push -- a Windows runner per push answers the same
+question every time, which is the argument that keeps `bench.sh` behind a
+label. NOT on the release path: see the not-tested list below.
 
 ### NOT tested, and do not claim otherwise
 
@@ -1438,29 +1440,35 @@ Keep this list honest, and name the assertion rather than the area: "the
 `docker run` mechanism under `elevate` is tested" was written here while only
 its pure planning function was.
 
-- **The MSI's Hyper-V workspace against real Hyper-V, and as a real standard
-  user.** CI proves the installer, service, group, rollback and upgrade around
-  a stand-in. By hand only (`docs/testing-machines.md`): real Hyper-V under the
-  service, that `[UserSID]` is the launching user under over-the-shoulder UAC
-  (a standard user typing admin credentials), that the impersonated action
-  writes that user's profile and not SYSTEM's or the administrator's, the
-  dialog (never clicked by CI), and a reboot with the service stopped.
+- **The MSI's Hyper-V workspace beyond one hand run.** CI proves the
+  installer, service, group, rollback and upgrade around a stand-in. Real
+  Hyper-V under the service, the installing user's identity (`[UserSID]` and
+  the impersonated action) under over-the-shoulder UAC, and the dialogs were
+  run BY HAND, ONCE, on 2026-10-16, on one computer, as a standard user typing
+  an administrator's credentials: the install creating the workspace, a reboot,
+  an upgrade whose files-in-use dialog closed a running session, Modify adding
+  and removing the feature, and the uninstall (ADR 0048, "Run by hand"). Never
+  run: any other Windows build or Hyper-V setup, a domain account or a member
+  through a nested group, the arm64 MSI. No CI clicks a dialog or runs real
+  Hyper-V. Say "run once by hand", never "tested in CI".
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
   through the routing mesh -- needs a real cluster. CI cannot cover it. The
   stack file leans on one thing the code does prove: the privileged child joins
   the TASK's network namespace, so the mesh delivers where the child listens
   and `mode: host` is not required.
-- **Hyper-V beyond one computer, by hand.** Run end to end by hand on
-  2026-10-05 on one computer and nowhere else (versions and what was checked
-  are in ADR 0026). GitHub's runners do not offer Hyper-V, so it has no
-  automated coverage and cannot get any: `docs/testing-machines.md` is its
-  whole verification, and any other Windows build, Flatcar release or network
-  setup is unproven. Its decisions are unit tested as far as a string can be:
+- **Hyper-V beyond one computer, by hand.** Run end to end by hand on one
+  computer and nowhere else: the backend directly on 2026-10-05 (versions and
+  what was checked are in ADR 0026), through the service and the MSI on
+  2026-10-16 (the entry above). GitHub's runners do not offer Hyper-V, so it
+  has no automated coverage and cannot get any: `docs/testing-machines.md` is
+  its whole verification, and any other Windows build, Flatcar release or
+  network setup is unproven. Its decisions are unit tested as far as a string can be:
   the PowerShell it builds, the Ignition document and its KVP chunks, the
   state and address parsing, the key fingerprint. The Windows test job only
-  checks that each script parses. Say "tested by hand", never "tested in CI". This
-  is still the strongest entry on this list: WSL at least runs on a runner.
+  checks that each script parses. Say "tested by hand", never "tested in CI".
+  This is still the strongest entry on this list: WSL at least runs on a
+  runner.
 - **Windows and WSL beyond one runner image.** `machine.yml` takes a session
   end to end on windows-latest against a WSL workspace, which is one Windows
   version, one runner image and one WSL kernel; nobody working on this has WSL

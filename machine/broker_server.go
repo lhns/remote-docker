@@ -269,6 +269,12 @@ func failure(err error) BrokerResponse { return refusal(codeFailed, err.Error())
 
 var errAbsentUnowned = errors.New("no such machine")
 
+// What a caller is told about a name it cannot have.
+const (
+	msgTakenByOther   = "the workspace name is taken by another user of this computer\n  fix: choose another workspace name"
+	msgTakenUnmanaged = "the workspace name is taken by a machine this service does not manage\n  fix: choose another workspace name"
+)
+
 func (s *brokerServer) loadRecords() (map[string]brokerRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,11 +294,10 @@ func (s *brokerServer) removeRecord(name, owner string) error {
 }
 
 // access decides whether the caller may act on a machine that is not being
-// created: it must be recorded for the caller's SID. A machine nobody recorded
-// that does not exist either is errAbsentUnowned, which look reports as absent
-// and destroy accepts; one that exists in Hyper-V and is nobody's the service
-// knows is refused, and so is the name, whoever's the machine is. Called with
-// the name's lock held.
+// created: it must be recorded for the caller's SID. A name neither recorded
+// nor in Hyper-V is errAbsentUnowned, which look reports as absent and destroy
+// accepts; a machine in Hyper-V that is not recorded is refused to everybody.
+// Called with the name's lock held.
 func (s *brokerServer) access(ctx context.Context, name string, c brokerCaller) error {
 	recs, err := s.loadRecords()
 	if err != nil {
@@ -302,7 +307,7 @@ func (s *brokerServer) access(ctx context.Context, name string, c brokerCaller) 
 		if strings.EqualFold(rec.Owner, c.SID) {
 			return nil
 		}
-		return &BrokerError{Code: codeNotYours, Message: "the workspace name is taken by another user of this computer\n  fix: choose another workspace name"}
+		return &BrokerError{Code: codeNotYours, Message: msgTakenByOther}
 	}
 	state, _, err := s.exec.Look(ctx, name)
 	if err != nil {
@@ -311,7 +316,7 @@ func (s *brokerServer) access(ctx context.Context, name string, c brokerCaller) 
 	if state == Absent {
 		return errAbsentUnowned
 	}
-	return &BrokerError{Code: codeNotYours, Message: "the workspace name is taken by a machine this service does not manage\n  fix: choose another workspace name"}
+	return &BrokerError{Code: codeNotYours, Message: msgTakenUnmanaged}
 }
 
 func (s *brokerServer) handle(ctx context.Context, c brokerCaller, req BrokerRequest) BrokerResponse {
@@ -356,13 +361,13 @@ func (s *brokerServer) handle(ctx context.Context, c brokerCaller, req BrokerReq
 	switch req.Op {
 	case opLook:
 		if absent {
-			return BrokerResponse{OK: true, State: stateName(Absent)}
+			return BrokerResponse{OK: true, State: Absent.String()}
 		}
 		state, notes, err := s.exec.Look(ctx, req.Name)
 		if err != nil {
 			return failure(err)
 		}
-		return BrokerResponse{OK: true, State: stateName(state), Notes: &BrokerNotes{Generation: notes.Generation, Key: notes.Key}}
+		return BrokerResponse{OK: true, State: state.String(), Notes: &BrokerNotes{Generation: notes.Generation, Key: notes.Key}}
 	case opDestroy:
 		if absent {
 			return BrokerResponse{OK: true}
@@ -426,7 +431,7 @@ func (s *brokerServer) create(ctx context.Context, c brokerCaller, req BrokerReq
 		return failure(err)
 	}
 	if rec, ok := recs[req.Name]; ok {
-		msg := "the workspace name is taken by another user of this computer\n  fix: choose another workspace name"
+		msg := msgTakenByOther
 		if strings.EqualFold(rec.Owner, c.SID) {
 			msg = "the workspace name is already recorded for you\n  fix: `remote rm " + req.Name + "` clears it"
 		}
@@ -437,7 +442,7 @@ func (s *brokerServer) create(ctx context.Context, c brokerCaller, req BrokerReq
 		return failure(err)
 	}
 	if state != Absent {
-		return refusal(codeTaken, "the workspace name is taken by a machine this service does not manage\n  fix: choose another workspace name")
+		return refusal(codeTaken, msgTakenUnmanaged)
 	}
 	if err := s.putRecord(req.Name, brokerRecord{Owner: c.SID, Created: s.now().UTC().Format(time.RFC3339)}); err != nil {
 		return failure(err)

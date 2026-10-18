@@ -10,8 +10,9 @@ import (
 //
 // Typed rather than "run this script" so that an implementation which does not
 // run in this process can carry them: whoever answers is handed an operation,
-// a machine name and typed arguments, never PowerShell. The one implementation
-// today is directHyperV, which runs PowerShell here (hyperv_windows.go).
+// a machine name and typed arguments, never PowerShell. directHyperV runs
+// PowerShell here (hyperv_windows.go); brokerExecutor asks the SYSTEM service
+// (broker_client.go), which runs a directHyperV of its own.
 //
 // Names are the bare workspace names; the executor adds the "rd-" prefix.
 type hyperVExecutor interface {

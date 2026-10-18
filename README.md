@@ -171,8 +171,11 @@ containers inside the machine, never your files, which live here.
 A Hyper-V backend exists (`--backend hyperv`). It downloads Flatcar's Hyper-V
 disk image itself (pinned and checksum-verified, about 600 MB, once), and
 `--proxy <url>` sends that download and the machine's docker daemon through an
-HTTP proxy. It is tested end to end by hand on Windows 11; no CI can run it, so
-`docs/testing-machines.md` is how to check it on yours.
+HTTP proxy. It needs administrator rights or the Hyper-V Administrators group,
+except where the installer's Hyper-V service is set up (above): then members of
+`remote-docker-users` use it as standard users. It has run end to end by hand
+on one Windows 11 computer, directly and through the installer; no CI can run
+it, so `docs/testing-machines.md` is how to check it on yours.
 
 ## What works
 
@@ -1434,8 +1437,8 @@ Beyond that:
 - **Windows**: one client is exercised end to end on every pull request
   (`machine.yml`: a WSL workspace, a bind mount, GNU tar with attributes, a
   non-root mkdir and the conformance probe), on one runner image and one WSL
-  kernel. The rest of the Windows client is unit tested only, and **Hyper-V is
-  tested by hand**, never in CI.
+  kernel. The rest of the Windows client is unit tested only, and **Hyper-V has
+  run by hand on one computer**, never in CI.
 - **Swarm itself** needs a real cluster; only the elevation mechanism is tested.
   The systemd unit is not exercised either.
 - **Every suite mounts a share on one kernel**, the runner's 6.x, so a mount
