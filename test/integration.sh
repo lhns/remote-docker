@@ -1831,10 +1831,9 @@ fi
 
 echo
 echo "== 14c. a compose project whose words change between runs (ADR 0042) =="
-# The reported case: a stack with prefetch=eager, taken down, and the same stack
-# with the word gone resolved to the session's default and was refused until
-# `remote restart`. This client's default is prefetch off, which is the same
-# disagreement as the report's tree.
+# A stack with prefetch=eager, taken down, and the same stack without the word,
+# which resolves to the session's default (off for this client): the second run
+# must not be refused for disagreeing with the first.
 if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     PFDIR="$WORK/prefetch-changes"
     mkdir -p "$PFDIR"
@@ -2161,8 +2160,8 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         fi
 
         # A file the cache refills while a container reads it is not emptied first
-        # (ADR 0044): a reader saw it short,
-        # and a mapping of it (git maps what it hashes) died with a bus error.
+        # (ADR 0044), or a reader sees it short and a mapping of it (git maps
+        # what it hashes) dies with a bus error.
         # The runner rewrites one file with IDENTICAL content over and over, so
         # every rewrite is an invalidation that refills it. Each rewrite is a
         # rename here too, so the live export never shows a short file either
@@ -2204,7 +2203,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             if outputs '^died=0 hashes=[1-9]' dockert exec itest-deleg-git sh -c '
                 died=0; hashes=0; end=$(( $(date +%s) + 9 ))
                 while [ "$(date +%s)" -lt "$end" ]; do
-                    h=$(git hash-object /w/churn.txt 2>&1) || { died=$((died + 1)); echo "git exited $?: $h"; continue; }
+                    h=$(git hash-object /w/churn.txt 2>&1) || { rc=$?; died=$((died + 1)); echo "git exited $rc: $h"; continue; }
                     hashes=$((hashes + 1))
                     [ "$h" = '"$want"' ] || { died=$((died + 1)); echo "hashed to $h"; }
                 done
@@ -2217,6 +2216,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             wait "$CHURN_PID" 2>/dev/null
             docker rm -f itest-deleg-git >/dev/null 2>&1
         else
+            docker rm -f itest-deleg-git >/dev/null 2>&1
             info "no git on the runner or alpine/git unavailable; the mapped-read case was not run"
         fi
         rm -f "$UNIONDIR/churn.txt" "$WORK"/churn.tmp.* "$WORK/churn.src"
