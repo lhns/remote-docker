@@ -191,25 +191,13 @@ func writeUnder(r *os.Root, file File) error {
 	// open without share-delete. That is an error like any other here: the
 	// round ends without moving the manifest, so the change is still pending
 	// and the next round tries again. Never a fallback to truncating it.
-	var f *os.File
-	var tmp string
-	for range 10 {
-		tmp = filepath.Join(filepath.Dir(rel), writebackPrefix+strconv.FormatUint(rand.Uint64(), 16))
-		var err error
-		f, err = r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, file.Mode.Perm())
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return err
-		}
-		f = nil
-	}
-	if f == nil {
-		return errors.New("no free temporary name")
+	tmp := filepath.Join(filepath.Dir(rel), writebackPrefix+strconv.FormatUint(rand.Uint64(), 16))
+	f, err := r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, file.Mode.Perm())
+	if err != nil {
+		return err
 	}
 
-	_, err := io.Copy(f, file.Body)
+	_, err = io.Copy(f, file.Body)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

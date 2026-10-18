@@ -270,7 +270,7 @@ func TestAddTreeEmitsWhatItFindsForALateWatch(t *testing.T) {
 	}
 
 	var found []string
-	tr.addTree(tr.roots[0], filepath.Join(root, "late"), func(p string, isDir bool) {
+	tr.addTree(filepath.Join(root, "late"), func(p string, isDir bool) {
 		rel, _ := relativeTo(runtime.GOOS, tr.roots[0].parts, p)
 		found = append(found, rel)
 	})
@@ -290,7 +290,7 @@ func TestAddTreeToleratesAVanishedDirectory(t *testing.T) {
 	tr := newTestTree(t, be, 100, nil)
 	tr.sync([]Share{{ExportPath: "/m/1111111111111111", LocalPath: root, Mode: workspace.WatchPartial}})
 
-	tr.addTree(tr.roots[0], filepath.Join(root, "never-existed"), nil)
+	tr.addTree(filepath.Join(root, "never-existed"), nil)
 	// No panic, and nothing bogus recorded as watched.
 	if tr.watching(filepath.Join(root, "never-existed")) {
 		t.Error("a non-existent directory was recorded as watched")

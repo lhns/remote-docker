@@ -126,13 +126,12 @@ type Registry struct {
 	traceOnce sync.Once
 	trace     time.Duration
 
-	// Neither map ever shrinks and there is no unregister, deliberately: a
+	// The map never shrinks and there is no unregister, deliberately: a
 	// share removed leaves every container mounting it with `Stale file
 	// handle` against a mount that still looks fine. The reasoning is the
 	// "share registry never shrinks" invariant in CLAUDE.md.
 	mu     sync.RWMutex
 	shares map[string]*Share // keyed by export path
-	byPath map[string]*Share // keyed by canonical local path and variant
 }
 
 // NewRegistry returns an empty registry reporting the given attributes.
@@ -140,7 +139,6 @@ func NewRegistry(attrs Attrs) *Registry {
 	return &Registry{
 		attrs:  attrs,
 		shares: map[string]*Share{},
-		byPath: map[string]*Share{},
 	}
 }
 
@@ -160,7 +158,7 @@ func (r *Registry) Register(localPath string, mode workspace.Mode, words workspa
 
 // register is Register with the export named when a record names it. An empty
 // export is derived from the variant; a recorded one is believed only as far
-// as restoreExport checked it.
+// as RecordedExport checked it.
 func (r *Registry) register(localPath, recorded string, mode workspace.Mode, words workspace.ShareWords) (*Share, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
@@ -189,24 +187,19 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 		words.Prefetch = workspace.PrefetchOff
 	}
 
-	// A share restored from a record that names no variant is known by its
-	// export alone: it is not what any mount resolves to, so a new mount of
-	// the directory gets a share of its own instead of the old one.
-	legacy := recorded != "" && mode == workspace.ModeUnset
+	// The export names the variant, so it is the only key a share needs. A
+	// share restored from a record that names no variant keeps the legacy
+	// export the record holds, which no new mount derives: a new mount of the
+	// directory gets a share of its own instead of the old one.
 	exportPath := recorded
 	if exportPath == "" {
 		exportPath = workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: words.Owner}))
 	}
-	key := variantKey(localPath, mode, words.Owner)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if existing, ok := r.shares[exportPath]; ok {
-		existing.raise(words)
-		return existing, nil
-	}
-	if existing, ok := r.byPath[key]; ok && !legacy {
 		existing.raise(words)
 		return existing, nil
 	}
@@ -234,31 +227,23 @@ func (r *Registry) register(localPath, recorded string, mode workspace.Mode, wor
 		fs:         withAttrs(r.shareFS(base, file), attrs, exportPath, r.OnRead),
 	}
 	r.shares[exportPath] = share
-	if !legacy {
-		r.byPath[key] = share
-	}
 	return share, nil
 }
 
-// variantKey identifies one variant of one directory.
-func variantKey(localPath string, mode workspace.Mode, owner workspace.Owner) string {
-	return workspace.CanonicalKey(localPath) + "\x00" + mode.String() + "\x00" + owner.String()
-}
-
-// restoreExport reports whether a recorded export is one this program would
-// have given localPath: derived from the variant when the record has one, from
-// the path alone when it predates the variant. The far side names an id and
-// never a path, and the id is recomputed before it is believed (ADR 0027).
-func restoreExport(export, localPath string, mode workspace.Mode, words workspace.ShareWords) bool {
+// RecordedExport is the export this program would have given localPath as
+// recorded: derived from the variant when the record has one, from the path
+// alone when it predates the variant. Empty for a variant with no owner, which
+// no share was ever registered without. A record is believed only if the
+// export it names is this one: the far side names an id and never a path, so
+// the id is recomputed before it is believed (ADR 0027).
+func RecordedExport(localPath string, mode workspace.Mode, owner workspace.Owner) string {
 	if mode == workspace.ModeUnset {
-		return export == workspace.ExportPathForID(workspace.LegacyShareID(localPath))
+		return workspace.ExportPathForID(workspace.LegacyShareID(localPath))
 	}
-	// The owner a record names is the one the share was registered with; an
-	// unset one cannot be what produced a variant id.
-	if !words.Owner.Set {
-		return false
+	if !owner.Set {
+		return ""
 	}
-	return export == workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: words.Owner}))
+	return workspace.ExportPathForID(workspace.ShareIDFor(localPath, workspace.ShareVariant{Mode: mode, Owner: owner}))
 }
 
 // Lookup finds the share serving an export path. A path below a share's root
@@ -302,7 +287,7 @@ func (r *Registry) LookupOrRestore(exportPath string) (*Share, string, bool) {
 	// registers exactly the path it was given.
 	clean := normalizeExport(exportPath)
 	local, mode, words, ok := r.Restore(clean)
-	if !ok || !restoreExport(clean, local, mode, words) {
+	if !ok || clean != RecordedExport(local, mode, words.Owner) {
 		return nil, "", false
 	}
 	share, err := r.register(local, clean, mode, words)

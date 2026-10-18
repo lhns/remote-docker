@@ -170,20 +170,14 @@ func newShareStore(path string, log *slog.Logger) *shareStore {
 }
 
 // usable reports whether a record still describes a directory this machine may
-// export. The id is RECOMPUTED from the path and the variant, so an edited
-// record cannot make /m/<id> resolve anywhere else; a record with no variant
-// must carry the id releases before it derived from the path alone. A
-// directory recreated at the same path is not detected.
+// export. The id is RECOMPUTED from the path and the variant
+// (nfsserve.RecordedExport), so an edited record cannot make /m/<id> resolve
+// anywhere else. A directory recreated at the same path is not detected.
 func (s *shareStore) usable(rec shareRecord) bool {
 	if rec.Export == "" || rec.Path == "" {
 		return false
 	}
-	if mode := rec.mode(); mode != workspace.ModeUnset {
-		owner := rec.words().Owner
-		if !owner.Set || rec.Export != workspace.ExportPathForID(workspace.ShareIDFor(rec.Path, workspace.ShareVariant{Mode: mode, Owner: owner})) {
-			return false
-		}
-	} else if rec.Export != workspace.ExportPathForID(workspace.LegacyShareID(rec.Path)) {
+	if rec.Export != nfsserve.RecordedExport(rec.Path, rec.mode(), rec.words().Owner) {
 		return false
 	}
 	if !rec.LastUsed.IsZero() && time.Since(rec.LastUsed) > shareUnused {
