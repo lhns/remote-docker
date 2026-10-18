@@ -1,7 +1,12 @@
 # 0016. Replaying change events as real syscalls
 
 - Status: Accepted
-- Date: 2026-08-07
+- Date: 2026-08-07; amended 2026-10-14 (watching per share), 2026-10-15 (one
+  directory mounted several ways)
+- Current answer: an edit here is replayed in the workspace as a real syscall
+  on the file through the export, never one that mutates it. A deletion
+  cannot be replayed faithfully; `coarse` pokes its directory instead. Watching is per share (`off`, `partial`, `coarse`), at the strongest any
+  mount of the share asked for, with `REMOTE_DOCKER_WATCH` the default.
 
 ## Context
 
@@ -115,15 +120,15 @@ narrowed to exactly this.
 
 ### Three states, defaulting to off
 
-*Amended 2026-10-14: the state is per share.* A mount may say `watch=off`,
+*Per share (2026-10-14, 2026-10-15).* A mount may say `watch=off`,
 `partial` or `coarse` (ADR 0042), and `REMOTE_DOCKER_WATCH` is the default for a
 mount that does not. `read=cached` and a union need the watcher, so they get at
 least `partial`; asking for `off` there is refused. A share in `off` has no
 watches at all. One watcher serves shares that disagree: each watched root
 carries its own mode and strips deletions by it, nested roots resolve to the
 deepest, and the cache observer still sees every event of a watched root before
-any mode strips one (ADR 0044). *Amended 2026-10-15:* a directory mounted
-several ways is several roots at one path (ADR 0042). They are all the deepest
+any mode strips one (ADR 0044). A directory mounted several ways is several
+roots at one path (ADR 0042). They are all the deepest
 there, so each event goes to every one of them with that root's own mode;
 removing one keeps the watches a sibling still needs; and a mount of a share
 that asks for more raises the share's watch, which `sync` applies to a root the

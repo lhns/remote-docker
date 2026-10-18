@@ -39,6 +39,7 @@ STRIDE letters are used where they apply and left out where they do not.
 | the reverse proxy operator | terminates TLS in front of the workspace | traffic timing and sizes, and the ability to break or impersonate the endpoint. Not the SSH session inside it |
 | an image the user runs | `docker run` on their own daemon | what was mounted into it, which is the feature. With host networking, more: see flow 3 |
 | a pod in the same cluster | the pod network | the workspace's ports, and the metrics port when it is on (flow 10). The export is loopback inside a namespace of its own, so it is not among them |
+| another local user on a Windows computer with the Hyper-V service | logged on at the same computer | the service's pipe: one refusal, unless a direct member of `remote-docker-users`; a member makes, starts and destroys only machines it created (flow 11) |
 | whoever holds a copy of the config directory | a synced folder, a backup, a stolen laptop | the private key at 0600, a share record that is refused wholesale when another machine or account wrote it, and a machine's host key, the public half only |
 
 **Not modelled**, said once so the rest reads as deliberate: defects in
@@ -1416,31 +1417,32 @@ sequenceDiagram
     S-->>C: answer
 ```
 
-**E — a caller who is not allowed (1).** The pipe grants Authenticated Users
-read and write (not instance creation) and denies network logons, so anyone at the keyboard connects.
-What stops them is the check inside: the caller's SID comes from
-impersonating the pipe client, never from a request, and a SID that is
+**E — a caller who is not allowed (3).** The pipe grants Authenticated Users
+read and write (not instance creation) and denies network logons, so anyone
+logged on at the computer connects. What stops them is the check inside: the
+caller's SID comes from impersonating the pipe client, never from a request,
+and a SID that is
 neither SYSTEM, an enabled Administrators token nor a direct member of
 `remote-docker-users` gets a refusal without one byte of its input read. A
 group that cannot be read allows administrators only. *Covered by*
 `TestBrokerAuthorisation`, `TestBrokerNeverReadsForAnUnauthorisedCaller` and
 `TestBrokerOverARealNamedPipe`.
 
-**E — one member acting on another's machine (3).** Every operation but
+**E — one member acting on another's machine (6).** Every operation but
 `create` and `available` needs the machine recorded for the caller's SID in
 `machines.json`. A Hyper-V VM the service did not create is recorded for
 nobody and is never touched, so a user's own `rd-` VM is safe. `create`
 refuses a name that is recorded or exists, whoever owns it. *Covered by*
 `TestBrokerOwnership` and `TestBrokerRefusesAMachineHyperVHasThatIsNotRecorded`.
 
-**T — a path or a script from the caller (3).** No operation takes either. The
+**T — a path or a script from the caller (5).** No operation takes either. The
 machine's directory is the service's `machines\` plus a name matching
 `^[a-z0-9][a-z0-9-]{0,62}$`; account, image, key and proxy are held to shapes
 that cannot leave the unit file, the Ignition JSON or a PowerShell literal;
 unknown JSON fields are refused. *Covered by* `TestBrokerRefusesMalformedNames`,
 `TestBrokerRefusesBadCreateSettings` and `TestBrokerRefusesUnknownOpsAndFields`.
 
-**T/E — the service's directory (4).** ProgramData lets Users create folders,
+**T/E — the service's directory (7).** ProgramData lets Users create folders,
 so a pre-created `remote-docker` there would hand its creator the service's
 writes. The service creates it with a protected DACL (SYSTEM and
 Administrators), and adopts an existing one only if SYSTEM or Administrators
@@ -1460,7 +1462,7 @@ with the service's own process id before sending anything. *Covered by*
 `TestBrokerClientRefusesAPipeTheServiceDoesNotServe` and
 `TestBrokerConstantsArePinned`.
 
-**D — a member (3).** Operations have deadlines and end with their caller's
+**D — a member (5).** Operations have deadlines and end with their caller's
 connection; a caller has two running at once and administrators their own
 four, so one member cannot take every slot or lock out purge; a hung Hyper-V
 call holds one machine's name and nothing else. *Covered by*
@@ -1470,7 +1472,7 @@ call holds one machine's name and nothing else. *Covered by*
 member can fill the disk with machines. *Accepted*: members are users an
 administrator chose.
 
-**E — group membership by nesting (1).** Only DIRECT members count. A user in
+**E — group membership by nesting (3).** Only DIRECT members count. A user in
 a domain group that is a member of `remote-docker-users` is refused, and told
 the command that adds them. A stricter reading is the safe direction.
 
@@ -1505,6 +1507,7 @@ source, if that matters to you.
 | the `docker.exe` name | a WiX Feature, `Level="2"`, unselected by default; `<CopyFile>` makes the second name at install and removes it at uninstall |
 | the refusal | a type 19 custom action when `DOCKERONPATH` finds a `docker.exe`, overridable with `ALLOWDOCKERSHADOW=1` |
 | what it searches | four directories (`System64Folder`, `SystemFolder`, Docker Desktop's two), because Windows Installer's `AppSearch` cannot enumerate PATH |
+| custom actions | only with the Hyper-V workspace feature: this program's own hidden commands, as SYSTEM (`sc`, service setup and teardown) and as the installing user (create, `rm`), never a script (ADR 0048; the service is flow 11) |
 
 So a `docker.exe` anywhere else on PATH is not noticed. The install directory is
 appended (`Environment Part="last"`), never prepended, so ours is the one
@@ -1597,6 +1600,10 @@ Stated here rather than buried, because each is a deliberate trade.
   the mechanism. There is no way around it while the remote daemon does the
   pulling, so treat a workspace as trusted with every registry you log into
   from it, and prefer tokens scoped to what that workspace needs.
+- **A member of `remote-docker-users` can fill the disk** (ADR 0055). The
+  Hyper-V service has no per-user quota, so one member can create machines
+  until the disk is full. Members are users an administrator chose; flow 11 has
+  the limits that do exist.
 - **A machine workspace is as trusted as the machine it runs on** (ADR 0026).
   The workspace is a VM on the user's own hardware, so the semi-trusted box and
   the trusted one share a computer, and anybody with administrator rights there

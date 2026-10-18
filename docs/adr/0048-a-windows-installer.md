@@ -1,11 +1,15 @@
 # 0048. A Windows installer, and it will not take the name `docker`
 
 - Status: Accepted
-- Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace), 2026-10-16 (rollback, Restart Manager)
-- Current answer: one MSI per architecture, `docker.exe` an optional feature,
-  and, since 2026-10-15, an optional Hyper-V workspace feature whose install,
-  upgrade and removal run the program's own commands as custom actions
-  (amendment below). Nothing else runs code at install time.
+- Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace feature), 2026-10-16
+  (rollback guard, Restart Manager, run by hand)
+- Current answer: one MSI per architecture with two optional features. The
+  `docker.exe` feature is a second file name and runs no code. The Hyper-V
+  workspace feature runs this program's own hidden commands as custom actions
+  on install, upgrade and removal; the service they set up is
+  [ADR 0055](0055-hyperv-machines-through-a-system-broker-service.md). Nothing
+  else runs code at install time. An upgrade closes a running background
+  session through Restart Manager.
 
 ## Context
 
@@ -57,8 +61,8 @@ available with GoReleaser Pro"), so this is a job after goreleaser and a
 
 **`docker.exe` is a WiX Feature, off by default.** `<CopyFile FileId=...>` is a
 `DuplicateFile` row: the binary ships once, the second name is made at install
-and removed at uninstall. No custom action, no second payload, and no code in
-the Go program — the name is the installation. So the option costs nothing to
+and removed at uninstall. The feature needs no custom action, no second payload
+and no code in the Go program: the name is the installation. So the option costs nothing to
 download, and the MSI is smaller than the binary it carries:
 
 | | bytes |
@@ -92,16 +96,15 @@ version (`sha-9370b24`) has no mapping to that at all, so
 naming the version. Truncating instead would produce an upgrade that never
 fires, which is silent for a release cycle.
 
-## Amendment 2026-10-15: the Hyper-V workspace, and custom actions
+## The Hyper-V workspace feature (2026-10-15)
 
-"No custom action" held for the `docker.exe` feature and no longer holds for
-the whole package. The feature "Hyper-V workspace" (`HyperV`, off by default,
-selected silently with `ADDLOCAL=Main,HyperV`; a dialog after the feature tree,
-shown only when this session adds it, takes `WORKSPACENAME`, `WORKSPACEIMAGE`
-and `WORKSPACEPROXY`) runs the program's own hidden commands
-through `WixQuietExec` (WixToolset.Util.wixext 5.0.2, which logs their output
-and fails the action on a non-zero exit), so the logic is Go that unit tests
-reach and the MSI only sequences it (ADR 0055).
+The feature `HyperV` ("Hyper-V workspace", off by default; silently
+`ADDLOCAL=Main,HyperV`) runs the program's own hidden commands through
+`WixQuietExec` (WixToolset.Util.wixext 5.0.2, which logs their output and fails
+the action on a non-zero exit). The logic is Go that unit tests reach; the MSI
+only sequences it. A dialog after the feature tree, shown only when this
+session adds the feature, takes `WORKSPACENAME`, `WORKSPACEIMAGE` and
+`WORKSPACEPROXY`.
 
 | When | As | Action |
 |---|---|---|
@@ -115,41 +118,38 @@ reach and the MSI only sequences it (ADR 0055).
 - **A feature, not a checkbox.** Every action keys on the feature's state
   transition (`&HyperV`, `!HyperV`), so a fresh install, Modify adding it,
   Modify removing it and an uninstall are one mechanism. Without Hyper-V
-  (`HYPERVPRESENT` empty) the feature is level 0 and hidden; naming it in
-  `ADDLOCAL` then is refused, because MSI skips a level 0 feature silently.
-  The checkbox it replaces was found unusable by hand on 2026-10-16: its
+  (`HYPERVPRESENT` empty) the feature is level 0 and hidden, and naming it in
+  `ADDLOCAL` is refused, because MSI skips a level 0 feature silently. The
+  checkbox it replaced could not be used (found by hand, 2026-10-16): its
   fields had a `DisableCondition` and no `EnableCondition`, and MSI applies
   only the control conditions that have rows, so ticking the box left them
-  grey. CI installs silently and never saw it.
-
+  grey. CI installs silently and never shows a dialog.
 - **`sc.exe`, not `ServiceInstall`.** MSI takes a service's binary from the key
   FILE of its component; that is the exe in the always-installed component, and
-  the service must exist only with the feature. The descriptor is the
-  stock LocalSystem one plus Authenticated Users: start, query, interrogate, so
-  a standard user can start it after a reboot and stop or change nothing.
-- **Each install action has a rollback** that undoes it (`rm`, stop, teardown,
-  `sc delete`), so a refused name or a failed download leaves nothing. A
-  machine the service built whose entry create never wrote is destroyed by
-  the rollback `rm` (which asks the service when there is no entry), and by
-  the rollback teardown regardless, which destroys every machine the service
-  recorded: this install created the service, so each is its own or one an
-  earlier uninstall's teardown failed to remove. A failed
-  create fails the install with 1603 and create's own message in the log.
+  the service must exist only with the feature. The descriptor is the stock
+  LocalSystem one plus Authenticated Users: start, query, interrogate, so a
+  standard user can start it after a reboot and stop or change nothing.
+- **Each install action has a rollback** (`rm`, stop, teardown, `sc delete`),
+  so a refused name or a failed download leaves nothing. A failed create fails
+  the install with 1603 and create's own message in the log. A machine the
+  service built whose config entry create never wrote is destroyed by the
+  rollback `rm`, which asks the service when no entry has the name, and by the
+  rollback teardown regardless. Teardown destroys every machine the service
+  recorded, and since this install created the service, each is its own or one
+  an earlier uninstall's teardown failed to remove.
 - **The rollback `rm` is scheduled only once nothing has the name**
-  (2026-10-16). It is `remote rm -f <name>`, which removed whatever had the
-  name: an install whose create failed because the user already had a
-  workspace called `hyperv` deleted that workspace and its machine.
+  (2026-10-16). `remote rm -f <name>` removes whatever has the name, so an
+  install whose create failed because the user already had a workspace called
+  `hyperv` deleted that workspace and its machine.
   `remote machine service refuse-existing <name>`, deferred and as the
-  installing user, now runs just before it and fails on any workspace entry,
-  machine or not, and on any Hyper-V machine of that name. The rollback
-  script is written as the installation script runs, and only what is already
-  in it is rolled back
+  installing user, runs just before it and fails on any workspace entry of that
+  name, machine or not, and on any Hyper-V machine of it. Only what is already
+  in the rollback script is rolled back
   ([Rollback Custom Actions](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions),
   read 2026-10-16), so after a refusal there is no `rm` to run, and once the
-  check passed, anything of that name is this install's. A marker in the
-  machine block was the alternative; it needs a per-run token the MSI has no
-  property for, and leaves a plain workspace's entry to be overwritten by
-  create.
+  check passed anything of that name is this install's. Rejected: a marker in
+  the machine block, which needs a per-run token the MSI has no property for
+  and leaves a plain workspace's entry to be overwritten by create.
 - **An upgrade runs none of it but the service.** MajorUpgrade migrates the
   feature's state, so in the new product it arrives as an install; the service
   is recreated after the old product's removal deletes it, and create, setup
@@ -159,25 +159,6 @@ reach and the MSI only sequences it (ADR 0055).
   keep the name and tell the new product a workspace exists. An upgrade that
   would add or drop the feature is refused naming Modify, since it would run
   half of either.
-- **A running background session is closed by Restart Manager** (2026-10-16).
-  Windows Installer asks Restart Manager to stop whatever holds a file it
-  replaces, always in a silent install and from the files-in-use dialog
-  otherwise, and Restart Manager stops a console program by sending
-  CTRL_C_EVENT to its console
-  ([Using Windows Installer with Restart Manager](https://learn.microsoft.com/en-us/windows/win32/msi/using-windows-installer-with-restart-manager),
-  [Guidelines for Applications](https://learn.microsoft.com/en-us/windows/win32/rstmgr/guidelines-for-applications),
-  both read 2026-10-16). The session was started `DETACHED_PROCESS`, with no
-  console, so `RmShutdown` failed with 351 (ERROR_FAIL_SHUTDOWN) and the
-  0.12.0 to 0.12.1 upgrade said it could not close applications until the
-  session was killed by hand. It now gets a console of its own with no window
-  (`CREATE_NO_WINDOW`, `spawn_windows.go`) and takes the event as Ctrl-C:
-  it closes, releasing its endpoint and lock, and the next docker command
-  starts it again. `spawn_windows_test.go` calls `RmShutdown` on both ways of
-  starting it. Another user's session is what the hand test had, and
-  `test/msi.ps1` 17b asserts it: a standard user's session gone after an
-  upgrade and starting again. A session started before this change is still
-  detached, so the first upgrade from such a version can still ask for it to
-  be closed (`remote stop`, or end the process).
 - **Uninstall is best effort.** `rm` runs for the user who uninstalls; another
   user's config entry cannot be reached and stays. Both actions ignore failure,
   so a machine that cannot be removed does not make the product impossible to
@@ -185,9 +166,46 @@ reach and the MSI only sequences it (ADR 0055).
 - **`HYPERVSERVICE`** (default `vmms`) names the Windows service whose key says
   Hyper-V is enabled. Only the tests set it, because runners have no Hyper-V.
 - **CI runs the real service against a stand-in for Hyper-V**, compiled in by
-  the `rdstandin` build tag, and asserts that no release binary contains it.
-  The dialog is built and never clicked by CI; Modify adding and removing the
-  feature is run silently (`ADDLOCAL=HyperV`, `REMOVE=HyperV`).
+  the `rdstandin` build tag, and asserts that no release binary contains it
+  (`test/msi.ps1` sections 11 to 19). Modify adding and removing the feature
+  runs silently there (`ADDLOCAL=HyperV`, `REMOVE=HyperV`); the dialog is built
+  and never clicked.
+
+## An upgrade closes a running background session (2026-10-16)
+
+- **Forced by:** upgrading over a running session, by hand, the installer said
+  it could not close applications until the session was killed. Windows
+  Installer asks Restart Manager to stop whatever holds a file it replaces
+  (always in a silent install, from the files-in-use dialog otherwise), and
+  Restart Manager stops a console program by sending CTRL_C_EVENT to its
+  console
+  ([Using Windows Installer with Restart Manager](https://learn.microsoft.com/en-us/windows/win32/msi/using-windows-installer-with-restart-manager),
+  [Guidelines for Applications](https://learn.microsoft.com/en-us/windows/win32/rstmgr/guidelines-for-applications),
+  both read 2026-10-16). The session was started `DETACHED_PROCESS`, with no
+  console, so `RmShutdown` failed with 351 (ERROR_FAIL_SHUTDOWN).
+- **Decision:** the session gets a console of its own with no window
+  (`CREATE_NO_WINDOW`, `client/cmd/remote-docker/spawn_windows.go`) and takes
+  the event as Ctrl-C: it closes, releasing its endpoint and lock, and the next
+  docker command starts it again.
+- **Covered by** `spawn_windows_test.go`, which calls `RmShutdown` on both ways
+  of starting it, and `test/msi.ps1` 17b: another user's session gone after an
+  upgrade and starting again.
+- **Cost:** a session started by 0.11.0 or earlier is still detached, so the
+  first upgrade from such a version still asks for it to be closed
+  (`remote stop`, or end the process).
+
+## Run by hand (2026-10-16)
+
+- **Once, on one computer** (Windows 11 Pro 25H2, real Hyper-V), as a standard
+  user who typed an administrator's credentials at the over-the-shoulder UAC
+  prompt, following `docs/testing-machines.md`: an install creating the Hyper-V
+  workspace, a reboot, an upgrade, Modify adding and removing the feature, an
+  uninstall, and the files-in-use dialog closing a running session. The
+  checkbox and the detached session above were found this way.
+- **Not covered:** any other Windows build or Hyper-V setup, a domain account
+  or a user who is a member only through a nested group (ADR 0055), the arm64
+  MSI, and an MSI built by a tag release. Real Hyper-V has no automated
+  coverage at all.
 
 ## Consequences
 
@@ -221,8 +239,8 @@ reach and the MSI only sequences it (ADR 0055).
   in the other direction too: the `installers` job, the `dist/artifacts.json`
   lookup that finds goreleaser's Windows binaries and the `gh release upload`
   are all behind `github.ref_type == 'tag'`, and none of them has ever run.
-- **Part of "installing a release has never been done" is closed.** A Windows
-  runner now installs an MSI built from this repository, runs the binary out of
-  a fresh shell's PATH, and uninstalls it. Still unproven: the archives, an MSI
-  built by an actual tag release, and the arm64 MSI, which is built on every run
-  and installed by nothing, GitHub having no Windows arm64 runner.
+- **A Windows runner installs an MSI built from this repository**, runs the
+  binary out of a fresh shell's PATH and uninstalls it (`test/msi.ps1`). Still
+  never installed: the release archives, an MSI built by an actual tag release,
+  and the arm64 MSI, which is built on every run and installed by nothing,
+  GitHub having no Windows arm64 runner.

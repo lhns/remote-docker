@@ -1,7 +1,8 @@
 # 0045 — Prefetch follows the reads: an escalating tree over small files
 
 - Status: Accepted; off by default since 2026-09-04
-- Date: 2026-09-04
+- Date: 2026-09-04; amended 2026-10-14 (per share), 2026-10-15 (a later
+  mount raises it)
 - Current answer: `prefetch: off|eager|tree` (`REMOTE_DOCKER_PREFETCH`);
   `tree` follows the NFS misses, `eager` sends the whole tree smallest first.
   Default off, pending the apply; see "What it measured". Amended 2026-10-14:

@@ -1,7 +1,8 @@
 # 0046 — A share reports wide mode bits and an owner that is root unless named
 
 - Status: Accepted
-- Date: 2026-09-04, restructured 2026-10-14
+- Date: 2026-09-04, restructured 2026-10-14, amended 2026-10-15 (a share per
+  owner)
 - Current answer: every file in a share reports mode 0666 and every directory
   0777 (plus the execute bits a file really has), owned by the `owner=` word of
   its mount, else `REMOTE_DOCKER_SHARE_OWNER`, else root (`0:0`). A union's upper
@@ -38,8 +39,9 @@
   session's carry `AlwaysExecutable`, which Windows cannot do without), set when
   the share is registered. The owner is part of the share id (ADR 0042), so a
   second mount of the directory naming another owner is a share of its own with
-  its own export and volume, and nothing is changed under the first. The setting is read once per session, so `Registry.SetAttrs` and the
-  rebuild on connect no longer exist.
+  its own export and volume, and nothing is changed under the first. The
+  setting is read once per session, so `Registry.SetAttrs` and the rebuild on
+  connect no longer exist.
 - **The union root.** The merged root is the upper the agent creates, so git as
   another uid refused a `write=back` share even with the owner set. The client
   sends the owner with `OpPrepare` (`cache.Request.Owner`, `uid:gid`, omitted for
@@ -50,7 +52,8 @@
   refused by name before anything is created (`fix: update the workspace, or
   use write=through`), and root keeps working. A live union's owner cannot
   change: a prepare naming another is refused, since the supervisor restarts the
-  child from its spec and would revert it.
+  child from its spec and would revert it. With the owner in the share id that
+  refusal is unreachable and stays as a guard (ADR 0044).
 - **Why not the caller's uid.** Per request is not possible: the kernel caches
   attributes per inode, so an entrypoint that drops from root to a user would
   see whichever uid stat'd first, and go-nfs gives the filesystem no

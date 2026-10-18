@@ -25,7 +25,7 @@
 
 | Piece | Choice |
 |---|---|
-| Service | `remote-docker-machines`, LocalSystem, demand start; `remote machine service run` (hidden). The installer grants Authenticated Users `SERVICE_START` and nothing else on it |
+| Service | `remote-docker-machines`, LocalSystem, demand start; `remote machine service run` (hidden). The installer grants Authenticated Users start, query and interrogate on it, nothing that stops or reconfigures it (ADR 0048) |
 | Pipe | `\\.\pipe\remote-docker-machines`, `D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;AU)`: network logons denied first, SYSTEM and Administrators full, Authenticated Users read and write WITHOUT `FILE_CREATE_PIPE_INSTANCE` (`0x4`, which is what `GENERIC_WRITE` includes on a pipe), so no user can add an instance of the running pipe |
 | Identity | `ImpersonateNamedPipeClient` on a locked thread, `OpenThreadToken`, the token's user SID and whether Administrators is ENABLED in it, `RevertToSelf`. Nothing is read from the pipe. The SID is never in a request |
 | Authorisation | SYSTEM or an Administrators-enabled token, or a SID that is a DIRECT member of local group `remote-docker-users`, read with `NetLocalGroupGetMembers` (level 0, SIDs) on EVERY connection. A group that cannot be read allows administrators only |
@@ -109,8 +109,9 @@ fix, not worked around.
 - A SYSTEM-level surface reachable by every member of the group
   (`docs/threat-model.md`, flow 11). Its worst case is one member exhausting
   disk or CPU, not reading or changing another member's machine.
-- The service is tested against a stand-in for Hyper-V, over a real named pipe
-  in CI. Real Hyper-V is exercised by hand (`docs/testing-machines.md`).
+- CI runs the service over a real named pipe against a stand-in for Hyper-V.
+  Real Hyper-V behind it has run by hand once, on one computer (ADR 0048,
+  "Run by hand"; procedure in `docs/testing-machines.md`).
 - A second code path exists for how an operation REACHES Hyper-V, but not for
   what it does. A change to a Hyper-V step is made in `hyperVBackend` or
   `directHyperV` and nowhere else.
