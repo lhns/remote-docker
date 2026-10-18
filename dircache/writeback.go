@@ -191,10 +191,23 @@ func writeUnder(r *os.Root, file File) error {
 	// open without share-delete. That is an error like any other here: the
 	// round ends without moving the manifest, so the change is still pending
 	// and the next round tries again. Never a fallback to truncating it.
+	// A file already here keeps its own permission bits, as it did when it was
+	// written in place: the consumer's copy can differ, and taking its bits
+	// would turn a private 0600 file readable or drop an executable bit. Only a
+	// new file takes the consumer's.
+	perm, existing := file.Mode.Perm(), false
+	if info, err := r.Stat(rel); err == nil && info.Mode().IsRegular() {
+		perm, existing = info.Mode().Perm(), true
+	}
+
 	tmp := filepath.Join(filepath.Dir(rel), writebackPrefix+strconv.FormatUint(rand.Uint64(), 16))
-	f, err := r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, file.Mode.Perm())
+	f, err := r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
+	}
+	// OpenFile's mode passes through the umask; the bits the file had must not.
+	if existing {
+		_ = r.Chmod(tmp, perm)
 	}
 
 	_, err = io.Copy(f, file.Body)
