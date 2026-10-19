@@ -170,6 +170,33 @@ names is left to it.
 {{- end -}}
 
 {{/*
+The pruning environment (ADR 0056), refused here rather than by an agent that
+will not start. A variable `env` names is left to it.
+*/}}
+{{- define "remote-docker-workspace.pruneEnv" -}}
+{{- $p := .Values.prune -}}
+{{- /* YAML reads an unquoted off as false. */ -}}
+{{- $after := ternary "off" (toString $p.after) (eq (toString $p.after) "false") -}}
+{{- if not (regexMatch "^(off|0|[0-9]+d|([0-9]*[.]?[0-9]+(ns|us|µs|ms|s|m|h))+)$" $after) -}}
+{{- fail (printf "prune.after: %q is not a duration such as 36h or 7d, or off" $after) -}}
+{{- end -}}
+{{- $above := ternary "off" (toString $p.above) (eq (toString $p.above) "false") -}}
+{{- if not (regexMatch "^(off|0|[1-9][0-9]?([.][0-9]+)?%?|0[.][0-9]*[1-9][0-9]*%?)$" $above) -}}
+{{- fail (printf "prune.above: %q is not a percentage such as 80%%, or off" $above) -}}
+{{- end -}}
+{{- $vars := dict
+      "WORKSPACE_PRUNE_AFTER" $after
+      "WORKSPACE_PRUNE_ABOVE" $above
+      "WORKSPACE_PRUNE_CONTAINERS" (toString $p.containers) -}}
+{{- range $name, $value := $vars }}
+{{- if not (hasKey $.Values.env $name) }}
+- name: {{ $name }}
+  value: {{ $value | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 The Secret holding authorized keys: the one this chart renders, or the one the
 operator manages.
 */}}

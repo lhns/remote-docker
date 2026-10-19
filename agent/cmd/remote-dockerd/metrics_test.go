@@ -78,6 +78,7 @@ func TestAgentMetricsExposition(t *testing.T) {
 		"remote_docker_ephemeral_runs_refused_total counter",
 		"remote_docker_ephemeral_sweep_duration_seconds histogram",
 		"remote_docker_ephemeral_sweeps_total counter",
+		"remote_docker_prune_reclaimed_bytes_total counter",
 		"remote_docker_ssh_connections gauge",
 		"remote_docker_token_limiter_rejections_total counter",
 		"remote_docker_token_redemption_duration_seconds histogram",

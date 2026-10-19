@@ -12,7 +12,10 @@ import (
 // notDocumented is every variable the code names and README's tables do not,
 // each with the reason. An entry here is a decision; a variable that is
 // missing from both is drift.
-var notDocumented = map[string]string{}
+var notDocumented = map[string]string{
+	"WORKSPACE_PRUNE_INTERVAL": "a test hook: how often the age rules run (ADR 0056)",
+	"WORKSPACE_PRUNE_FLOOR":    "a test hook: how long an image is safe from the usage rule (ADR 0056)",
+}
 
 // The environment variables a person can set are documented in README's two
 // settings tables, and nothing else keeps them honest: a variable added to the

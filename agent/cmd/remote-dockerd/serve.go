@@ -212,6 +212,12 @@ func serve(addr, wsAddr string) error {
 			"max-clients", maxRuns, "grace", grace, "cleanup-containers", cleanContainers)
 	}
 
+	pruneCfg, err := pruneSettings(os.Getenv(envPruneAfter), os.Getenv(envPruneAbove),
+		os.Getenv(envPruneContainers), os.Getenv(envPruneInterval), os.Getenv(envPruneFloor))
+	if err != nil {
+		return err
+	}
+
 	// Bound now so a bad address stops the start; served once everything it
 	// reads exists.
 	metricsLn, err := listenMetrics(os.Getenv(envMetricsAddr))
@@ -316,6 +322,9 @@ func serve(addr, wsAddr string) error {
 	}
 
 	targets := daemons.Shared("")
+	// The image an account's daemon runs, which pruning keeps; empty means the
+	// default, or no daemon per account.
+	var dindImage string
 	var manager *daemons.Manager
 	if perUserDind {
 		// The id identifies THIS workspace across redeploys, which a container
@@ -346,6 +355,7 @@ func serve(addr, wsAddr string) error {
 		// it inspected; a deployment that does not elevate sets it in the stack
 		// file; without either the stock image is used.
 		image := envOr(envDindImage, os.Getenv(elevate.ImageEnv))
+		dindImage = image
 		if image != "" {
 			log.Info("per-account daemons run an image", "image", image)
 		}
@@ -487,6 +497,33 @@ func serve(addr, wsAddr string) error {
 
 	tokenStore := &tokens.Store{Dir: tokensDirFor(stateDir)}
 	wg.Go(func() { sweepTokens(ctx, tokenStore, log) })
+
+	if pruneCfg.enabled() {
+		keep := []string{cmp.Or(dindImage, daemons.DefaultImage)}
+		pr := &pruner{
+			cfg:     pruneCfg,
+			targets: targets,
+			accounts: func() []string {
+				var names []string
+				for _, a := range store.List() {
+					names = append(names, a.Name)
+				}
+				return names
+			},
+			docker:    dockercli.Pruning{},
+			measure:   statfs,
+			now:       time.Now,
+			dir:       filepath.Join(stateDir, "prune"),
+			keep:      keep,
+			reclaimed: agentMetrics.observePruned,
+			log:       logger("prune"),
+		}
+		log.Info("pruning unused images and build cache", "after", pruneCfg.After,
+			"above", pruneCfg.Above, "containers", pruneCfg.Containers)
+		wg.Go(func() { pr.run(ctx) })
+	} else {
+		log.Info("pruning is off", "vars", envPruneAfter+","+envPruneAbove)
+	}
 
 	server, err := sshd.New(sshd.Config{
 		Addr:     addr,
@@ -750,9 +787,9 @@ func ephemeralLimits(maxRaw, graceRaw string) (int, time.Duration, error) {
 		maxRuns = n
 	}
 	if graceRaw != "" {
-		d, err := time.ParseDuration(graceRaw)
+		d, err := parseDuration(graceRaw)
 		if err != nil || d <= 0 {
-			return 0, 0, fmt.Errorf("%s: %q is not a positive duration, such as 2m", envEphemeralGrace, graceRaw)
+			return 0, 0, fmt.Errorf("%s: %q is not a positive duration, such as 2m or 1d", envEphemeralGrace, graceRaw)
 		}
 		grace = d
 	}

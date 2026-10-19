@@ -14,6 +14,8 @@ import (
 // WebSocket listener up it hung instead: nothing closed the SSH server that
 // listener was serving, and waiting for it never returned.
 func TestServeReturnsWhenTheSSHPortIsTaken(t *testing.T) {
+	t.Setenv(envPruneAfter, "off")
+	t.Setenv(envPruneAbove, "off")
 	t.Setenv(envEnableDind, "false")
 	t.Setenv(envPerUserDind, "false")
 	t.Setenv(envStateDir, t.TempDir())
@@ -70,6 +72,8 @@ func TestCommaList(t *testing.T) {
 // An enrolled keys directory inside the operator's would have the agent write
 // into the operator's keys, so the start is refused, naming both variables.
 func TestServeRefusesAnEnrolledDirectoryInsideTheOperators(t *testing.T) {
+	t.Setenv(envPruneAfter, "off")
+	t.Setenv(envPruneAbove, "off")
 	t.Setenv(envEnableDind, "false")
 	t.Setenv(envPerUserDind, "false")
 	state := t.TempDir()

@@ -909,14 +909,48 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_ACCOUNT_PREFIX` | `rd-` | prefix of the unix user behind an account (`rd-alice`) |
 | `WORKSPACE_EPHEMERAL_ACCOUNTS` | empty | accounts, comma-separated, whose every client process gets its own port and volumes, removed after its grace (ADR 0050) |
 | `WORKSPACE_EPHEMERAL_MAX_CLIENTS` | `8` | runs per ephemeral account, connected or in grace; the next is refused |
-| `WORKSPACE_EPHEMERAL_GRACE` | `2m` | how long a run keeps its port after its last connection, for a reconnect |
+| `WORKSPACE_EPHEMERAL_GRACE` | `2m` | how long a run keeps its port after its last connection, for a reconnect. A Go duration or whole days, such as `90s` or `1d` |
 | `WORKSPACE_EPHEMERAL_CLEANUP_CONTAINERS` | `false` | also remove an expired run's containers and its compose networks; without it a run whose containers remain keeps its slot until they are removed |
+| `WORKSPACE_PRUNE_AFTER` | `7d` | remove images no container has used for this long, and build cache unused that long. A Go duration or whole days, such as `36h` or `7d`; `0` or `off` disables it. Never volumes. See [Pruning](#pruning) |
+| `WORKSPACE_PRUNE_ABOVE` | `80%` | above this disk usage of the daemons' data directory, remove unused build cache and images whatever their age, oldest first; `off` disables it |
+| `WORKSPACE_PRUNE_CONTAINERS` | `false` | also remove containers stopped for longer than `WORKSPACE_PRUNE_AFTER`; never the workspace's own daemon containers |
 | `WORKSPACE_METRICS_ADDR` | empty | address such as `:9090` to serve Prometheus metrics on, in plain HTTP at `/metrics`; empty serves none. See [Metrics](#metrics) |
 | `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
 | `WORKSPACE_ELEVATED` | | *internal.* Set by the agent on the privileged child it starts for Swarm, so a misconfiguration cannot elevate in a loop ([ADR 0013](docs/adr/0013-self-elevation-instead-of-a-launcher.md)); not for you to set |
 | `WORKSPACE_HOST_SOCKET` | `/var/run/host-docker.sock` | the node's Docker socket, for Swarm elevation |
 | `WORKSPACE_DATA` | `/var/lib/remote-docker` | read by `deploy/swarm.yml`, not by the agent |
+
+### Pruning
+
+The agent removes what a daemon no longer needs, on by default
+([ADR 0056](docs/adr/0056-the-agent-prunes-unused-images-and-build-cache.md)).
+It covers the workspace's own daemon and every account's, including a VM's
+own dockerd.
+
+- **By age.** An image no container, running or stopped, has used for
+  `WORKSPACE_PRUNE_AFTER` is removed. Its age is when a container last used it,
+  tracked by the agent under `/etc/workspace/prune/`, not when it was built. The
+  first time the agent sees an image counts as used, so an upgrade, or a lost
+  record, delays removal and never hastens it. Build cache unused that long goes
+  too.
+- **By usage.** Every five minutes the agent measures the filesystem holding
+  the workspace's `/var/lib/docker`, where every account's storage sits. Above
+  `WORKSPACE_PRUNE_ABOVE` it removes build cache unused for an hour, then unused
+  images, oldest first, until usage is below the threshold. An image used in the
+  last hour is never removed this way. If the disk stays above the threshold with
+  nothing left to remove, the log says so once.
+- **Never** volumes, an image a container (even a stopped one) still uses, or the
+  image an account's daemon runs. Stopped containers are removed only with
+  `WORKSPACE_PRUNE_CONTAINERS=true`, and never the workspace's own daemon
+  containers. A daemon that is not running is not started to be pruned.
+- **Off:** `WORKSPACE_PRUNE_AFTER=off` and `WORKSPACE_PRUNE_ABOVE=off`.
+- Each prune that removed something is one log line naming the account, how
+  much it removed and the space it freed, and the Prometheus counter
+  `remote_docker_prune_reclaimed_bytes_total{account,reason}` adds it up.
+
+An image another machine pulled and has not used for the age is pulled again
+the next time somebody needs it, which is the whole cost.
 
 ### Metrics
 
@@ -941,6 +975,7 @@ Prometheus, or bind `WORKSPACE_METRICS_ADDR` to one address, such as
 | `remote_docker_ephemeral_sweeps_total` | counter | sweeps for expired runs |
 | `remote_docker_ephemeral_objects_removed_total` | counter | `kind`: `container`, `network`, `volume` |
 | `remote_docker_ephemeral_objects_kept_total` | counter | `kind`, `reason`: `in_use`, `mounted`, `error` |
+| `remote_docker_prune_reclaimed_bytes_total` | counter | `account`, `reason`: `age`, `pressure`; bytes the free space grew by around a prune (ADR 0056). `account` is also `_parent` for the workspace's own daemon of a daemon per account, and `_shared` |
 | `remote_docker_token_redemptions_total` | counter | `outcome`: `ok`, `pending` (the account is still being created), `refused`, `failed` (the workspace's side) |
 | `remote_docker_token_limiter_rejections_total` | counter | redemptions turned away after too many failures |
 | `remote_docker_account_daemons` | gauge | per-account daemons the agent has started or adopted; not probed, so one that died is still counted. Absent with a shared daemon |
@@ -1220,7 +1255,13 @@ daemon per account nests the same data one level deeper. So:
 - **`docker system prune -a --volumes` on the workspace's own daemon is
   destructive**: an idle account's daemon container goes, then its storage.
   `docker volume ls --filter label=remote-docker.daemon` lists what must not
-  be pruned.
+  be pruned. The agent's own [pruning](#pruning) touches images and build cache
+  only, never a volume.
+- **A `rd-*-cache` volume looks unused and is not.** The daemon calls a volume
+  in use only while a container names it, and a cache behind a `write=back` or
+  `write=ephemeral` share is bound into the container by path, so it always
+  looks unused. Deleting "unattached" volumes removes the cache under a running
+  container, and with it the container's writes not yet carried back.
 - **`/etc/workspace/workspace-id` is how the agent recognises its own daemons
   after a redeploy.** Lose it and they keep running, holding their users' work,
   no longer adopted.
