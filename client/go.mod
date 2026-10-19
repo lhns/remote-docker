@@ -7,7 +7,7 @@ module github.com/lhns/remote-docker/client
 go 1.26.8
 
 require (
-	github.com/Microsoft/go-winio v0.6.3
+	github.com/Microsoft/go-winio v0.6.4
 	github.com/compose-spec/compose-go/v2 v2.16.1
 	github.com/docker/buildx v0.38.0
 	github.com/docker/cli v29.9.0+incompatible
