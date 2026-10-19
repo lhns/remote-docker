@@ -77,6 +77,9 @@ Every release also carries an MSI per architecture, beside the zip:
 directory to the system PATH. Per machine, so it needs administrator rights.
 About 19 MB on amd64 and 18 on arm64, the same binary the zip holds.
 
+From Git Bash or another MSYS2 shell, read [Windows shells](#windows-shells):
+those shells rewrite path arguments before this program sees them.
+
 ```powershell
 # with a UI, and a feature tree
 msiexec /i remote-docker_0.6.0_windows_amd64.msi
@@ -1307,13 +1310,24 @@ A path the workspace owns (`-v /lib/modules:/lib/modules:ro`) works from Git
 Bash too: the client undoes the conversion when the workspace declared the path
 and this machine does not have it. `//lib/modules` also works.
 
-For everything else, use `--mount`, which Git Bash does not mangle, or escape:
-`MSYS_NO_PATHCONV=1 docker …` disables conversion entirely, and a leading
-double slash (`//app`) protects one argument:
+For everything else, use `--mount`, which Git Bash does not mangle, or turn the
+conversion off:
 
 ```bash
 docker run --mount type=bind,source="$PWD",target=/app alpine ls /app
+
+MSYS_NO_PATHCONV=1 docker run -w /src -v "$(pwd -W)":/src alpine ls  # Git Bash
+MSYS2_ARG_CONV_EXCL='*' docker run -w /src -v "$(pwd -W)":/src alpine ls  # other MSYS2 shells
 ```
+
+`MSYS_NO_PATHCONV` is Git for Windows' own variable; plain MSYS2 and MinGW
+shells ignore it and read `MSYS2_ARG_CONV_EXCL`. With conversion off, write
+this machine's paths the Windows way: `"$PWD"` is `/c/Users/alice/x`, which
+Windows reads as `C:\c\Users\alice\x`, so use `"$(pwd -W)"` or `C:/Users/…`.
+A leading double slash (`//src`) protects a single argument instead.
+*(Checked 2026-10-19: both variables in Git Bash with `cmd.exe /c echo -w /src`;
+MSYS2 documents only `MSYS2_ARG_CONV_EXCL`, at
+<https://www.msys2.org/docs/filesystem-paths/>.)*
 
 ### What differs from a bind mount
 
