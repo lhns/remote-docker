@@ -8,17 +8,17 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.13.0 — 2026-10-19
 
 ### New
 
 - **The workspace removes images and build cache nobody uses.** Nothing cleaned
-  up, so a workspace's disk filled over time. Now an image no container has used for 7 days is removed, and so is build cache unused that
-  long, in the workspace's own daemon and in every account's. When the disk
-  holding `/var/lib/docker` is more than 80% full, unused cache and images
-  go oldest first until it is below, sparing anything used in the last hour.
-  Volumes are never touched, nor is an image a container still uses, even a
-  stopped one.
+  up before, so a workspace's disk only ever filled. Now an image no container
+  has used for 7 days is removed, and so is build cache unused that long, in
+  the workspace's own daemon and in every account's. When the disk holding
+  `/var/lib/docker` is more than 80% full, unused cache and images go oldest
+  first until it is below, sparing anything used in the last hour. Volumes are
+  never touched, nor is an image a container still uses, even a stopped one.
   `WORKSPACE_PRUNE_AFTER` (`prune.after` in the chart) and
   `WORKSPACE_PRUNE_ABOVE` (`prune.above`) change the limits; `off` turns each
   off. `WORKSPACE_PRUNE_CONTAINERS=true` (`prune.containers`) also removes
@@ -32,9 +32,8 @@ software.
   upgrade every image counts as used just now, so the age rule removes nothing
   for 7 days; the disk rule applies at once if the disk is over 80%. An image
   you need after it was pruned is pulled again. To keep everything, set
-  `WORKSPACE_PRUNE_AFTER=off` and
-  `WORKSPACE_PRUNE_ABOVE=off` (in the chart, `prune.after: "off"` and
-  `prune.above: "off"`).
+  `WORKSPACE_PRUNE_AFTER=off` and `WORKSPACE_PRUNE_ABOVE=off` (in the chart,
+  `prune.after: "off"` and `prune.above: "off"`).
 
 ## 0.12.0 — 2026-10-18
 
