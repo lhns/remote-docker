@@ -20,10 +20,12 @@ type Pruning struct{}
 // are JSON arrays, since a name may hold anything but a tab or a newline.
 const imageFormat = "{{.Id}}\t{{json .RepoTags}}\t{{json .RepoDigests}}\t{{.Size}}"
 
-// Images is every image, intermediate ones included.
+// Images is every image the daemon lists by default: tagged ones and dangling
+// leaves. Without --all, the intermediate layers of the classic builder are
+// left out; they have children and can never be removed on their own.
 func (Pruning) Images(ctx context.Context, host string) ([]prune.Image, error) {
 	cli := CLI{Host: host}
-	list, err := cli.Line(ctx, "image", "ls", "--all", "--quiet", "--no-trunc")
+	list, err := cli.Line(ctx, "image", "ls", "--quiet", "--no-trunc")
 	if err != nil {
 		return nil, fmt.Errorf("dockercli: listing images: %w", err)
 	}

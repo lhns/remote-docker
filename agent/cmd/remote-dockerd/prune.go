@@ -303,13 +303,6 @@ func (p *pruner) record(d pruneDaemon) (*prune.Record, string) {
 	return r, path
 }
 
-// free is the free space on the data directory, ok false when it cannot be
-// measured.
-func (p *pruner) free(ctx context.Context) (uint64, bool) {
-	u, ok := p.usage(ctx)
-	return u.Avail, ok
-}
-
 // usage measures the parent daemon's data directory, where every account's
 // graph volume sits. One warning when it cannot be.
 func (p *pruner) usage(ctx context.Context) (diskUsage, bool) {
@@ -339,7 +332,7 @@ func (p *pruner) cannotMeasure(err error) {
 
 // age applies the age rules to one daemon.
 func (p *pruner) age(ctx context.Context, s *pruneState) {
-	before, measured := p.free(ctx)
+	before, measured := p.usage(ctx)
 	now := p.now()
 	var images, containers int
 
@@ -365,8 +358,8 @@ func (p *pruner) age(ctx context.Context, s *pruneState) {
 	}
 
 	var freed uint64
-	if after, ok := p.free(ctx); ok && measured && after > before {
-		freed = after - before
+	if after, ok := p.usage(ctx); ok && measured && after.Avail > before.Avail {
+		freed = after.Avail - before.Avail
 		p.reclaimed(float64(freed), s.d.name, reasonAge)
 	}
 	if images > 0 || containers > 0 || freed > 0 {

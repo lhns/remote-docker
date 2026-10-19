@@ -11,8 +11,7 @@
 
 ## What forced it
 
-- A deployed workspace filled its graph volume within weeks. Nothing here
-  pruned, and with a daemon per account (ADR 0019) an operator has no one place
+- A workspace's graph volume fills over time. Nothing here pruned, and with a daemon per account (ADR 0019) an operator has no one place
   to prune from.
 - Docker's own `image prune --filter until=` measures an image's build or pull
   date. A base image built a year ago and used this morning is not old, so it
@@ -83,7 +82,8 @@
   removal runs by reference, tag by tag, and the daemon refuses only the last
   one. Accepted: the image is then still present under its remaining names.
 - **The event buffer is best effort.** Moby keeps only the last 256 events
-  (`eventsLimit`, `daemon/events/events.go`, v28.5.2, read 2026-10-19; re-check with `gh api repos/moby/moby/contents/daemon/events/events.go?ref=v28.5.2 --jq .content | base64 -d | grep eventsLimit`), so
+  (`eventsLimit`, `daemon/events/events.go`, v28.5.2, read 2026-10-19; re-check with
+  `gh api repos/moby/moby/contents/daemon/events/events.go?ref=v28.5.2 --jq .content | base64 -d | grep eventsLimit`), so
   `--rm` runs between two looks can be missed. The look is every 5 minutes, and
   an image used that way and then idle for the whole age is the case it can
   still lose.
