@@ -71,7 +71,7 @@ type pruneConfig struct {
 
 func (c pruneConfig) enabled() bool { return c.After > 0 || c.Above > 0 }
 
-// pruneSettings reads the WORKSPACE_PRUNE_* variables. Unset is the default;
+// pruneSettings reads the pruning variables. Unset is the default;
 // anything unusable refuses the start, naming the variable.
 func pruneSettings(after, above, containers, interval, floor string) (pruneConfig, error) {
 	cfg := pruneConfig{After: defaultPruneAfter, Above: defaultPruneAbove,
