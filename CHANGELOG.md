@@ -8,6 +8,29 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **The workspace notices the daemon of an account that is gone.** With a daemon
+  per account, removing an account's key leaves its daemon container and its
+  graph volume behind, and the volume is often the biggest thing on the disk.
+  The agent now logs such an account once and counts it in
+  `remote_docker_orphaned_daemons`. `WORKSPACE_PRUNE_ORPHANS=delete`
+  (`prune.orphans: delete`) removes the daemon container
+  `WORKSPACE_PRUNE_ORPHANS_AFTER` (30 days) after the agent first saw the
+  account gone; the account's volume, which holds its compose volumes and
+  databases, goes only with `WORKSPACE_PRUNE_ORPHAN_VOLUMES=true`
+  (`prune.orphanVolumes`). `off` ignores them.
+- **`WORKSPACE_PRUNE_DRY_RUN=true`** (`prune.dryRun`) logs what pruning and orphan
+  deletion would remove, and removes nothing.
+
+### Upgrading
+
+- Nothing is removed by default: orphans are only reported. The clock for
+  `delete` starts when the agent first sees the account gone, so it starts at the
+  upgrade for an account that left earlier.
+
 ## 0.13.0 — 2026-10-19
 
 ### New

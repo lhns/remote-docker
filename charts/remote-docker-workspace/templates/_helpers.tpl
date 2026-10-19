@@ -184,10 +184,22 @@ will not start. A variable `env` names is left to it.
 {{- if not (regexMatch "^(off|0|[1-9][0-9]?([.][0-9]+)?%?|0[.][0-9]*[1-9][0-9]*%?)$" $above) -}}
 {{- fail (printf "prune.above: %q is not a percentage such as 80%%, or off" $above) -}}
 {{- end -}}
+{{- $orphans := toString $p.orphans -}}
+{{- if not (has $orphans (list "off" "report" "delete")) -}}
+{{- fail (printf "prune.orphans: %q is not off, report or delete" $orphans) -}}
+{{- end -}}
+{{- $orphansAfter := toString $p.orphansAfter -}}
+{{- if not (regexMatch "^([1-9][0-9]*d|([0-9]*[.]?[0-9]+(ns|us|µs|ms|s|m|h))+)$" $orphansAfter) -}}
+{{- fail (printf "prune.orphansAfter: %q is not a positive duration such as 14d" $orphansAfter) -}}
+{{- end -}}
 {{- $vars := dict
       "WORKSPACE_PRUNE_AFTER" $after
       "WORKSPACE_PRUNE_ABOVE" $above
-      "WORKSPACE_PRUNE_CONTAINERS" (toString $p.containers) -}}
+      "WORKSPACE_PRUNE_CONTAINERS" (toString $p.containers)
+      "WORKSPACE_PRUNE_DRY_RUN" (toString $p.dryRun)
+      "WORKSPACE_PRUNE_ORPHANS" $orphans
+      "WORKSPACE_PRUNE_ORPHANS_AFTER" $orphansAfter
+      "WORKSPACE_PRUNE_ORPHAN_VOLUMES" (toString $p.orphanVolumes) -}}
 {{- range $name, $value := $vars }}
 {{- if not (hasKey $.Values.env $name) }}
 - name: {{ $name }}

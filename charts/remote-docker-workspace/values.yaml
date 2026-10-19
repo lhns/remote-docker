@@ -138,6 +138,19 @@ prune:
   # Also remove containers stopped for longer than `after`. Never the
   # workspace's own daemon containers.
   containers: false
+  # Log what would be removed, here and for orphans, and remove nothing.
+  dryRun: false
+  # With perUserDind (ADR 0057): what to do about the daemon of an account that
+  # is no longer enrolled. `report` logs it and counts it in the
+  # remote_docker_orphaned_daemons metric; `delete` also removes its daemon
+  # container once `orphansAfter` has passed since the agent first saw the
+  # account gone; `off` ignores them.
+  orphans: report
+  # The grace before `delete` acts: a Go duration or whole days, such as 14d.
+  orphansAfter: 30d
+  # Also remove the account's graph volume when deleting. It holds everything
+  # the account's containers kept, databases included, and cannot be got back.
+  orphanVolumes: false
 
 # Prometheus metrics (ADR 0054): GET /metrics in plain HTTP on a port of its
 # own (WORKSPACE_METRICS_ADDR), never the SSH or WebSocket one. Enabled, the pod

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,34 +17,56 @@ import (
 	"github.com/lhns/remote-docker/core/workspace"
 )
 
+// envOf is pruneSettings' environment: the variables set, in the order the
+// settings were once positional.
+func envOf(kv ...string) func(string) string {
+	m := map[string]string{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		m[kv[i]] = kv[i+1]
+	}
+	return func(k string) string { return m[k] }
+}
+
 func TestPruneSettings(t *testing.T) {
-	cfg, err := pruneSettings("", "", "", "", "")
+	cfg, err := pruneSettings(envOf())
 	if err != nil || cfg.After != 7*24*time.Hour || cfg.Above != 80 || cfg.Containers ||
-		cfg.Interval != time.Hour || cfg.Floor != time.Hour {
+		cfg.Interval != time.Hour || cfg.Floor != time.Hour || cfg.DryRun ||
+		cfg.Orphans != orphansReport || cfg.OrphansAfter != 30*24*time.Hour || cfg.OrphanVolumes {
 		t.Errorf("defaults = %+v, %v", cfg, err)
 	}
 	if !cfg.enabled() {
 		t.Error("pruning is not on by default")
 	}
 
-	cfg, err = pruneSettings("36h", "90%", "true", "5s", "1s")
+	cfg, err = pruneSettings(envOf(envPruneAfter, "36h", envPruneAbove, "90%", envPruneContainers, "true",
+		envPruneInterval, "5s", envPruneFloor, "1s", envPruneDryRun, "true",
+		envPruneOrphans, "Delete", envPruneOrphansAfter, "14d", envPruneOrphanVolumes, "true"))
 	if err != nil || cfg.After != 36*time.Hour || cfg.Above != 90 || !cfg.Containers ||
-		cfg.Interval != 5*time.Second || cfg.Floor != time.Second {
+		cfg.Interval != 5*time.Second || cfg.Floor != time.Second || !cfg.DryRun ||
+		cfg.Orphans != orphansDelete || cfg.OrphansAfter != 14*24*time.Hour || !cfg.OrphanVolumes {
 		t.Errorf("set = %+v, %v", cfg, err)
 	}
 
 	for _, off := range []string{"0", "off"} {
-		cfg, err = pruneSettings(off, off, "", "", "")
+		cfg, err = pruneSettings(envOf(envPruneAfter, off, envPruneAbove, off, envPruneOrphans, "off"))
 		if err != nil || cfg.After != 0 || cfg.Above != 0 || cfg.enabled() {
-			t.Errorf("%q = %+v, %v; want both rules off", off, cfg, err)
+			t.Errorf("%q = %+v, %v; want everything off", off, cfg, err)
 		}
 	}
+	// Orphan reporting alone keeps the loop, and so the check, running.
+	cfg, _ = pruneSettings(envOf(envPruneAfter, "off", envPruneAbove, "off"))
+	if !cfg.enabled() {
+		t.Error("orphan reporting is not enough to run the loop")
+	}
 
-	for _, bad := range [][5]string{
-		{"garbage"}, {"-1d"}, {"7"}, {"", "garbage"}, {"", "100%"}, {"", "-5"},
-		{"", "", "maybe"}, {"", "", "", "0"}, {"", "", "", "soon"}, {"", "", "", "", "soon"},
+	for _, bad := range [][]string{
+		{envPruneAfter, "garbage"}, {envPruneAfter, "-1d"}, {envPruneAfter, "7"},
+		{envPruneAbove, "garbage"}, {envPruneAbove, "100%"}, {envPruneAbove, "-5"},
+		{envPruneContainers, "maybe"}, {envPruneInterval, "0"}, {envPruneInterval, "soon"},
+		{envPruneFloor, "soon"}, {envPruneDryRun, "maybe"}, {envPruneOrphanVolumes, "maybe"},
+		{envPruneOrphans, "purge"}, {envPruneOrphansAfter, "0"}, {envPruneOrphansAfter, "soon"},
 	} {
-		if cfg, err := pruneSettings(bad[0], bad[1], bad[2], bad[3], bad[4]); err == nil {
+		if cfg, err := pruneSettings(envOf(bad...)); err == nil {
 			t.Errorf("%q was accepted: %+v", bad, cfg)
 		}
 	}
@@ -315,3 +338,200 @@ func TestPressureFloorHolds(t *testing.T) {
 type writerFunc func(string)
 
 func (w writerFunc) Write(p []byte) (int, error) { w(string(p)); return len(p), nil }
+
+func TestDryRunRemovesNothing(t *testing.T) {
+	d := &fakeDocker{
+		images: map[string][]prune.Image{"": {{ID: "sha256:x", Tags: []string{"x:1"}}}},
+		containers: map[string][]prune.Container{"": {
+			{ID: "old", Name: "/old", Status: "exited", Finished: base.Add(-10 * 24 * time.Hour)},
+		}},
+	}
+	cfg := pruneConfig{After: time.Hour, Interval: time.Hour, Containers: true, DryRun: true}
+	h := newHarness(t, workspace.ModeShared, cfg, d, nil)
+	var lines []string
+	log := slog.New(slog.NewTextHandler(writerFunc(func(s string) { lines = append(lines, s) }), nil))
+	h.p.docker = dryRun{pruneDocker: d, log: log}
+	h.p.log = log
+
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+
+	if len(d.removed) != 0 || len(d.rmContr) != 0 || len(d.builds) != 0 {
+		t.Errorf("a dry run removed images %v, containers %v, cache on %v", d.removed, d.rmContr, d.builds)
+	}
+	out := strings.Join(lines, "")
+	for _, want := range []string{"would remove an image", "would remove a stopped container",
+		"would prune the build cache", "dry run: would have pruned what had gone unused"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the log lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// orphanTargets is fakeTargets that records the daemons asked to be reset.
+type orphanTargets struct {
+	fakeTargets
+	resets  []string // account/purge
+	failFor string
+}
+
+func (o *orphanTargets) Reset(_ context.Context, account string, purge bool) error {
+	if account == o.failFor {
+		return errors.New("busy")
+	}
+	o.resets = append(o.resets, account+"/"+strconv.FormatBool(purge))
+	return nil
+}
+
+type fakeFootprints struct{ found []prune.Footprint }
+
+func (f fakeFootprints) Footprints(context.Context) ([]prune.Footprint, error) { return f.found, nil }
+
+func orphanHarness(t *testing.T, cfg pruneConfig, found []prune.Footprint, enrolled *[]string) (*harness, *orphanTargets, *[]string) {
+	t.Helper()
+	targets := &orphanTargets{fakeTargets: fakeTargets{mode: workspace.ModePerAccount}}
+	h := newHarness(t, workspace.ModePerAccount, cfg, &fakeDocker{}, nil)
+	h.p.targets = targets
+	h.p.accounts = func() []string { return *enrolled }
+	h.p.orphans = fakeFootprints{found}
+	var removed []string
+	h.p.orphanRemoved = func(account, what string) { removed = append(removed, account+"/"+what) }
+	return h, targets, &removed
+}
+
+func TestOrphansReportOnly(t *testing.T) {
+	enrolled := []string{"alice"}
+	cfg := pruneConfig{Orphans: orphansReport, OrphansAfter: time.Hour, Interval: time.Hour}
+	h, targets, removed := orphanHarness(t, cfg, []prune.Footprint{
+		{Account: "alice", Container: true, Running: true, Volume: true},
+		{Account: "twow", Container: true, Volume: true},
+	}, &enrolled)
+
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(90 * 24 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+
+	if len(targets.resets) != 0 || len(*removed) != 0 {
+		t.Errorf("report mode removed %v %v", targets.resets, *removed)
+	}
+	if got := h.p.Orphaned(); !slices.Equal(got, []string{"twow"}) {
+		t.Errorf("orphaned = %v, want [twow]", got)
+	}
+}
+
+func TestOrphansDeleteAfterGrace(t *testing.T) {
+	enrolled := []string{"alice"}
+	cfg := pruneConfig{Orphans: orphansDelete, OrphansAfter: 14 * 24 * time.Hour, Interval: time.Hour}
+	h, targets, removed := orphanHarness(t, cfg, []prune.Footprint{
+		{Account: "alice", Container: true, Volume: true},
+		{Account: "twow", Container: true, Volume: true},
+		{Account: "lonely", Volume: true}, // no container of ours: reported, never removed
+	}, &enrolled)
+
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(13 * 24 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(targets.resets) != 0 {
+		t.Fatalf("removed %v inside the grace", targets.resets)
+	}
+
+	h.advance(2 * 24 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if want := []string{"twow/false"}; !slices.Equal(targets.resets, want) {
+		t.Errorf("resets = %v, want %v: the volume stays unless asked for", targets.resets, want)
+	}
+	if want := []string{"twow/container"}; !slices.Equal(*removed, want) {
+		t.Errorf("counted %v, want %v", *removed, want)
+	}
+}
+
+func TestOrphansDeleteWithVolumes(t *testing.T) {
+	enrolled := []string{"alice"}
+	cfg := pruneConfig{Orphans: orphansDelete, OrphansAfter: time.Hour, OrphanVolumes: true, Interval: time.Hour}
+	h, targets, removed := orphanHarness(t, cfg, []prune.Footprint{
+		{Account: "twow", Container: true, Volume: true},
+	}, &enrolled)
+
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+
+	if want := []string{"twow/true"}; !slices.Equal(targets.resets, want) {
+		t.Errorf("resets = %v, want %v", targets.resets, want)
+	}
+	if want := []string{"twow/container", "twow/volume"}; !slices.Equal(*removed, want) {
+		t.Errorf("counted %v, want %v", *removed, want)
+	}
+}
+
+func TestOrphansDryRun(t *testing.T) {
+	enrolled := []string{"alice"}
+	cfg := pruneConfig{Orphans: orphansDelete, OrphansAfter: time.Hour, OrphanVolumes: true, Interval: time.Hour, DryRun: true}
+	h, targets, _ := orphanHarness(t, cfg, []prune.Footprint{{Account: "twow", Container: true, Volume: true}}, &enrolled)
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(targets.resets) != 0 {
+		t.Errorf("a dry run removed %v", targets.resets)
+	}
+}
+
+// With no enrolled account at all the keys were not read, or are gone: that
+// must not look like every account leaving at once.
+func TestOrphansNeedAnEnrolledAccount(t *testing.T) {
+	none := []string{}
+	cfg := pruneConfig{Orphans: orphansDelete, OrphansAfter: time.Hour, OrphanVolumes: true, Interval: time.Hour}
+	h, targets, _ := orphanHarness(t, cfg, []prune.Footprint{{Account: "twow", Container: true, Volume: true}}, &none)
+	h.p.sweep(context.Background(), time.Hour)
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(targets.resets) != 0 || len(h.p.Orphaned()) != 0 {
+		t.Errorf("removed %v, orphaned %v", targets.resets, h.p.Orphaned())
+	}
+}
+
+func TestOrphanReturnsAndFailureRetries(t *testing.T) {
+	found := []prune.Footprint{{Account: "twow", Container: true}}
+	cfg := pruneConfig{Orphans: orphansDelete, OrphansAfter: time.Hour, Interval: time.Hour}
+	enrolled := []string{"alice"}
+	h, targets, _ := orphanHarness(t, cfg, found, &enrolled)
+
+	h.p.sweep(context.Background(), time.Hour)
+	enrolled = []string{"alice", "twow"} // back inside the grace
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	if len(targets.resets) != 0 || len(h.p.Orphaned()) != 0 {
+		t.Fatalf("an enrolled account lost its daemon: %v", targets.resets)
+	}
+
+	enrolled = []string{"alice"} // gone again: a fresh grace from here
+	h.advance(time.Hour)
+	h.p.sweep(context.Background(), time.Hour)
+	targets.failFor = "twow"
+	h.advance(2 * time.Hour)
+	h.p.sweep(context.Background(), time.Hour) // due, and fails
+	targets.failFor = ""
+	h.advance(time.Hour)
+	h.p.sweep(context.Background(), time.Hour) // tried again
+	if want := []string{"twow/false"}; !slices.Equal(targets.resets, want) {
+		t.Errorf("resets = %v, want %v", targets.resets, want)
+	}
+}
+
+func TestOrphanRecordSurvivesARestart(t *testing.T) {
+	enrolled := []string{"alice"}
+	cfg := pruneConfig{Orphans: orphansDelete, OrphansAfter: 24 * time.Hour, Interval: time.Hour}
+	found := []prune.Footprint{{Account: "twow", Container: true}}
+	h, targets, _ := orphanHarness(t, cfg, found, &enrolled)
+	h.p.sweep(context.Background(), time.Hour)
+
+	// A new process, the same state directory, a day later.
+	h2, targets2, _ := orphanHarness(t, cfg, found, &enrolled)
+	h2.p.dir = h.p.dir
+	*h2.clock = base.Add(25 * time.Hour)
+	h2.p.sweep(context.Background(), time.Hour)
+	if len(targets.resets) != 0 || len(targets2.resets) != 1 {
+		t.Errorf("resets %v then %v: the clock did not outlive the process", targets.resets, targets2.resets)
+	}
+}

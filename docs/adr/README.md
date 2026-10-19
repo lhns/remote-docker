@@ -116,6 +116,7 @@ What the binary is, what it answers to, and where it can run.
 | [0054](0054-metrics-on-an-opt-in-plain-http-listener.md) | Metrics on an opt-in plain HTTP listener, in the text format, with no client library |
 | [0055](0055-hyperv-machines-through-a-system-broker-service.md) | Hyper-V machines through a SYSTEM broker service |
 | [0056](0056-the-agent-prunes-unused-images-and-build-cache.md) | The agent prunes unused images and build cache, by age and under disk pressure |
+| [0057](0057-orphaned-account-daemons-are-reported-then-optionally-removed.md) | Orphaned account daemons are reported, and removed only when asked |
 
 ## Retired numbers
 

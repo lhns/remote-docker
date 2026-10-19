@@ -156,8 +156,9 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          their limit, their ports and their cleanup (ADR 0050)
     metrics/             Prometheus text format with the stdlib, on an opt-in
                          listener of its own (ADR 0054)
-    prune/               what to remove from a daemon and the record of when
-                         images were last in use: pure, table-tested (ADR 0056)
+    prune/               what to remove from a daemon, the record of when
+                         images were last in use, and which account daemons are
+                         orphans: pure, table-tested (ADR 0056, 0057)
 
 image/                   the workspace container (Dockerfile only)
 installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code of its

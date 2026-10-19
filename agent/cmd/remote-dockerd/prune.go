@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lhns/remote-docker/agent/internal/daemons"
@@ -31,6 +32,21 @@ const (
 	// envPruneAfter. Never on the parent daemon of a daemon per account.
 	envPruneContainers = "WORKSPACE_PRUNE_CONTAINERS"
 
+	// envPruneDryRun logs what would be removed and removes nothing.
+	envPruneDryRun = "WORKSPACE_PRUNE_DRY_RUN"
+
+	// envPruneOrphans is what to do about a daemon per account whose account
+	// is no longer enrolled (ADR 0057): off, report (the default) or delete.
+	envPruneOrphans = "WORKSPACE_PRUNE_ORPHANS"
+
+	// envPruneOrphansAfter is how long an account must have been gone before
+	// its daemon container is removed in delete mode: a Go duration or whole days.
+	envPruneOrphansAfter = "WORKSPACE_PRUNE_ORPHANS_AFTER"
+
+	// envPruneOrphanVolumes also removes the account's graph volume, which
+	// holds everything the account's containers kept, databases included.
+	envPruneOrphanVolumes = "WORKSPACE_PRUNE_ORPHAN_VOLUMES"
+
 	// envPruneInterval and envPruneFloor are test hooks: how often the age
 	// rules run, and how long an image is protected from the pressure rule.
 	envPruneInterval = "WORKSPACE_PRUNE_INTERVAL"
@@ -42,6 +58,8 @@ const (
 	defaultPruneAbove    = 80.0
 	defaultPruneInterval = time.Hour
 	defaultPruneFloor    = time.Hour
+
+	defaultOrphansAfter = 30 * 24 * time.Hour
 
 	// pressureInterval is how often the disk is measured, and how long a build
 	// cache must be unused to go under pressure.
@@ -61,23 +79,40 @@ const (
 	reasonPressure = "pressure"
 )
 
+// What to do about an orphaned daemon.
+const (
+	orphansOff    = "off"
+	orphansReport = "report"
+	orphansDelete = "delete"
+)
+
 type pruneConfig struct {
 	After      time.Duration // 0: no age pruning
 	Above      float64       // percent; 0: no pressure pruning
 	Containers bool
 	Interval   time.Duration
 	Floor      time.Duration
+	DryRun     bool
+
+	Orphans       string        // orphansOff, orphansReport or orphansDelete
+	OrphansAfter  time.Duration // the grace before delete mode removes a daemon
+	OrphanVolumes bool          // delete mode also removes the graph volume
 }
 
-func (c pruneConfig) enabled() bool { return c.After > 0 || c.Above > 0 }
+// enabled: something to do. Orphans only count with a daemon per account,
+// which the caller knows and this does not.
+func (c pruneConfig) enabled() bool { return c.After > 0 || c.Above > 0 || c.Orphans != orphansOff }
 
-// pruneSettings reads the pruning variables. Unset is the default;
+// pruneSettings reads the pruning variables through env. Unset is the default;
 // anything unusable refuses the start, naming the variable.
-func pruneSettings(after, above, containers, interval, floor string) (pruneConfig, error) {
+func pruneSettings(env func(string) string) (pruneConfig, error) {
 	cfg := pruneConfig{After: defaultPruneAfter, Above: defaultPruneAbove,
-		Interval: defaultPruneInterval, Floor: defaultPruneFloor}
+		Interval: defaultPruneInterval, Floor: defaultPruneFloor,
+		Orphans: orphansReport, OrphansAfter: defaultOrphansAfter}
+	after, above := strings.TrimSpace(env(envPruneAfter)), strings.TrimSpace(env(envPruneAbove))
+	interval, floor := env(envPruneInterval), env(envPruneFloor)
 
-	switch after = strings.TrimSpace(after); after {
+	switch after {
 	case "":
 	case "0", "off":
 		cfg.After = 0
@@ -89,7 +124,7 @@ func pruneSettings(after, above, containers, interval, floor string) (pruneConfi
 		cfg.After = d
 	}
 
-	switch above = strings.TrimSpace(above); above {
+	switch above {
 	case "":
 	case "0", "off":
 		cfg.Above = 0
@@ -102,8 +137,28 @@ func pruneSettings(after, above, containers, interval, floor string) (pruneConfi
 	}
 
 	var err error
-	if cfg.Containers, err = envBool(envPruneContainers, containers, false); err != nil {
+	if cfg.Containers, err = envBool(envPruneContainers, env(envPruneContainers), false); err != nil {
 		return cfg, err
+	}
+	if cfg.DryRun, err = envBool(envPruneDryRun, env(envPruneDryRun), false); err != nil {
+		return cfg, err
+	}
+	if cfg.OrphanVolumes, err = envBool(envPruneOrphanVolumes, env(envPruneOrphanVolumes), false); err != nil {
+		return cfg, err
+	}
+	switch mode := strings.ToLower(strings.TrimSpace(env(envPruneOrphans))); mode {
+	case "":
+	case orphansOff, orphansReport, orphansDelete:
+		cfg.Orphans = mode
+	default:
+		return cfg, fmt.Errorf("%s: %q is not off, report or delete", envPruneOrphans, mode)
+	}
+	if raw := strings.TrimSpace(env(envPruneOrphansAfter)); raw != "" {
+		d, err := parseDuration(raw)
+		if err != nil || d == 0 {
+			return cfg, fmt.Errorf("%s: %q is not a positive duration such as 14d", envPruneOrphansAfter, raw)
+		}
+		cfg.OrphansAfter = d
 	}
 	if interval != "" {
 		d, err := parseDuration(interval)
@@ -131,6 +186,33 @@ type pruneDocker interface {
 	RemoveContainer(ctx context.Context, host, id string) error
 	BuildPrune(ctx context.Context, host string, unusedFor time.Duration) error
 	RootDir(ctx context.Context, host string) (string, error)
+}
+
+// footprinter lists what each account owns on the workspace's own daemon;
+// daemons.Manager. Nil with a shared daemon, which has no account daemons.
+type footprinter interface {
+	Footprints(ctx context.Context) ([]prune.Footprint, error)
+}
+
+// dryRun logs the removals asked of it and makes none.
+type dryRun struct {
+	pruneDocker
+	log *slog.Logger
+}
+
+func (d dryRun) RemoveImage(_ context.Context, host, ref string) error {
+	d.log.Info("dry run: would remove an image", "host", host, "image", ref)
+	return nil
+}
+
+func (d dryRun) RemoveContainer(_ context.Context, host, id string) error {
+	d.log.Info("dry run: would remove a stopped container", "host", host, "container", id)
+	return nil
+}
+
+func (d dryRun) BuildPrune(_ context.Context, host string, unusedFor time.Duration) error {
+	d.log.Info("dry run: would prune the build cache", "host", host, "unused-for", unusedFor)
+	return nil
 }
 
 // pruneDaemon is one daemon to prune.
@@ -163,9 +245,22 @@ type pruner struct {
 	// reclaimed counts bytes freed, by account and reason.
 	reclaimed func(bytes float64, account, reason string)
 
-	records      map[string]*prune.Record
-	rootDir      string
-	lastAge      time.Time
+	// orphans lists the account daemons to check, and orphanRemoved counts
+	// the ones removed, by account and what: container or volume.
+	orphans       footprinter
+	orphanRemoved func(account, what string)
+
+	records     map[string]*prune.Record
+	rootDir     string
+	lastAge     time.Time
+	lastOrphans time.Time
+	orphanRec   *prune.OrphanRecord
+	reported    map[string]bool // orphans already said so for, by this process
+	noAccounts  bool            // no enrolled account, and we have said so
+
+	mu       sync.Mutex
+	orphaned map[string]bool // the orphans the last check found, for the gauge
+
 	warned       bool // the disk is above the threshold and we have said so
 	unmeasurable bool // the disk could not be measured and we have said so
 }
@@ -192,6 +287,20 @@ func (p *pruner) run(ctx context.Context) {
 // sweep is one tick: look at every daemon, apply the age rules when they are
 // due, then the pressure rules.
 func (p *pruner) sweep(ctx context.Context, tick time.Duration) {
+	now := p.now()
+	if p.cfg.After > 0 || p.cfg.Above > 0 {
+		p.sweepImages(ctx, tick)
+	}
+	if p.orphans != nil && p.cfg.Orphans != orphansOff && ctx.Err() == nil &&
+		(p.lastOrphans.IsZero() || now.Sub(p.lastOrphans) >= p.cfg.Interval-tick/2) {
+		p.lastOrphans = now
+		p.checkOrphans(ctx)
+	}
+}
+
+// sweepImages is the part of a sweep that prunes images, build cache and
+// containers.
+func (p *pruner) sweepImages(ctx context.Context, tick time.Duration) {
 	now := p.now()
 	ds := p.daemons(ctx)
 
@@ -363,7 +472,7 @@ func (p *pruner) age(ctx context.Context, s *pruneState) {
 		p.reclaimed(float64(freed), s.d.name, reasonAge)
 	}
 	if images > 0 || containers > 0 || freed > 0 {
-		p.log.Info("pruned what had gone unused", "account", s.d.name, "images", images,
+		p.log.Info(p.say("pruned what had gone unused"), "account", s.d.name, "images", images,
 			"containers", containers, "reclaimed", freed, "unused-for", p.cfg.After)
 	}
 }
@@ -470,7 +579,7 @@ func (p *pruner) pressure(ctx context.Context, ds []pruneDaemon) {
 
 	for _, name := range slices.Sorted(maps.Keys(done)) {
 		if t := done[name]; t.images > 0 || t.bytes > 0 {
-			p.log.Info("pruned under disk pressure", "account", name, "images", t.images, "reclaimed", t.bytes)
+			p.log.Info(p.say("pruned under disk pressure"), "account", name, "images", t.images, "reclaimed", t.bytes)
 		}
 	}
 	if !below && !p.warned {
@@ -498,3 +607,108 @@ func (u diskUsage) Percent() float64 {
 }
 
 func pct(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) + "%" }
+
+// say is a log message, marked when nothing was really removed.
+func (p *pruner) say(msg string) string {
+	if p.cfg.DryRun {
+		return "dry run: would have " + msg
+	}
+	return msg
+}
+
+// Orphaned is the accounts whose daemon the last check found orphaned.
+func (p *pruner) Orphaned() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Sorted(maps.Keys(p.orphaned))
+}
+
+// checkOrphans finds the account daemons whose account is gone (ADR 0057),
+// says so, and in delete mode removes those whose grace is over. The enrolled
+// accounts are read again before each removal.
+func (p *pruner) checkOrphans(ctx context.Context) {
+	enrolled := p.enrolled()
+	if len(enrolled) == 0 {
+		// An agent that has not read its keys yet, or lost them, must not look
+		// like every account leaving at once.
+		if !p.noAccounts {
+			p.log.Warn("no account is enrolled; orphaned daemons are not looked for")
+		}
+		p.noAccounts = true
+		return
+	}
+	p.noAccounts = false
+	found, err := p.orphans.Footprints(ctx)
+	if err != nil {
+		p.log.Debug("could not list the account daemons", "err", err)
+		return
+	}
+
+	path := filepath.Join(p.dir, "_orphans.json")
+	if p.orphanRec == nil {
+		rec, err := prune.LoadOrphans(path)
+		if err != nil {
+			p.log.Warn("ignoring an unreadable record of orphaned accounts; the grace starts again", "err", err)
+		}
+		p.orphanRec = rec
+	}
+	orphans := prune.Orphans(p.orphanRec, found, enrolled, p.cfg.OrphansAfter, p.now())
+	if err := p.orphanRec.Save(path); err != nil {
+		p.log.Warn("could not save the record of orphaned accounts", "path", path, "err", err)
+	}
+
+	set := make(map[string]bool, len(orphans))
+	for _, o := range orphans {
+		set[o.Account] = true
+	}
+	p.mu.Lock()
+	p.orphaned = set
+	p.mu.Unlock()
+	if p.reported == nil {
+		p.reported = map[string]bool{}
+	}
+	maps.DeleteFunc(p.reported, func(a string, _ bool) bool { return !set[a] })
+
+	for _, o := range orphans {
+		if ctx.Err() != nil {
+			return
+		}
+		deleting := p.cfg.Orphans == orphansDelete && o.Due
+		if !deleting {
+			if !p.reported[o.Account] {
+				p.reported[o.Account] = true
+				p.log.Warn("an account is gone and its daemon is still here",
+					"account", o.Account, "container", o.Container, "running", o.Running, "volume", o.Volume,
+					"since", o.Since.UTC().Format(time.DateOnly), "mode", p.cfg.Orphans, "grace", p.cfg.OrphansAfter)
+			}
+			continue
+		}
+		if p.enrolled()[o.Account] {
+			continue
+		}
+		if p.cfg.DryRun {
+			p.log.Info("dry run: would remove an orphaned daemon", "account", o.Account,
+				"running", o.Running, "volume", o.Volume && p.cfg.OrphanVolumes)
+			continue
+		}
+		if err := p.targets.Reset(ctx, o.Account, p.cfg.OrphanVolumes); err != nil {
+			p.log.Warn("could not remove an orphaned daemon", "account", o.Account, "err", err)
+			continue
+		}
+		p.log.Warn("removed the daemon of an account that is gone", "account", o.Account,
+			"running", o.Running, "volume-removed", o.Volume && p.cfg.OrphanVolumes,
+			"since", o.Since.UTC().Format(time.DateOnly))
+		p.orphanRemoved(o.Account, "container")
+		if o.Volume && p.cfg.OrphanVolumes {
+			p.orphanRemoved(o.Account, "volume")
+		}
+	}
+}
+
+func (p *pruner) enrolled() map[string]bool {
+	set := map[string]bool{}
+	for _, a := range p.accounts() {
+		set[a] = true
+	}
+	return set
+}

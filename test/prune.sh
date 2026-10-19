@@ -11,6 +11,8 @@
 #   1. AFTER=20s: what goes and what stays, and that volumes are never touched.
 #   2. AFTER=20s and CONTAINERS=true: a stopped container goes, a running one stays.
 #   3. ABOVE=1% and AFTER=off: usage pressure removes unused images, once warned.
+#   4. (per-account) ORPHANS=delete: the daemon and volume of an account whose
+#      key is gone are removed after the grace; an enrolled account's are not.
 #
 # Every other suite runs with pruning off (start_workspace in lib.sh).
 #
@@ -312,6 +314,42 @@ if [ "$WARNED" -eq 1 ]; then
     ok "one warning that nothing is left to prune"
 else
     bad "the warning was logged $WARNED times, want once: $(agent_log | grep 'still above' | tail -3)"
+fi
+
+if [ "$PER_USER_DIND" = true ]; then
+    echo
+    echo "== 4. an account that is gone (ADR 0057) =="
+    # A second account runs a daemon, and then its key file is removed. With
+    # delete, a short grace and volumes, its daemon container and graph volume go;
+    # the account that is still enrolled keeps both.
+    GHOST=ghost
+    workspace_for         -e WORKSPACE_PRUNE_AFTER=off         -e WORKSPACE_PRUNE_ABOVE=off         -e WORKSPACE_PRUNE_ORPHANS=delete         -e "WORKSPACE_PRUNE_ORPHANS_AFTER=${AGE}s"         -e WORKSPACE_PRUNE_ORPHAN_VOLUMES=true         -e "WORKSPACE_PRUNE_INTERVAL=${INTERVAL}s"
+
+    parentcontainers() { parentdocker ps -a --format '{{.Names}}'; }
+    parentvolumes() { parentdocker volume ls --format '{{.Name}}'; }
+    if enrol "$GHOST" "$WORK/state-$GHOST" && wait_provisioned "$GHOST" &&
+        ssh_account "$WORK/state-$GHOST/id_ed25519" "$GHOST" 240 'docker ps' >/dev/null 2>&1; then
+        ok "$GHOST's daemon started"
+    else
+        bad "$GHOST's daemon did not start"
+        dump_workspace_log 40
+        exit 1
+    fi
+    check_present container "rd-dind-$GHOST" parentcontainers
+    check_present volume "rd-dind-$GHOST-lib" parentvolumes
+
+    rm -f "$WORK/keys/$GHOST.pub"
+    info "waiting for $GHOST's daemon to be removed"
+    if wait_gone $((AGE * 6)) "rd-dind-$GHOST" parentcontainers; then
+        ok "the daemon of the account that is gone is removed after the grace"
+    else
+        bad "the orphaned daemon is still there: [$(parentcontainers | tr '
+' ' ')]"
+        agent_log | grep -i orphan | tail -20 | sed 's/^/        /'
+    fi
+    check_absent volume "rd-dind-$GHOST-lib" parentvolumes
+    check_present container "rd-dind-$ACCOUNT" parentcontainers
+    check_present volume "rd-dind-$ACCOUNT-lib" parentvolumes
 fi
 
 if [ "$FAIL" -ne 0 ]; then

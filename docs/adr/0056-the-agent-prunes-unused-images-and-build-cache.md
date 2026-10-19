@@ -69,6 +69,8 @@
   `WORKSPACE_PRUNE_CONTAINERS`; a bad value stops the start. `..._INTERVAL` and
   `..._FLOOR` are test hooks. Whole days (`7d`) are parsed by one helper that
   `WORKSPACE_EPHEMERAL_GRACE` shares.
+- Amended 2026-10-19: `WORKSPACE_PRUNE_DRY_RUN=true` logs the removals instead
+  of making them. Orphaned account daemons are ADR 0057's.
 - **Packages.** `agent/internal/prune` is the policy and the record codec, pure
   and table-tested; `dockercli.Pruning` runs the docker commands; the loop is
   `cmd/remote-dockerd/prune.go`.

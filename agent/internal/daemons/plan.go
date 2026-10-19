@@ -131,7 +131,8 @@ func ContainerName(account string) string {
 
 // VolumeName is where one account's /var/lib/docker lives: a named volume on
 // the workspace's daemon, on a real filesystem, outliving the daemon, the agent
-// and a redeploy. Never collected automatically.
+// and a redeploy. Removed only on request (`daemons reset --purge`, `remote user
+// rm`) or by the opt-in orphan deletion (ADR 0057).
 func VolumeName(account string) string {
 	return "rd-dind-" + account + "-lib"
 }

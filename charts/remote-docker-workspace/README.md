@@ -94,6 +94,10 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:<x.y.z> \
 | `prune.after` | `7d` | remove images no container has used for this long, and build cache unused that long (`WORKSPACE_PRUNE_AFTER`, ADR 0056). A Go duration or whole days; `off` disables it. Never volumes |
 | `prune.above` | `80%` | above this usage of the graph volume, remove unused build cache and images whatever their age, oldest first (`WORKSPACE_PRUNE_ABOVE`); `off` disables it |
 | `prune.containers` | `false` | also remove containers stopped for longer than `prune.after`; never the workspace's own daemon containers |
+| `prune.dryRun` | `false` | log what pruning and orphan deletion would remove, and remove nothing (`WORKSPACE_PRUNE_DRY_RUN`) |
+| `prune.orphans` | `report` | with `perUserDind`, what to do about the daemon of an account that is no longer enrolled (`WORKSPACE_PRUNE_ORPHANS`, ADR 0057): `report` logs it and sets `remote_docker_orphaned_daemons`; `delete` removes its daemon container after `prune.orphansAfter`; `off` ignores it |
+| `prune.orphansAfter` | `30d` | how long after the agent first saw the account gone `delete` acts. A Go duration or whole days; the clock starts at the first sighting, so an upgrade starts it |
+| `prune.orphanVolumes` | `false` | with `delete`, also remove the account's graph volume. **It holds everything the account's containers kept, databases included, and cannot be got back** |
 | `metrics.enabled` | `false` | serve Prometheus metrics (`WORKSPACE_METRICS_ADDR`, ADR 0054) and add the `prometheus.io/scrape`, `/port` and `/path` pod annotations. No ServiceMonitor. **Unauthenticated and on every interface of the pod**: account names and activity are readable to anything that reaches the port, so admit only your Prometheus with a NetworkPolicy |
 | `metrics.port` | `9090` | the metrics port, named `metrics` on the container |
 | `env` | `{}` | extra agent environment; an entry here wins over the variable a value above renders |

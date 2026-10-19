@@ -425,7 +425,8 @@ fi
 echo
 echo "== 11. the account's storage outlives its daemon container =="
 # The graph volume is named and labelled so the container in front of it is
-# disposable: an upgrade removes and recreates that container.
+# disposable: an upgrade removes and recreates that container. The label is
+# also what orphan deletion checks before removing a volume (ADR 0057).
 if outputs '^1$' hostdocker exec "$CONTAINER" docker volume inspect "rd-dind-$A-lib" \
         --format '{{index .Labels "remote-docker.daemon"}}'; then
     ok "the graph volume is labelled, so an operator can see what must not be pruned"

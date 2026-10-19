@@ -212,8 +212,7 @@ func serve(addr, wsAddr string) error {
 			"max-clients", maxRuns, "grace", grace, "cleanup-containers", cleanContainers)
 	}
 
-	pruneCfg, err := pruneSettings(os.Getenv(envPruneAfter), os.Getenv(envPruneAbove),
-		os.Getenv(envPruneContainers), os.Getenv(envPruneInterval), os.Getenv(envPruneFloor))
+	pruneCfg, err := pruneSettings(os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -498,7 +497,15 @@ func serve(addr, wsAddr string) error {
 	tokenStore := &tokens.Store{Dir: tokensDirFor(stateDir)}
 	wg.Go(func() { sweepTokens(ctx, tokenStore, log) })
 
+	if manager == nil {
+		pruneCfg.Orphans = orphansOff // a shared daemon has no daemon per account
+	}
 	if pruneCfg.enabled() {
+		logPrune := logger("prune")
+		var docker pruneDocker = dockercli.Pruning{}
+		if pruneCfg.DryRun {
+			docker = dryRun{pruneDocker: docker, log: logPrune}
+		}
 		keep := []string{cmp.Or(dindImage, daemons.DefaultImage)}
 		pr := &pruner{
 			cfg:     pruneCfg,
@@ -510,19 +517,26 @@ func serve(addr, wsAddr string) error {
 				}
 				return names
 			},
-			docker:    dockercli.Pruning{},
+			docker:    docker,
 			measure:   statfs,
 			now:       time.Now,
 			dir:       filepath.Join(stateDir, "prune"),
 			keep:      keep,
 			reclaimed: agentMetrics.observePruned,
-			log:       logger("prune"),
+			log:       logPrune,
+		}
+		if manager != nil && pruneCfg.Orphans != orphansOff {
+			pr.orphans = manager
+			pr.orphanRemoved = agentMetrics.observeOrphanRemoved
+			agentMetrics.orphanGauge(pr.Orphaned)
 		}
 		log.Info("pruning unused images and build cache", "after", pruneCfg.After,
-			"above", pruneCfg.Above, "containers", pruneCfg.Containers)
+			"above", pruneCfg.Above, "containers", pruneCfg.Containers, "dry-run", pruneCfg.DryRun,
+			"orphans", pruneCfg.Orphans, "orphans-after", pruneCfg.OrphansAfter,
+			"orphan-volumes", pruneCfg.OrphanVolumes)
 		wg.Go(func() { pr.run(ctx) })
 	} else {
-		log.Info("pruning is off", "vars", envPruneAfter+","+envPruneAbove)
+		log.Info("pruning is off", "vars", envPruneAfter+","+envPruneAbove+","+envPruneOrphans)
 	}
 
 	server, err := sshd.New(sshd.Config{

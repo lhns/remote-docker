@@ -914,6 +914,10 @@ untested; only the elevation mechanism is.
 | `WORKSPACE_PRUNE_AFTER` | `7d` | remove images no container has used for this long, and build cache unused that long. A Go duration or whole days, such as `36h` or `7d`; `0` or `off` disables it. Never volumes. See [Pruning](#pruning) |
 | `WORKSPACE_PRUNE_ABOVE` | `80%` | above this disk usage of the daemons' data directory, remove unused build cache and images whatever their age, oldest first; `off` disables it |
 | `WORKSPACE_PRUNE_CONTAINERS` | `false` | also remove containers stopped for longer than `WORKSPACE_PRUNE_AFTER`; never the workspace's own daemon containers |
+| `WORKSPACE_PRUNE_DRY_RUN` | `false` | log what pruning and orphan deletion would remove, and remove nothing |
+| `WORKSPACE_PRUNE_ORPHANS` | `report` | with a daemon per account, what to do about the daemon of an account that is no longer enrolled: `report` logs it and sets `remote_docker_orphaned_daemons`, `delete` removes its daemon container after `WORKSPACE_PRUNE_ORPHANS_AFTER`, `off` ignores it. See [Pruning](#pruning) |
+| `WORKSPACE_PRUNE_ORPHANS_AFTER` | `30d` | how long after the agent first saw the account gone `delete` acts. A Go duration or whole days |
+| `WORKSPACE_PRUNE_ORPHAN_VOLUMES` | `false` | with `delete`, also remove the account's graph volume. **It holds everything the account's containers kept, databases included** |
 | `WORKSPACE_METRICS_ADDR` | empty | address such as `:9090` to serve Prometheus metrics on, in plain HTTP at `/metrics`; empty serves none. See [Metrics](#metrics) |
 | `WORKSPACE_IMAGE` | | the workspace's own image; set by elevation and by `deploy/docker-compose.yml` |
 | `WORKSPACE_SELF` | | this task's name, set by `deploy/swarm.yml` |
@@ -945,6 +949,20 @@ own dockerd.
   `WORKSPACE_PRUNE_CONTAINERS=true`, and never the workspace's own daemon
   containers. A daemon that is not running is not started to be pruned.
 - **Off:** `WORKSPACE_PRUNE_AFTER=off` and `WORKSPACE_PRUNE_ABOVE=off`.
+- **Dry run:** `WORKSPACE_PRUNE_DRY_RUN=true` logs each removal as "would remove"
+  and makes none.
+- **Orphaned daemons**
+  ([ADR 0057](docs/adr/0057-orphaned-account-daemons-are-reported-then-optionally-removed.md)).
+  With a daemon per account, an account whose key is gone but whose daemon
+  container or graph volume remains is reported in the log, once per agent run,
+  and in `remote_docker_orphaned_daemons`. Nothing is removed unless
+  `WORKSPACE_PRUNE_ORPHANS=delete`: then the daemon container goes once
+  `WORKSPACE_PRUNE_ORPHANS_AFTER` has passed since the agent first saw the
+  account gone (kept in `/etc/workspace/prune/_orphans.json`; an account that
+  returns starts over). The graph volume goes only with
+  `WORKSPACE_PRUNE_ORPHAN_VOLUMES=true`, and it holds the account's compose
+  volumes: that is data nothing can restore. A volume with no daemon container
+  of this workspace is only ever reported.
 - Each prune that removed something is one log line naming the account, how
   much it removed and the space it freed, and the Prometheus counter
   `remote_docker_prune_reclaimed_bytes_total{account,reason}` adds it up.
@@ -976,6 +994,8 @@ Prometheus, or bind `WORKSPACE_METRICS_ADDR` to one address, such as
 | `remote_docker_ephemeral_objects_removed_total` | counter | `kind`: `container`, `network`, `volume` |
 | `remote_docker_ephemeral_objects_kept_total` | counter | `kind`, `reason`: `in_use`, `mounted`, `error` |
 | `remote_docker_prune_reclaimed_bytes_total` | counter | `account`, `reason`: `age`, `pressure`; bytes the free space grew by around a prune (ADR 0056). `account` is also `_parent` for the workspace's own daemon of a daemon per account, and `_shared` |
+| `remote_docker_orphaned_daemons` | gauge | `account`; 1 for each account that is no longer enrolled and still owns a daemon container or graph volume (ADR 0057). Absent with a shared daemon |
+| `remote_docker_orphans_removed_total` | counter | `account`, `what`: `container`, `volume`; orphaned daemons removed with `WORKSPACE_PRUNE_ORPHANS=delete` |
 | `remote_docker_token_redemptions_total` | counter | `outcome`: `ok`, `pending` (the account is still being created), `refused`, `failed` (the workspace's side) |
 | `remote_docker_token_limiter_rejections_total` | counter | redemptions turned away after too many failures |
 | `remote_docker_account_daemons` | gauge | per-account daemons the agent has started or adopted; not probed, so one that died is still counted. Absent with a shared daemon |

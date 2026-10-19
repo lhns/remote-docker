@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/lhns/remote-docker/agent/internal/dockercli"
 	"github.com/lhns/remote-docker/agent/internal/metrics"
+	"github.com/lhns/remote-docker/agent/internal/prune"
 	"github.com/lhns/remote-docker/agent/internal/unions"
 	"github.com/lhns/remote-docker/core-agent/netns"
 	"github.com/lhns/remote-docker/core/logx"
@@ -954,6 +956,47 @@ func (m *Manager) Accounts(ctx context.Context) ([]string, error) {
 	}
 	sort.Strings(accounts)
 	return accounts, nil
+}
+
+// Footprints lists what each account owns on the parent daemon: its daemon
+// container, of this workspace, and its graph volume. An account is listed
+// when it owns either (ADR 0057).
+func (m *Manager) Footprints(ctx context.Context) ([]prune.Footprint, error) {
+	rows, err := m.managed(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("daemons: listing daemons: %w", err)
+	}
+	out, err := m.parent().Line(ctx, "volume", "ls", "--filter", "label="+ManagedLabel+"=1",
+		"--format", `{{.Label "`+AccountLabel+`"}}`)
+	if err != nil {
+		return nil, fmt.Errorf("daemons: listing storage: %w", err)
+	}
+	return footprints(rows, strings.Fields(out)), nil
+}
+
+func footprints(rows []managedRow, volumes []string) []prune.Footprint {
+	byAccount := map[string]*prune.Footprint{}
+	get := func(account string) *prune.Footprint {
+		if byAccount[account] == nil {
+			byAccount[account] = &prune.Footprint{Account: account}
+		}
+		return byAccount[account]
+	}
+	for _, row := range rows {
+		if a := labelValue(row.Labels, AccountLabel); a != "" {
+			f := get(a)
+			f.Container = true
+			f.Running = f.Running || row.State == "running"
+		}
+	}
+	for _, a := range volumes {
+		get(a).Volume = true
+	}
+	out := make([]prune.Footprint, 0, len(byAccount))
+	for _, a := range slices.Sorted(maps.Keys(byAccount)) {
+		out = append(out, *byAccount[a])
+	}
+	return out
 }
 
 // Started counts the daemons this agent has started or adopted and not reset.

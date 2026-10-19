@@ -113,6 +113,10 @@ func (r *Record) Save(path string) error {
 	if err != nil {
 		return err
 	}
+	return writeAtomic(path, data)
+}
+
+func writeAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

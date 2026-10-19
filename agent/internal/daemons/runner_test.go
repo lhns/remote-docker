@@ -3,8 +3,11 @@ package daemons
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/lhns/remote-docker/agent/internal/prune"
 )
 
 // fakeDocker answers the two questions idle asks: the parent for a container's
@@ -210,5 +213,22 @@ func TestStopStraysRefusesWithoutAWorkspaceID(t *testing.T) {
 	}
 	if len(ran) != 0 {
 		t.Errorf("it stopped something anyway: %v", ran)
+	}
+}
+
+func TestFootprints(t *testing.T) {
+	rows := []managedRow{
+		{Labels: "remote-docker.daemon=1,remote-docker.account=alice", State: "running"},
+		{Labels: "remote-docker.daemon=1,remote-docker.account=twow", State: "exited"},
+		{Labels: "remote-docker.daemon=1"},
+	}
+	got := footprints(rows, []string{"twow", "carol", "alice"})
+	want := []prune.Footprint{
+		{Account: "alice", Container: true, Running: true, Volume: true},
+		{Account: "carol", Volume: true},
+		{Account: "twow", Container: true, Volume: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("footprints = %+v, want %+v", got, want)
 	}
 }

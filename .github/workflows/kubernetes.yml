@@ -227,6 +227,37 @@ jobs:
             fi
           done
 
+      # Pruning (ADRs 0056, 0057): the defaults leave orphans reported and
+      # their volumes alone, every value renders, and a bad one is refused by name.
+      - name: prune values render, and bad values are refused
+        run: |
+          set -eu
+          render() {
+            helm template ws charts/remote-docker-workspace --kube-version 1.29.0               --set ingress.host=ws.example.com --show-only templates/statefulset.yaml "$@"
+          }
+          has() {
+            case "$1" in
+              *"name: $2
+                        value: \"$3\""*) ;;
+              *) echo "$2 is not \"$3\":"; echo "$1"; exit 1 ;;
+            esac
+          }
+          out=$(render)
+          has "$out" WORKSPACE_PRUNE_ORPHANS report
+          has "$out" WORKSPACE_PRUNE_ORPHANS_AFTER 30d
+          has "$out" WORKSPACE_PRUNE_ORPHAN_VOLUMES false
+          has "$out" WORKSPACE_PRUNE_DRY_RUN false
+          out=$(render --set prune.orphans=delete --set prune.orphansAfter=14d                        --set prune.orphanVolumes=true --set prune.dryRun=true)
+          has "$out" WORKSPACE_PRUNE_ORPHANS delete
+          has "$out" WORKSPACE_PRUNE_ORPHANS_AFTER 14d
+          has "$out" WORKSPACE_PRUNE_ORPHAN_VOLUMES true
+          has "$out" WORKSPACE_PRUNE_DRY_RUN true
+          for bad in prune.orphans=purge prune.orphansAfter=0 prune.orphansAfter=soon; do
+            if render --set "$bad" >/dev/null 2>&1; then
+              echo "$bad was accepted"; exit 1
+            fi
+          done
+
       # Ephemeral accounts (ADR 0050): every variable rendered, nothing for an
       # empty list, an env entry winning, and each bad value refused by name.
       - name: ephemeral accounts render, and bad values are refused

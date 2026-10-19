@@ -35,7 +35,7 @@ type agentMetrics struct {
 
 	runsRefused, sweeps, removed, kept *metrics.Counter
 	redemptions, limiter               *metrics.Counter
-	pruneReclaimed                     *metrics.Counter
+	pruneReclaimed, orphansRemoved     *metrics.Counter
 
 	redemptionSeconds, daemonStartSeconds *metrics.Histogram
 	provisionSeconds, sweepSeconds        *metrics.Histogram
@@ -87,6 +87,9 @@ func newAgentMetrics() *agentMetrics {
 	m.pruneReclaimed = m.reg.Counter("remote_docker_prune_reclaimed_bytes_total",
 		"Disk space freed by pruning unused images and build cache (ADR 0056), as the free space grew around each prune, by account and reason.",
 		"account", "reason")
+	m.orphansRemoved = m.reg.Counter("remote_docker_orphans_removed_total",
+		"Orphaned account daemons removed by orphan deletion (ADR 0057), by account and what: container or volume.",
+		"account", "what")
 
 	// Every fixed series from the start, so a rate over it is defined.
 	for _, r := range []string{ephemeral.RefusedLimit, ephemeral.RefusedCleaning, sshd.RefusedDuplicate, sshd.RefusedMalformed} {
@@ -106,6 +109,24 @@ func newAgentMetrics() *agentMetrics {
 	m.sweeps.Add(0)
 	m.limiter.Add(0)
 	return m
+}
+
+// orphanGauge reports the accounts whose daemon outlived them (ADR 0057).
+func (m *agentMetrics) orphanGauge(orphaned func() []string) {
+	m.reg.Gauge("remote_docker_orphaned_daemons",
+		"Accounts that are no longer enrolled and still own a daemon container or graph volume, 1 each.",
+		[]string{"account"}, func() []metrics.Sample {
+			var out []metrics.Sample
+			for _, a := range orphaned() {
+				out = append(out, metrics.Sample{Labels: []string{a}, Value: 1})
+			}
+			return out
+		})
+}
+
+// observeOrphanRemoved is pruner.orphanRemoved.
+func (m *agentMetrics) observeOrphanRemoved(account, what string) {
+	m.orphansRemoved.Inc(account, what)
 }
 
 // observePruned is pruner.reclaimed.
