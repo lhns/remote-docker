@@ -91,6 +91,9 @@ cosign verify ghcr.io/lhns/charts/remote-docker-workspace:<x.y.z> \
 | `ephemeral.maxClients` | `8` | clients at once per such account, counting those in their grace period |
 | `ephemeral.grace` | `2m` | how long a client's port and volumes outlive its last connection |
 | `ephemeral.cleanupContainers` | `false` | also remove an expired client's containers and compose networks |
+| `prune.after` | `7d` | remove images no container has used for this long, and build cache unused that long (`WORKSPACE_PRUNE_AFTER`, ADR 0056). A Go duration or whole days; `off` disables it. Never volumes |
+| `prune.above` | `80%` | above this usage of the graph volume, remove unused build cache and images whatever their age, oldest first (`WORKSPACE_PRUNE_ABOVE`); `off` disables it |
+| `prune.containers` | `false` | also remove containers stopped for longer than `prune.after`; never the workspace's own daemon containers |
 | `metrics.enabled` | `false` | serve Prometheus metrics (`WORKSPACE_METRICS_ADDR`, ADR 0054) and add the `prometheus.io/scrape`, `/port` and `/path` pod annotations. No ServiceMonitor. **Unauthenticated and on every interface of the pod**: account names and activity are readable to anything that reaches the port, so admit only your Prometheus with a NetworkPolicy |
 | `metrics.port` | `9090` | the metrics port, named `metrics` on the container |
 | `env` | `{}` | extra agent environment; an entry here wins over the variable a value above renders |

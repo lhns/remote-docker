@@ -42,6 +42,8 @@ start_agent() {
     # shellcheck disable=SC2024
     sudo -b env \
         WORKSPACE_ENABLE_DIND=false \
+        WORKSPACE_PRUNE_AFTER=off \
+        WORKSPACE_PRUNE_ABOVE=off \
         WORKSPACE_PER_USER_DIND="$per_user_dind" \
         WORKSPACE_STATE_DIR="$WORK/wsstate" \
         WORKSPACE_KEYS_DIR="$WORK/keys" \

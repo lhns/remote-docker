@@ -114,6 +114,9 @@ spec:
             {{- with include "remote-docker-workspace.ephemeralEnv" . | trim }}
             {{- . | nindent 12 }}
             {{- end }}
+            {{- with include "remote-docker-workspace.pruneEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- if and .Values.admins (not (hasKey .Values.env "WORKSPACE_ADMINS")) }}
             - name: WORKSPACE_ADMINS
               value: {{ join "," .Values.admins | quote }}

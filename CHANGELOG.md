@@ -8,6 +8,33 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **The workspace removes images and build cache nobody uses.** A workspace
+  filled its graph volume within weeks, and nothing cleaned up. Now an image no
+  container has used for 7 days is removed, and so is build cache unused that
+  long, in the workspace's own daemon and in every account's. When the disk
+  holding `/var/lib/docker` is more than 80% full, unused cache and images
+  go oldest first, whatever their age, until it is below. Volumes are never
+  touched, nor is an image a container still uses, even a stopped one.
+  `WORKSPACE_PRUNE_AFTER` (`prune.after` in the chart) and
+  `WORKSPACE_PRUNE_ABOVE` (`prune.above`) change the limits; `off` turns each
+  off. `WORKSPACE_PRUNE_CONTAINERS=true` (`prune.containers`) also removes
+  containers stopped that long. Each prune is one log line, and
+  `remote_docker_prune_reclaimed_bytes_total` counts the space.
+- **`WORKSPACE_EPHEMERAL_GRACE` takes whole days**, such as `1d`.
+
+### Upgrading
+
+- **Pruning is on by default, also for a VM's own docker daemon.** After the
+  upgrade every image counts as used just now, so the age rule removes nothing
+  for 7 days; the disk rule applies at once if the disk is over 80%. An image you need after it was pruned is pulled
+  again. To keep everything, set `WORKSPACE_PRUNE_AFTER=off` and
+  `WORKSPACE_PRUNE_ABOVE=off` (in the chart, `prune.after: "off"` and
+  `prune.above: "off"`).
+
 ## 0.12.0 — 2026-10-18
 
 ### New

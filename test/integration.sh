@@ -1504,6 +1504,7 @@ hostdocker rm -f "$ELEV" "$ELEV.elevated" >/dev/null 2>&1
 
 if hostdocker run -d --name "$ELEV" \
     -v /var/run/docker.sock:/var/run/host-docker.sock \
+    -e WORKSPACE_PRUNE_AFTER=off -e WORKSPACE_PRUNE_ABOVE=off \
     "$IMAGE" elevate >/dev/null 2>&1; then
 
     elevated=false

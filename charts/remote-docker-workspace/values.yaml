@@ -124,6 +124,21 @@ ephemeral:
   # whose containers remain keeps its slot until somebody removes them.
   cleanupContainers: false
 
+# Pruning of unused images and build cache (ADR 0056), over the workspace's own
+# daemon and every account's. Never volumes. An `env` entry for the same
+# variable wins.
+prune:
+  # How long an image may go unused before it is removed, counted from when a
+  # container last used it. A Go duration or whole days, such as 36h or 7d;
+  # `off` disables it. Build cache unused that long goes too.
+  after: 7d
+  # Disk usage of the graph volume above which images and cache are removed
+  # whatever their age, oldest first, such as 80%; `off` disables it.
+  above: 80%
+  # Also remove containers stopped for longer than `after`. Never the
+  # workspace's own daemon containers.
+  containers: false
+
 # Prometheus metrics (ADR 0054): GET /metrics in plain HTTP on a port of its
 # own (WORKSPACE_METRICS_ADDR), never the SSH or WebSocket one. Enabled, the pod
 # carries the prometheus.io/scrape, /port and /path annotations. No

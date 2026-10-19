@@ -170,6 +170,14 @@ jobs:
             args: per-account
             name: ephemeral runs of one key, a daemon per account
             timeout: 40
+          - suite: prune
+            args: shared
+            name: pruning unused images, shared daemon
+            timeout: 40
+          - suite: prune
+            args: per-account
+            name: pruning unused images, a daemon per account
+            timeout: 40
     steps:
       - uses: actions/checkout@v7
 

@@ -35,6 +35,7 @@ type agentMetrics struct {
 
 	runsRefused, sweeps, removed, kept *metrics.Counter
 	redemptions, limiter               *metrics.Counter
+	pruneReclaimed                     *metrics.Counter
 
 	redemptionSeconds, daemonStartSeconds *metrics.Histogram
 	provisionSeconds, sweepSeconds        *metrics.Histogram
@@ -83,6 +84,10 @@ func newAgentMetrics() *agentMetrics {
 	m.limiter = m.reg.Counter("remote_docker_token_limiter_rejections_total",
 		"Redemptions turned away by the global failed-attempt limiter.")
 
+	m.pruneReclaimed = m.reg.Counter("remote_docker_prune_reclaimed_bytes_total",
+		"Disk space freed by pruning unused images and build cache (ADR 0056), as the free space grew around each prune, by account and reason.",
+		"account", "reason")
+
 	// Every fixed series from the start, so a rate over it is defined.
 	for _, r := range []string{ephemeral.RefusedLimit, ephemeral.RefusedCleaning, sshd.RefusedDuplicate, sshd.RefusedMalformed} {
 		m.runsRefused.Add(0, r)
@@ -101,6 +106,11 @@ func newAgentMetrics() *agentMetrics {
 	m.sweeps.Add(0)
 	m.limiter.Add(0)
 	return m
+}
+
+// observePruned is pruner.reclaimed.
+func (m *agentMetrics) observePruned(bytes float64, account, reason string) {
+	m.pruneReclaimed.Add(bytes, account, reason)
 }
 
 // observeProvision is accounts.Store.ProvisionObserved.

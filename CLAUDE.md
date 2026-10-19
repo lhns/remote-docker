@@ -156,6 +156,8 @@ agent/go.mod             the agent module: THE GLUE. 5 direct third-party
                          their limit, their ports and their cleanup (ADR 0050)
     metrics/             Prometheus text format with the stdlib, on an opt-in
                          listener of its own (ADR 0054)
+    prune/               what to remove from a daemon and the record of when
+                         images were last in use: pure, table-tested (ADR 0056)
 
 image/                   the workspace container (Dockerfile only)
 installer/windows/       the MSI (ADR 0048). A .wxs and a build.ps1, no code of its
@@ -1170,6 +1172,20 @@ premise of the project, and it applies to building it too. So:
   `IN_OPEN` and `IN_CLOSE_WRITE`, so a probe built on it cannot see the
   primitive under test and would report "nothing happened" convincingly.
 
+- **Pruning never touches a volume, never starts a daemon and never forces an
+  image removal** (ADR 0056). A volume cannot be judged unused by the daemon: an
+  `rd-*-cache` behind a union is bound by path and always looks so, and removing
+  it empties a running container's mount. A daemon per account is reached with
+  `Targets.Lookup`, never `Ensure`. Images go by each tag or digest reference
+  without `-f`, so Docker itself refuses one a stopped container uses; the
+  parent daemon gets images only, and `WORKSPACE_DIND_IMAGE` is never a
+  candidate. An image's age is when a container last used it, from the record
+  under `<state>/prune/`; a missing or unreadable record means now. Every suite
+  but `test/prune.sh` runs with `WORKSPACE_PRUNE_AFTER=off` and
+  `WORKSPACE_PRUNE_ABOVE=off` (`start_workspace` in `test/lib.sh`, `test/vm.sh`,
+  `kubernetes.yml`): a runner's disk sits near the threshold and the default
+  would remove images mid-suite.
+
 ## Retired invariants
 
 These were true of the shell design and are no longer. Do not reintroduce
@@ -1434,6 +1450,13 @@ rather than on every push -- a Windows runner per push answers the same
 question every time, which is the argument that keeps `bench.sh` behind a
 label. NOT on the release path: see the not-tested list below.
 
+`test/prune.sh` runs a workspace per daemon mode with pruning turned on (ADR
+0056): an image used by a stopped container surviving, an unused image tagged
+twice and a build's cache going after the age, volumes (including an `rd-*-cache`)
+untouched, a stopped container going only with `WORKSPACE_PRUNE_CONTAINERS` while
+a running one stays, the workspace's own image surviving with no account daemon
+left, and `WORKSPACE_PRUNE_ABOVE=1%` removing an unused image and warning once.
+
 ### NOT tested, and do not claim otherwise
 
 Keep this list honest, and name the assertion rather than the area: "the
@@ -1451,6 +1474,10 @@ its pure planning function was.
   run: any other Windows build or Hyper-V setup, a domain account or a member
   through a nested group, the arm64 MSI. No CI clicks a dialog or runs real
   Hyper-V. Say "run once by hand", never "tested in CI".
+- **Pruning on a WSL or Hyper-V machine, and in `machine.yml`.** The machine
+  backends start the agent with its defaults, so pruning is on there, and no
+  suite runs it: `machine.yml` lasts minutes and its disk is a machine of its
+  own far from the threshold, so it sets nothing.
 - **Swarm itself.** `elevate`'s `docker run` mechanism is tested; the Swarm
   wiring -- templated `{{.Task.Name}}` and `{{.Task.Slot}}`, and publishing
   through the routing mesh -- needs a real cluster. CI cannot cover it. The

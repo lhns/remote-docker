@@ -159,6 +159,9 @@ ssh_account() {
 
 # start_workspace runs the workspace container. The WORKSPACE_PER_USER_DIND
 # value has no default, so every suite states the daemon mode it tests.
+# Pruning is off unless a suite's own arguments turn it on (test/prune.sh): a
+# runner's disk sits near the usage threshold, so the default would remove
+# images in the middle of a suite. A later -e wins.
 start_workspace() {
     local per_user_dind=$1
     shift
@@ -174,6 +177,7 @@ start_workspace() {
         -v "$WORK/wsstate:/etc/workspace" \
         -e DOCKER_TLS_CERTDIR= \
         -e "WORKSPACE_PER_USER_DIND=$per_user_dind" \
+        -e WORKSPACE_PRUNE_AFTER=off -e WORKSPACE_PRUNE_ABOVE=off \
         "$@" \
         "$IMAGE" >/dev/null
 }

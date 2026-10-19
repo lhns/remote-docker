@@ -483,6 +483,8 @@ jobs:
             --set 'ephemeral.accounts={pods}' \
             --set ephemeral.grace=20s \
             --set ephemeral.cleanupContainers=true \
+            --set-string env.WORKSPACE_PRUNE_AFTER=off \
+            --set-string env.WORKSPACE_PRUNE_ABOVE=off \
             --wait --timeout 10m
 
       - name: the workspace is up
