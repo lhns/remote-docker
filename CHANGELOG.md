@@ -12,9 +12,8 @@ software.
 
 ### New
 
-- **The workspace removes images and build cache nobody uses.** A workspace
-  filled its graph volume within weeks, and nothing cleaned up. Now an image no
-  container has used for 7 days is removed, and so is build cache unused that
+- **The workspace removes images and build cache nobody uses.** Nothing cleaned
+  up, so a workspace's disk filled over time. Now an image no container has used for 7 days is removed, and so is build cache unused that
   long, in the workspace's own daemon and in every account's. When the disk
   holding `/var/lib/docker` is more than 80% full, unused cache and images
   go oldest first until it is below, sparing anything used in the last hour.
