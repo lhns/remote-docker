@@ -18,6 +18,8 @@ func container(client, label string, published ...ports.Published) ports.Contain
 	}
 }
 
+var me = ports.Rule{ClientID: "me"}
+
 func tcp(public, private int) ports.Published {
 	return ports.Published{PublicPort: public, PrivatePort: private, Type: "tcp"}
 }
@@ -25,8 +27,8 @@ func tcp(public, private int) ports.Published {
 func TestTheLocalPortIsTheOneThisMachineAskedFor(t *testing.T) {
 	c := container("me", "80/tcp=8080", tcp(32768, 80))
 
-	if got := localPortsFor(c, tcp(32768, 80), "me"); !slices.Equal(got, []int{8080}) {
-		t.Errorf("localPortsFor = %v, want [8080]", got)
+	if got := me.LocalPorts(c, tcp(32768, 80)); !slices.Equal(got, []int{8080}) {
+		t.Errorf("LocalPorts = %v, want [8080]", got)
 	}
 }
 
@@ -35,8 +37,8 @@ func TestTheLocalPortIsTheOneThisMachineAskedFor(t *testing.T) {
 func TestBothNumbersFrontOnePublication(t *testing.T) {
 	c := container("me", "80/tcp=8080;9090", tcp(32768, 80))
 
-	if got := localPortsFor(c, tcp(32768, 80), "me"); !slices.Equal(got, []int{8080, 9090}) {
-		t.Errorf("localPortsFor = %v, want both numbers", got)
+	if got := me.LocalPorts(c, tcp(32768, 80)); !slices.Equal(got, []int{8080, 9090}) {
+		t.Errorf("LocalPorts = %v, want both numbers", got)
 	}
 }
 
@@ -45,8 +47,8 @@ func TestBothNumbersFrontOnePublication(t *testing.T) {
 func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 	c := container("them", "80/tcp=8080", tcp(32768, 80))
 
-	if got := localPortsFor(c, tcp(32768, 80), "me"); len(got) != 0 {
-		t.Errorf("localPortsFor = %v, want nothing, so the published port is used", got)
+	if got := me.LocalPorts(c, tcp(32768, 80)); len(got) != 0 {
+		t.Errorf("LocalPorts = %v, want nothing, so the published port is used", got)
 	}
 }
 
@@ -54,8 +56,8 @@ func TestAnotherMachinesContainerKeepsThePublishedPort(t *testing.T) {
 func TestAnUnlabelledContainerKeepsThePublishedPort(t *testing.T) {
 	c := ports.Container{ID: "c1", Ports: []ports.Published{tcp(8080, 80)}}
 
-	if got := localPortsFor(c, tcp(8080, 80), "me"); len(got) != 0 {
-		t.Errorf("localPortsFor = %v, want nothing", got)
+	if got := me.LocalPorts(c, tcp(8080, 80)); len(got) != 0 {
+		t.Errorf("LocalPorts = %v, want nothing", got)
 	}
 }
 
@@ -64,7 +66,7 @@ func TestAnUnlabelledContainerKeepsThePublishedPort(t *testing.T) {
 func TestAPortNobodyAskedForKeepsThePublishedPort(t *testing.T) {
 	c := container("me", "80/tcp=8080", tcp(32768, 80), tcp(32769, 443))
 
-	if got := localPortsFor(c, tcp(32769, 443), "me"); len(got) != 0 {
-		t.Errorf("localPortsFor = %v, want nothing", got)
+	if got := me.LocalPorts(c, tcp(32769, 443)); len(got) != 0 {
+		t.Errorf("LocalPorts = %v, want nothing", got)
 	}
 }

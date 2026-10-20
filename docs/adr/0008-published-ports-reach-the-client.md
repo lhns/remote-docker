@@ -80,11 +80,39 @@ the user asking for any port.
 
 - **Published ports are reachable at the address the user asked for.** `-p
   8080:80` means `localhost:8080` on the client.
-- **On the workspace, a published port is not the number you chose.** `docker
-  ps`, `docker port` and `compose ps` report what the daemon assigned; anything
-  reaching the service from outside the tunnel must look it up. Inside the
-  workspace nothing changes — containers reach each other by container port on a
-  shared network.
+- **On the workspace, a published port is not the number you chose.** The
+  daemon's own `docker ps` there reports what it assigned
+  (`docker exec <workspace> docker ps`); anything reaching the service from
+  outside the tunnel must look it up. Inside the workspace nothing changes:
+  containers reach each other by container port on a shared network. Through
+  the client the tools show this machine's number, see the amendment below.
+- **Amendment, 2026-10-20: the tools show the local port.** Reading the
+  daemon's number in `docker ps` led a person to rewrite a working config to
+  it, and an SDK that reads the mapped port from inspect (a fixed-port
+  Testcontainers container) dialled a number nothing forwards. The proxy now
+  rewrites the ports of `GET /containers/json` and `GET /containers/{id}/json`
+  (ADR 0005), by the same `ports.Rule` that opens the forwards, so the display
+  and the listeners come from one decision.
+  - A container this session forwards shows each local port it opens, one entry
+    per number (`-p 8080:80 -p 9090:80` shows both). Inspect also gets
+    `HostConfig.PortBindings` back as asked, which the create rewrite emptied.
+  - The host is `127.0.0.1` and the daemon's IPv6 duplicate is dropped.
+    Judgement call: Docker would show `0.0.0.0`, but the listener here is
+    loopback only by design, and showing what is true beats looking familiar.
+    Whoever re-makes this call is the maintainer, and nothing re-checks it.
+  - A container this session does not forward (another account's on a shared
+    daemon) is untouched.
+  - **The display is intent, not state.** For a moment after start, or after a
+    forward failed because something else holds the port, it shows a port
+    that is not open. Mixing requested and workspace numbers by forward state
+    would be worse: the same field would mean two things.
+  - The forward manager lists containers through its own API client, not this
+    proxy, so it keeps seeing the daemon's real ports. A container with the
+    Docker socket (ADR 0049) talks to the daemon directly and sees them too,
+    which is correct from where it sits.
+  - A container dialling the workspace host (`host.docker.internal:8080`)
+    reaches the daemon's number, not the one asked for. That was true before
+    and the display does not change it.
 - **The client binds ports on the user's machine because a container started
   elsewhere.** Every forward opened or closed is reported, never silent.
 - **A local port already in use cannot be honoured.** Report and leave it

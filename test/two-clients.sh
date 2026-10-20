@@ -181,13 +181,19 @@ for probe in "18095 pc" "18096 phone"; do
 done
 
 # And the workspace bound neither number, which is what stops the two from
-# colliding there in the first place.
-if ! outputs ':[0-9]+$' dpc port pc-web 80/tcp; then
+# colliding there in the first place. Asked of the workspace's own docker,
+# because the client shows the number it opened here (ADR 0008).
+if ! outputs ':[0-9]+$' hostdocker exec "$CONTAINER" docker port pc-web 80/tcp; then
     bad "pc-web published nothing: [$LAST_OUTPUT]"
-elif outputs ':18095$' dpc port pc-web 80/tcp; then
-    bad "the workspace bound 18095 itself"
+elif outputs ':18095$' hostdocker exec "$CONTAINER" docker port pc-web 80/tcp; then
+    bad "the workspace bound 18095 itself: [$LAST_OUTPUT]"
 else
-    ok "the workspace published on ports of its own choosing"
+    ok "the workspace published on ports of its own choosing: $LAST_OUTPUT"
+fi
+if outputs '^127\.0\.0\.1:18095$' dpc port pc-web 80/tcp; then
+    ok "pc's docker port shows the port it asked for: $LAST_OUTPUT"
+else
+    bad "pc's docker port shows [$LAST_OUTPUT], want 127.0.0.1:18095"
 fi
 
 dpc rm -f pc-web >/dev/null 2>&1

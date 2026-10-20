@@ -353,17 +353,13 @@ func (s *Session) startNFS(live *liveConn) error {
 }
 
 func (s *Session) startPorts(ctx context.Context, live *liveConn) {
+	rule := portRule(live)
 	live.ports = &ports.Manager{
-		Docker:    dockerPorts{live.api},
-		Forwarder: sshForwarder{live.ssh},
-		Log:       s.opts.Log,
-		Owned: func(c ports.Container) bool {
-			return c.Labels[workspace.OwnerLabel] == live.info.User
-		},
-
-		LocalPorts: func(c ports.Container, p ports.Published) []int {
-			return localPortsFor(c, p, live.clientID)
-		},
+		Docker:     dockerPorts{live.api},
+		Forwarder:  sshForwarder{live.ssh},
+		Log:        s.opts.Log,
+		Owned:      rule.Owned,
+		LocalPorts: rule.LocalPorts,
 	}
 	live.wg.Go(func() { s.watchPorts(ctx, live) })
 }
@@ -455,12 +451,8 @@ func localPortFree(live *liveConn, port int) error {
 	return l.Close()
 }
 
-// localPortsFor is the ports to open here for one published port, or nil to
-// use the published one. Only on the machine that asked (ADR 0008, ADR 0029);
-// several when one container port was published more than once.
-func localPortsFor(c ports.Container, p ports.Published, clientID string) []int {
-	if c.Labels[workspace.ClientLabel] != clientID {
-		return nil
-	}
-	return workspace.ParseRequestedPorts(c.Labels[workspace.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
+// portRule is the one rule for which containers this session forwards and on
+// which local numbers, shared by the forwards and the proxy's display.
+func portRule(live *liveConn) ports.Rule {
+	return ports.Rule{User: live.info.User, ClientID: live.clientID}
 }

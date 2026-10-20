@@ -306,6 +306,45 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 
+# The tools show this machine's number (ADR 0008); the account's own daemon,
+# which a shell on the workspace talks to, holds the one it picked.
+if outputs '^127\.0\.0\.1:18090$' da port alice-web 80/tcp; then
+    ok "$A: docker port shows the port asked for: $LAST_OUTPUT"
+else
+    bad "$A: docker port shows [$LAST_OUTPUT], want 127.0.0.1:18090"
+fi
+if outputs '127\.0\.0\.1:18090->80/tcp' da ps --format '{{.Names}} {{.Ports}}'; then
+    ok "$A: docker ps shows the port asked for: $LAST_OUTPUT"
+else
+    bad "$A: docker ps shows [$LAST_OUTPUT], want 127.0.0.1:18090->80/tcp"
+fi
+if outputs '^18090$' da inspect alice-web --format '{{(index .NetworkSettings.Ports "80/tcp" 0).HostPort}}'; then
+    ok "$A: docker inspect shows HostPort $LAST_OUTPUT"
+else
+    bad "$A: docker inspect shows HostPort [$LAST_OUTPUT], want 18090"
+fi
+workspace_side=$(ssh_account "$WORK/state-$A/id_ed25519" "$A" 90 'docker port alice-web 80/tcp' 2>/dev/null | tr -d '\015' | head -1)
+case "$workspace_side" in
+*:18090)
+    bad "$A: the account's daemon bound 18090 itself: [$workspace_side]" ;;
+*:[0-9]*)
+    ok "$A: the account's daemon published ${workspace_side##*:}, not the 18090 that was asked for" ;;
+*)
+    bad "$A: could not read the account's own port: [$workspace_side]" ;;
+esac
+
+# Several containers and an inspect, so the daemon sends them chunked.
+for n in 3 4; do
+    da run -d --name "alice-view-$n" --label "note=$(head -c 600 /dev/zero | tr '\0' x)" \
+        -p "1809$n:80" alpine:3 sleep 600 >/dev/null 2>&1
+done
+if outputs '127\.0\.0\.1:18093->80/tcp' da ps --format '{{.Names}} {{.Ports}}'; then
+    ok "$A: a list of several containers shows each one's port"
+else
+    bad "$A: docker ps with several containers shows [$LAST_OUTPUT], want 127.0.0.1:18093->80/tcp"
+fi
+da rm -f alice-view-3 alice-view-4 >/dev/null 2>&1
+
 if out=$(db run -d --name bob-web -p 18090:80 nginx:alpine 2>&1); then
     bad "two clients on one machine both opened 18090"
     db rm -f bob-web >/dev/null 2>&1

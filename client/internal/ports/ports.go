@@ -132,7 +132,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		keep := map[listener]bool{}
 		for _, p := range published(container) {
 			for _, local := range m.localPorts(container, p) {
-				keep[listener{network(p), local}] = true
+				keep[listener{p.Network(), local}] = true
 			}
 		}
 		for l, fwd := range existing.forwards {
@@ -156,7 +156,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		for _, p := range published(container) {
 			for _, local := range m.localPorts(container, p) {
-				if _, already := existing.forwards[listener{network(p), local}]; already {
+				if _, already := existing.forwards[listener{p.Network(), local}]; already {
 					continue
 				}
 				m.openLocked(existing, container, p, local)
@@ -174,25 +174,20 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 	local := net.JoinHostPort(bindAddr, fmt.Sprint(localPort))
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(p.PublicPort))
 
-	fwd, err := m.Forwarder.Forward(network(p), local, remote)
+	fwd, err := m.Forwarder.Forward(p.Network(), local, remote)
 	if err != nil {
 		// Never retried on another port: that would look like success.
 		m.log().Warn("could not forward", "addr", local, "container", container.Name, "err", err)
 		return
 	}
-	entry.forwards[listener{network(p), localPort}] = fwd
+	entry.forwards[listener{p.Network(), localPort}] = fwd
 	m.log().Info("forwarding", "from", fwd.LocalAddr(), "container", container.Name, "port", p.PrivatePort)
 }
 
 // localPorts are the ports to open here for a published one, and never empty:
 // with no answer the published port is its own.
 func (m *Manager) localPorts(c Container, p Published) []int {
-	if m.LocalPorts != nil {
-		if local := m.LocalPorts(c, p); len(local) > 0 {
-			return local
-		}
-	}
-	return []int{p.PublicPort}
+	return orPublished(m.LocalPorts, c, p)
 }
 
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
@@ -244,7 +239,7 @@ func published(c Container) []Published {
 		if p.PublicPort == 0 {
 			continue
 		}
-		key := network(p) + "/" + strconv.Itoa(p.PublicPort)
+		key := p.Network() + "/" + strconv.Itoa(p.PublicPort)
 		if seen[key] {
 			continue
 		}
@@ -255,13 +250,13 @@ func published(c Container) []Published {
 		if out[i].PublicPort != out[j].PublicPort {
 			return out[i].PublicPort < out[j].PublicPort
 		}
-		return network(out[i]) < network(out[j])
+		return out[i].Network() < out[j].Network()
 	})
 	return out
 }
 
-// network is what a published port is carried over; an empty type is tcp.
-func network(p Published) string {
+// Network is what a published port is carried over; an empty type is tcp.
+func (p Published) Network() string {
 	if workspace.IsTCP(p.Type) {
 		return "tcp"
 	}
