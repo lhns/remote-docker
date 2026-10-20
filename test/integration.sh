@@ -641,7 +641,7 @@ for port in 18082 18083; do
     else
         bad "$port never became reachable"
         # What the daemon published against what this machine opened.
-        dockert port itest-twice 2>&1 | sed 's/^/        published: /'
+        hostdocker exec "$CONTAINER" docker port itest-twice 2>&1 | sed 's/^/        published: /'
         dockert ps --all --filter name=itest-twice --format '{{.Status}}' 2>&1 | sed 's/^/        state: /'
         sed 's/^/        /' "$WORK/up.log" | tail -8
     fi
@@ -660,8 +660,9 @@ elif ! dockert run -d --name itest-udp -p 15353:5353/udp \
     bad "the udp echo container did not start: $(tail -2 "$WORK/udp-run.log" | tr '\n' ' ')"
 else
     # The daemon publishes where it likes (ADR 0008): the number above is this
-    # machine's, and these two must not be the same.
-    published=$(dockert port itest-udp 5353/udp 2>/dev/null | head -1)
+    # machine's, and these two must not be the same. Asked of the workspace's
+    # own docker, since the client shows the local number.
+    published=$(hostdocker exec "$CONTAINER" docker port itest-udp 5353/udp 2>/dev/null | head -1)
     case "$published" in
     *:15353) bad "the workspace bound 15353 itself" ;;
     *:[0-9]*) ok "the workspace published ${published##*:}/udp, not the 15353 asked for" ;;
