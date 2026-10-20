@@ -8,7 +8,7 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
-## Unreleased
+## 0.14.0 — 2026-10-20
 
 ### New
 
@@ -25,6 +25,13 @@ software.
   fixed host port, and anything else that asks inspect which port a container
   is on, was told the workspace's number and dialled `localhost:32790`, which
   nothing listens on.
+
+### Upgrading
+
+- **A script that read the workspace's port from `docker ps` or `docker port`
+  now gets your local one.** The workspace's daemon still reports its own
+  number, for example to `docker port <container>` in an `ssh` shell on the
+  workspace.
 
 ## 0.13.0 — 2026-10-19
 
