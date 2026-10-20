@@ -316,12 +316,18 @@ premise of the project, and it applies to building it too. So:
   anybody -- so a nil callback is refused by name rather than mid-handshake.
   The root `core/tunnel` imports NEITHER SSH library: Go links what is imported,
   and that is the whole reason the agent's go.sum did not move for it.
-- **Only `/containers/create` is ever decoded, and the error message of a start
-  or restart that failed to mount a share volume** (ADR 0005, amended
-  2026-10-14). Everything else is copied through. Bodies are handled as generic
-  JSON, never typed structs, so unknown fields survive. The error is read
-  bounded at 64 KiB and only when it matches; a response that does not match is
-  relayed byte for byte.
+- **Only `/containers/create`, the error message of a start or restart that
+  failed to mount a share volume, and the port fields of `GET /containers/json`
+  and `GET /containers/{id}/json` are ever decoded** (ADR 0005, amended
+  2026-10-14 and 2026-10-20). Everything else is copied through. Bodies are
+  handled as generic JSON, never typed structs, so unknown fields survive. The
+  error is read bounded at 64 KiB and only when it matches; the two port
+  responses at 16 MiB, chunked included (moby sends JSON over about 2 KiB
+  without a length), and only for a 200 `application/json`. A response that
+  does not match, parse or fit is relayed byte for byte. What they show comes
+  from `ports.Rule`, the same one that opens the forwards; never a second copy
+  of that rule. The forward manager lists containers around the proxy and must
+  keep seeing the daemon's numbers.
 - **A rewritten mount keeps every option it arrived with, `ro` above all.**
   A bind becomes an NFS volume the workspace daemon mounts for itself, and that
   export is read-write -- so the read-only flag surviving the rewrite is the
@@ -1221,6 +1227,13 @@ asserted to be BuildKit and not the classic builder wearing its name, with
 `COPY`, `ADD` and `.dockerignore` checked through file CONTENT -- and the
 workspace lifecycle with the docker context appearing and disappearing
 alongside it.
+
+What the tools show for a published port (ADR 0008, ADR 0005), in
+`integration.sh` 10 and 12 and `per-user-dind.sh` 8: `docker port`, `docker ps`
+(with enough containers for the daemon to send the list chunked), `docker
+inspect` (`NetworkSettings.Ports` and `HostConfig.PortBindings`) and `compose
+ps` printing the number asked for on `127.0.0.1`, while the workspace's own
+docker, and an account's daemon, still holds another.
 
 The words a mount carries for its share, in `integration.sh` 14b (2026-10-14):
 `owner=1000` and `owner=1000.2000` on `-v` and `owner=1000:2000` on `--mount`

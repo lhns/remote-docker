@@ -42,6 +42,10 @@ type Proxy struct {
 	// message and the remedy, or false to leave the daemon's text alone.
 	ExplainMountFailure func(volume, client string, port int) (msg, fix string, ok bool)
 
+	// PortView, when set, shows this machine's ports in container list and
+	// inspect responses.
+	PortView PortView
+
 	// Control answers ControlPrefix. Nil unless this session is the daemon.
 	Control Control
 
@@ -239,6 +243,10 @@ func (p *Proxy) forward(ctx context.Context, client net.Conn, clientReader *bufi
 
 	if p.ExplainMountFailure != nil && isContainerStart(req) && explainable(resp) {
 		p.explainMountFailure(resp)
+	}
+
+	if p.PortView != nil {
+		p.viewPorts(req, resp)
 	}
 
 	// resp.Write does not buffer, so /events, /build and logs -f stream.

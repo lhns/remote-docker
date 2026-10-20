@@ -191,11 +191,15 @@ it, so `docs/testing-machines.md` is how to check it on yours.
   on a port of its own choosing, so two people sharing a workspace can both
   ask for 8080, and `-p 8080:80 -p 9090:80` gives you both
   ([ADR 0008](docs/adr/0008-published-ports-reach-the-client.md)).
-  **`docker ps` and `docker port` show the workspace's port**, such as
-  `0.0.0.0:32790->80`, because they ask the workspace's daemon; yours is still
-  `localhost:8080`. Only `-p 80` with no host port gets you the workspace's
-  number here too, as Docker would. A `127.0.0.1:` prefix changes nothing on
-  this machine: the local port is always opened on loopback.
+  **`docker ps`, `docker port`, `docker inspect` and `compose ps` show the port
+  on your machine**, as `127.0.0.1:8080->80/tcp`, since that is where it is
+  open. It is the number you asked for and the address it listens on: always
+  loopback, whatever `-p` said. It is what you asked for rather than a check
+  that the port is open right now. Only `-p 80` with no host port gets you the
+  workspace's number here too, as Docker would. The workspace's own number is
+  in `docker exec <workspace> docker ps`. A container reaching the workspace
+  host as `host.docker.internal:8080` does not get your port, because that
+  address is the workspace's.
   **UDP works too** ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)), but
   datagrams travel inside the SSH stream, so a delayed one delays those behind
   it. Fine for DNS, syslog and metrics; not for measuring latency.

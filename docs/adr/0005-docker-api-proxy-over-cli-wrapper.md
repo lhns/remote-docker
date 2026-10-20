@@ -2,8 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-08-07
-- Current answer: the proxy decodes `/containers/create` and the error message
-  of a start or restart whose share volume could not mount, and copies
+- Current answer: the proxy decodes `/containers/create`, the error message
+  of a start or restart whose share volume could not mount, and the port fields
+  of `GET /containers/json` and `GET /containers/{id}/json`, and copies
   everything else through. A shell on the workspace is a stock `ssh`, not a subcommand
   ([ADR 0018](0018-one-way-to-do-each-thing.md)).
 
@@ -49,7 +50,8 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
   only to request/response.** `/containers/*/attach`, `/exec/*/start` and
   `/session` are HTTP upgrades carrying raw or gRPC traffic; `/build`,
   `/events`, `/logs` and image push/pull are long-lived streams. Only
-  `/containers/create` is ever decoded — everything else is copied through
+  `/containers/create` is decoded as a request, and the two port-bearing
+  responses below as bounded bodies; everything else is copied through
   without buffering. Get this wrong and the proxy passes `docker ps` while
   failing `docker build`, `docker exec` and `docker logs -f`, which is a worse
   outcome than not working at all. See ADR 0009.
@@ -61,6 +63,23 @@ its bind mounts rewritten (ADR 0006), and re-encoded.
   status and every other field are kept, and anything that does not match is
   relayed byte for byte. The session supplies the diagnosis from its own
   client id and tunnel port; it never asks the workspace.
+- **Amendment, 2026-10-20: two more responses are read, for their ports.** A
+  `200 application/json` answer to `GET /containers/json` or `GET
+  /containers/{id}/json`, versioned or not, has its port fields rewritten to
+  the numbers this machine opens (ADR 0008). Why here: every tool asks the
+  workspace's daemon through this proxy, so it is the one place that fixes
+  `docker ps`, `docker port`, `compose ps` and an SDK reading the mapped port
+  alike. Bounds:
+  - Read at most 16 MiB. moby writes JSON without a `Content-Length`, so
+    anything over about 2 KiB (an inspect, a list of two containers) arrives
+    chunked. `http.ReadResponse` removes the chunking, and a rewritten body is
+    sent with its length and no `Transfer-Encoding`. A chunked JSON body is not
+    a hijack under the rule above, which is unchanged.
+  - Generic JSON only: only the port fields are decoded, so unknown fields
+    survive.
+  - Any other method, path (`/containers/{id}/json/...`, stats, events),
+    status or content type, a body that does not parse, and one over the bound
+    are relayed byte for byte.
 - The proxy sees every request, which is what makes ADR 0008's automatic port
   forwarding possible at no extra architectural cost.
 - Requests we do not understand are forwarded verbatim rather than rejected.

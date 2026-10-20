@@ -547,18 +547,53 @@ else
     sed 's/^/        /' "$WORK/up.log" | tail -20
 fi
 
-# And the workspace published somewhere else entirely, which is what stops two
-# accounts on one daemon colliding over 18080 (ADR 0008). The number above is
-# this machine's; this one is the daemon's own choice.
-published=$(dockert port itest-web 80/tcp 2>/dev/null | head -1)
+# The workspace published somewhere else entirely, which is what stops two
+# accounts on one daemon colliding over 18080 (ADR 0008). Asked of the
+# workspace's own docker, because through the client the tools show this
+# machine's number.
+published=$(hostdocker exec "$CONTAINER" docker port itest-web 80/tcp 2>/dev/null | head -1)
 case "$published" in
 *:18080)
-    bad "the workspace bound 18080 itself, so a second account asking for it still collides" ;;
+    bad "the workspace bound 18080 itself, so a second account asking for it still collides: [$published]" ;;
 *:[0-9]*)
     ok "the workspace published ${published##*:}, not the 18080 that was asked for" ;;
 *)
     bad "could not read the workspace-side port: [$published]" ;;
 esac
+
+# What the tools show through the client is the number opened here (ADR 0008).
+# Two more containers, with a long label each, make the list and the inspect
+# large enough that the daemon sends them chunked.
+for n in 4 5; do
+    dockert run -d --name "itest-view-$n" --label "note=$(head -c 600 /dev/zero | tr '\0' x)" \
+        -p "1808$n:80" alpine:3 sleep 600 >/dev/null 2>&1
+done
+if outputs '^127\.0\.0\.1:18080$' dockert port itest-web 80/tcp; then
+    ok "docker port shows the port asked for: $LAST_OUTPUT"
+else
+    bad "docker port shows [$LAST_OUTPUT], want 127.0.0.1:18080"
+fi
+if outputs '127\.0\.0\.1:18080->80/tcp' dockert ps --filter name=itest-web --format '{{.Ports}}'; then
+    ok "docker ps shows the port asked for: $LAST_OUTPUT"
+else
+    bad "docker ps shows [$LAST_OUTPUT], want 127.0.0.1:18080->80/tcp"
+fi
+if outputs '127\.0\.0\.1:18084->80/tcp' dockert ps --format '{{.Names}} {{.Ports}}'; then
+    ok "a list of several containers shows each one's port"
+else
+    bad "docker ps with several containers shows [$LAST_OUTPUT], want 127.0.0.1:18084->80/tcp"
+fi
+if outputs '^18080$' dockert inspect itest-web --format '{{(index .NetworkSettings.Ports "80/tcp" 0).HostPort}}'; then
+    ok "docker inspect shows HostPort $LAST_OUTPUT"
+else
+    bad "docker inspect shows HostPort [$LAST_OUTPUT], want 18080"
+fi
+if outputs '^18080$' dockert inspect itest-web --format '{{(index .HostConfig.PortBindings "80/tcp" 0).HostPort}}'; then
+    ok "docker inspect keeps the PortBindings that were asked for: $LAST_OUTPUT"
+else
+    bad "docker inspect PortBindings show [$LAST_OUTPUT], want 18080"
+fi
+docker rm -f itest-view-4 itest-view-5 >/dev/null 2>&1
 
 # The daemon no longer refuses a clash, so the client does, in the daemon's
 # wording. Two accounts colliding cannot be shown from one client; what makes it
@@ -581,6 +616,11 @@ docker rm -f itest-web >/dev/null 2>&1
 dockert run -d --name itest-web-lo -p 127.0.0.1:18081:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
 if wait_url http://127.0.0.1:18081/ "served from the client" 45; then
     ok "-p 127.0.0.1:18081:80 is reachable here on 18081"
+    if outputs '^127\.0\.0\.1:18081$' dockert port itest-web-lo 80/tcp; then
+        ok "and docker port says 127.0.0.1:18081"
+    else
+        bad "docker port shows [$LAST_OUTPUT] for -p 127.0.0.1:18081:80"
+    fi
 else
     bad "-p 127.0.0.1:18081:80 never became reachable on 18081; docker port says [$(dockert port itest-web-lo 80/tcp 2>&1 | head -1)]"
 fi
@@ -1221,6 +1261,11 @@ if timeout 180 docker compose -f "$PROJECT/compose.yaml" up -d >"$WORK/compose.l
 
     if wait_url http://127.0.0.1:18081/ "served by compose" 45; then
         ok "a compose relative bind resolved and its port was forwarded"
+        if outputs '127\.0\.0\.1:18081->80/tcp' docker compose -f "$PROJECT/compose.yaml" ps --format '{{.Ports}}'; then
+            ok "compose ps shows the port asked for: $LAST_OUTPUT"
+        else
+            bad "compose ps shows [$LAST_OUTPUT], want 127.0.0.1:18081->80/tcp"
+        fi
     else
         bad "the compose service never served this machine's file"
         sed 's/^/        /' "$WORK/compose.log" | tail -20

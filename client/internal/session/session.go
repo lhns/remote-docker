@@ -287,7 +287,7 @@ func Open(ctx context.Context, opts Options) (*Session, error) {
 	}
 
 	s.started = time.Now()
-	s.proxy = &proxy.Proxy{Dialer: s, Rewriter: s, Log: opts.Log, ExplainMountFailure: s.explainMountFailure}
+	s.proxy = &proxy.Proxy{Dialer: s, Rewriter: s, Log: opts.Log, ExplainMountFailure: s.explainMountFailure, PortView: s}
 
 	if opts.Role.hosting() {
 		s.proxy.Control = s

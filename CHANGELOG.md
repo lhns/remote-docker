@@ -8,6 +8,24 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **`docker ps`, `docker port`, `docker inspect` and `compose ps` show the port
+  on your machine.** `-p 8080:80` now reads `127.0.0.1:8080->80/tcp` instead
+  of the workspace's own number, such as `0.0.0.0:32790->80/tcp`. It shows
+  what you asked for, not whether the port is open this second. A container
+  that dials the workspace host as `host.docker.internal:8080` still does not
+  reach your port.
+
+### Fixes
+
+- **A tool that reads the mapped port now connects.** Testcontainers with a
+  fixed host port, and anything else that asks inspect which port a container
+  is on, was told the workspace's number and dialled `localhost:32790`, which
+  nothing listens on.
+
 ## 0.13.0 — 2026-10-19
 
 ### New
