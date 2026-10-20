@@ -30,17 +30,16 @@ func (r Rule) LocalPorts(c Container, p Published) []int {
 	return workspace.ParseRequestedPorts(c.Labels[workspace.PortsLabel])[workspace.ContainerPort(p.PrivatePort, p.Type)]
 }
 
-// Local is the ports opened here for a published port, never empty: with no
-// request the published port is its own.
+// Local is the ports opened here for a published port, never empty.
 func (r Rule) Local(c Container, p Published) []int {
-	return orPublished(r.LocalPorts, c, p)
+	return orPublished(r.LocalPorts(c, p), p)
 }
 
-func orPublished(f func(Container, Published) []int, c Container, p Published) []int {
-	if f != nil {
-		if local := f(c, p); len(local) > 0 {
-			return local
-		}
+// orPublished is asked, or with no request the published port, which is its
+// own.
+func orPublished(asked []int, p Published) []int {
+	if len(asked) > 0 {
+		return asked
 	}
 	return []int{p.PublicPort}
 }

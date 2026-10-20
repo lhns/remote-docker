@@ -3,6 +3,7 @@ package rewrite
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -72,10 +73,7 @@ func ListPorts(body []byte, rule ports.Rule) ([]byte, bool) {
 			seen[key] = true
 
 			for _, local := range rule.Local(c, published) {
-				shownPort := make(map[string]json.RawMessage, len(p))
-				for k, v := range p {
-					shownPort[k] = v
-				}
+				shownPort := maps.Clone(p)
 				shownPort["IP"] = json.RawMessage(strconv.Quote(localHost))
 				shownPort["PublicPort"] = json.RawMessage(strconv.Itoa(local))
 				out = append(out, shownPort)
@@ -174,10 +172,7 @@ func localBindings(raw json.RawMessage, c ports.Container, rule ports.Rule) (jso
 			seen[public] = true
 
 			for _, local := range rule.Local(c, ports.Published{PublicPort: public, PrivatePort: private, Type: proto}) {
-				shown := binding{}
-				for k, v := range b {
-					shown[k] = v
-				}
+				shown := maps.Clone(b)
 				shown["HostIp"] = json.RawMessage(strconv.Quote(localHost))
 				shown["HostPort"] = json.RawMessage(strconv.Quote(strconv.Itoa(local)))
 				out = append(out, shown)
@@ -209,10 +204,7 @@ func askedBindings(raw json.RawMessage, c ports.Container, rule ports.Rule) (jso
 		}
 		var out []binding
 		for _, port := range asked {
-			b := binding{}
-			for k, v := range list[0] {
-				b[k] = v
-			}
+			b := maps.Clone(list[0])
 			b["HostPort"] = json.RawMessage(strconv.Quote(strconv.Itoa(port)))
 			out = append(out, b)
 		}

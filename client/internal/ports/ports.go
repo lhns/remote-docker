@@ -187,7 +187,11 @@ func (m *Manager) openLocked(entry *containerForwards, container Container, p Pu
 // localPorts are the ports to open here for a published one, and never empty:
 // with no answer the published port is its own.
 func (m *Manager) localPorts(c Container, p Published) []int {
-	return orPublished(m.LocalPorts, c, p)
+	var asked []int
+	if m.LocalPorts != nil {
+		asked = m.LocalPorts(c, p)
+	}
+	return orPublished(asked, p)
 }
 
 func (m *Manager) closeContainerLocked(id string, entry *containerForwards) {
