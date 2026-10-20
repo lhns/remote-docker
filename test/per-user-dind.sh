@@ -325,6 +325,16 @@ else
     db logs bob-web 2>&1 | tail -5
 fi
 
+# A loopback HostIp binds the account daemon's own loopback, which is where the
+# forward dials.
+da run -d --name alice-web-lo -p 127.0.0.1:18092:80 nginx:alpine >/dev/null 2>&1
+if wait_url http://127.0.0.1:18092/ "nginx" 60; then
+    ok "$A's -p 127.0.0.1:18092:80 is reachable here on 18092"
+else
+    bad "$A's -p 127.0.0.1:18092:80 never became reachable; docker port says [$(da port alice-web-lo 80/tcp 2>&1 | head -1)]"
+fi
+da rm -f alice-web-lo >/dev/null 2>&1
+
 echo
 echo "== 9. a shell points at its own daemon, AND CAN USE IT =="
 # A correct DOCKER_HOST behind a directory the account cannot enter (/run/rd

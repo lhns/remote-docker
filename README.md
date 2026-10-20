@@ -189,9 +189,13 @@ it, so `docs/testing-machines.md` is how to check it on yours.
 - **Published ports reach your localhost.** `-p 8080:80` means
   `localhost:8080` here, opened as containers start. The workspace publishes
   on a port of its own choosing, so two people sharing a workspace can both
-  ask for 8080, and `-p 8080:80 -p 9090:80` gives you both; `docker ps` on the
-  workspace itself shows the port it picked
+  ask for 8080, and `-p 8080:80 -p 9090:80` gives you both
   ([ADR 0008](docs/adr/0008-published-ports-reach-the-client.md)).
+  **`docker ps` and `docker port` show the workspace's port**, such as
+  `0.0.0.0:32790->80`, because they ask the workspace's daemon; yours is still
+  `localhost:8080`. Only `-p 80` with no host port gets you the workspace's
+  number here too, as Docker would. A `127.0.0.1:` prefix changes nothing on
+  this machine: the local port is always opened on loopback.
   **UDP works too** ([ADR 0038](docs/adr/0038-udp-crosses-the-tunnel.md)), but
   datagrams travel inside the SSH stream, so a delayed one delays those behind
   it. Fine for DNS, syslog and metrics; not for measuring latency.

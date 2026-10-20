@@ -576,6 +576,16 @@ else
 fi
 docker rm -f itest-web >/dev/null 2>&1
 
+# A loopback HostIp reaches here the same way: the workspace binds its own
+# loopback, and the forward dials 127.0.0.1 there.
+dockert run -d --name itest-web-lo -p 127.0.0.1:18081:80 -v "$PROJECT:/usr/share/nginx/html" nginx:alpine >/dev/null 2>&1
+if wait_url http://127.0.0.1:18081/ "served from the client" 45; then
+    ok "-p 127.0.0.1:18081:80 is reachable here on 18081"
+else
+    bad "-p 127.0.0.1:18081:80 never became reachable on 18081; docker port says [$(dockert port itest-web-lo 80/tcp 2>&1 | head -1)]"
+fi
+docker rm -f itest-web-lo >/dev/null 2>&1
+
 # One container port published twice, which is the case that cannot be paired
 # back and does not need to be: both assigned ports front port 80, so both
 # numbers work whichever way round they were matched.
