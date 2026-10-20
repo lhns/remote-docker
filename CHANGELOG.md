@@ -29,8 +29,9 @@ software.
 ### Upgrading
 
 - **A script that read the workspace's port from `docker ps` or `docker port`
-  now gets your local one.** The workspace's number is still there from the
-  workspace itself: `docker exec <workspace> docker port <container>`.
+  now gets your local one.** The workspace's daemon still reports its own
+  number, for example to `docker port <container>` in an `ssh` shell on the
+  workspace.
 
 ## 0.13.0 — 2026-10-19
 
