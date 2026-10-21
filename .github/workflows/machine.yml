@@ -309,7 +309,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # A container writes into a Linux layer, where `bad:name` is a valid name
+      # A container writes into a Linux layer, where `bad?name` is a valid name
       # and NTFS refuses it (ERROR_INVALID_NAME). Write-back must name that one
       # file and carry on, not stop at it for good (ADR 0044).
       - name: write-back skips a name NTFS refuses and carries on
@@ -328,7 +328,7 @@ jobs:
             Start-Sleep -Seconds 3
           } while ((Get-Date) -lt $deadline)
 
-          .\client\rd.exe exec wbprobe sh -c 'echo x >/w/bad:name; echo y >/w/good'
+          .\client\rd.exe exec wbprobe sh -c 'echo x >''/w/bad?name''; echo y >/w/good'
           $deadline = (Get-Date).AddSeconds(90)
           while (-not (Test-Path wb\good) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
           if (-not (Test-Path wb\good)) { throw "good never arrived behind a name NTFS refuses" }
@@ -336,7 +336,7 @@ jobs:
 
           $status = (.\client\rd.exe remote status) -join "`n"
           $status
-          if ($status -notmatch 'bad:name') { throw "status does not name the file that cannot be written back" }
+          if ($status -notmatch 'bad.name') { throw "status does not name the file that cannot be written back" }
 
           .\client\rd.exe exec wbprobe sh -c 'echo z >/w/later'
           $deadline = (Get-Date).AddSeconds(90)
