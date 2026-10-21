@@ -2764,7 +2764,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
         alpine:3 sleep 900 >"$WORK/wb-burst-run.log" 2>&1; then
         wait_output "$BURSTDIR: .*, cached\$" 30 "$WORK/remote-docker" remote status >/dev/null
         burst_out=$(dockert exec itest-wb-burst sh -c \
-            'mkdir -p /w/burst && cd /w/burst && i=0 && while [ $i -lt 5000 ]; do echo $i >f$i; i=$((i+1)); done' 2>&1)
+            'mkdir -p /w/burst && cd /w/burst && i=0 && while [ $i -lt 5000 ]; do echo $i >f$i; i=$((i+1)); done; echo "made $i, listing $(ls | wc -l)"' 2>&1)
         echo "        burst exec exited $?: [$(echo "$burst_out" | head -3)]"
         have=0
         for n in $(seq 1 90); do

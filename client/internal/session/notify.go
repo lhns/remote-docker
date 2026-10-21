@@ -266,13 +266,19 @@ func (s *Session) reattachUnions(ctx context.Context, live *liveConn) {
 	// Through the connection being built, not the gate: this runs inside the
 	// connect, before the gate holds the connection.
 	ch, err := s.ensureCacheChan(ctx, live)
-	if err != nil {
-		return
+	if err == nil {
+		var names []string
+		names, err = ch.Mounted(ctx)
+		if err == nil {
+			s.restoreMounted(live, recorded, names)
+			return
+		}
 	}
-	names, err := ch.Mounted(ctx)
-	if err != nil {
-		return
-	}
+	s.logQuiet(ctx, "could not ask which unions are mounted; a recorded union is restored when its container touches it", "err", err)
+}
+
+// restoreMounted restores the recorded unions whose cache volume is in names.
+func (s *Session) restoreMounted(live *liveConn, recorded, names []string) {
 	mounted := make(map[string]bool, len(names))
 	for _, n := range names {
 		mounted[n] = true
