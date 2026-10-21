@@ -509,6 +509,25 @@ premise of the project, and it applies to building it too. So:
   written over, and CI watched 5,000 files vanish from the container when that
   silence was read as a deletion. A prune keeps the record of every registered
   share, since a share is recorded before its volume exists.
+- **Write-back deletes or overwrites here only what it has checked against the
+  ground truth at that moment** (ADR 0044, 2026-10-21). The listing hides what
+  the client wrote through the union, so a file the user created or edited in a
+  directory the container replaced is silent exactly like one it deleted. A
+  deletion a removed or replaced directory implies is therefore confirmed absent
+  from the consumer's MERGED view (`OpPresent`: lstat, never a link, under
+  `Hello.Carry`); present, an error or an agent that cannot answer means keep,
+  and without one no deletion is implied at all. The candidates come from every
+  change reported, including those set aside. Each path's state from decide is
+  compared with a fresh stat right before its remove, link or rename
+  (`stillAsSeen`, `writeUnderGuarded`), because a pass runs for minutes. A
+  resumed FILL never sends a path it sent before that the consumer lists as
+  changed (not as the fill's own copy); an invalidation still does, since it is
+  the user writing now and leaving it out strands the container on its version.
+  No file starves the rest: a failed chunk ends only itself, the agent's pull
+  names an unreadable file (`Reply.Skipped` under `Carry`), paths that keep
+  failing rank last (`wbRanked`), and a pass that landed anything backs off only
+  5s. A conflict is said once per path. The agent removes after a failed write
+  only a file the entry created (`O_EXCL`), never via a temporary renamed in.
 - **An overlay marker never reaches the user's tree** (ADR 0044, 2026-10-21).
   fuse-overlayfs records a replaced directory as `trusted.overlay.opaque=y`, a
   character device `.wh..opq` AND a regular file `.wh..wh..opq`, and a deletion
@@ -519,8 +538,8 @@ premise of the project, and it applies to building it too. So:
   older agent's included), the fill's walk and an invalidation leave such a
   name out, and each says once that it is a leftover safe to delete. A whiteout
   or an opaque directory is expanded on the CLIENT into deletions of what the
-  fill sent under it (`expandReplaced`), through `decide`, never of anything
-  the fill did not send. Links and these are `Hello.Carry` and `Request.Carry`:
+  fill sent under it and the merged view no longer has (`replacedDeletions`,
+  `OpPresent`), through `decide`, never of anything the fill did not send. Links and these are `Hello.Carry` and `Request.Carry`:
   the agent announces, the client asks only then, and an agent that did not
   announce is never sent the field and never sends a link an old client would
   read as an empty file. Links keep their target verbatim and are made under

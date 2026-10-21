@@ -20,7 +20,10 @@
   the agent drains a payload it did not read. An overlay's own marks are read
   and never written into the user's tree; a replaced directory and a link the
   container made come back (`Change.Opaque`, `Change.Link`, negotiated by
-  `Hello.Carry`).
+  `Hello.Carry`). Nothing is deleted or overwritten here without checking the
+  ground truth as it is done: a deletion a directory implies only if the
+  consumer's merged view confirms it (`OpPresent`), and every path only if this
+  machine still has what decide saw.
 
 ## What forced it
 
@@ -332,6 +335,22 @@ Fixing those exposed three more, each found by CI after the first fixes:
 | restoring waited for a MOUNT or root handle | a container that only writes into its union presents neither, so a restarted client carried back nothing | the session restores the recorded unions the workspace reports mounted as it connects (ADR 0027) |
 | a resumed fill sent the whole tree again | it overwrote what a running container had written over those files | the fill skips what the record says went and has not changed here (`alreadyHeld`, `Tree.MarkSent`) |
 
+A review of those fixes on 2026-10-21 found ways write-back could still take
+the user's own work. The rule behind every answer: **nothing here is deleted or
+overwritten on bookkeeping or on the absence of a report; each is checked
+against the ground truth at the moment it is acted on.**
+
+| cause | what it did | answer |
+|---|---|---|
+| the agent lists a replaced directory on every Changes while its marker exists, and hides what the client wrote into it | a file this machine created or edited there (the watcher sent it to the cache) read as deleted by the container, and was deleted here and then from the container | a deletion a directory implies is acted on only for a path the consumer's MERGED view confirms absent: `OpPresent`, lstat through the merged mount, never following a link. Present, an error or an agent without `Hello.Carry` all mean keep, and with such an agent no deletion is implied at all |
+| the candidates were computed after skipped changes were set aside | a link this account could not make at `D/F` read next round as the deletion of the user's `D/F` | the candidates come from every change reported |
+| decide looked at this machine once, and a pass lands up to 2,000 files over minutes | a file edited here meanwhile was overwritten; one created here meanwhile was replaced | each action carries what decide saw (exists, size, time, link target) and it is compared with a fresh stat just before the remove, the link or the rename (`stillAsSeen`, `writeUnderGuarded`); a path that changed is left, said once, and decided afresh |
+| one failed pull chunk ended the pass, and the agent failed the chunk for one file | an unreadable file starved every file behind it, and so did 2,000 files that never land | a failed chunk ends only itself (three in a row end the pass); under `Carry` the agent's pull names a file it cannot read in `Reply.Skipped`, which is set aside until its change differs; paths that keep failing rank behind the rest; a pass that landed anything backs off only 5s |
+| a resumed fill re-sent a file changed here while nothing ran | when the container had changed it too, its version was overwritten in the cache and the baseline reset, so the both-changed rule never ran | the fill leaves out a path it sent before that the consumer lists as changed (and not as the fill's own copy, which an agent that restarted also lists), says so once, and write-back decides it with the persisted baseline. Only the fill: an invalidation is the user writing now, and leaving it out would keep the container on its version for good once a conflict kept the user's |
+| a conflict was logged every round | the log said "your file is kept" every 5s | said once per path, again only after the path lands or stops being listed |
+| the agent removed a file after a failed write if it had not existed a moment before | a file the container created in that moment was removed | the file is opened `O_EXCL` when absent, so only a file the entry created is removed; a temporary renamed in would do the same and is what a landed file must not be (above) |
+| a dead cache channel was replaced and left open | an SSH channel and an agent handler leaked per failure | closed when replaced |
+
 **What a failed write means.** `classifyWrite` sorts it, by platform:
 
 | class | errors | what happens |
@@ -339,6 +358,10 @@ Fixing those exposed three more, each found by CI after the first fixes:
 | space | ENOSPC, EDQUOT; Windows 112, 39 | the pass stops, the share backs off 5s doubling to 1 min and resets on success, and the file and the changes behind it stay pending |
 | name | EINVAL, ENAMETOOLONG, EILSEQ; Windows 123, 206, 1314; a path leaving the share; a case collision | that path is given up on and named once, in the log and in `remote status`, and tried again only when its change differs; the others carry on |
 | other | anything else, such as a file another program holds | left for the next round with the same backoff; the others carry on |
+| unreadable | the agent could not read it (`Reply.Skipped` on a pull) | given up on like a name, until its change differs |
+
+A pass that landed anything waits only the 5s floor, whatever else failed, so
+one file that never lands does not slow every other to once a minute.
 
 One Warn says a share stalled (why, the first path, how many are pending, when
 it tries next) and one Info says it moved again.
@@ -349,14 +372,18 @@ reports `.wh.<name>` as `<name>` deleted; the client drops any change with such
 a component, an older agent's included, and the fill and an invalidation leave
 such a name out and warn once.
 
-**A removed or replaced directory is expanded on the client.** The layer says
-a deletion once, at the level it happened: a whiteout for a directory, or an
-`Opaque` directory. The client turns each into the deletion of every path the
-FILL SENT under it (`expandReplaced`), and every deletion goes through `decide`
-like any other, so a file changed here since is kept and reported. A file the
-fill never sent is deliberately not touched: under `prefetch=tree` most of a
-large tree was never sent, and a directory the container replaced leaves what
-was only ever on this machine, where it was.
+**A removed or replaced directory is expanded on the client, and confirmed.**
+The layer says a deletion once, at the level it happened: a whiteout for a
+directory, or an `Opaque` directory. The client takes every path the FILL SENT
+under it as a candidate (`replacedDeletions`), asks the consumer which of them
+its merged view still has (`OpPresent`), and deletes only what is confirmed
+gone; each deletion then goes through `decide` like any other, so a file
+changed here since is kept and reported. The listing cannot answer this alone:
+the agent hides what the client wrote through the union, so a file the user
+created or edited there is silent in it exactly like one the container deleted.
+A file the fill never sent is deliberately not touched: under `prefetch=tree`
+most of a large tree was never sent, and a directory the container replaced
+leaves what was only ever on this machine, where it was.
 
 **Links are carried back by the rule the live share already follows**
 (README, "What differs from a bind mount"; `core-client/nfsserve/symlink.go`):
@@ -380,7 +407,10 @@ fails a batch on an unwritable entry as it always did. With `Carry` the agent
 leaves such an entry out and names it in `Reply.Skipped`; the client takes it
 out of the record and the manifest, so the file is read live and a copy the
 consumer makes later is the consumer's. A client without it never sees a field
-it would misread: a link reported to it would read as an empty file.
+it would misread: a link reported to it would read as an empty file. Under
+`Carry` a pull names a file it cannot read in `Reply.Skipped` instead of failing
+the chunk, and `OpPresent` answers which paths the merged view has; a client
+facing an agent without `Carry` never asks it, and implies no deletion at all.
 
 **Deliberately not carried back:** a name this machine refuses (named once), a
 case collision on a filesystem that treats the two names as one (named once;

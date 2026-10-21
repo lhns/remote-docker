@@ -502,3 +502,12 @@ func TestTheFillLeavesOutAnOverlayMarkerName(t *testing.T) {
 		t.Errorf("the walk counted %d marker names, want 2", r.Stats.Markers)
 	}
 }
+
+// expandReplaced is the changes with every candidate deletion a replaced
+// directory implies, as if the consumer confirmed each absent.
+func expandReplaced(manifest map[string]Baseline, changes []Change) []Change {
+	for _, p := range replacedDeletions(manifest, changes) {
+		changes = append(changes, Change{Path: p, Deleted: true})
+	}
+	return changes
+}

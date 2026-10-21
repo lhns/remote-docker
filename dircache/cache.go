@@ -315,8 +315,8 @@ type changedAnswer struct {
 	changes map[string]Change
 }
 
-// consumerChangedTTL is how long an answer is reused: the watcher flushes every
-// 150ms and each answer is a walk of the consumer's layer.
+// consumerChangedTTL is how long an answer is reused: a resumed fill sends
+// batches back to back, and each answer is a walk of the consumer's layer.
 const consumerChangedTTL = 2 * time.Second
 
 // consumerChanged is what the consumer reports, by path.
@@ -371,7 +371,7 @@ func (c *Cache) withoutConsumerChanges(share string, store Store, entries []Entr
 			out = append(out, e)
 			continue
 		}
-		if c.shares.wbConflictNew(share, slashed(e.Path), "changed in the container and here before write-back carried it") {
+		if c.shares.wbConflictNew(share, p, "changed in the container and here before write-back carried it") {
 			c.log().Warn("a file changed in the container and here; this machine's version is not sent over the container's, and write-back decides which is kept",
 				"path", strings.TrimPrefix(e.Path, "/"))
 		}

@@ -12,36 +12,27 @@ import (
 	"time"
 )
 
-// expandReplaced turns a removed or replaced directory into the deletion of
-// every file under it that the fill sent.
+// replacedDeletions are the paths a removed or replaced directory implies the
+// consumer deleted: every file under it that the fill sent.
 //
 // The cache layer records a deletion at the level it happened: removing a
 // directory is one whiteout for it, and replacing one is a directory marked as
 // hiding what the lower held. Neither names the files, and the files are what
-// this machine has. Only paths the fill sent are touched; one it never sent
+// this machine has. Only paths the fill sent are candidates; one it never sent
 // (prefetch=tree leaves most of a large tree to the live export) is not the
-// cache's to take out of somebody's tree, and says so by being absent from the
-// manifest. A file recreated by the consumer under the same name is listed as
-// its own change and is a write, not a deletion.
+// cache's to take out of somebody's tree. A file recreated by the consumer under
+// the same name is listed as its own change and is a write, not a deletion.
 //
-// Each synthesised deletion goes through decide like any other, so a file
-// changed here since it was sent is kept and reported rather than removed.
+// These are CANDIDATES. What this machine wrote into the directory is hidden
+// from the listing too, so the caller confirms each against the consumer's view
+// before deleting it (Cache.confirmedAbsent), and each deletion then goes
+// through decide, so a file changed here since is kept and reported.
 //
 // Never a file this machine carried back FROM the consumer (Baseline.Consumer):
-// that file lives in the consumer's own layer and is not listed again once the
-// cache has been written over it, so its absence from the changes says nothing
-// about it, and deleting it here would delete the consumer's work.
-func expandReplaced(manifest map[string]Baseline, changes []Change) []Change {
-	for _, p := range replacedDeletions(manifest, changes) {
-		changes = append(changes, Change{Path: p, Deleted: true})
-	}
-	return changes
-}
-
-// replacedDeletions are the paths expandReplaced would delete, for a caller that
-// has to confirm each against the consumer's view first. changes must be every
-// change the consumer reported, before anything was set aside: a path set aside
-// is still listed, and not a deletion.
+// a second guard, kept because it costs nothing.
+//
+// changes must be every change the consumer reported, before anything was set
+// aside: a path set aside is still listed, and not a deletion.
 func replacedDeletions(manifest map[string]Baseline, changes []Change) []string {
 	hidden := map[string]bool{}
 	listed := map[string]bool{}

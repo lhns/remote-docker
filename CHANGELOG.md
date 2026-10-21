@@ -25,7 +25,9 @@ software.
   are left and which files it gave up on.
 - **A directory a container removes or replaces is removed or replaced on your
   machine too**, for the files the cache was filled with; before, the old files
-  stayed. **Links a container makes arrive as links**, as they do on the share
+  stayed. A file is deleted only once the container is confirmed not to have
+  it, and **write-back never overwrites or deletes a file you changed while it
+  was running**: it says so once and looks again. **Links a container makes arrive as links**, as they do on the share
   itself. On Windows an account without Developer Mode cannot create one: the
   link is listed in `remote status` and the files around it still arrive.
 - **Files named `.wh.something` are no longer written into your directory.** They

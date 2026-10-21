@@ -171,7 +171,7 @@ func decide(
 	seen := make(map[string]seenState, len(changes))
 	for _, change := range changes {
 		// A replaced directory and a link are not files to compare: the first
-		// is expanded into deletions before this (expandReplaced) and the
+		// is expanded into deletions before this (replacedDeletions) and the
 		// second is decided by decideLinks.
 		if change.Opaque || change.Link != "" {
 			continue

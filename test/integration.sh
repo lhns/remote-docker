@@ -2706,6 +2706,35 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             else
                 bad "the container could not make its links"
             fi
+            # What this machine writes into a directory the container replaced
+            # is hidden from the changes the workspace lists, and that silence
+            # once read as the container deleting it: write-back removed the
+            # user's new and edited files. A deletion a replaced directory
+            # implies is now acted on only when the container's own view
+            # confirms the file is gone (ADR 0044, OpPresent).
+            echo "edited here" >"$REPLDIR/tools/new"
+            echo mine >"$REPLDIR/tools/mine"
+            if wait_output '^edited here$' 30 dockert exec itest-wb-replace cat /w/tools/new &&
+                wait_output '^mine$' 30 dockert exec itest-wb-replace cat /w/tools/mine; then
+                # Several write-back rounds, which run every 5s.
+                sleep 20
+                if outputs '^edited here$' cat "$REPLDIR/tools/new" && outputs '^mine$' cat "$REPLDIR/tools/mine"; then
+                    ok "files written here into a replaced directory survive write-back"
+                else
+                    bad "after 20s of write-back: tools/new [$(cat "$REPLDIR/tools/new" 2>&1)], tools/mine [$(cat "$REPLDIR/tools/mine" 2>&1)]"
+                    share_diagnostics
+                fi
+                if outputs '^edited here$' dockert exec itest-wb-replace cat /w/tools/new &&
+                    outputs '^mine$' dockert exec itest-wb-replace cat /w/tools/mine; then
+                    ok "and the container still has them"
+                else
+                    bad "the container lost a file written here into a replaced directory: [$LAST_OUTPUT]"
+                    share_diagnostics
+                fi
+            else
+                bad "an edit made here never reached the container: [$LAST_OUTPUT]"
+                share_diagnostics
+            fi
         else
             bad "the container could not replace its directory"
         fi
