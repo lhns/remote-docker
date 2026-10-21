@@ -1,4 +1,4 @@
-# The Windows installer, end to end: install, what lands on PATH, the docker.exe
+# The Windows installer, end to end: install, the PATH feature, the docker.exe
 # feature, the refusal that guards it, uninstall, and the optional Hyper-V
 # workspace feature (service, group, a machine, upgrade, removal, adding and
 # removing it with Modify) against a stand-in for Hyper-V.
@@ -175,7 +175,7 @@ Ok 'the file and the PATH entry are both gone'
 # ---------------------------------------------------------------------------
 Section '5. ADDLOCAL selects the docker.exe feature, and it works'
 
-Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,DockerName') 'install-feature' 0
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,Path,DockerName') 'install-feature' 0
 if (-not (Test-Path $Alias)) { Fail "the feature was selected and $Alias was not created" }
 Ok "$Alias is $((Get-Item $Alias).Length) bytes"
 
@@ -198,7 +198,7 @@ Copy-Item (Join-Path $env:SystemRoot 'System32\where.exe') $stub
 Ok "put a docker.exe at $stub, which is on the system PATH"
 
 # 1603 is what a type 19 error custom action gives a silent install.
-Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,DockerName') 'refusal' 1603
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,Path,DockerName') 'refusal' 1603
 Assert-NotInstalled
 Ok 'nothing was installed'
 
@@ -224,13 +224,82 @@ Assert-NotInstalled
 # ---------------------------------------------------------------------------
 Section '9. ALLOWDOCKERSHADOW=1 overrides the refusal'
 
-Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,DockerName', 'ALLOWDOCKERSHADOW=1') 'override' 0
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,Path,DockerName', 'ALLOWDOCKERSHADOW=1') 'override' 0
 if (-not (Test-Path $Alias)) { Fail "the override was given and $Alias was not created" }
 Ok 'the copy was made'
 Invoke-Msi @('/x', $Msi) 'uninstall-override' 0
 Assert-NotInstalled
 
+# ---------------------------------------------------------------------------
+Section '9b. docker.exe without the Path feature is not refused by that docker.exe'
+
+# The stub from section 7 is still in System32. Nothing is shadowed when the
+# install directory is not on PATH (ADR 0048).
+$stubBefore = (Get-FileHash $stub).Hash
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main,DockerName') 'no-path-docker' 0
+if (-not (Test-Path $Alias)) { Fail "the feature was selected and $Alias was not created" }
+if (-not (Test-Path $stub)) { Fail "$stub was removed" }
+if ((Get-FileHash $stub).Hash -ne $stubBefore) { Fail "$stub was changed" }
+Ok 'installed beside the other docker.exe, which is untouched'
+Invoke-Msi @('/x', $Msi) 'uninstall-no-path-docker' 0
+Assert-NotInstalled
+
 Remove-Item $stub -Force
+
+# ---------------------------------------------------------------------------
+Section '9c. the PATH entry is optional, and Modify adds and removes it'
+
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Main') 'path-off' 0
+if (-not (Test-Path $Exe)) { Fail "missing $Exe" }
+if ((MachinePath) -like "*$InstallDir*") { Fail "system PATH names $InstallDir without the Path feature: $(MachinePath)" }
+$r = Invoke-FromFreshShell 'remote-docker remote --help'
+if ($r.Code -eq 0) { Fail "a fresh shell ran remote-docker with no PATH entry: $($r.Output)" }
+Ok 'installed, not on PATH, and a fresh shell does not find it'
+
+Invoke-Msi @('/i', $Msi, 'ADDLOCAL=Path') 'path-add' 0
+if ((MachinePath) -notlike "*$InstallDir*") { Fail "Modify added the feature and PATH does not name $InstallDir : $(MachinePath)" }
+$r = Invoke-FromFreshShell 'remote-docker remote --help'
+if ($r.Code -ne 0) { Fail "exit $($r.Code) from a fresh shell after Modify; output: $($r.Output)" }
+Ok 'Modify added the entry and a fresh shell runs it'
+
+Invoke-Msi @('/i', $Msi, 'REMOVE=Path') 'path-remove' 0
+if ((MachinePath) -like "*$InstallDir*") { Fail "removing the feature left the entry: $(MachinePath)" }
+if (-not (Test-Path $Exe)) { Fail "removing the feature took $Exe with it" }
+Ok 'Modify removed the entry and kept the exe'
+
+Invoke-Msi @('/x', $Msi) 'uninstall-path-off' 0
+Assert-NotInstalled
+
+# ---------------------------------------------------------------------------
+Section '9d. an upgrade from the latest released MSI keeps the PATH entry'
+
+# The only real check that the old product's PATH component, which lived in
+# Main, migrates into the Path feature. Needs the network and gh; a failure to
+# download is a failure, never a skip. $Msi is built at a version above any
+# release (see msi.yml), or this would be a downgrade.
+$relDir = Join-Path $Temp 'released-msi'
+if (Test-Path $relDir) { Remove-Item -Recurse -Force $relDir }
+New-Item -ItemType Directory -Force -Path $relDir | Out-Null
+$gh = & gh release download --repo lhns/remote-docker --pattern '*windows_amd64.msi' --dir $relDir 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { Fail "could not download the latest released MSI: $gh" }
+$released = @(Get-ChildItem $relDir -Filter '*.msi')
+if ($released.Count -ne 1) { Fail "expected one released x64 MSI in $relDir, found $($released.Count): $gh" }
+Ok "downloaded $($released[0].Name)"
+
+Invoke-Msi @('/i', $released[0].FullName) 'released-install' 0
+if ((MachinePath) -notlike "*$InstallDir*") { Fail "the released MSI left PATH without $InstallDir : $(MachinePath)" }
+Invoke-Msi @('/i', $Msi) 'released-upgrade' 0
+if ((MachinePath) -notlike "*$InstallDir*") { Fail "the upgrade dropped the PATH entry: $(MachinePath)" }
+Ok 'the system PATH still names the install directory'
+if ($null -eq (Get-ItemProperty 'HKLM:\SOFTWARE\lhns\remote-docker' -Name Path -ErrorAction SilentlyContinue)) {
+  Fail 'the Path registry value is missing after the upgrade'
+}
+Ok 'the Path registry value exists'
+$r = Invoke-FromFreshShell 'remote-docker remote --help'
+if ($r.Code -ne 0) { Fail "exit $($r.Code) from a fresh shell after the upgrade; output: $($r.Output)" }
+Ok 'a fresh shell runs it'
+Invoke-Msi @('/x', $Msi) 'released-uninstall' 0
+Assert-NotInstalled
 
 # ===========================================================================
 # The optional Hyper-V workspace (ADR 0048 amendment, ADR 0055). The package is
@@ -247,7 +316,7 @@ $ServiceDir = Join-Path $env:ProgramData 'remote-docker'
 $StandinDir = Join-Path $env:ProgramData 'remote-docker-standin'
 $OpsLog = Join-Path $StandinDir 'ops.log'
 $MyConfig = Join-Path $env:USERPROFILE '.remote-docker.json'
-$HyperVOn = @('ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=msiserver')
+$HyperVOn = @('ADDLOCAL=Main,Path,HyperV', 'HYPERVSERVICE=msiserver')
 $RegKey = 'HKLM:\SOFTWARE\lhns\remote-docker'
 
 function ServiceExists() {
@@ -309,7 +378,7 @@ else { Ok 'this runner has no vmms service key' }
 # ---------------------------------------------------------------------------
 Section '11. ADDLOCAL=HyperV without Hyper-V is refused with the way to enable it'
 
-Invoke-Msi @('/i', $StandinMsi, 'ADDLOCAL=Main,HyperV', 'HYPERVSERVICE=nosuchservice') 'hyperv-absent' 1603
+Invoke-Msi @('/i', $StandinMsi, 'ADDLOCAL=Main,Path,HyperV', 'HYPERVSERVICE=nosuchservice') 'hyperv-absent' 1603
 $log = Log-Of 'hyperv-absent'
 if ($log -notmatch 'Hyper-V is not enabled on this computer') { Fail 'the refusal message is not in the log' }
 if ($log -notmatch 'Enable-WindowsOptionalFeature') { Fail 'the refusal does not give the command that enables Hyper-V' }
@@ -486,7 +555,7 @@ Ok 'the client started the service (SERVICE_START for Authenticated Users) and t
 # ---------------------------------------------------------------------------
 Section '17. an upgrade that would drop the workspace is refused'
 
-Invoke-Msi @('/i', $StandinNextMsi, 'ADDLOCAL=Main') 'hyperv-upgrade-drop' 1603
+Invoke-Msi @('/i', $StandinNextMsi, 'ADDLOCAL=Main,Path') 'hyperv-upgrade-drop' 1603
 if ((Log-Of 'hyperv-upgrade-drop') -notmatch 'cannot be added or removed during an upgrade') { Fail 'the refusal message is not in the log' }
 $ver = InstalledVersion
 if ($ver -ne '0.0.1') { Fail "after the refused upgrade the installed version is '$ver', not 0.0.1" }

@@ -96,14 +96,16 @@ jobs:
       - uses: ./.github/actions/setup-wix
 
       # Both architectures are built; only amd64 can be installed (no Windows
-      # arm64 runner). The version is a three-number stand-in.
+      # arm64 runner). The version is a three-number stand-in, above any
+      # release so that the upgrade from the latest released MSI is not a
+      # downgrade.
       - name: build the msis
         shell: pwsh
         run: |
           foreach ($pair in @(@('amd64', 'x64'), @('arm64', 'arm64'))) {
-            ./installer/windows/build.ps1 -Version 0.0.1 -Arch $pair[1] `
+            ./installer/windows/build.ps1 -Version 99.0.0 -Arch $pair[1] `
               -Binary "windows/$($pair[0])/remote-docker.exe" `
-              -Out "dist/msi/remote-docker_0.0.1_windows_$($pair[0]).msi"
+              -Out "dist/msi/remote-docker_99.0.0_windows_$($pair[0]).msi"
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
 
@@ -143,7 +145,10 @@ jobs:
       - name: install, uninstall, the docker.exe feature and the Hyper-V workspace
         timeout-minutes: 30
         shell: pwsh
-        run: ./test/msi.ps1 -Msi dist/msi/remote-docker_0.0.1_windows_amd64.msi -StandinMsi dist/msi/standin_0.0.1.msi -StandinNextMsi dist/msi/standin_0.0.2.msi
+        env:
+          # For gh, which downloads the latest released MSI for the upgrade test.
+          GH_TOKEN: ${{ github.token }}
+        run: ./test/msi.ps1 -Msi dist/msi/remote-docker_99.0.0_windows_amd64.msi -StandinMsi dist/msi/standin_0.0.1.msi -StandinNextMsi dist/msi/standin_0.0.2.msi
 
       # For a job that died outside the suite, which prints its own.
       - name: the msiexec logs
