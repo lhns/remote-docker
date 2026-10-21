@@ -35,6 +35,26 @@ import (
 type Baseline struct {
 	Size    int64
 	ModTime time.Time
+
+	// Consumer is the modification time, in Unix nanoseconds on the consumer's
+	// clock, of a version this machine carried back from it. What landed here
+	// keeps a time to the second at best (a tar does), so the consumer's own
+	// reading of that file never equals ModTime again; without this the same
+	// version reads as a new change every round and is written back for ever.
+	// Zero for what the fill sent.
+	Consumer int64
+}
+
+// carries reports whether a change is exactly the version this baseline stands
+// for: a copy of the fill's, or one already carried back.
+func (b Baseline) carries(c Change) bool {
+	if c.Size != b.Size {
+		return false
+	}
+	if b.Consumer != 0 && c.ModTime == b.Consumer {
+		return true
+	}
+	return time.Unix(0, c.ModTime).Equal(b.ModTime)
 }
 
 // kind is what to do about one path.
@@ -84,6 +104,10 @@ type action struct {
 
 	// Link is the target of a kindLink, verbatim.
 	Link string
+
+	// Consumer is the consumer's modification time of the version a write
+	// carries back (Baseline.Consumer).
+	Consumer int64
 }
 
 // localAt is what this machine knows about a path: its current state, or nothing
@@ -132,8 +156,7 @@ func decide(
 		// whole tree back. A timestamp that did not survive the round trip
 		// exactly reads as the consumer's change, and the file comes back with
 		// the bytes it already has.
-		if sent && !change.Deleted && change.Size == base.Size &&
-			time.Unix(0, change.ModTime).Equal(base.ModTime) {
+		if sent && !change.Deleted && base.carries(change) {
 			continue
 		}
 
@@ -144,7 +167,7 @@ func decide(
 			if change.Deleted || here || recorded[change.Path] {
 				continue
 			}
-			actions = append(actions, action{Path: change.Path, kind: kindWrite})
+			actions = append(actions, action{Path: change.Path, kind: kindWrite, Consumer: change.ModTime})
 			continue
 		}
 
@@ -166,13 +189,13 @@ func decide(
 		}
 
 		if !youChanged {
-			actions = append(actions, action{Path: change.Path, kind: kindWrite})
+			actions = append(actions, action{Path: change.Path, kind: kindWrite, Consumer: change.ModTime})
 			continue
 		}
 
 		if !here {
 			actions = append(actions, action{
-				Path: change.Path, kind: kindConflict, Wins: true,
+				Path: change.Path, kind: kindConflict, Wins: true, Consumer: change.ModTime,
 				Why: "you deleted it and the container changed it; its version is kept",
 			})
 			continue
@@ -184,7 +207,7 @@ func decide(
 		containerAt := time.Unix(0, change.ModTime).Add(-skew)
 		wins := containerAt.After(info.ModTime())
 		actions = append(actions, action{
-			Path: change.Path, kind: kindConflict, Wins: wins,
+			Path: change.Path, kind: kindConflict, Wins: wins, Consumer: change.ModTime,
 			Why: conflictReason(wins),
 		})
 	}

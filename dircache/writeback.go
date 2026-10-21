@@ -43,6 +43,9 @@ const (
 	// progress and left more goes straight on to the next, so the cap bounds
 	// how long a round holds the cache and how much is lost to one failure.
 	writeBackRoundFiles = 2000
+
+	// maxPassesPerRound bounds the passes one round makes over a share.
+	maxPassesPerRound = 50
 )
 
 // WriteBack carries the consumer's writes back until ctx is done.
@@ -72,7 +75,12 @@ func (c *Cache) writeBackRound(ctx context.Context) {
 		if c.shares.ephemeral(share) {
 			continue
 		}
-		for c.writeBackShare(ctx, share) && ctx.Err() == nil {
+		// Bounded, so a share that always has more cannot hold the others: the
+		// next tick takes it up again.
+		for range maxPassesPerRound {
+			if !c.writeBackShare(ctx, share) || ctx.Err() != nil {
+				break
+			}
 		}
 	}
 }

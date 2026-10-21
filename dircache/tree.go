@@ -533,6 +533,18 @@ func (t *Tree) fetch(n *node) []Entry {
 	return out
 }
 
+// MarkSent marks a file stored without sending it, for one the cache already
+// holds from an earlier session: its record says it went, and it has not changed
+// here since. Sending it again would overwrite what a container running through
+// the restart has written over it.
+func (t *Tree) MarkSent(path string) {
+	loc, ok := t.where[path]
+	if !ok || loc.leaf.state[loc.idx].stored {
+		return
+	}
+	loc.leaf.markStored(loc.idx)
+}
+
 // Unstore puts entries back as not sent, for a batch the store refused: the
 // share is then no more cached than before, and the next send takes them again.
 func (t *Tree) Unstore(entries []Entry) {

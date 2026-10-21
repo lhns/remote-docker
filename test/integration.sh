@@ -2135,6 +2135,9 @@ share_diagnostics() {
         grep -iE "cache|watch" | sed 's/^/        client: /'
     grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
         tail -12 | sed 's/^/        client: /'
+    # The background session's own log, which is where sections 16 and later log.
+    grep -viE "poking" "$WORK/state/logs/remote-docker.log" 2>/dev/null |
+        tail -25 | sed 's/^/        session: /'
     # Not `docker logs`: `docker` here is the CLIENT's endpoint, where the
     # workspace container does not exist and would look like it logged nothing.
     dump_workspace_log 25

@@ -599,6 +599,29 @@ func baselineOf(root, p string) (Baseline, bool) {
 	return Baseline{Size: info.Size(), ModTime: info.ModTime()}, true
 }
 
+// alreadyHeld names the entries the cache holds from an earlier session: the
+// record has a baseline for each and the file here still matches it. A fill that
+// resumed would otherwise send the whole tree again over whatever a container
+// has written since, and a changed file still goes, as a change here does.
+func (f *shares) alreadyHeld(share, root string, entries []Entry) []string {
+	f.mu.Lock()
+	manifest := make(map[string]Baseline, len(entries))
+	for _, e := range entries {
+		if b, ok := f.manifests[share][slashed(e.Path)]; ok {
+			manifest[e.Path] = b
+		}
+	}
+	f.mu.Unlock()
+
+	var held []string
+	for p, b := range manifest {
+		if now, ok := baselineOf(root, p); ok && now.Size == b.Size && now.ModTime.Equal(b.ModTime) {
+			held = append(held, p)
+		}
+	}
+	return held
+}
+
 // baselines is a COPY of a share's manifest: the prefetch may still be adding
 // to it while a write-back round decides against it.
 func (f *shares) baselines(share string) map[string]Baseline {
@@ -637,6 +660,7 @@ func (f *shares) rebase(share, root string, actions []action) {
 			}
 		case a.kind == kindWrite || (a.kind == kindConflict && a.Wins):
 			if b, ok := baselineOf(root, a.Path); ok {
+				b.Consumer = a.Consumer
 				manifest[a.Path] = b
 			} else {
 				delete(manifest, a.Path)

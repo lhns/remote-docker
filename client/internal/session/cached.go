@@ -35,6 +35,9 @@ type cachedFile struct {
 type cachedBaseline struct {
 	Size  int64 `json:"s"`
 	MTime int64 `json:"m"`
+
+	// Consumer is dircache.Baseline.Consumer, omitted for what the fill sent.
+	Consumer int64 `json:"c,omitempty"`
 }
 
 const cachedFileVersion = 1
@@ -66,7 +69,7 @@ func newCachedStore(path string, log *slog.Logger) *cachedStore {
 			filled[p] = dircache.Baseline{}
 		}
 		for p, b := range file.Baselines[export] {
-			filled[p] = dircache.Baseline{Size: b.Size, ModTime: time.Unix(0, b.MTime)}
+			filled[p] = dircache.Baseline{Size: b.Size, ModTime: time.Unix(0, b.MTime), Consumer: b.Consumer}
 		}
 		s.shares[export] = filled
 	}
@@ -101,7 +104,7 @@ func (s *cachedStore) Record(export string, filled map[string]dircache.Baseline)
 				if file.Baselines[e] == nil {
 					file.Baselines[e] = map[string]cachedBaseline{}
 				}
-				file.Baselines[e][p] = cachedBaseline{Size: b.Size, MTime: b.ModTime.UnixNano()}
+				file.Baselines[e][p] = cachedBaseline{Size: b.Size, MTime: b.ModTime.UnixNano(), Consumer: b.Consumer}
 			}
 		}
 		sort.Strings(paths)

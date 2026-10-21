@@ -231,8 +231,12 @@ func (c *Cache) feedTree(p *prefetch) {
 		if len(pending) == 0 {
 			return
 		}
+		held := c.shares.alreadyHeld(p.share, p.root, pending)
 		p.mu.Lock()
 		p.tree.Add(pending)
+		for _, path := range held {
+			p.tree.MarkSent(path)
+		}
 		p.mu.Unlock()
 		pending = nil
 	}
