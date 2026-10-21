@@ -1,9 +1,12 @@
 # 0027 — Restoring an export the workspace remembers
 
 - Status: Accepted; amends [ADR 0007](0007-virtual-nfs-export-namespace.md)
-- Date: 2026-08-11; amended 2026-09-25, 2026-10-14, 2026-10-15
+- Date: 2026-08-11; amended 2026-09-25, 2026-10-14, 2026-10-15, 2026-10-21
 - Current answer: restore lazily, from a MOUNT or a share ROOT HANDLE that
-  misses, through the checks below. Never eagerly, never from a lookup.
+  misses, through the checks below. Never eagerly, never from a lookup. A
+  restored union share is attached to the cache with its recorded words, and
+  the fill record carries the baselines write-back compares against
+  (amended 2026-10-21).
 
 ## Context
 
@@ -116,8 +119,18 @@ digest is an identity rather than a security boundary.
   gets a share, export and volume of its own. This is what makes upgrading safe.
 - **A restored share that watches starts the watcher** and is handed to it at
   once (`Registry.Restored`), because the mount that brought it back registered
-  nothing and so told nothing. It is never attached to the cache, so its
-  prefetch is restored into its words and not resumed (ADR 0045).
+  nothing and so told nothing. **It is attached to the cache** (amended
+  2026-10-21), as a mount would, with the words it was recorded with: its
+  prefetch resumes (ADR 0045) and, above all, its write-back runs again.
+  Before, a restart left a restored share unattached, and write-back, which
+  polls only attached shares, never carried a container's writes back from it.
+- **The fill record holds baselines** (amended 2026-10-21). The record (`caches/<workspace>.json`)
+  keeps, beside each share's list of paths, the size and modification time every
+  file had when it was sent. After a restart the paths alone read every file as
+  one the fill never sent, so a file the container modified was mistaken for one
+  this machine made and was never written back, only new files were. The paths
+  keep their field, so a client before this reads the file as it did, and the
+  file version stays 1.
 - **The file version stays 1** through both: `readBound` drops a record whose
   version differs, so a bump would make every restore fail after an upgrade.
 

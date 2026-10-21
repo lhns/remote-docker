@@ -15,10 +15,34 @@ software.
 - **The system PATH entry is now an installer feature.** Leave it out to
   install remote-docker without changing PATH.
 
+### Fixes
+
+- **`write=back` no longer stops for good.** A full disk, a dropped connection,
+  a restart of the client, or one file your machine will not accept used to end
+  it without a word, and what a container had made (a build's `node_modules`,
+  say) never reached your disk. Now it waits and tries again, carries on with
+  everything else, and `remote status` says why it is waiting, how many changes
+  are left and which files it gave up on.
+- **A directory a container removes or replaces is removed or replaced on your
+  machine too**, for the files the cache was filled with; before, the old files
+  stayed. **Links a container makes arrive as links**, as they do on the share
+  itself. On Windows an account without Developer Mode cannot create one: the
+  link is listed in `remote status` and the files around it still arrive.
+- **Files named `.wh.something` are no longer written into your directory.** They
+  were overlay bookkeeping, and one of them made the workspace refuse every
+  later update of the cache. If your shared directory already has files such as
+  `.wh..wh..opq`, they are leftovers and safe to delete; the client says so.
+- **A file two names apart only in case, on a filesystem that ignores case** (such
+  as `LICENSE` and `license` on Windows), no longer vanishes or overwrites the other. It is
+  named in `remote status` and left.
+
 ### Upgrading
 
 - Scripted installs that list features with `ADDLOCAL` must add `Path` to keep
   the PATH entry, e.g. `ADDLOCAL=Main,Path,DockerName`.
+- **Update the workspace as well as the client** to carry links and replaced
+  directories back. Against an older workspace the client carries back plain
+  files only, and `remote status` says so.
 
 ## 0.14.0 — 2026-10-20
 

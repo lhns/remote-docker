@@ -2,7 +2,8 @@
 
 - Status: Accepted; off by default since 2026-09-04
 - Date: 2026-09-04; amended 2026-10-14 (per share), 2026-10-15 (a later
-  mount raises it)
+  mount raises it), 2026-10-21 (restored shares resume, a failed batch is
+  retried)
 - Current answer: `prefetch: off|eager|tree` (`REMOTE_DOCKER_PREFETCH`);
   `tree` follows the NFS misses, `eager` sends the whole tree smallest first.
   Default off, pending the apply; see "What it measured". Amended 2026-10-14:
@@ -11,8 +12,10 @@
   `read=cached` union has anything to fill. `dircache.ShareOptions.Policy`
   carries it, so one cache serves a tree share and an eager one; `Touch` feeds
   only tree shares and costs one atomic load while there are none. A share
-  restored after a restart is not attached to the cache, so its prefetch is
-  recorded, restored into its words, and not resumed (ADR 0027). Amended
+  restored after a restart is attached to the cache with its recorded words, so
+  its prefetch resumes from them (ADR 0027, amended 2026-10-21). A batch the
+  store refuses is retried and never final: the tree takes it back, the wait is
+  1s doubling to 5 min, and status shows the error and the next try. Amended
   2026-10-15: a later mount of the same share raises the policy (`off < tree <
   eager`) and never lowers it: `Cache.Attach` on a known share lifts it, starting
   the fill if there was none, and `Touch` keeps its atomic-count fast path

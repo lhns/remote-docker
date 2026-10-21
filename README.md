@@ -624,6 +624,33 @@ Both are proven end to end in CI; conflict handling only by unit tests.
 **Neither is faster today**: a cold union reads no faster than a plain mount,
 and scattered reads are slower. Large writes are local.
 
+**`write=back` keeps going, and says when it cannot.** A full disk, a dropped
+connection or a client restart only delays it: it backs off from 5 seconds to a
+minute, tries again, and carries on from where it got to. A file this machine
+cannot hold (a name Windows refuses, a link your account may not create, a
+`LICENSE` beside a `license` on a filesystem that ignores case) is named once
+and left until it changes, and the files behind it still arrive. `remote status`
+shows each share as ok, or stalled with the reason, how many changes wait and
+when it tries next:
+
+```
+write-back  /home/me/project: ok
+write-back  /home/me/other: stalled since 12:30:00, writing back what a container wrote: no space left on device; 7 change(s) pending; first: dist/app.js; next try 12:31:00
+write-back    /home/me/other: 1 file(s) this machine cannot hold are left until they change: bad?name
+```
+
+A directory the container removes or replaces is removed or replaced here for
+the files the cache was filled with; a file the cache never held is left where
+it is, which with `prefetch` off or `tree` is most of a large tree. Symbolic
+links the container makes arrive as symbolic links, with the target as written,
+by the rule the share itself follows
+([What differs from a bind mount](#what-differs-from-a-bind-mount)): on Windows
+an account without Developer Mode cannot create one, and the link is listed in
+`remote status` and nothing stands in for it. Links and replaced directories
+need a workspace of this release or newer; an older one carries back plain
+files only, and status says so. Proven in CI for the cases above on Linux and on
+one Windows runner; see [CLAUDE.md](CLAUDE.md) for what is not.
+
 **Prefetch is off by default**, and applies only to a `read=cached` union
 ([ADR 0045](docs/adr/0045-prefetch-follows-the-reads.md) says why it is off).
 Turn it on with `REMOTE_DOCKER_PREFETCH` or a mount's `prefetch=`.
@@ -1331,6 +1358,13 @@ RUN mkdir -p /home/app/.local/share/app && chown -R app:app /home/app/.local
 - **Build artifacts.** `node_modules`, `.git`, `target/`, package caches.
   Keeping them off the share is worth roughly 20×; protocol tuning is worth
   about 2×.
+- **`node_modules` and other package directories a container installs into.**
+  They are thousands of small files and many links, and on a `write=back` share
+  every one is carried back to your disk, which is slow and can fill it. Put the
+  directory on a named volume in the workspace instead, where nothing carries it
+  back: `-v deps:/app/node_modules` (or a `volumes:` entry in compose). Your
+  editor then sees an empty `node_modules`, which is usually what you want; run
+  the install in the container.
 - **Databases.** `nolock` plus `fcntl` locking is a corruption risk.
 - **Very large trees over a WAN.** NFSv3 is synchronous per operation, so
   latency multiplies. Over a LAN it is fine.

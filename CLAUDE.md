@@ -415,9 +415,10 @@ premise of the project, and it applies to building it too. So:
   silently on Windows. The share record gained `read`, `write`, `owner`, `watch`
   and `prefetch` WITHOUT a version bump: `readBound` drops a record whose version
   differs. A record with a variant must have the export that variant derives, and
-  one without must have the legacy one. Prefetch is recorded and restored into
-  the words, and not resumed: a restored share is not attached to the cache
-  (ADR 0027, ADR 0042, ADR 0045).
+  one without must have the legacy one. Prefetch is recorded, restored into
+  the words and resumed: a restored share is attached to the cache with them,
+  which is also what lets write-back run for it again (ADR 0027, ADR 0042,
+  ADR 0045, amended 2026-10-21).
 - **A union's root has the share's owner, and an agent that cannot do it is
   refused, not trusted** (ADR 0046). The merged root is the upper directory the
   agent creates as root; `owner=` on a `write=back` mount would otherwise
@@ -482,6 +483,43 @@ premise of the project, and it applies to building it too. So:
   Every write and delete it makes here goes through one `os.Root` for the
   share: the workspace names the path, and a link in the share must not lead
   it out (`writeback_link_test.go`).
+- **Write-back never stops for good, and a failure is classified, never
+  final** (ADR 0044, 2026-10-21). A user's write-back stopped and never
+  resumed, and the causes compounded: a marker file written into the tree, a
+  failed apply that left its tar unread, a channel opened once per connection,
+  a failed fill that was final, and a round that was all or nothing. So: the
+  deadline is per store call and a pass lands at most 2,000 files in chunks of
+  200, moving the manifest and the record per file; `classifyWrite` sorts an
+  error into SPACE (ENOSPC, EDQUOT, Windows 112 and 39: stop the pass, back off
+  from 5s to 1 min, reset on success), NAME (EINVAL, ENAMETOOLONG, EILSEQ,
+  Windows 123, 206 and 1314, a path leaving the share, a case collision: that
+  path alone is given up on and named once until its change differs) or OTHER
+  (a file another program holds: pending, the rest carry on). One Warn says it
+  stalled and one Info says it recovered; `remote status` says which, with the
+  skipped paths. Never turn a class into a retry loop without a backoff or a
+  skip into a silence. The cache channel is reopened when it dies
+  (`ensureCacheChan`; a refusal in words does not retire it), a refused fill
+  batch is taken back out of the tree (`Tree.Unstore`) and retried from 1s to
+  5 min, and an agent drains an apply's payload whatever the extraction did,
+  or the next request is read out of the middle of a tar and every request on
+  the channel for every share fails with `invalid character`.
+- **An overlay marker never reaches the user's tree** (ADR 0044, 2026-10-21).
+  fuse-overlayfs records a replaced directory as `trusted.overlay.opaque=y`, a
+  character device `.wh..opq` AND a regular file `.wh..wh..opq`, and a deletion
+  as a device 0:0 (`union-probe.sh` section 13, recorded, not asserted). A name
+  starting `.wh.` is the union's own and no file can be named so inside one:
+  the agent reports `.wh.<name>` as `<name>` deleted and a replaced directory as
+  one `Change.Opaque`; the client drops any change with such a component (an
+  older agent's included), the fill's walk and an invalidation leave such a
+  name out, and each says once that it is a leftover safe to delete. A whiteout
+  or an opaque directory is expanded on the CLIENT into deletions of what the
+  fill sent under it (`expandReplaced`), through `decide`, never of anything
+  the fill did not send. Links and these are `Hello.Carry` and `Request.Carry`:
+  the agent announces, the client asks only then, and an agent that did not
+  announce is never sent the field and never sends a link an old client would
+  read as an empty file. Links keep their target verbatim and are made under
+  the share's `os.Root` through a temporary and a rename; Windows without
+  privilege (1314) skips the link by path, never a copy or a junction.
 - **Never rewrite a named volume**, and never delete a volume without both the
   `rd-` prefix *and* the managed label. A user may legitimately name a volume
   `rd-backups`.
@@ -698,7 +736,9 @@ premise of the project, and it applies to building it too. So:
   (fill, prefetch or invalidation, saved BEFORE it is applied) is what makes
   it removable, and only paths from that record are ever dropped -- a path in
   the cache no batch put there is a container's own file. Write-back refuses
-  a recorded path this run did not send and this machine no longer has. A watcher
+  a recorded path this run did not send and this machine no longer has. The
+  record also keeps each file's size and time as sent, so after a restart a file
+  the container modified is still told from one this machine made. A watcher
   overflow is the same problem inside a session, which is why `Observer` has
   `Lost` and answers it with a reconcile rather than a log line.
 - **A cache volume is never in use as far as the daemon is concerned, and the
@@ -1536,7 +1576,10 @@ its pure planning function was.
   thing that would catch this is the thing CI cannot see. The unit tests say
   it by skipping (`symlink_test.go`, `nofollow_test.go`, `model_test.go`).
   Nothing tests the refusal, and nothing stands in for it: see
-  `core-client/nfsserve/symlink.go` for why a hard link cannot.
+  `core-client/nfsserve/symlink.go` for why a hard link cannot. The same holds
+  for write-back carrying a container's links back: `machine.yml` makes one on
+  an elevated runner and the unelevated skip (`dircache`
+  `TestALinkThisAccountMayNotMakeIsSkippedAndNamed`) is unit tested only.
   *(Checked 2026-09-07 on an unelevated account here: `os.Symlink` returns
   errno 1314. Re-check with a two-line `os.Symlink` under `go run`.)*
 - **A share against a file over 4 GiB.** `test/probes/fsprobe` has no step that
@@ -1616,6 +1659,22 @@ its pure planning function was.
   `consistency:` survives only with `bind: {create_host_path: false}` (a plain
   bind goes to the daemon as a `Binds` string, and the client warns about one
   without it); `integration.sh` 15e asserts that.
+- **Write-back at scale, and a deadline that fires mid-pull.** `integration.sh`
+  15g lands 5,000 small files from one burst; the per-call deadline, the
+  2,000-file pass and the chunking are unit tested with a stand-in store and a
+  fake clock, and nothing has carried back a tree of hundreds of thousands of
+  files or a link slower than the runner's loopback.
+- **A workspace between versions of the cache channel.** A client that sees no
+  `Hello.Carry` carries back no link or replaced directory and says so in
+  `remote status`; that is unit tested (`writebackstatus_test.go`,
+  `cache_carry_test.go`) and no suite runs a workspace that old.
+  `old-workspace.sh` runs 0.5.1, which refuses write=back outright.
+- **Case collisions and Windows names beyond one runner.** `machine.yml`
+  creates `bad?name` from a container and checks `good` and a later file arrive
+  and status names it; a collision between `LICENSE` and `license` is unit
+  tested only, where the test filesystem treats them as one. Which names NTFS
+  refuses on another Windows build is a claim about Windows, not about this
+  code.
 - **Write-back's conflict resolution, and the measured clock offset.** All six
   rows of the baseline table are unit tested and the skew correction has its own
   test; no integration suite has ever made a file change in both places at once.
