@@ -221,6 +221,7 @@ func (s *Session) Status() any {
 		st.Storage = live.info.Storage
 	}
 	st.Caches = s.cacheStatus()
+	st.WriteBack = s.writeBackStatus()
 	return st
 }
 
@@ -330,6 +331,8 @@ func (s *Session) cacheStatus() []string {
 		switch {
 		case r.Err != nil:
 			what = "stopped: " + r.Err.Error()
+		case !r.Done && r.FillErr != nil:
+			what = "filling, and retrying at " + r.FillRetry.Format(time.TimeOnly) + " after: " + r.FillErr.Error()
 		case !r.Done:
 		case stats.Complete():
 			what = "cached"

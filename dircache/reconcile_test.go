@@ -12,23 +12,33 @@ import (
 
 type fakeRecord struct {
 	mu     sync.Mutex
-	filled map[string][]string
+	filled map[string]map[string]Baseline
 }
 
-func (r *fakeRecord) Filled(share string) ([]string, bool) {
+// recorded is a record of paths with no baselines, as one saved before a batch
+// landed holds.
+func recorded(paths ...string) map[string]Baseline {
+	out := make(map[string]Baseline, len(paths))
+	for _, p := range paths {
+		out[p] = Baseline{}
+	}
+	return out
+}
+
+func (r *fakeRecord) Filled(share string) (map[string]Baseline, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	paths, ok := r.filled[share]
 	return paths, ok
 }
 
-func (r *fakeRecord) Record(share string, paths []string) {
+func (r *fakeRecord) Record(share string, filled map[string]Baseline) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.filled == nil {
-		r.filled = map[string][]string{}
+		r.filled = map[string]map[string]Baseline{}
 	}
-	r.filled[share] = paths
+	r.filled[share] = filled
 }
 
 // A file deleted here while nothing ran is taken out of the cache on the next
@@ -41,7 +51,7 @@ func TestAttachReconcilesDeletionsWithPrefetchOff(t *testing.T) {
 	}
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"kept.go", "gone.go"}}}
+	c.Record = &fakeRecord{filled: map[string]map[string]Baseline{"/m/1111111111111111": recorded("kept.go", "gone.go")}}
 
 	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyOff})
 
@@ -100,7 +110,7 @@ func TestAnInterruptedPrefetchIsRecorded(t *testing.T) {
 	c.Attach("/m/1111111111111111", root, ShareOptions{Policy: PolicyEager})
 	eventually(t, "the prefetch to fail", func() bool {
 		r := c.Reports()
-		return len(r) == 1 && r[0].Done && r[0].Err != nil
+		return len(r) == 1 && r[0].FillErr != nil
 	})
 
 	deletedWhileAway(t, record, root, "pkga/faa.go")
@@ -122,7 +132,7 @@ func TestWriteBackRefusesARecordedFileDeletedHere(t *testing.T) {
 		},
 	}
 	c := cacheWith(t, store)
-	c.Record = &fakeRecord{filled: map[string][]string{"/m/1111111111111111": {"/stale.go"}}}
+	c.Record = &fakeRecord{filled: map[string]map[string]Baseline{"/m/1111111111111111": recorded("/stale.go")}}
 	c.Attach("/m/1111111111111111", root, ShareOptions{})
 
 	c.writeBackShare(t.Context(), "/m/1111111111111111")

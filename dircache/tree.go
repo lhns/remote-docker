@@ -533,6 +533,19 @@ func (t *Tree) fetch(n *node) []Entry {
 	return out
 }
 
+// Unstore puts entries back as not sent, for a batch the store refused: the
+// share is then no more cached than before, and the next send takes them again.
+func (t *Tree) Unstore(entries []Entry) {
+	for _, e := range entries {
+		loc, ok := t.where[e.Path]
+		if !ok || !loc.leaf.state[loc.idx].stored {
+			continue
+		}
+		loc.leaf.state[loc.idx].stored = false
+		loc.leaf.addFetched(-e.Size, -1)
+	}
+}
+
 // markStored marks entry i stored, moving what was read of it to fetched.
 func (n *node) markStored(i int) Entry {
 	e, st := n.entries[i], &n.state[i]

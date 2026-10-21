@@ -119,6 +119,10 @@ type Status struct {
 	// Caches is one line per delegated share saying how much is cached (ADR 0044).
 	Caches []string `json:"caches,omitempty"`
 
+	// WriteBack is what carrying a container's writes back is doing, one line
+	// per share and then one per thing left behind (ADR 0044).
+	WriteBack []string `json:"writeBack,omitempty"`
+
 	// Drops counts reconnects after a dead connection; otherwise invisible.
 	Drops    int    `json:"drops,omitempty"`
 	LastDrop string `json:"lastDrop,omitempty"`

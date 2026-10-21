@@ -342,6 +342,16 @@ jobs:
           $deadline = (Get-Date).AddSeconds(90)
           while (-not (Test-Path wb\later) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
           if (-not (Test-Path wb\later)) { throw "a file made after the refused name never arrived" }
+
+          # A link the container makes arrives as a link. The runner is elevated,
+          # so it may create one; an account that may not has the link named in
+          # status instead, which only a unit test covers (ADR 0044).
+          .\client\rd.exe exec wbprobe sh -c 'ln -s later /w/wblink'
+          $deadline = (Get-Date).AddSeconds(90)
+          while (-not (Test-Path wb\wblink) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+          $item = Get-Item wb\wblink -Force -ErrorAction SilentlyContinue
+          "wblink: $($item.LinkType) -> $($item.Target)"
+          if ($item.LinkType -ne 'SymbolicLink') { throw "a link the container made did not arrive as a link" }
           .\client\rd.exe rm -f wbprobe
 
       # A distribution left behind is a running Linux system nothing names.

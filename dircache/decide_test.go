@@ -44,7 +44,7 @@ func kindOf(actions []action, path string) (kind, bool) {
 // The table this whole mode's safety rests on. Each side is compared against
 // its own baseline, so only one case needs a clock at all.
 func TestDecide(t *testing.T) {
-	manifest := map[string]baseline{
+	manifest := map[string]Baseline{
 		"/untouched.go":         {Size: 10, ModTime: sentAt},
 		"/yours.go":             {Size: 10, ModTime: sentAt},
 		"/theirs.go":            {Size: 10, ModTime: sentAt},
@@ -104,7 +104,7 @@ func TestDecide(t *testing.T) {
 // nothing recovers, which took the client down. The changed side wins, as it
 // does when the container deleted and you changed.
 func TestDecideDeletedHereChangedThere(t *testing.T) {
-	manifest := map[string]baseline{"/gone.go": {Size: 10, ModTime: sentAt}}
+	manifest := map[string]Baseline{"/gone.go": {Size: 10, ModTime: sentAt}}
 	missing := func(string) (fs.FileInfo, bool) { return nil, false }
 	changes := []Change{{Path: "/gone.go", Size: 20, ModTime: laterHere.UnixNano()}}
 
@@ -130,7 +130,7 @@ func TestDecideRefusesAnIncompleteCache(t *testing.T) {
 // The one place a clock is used, and the offset between the two machines is
 // applied rather than assumed away.
 func TestDecideResolvesAConflictWithTheMeasuredSkew(t *testing.T) {
-	manifest := map[string]baseline{"/both.go": {Size: 10, ModTime: sentAt}}
+	manifest := map[string]Baseline{"/both.go": {Size: 10, ModTime: sentAt}}
 	local := localFrom(map[string]stub{"/both.go": {size: 99, mod: laterYet}})
 
 	// The workspace's clock runs an hour ahead. Its file was written a minute
@@ -163,7 +163,7 @@ func TestDecideLeavesUnsentPathsAlone(t *testing.T) {
 		{Path: "/gone.go", Deleted: true},
 	}
 
-	if got := decide(map[string]baseline{}, nil, changes, local, 0, true); len(got) != 0 {
+	if got := decide(map[string]Baseline{}, nil, changes, local, 0, true); len(got) != 0 {
 		t.Errorf("decided %v, want nothing for paths the fill never sent", got)
 	}
 }
@@ -196,7 +196,7 @@ func TestPartitionsForTheCaller(t *testing.T) {
 // small waste but a stream large enough to be refused, so nothing is ever
 // written back at all.
 func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
-	manifest := map[string]baseline{
+	manifest := map[string]Baseline{
 		"/filled.go":  {Size: 10, ModTime: sentAt},
 		"/written.go": {Size: 10, ModTime: sentAt},
 	}
@@ -225,7 +225,7 @@ func TestDecideIgnoresWhatTheFillItselfWrote(t *testing.T) {
 // Same size, different content, and the container's write lands within the
 // same timestamp: the filter must key on the pair rather than on either half.
 func TestDecideCarriesBackASameSizedRewrite(t *testing.T) {
-	manifest := map[string]baseline{"/same-size.go": {Size: 10, ModTime: sentAt}}
+	manifest := map[string]Baseline{"/same-size.go": {Size: 10, ModTime: sentAt}}
 	local := localFrom(map[string]stub{"/same-size.go": {size: 10, mod: sentAt}})
 
 	changes := []Change{

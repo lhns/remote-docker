@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -34,6 +35,19 @@ type cacheChannel struct {
 	// owner says the workspace gives a union's root the owner a prepare names
 	// (cache.Hello.Owner). An agent before it ignores the field.
 	owner bool
+
+	// carry says the workspace reports opaque directories and links, and skips
+	// and names an entry of a batch it cannot write (cache.Hello.Carry). Asked
+	// for in each request only when it is set, since an agent without it would
+	// ignore the field and the client would take a skipped entry for a landed
+	// one.
+	carry bool
+
+	// dead is set when the stream can no longer be trusted: it was closed, an
+	// exchange timed out, or a read or write on it failed. A request that is
+	// refused by the workspace in words does not set it. The next caller opens
+	// a new channel (ensureCacheChan).
+	dead atomic.Bool
 
 	// turn is held for a whole exchange (see do). A channel rather than a
 	// mutex so that waiting for it honours the caller's context.
@@ -65,6 +79,7 @@ func openCache(ctx context.Context, client *tunnelclient.Client) (*cacheChannel,
 		c.codec = cache.CodecZstd
 	}
 	c.owner = reply.Hello.Owner
+	c.carry = reply.Hello.Carry
 	return c, nil
 }
 
@@ -219,13 +234,30 @@ func (c *cacheChannel) do(ctx context.Context, req cache.Request, body io.Reader
 
 	select {
 	case a := <-done:
+		if a.err != nil && !errors.Is(a.err, errRefused) {
+			c.dead.Store(true)
+		}
 		return a.reply, a.err
 	case <-ctx.Done():
+		c.dead.Store(true)
 		_ = c.stream.Close()
 		return cache.Reply{}, fmt.Errorf("cache: %s for %s did not answer: %w",
 			req.Op, req.Export, ctx.Err())
 	}
 }
+
+// errRefused marks an error that is the workspace's answer in words, over a
+// stream that is intact, as against one that says the stream is not.
+var errRefused = errors.New("the workspace refused the request")
+
+// refusal is the workspace's own message, kept as it came.
+type refusal string
+
+func (r refusal) Error() string        { return string(r) }
+func (r refusal) Is(target error) bool { return target == errRefused }
+
+// usable reports whether the channel can still carry a request.
+func (c *cacheChannel) usable() bool { return !c.dead.Load() }
 
 // exchange is the request and its reply, on a stream the caller has locked.
 func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply, error) {
@@ -263,7 +295,7 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 		}
 	}
 	if reply.Err != "" {
-		return reply, fmt.Errorf("%s", reply.Err)
+		return reply, refusal(reply.Err)
 	}
 	return reply, nil
 }
@@ -271,7 +303,7 @@ func (c *cacheChannel) exchange(req cache.Request, body io.Reader) (cache.Reply,
 // Changes asks what the container did to a share, converting the wire type to
 // dircache's field for field (ADR 0021).
 func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.Change, error) {
-	reply, err := c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export}, nil)
+	reply, err := c.do(ctx, cache.Request{Op: cache.OpChanges, Export: export, Carry: c.carry}, nil)
 	if reply.Unknown {
 		return nil, dircache.ErrShareGone
 	}
@@ -285,6 +317,8 @@ func (c *cacheChannel) Changes(ctx context.Context, export string) ([]dircache.C
 			Size:    ch.Size,
 			ModTime: ch.ModTime,
 			Deleted: ch.Deleted,
+			Opaque:  ch.Opaque,
+			Link:    ch.Link,
 		})
 	}
 	return changes, nil
@@ -370,19 +404,25 @@ func (c *cacheChannel) Prepare(ctx context.Context, export, volume string, port 
 	return reply.Merged, nil
 }
 
-// Apply puts one batch of files, read from root, into a share's cache.
-func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []dircache.Entry) error {
+// Apply puts one batch of files, read from root, into a share's cache, and
+// names the paths the workspace could not take and left out. An agent that does
+// not skip fails the batch instead, so there is nothing to name then.
+func (c *cacheChannel) Apply(ctx context.Context, export, root string, entries []dircache.Entry) ([]string, error) {
 	body, err := tarOf(root, entries, c.codec)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = c.do(ctx, cache.Request{
+	reply, err := c.do(ctx, cache.Request{
 		Op:     cache.OpApply,
 		Export: export,
 		Bytes:  int64(len(body)),
 		Codec:  c.codec,
+		Carry:  c.carry,
 	}, bytes.NewReader(body))
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return reply.Skipped, nil
 }
 
 // Drop removes paths from a share's cache, in as many requests as the frame
@@ -401,7 +441,10 @@ func (c *cacheChannel) Drop(ctx context.Context, export string, paths []string) 
 }
 
 // Close ends the channel, which releases every union this session prepared.
-func (c *cacheChannel) Close() error { return c.stream.Close() }
+func (c *cacheChannel) Close() error {
+	c.dead.Store(true)
+	return c.stream.Close()
+}
 
 // liveCache is this session's cache channel, or nil. Asked per batch: a fill
 // outlives the connection it started on (ADR 0015).
@@ -436,16 +479,26 @@ type shareCache struct {
 // Attach hands the share to the engine, if any, translating the mode into
 // dircache's terms, which cannot name workspace.Mode.
 func (c shareCache) Attach(export, localPath string, mode workspace.Mode, words workspace.ShareWords) {
-	if c.session.cache != nil {
-		policy := policyOf(words.Prefetch)
-		if !mode.Prefetch() {
-			policy = dircache.PolicyOff
-		}
-		c.session.cache.Attach(export, localPath, dircache.ShareOptions{
-			Policy:    policy,
-			Ephemeral: mode.Write == workspace.WriteEphemeral,
-		})
+	c.session.attachShare(export, localPath, mode, words)
+}
+
+// attachShare hands a share to the cache engine, if there is one. A mount calls
+// it for a share it registered, and a share restored from the record calls it
+// too: the restored share registers for NFS and nothing else would tell the
+// cache, so write-back, which polls only attached shares, would never run for it
+// again (ADR 0027).
+func (s *Session) attachShare(export, localPath string, mode workspace.Mode, words workspace.ShareWords) {
+	if s.cache == nil {
+		return
 	}
+	policy := policyOf(words.Prefetch)
+	if !mode.Prefetch() {
+		policy = dircache.PolicyOff
+	}
+	s.cache.Attach(export, localPath, dircache.ShareOptions{
+		Policy:    policy,
+		Ephemeral: mode.Write == workspace.WriteEphemeral,
+	})
 }
 
 // policyOf is the fill policy a share's prefetch word stands for.

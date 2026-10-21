@@ -30,8 +30,9 @@ import (
 	"time"
 )
 
-// baseline is what the fill sent, for one path.
-type baseline struct {
+// Baseline is what the fill sent, for one path: the size and modification time
+// it had on THIS machine when it went.
+type Baseline struct {
 	Size    int64
 	ModTime time.Time
 }
@@ -50,6 +51,9 @@ const (
 	// kindConflict means both sides changed it. Reported whichever way it
 	// resolves, because silently choosing is the one thing this must not do.
 	kindConflict
+
+	// kindLink makes the symbolic link the consumer made (action.Link).
+	kindLink
 )
 
 func (k kind) String() string {
@@ -58,6 +62,8 @@ func (k kind) String() string {
 		return "write"
 	case kindDelete:
 		return "delete"
+	case kindLink:
+		return "link"
 	default:
 		return "conflict"
 	}
@@ -75,6 +81,9 @@ type action struct {
 
 	// Why is the one line a person is shown for a conflict.
 	Why string
+
+	// Link is the target of a kindLink, verbatim.
+	Link string
 }
 
 // localAt is what this machine knows about a path: its current state, or nothing
@@ -96,7 +105,7 @@ type localAt func(path string) (fs.FileInfo, bool)
 // run did not send and this machine no longer has was deleted here, and a
 // cached copy of it is not the consumer's to bring back.
 func decide(
-	manifest map[string]baseline,
+	manifest map[string]Baseline,
 	recorded map[string]bool,
 	changes []Change,
 	local localAt,
@@ -109,6 +118,12 @@ func decide(
 
 	var actions []action
 	for _, change := range changes {
+		// A replaced directory and a link are not files to compare: the first
+		// is expanded into deletions before this (expandReplaced) and the
+		// second is decided by decideLinks.
+		if change.Opaque || change.Link != "" {
+			continue
+		}
 		base, sent := manifest[change.Path]
 		info, here := local(change.Path)
 

@@ -222,7 +222,7 @@ func TestDropDeletedAsksOnlyForWhatIsGone(t *testing.T) {
 
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.shares.set("/m/1111111111111111", root, &shareState{}, []string{"/kept.go", "/gone.go"})
+	c.shares.set("/m/1111111111111111", root, &shareState{}, recorded("/kept.go", "/gone.go"))
 	c.reconcileDeletions("/m/1111111111111111", root)
 
 	store.mu.Lock()
@@ -246,7 +246,7 @@ func TestDropDeletedSaysNothingWhenNothingIsGone(t *testing.T) {
 
 	store := &fakeStore{}
 	c := cacheWith(t, store)
-	c.shares.set("/m/1111111111111111", root, &shareState{}, []string{"/a.go"})
+	c.shares.set("/m/1111111111111111", root, &shareState{}, recorded("/a.go"))
 	c.reconcileDeletions("/m/1111111111111111", root)
 
 	store.mu.Lock()

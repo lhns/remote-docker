@@ -121,6 +121,10 @@ func TestCacheChannelHonoursItsContext(t *testing.T) {
 	default:
 		t.Error("the timed-out exchange left the channel open")
 	}
+	// And the next caller is not handed it: ensureCacheChan opens another.
+	if c.usable() {
+		t.Error("a channel closed by a timeout is still reported usable")
+	}
 }
 
 // A request's deadline covers its wait for the channel too. The collector's

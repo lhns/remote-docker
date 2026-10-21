@@ -146,6 +146,13 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 			dropped = append(dropped, p)
 			continue
 		}
+		// A name the union reserves for itself cannot be held by it, and the
+		// fill leaves such a file out for the same reason.
+		if overlayMarker(p) {
+			c.log().Warn("a file named like an overlay marker is not copied to a share's cache; it is read live",
+				"share", share, "path", strings.TrimPrefix(p, "/"))
+			continue
+		}
 		// The size is what bounds a batch. A path that cannot be stat'ed still
 		// goes: it may have been deleted again since the event, and a Store
 		// leaves out what it cannot open.
@@ -168,9 +175,14 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 	}
 	for _, batch := range batches(changed) {
 		c.record(share, batch)
-		if err := store.Apply(ctx, share, root, batch); err != nil {
+		skipped, err := store.Apply(ctx, share, root, batch)
+		if err != nil {
 			c.quiet(ctx, "updating a cache", "share", share, "err", err)
 			continue
+		}
+		if len(skipped) > 0 {
+			c.unrecord(share, skipped)
+			batch = withoutSkipped(batch, skipped)
 		}
 		// The manifest means "what this client put in the cache", and a file
 		// created here after the fill is exactly that. Left out, it is in the
@@ -178,7 +190,23 @@ func (c *Cache) invalidate(share, root string, paths map[string]bool) {
 		// consumer's own file, and a later deletion of it has nothing to
 		// reconcile against.
 		c.shares.noteSent(share, root, batch)
+		c.saveRecord(share)
 	}
+}
+
+// withoutSkipped is the entries of a batch the far end did take.
+func withoutSkipped(entries []Entry, skipped []string) []Entry {
+	left := make(map[string]bool, len(skipped))
+	for _, p := range skipped {
+		left[slashed(p)] = true
+	}
+	var out []Entry
+	for _, e := range entries {
+		if !left[slashed(e.Path)] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // excludedPath reports whether any component of a share-relative path is a

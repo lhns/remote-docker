@@ -86,8 +86,21 @@ type Change struct {
 	ModTime int64 `json:"m,omitempty"`
 
 	// Deleted is a whiteout in the upper layer, which is how a deletion is told
-	// from a file never cached.
+	// from a file never cached. A whiteout of a directory is one Change with
+	// the directory's path: what lay under it is the client's to work out.
 	Deleted bool `json:"d,omitempty"`
+
+	// Opaque says the path is a directory the container replaced: what the
+	// lower held under it is hidden, and only what is listed beside this
+	// change exists there now. Sent only to a client that asked (Request.Carry).
+	Opaque bool `json:"o,omitempty"`
+
+	// Link is the target of a symbolic link the container made at Path, kept
+	// verbatim, however absolute or far outside the share. A link is a name, not
+	// a write through it. Sent only to a client that asked (Request.Carry); one
+	// that did not is never told of a link, because it would read it as an empty
+	// file.
+	Link string `json:"l,omitempty"`
 }
 
 // Request is one frame from the client: one op and the fields it needs.
@@ -130,6 +143,14 @@ type Request struct {
 
 	// Codec is how that tar is encoded. Empty is uncompressed.
 	Codec string `json:"z,omitempty"`
+
+	// Carry asks for the write-back behaviour of Hello.Carry: on OpChanges,
+	// opaque directories and links are reported (Change.Opaque, Change.Link);
+	// on OpApply, an entry that cannot be written is skipped and named in
+	// Reply.Skipped instead of failing the whole batch. A client sends it only
+	// when the agent announced the capability, and an agent that has not got it
+	// ignores the field.
+	Carry bool `json:"y,omitempty"`
 }
 
 // Reply is the agent's answer to one request.
@@ -151,6 +172,11 @@ type Reply struct {
 	// the request failing. A released share would otherwise be asked about for
 	// the life of the session.
 	Unknown bool `json:"unknown,omitempty"`
+
+	// Skipped answers an OpApply that asked for Carry: the paths of entries
+	// that could not be written and were left out, where the rest of the batch
+	// landed. Spelled as a share path.
+	Skipped []string `json:"k,omitempty"`
 
 	// Bytes is the length of the tar after this reply, answering OpPull.
 	Bytes int64 `json:"n,omitempty"`
@@ -176,6 +202,13 @@ type Hello struct {
 	// non-root container cannot use the share: the client refuses that mount
 	// by name instead (cache.Hello.Owner is how it knows).
 	Owner bool `json:"o,omitempty"`
+
+	// Carry says this agent reports opaque directories and links in OpChanges
+	// and skips and reports an unwritable entry of an OpApply, each only when
+	// the request carries Carry (ADR 0044). A client that sees it absent
+	// carries nothing back that is not a plain file, and says so in its
+	// status.
+	Carry bool `json:"w,omitempty"`
 }
 
 // Accepts reports whether the agent that sent this greeting can read a codec.

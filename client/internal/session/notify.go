@@ -186,10 +186,15 @@ func (s *Session) closeWatcher() {
 }
 
 // shareRestored is told of a share brought back from the record, which no
-// mount registered: if it watches, the watcher must exist and know it now, or
-// a container started against it is served unwatched until the next
-// reconcile.
+// mount registered: a union goes to the cache, and if it watches, the watcher
+// must exist and know it now, or a container started against it is served
+// unwatched until the next reconcile.
 func (s *Session) shareRestored(share *nfsserve.Share) {
+	// Attached with the words it was recorded with, prefetch included: its fill
+	// resumes, and its write-back starts again.
+	if share.Mode.Union() {
+		s.attachShare(share.ExportPath, share.LocalPath, share.Mode, share.Words())
+	}
 	if !share.Words().Watch.Watching() {
 		return
 	}

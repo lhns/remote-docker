@@ -51,7 +51,7 @@ func TestACacheChannelATimeoutClosedIsReopened(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening the channel: %v", err)
 	}
-	_ = first.stream.Close()
+	_ = first.Close()
 
 	second, err := s.ensureCacheChan(t.Context(), live)
 	if err != nil {

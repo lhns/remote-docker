@@ -15,8 +15,18 @@ type Change struct {
 	// machine's only for a file both sides changed, after the measured offset.
 	ModTime int64
 
-	// Deleted says the consumer removed it.
+	// Deleted says the consumer removed it. For a directory that is one change
+	// with the directory's path, and what lay under it is worked out from what
+	// the fill sent.
 	Deleted bool
+
+	// Opaque says the consumer replaced a directory: what was under it is
+	// hidden, and only what is listed beside this change exists there now.
+	Opaque bool
+
+	// Link is the target of a symbolic link the consumer made at Path, kept
+	// verbatim. Size and ModTime are not meaningful for it beyond identity.
+	Link string
 }
 
 // Op is what happened to a path on this machine. A bitset: one save can be

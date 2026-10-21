@@ -69,6 +69,12 @@ type Stats struct {
 	// Excluded is how many entries the exclude list skipped. Reported because
 	// a cache that mysteriously omits .git is worth being able to explain.
 	Excluded int
+
+	// Markers is how many names the union reserves for itself were left out
+	// (a name starting ".wh."), and FirstMarker the first of them. The union
+	// reads such a name as the deletion of another, so it cannot hold one.
+	Markers     int
+	FirstMarker string
 }
 
 // Complete reports whether everything the walk saw will be cached.
@@ -100,6 +106,18 @@ func walk(root string, excludes []string, yield func(Entry)) Stats {
 		}
 		// A write-back landing in progress: ours, never the user's file.
 		if !d.IsDir() && strings.HasPrefix(d.Name(), writebackPrefix) {
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".wh.") {
+			stats.Markers++
+			if stats.FirstMarker == "" {
+				if rel, err := filepath.Rel(root, p); err == nil {
+					stats.FirstMarker = filepath.ToSlash(rel)
+				}
+			}
+			if d.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if skip[d.Name()] {

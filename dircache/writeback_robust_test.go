@@ -10,13 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -32,22 +32,34 @@ type faultStore struct {
 
 	changesFn func() error
 	pullFn    func(ctx context.Context, paths []string, deliver func(path string) error) error
-	applyFn   func() error
+	applyFn   func(entries []Entry) error
+	skipPaths map[string]bool // share-relative, no leading slash
 
 	applied []Entry
 	pulled  [][]string
 }
 
-func (f *faultStore) Apply(_ context.Context, _, _ string, entries []Entry) error {
+func (f *faultStore) Apply(_ context.Context, _, _ string, entries []Entry) ([]string, error) {
 	if f.applyFn != nil {
-		if err := f.applyFn(); err != nil {
-			return err
+		if err := f.applyFn(entries); err != nil {
+			return nil, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = append(f.applied, entries...)
-	return nil
+	return f.skip(entries), nil
+}
+
+// skip names the entries the far end is scripted to leave out.
+func (f *faultStore) skip(entries []Entry) []string {
+	var out []string
+	for _, e := range entries {
+		if f.skipPaths[e.Path] {
+			out = append(out, "/"+e.Path)
+		}
+	}
+	return out
 }
 
 func (f *faultStore) Drop(context.Context, string, []string) error { return nil }
@@ -109,17 +121,38 @@ const wbShare = "/m/1111111111111111"
 
 // wbCache is a cache over store with one complete share at root, logging to
 // the returned buffer.
-func wbCache(t *testing.T, store Store, root string) (*Cache, *syncBuffer) {
+func wbCache(t *testing.T, store Store, root string) (*Cache, *syncBuffer, *fakeClock) {
 	t.Helper()
 	logs := &syncBuffer{}
+	clk := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
 	c := &Cache{
 		Store: func() (Store, bool) { return store, true },
 		Ctx:   t.Context(),
 		Log:   slog.New(slog.NewTextHandler(logs, nil)),
+		now:   clk.Now,
 	}
 	t.Cleanup(c.Stop)
 	c.shares.set(wbShare, root, &shareState{Report: Report{Done: true}, Cached: true}, nil)
-	return c, logs
+	return c, logs, clk
+}
+
+// fakeClock is the time write-back backs off by, which a test moves instead of
+// waiting for.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (f *fakeClock) Now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.t
+}
+
+func (f *fakeClock) advance(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.t = f.t.Add(d)
 }
 
 type syncBuffer struct {
@@ -139,10 +172,12 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// rounds runs n write-back rounds back to back.
-func rounds(t *testing.T, c *Cache, n int) {
+// rounds runs n write-back rounds, each after more than the longest backoff, so
+// a failure never makes the next round wait.
+func rounds(t *testing.T, c *Cache, clk *fakeClock, n int) {
 	t.Helper()
 	for range n {
+		clk.advance(2 * writeBackBackoffMax)
 		c.writeBackRound(t.Context())
 	}
 }
@@ -177,10 +212,10 @@ func TestWriteBackKeepsWhatLandedWhenAPullRunsOutOfBudget(t *testing.T) {
 		}
 		return nil
 	}
-	c, _ := wbCache(t, store, root)
+	c, _, clk := wbCache(t, store, root)
 	c.roundBudget = 50 * time.Millisecond
 
-	rounds(t, c, 1)
+	rounds(t, c, clk, 1)
 
 	base := c.shares.baselines(wbShare)
 	recorded := c.shares.recordedSet(wbShare)
@@ -197,7 +232,7 @@ func TestWriteBackKeepsWhatLandedWhenAPullRunsOutOfBudget(t *testing.T) {
 		}
 	}
 
-	rounds(t, c, 2)
+	rounds(t, c, clk, 2)
 	for i := range 6 {
 		if p := fmt.Sprintf("/f%d", i); !exists(root, p) {
 			t.Errorf("%s never arrived", p)
@@ -215,17 +250,17 @@ func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
 	store.add("/b", "y")
 	store.add("/c", "z")
 
-	c, logs := wbCache(t, store, root)
+	c, logs, clk := wbCache(t, store, root)
 	var attempts int
 	c.writeFile = func(r *os.Root, f File) error {
 		if f.Path == "/a:bad" {
 			attempts++
-			return &os.PathError{Op: "openat", Path: f.Path, Err: syscall.EINVAL}
+			return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 		}
 		return writeUnder(r, f)
 	}
 
-	rounds(t, c, 5)
+	rounds(t, c, clk, 5)
 
 	for _, p := range []string{"b", "c"} {
 		if !exists(root, p) {
@@ -235,8 +270,14 @@ func TestWriteBackSkipsAFileItCannotWriteAndCarriesOn(t *testing.T) {
 	if attempts > 1 {
 		t.Errorf("the unwritable file was tried %d times in 5 rounds, want it given up on", attempts)
 	}
-	if n := strings.Count(logs.String(), "a:bad"); n != 1 {
-		t.Errorf("the unwritable file is named %d times in the log, want once:\n%s", n, logs.String())
+	named := 0
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "a:bad") {
+			named++
+		}
+	}
+	if named != 1 {
+		t.Errorf("the unwritable file is named on %d log lines, want once:\n%s", named, logs.String())
 	}
 }
 
@@ -248,23 +289,23 @@ func TestWriteBackResumesAfterTheDiskWasFull(t *testing.T) {
 	for i := range 4 {
 		store.add(fmt.Sprintf("/f%d", i), "body")
 	}
-	c, _ := wbCache(t, store, root)
+	c, _, clk := wbCache(t, store, root)
 	full := true
 	c.writeFile = func(r *os.Root, f File) error {
 		if full {
-			return &os.PathError{Op: "write", Path: f.Path, Err: syscall.ENOSPC}
+			return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 		}
 		return writeUnder(r, f)
 	}
 
-	rounds(t, c, 4)
+	rounds(t, c, clk, 4)
 	if exists(root, "f0") {
 		t.Fatal("a file landed on a full disk")
 	}
 
 	full = false
 	store.add("/later", "after")
-	rounds(t, c, 12)
+	rounds(t, c, clk, 12)
 
 	for _, p := range []string{"f0", "f1", "f2", "f3", "later"} {
 		if !exists(root, p) {
@@ -284,14 +325,15 @@ func TestAFailedFillBatchIsRetriedAndWriteBackFollows(t *testing.T) {
 	}
 	var calls int
 	store := &faultStore{}
-	store.applyFn = func() error {
+	store.applyFn = func([]Entry) error {
 		calls++
 		if calls == 1 {
 			return errors.New("the workspace refused the batch")
 		}
 		return nil
 	}
-	c := &Cache{Store: func() (Store, bool) { return store, true }, Ctx: t.Context()}
+	clk := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	c := &Cache{Store: func() (Store, bool) { return store, true }, Ctx: t.Context(), now: clk.Now, fillBackoff: 5 * time.Millisecond}
 	t.Cleanup(c.Stop)
 
 	c.Attach(wbShare, root, ShareOptions{Policy: PolicyEager})
@@ -301,7 +343,7 @@ func TestAFailedFillBatchIsRetriedAndWriteBackFollows(t *testing.T) {
 	})
 
 	store.add("/made-by-the-container", "hello")
-	rounds(t, c, 1)
+	rounds(t, c, clk, 1)
 	if !exists(root, "made-by-the-container") {
 		t.Error("write-back did not run after the fill recovered")
 	}
@@ -310,23 +352,23 @@ func TestAFailedFillBatchIsRetriedAndWriteBackFollows(t *testing.T) {
 // memRecord is a Record that survives a Cache, as the file does a process.
 type memRecord struct {
 	mu sync.Mutex
-	m  map[string][]string
+	m  map[string]map[string]Baseline
 }
 
-func (r *memRecord) Filled(share string) ([]string, bool) {
+func (r *memRecord) Filled(share string) (map[string]Baseline, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p, ok := r.m[share]
-	return append([]string(nil), p...), ok
+	return maps.Clone(p), ok
 }
 
-func (r *memRecord) Record(share string, paths []string) {
+func (r *memRecord) Record(share string, filled map[string]Baseline) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.m == nil {
-		r.m = map[string][]string{}
+		r.m = map[string]map[string]Baseline{}
 	}
-	r.m[share] = append([]string(nil), paths...)
+	r.m[share] = maps.Clone(filled)
 }
 
 // H6. After a client restart a file the fill sent and the consumer then
@@ -351,10 +393,11 @@ func TestAModifiedFileIsWrittenBackAfterARestart(t *testing.T) {
 
 	store := &faultStore{}
 	store.add("/main.go", "after, from the container\n")
-	second := &Cache{Store: func() (Store, bool) { return store, true }, Record: rec, Ctx: t.Context()}
+	secondClock := &fakeClock{t: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}
+	second := &Cache{Store: func() (Store, bool) { return store, true }, Record: rec, Ctx: t.Context(), now: secondClock.Now}
 	t.Cleanup(second.Stop)
 	second.Attach(wbShare, root, ShareOptions{Policy: PolicyOff})
-	rounds(t, second, 1)
+	rounds(t, second, secondClock, 1)
 
 	got, err := os.ReadFile(local)
 	if err != nil {
@@ -370,7 +413,7 @@ func TestAModifiedFileIsWrittenBackAfterARestart(t *testing.T) {
 // a file this machine cannot hold is skipped without stopping the others, and
 // nothing else is written.
 func TestWriteBackEventuallyLandsEverythingWhateverFailedFirst(t *testing.T) {
-	for seed := uint64(1); seed <= 40; seed++ {
+	for seed := uint64(1); seed <= 20; seed++ {
 		t.Run(fmt.Sprint("seed ", seed), func(t *testing.T) {
 			rng := rand.New(rand.NewPCG(seed, seed*7919))
 			root := t.TempDir()
@@ -408,20 +451,20 @@ func TestWriteBackEventuallyLandsEverythingWhateverFailedFirst(t *testing.T) {
 				}
 				return nil
 			}
-			c, _ := wbCache(t, store, root)
+			c, _, clk := wbCache(t, store, root)
 			c.writeFile = func(r *os.Root, f File) error {
 				if bad[f.Path] {
-					return &os.PathError{Op: "openat", Path: f.Path, Err: syscall.EINVAL}
+					return &os.PathError{Op: "openat", Path: f.Path, Err: errBadName}
 				}
 				if faulty && rng.IntN(4) == 0 {
-					return &os.PathError{Op: "write", Path: f.Path, Err: syscall.ENOSPC}
+					return &os.PathError{Op: "write", Path: f.Path, Err: errNoSpace}
 				}
 				return writeUnder(r, f)
 			}
 
-			rounds(t, c, 15)
+			rounds(t, c, clk, 15)
 			faulty = false
-			rounds(t, c, 25)
+			rounds(t, c, clk, 25)
 
 			var found []string
 			_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {

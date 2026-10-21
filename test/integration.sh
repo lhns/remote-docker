@@ -2675,6 +2675,34 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             else
                 bad "overlay markers in the user's tree: [$markers]"
             fi
+            # A marker sent back into the cache failed the batch, left the rest of
+            # its payload unread, and every later request on the channel, for every
+            # share, answered with "invalid character" (ADR 0044).
+            desync=$(grep 'invalid character' "$WORK/watch-up.log")
+            if [ -z "$desync" ]; then
+                ok "the cache channel stayed in step through a replaced directory"
+            else
+                bad "the cache channel failed after a replaced directory: [$(echo "$desync" | head -3)]"
+            fi
+            # Links the container makes arrive as links, targets as written, one
+            # relative and one absolute; this is the rule the live share follows
+            # (README, "What differs from a bind mount").
+            if dockert exec itest-wb-replace sh -c 'cd /w && ln -s tools/new rel-link && ln -s /usr/bin/example abs-link' >/dev/null 2>&1; then
+                linked=false
+                for _ in $(seq 1 40); do
+                    [ -L "$REPLDIR/rel-link" ] && [ -L "$REPLDIR/abs-link" ] && linked=true && break
+                    sleep 1
+                done
+                if [ "$linked" = true ] && [ "$(readlink "$REPLDIR/rel-link")" = "tools/new" ] &&
+                    [ "$(readlink "$REPLDIR/abs-link")" = "/usr/bin/example" ]; then
+                    ok "links the container made arrive as links, targets as written"
+                else
+                    bad "rel-link -> [$(readlink "$REPLDIR/rel-link" 2>&1)], abs-link -> [$(readlink "$REPLDIR/abs-link" 2>&1)]"
+                    share_diagnostics
+                fi
+            else
+                bad "the container could not make its links"
+            fi
         else
             bad "the container could not replace its directory"
         fi
@@ -2736,7 +2764,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             'mkdir -p /w/burst && cd /w/burst && i=0 && while [ $i -lt 5000 ]; do echo $i >f$i; i=$((i+1)); done' >/dev/null 2>&1
         have=0
         for _ in $(seq 1 90); do
-            have=$(find "$BURSTDIR/burst" -type f 2>/dev/null | wc -l | tr -d ' ')
+            have=$(find "$BURSTDIR/burst" -name 'f*' -type f 2>/dev/null | wc -l | tr -d ' ')
             [ "$have" = 5000 ] && break
             sleep 2
         done
