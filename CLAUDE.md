@@ -502,7 +502,13 @@ premise of the project, and it applies to building it too. So:
   batch is taken back out of the tree (`Tree.Unstore`) and retried from 1s to
   5 min, and an agent drains an apply's payload whatever the extraction did,
   or the next request is read out of the middle of a tar and every request on
-  the channel for every share fails with `invalid character`.
+  the channel for every share fails with `invalid character`. A file this
+  machine carried back is marked with the consumer's own time
+  (`Baseline.Consumer`) and is never deleted because a directory above it is
+  opaque or absent from the changes: the agent stops listing what the cache was
+  written over, and CI watched 5,000 files vanish from the container when that
+  silence was read as a deletion. A prune keeps the record of every registered
+  share, since a share is recorded before its volume exists.
 - **An overlay marker never reaches the user's tree** (ADR 0044, 2026-10-21).
   fuse-overlayfs records a replaced directory as `trusted.overlay.opaque=y`, a
   character device `.wh..opq` AND a regular file `.wh..wh..opq`, and a deletion

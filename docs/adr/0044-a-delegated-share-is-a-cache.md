@@ -322,6 +322,16 @@ fixed (PR 342); the causes, in the order they compound:
 | one round was all or nothing, under one 2 minute deadline | a burst bigger than the budget moved nothing, and one file this machine refuses stopped every file behind it | a deadline per call, 200 files per pull, at most 2,000 landed per pass; the manifest and the record move per file |
 | a restart dropped the baselines | a restored share was not attached, and the record held paths and not baselines, so a file the container modified read as one this machine might have made and was never carried back | a restored share is attached with its recorded words (ADR 0027) and the fill record persists each file's size and time beside its path |
 
+Fixing those exposed three more, each found by CI after the first fixes:
+
+| cause | what it did | answer |
+|---|---|---|
+| a landed file keeps its time to the second (a tar does), and the consumer's own reading never equals that | the same version read as a new change every round and was written back again, which with passes of 2,000 files became a loop | `Baseline.Consumer` remembers the consumer's time for a version carried back, and persists |
+| a directory the container made reads as opaque, and a file written back into it stops being listed once the watcher sends it to the cache again (the agent hides what the client applied) | `expandReplaced` read the silence as the consumer deleting it: write-back deleted each file it had just landed, the watcher dropped it from the cache, and 5,000 files made in the container were gone within seconds | a file carried back from the consumer (`Consumer != 0`, kept by `noteSent` while unchanged) is never deleted on a directory's say-so |
+| a share is recorded before its volume exists (a union is prepared first, which takes seconds), and the prune after connect forgot records with no volume | a client restarted under that container had no record to restore | a prune keeps the record of every share this session has registered |
+| restoring waited for a MOUNT or root handle | a container that only writes into its union presents neither, so a restarted client carried back nothing | the session restores the recorded unions the workspace reports mounted as it connects (ADR 0027) |
+| a resumed fill sent the whole tree again | it overwrote what a running container had written over those files | the fill skips what the record says went and has not changed here (`alreadyHeld`, `Tree.MarkSent`) |
+
 **What a failed write means.** `classifyWrite` sorts it, by platform:
 
 | class | errors | what happens |
