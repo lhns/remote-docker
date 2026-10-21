@@ -122,6 +122,7 @@ func (s *Session) connect(ctx context.Context) (*liveConn, error) {
 
 		// Idle until a share has a complete cache (ADR 0044).
 		live.wg.Go(func() { s.cache.WriteBack(liveCtx) })
+		live.wg.Go(func() { s.reattachUnions(liveCtx, live) })
 
 		live.wg.Go(func() {
 			if _, err := s.collector(live).Collect(liveCtx); err != nil {

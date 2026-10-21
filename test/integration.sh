@@ -2132,7 +2132,7 @@ echo "== 15c. read=cached,write=back, which is a union =="
 # the container down by then.
 share_diagnostics() {
     "$WORK/remote-docker" remote status 2>&1 |
-        grep -iE "cache|watch" | sed 's/^/        client: /'
+        grep -iE "cache|watch|write-back" | sed 's/^/        client: /'
     grep -iE "cache|union|fuse|writ|chang|collect" "$WORK/watch-up.log" 2>/dev/null |
         tail -12 | sed 's/^/        client: /'
     # The background session's own log, which is where sections 16 and later log.
@@ -2775,6 +2775,7 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
             ok "5,000 files made in one burst all arrive"
         else
             bad "$have of 5000 files arrived in 180s"
+            echo "        in the container: $(dockert exec itest-wb-burst sh -c 'ls /w/burst | wc -l' 2>&1)"
             share_diagnostics
         fi
     else

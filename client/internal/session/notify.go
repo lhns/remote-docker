@@ -240,3 +240,38 @@ func (s *Session) reconcileShares(ctx context.Context, every time.Duration) {
 		}
 	}
 }
+
+// reattachUnions brings back the shares a running container still binds, as
+// soon as the session is connected, and does not wait for the container to touch
+// its mount.
+//
+// A restored share is attached to the cache and so is write-back for it
+// (shareRestored), but restoring waits for a MOUNT or a root handle the kernel
+// presents, and a container that only writes into its union presents neither: a
+// restarted client then never carried its writes back. The workspace knows which
+// unions are mounted, and the record knows which of them are this machine's, so
+// the two together name exactly the shares to restore. A share the workspace
+// holds no union for is left to the lazy path, and a workspace too old to answer
+// is left alone.
+func (s *Session) reattachUnions(ctx context.Context, live *liveConn) {
+	if s.shares == nil || s.cache == nil {
+		return
+	}
+	// Only when a union is recorded: a session with none must never ask, so it
+	// stays silent against a workspace too old for the channel.
+	recorded := s.shares.unionExports()
+	if len(recorded) == 0 {
+		return
+	}
+	mounted, err := s.mountedCaches(ctx)
+	if err != nil {
+		return
+	}
+	for _, export := range recorded {
+		volume, err := workspace.CacheVolumeForExport(live.clientID, export)
+		if err != nil || !mounted[volume] {
+			continue
+		}
+		s.registry.LookupOrRestore(export)
+	}
+}

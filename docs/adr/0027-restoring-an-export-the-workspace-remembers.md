@@ -3,7 +3,8 @@
 - Status: Accepted; amends [ADR 0007](0007-virtual-nfs-export-namespace.md)
 - Date: 2026-08-11; amended 2026-09-25, 2026-10-14, 2026-10-15, 2026-10-21
 - Current answer: restore lazily, from a MOUNT or a share ROOT HANDLE that
-  misses, through the checks below. Never eagerly, never from a lookup. A
+  misses, through the checks below, and for a recorded union the workspace
+  reports mounted, at connect. Never from a lookup. A
   restored union share is attached to the cache with its recorded words, and
   the fill record carries the baselines write-back compares against
   (amended 2026-10-21).
@@ -124,6 +125,12 @@ digest is an identity rather than a security boundary.
   prefetch resumes (ADR 0045) and, above all, its write-back runs again.
   Before, a restart left a restored share unattached, and write-back, which
   polls only attached shares, never carried a container's writes back from it.
+  Waiting for a MOUNT or a root handle is not enough for that: a container that
+  only writes into its union presents neither, and CI showed a restarted client
+  carrying back nothing. So at connect the session also restores the recorded
+  unions whose cache volume the workspace reports mounted
+  (`Session.reattachUnions`, through the same `LookupOrRestore`). That is the one
+  eager restore, and it is bounded by what a container demonstrably holds.
 - **The fill record holds baselines** (amended 2026-10-21). The record (`caches/<workspace>.json`)
   keeps, beside each share's list of paths, the size and modification time every
   file had when it was sent. After a restart the paths alone read every file as

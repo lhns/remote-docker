@@ -259,6 +259,24 @@ func (s *shareStore) exports() []string {
 	return out
 }
 
+// unionExports names the recorded exports that are unions, which are the only
+// ones a cache channel has anything to say about.
+func (s *shareStore) unionExports() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for export, rec := range s.records {
+		if rec.mode().Union() && s.usable(rec) {
+			out = append(out, export)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // forget drops records for exports the workspace no longer has a volume for.
 func (s *shareStore) forget(keep map[string]bool) {
 	if s == nil {
