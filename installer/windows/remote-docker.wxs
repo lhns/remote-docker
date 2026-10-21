@@ -65,10 +65,10 @@
     <!--
       The feature refuses rather than shadowing another vendor's docker.exe,
       which is the larger version of the promise ADR 0024 makes about a docker
-      context we did not create. Only with the Path feature: a docker.exe that
-      is not on the PATH shadows nothing. After CostFinalize, where feature action states
-      become readable, and in both sequences so a silent install and an
-      interactive one refuse alike.
+      context we did not create. Only with the Path feature, since a docker.exe
+      that is not on PATH shadows nothing. After CostFinalize, where feature
+      action states become readable, and in both sequences so a silent install
+      and an interactive one refuse alike.
     -->
     <CustomAction Id="RefuseDockerShadow"
                   Error="A docker.exe is already installed at [DOCKERONPATH], and the &quot;docker&quot; name would shadow it.&#xA;fix: leave that feature unselected, or pass ALLOWDOCKERSHADOW=1 to install it anyway." />

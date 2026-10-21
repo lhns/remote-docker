@@ -231,7 +231,7 @@ Invoke-Msi @('/x', $Msi) 'uninstall-override' 0
 Assert-NotInstalled
 
 # ---------------------------------------------------------------------------
-Section '9b. docker.exe without the Path feature is not refused by that docker.exe'
+Section '9b. docker.exe without the Path feature is installed beside another one'
 
 # The stub from section 7 is still in System32. Nothing is shadowed when the
 # install directory is not on PATH (ADR 0048).
