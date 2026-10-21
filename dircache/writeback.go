@@ -440,9 +440,11 @@ func (p *writePass) stillAsSeen(a action) bool {
 	rel := relPath(a.Path)
 	if !a.Seen.Here {
 		// Nothing was there; anything now, a dangling link included, is the
-		// user's and not ours to replace.
+		// user's and not ours to replace. A name this machine cannot even look
+		// up (Windows answers ERROR_INVALID_NAME) has nothing there either, and
+		// the write is what says why it cannot be held.
 		_, err := p.r.Lstat(rel)
-		return errors.Is(err, os.ErrNotExist)
+		return err != nil
 	}
 	info, err := p.r.Stat(rel)
 	return a.Seen.same(seenOf(info, err == nil))
