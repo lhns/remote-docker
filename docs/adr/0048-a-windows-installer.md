@@ -2,8 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-09-08; amended 2026-10-15 (Hyper-V workspace feature), 2026-10-16
-  (rollback guard, Restart Manager, run by hand)
-- Current answer: one MSI per architecture with two optional features. The
+  (rollback guard, Restart Manager, run by hand), 2026-10-21 (PATH feature)
+- Current answer: one MSI per architecture with three features besides the
+  required one: `Path` (on by default), `DockerName` and `HyperV`. The
   `docker.exe` feature is a second file name and runs no code. The Hyper-V
   workspace feature runs this program's own hidden commands as custom actions
   on install, upgrade and removal; the service they set up is
@@ -34,7 +35,7 @@ tool.
 | built on | `windows-latest`, in an `installers` job after the `binaries` one |
 | payload | the two Windows binaries goreleaser built, passed as an artifact |
 | scope | `perMachine`: Program Files, system PATH, elevated |
-| PATH | `Environment Part="last"` — appended, never prepended |
+| PATH | the `Path` feature, on by default; `Environment Part="last"` — appended, never prepended |
 | upgrades | `MajorUpgrade`, on a fixed `UpgradeCode` |
 | when | tag releases only |
 
@@ -80,7 +81,7 @@ dist/msi` after a `build.ps1` run.
 
 **The feature is refused when a `docker.exe` is already installed.** A type 19
 error custom action, after `CostFinalize` in both sequences, conditioned on
-`NOT Installed AND &DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW`.
+`NOT Installed AND &DockerName=3 AND &Path=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW`.
 The message names the file it found, and `ALLOWDOCKERSHADOW=1` overrides it.
 
 Why refuse rather than win: a Windows machine commonly already has a
@@ -95,6 +96,20 @@ version (`sha-9370b24`) has no mapping to that at all, so
 `installer/windows/build.ps1` validates the shape and the ranges and exits
 naming the version. Truncating instead would produce an upgrade that never
 fires, which is silent for a release cycle.
+
+## The PATH entry is a feature (2026-10-21)
+
+- **`Path` is a sibling of `DockerName` and `HyperV` under `Main`, `Level="1"`.**
+  Its component, `C.Path`, is unchanged (same Id and directory, so an upgrade
+  sees the same component). Leaving it out installs the exe and touches no
+  PATH; Modify adds and removes it.
+- **The `docker.exe` refusal applies only with `Path`** (`&Path=3`): a
+  `docker.exe` that is not on PATH shadows nothing.
+- **Scripts that list features with `ADDLOCAL` must name `Path`** to keep the
+  entry: `ADDLOCAL=Main,Path,DockerName`. A default install and an upgrade
+  need nothing.
+- Checked by `test/msi.ps1` 9b to 9d, the last of which upgrades from the
+  latest released MSI, where the entry lived in `Main`.
 
 ## The Hyper-V workspace feature (2026-10-15)
 

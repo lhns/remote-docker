@@ -8,6 +8,18 @@ proven.
 Dates are the day a claim was checked, which matters for the ones about other
 software.
 
+## Unreleased
+
+### New
+
+- **The system PATH entry is now an installer feature.** Leave it out to
+  install remote-docker without changing PATH.
+
+### Upgrading
+
+- Scripted installs that list features with `ADDLOCAL` must add `Path` to keep
+  the PATH entry, e.g. `ADDLOCAL=Main,Path,DockerName`.
+
 ## 0.14.0 — 2026-10-20
 
 ### New
