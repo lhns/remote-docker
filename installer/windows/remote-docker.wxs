@@ -274,7 +274,7 @@
           this binary in front of every tool already on the machine.
         -->
         <Component Id="C.Path" Directory="INSTALLFOLDER">
-          <RegistryValue Root="HKLM" Key="Software\lhnsemote-docker" Name="Path"
+          <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="Path"
                          Type="integer" Value="1" KeyPath="yes" />
           <Environment Id="E.Path" Name="PATH" Value="[INSTALLFOLDER]"
                        Part="last" Action="set" System="yes" Permanent="no" />
