@@ -351,8 +351,8 @@ func (c *cacheChannel) Pull(ctx context.Context, export string, paths []string, 
 }
 
 // errNoPresent is a workspace that cannot say which paths exist, which the
-// caller reads as "keep everything".
-var errNoPresent = errors.New("the workspace cannot say which paths exist")
+// caller reads as "keep everything", silently.
+var errNoPresent = dircache.ErrCannotPresent
 
 // Present answers which of the paths exist in the merged view of a share, the
 // one a container sees. An agent without Carry cannot answer.

@@ -365,3 +365,51 @@ func TestAFileTheWorkspaceCannotReadIsSetAsideAndTheRestLand(t *testing.T) {
 		}
 	}
 }
+
+// An ephemeral share is never carried back, so there is no both-changed rule to
+// protect: the edit here is what the container should get, and it is sent.
+func TestAResumedFillOfAnEphemeralShareSendsWhatChangedHere(t *testing.T) {
+	root := t.TempDir()
+	writeLocal(t, root, "main.go", "edited here since the restart")
+	rec := &memRecord{m: map[string]map[string]Baseline{wbShare: {
+		"/main.go": {Size: 3, ModTime: time.Unix(5, 0)},
+	}}}
+	store := &faultStore{}
+	store.changes = []Change{{Path: "/main.go", Size: 9, ModTime: time.Now().UnixNano()}}
+	c := &Cache{Store: func() (Store, bool) { return store, true }, Record: rec, Ctx: t.Context()}
+	t.Cleanup(c.Stop)
+
+	c.Attach(wbShare, root, ShareOptions{Policy: PolicyEager, Ephemeral: true})
+	eventually(t, "the resumed fill to finish", func() bool {
+		r := c.Reports()
+		return len(r) == 1 && r[0].Done
+	})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, e := range store.applied {
+		if e.Path == "main.go" {
+			return
+		}
+	}
+	t.Errorf("main.go was not sent to an ephemeral share; sent %v", store.applied)
+}
+
+// A consumer that cannot say what exists keeps everything, and does not say so
+// every round.
+func TestAStoreThatCannotPresentIsNotLoggedEveryRound(t *testing.T) {
+	root := t.TempDir()
+	writeLocal(t, root, "D/old", "x")
+	store := &faultStore{changes: []Change{{Path: "/D", Deleted: true}}, presentFn: func([]string) ([]string, error) {
+		return nil, ErrCannotPresent
+	}}
+	c, logs, clk := wbCache(t, store, root)
+	c.shares.noteSent(wbShare, root, []Entry{{Path: "D/old"}})
+
+	rounds(t, c, clk, 3)
+	if !exists(root, "D/old") {
+		t.Error("a file was deleted on a directory's say-so by a store that cannot confirm it")
+	}
+	if strings.Contains(logs.String(), "asking which paths") {
+		t.Errorf("a store that cannot answer was reported as failing:\n%s", logs.String())
+	}
+}

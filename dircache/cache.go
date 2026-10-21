@@ -50,6 +50,11 @@ type Presenter interface {
 	Present(ctx context.Context, share string, paths []string) ([]string, error)
 }
 
+// ErrCannotPresent is a Presenter whose far end cannot answer at all, such as an
+// older consumer. Nothing is deleted on a directory's say-so, and nothing is
+// said about it every round.
+var ErrCannotPresent = errors.New("dircache: the store cannot say which paths exist")
+
 // File is one file coming back out of a cache.
 type File struct {
 	// Path is share-relative with a leading slash, as every path here is.
@@ -139,7 +144,8 @@ type Cache struct {
 	recording sync.Mutex
 
 	// changed is what the consumer was last asked it had changed, per share, for
-	// a few seconds (consumerChanged).
+	// a few seconds (consumerChanged). One entry per share id this process has
+	// filled, so it is left when a share is forgotten.
 	changedMu sync.Mutex
 	changed   map[string]changedAnswer
 
@@ -353,7 +359,13 @@ func (c *Cache) consumerChanged(share string, store Store) (map[string]Change, e
 // asks nothing, so a first fill does not walk the consumer's layer per batch.
 // A change that is the fill's own copy (the agent cannot always tell, after it
 // restarts) is not the consumer's, and is judged by the baseline as decide does.
+//
+// Never for an ephemeral share: nothing is carried back from one, so there is no
+// rule to protect, and the edit here is the version the container should get.
 func (c *Cache) withoutConsumerChanges(share string, store Store, entries []Entry) ([]Entry, error) {
+	if c.shares.ephemeral(share) {
+		return entries, nil
+	}
 	sent := c.shares.sentOf(share, entries)
 	if len(sent) == 0 {
 		return entries, nil

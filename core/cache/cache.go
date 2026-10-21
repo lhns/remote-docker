@@ -283,7 +283,7 @@ func (r Request) Validate() error {
 	case OpChanges:
 	case OpPull, OpPresent:
 		if len(r.Paths) == 0 {
-			return fmt.Errorf("workspace: cache pull for %s names no paths", r.Export)
+			return fmt.Errorf("workspace: cache %s for %s names no paths", r.Op, r.Export)
 		}
 		for _, p := range r.Paths {
 			if err := workspace.ValidSharePath(p); err != nil {

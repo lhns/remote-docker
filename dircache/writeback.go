@@ -130,6 +130,9 @@ func (c *Cache) confirmedAbsent(ctx context.Context, store Store, share string, 
 	callCtx, cancel := context.WithTimeout(ctx, c.budget())
 	defer cancel()
 	here, err := pr.Present(callCtx, share, candidates)
+	if errors.Is(err, ErrCannotPresent) {
+		return nil
+	}
 	if err != nil {
 		c.quiet(ctx, "asking which paths a container still has", "share", share, "err", err)
 		return nil
@@ -374,7 +377,9 @@ func (p *writePass) pull(store Store, chunk []string) bool {
 	ctx, cancel := context.WithTimeout(p.ctx, p.c.budget())
 	err := store.Pull(ctx, p.share, chunk, func(f File) error {
 		if f.Unreadable != "" {
-			p.c.skipped(p.ctx, p.share, p.change[f.Path], Skipped{Why: f.Unreadable})
+			if ch, asked := p.change[f.Path]; asked {
+				p.c.skipped(p.ctx, p.share, ch, Skipped{Why: f.Unreadable})
+			}
 			return nil
 		}
 		act := p.action[f.Path]
