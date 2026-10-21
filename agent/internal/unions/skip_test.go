@@ -57,3 +57,36 @@ func TestAnEntryTheShareCannotTakeIsSkippedOnlyWhenAsked(t *testing.T) {
 		t.Error("without Carry, an entry the share cannot take did not fail the batch")
 	}
 }
+
+// A file this batch could not finish is removed only if the batch created it.
+// The root is the merged mount, so removing one that was already there is a
+// whiteout: it would hide the live file from the container instead of letting a
+// read fall through to it.
+func TestASkippedWriteRemovesOnlyWhatItCreated(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "existing"), []byte("live content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"existing", "created"} {
+		// A header promising 4 bytes followed by 2: the copy fails half way.
+		var cut bytes.Buffer
+		tw := tar.NewWriter(&cut)
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: 4, ModTime: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = cut.WriteString("xx")
+
+		skipped, _ := extractWith(root, &cut, true, func(string, os.FileInfo) {})
+		if !slices.Equal(skipped, []string{"/" + name}) {
+			t.Fatalf("%s: skipped = %v, want it named", name, skipped)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "existing")); err != nil {
+		t.Errorf("a file that was already there is gone after a failed write: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "created")); err == nil {
+		t.Error("a file the failed write created was left behind, short")
+	}
+}

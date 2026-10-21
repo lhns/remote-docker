@@ -71,10 +71,12 @@ func extract(root string, body io.Reader, landed func(name string, info os.FileI
 }
 
 // extractWith is extract that, when skip is set, leaves out an entry it cannot
-// write and returns its path instead of failing. A file half written is
-// removed: the cache would serve it short, where a missing one falls through to
-// the live export. The tar reader steps past what is unread of the entry, so
-// the batch stays in frame.
+// write and returns its path instead of failing. A file this entry CREATED and
+// could not finish is removed, so a container is not served it short. One that
+// was already there is left: the root is the merged mount, so a removal would
+// be a whiteout, which hides the live file instead of falling through to it. The
+// tar reader steps past what is unread of the entry, so the batch stays in
+// frame.
 func extractWith(root string, body io.Reader, skip bool, landed func(name string, info os.FileInfo)) ([]string, error) {
 	r, err := os.OpenRoot(root)
 	if err != nil {
@@ -92,12 +94,18 @@ func extractWith(root string, body io.Reader, skip bool, landed func(name string
 		if err != nil {
 			return skipped, fmt.Errorf("unions: reading a batch: %w", err)
 		}
+		target, werr := within(header.Name)
+		existed := false
+		if werr == nil {
+			_, lerr := r.Lstat(target)
+			existed = lerr == nil
+		}
 		info, err := writeEntry(r, header, tr)
 		if err != nil {
 			if !skip {
 				return nil, err
 			}
-			if target, werr := within(header.Name); werr == nil && header.Typeflag == tar.TypeReg {
+			if werr == nil && !existed && header.Typeflag == tar.TypeReg {
 				_ = r.Remove(target)
 			}
 			skipped = append(skipped, "/"+strings.TrimPrefix(header.Name, "/"))

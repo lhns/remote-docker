@@ -1295,6 +1295,20 @@ session's `tree`, and a compose `consistency:` carrying `watch=`, `prefetch=`
 and `owner=` into an owned union. What this cannot tell is `eager` from
 `tree` for a share nobody reads: both fill it at once.
 
+Write-back past trouble, in `integration.sh` 15g and 16b and `machine.yml`
+(2026-10-21, PR 342): a directory the container replaced giving `tools/new`
+here, `tools/old` gone and no `.wh.` name anywhere, with the cache channel still
+in step afterwards; links made in the container arriving as links with their
+targets as written; a share on a 2 MiB tmpfs taking a 4 MiB file once it was
+resized and a later file after it; 5,000 files from one burst; a modified file
+and a new one arriving after `remote restart -f`; and 18 files written 10s apart
+with no client command in three minutes. On a Windows runner `good` and a later
+file arrive beside a `bad?name` that NTFS refuses, status names it, and a link
+arrives as a symlink. `union-probe.sh` section 13 RECORDS what fuse-overlayfs
+writes for a replaced directory and a deleted file (an xattr, a device
+`.wh..opq`, a regular `.wh..wh..opq`, and a device 0:0 for a file) and asserts
+nothing: a change in it should be read.
+
 Keys and enrolment, in `integration.sh` 11f to 11i: a key in the enrolled
 directory and one in the operator's authenticating the same account (ADR
 0052); deleting a key file ending an open session, and emptying one ending it

@@ -378,6 +378,13 @@ landing it would replace the other file), a link this account may not make, and
 under `prefetch=tree` or `off` the files a replaced directory hid that the fill
 never sent.
 
+**A link write-back made is then invalidated like any change.** The watcher sees
+it, `invalidate` stats it (following the link) and sends the target's bytes under
+the link's name, and the agent writes them through the union. That is wasteful
+and not lossy: the content is the target's own. Skipping links there would
+leave a stale regular copy shadowing a file later replaced by a link, and a
+drop would be a whiteout over the lower's link, so it is left as it was.
+
 **Not decided here.** Whether a connection released while a container still
 writes can lose its tail, and whether the client should prepare a union again
 (which adopts) before it forgets a share for `no union for this share`, are
