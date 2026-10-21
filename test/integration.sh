@@ -2763,12 +2763,17 @@ if [ -n "${CLIENT_PID:-}" ] && kill -0 "$CLIENT_PID" 2>/dev/null; then
     if dockert run -d --name itest-wb-burst -v "$BURSTDIR:/w:read=cached,write=back" \
         alpine:3 sleep 900 >"$WORK/wb-burst-run.log" 2>&1; then
         wait_output "$BURSTDIR: .*, cached\$" 30 "$WORK/remote-docker" remote status >/dev/null
-        dockert exec itest-wb-burst sh -c \
-            'mkdir -p /w/burst && cd /w/burst && i=0 && while [ $i -lt 5000 ]; do echo $i >f$i; i=$((i+1)); done' >/dev/null 2>&1
+        burst_out=$(dockert exec itest-wb-burst sh -c \
+            'mkdir -p /w/burst && cd /w/burst && i=0 && while [ $i -lt 5000 ]; do echo $i >f$i; i=$((i+1)); done' 2>&1)
+        echo "        burst exec exited $?: [$(echo "$burst_out" | head -3)]"
         have=0
-        for _ in $(seq 1 90); do
+        for n in $(seq 1 90); do
             have=$(find "$BURSTDIR/burst" -name 'f*' -type f 2>/dev/null | wc -l | tr -d ' ')
             [ "$have" = 5000 ] && break
+            # Where the files are, every 20s: made in the container, and carried here.
+            if [ $((n % 10)) = 0 ]; then
+                echo "        after $((n * 2))s: here $have, in the container $(dockert exec itest-wb-burst sh -c 'ls /w/burst | wc -l' 2>&1)"
+            fi
             sleep 2
         done
         if [ "$have" = 5000 ]; then

@@ -263,9 +263,19 @@ func (s *Session) reattachUnions(ctx context.Context, live *liveConn) {
 	if len(recorded) == 0 {
 		return
 	}
-	mounted, err := s.mountedCaches(ctx)
+	// Through the connection being built, not the gate: this runs inside the
+	// connect, before the gate holds the connection.
+	ch, err := s.ensureCacheChan(ctx, live)
 	if err != nil {
 		return
+	}
+	names, err := ch.Mounted(ctx)
+	if err != nil {
+		return
+	}
+	mounted := make(map[string]bool, len(names))
+	for _, n := range names {
+		mounted[n] = true
 	}
 	for _, export := range recorded {
 		volume, err := workspace.CacheVolumeForExport(live.clientID, export)
