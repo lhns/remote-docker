@@ -74,7 +74,8 @@ if you prefer one. *(Checked 2026-09-23 with
 Every release also carries an MSI per architecture, beside the zip:
 `remote-docker_<version>_windows_amd64.msi` and `..._arm64.msi`. It installs
 `remote-docker.exe` into `C:\Program Files\remote-docker` and **appends** that
-directory to the system PATH. Per machine, so it needs administrator rights.
+directory to the system PATH (a feature of its own, "Add to the system
+PATH", that can be left out). Per machine, so it needs administrator rights.
 About 19 MB on amd64 and 18 on arm64, the same binary the zip holds.
 
 From Git Bash or another MSYS2 shell, read [Windows shells](#windows-shells):
@@ -88,7 +89,7 @@ msiexec /i remote-docker_0.6.0_windows_amd64.msi
 msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn
 
 # silently, and also as docker.exe
-msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,DockerName
 
 # uninstall
 msiexec /x remote-docker_0.6.0_windows_amd64.msi /qn
@@ -109,7 +110,7 @@ the "docker" name would shadow it.
 ```
 
 ```powershell
-msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,DockerName ALLOWDOCKERSHADOW=1
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,DockerName ALLOWDOCKERSHADOW=1
 ```
 
 The check reads four directories (the two system directories and Docker
@@ -128,7 +129,7 @@ Modify. It needs Hyper-V enabled; without it the feature is not offered and a
 silent install naming it is refused, naming the command that enables it.
 
 ```powershell
-msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,HyperV WORKSPACENAME=dev `
+msiexec /i remote-docker_0.6.0_windows_amd64.msi /qn ADDLOCAL=Main,Path,HyperV WORKSPACENAME=dev `
   WORKSPACEIMAGE=registry.example/remote-docker-workspace:0.6.0 WORKSPACEPROXY=http://proxy.example:3128
 ```
 

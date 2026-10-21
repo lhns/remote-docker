@@ -65,19 +65,20 @@
     <!--
       The feature refuses rather than shadowing another vendor's docker.exe,
       which is the larger version of the promise ADR 0024 makes about a docker
-      context we did not create. After CostFinalize, where feature action states
-      become readable, and in both sequences so a silent install and an
-      interactive one refuse alike.
+      context we did not create. Only with the Path feature, since a docker.exe
+      that is not on PATH shadows nothing. After CostFinalize, where feature
+      action states become readable, and in both sequences so a silent install
+      and an interactive one refuse alike.
     -->
     <CustomAction Id="RefuseDockerShadow"
                   Error="A docker.exe is already installed at [DOCKERONPATH], and the &quot;docker&quot; name would shadow it.&#xA;fix: leave that feature unselected, or pass ALLOWDOCKERSHADOW=1 to install it anyway." />
     <InstallUISequence>
       <Custom Action="RefuseDockerShadow" After="CostFinalize"
-              Condition="NOT Installed AND &amp;DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
+              Condition="NOT Installed AND &amp;DockerName=3 AND &amp;Path=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
     </InstallUISequence>
     <InstallExecuteSequence>
       <Custom Action="RefuseDockerShadow" After="CostFinalize"
-              Condition="NOT Installed AND &amp;DockerName=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
+              Condition="NOT Installed AND &amp;DockerName=3 AND &amp;Path=3 AND DOCKERONPATH AND NOT ALLOWDOCKERSHADOW" />
     </InstallExecuteSequence>
 
     <!--
@@ -260,21 +261,25 @@
     </UI>
 
     <Feature Id="Main" Title="remote-docker" Level="1" AllowAbsent="no" AllowAdvertise="no"
-             Description="The remote-docker command, added to the system PATH.">
+             Description="The remote-docker command.">
       <Component Id="C.RemoteDockerExe" Directory="INSTALLFOLDER">
         <File Id="F.RemoteDockerExe" Name="remote-docker.exe" Source="$(BinPath)" KeyPath="yes" />
       </Component>
 
-      <!--
-        Appended, never prepended: the install directory going first would put
-        this binary in front of every tool already on the machine.
-      -->
-      <Component Id="C.Path" Directory="INSTALLFOLDER">
-        <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="Path"
-                       Type="integer" Value="1" KeyPath="yes" />
-        <Environment Id="E.Path" Name="PATH" Value="[INSTALLFOLDER]"
-                     Part="last" Action="set" System="yes" Permanent="no" />
-      </Component>
+      <!-- A feature of its own, on by default, so it can be left out (ADR 0048). -->
+      <Feature Id="Path" Title="Add to the system PATH" Level="1" AllowAdvertise="no"
+               Description="The install folder is appended to the system PATH, so remote-docker runs from any new shell.">
+        <!--
+          Appended, never prepended: the install directory going first would put
+          this binary in front of every tool already on the machine.
+        -->
+        <Component Id="C.Path" Directory="INSTALLFOLDER">
+          <RegistryValue Root="HKLM" Key="Software\lhns\remote-docker" Name="Path"
+                         Type="integer" Value="1" KeyPath="yes" />
+          <Environment Id="E.Path" Name="PATH" Value="[INSTALLFOLDER]"
+                       Part="last" Action="set" System="yes" Permanent="no" />
+        </Component>
+      </Feature>
 
       <!--
         Level 2 against the default INSTALLLEVEL of 1: shown in the feature

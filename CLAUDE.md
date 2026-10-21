@@ -1441,7 +1441,9 @@ prepended, `remote-docker remote --help` running from a shell whose PATH came
 from the registry rather than from this process, the `docker.exe` feature
 absent by default and working when `ADDLOCAL` asks for it, the refusal firing
 against a `docker.exe` in System32 with a message naming it, the override, and
-an uninstall that takes both names and the PATH entry with it. Sections 11 to 19
+an uninstall that takes both names and the PATH entry with it. PATH is a
+feature that can be left out, added and removed by Modify, and is kept across
+an upgrade from the latest released MSI (9b to 9d). Sections 11 to 19
 run the optional Hyper-V workspace against a STAND-IN for Hyper-V (the
 `rdstandin` build tag, `machine/broker_standin_windows.go`, which logs its
 operations under `%ProgramData%\remote-docker-standin`; `msi.yml` asserts no
