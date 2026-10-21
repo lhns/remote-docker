@@ -283,11 +283,16 @@ func (s *Session) restoreMounted(live *liveConn, recorded, names []string) {
 	for _, n := range names {
 		mounted[n] = true
 	}
+	restored := 0
 	for _, export := range recorded {
 		volume, err := workspace.CacheVolumeForExport(live.clientID, export)
 		if err != nil || !mounted[volume] {
 			continue
 		}
-		s.registry.LookupOrRestore(export)
+		if _, _, ok := s.registry.LookupOrRestore(export); ok {
+			restored++
+		}
 	}
+	s.log().Info("looked for recorded unions the workspace still has mounted",
+		"recorded", len(recorded), "mounted", len(names), "restored", restored)
 }
