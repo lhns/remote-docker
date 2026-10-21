@@ -25,6 +25,11 @@ import (
 //
 // Each synthesised deletion goes through decide like any other, so a file
 // changed here since it was sent is kept and reported rather than removed.
+//
+// Never a file this machine carried back FROM the consumer (Baseline.Consumer):
+// that file lives in the consumer's own layer and is not listed again once the
+// cache has been written over it, so its absence from the changes says nothing
+// about it, and deleting it here would delete the consumer's work.
 func expandReplaced(manifest map[string]Baseline, changes []Change) []Change {
 	hidden := map[string]bool{}
 	listed := map[string]bool{}
@@ -44,8 +49,8 @@ func expandReplaced(manifest map[string]Baseline, changes []Change) []Change {
 	}
 
 	out := changes
-	for p := range manifest {
-		if listed[p] {
+	for p, b := range manifest {
+		if listed[p] || b.Consumer != 0 {
 			continue
 		}
 		for dir := path.Dir(p); dir != "/" && dir != "."; dir = path.Dir(dir) {

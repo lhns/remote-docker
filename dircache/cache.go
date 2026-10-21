@@ -585,6 +585,12 @@ func (f *shares) noteSent(share, root string, entries []Entry) {
 	}
 	for _, e := range entries {
 		if b, ok := baselineOf(root, e.Path); ok {
+			// A file carried back from the consumer and then sent again
+			// unchanged (the watcher sees the landing as a local change) is
+			// still the consumer's.
+			if old, had := manifest["/"+e.Path]; had && old.Consumer != 0 && old.Size == b.Size && old.ModTime.Equal(b.ModTime) {
+				b.Consumer = old.Consumer
+			}
 			manifest["/"+e.Path] = b
 		}
 	}
